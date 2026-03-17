@@ -237,6 +237,10 @@ pub struct AgentDefinition {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subagents: Option<SubagentPolicy>,
 
+    /// Per-agent tool permission overrides (merged with global policies)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_permissions: Option<crate::config::types::policies::ToolPermissionsConfig>,
+
     /// Link access whitelist.
     /// None or empty = all links allowed (default).
     /// Some(list) = only listed link IDs can access this agent.

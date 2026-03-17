@@ -45,6 +45,8 @@ pub struct ExecutionEngine<P: ThinkerProviderRegistry + 'static, R: ToolRegistry
     pub(super) compression_service: Option<Arc<crate::memory::compression::CompressionService>>,
     /// Memory context provider for LanceDB-backed prompt augmentation
     pub(super) memory_context_provider: Option<Arc<crate::thinker::MemoryContextProvider>>,
+    /// Global tool permission policy
+    pub(super) global_tool_permissions: crate::config::types::policies::ToolPermissionsConfig,
 }
 
 impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionEngine<P, R> {
@@ -67,6 +69,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             task_router: None,
             compression_service: None,
             memory_context_provider: None,
+            global_tool_permissions: Default::default(),
         }
     }
 
@@ -91,6 +94,15 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         provider: Arc<crate::thinker::MemoryContextProvider>,
     ) -> Self {
         self.memory_context_provider = Some(provider);
+        self
+    }
+
+    /// Set global tool permission policy.
+    pub fn with_global_tool_permissions(
+        mut self,
+        permissions: crate::config::types::policies::ToolPermissionsConfig,
+    ) -> Self {
+        self.global_tool_permissions = permissions;
         self
     }
 

@@ -81,6 +81,9 @@ pub struct ResolvedAgent {
 
     /// Link access whitelist (None or empty = all links allowed)
     pub allowed_links: Option<Vec<String>>,
+
+    /// Per-agent tool permission overrides
+    pub tool_permissions: Option<crate::config::types::policies::ToolPermissionsConfig>,
 }
 
 // =============================================================================
@@ -305,6 +308,7 @@ impl AgentDefinitionResolver {
 
         let subagent_policy = agent.subagents.clone();
         let allowed_links = agent.allowed_links.clone();
+        let tool_permissions = agent.tool_permissions.clone();
 
         ResolvedAgent {
             id: agent.id.clone(),
@@ -321,6 +325,7 @@ impl AgentDefinitionResolver {
             skills_blacklist,
             subagent_policy,
             allowed_links,
+            tool_permissions,
         }
     }
 }

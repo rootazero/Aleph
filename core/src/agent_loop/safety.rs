@@ -2,12 +2,18 @@
 //!
 //! Replaces the previous 3-layer tool filter system with a simple two-check approach:
 //! 1. Pattern matching against blocked commands (hard block)
-//! 2. Set membership for tools requiring user confirmation
+//! 2. Permission lookup (Allow / Ask / Deny) from merged tool permissions
+//!
+//! Permission levels are resolved via `ToolPermissionsConfig::merge` which
+//! combines global policies and agent-level overrides (most restrictive wins).
 
 use regex::Regex;
 use serde_json::Value;
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::fmt;
+
+use crate::config::types::policies::ToolPermissionsConfig;
+use crate::extension::PermissionAction;
 
 // =============================================================================
 // ToolCall
@@ -31,6 +37,8 @@ pub enum SafetyError {
     Blocked { tool: String, pattern: String },
     /// The tool call requires explicit user confirmation before execution.
     NeedsConfirmation { tool: String },
+    /// The tool call is denied by permission policy.
+    PolicyDenied { tool: String },
 }
 
 impl fmt::Display for SafetyError {
@@ -42,6 +50,9 @@ impl fmt::Display for SafetyError {
             SafetyError::NeedsConfirmation { tool } => {
                 write!(f, "tool '{}' requires user confirmation", tool)
             }
+            SafetyError::PolicyDenied { tool } => {
+                write!(f, "tool '{}' denied by permission policy", tool)
+            }
         }
     }
 }
@@ -52,57 +63,69 @@ impl std::error::Error for SafetyError {}
 // SafetyGuard
 // =============================================================================
 
-/// Single-layer safety guard using pattern matching and confirmation sets.
+/// Single-layer safety guard using pattern matching and permission levels.
 pub struct SafetyGuard {
     blocked_patterns: Vec<Regex>,
-    confirmation_required: HashSet<String>,
+    tool_permissions: HashMap<String, PermissionAction>,
+    default_permission: PermissionAction,
 }
 
 impl SafetyGuard {
-    /// Create a new guard from raw pattern strings and confirmation tool names.
+    /// Create a new guard from raw components.
     ///
     /// Each string in `blocked` is compiled as a regex pattern.
-    /// Each string in `confirmation` is added to the confirmation-required set.
-    pub fn new(blocked: Vec<String>, confirmation: Vec<String>) -> Self {
+    /// `tool_permissions` maps tool names to permission levels.
+    /// `default_permission` is used for tools not in the map.
+    pub fn new(
+        blocked: Vec<String>,
+        tool_permissions: HashMap<String, PermissionAction>,
+        default_permission: PermissionAction,
+    ) -> Self {
         let blocked_patterns = blocked
             .into_iter()
             .filter_map(|p| Regex::new(&p).ok())
             .collect();
-        let confirmation_required = confirmation.into_iter().collect();
         Self {
             blocked_patterns,
-            confirmation_required,
+            tool_permissions,
+            default_permission,
         }
     }
 
     /// Create a guard with sensible defaults for common dangerous commands.
+    ///
+    /// Default policy: all tools allowed (no permission restrictions).
+    /// Only truly destructive commands are hard-blocked.
     pub fn default_guard() -> Self {
-        let blocked = vec![
-            r"rm\s+-rf\s+/".to_string(),
-            r"(?i)drop\s+database".to_string(),
-            r"mkfs\.".to_string(),
-            r"dd\s+if=.*of=/dev/".to_string(),
-            r">\s*/dev/sd".to_string(),
-        ];
-        let confirmation = vec![
-            "shell".to_string(),
-            "file_write".to_string(),
-            "file_delete".to_string(),
-        ];
-        Self::new(blocked, confirmation)
+        let blocked = default_blocked_patterns();
+        Self::new(blocked, HashMap::new(), PermissionAction::Allow)
+    }
+
+    /// Create a guard from global and agent-level permission configs.
+    ///
+    /// Merges the two layers (most restrictive wins) and combines with
+    /// the default blocked patterns.
+    pub fn from_permissions(
+        global: &ToolPermissionsConfig,
+        agent: &ToolPermissionsConfig,
+    ) -> Self {
+        let merged = ToolPermissionsConfig::merge(global, agent);
+        let blocked = default_blocked_patterns();
+        Self::new(blocked, merged.overrides, merged.default)
     }
 
     /// Check whether a tool call is safe to execute.
     ///
     /// Returns `Ok(())` if the call is allowed unconditionally.
     /// Returns `Err(SafetyError::Blocked)` if it matches a blocked pattern (highest priority).
-    /// Returns `Err(SafetyError::NeedsConfirmation)` if the tool requires user confirmation.
+    /// Returns `Err(SafetyError::NeedsConfirmation)` if the tool permission is Ask.
+    /// Returns `Err(SafetyError::PolicyDenied)` if the tool permission is Deny.
     pub fn check(&self, call: &ToolCall) -> Result<(), SafetyError> {
         // Build the haystack: "{name} {input_json}"
         let input_json = call.input.to_string();
         let haystack = format!("{} {}", call.name, input_json);
 
-        // Blocked patterns take priority over confirmation.
+        // Blocked patterns take highest priority.
         for pattern in &self.blocked_patterns {
             if pattern.is_match(&haystack) {
                 return Err(SafetyError::Blocked {
@@ -112,15 +135,34 @@ impl SafetyGuard {
             }
         }
 
-        // Check confirmation set.
-        if self.confirmation_required.contains(&call.name) {
-            return Err(SafetyError::NeedsConfirmation {
-                tool: call.name.clone(),
-            });
-        }
+        // Permission lookup
+        let permission = self
+            .tool_permissions
+            .get(&call.name)
+            .copied()
+            .unwrap_or(self.default_permission);
 
-        Ok(())
+        match permission {
+            PermissionAction::Allow => Ok(()),
+            PermissionAction::Ask => Err(SafetyError::NeedsConfirmation {
+                tool: call.name.clone(),
+            }),
+            PermissionAction::Deny => Err(SafetyError::PolicyDenied {
+                tool: call.name.clone(),
+            }),
+        }
     }
+}
+
+/// Default blocked patterns for dangerous system commands.
+fn default_blocked_patterns() -> Vec<String> {
+    vec![
+        r"rm\s+-rf\s+/".to_string(),
+        r"(?i)drop\s+database".to_string(),
+        r"mkfs\.".to_string(),
+        r"dd\s+if=.*of=/dev/".to_string(),
+        r">\s*/dev/sd".to_string(),
+    ]
 }
 
 // =============================================================================
@@ -136,7 +178,8 @@ mod tests {
     fn test_blocked_pattern() {
         let guard = SafetyGuard::new(
             vec![r"rm\s+-rf\s+/".to_string()],
-            vec![],
+            HashMap::new(),
+            PermissionAction::Allow,
         );
         let call = ToolCall {
             name: "shell".to_string(),
@@ -151,7 +194,8 @@ mod tests {
     fn test_allowed_tool() {
         let guard = SafetyGuard::new(
             vec![r"rm\s+-rf\s+/".to_string()],
-            vec!["shell".to_string()],
+            HashMap::new(),
+            PermissionAction::Allow,
         );
         let call = ToolCall {
             name: "read_file".to_string(),
@@ -161,11 +205,11 @@ mod tests {
     }
 
     #[test]
-    fn test_confirmation_required() {
-        let guard = SafetyGuard::new(
-            vec![],
-            vec!["shell".to_string(), "file_write".to_string()],
-        );
+    fn test_needs_confirmation_via_ask() {
+        let perms = [("shell".to_string(), PermissionAction::Ask)]
+            .into_iter()
+            .collect();
+        let guard = SafetyGuard::new(vec![], perms, PermissionAction::Allow);
         let call = ToolCall {
             name: "shell".to_string(),
             input: json!({ "command": "echo hello" }),
@@ -176,18 +220,48 @@ mod tests {
     }
 
     #[test]
-    fn test_blocked_takes_priority_over_confirmation() {
+    fn test_policy_denied() {
+        let perms = [("shell".to_string(), PermissionAction::Deny)]
+            .into_iter()
+            .collect();
+        let guard = SafetyGuard::new(vec![], perms, PermissionAction::Allow);
+        let call = ToolCall {
+            name: "shell".to_string(),
+            input: json!({ "command": "echo hello" }),
+        };
+        let err = guard.check(&call).unwrap_err();
+        assert!(matches!(err, SafetyError::PolicyDenied { .. }));
+        assert!(err.to_string().contains("denied"));
+    }
+
+    #[test]
+    fn test_blocked_takes_priority_over_permission() {
+        let perms = [("shell".to_string(), PermissionAction::Allow)]
+            .into_iter()
+            .collect();
         let guard = SafetyGuard::new(
             vec![r"rm\s+-rf\s+/".to_string()],
-            vec!["shell".to_string()],
+            perms,
+            PermissionAction::Allow,
         );
         let call = ToolCall {
             name: "shell".to_string(),
             input: json!({ "command": "rm -rf /" }),
         };
-        // "shell" is in confirmation set, but the pattern also matches — Blocked wins.
+        // Blocked wins even when tool permission is Allow.
         let err = guard.check(&call).unwrap_err();
         assert!(matches!(err, SafetyError::Blocked { .. }));
+    }
+
+    #[test]
+    fn test_default_permission_deny() {
+        let guard = SafetyGuard::new(vec![], HashMap::new(), PermissionAction::Deny);
+        let call = ToolCall {
+            name: "any_tool".to_string(),
+            input: json!({}),
+        };
+        let err = guard.check(&call).unwrap_err();
+        assert!(matches!(err, SafetyError::PolicyDenied { .. }));
     }
 
     #[test]
@@ -226,16 +300,15 @@ mod tests {
             );
         }
 
-        // Confirmation-required tools should need confirmation (when not blocked).
+        // Default policy: all tools allowed.
         for name in &["shell", "file_write", "file_delete"] {
             let call = ToolCall {
                 name: name.to_string(),
                 input: json!({ "safe": true }),
             };
-            let result = guard.check(&call);
             assert!(
-                matches!(result, Err(SafetyError::NeedsConfirmation { .. })),
-                "expected NeedsConfirmation for tool: {}",
+                guard.check(&call).is_ok(),
+                "expected Ok (allowed) for tool: {}",
                 name
             );
         }
@@ -246,5 +319,49 @@ mod tests {
             input: json!({ "path": "/tmp/test" }),
         };
         assert!(guard.check(&safe).is_ok());
+    }
+
+    #[test]
+    fn test_from_permissions() {
+        let global = ToolPermissionsConfig {
+            default: PermissionAction::Allow,
+            overrides: [("shell".to_string(), PermissionAction::Ask)]
+                .into_iter()
+                .collect(),
+        };
+        let agent = ToolPermissionsConfig {
+            default: PermissionAction::Allow,
+            overrides: [("file_delete".to_string(), PermissionAction::Deny)]
+                .into_iter()
+                .collect(),
+        };
+        let guard = SafetyGuard::from_permissions(&global, &agent);
+
+        // shell: Ask from global
+        let call = ToolCall {
+            name: "shell".to_string(),
+            input: json!({}),
+        };
+        assert!(matches!(
+            guard.check(&call),
+            Err(SafetyError::NeedsConfirmation { .. })
+        ));
+
+        // file_delete: Deny from agent
+        let call = ToolCall {
+            name: "file_delete".to_string(),
+            input: json!({}),
+        };
+        assert!(matches!(
+            guard.check(&call),
+            Err(SafetyError::PolicyDenied { .. })
+        ));
+
+        // read_file: Allow (default)
+        let call = ToolCall {
+            name: "read_file".to_string(),
+            input: json!({}),
+        };
+        assert!(guard.check(&call).is_ok());
     }
 }

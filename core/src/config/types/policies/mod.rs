@@ -35,6 +35,7 @@ pub mod memory;
 pub mod metrics;
 pub mod retry;
 pub mod text;
+pub mod tool_permissions;
 pub mod tool_safety;
 pub mod web_fetch;
 
@@ -45,6 +46,7 @@ pub use memory::{AiRetrievalPolicy, CompressionPolicy, MemoryPolicies};
 pub use metrics::MetricsPolicy;
 pub use retry::RetryPolicy;
 pub use text::TextFormatPolicy;
+pub use tool_permissions::ToolPermissionsConfig;
 pub use tool_safety::ToolSafetyPolicy;
 pub use web_fetch::WebFetchPolicy;
 
@@ -89,6 +91,10 @@ pub struct PoliciesConfig {
     /// Keyword matching policy for intent detection
     #[serde(default)]
     pub keyword: KeywordPolicy,
+
+    /// Tool permission levels (Allow / Ask / Deny)
+    #[serde(default)]
+    pub tool_permissions: ToolPermissionsConfig,
 
     /// Experimental feature flags
     ///

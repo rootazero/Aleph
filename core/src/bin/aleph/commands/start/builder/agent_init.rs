@@ -323,7 +323,8 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             tool_registry,
             tools,
             Some(memory_db.clone()),
-        );
+        )
+        .with_global_tool_permissions(app_config.policies.tool_permissions.clone());
         if let Some(router) = task_router {
             engine = engine.with_task_router(router);
         }

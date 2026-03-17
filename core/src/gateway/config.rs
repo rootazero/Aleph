@@ -230,6 +230,7 @@ impl AgentConfig {
                 .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
                 .join(format!(".aleph/agents/{}", agent_id)),
             allowed_links: None,
+            tool_permissions: None,
         }
     }
 }
