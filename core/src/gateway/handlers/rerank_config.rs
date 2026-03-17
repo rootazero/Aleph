@@ -263,7 +263,7 @@ mod tests {
         assert!(cfg.memory.rerank.api_key.is_empty(), "api_key should be empty in config");
 
         // Verify api_key IS in vault
-        let secret = vault.get_secret(VAULT_KEY).unwrap().unwrap();
+        let secret = vault.get_secret(&vault_key("jina")).unwrap().unwrap();
         assert_eq!(secret.expose(), "test-secret-key");
     }
 
