@@ -45,7 +45,7 @@ fn normalize_optional_string(value: Option<String>) -> Option<String> {
 }
 
 fn save_config(cfg: &Config) -> Result<(), String> {
-    cfg.save().map_err(|e| e.to_string())
+    cfg.save_incremental(&["generation"]).map_err(|e| e.to_string())
 }
 
 /// Vault key prefix for generation provider API keys
@@ -447,7 +447,7 @@ pub async fn handle_delete(
         }
 
         // Save to file
-        if let Err(e) = cfg.save() {
+        if let Err(e) = cfg.save_incremental(&["generation"]) {
             return JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,
@@ -536,7 +536,7 @@ pub async fn handle_set_default(
         }
 
         // Save to file
-        if let Err(e) = cfg.save() {
+        if let Err(e) = cfg.save_incremental(&["generation"]) {
             return JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,

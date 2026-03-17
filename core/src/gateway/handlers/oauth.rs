@@ -172,7 +172,7 @@ async fn update_config_api_key(
         provider.api_key = None;
     }
 
-    if let Err(e) = cfg.save() {
+    if let Err(e) = cfg.save_incremental(&["providers"]) {
         warn!(error = %e, "Failed to persist config after OAuth update");
     }
 }

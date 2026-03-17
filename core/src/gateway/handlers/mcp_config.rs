@@ -218,7 +218,7 @@ pub async fn handle_create(
         }
 
         // Save to file
-        if let Err(e) = cfg.save() {
+        if let Err(e) = cfg.save_incremental(&["unified_tools"]) {
             error!(error = %e, "Failed to save config");
             return JsonRpcResponse::error(
                 request.id,
@@ -306,7 +306,7 @@ pub async fn handle_update(
         }
 
         // Save to file
-        if let Err(e) = cfg.save() {
+        if let Err(e) = cfg.save_incremental(&["unified_tools"]) {
             error!(error = %e, "Failed to save config");
             return JsonRpcResponse::error(
                 request.id,
@@ -382,7 +382,7 @@ pub async fn handle_delete(
         }
 
         // Save to file
-        if let Err(e) = cfg.save() {
+        if let Err(e) = cfg.save_incremental(&["unified_tools"]) {
             error!(error = %e, "Failed to save config");
             return JsonRpcResponse::error(
                 request.id,

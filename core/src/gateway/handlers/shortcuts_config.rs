@@ -77,7 +77,7 @@ pub async fn handle_update(
             shortcuts.command_prompt = dto.command_prompt.clone();
         }
 
-        if let Err(e) = cfg.save() {
+        if let Err(e) = cfg.save_incremental(&["shortcuts"]) {
             return JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,

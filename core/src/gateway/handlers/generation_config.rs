@@ -102,7 +102,7 @@ pub async fn handle_update(
         generation.background_task_threshold_seconds = dto.background_task_threshold_seconds;
         generation.smart_routing_enabled = dto.smart_routing_enabled;
 
-        if let Err(e) = cfg.save() {
+        if let Err(e) = cfg.save_incremental(&["generation"]) {
             return JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,

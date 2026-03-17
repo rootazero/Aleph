@@ -69,7 +69,7 @@ pub async fn handle_update(
         cfg.memory = merged;
 
         // Save to file
-        if let Err(e) = cfg.save() {
+        if let Err(e) = cfg.save_incremental(&["memory"]) {
             return JsonRpcResponse::error(request.id, INTERNAL_ERROR, format!("Failed to save config: {}", e));
         }
     }

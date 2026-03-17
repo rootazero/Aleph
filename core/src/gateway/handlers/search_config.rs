@@ -239,7 +239,7 @@ pub async fn handle_update(
         }
 
         // api_key is #[serde(skip)] — never persisted to config.toml
-        if let Err(e) = cfg.save().map_err(|e| e.to_string()) {
+        if let Err(e) = cfg.save_incremental(&["search"]).map_err(|e| e.to_string()) {
             return JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,
@@ -453,7 +453,7 @@ pub async fn handle_test(
         if let Some(search) = &mut cfg.search {
             if let Some(backend) = search.backends.get_mut(&params.name) {
                 backend.verified = true;
-                if let Err(e) = cfg.save() {
+                if let Err(e) = cfg.save_incremental(&["search"]) {
                     tracing::error!(error = %e, "Failed to save config after search test");
                 }
             }
@@ -520,7 +520,7 @@ pub async fn handle_delete_backend(
         }
 
         // Save config
-        if let Err(e) = cfg.save().map_err(|e| e.to_string()) {
+        if let Err(e) = cfg.save_incremental(&["search"]).map_err(|e| e.to_string()) {
             return JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,

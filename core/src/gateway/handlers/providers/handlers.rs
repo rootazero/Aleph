@@ -141,7 +141,7 @@ pub async fn handle_update(
         cfg.providers.insert(params.name.clone(), provider_config);
 
         // Save to file
-        if let Err(e) = save_config(&cfg) {
+        if let Err(e) = save_config(&cfg, &["providers"]) {
             error!(error = %e, "Failed to save config");
             return JsonRpcResponse::error(
                 request.id,
@@ -224,7 +224,7 @@ pub async fn handle_create(
         cfg.providers.insert(params.name.clone(), provider_config);
 
         // Save to file
-        if let Err(e) = save_config(&cfg) {
+        if let Err(e) = save_config(&cfg, &["providers"]) {
             error!(error = %e, "Failed to save config");
             return JsonRpcResponse::error(
                 request.id,
@@ -301,7 +301,7 @@ pub async fn handle_delete(
         }
 
         // Save to file
-        if let Err(e) = save_config(&cfg) {
+        if let Err(e) = save_config(&cfg, &["providers"]) {
             error!(error = %e, "Failed to save config");
             return JsonRpcResponse::error(
                 request.id,
@@ -409,7 +409,7 @@ pub async fn handle_test(request: JsonRpcRequest, config_store: Arc<RwLock<Confi
                 let mut cfg = config_store.write().await;
                 if let Some(p) = cfg.providers.get_mut(name) {
                     p.verified = true;
-                    if let Err(e) = save_config(&cfg) {
+                    if let Err(e) = save_config(&cfg, &["providers"]) {
                         error!(error = %e, "Failed to save config after test");
                     }
                 }
@@ -541,7 +541,7 @@ async fn set_default_provider_inner(
         }
 
         // Save to file (redact resolved secrets before write)
-        if let Err(e) = save_config(&cfg) {
+        if let Err(e) = save_config(&cfg, &["general"]) {
             error!(error = %e, "Failed to save config");
             return JsonRpcResponse::error(
                 request.id.clone(),

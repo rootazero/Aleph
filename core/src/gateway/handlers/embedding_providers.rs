@@ -66,7 +66,7 @@ fn resolve_api_key(id: &str, vault: &SharedTokenManager) -> Option<String> {
 }
 
 fn save_config(cfg: &Config) -> Result<(), String> {
-    cfg.save().map_err(|e| e.to_string())
+    cfg.save_incremental(&["memory"]).map_err(|e| e.to_string())
 }
 
 /// Serialize a provider config to JSON and inject `is_active` based on the active provider id.
@@ -353,7 +353,7 @@ pub async fn handle_remove(
         }
 
         // Save to file
-        if let Err(e) = cfg.save() {
+        if let Err(e) = cfg.save_incremental(&["memory"]) {
             return JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,
@@ -420,7 +420,7 @@ pub async fn handle_set_active(
         cfg.memory.embedding.active_provider_id = params.id.clone();
 
         // Save to file
-        if let Err(e) = cfg.save() {
+        if let Err(e) = cfg.save_incremental(&["memory"]) {
             return JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,
@@ -514,7 +514,7 @@ pub async fn handle_test(
                 let mut cfg = config.write().await;
                 if let Some(p) = cfg.memory.embedding.providers.iter_mut().find(|p| p.id == provider_config.id) {
                     p.verified = true;
-                    if let Err(e) = cfg.save() {
+                    if let Err(e) = cfg.save_incremental(&["memory"]) {
                         tracing::error!(error = %e, "Failed to save config after embedding test");
                     }
                 }

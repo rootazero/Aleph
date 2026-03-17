@@ -62,7 +62,7 @@ pub async fn handle_update(
         cfg.general = new_general.clone();
 
         // Save to file
-        if let Err(e) = cfg.save() {
+        if let Err(e) = cfg.save_incremental(&["general"]) {
             return JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,

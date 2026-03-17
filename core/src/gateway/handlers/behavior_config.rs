@@ -92,7 +92,7 @@ pub async fn handle_update(
             behavior.typing_speed = dto.typing_speed;
         }
 
-        if let Err(e) = cfg.save() {
+        if let Err(e) = cfg.save_incremental(&["behavior"]) {
             return JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,
