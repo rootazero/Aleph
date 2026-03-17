@@ -219,7 +219,12 @@ Examples:
 
         // Set working directory
         if let Some(ref dir) = args.working_dir {
-            cmd.current_dir(dir);
+            let path = std::path::Path::new(dir);
+            // Ensure directory exists (agent workspace may not be created yet)
+            if !path.exists() {
+                let _ = std::fs::create_dir_all(path);
+            }
+            cmd.current_dir(path);
         } else {
             // Use temp directory as default
             cmd.current_dir(std::env::temp_dir());

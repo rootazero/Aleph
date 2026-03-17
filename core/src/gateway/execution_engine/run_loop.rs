@@ -54,9 +54,11 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             .cloned()
             .collect();
 
+        let default_working_dir = Some(agent.workspace().to_string_lossy().to_string());
         let tool_registry = build_registry_from_tools(
             self.tool_registry.clone(),
             &allowed_tools,
+            default_working_dir,
         );
 
         debug!(

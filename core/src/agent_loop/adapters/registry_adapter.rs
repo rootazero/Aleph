@@ -21,7 +21,12 @@ struct RegistryToolAdapter<R: ToolRegistry + 'static> {
     description: String,
     schema: Value,
     registry: Arc<R>,
+    /// Default working directory for bash/code_exec tools (agent workspace)
+    default_working_dir: Option<String>,
 }
+
+/// Tools that should have working_dir injected when not specified by LLM
+const WORKING_DIR_TOOLS: &[&str] = &["bash", "code_exec"];
 
 #[async_trait]
 impl<R: ToolRegistry + 'static> LoopTool for RegistryToolAdapter<R> {
@@ -38,6 +43,23 @@ impl<R: ToolRegistry + 'static> LoopTool for RegistryToolAdapter<R> {
     }
 
     async fn execute(&self, input: Value) -> ToolResult {
+        // Inject default working_dir for bash/code_exec if not provided by LLM
+        let input = if WORKING_DIR_TOOLS.contains(&self.name.as_str()) {
+            if let Some(ref dir) = self.default_working_dir {
+                let mut obj = match input {
+                    Value::Object(m) => m,
+                    _ => serde_json::Map::new(),
+                };
+                if !obj.contains_key("working_dir") || obj.get("working_dir").map_or(false, |v| v.is_null()) {
+                    obj.insert("working_dir".to_string(), Value::String(dir.clone()));
+                }
+                Value::Object(obj)
+            } else {
+                input
+            }
+        } else {
+            input
+        };
         match self.registry.execute_tool(&self.name, input).await {
             Ok(output) => {
                 // agent_switch should terminate the current loop so the next
@@ -63,9 +85,13 @@ impl<R: ToolRegistry + 'static> LoopTool for RegistryToolAdapter<R> {
 ///
 /// Each `UnifiedTool` becomes a `LoopTool` that delegates execution to the
 /// shared `ToolRegistry`. Only active tools are included.
+///
+/// `default_working_dir` is injected into bash/code_exec tools when the LLM
+/// doesn't specify a working_dir (defaults to agent workspace).
 pub fn build_registry_from_tools<R: ToolRegistry + 'static>(
     tool_registry: Arc<R>,
     unified_tools: &[UnifiedTool],
+    default_working_dir: Option<String>,
 ) -> LoopToolRegistry {
     let mut registry = LoopToolRegistry::new();
 
@@ -84,6 +110,7 @@ pub fn build_registry_from_tools<R: ToolRegistry + 'static>(
             description: tool.description.clone(),
             schema,
             registry: Arc::clone(&tool_registry),
+            default_working_dir: default_working_dir.clone(),
         }));
     }
 
@@ -151,7 +178,7 @@ mod tests {
             make_unified_tool("memory", "Query memory"),
         ];
 
-        let registry = build_registry_from_tools(tool_registry, &tools);
+        let registry = build_registry_from_tools(tool_registry, &tools, None);
         assert_eq!(registry.len(), 2);
         assert!(registry.get("search").is_some());
         assert!(registry.get("memory").is_some());
@@ -165,7 +192,7 @@ mod tests {
         let tool_registry = Arc::new(MockRegistry { results });
         let tools = vec![make_unified_tool("search", "Search")];
 
-        let registry = build_registry_from_tools(tool_registry, &tools);
+        let registry = build_registry_from_tools(tool_registry, &tools, None);
         let result = registry.execute("search", json!({"q": "rust"})).await;
 
         match result {
@@ -188,7 +215,7 @@ mod tests {
             inactive,
         ];
 
-        let registry = build_registry_from_tools(tool_registry, &tools);
+        let registry = build_registry_from_tools(tool_registry, &tools, None);
         assert_eq!(registry.len(), 1);
         assert!(registry.get("active").is_some());
         assert!(registry.get("disabled").is_none());
