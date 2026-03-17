@@ -39,6 +39,8 @@ pub struct AgentInstanceConfig {
     pub agent_dir: PathBuf,
     /// Link access whitelist (None or empty = all links allowed)
     pub allowed_links: Option<Vec<String>>,
+    /// Per-agent tool permission overrides
+    pub tool_permissions: Option<crate::config::types::policies::ToolPermissionsConfig>,
 }
 
 impl Default for AgentInstanceConfig {
@@ -60,11 +62,19 @@ impl Default for AgentInstanceConfig {
                 .unwrap_or_else(|| PathBuf::from("/tmp"))
                 .join(".aleph/agents/main"),
             allowed_links: None,
+            tool_permissions: None,
         }
     }
 }
 
 impl AgentInstanceConfig {
+    /// Return the agent's tool permissions config, or a default (all-Allow).
+    pub fn tool_permissions(&self) -> crate::config::types::policies::ToolPermissionsConfig {
+        self.tool_permissions
+            .clone()
+            .unwrap_or_default()
+    }
+
     /// Create from a resolved agent definition.
     ///
     /// Maps ResolvedAgent fields to AgentInstanceConfig:
@@ -85,6 +95,7 @@ impl AgentInstanceConfig {
             tool_blacklist: agent.skills_blacklist.clone(),
             agent_dir: agent.agent_dir.clone(),
             allowed_links: agent.allowed_links.clone(),
+            tool_permissions: agent.tool_permissions.clone(),
         }
     }
 }
@@ -772,6 +783,7 @@ mod tests {
             skills_blacklist: vec![],
             subagent_policy: None,
             allowed_links: None,
+            tool_permissions: None,
         };
 
         let config = AgentInstanceConfig::from_resolved(&resolved);
@@ -804,6 +816,7 @@ mod tests {
             skills_blacklist: vec!["bash".to_string(), "code_exec".to_string()],
             subagent_policy: None,
             allowed_links: None,
+            tool_permissions: None,
         };
 
         let config = AgentInstanceConfig::from_resolved(&resolved);

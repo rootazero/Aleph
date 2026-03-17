@@ -253,6 +253,20 @@ impl<P: LoopProvider> AgentLoop<P> {
                             true,
                         ));
                     }
+                    Err(SafetyError::PolicyDenied { ref tool }) => {
+                        let err = SafetyError::PolicyDenied { tool: tool.clone() };
+                        callback.on_safety_block(&err);
+                        messages.push(UnifiedMessage::tool_result(
+                            tc.id.clone(),
+                            tc.name.clone(),
+                            format!(
+                                "DENIED: tool '{}' is not allowed by permission policy",
+                                tool
+                            ),
+                            true,
+                        ));
+                        // Do NOT increment consecutive_errors
+                    }
                     Ok(()) => {
                         // Safe — execute the tool
                         callback.on_tool_start(&tc.name, &tc.arguments);
@@ -522,7 +536,7 @@ mod tests {
             provider,
             registry,
             PromptBuilder::new(),
-            SafetyGuard::new(vec![], vec![]),
+            SafetyGuard::default_guard(),
             LoopConfig {
                 max_iterations: 10,
                 token_budget: 100_000,
@@ -630,7 +644,7 @@ mod tests {
                 r
             },
             PromptBuilder::new(),
-            SafetyGuard::new(vec![], vec![]),
+            SafetyGuard::default_guard(),
             LoopConfig {
                 max_iterations: 5,
                 token_budget: 100_000,
@@ -675,7 +689,8 @@ mod tests {
             PromptBuilder::new(),
             SafetyGuard::new(
                 vec![r"rm\s+-rf\s+/".to_string()],
-                vec![],
+                std::collections::HashMap::new(),
+                crate::extension::PermissionAction::Allow,
             ),
             LoopConfig {
                 max_iterations: 10,
@@ -759,7 +774,7 @@ mod tests {
             provider,
             registry,
             PromptBuilder::new(),
-            SafetyGuard::new(vec![], vec![]),
+            SafetyGuard::default_guard(),
             LoopConfig {
                 max_iterations: 10,
                 token_budget: 100_000,
@@ -862,7 +877,7 @@ mod tests {
             provider,
             registry,
             PromptBuilder::new(),
-            SafetyGuard::new(vec![], vec![]),
+            SafetyGuard::default_guard(),
             LoopConfig {
                 max_iterations: 25,
                 token_budget: 100_000,
@@ -947,7 +962,7 @@ mod tests {
             provider,
             registry,
             PromptBuilder::new(),
-            SafetyGuard::new(vec![], vec![]),
+            SafetyGuard::default_guard(),
             LoopConfig {
                 max_iterations: 25,
                 token_budget: 100_000,
@@ -999,7 +1014,7 @@ mod tests {
             provider,
             registry,
             PromptBuilder::new(),
-            SafetyGuard::new(vec![], vec![]),
+            SafetyGuard::default_guard(),
             LoopConfig {
                 max_iterations: 10,
                 token_budget: 100_000,
@@ -1072,7 +1087,7 @@ mod tests {
             provider,
             registry,
             PromptBuilder::new(),
-            SafetyGuard::new(vec![], vec![]),
+            SafetyGuard::default_guard(),
             LoopConfig {
                 max_iterations: 10,
                 token_budget: 100_000,
@@ -1180,7 +1195,7 @@ mod tests {
                 r
             },
             PromptBuilder::new(),
-            SafetyGuard::new(vec![], vec![]),
+            SafetyGuard::default_guard(),
             LoopConfig {
                 max_iterations: 10,
                 token_budget: 50,
@@ -1235,7 +1250,7 @@ mod tests {
             provider,
             registry,
             PromptBuilder::new(),
-            SafetyGuard::new(vec![], vec![]),
+            SafetyGuard::default_guard(),
             LoopConfig {
                 max_iterations: 10,
                 token_budget: 100_000,

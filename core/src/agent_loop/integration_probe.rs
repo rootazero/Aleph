@@ -164,7 +164,7 @@ mod tests {
             bridge,
             registry,
             PromptBuilder::new(),
-            SafetyGuard::new(vec![], vec![]),
+            SafetyGuard::default_guard(),
             LoopConfig {
                 max_iterations: 10,
                 token_budget: 100_000,

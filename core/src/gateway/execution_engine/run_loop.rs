@@ -74,8 +74,9 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             PromptBuilder::from_soul(&resolved_soul)
         };
 
-        // Safety guard with defaults
-        let safety = SafetyGuard::default_guard();
+        // Safety guard from merged global + agent permissions
+        let agent_perms = agent.config().tool_permissions();
+        let safety = SafetyGuard::from_permissions(&self.global_tool_permissions, &agent_perms);
 
         // Config from agent
         let max_loops = agent.config().max_loops as usize;
