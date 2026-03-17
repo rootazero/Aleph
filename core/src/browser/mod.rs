@@ -1,6 +1,8 @@
 pub mod actions;
+pub mod backend;
 pub mod discovery;
 pub mod error;
+pub mod managed_backend;
 pub mod manager;
 pub mod network_policy;
 pub mod playwright_bridge;
@@ -9,8 +11,10 @@ pub mod runtime;
 pub mod snapshot;
 pub mod types;
 
+pub use backend::BrowserBackend;
 pub use discovery::find_chromium;
 pub use error::BrowserError;
+pub use managed_backend::ManagedBackend;
 pub use runtime::BrowserRuntime;
 pub use snapshot::{resolve_ref_to_point, take_aria_snapshot};
 pub use types::{
