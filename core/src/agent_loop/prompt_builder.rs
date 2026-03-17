@@ -29,7 +29,8 @@ const BASE_BEHAVIOR: &str = "\
 - When the user asks you to do something and a matching tool exists, call it immediately rather than describing what you would do.\n\
 - Continue working until the user's request is fully resolved. Chain multiple tool calls if needed.\n\
 - When a tool call fails, analyze the error and retry with corrected parameters if possible.\n\
-- Provide concise summaries of actions taken and results obtained.";
+- Provide concise summaries of actions taken and results obtained.\n\
+- When using Python, ALWAYS create a virtual environment via `uv` in `~/.aleph/venvs/<project_name>/` before installing any packages. NEVER use the system Python directly. Example: `uv venv ~/.aleph/venvs/myproject && source ~/.aleph/venvs/myproject/bin/activate && uv pip install <packages>`. This keeps the system environment clean.";
 
 /// Builds the system prompt by assembling sections.
 pub struct PromptBuilder {
