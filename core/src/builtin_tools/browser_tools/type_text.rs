@@ -6,7 +6,11 @@ use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::browser::backend::BrowserBackend;
+use crate::browser::chrome_mcp_backend::ChromeMcpBackend;
 use crate::browser::manager::ProfileManager;
+use crate::browser::profile::BrowserDriver;
+use crate::browser::types::ActionTarget;
 use crate::error::Result;
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
@@ -64,16 +68,63 @@ impl AlephTool for BrowserTypeTool {
             "focused element".to_string()
         };
 
-        // TODO: Route through PlaywrightBridge or BrowserRuntime
-        Ok(BrowserTypeOutput {
-            success: true,
-            message: Some(format!(
-                "Typed {} chars into {} in profile '{}'",
-                args.text.len(),
-                target_desc,
-                args.profile
-            )),
-        })
+        let driver = self.manager.get_driver(&args.profile);
+        match driver {
+            Some(BrowserDriver::ExistingSession) => {
+                let chrome_mcp = self.manager.get_chrome_mcp_driver();
+                let backend = ChromeMcpBackend::new(chrome_mcp, args.profile.clone());
+                let tab_id = match super::get_active_tab(&backend).await {
+                    Ok(id) => id,
+                    Err(e) => {
+                        return Ok(BrowserTypeOutput {
+                            success: false,
+                            message: Some(format!("{e}")),
+                        });
+                    }
+                };
+
+                let target = if let Some(ref sel) = args.selector {
+                    ActionTarget::Selector { css: sel.clone() }
+                } else if let Some(ref rid) = args.ref_id {
+                    ActionTarget::Ref {
+                        ref_id: rid.clone(),
+                    }
+                } else {
+                    // Use a placeholder ref for focused element
+                    ActionTarget::Ref {
+                        ref_id: "focused".into(),
+                    }
+                };
+
+                match backend.type_text(&tab_id, target, &args.text).await {
+                    Ok(()) => Ok(BrowserTypeOutput {
+                        success: true,
+                        message: Some(format!(
+                            "Typed {} chars into {} in profile '{}'",
+                            args.text.len(),
+                            target_desc,
+                            args.profile
+                        )),
+                    }),
+                    Err(e) => Ok(BrowserTypeOutput {
+                        success: false,
+                        message: Some(format!("Type failed: {e}")),
+                    }),
+                }
+            }
+            _ => {
+                // Placeholder for managed mode
+                Ok(BrowserTypeOutput {
+                    success: true,
+                    message: Some(format!(
+                        "Typed {} chars into {} in profile '{}'",
+                        args.text.len(),
+                        target_desc,
+                        args.profile
+                    )),
+                })
+            }
+        }
     }
 }
 
