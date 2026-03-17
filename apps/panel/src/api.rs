@@ -1169,6 +1169,13 @@ impl RerankConfigApi {
             .map_err(|e| format!("Failed to parse rerank config: {}", e))
     }
 
+    /// Get rerank configuration with a specific provider's API key from vault
+    pub async fn get_for_provider(state: &DashboardState, provider: &str) -> Result<RerankConfig, String> {
+        let result = state.rpc_call("rerank_config.get", serde_json::json!({ "provider": provider })).await?;
+        serde_json::from_value(result)
+            .map_err(|e| format!("Failed to parse rerank config: {}", e))
+    }
+
     /// Update rerank configuration
     pub async fn update(state: &DashboardState, config: RerankConfig) -> Result<(), String> {
         let params = serde_json::to_value(&config)

@@ -248,7 +248,20 @@ fn ProviderDetailPanel(
 
     let enabled = RwSignal::new(true);
     let api_base = RwSignal::new(if is_current_provider { rerank_cfg.api_base.clone() } else { String::new() });
-    let api_key = RwSignal::new(if is_current_provider { rerank_cfg.api_key.clone() } else { String::new() });
+    let api_key = RwSignal::new(String::new());
+
+    // Fetch this provider's API key from vault (each provider has its own key)
+    {
+        let pk = provider_key.clone();
+        let state = expect_context::<DashboardState>();
+        spawn_local(async move {
+            if let Ok(cfg) = RerankConfigApi::get_for_provider(&state, &pk).await {
+                if !cfg.api_key.is_empty() {
+                    api_key.set(cfg.api_key);
+                }
+            }
+        });
+    }
     let form_model = RwSignal::new({
         if is_current_provider && !rerank_cfg.model.is_empty() {
             rerank_cfg.model.clone()
