@@ -15,10 +15,13 @@ use tokio::sync::RwLock;
 use tracing::{debug, info};
 
 use crate::config::types::agent::{CodeExecConfigToml, CoworkConfigToml, FileOpsConfigToml};
+use crate::config::types::policies::ToolPermissionsConfig;
 use crate::config::Config;
+use crate::extension::PermissionAction;
 
 use super::super::event_bus::{ConfigChangedEvent, GatewayEvent, GatewayEventBus};
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
+use super::parse_params;
 
 // =============================================================================
 // Response Types
@@ -345,4 +348,149 @@ pub async fn handle_update_code_exec(
     let _ = event_bus.publish_json(&event);
 
     JsonRpcResponse::success(request.id, json!({"success": true}))
+}
+
+// =============================================================================
+// Tool Permissions Handlers
+// =============================================================================
+
+/// Parameters for agent_config.get_tool_permissions
+#[derive(Debug, Clone, Deserialize)]
+struct GetToolPermissionsParams {
+    pub agent_id: String,
+}
+
+/// Parameters for agent_config.update_tool_permissions
+#[derive(Debug, Clone, Deserialize)]
+struct UpdateToolPermissionsParams {
+    pub agent_id: String,
+
+    /// Default permission level (optional partial update)
+    #[serde(default)]
+    pub default: Option<PermissionAction>,
+
+    /// Per-tool overrides (optional partial update)
+    #[serde(default)]
+    pub overrides: Option<std::collections::HashMap<String, PermissionAction>>,
+}
+
+/// Build the tool permissions response for an agent.
+///
+/// Returns agent-level config, effective (merged with global), and global overrides.
+fn build_tool_permissions_response(
+    global: &ToolPermissionsConfig,
+    agent_perms: Option<&ToolPermissionsConfig>,
+) -> serde_json::Value {
+    let agent = agent_perms.cloned().unwrap_or_default();
+    let effective = ToolPermissionsConfig::merge(global, &agent);
+
+    json!({
+        "default": agent.default,
+        "overrides": agent.overrides,
+        "effective_default": effective.default,
+        "effective": effective.overrides,
+        "global_overrides": global.overrides,
+    })
+}
+
+/// Handle agent_config.get_tool_permissions request
+///
+/// Returns the agent's tool_permissions, effective (merged with global), and global overrides.
+pub async fn handle_get_tool_permissions(
+    request: JsonRpcRequest,
+    config: Arc<RwLock<Config>>,
+) -> JsonRpcResponse {
+    debug!("Handling agent_config.get_tool_permissions request");
+
+    let params: GetToolPermissionsParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
+    };
+
+    let cfg = config.read().await;
+
+    let agent = cfg.agents.list.iter().find(|a| a.id == params.agent_id);
+    let agent = match agent {
+        Some(a) => a,
+        None => {
+            return JsonRpcResponse::error(
+                request.id,
+                INVALID_PARAMS,
+                format!("Agent not found: {}", params.agent_id),
+            );
+        }
+    };
+
+    let global = &cfg.policies.tool_permissions;
+    let result = build_tool_permissions_response(global, agent.tool_permissions.as_ref());
+
+    JsonRpcResponse::success(request.id, result)
+}
+
+/// Handle agent_config.update_tool_permissions request
+///
+/// Partial update of agent's tool_permissions. Returns the full get_tool_permissions response.
+pub async fn handle_update_tool_permissions(
+    request: JsonRpcRequest,
+    config: Arc<RwLock<Config>>,
+    event_bus: Arc<GatewayEventBus>,
+) -> JsonRpcResponse {
+    debug!("Handling agent_config.update_tool_permissions request");
+
+    let params: UpdateToolPermissionsParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
+    };
+
+    let result = {
+        let mut cfg = config.write().await;
+
+        let agent = cfg.agents.list.iter_mut().find(|a| a.id == params.agent_id);
+        let agent = match agent {
+            Some(a) => a,
+            None => {
+                return JsonRpcResponse::error(
+                    request.id,
+                    INVALID_PARAMS,
+                    format!("Agent not found: {}", params.agent_id),
+                );
+            }
+        };
+
+        // Ensure tool_permissions exists, then patch
+        let perms = agent.tool_permissions.get_or_insert_with(Default::default);
+
+        if let Some(default) = params.default {
+            perms.default = default;
+        }
+        if let Some(overrides) = params.overrides {
+            perms.overrides = overrides;
+        }
+
+        // Save to file
+        if let Err(e) = cfg.save_incremental(&["agents"]) {
+            return JsonRpcResponse::error(
+                request.id,
+                INTERNAL_ERROR,
+                format!("Failed to save configuration: {}", e),
+            );
+        }
+
+        info!(agent_id = %params.agent_id, "Agent tool permissions updated successfully");
+
+        // Re-find the agent immutably for the response
+        let agent = cfg.agents.list.iter().find(|a| a.id == params.agent_id).unwrap();
+        let global = &cfg.policies.tool_permissions;
+        build_tool_permissions_response(global, agent.tool_permissions.as_ref())
+    };
+
+    // Broadcast configuration change event
+    let event = GatewayEvent::ConfigChanged(ConfigChangedEvent {
+        section: Some("agents".to_string()),
+        value: json!({"updated": true}),
+        timestamp: chrono::Utc::now().timestamp_millis(),
+    });
+    let _ = event_bus.publish_json(&event);
+
+    JsonRpcResponse::success(request.id, result)
 }
