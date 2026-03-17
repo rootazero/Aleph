@@ -42,11 +42,20 @@ impl SharedTokenManager {
     /// If the store already has a persisted HMAC secret, it is reused so that
     /// existing tokens remain valid across restarts and updates.
     pub fn new(store: Arc<SecurityStore>, vault_path: impl Into<std::path::PathBuf>) -> Self {
-        let secret = store
-            .get_shared_token_secret()
-            .ok()
-            .flatten()
-            .unwrap_or_else(generate_secret);
+        let secret = match store.get_shared_token_secret() {
+            Ok(Some(s)) => {
+                tracing::info!("SharedTokenManager: restored persisted HMAC secret from DB");
+                s
+            }
+            Ok(None) => {
+                tracing::info!("SharedTokenManager: no persisted HMAC secret found, generating new one");
+                generate_secret()
+            }
+            Err(e) => {
+                tracing::warn!("SharedTokenManager: failed to load HMAC secret from DB: {}, generating new one — THIS WILL INVALIDATE EXISTING TOKENS", e);
+                generate_secret()
+            }
+        };
         let vault_path = vault_path.into();
         let vault = SecretVault::open(&vault_path).unwrap_or_else(|_| SecretVault::empty(vault_path));
         Self {
@@ -95,17 +104,32 @@ impl SharedTokenManager {
     /// Try to load and validate an existing token from a file.
     /// Returns `Some(token)` if the file exists and the token validates.
     pub fn try_load_token_from_file(&self, path: &std::path::Path) -> Option<String> {
-        let token = std::fs::read_to_string(path).ok()?.trim().to_string();
+        let token = match std::fs::read_to_string(path) {
+            Ok(t) => t.trim().to_string(),
+            Err(e) => {
+                tracing::warn!("SharedTokenManager: failed to read token file {:?}: {}", path, e);
+                return None;
+            }
+        };
         if token.is_empty() {
+            tracing::warn!("SharedTokenManager: token file {:?} is empty", path);
             return None;
         }
         match self.validate(&token) {
             Ok(true) => {
+                tracing::info!("SharedTokenManager: existing token validated successfully from {:?}", path);
                 let mut current = self.current_token.lock().unwrap_or_else(|e| e.into_inner());
                 *current = Some(token.clone());
                 Some(token)
             }
-            _ => None,
+            Ok(false) => {
+                tracing::warn!("SharedTokenManager: token from {:?} failed HMAC validation — HMAC secret may have changed", path);
+                None
+            }
+            Err(e) => {
+                tracing::warn!("SharedTokenManager: token validation error for {:?}: {}", path, e);
+                None
+            }
         }
     }
 
