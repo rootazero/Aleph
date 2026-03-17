@@ -48,10 +48,13 @@ impl<R: ToolRegistry + 'static> LoopTool for RegistryToolAdapter<R> {
                     ToolResult::Success { output }
                 }
             }
-            Err(e) => ToolResult::Error {
-                error: e.to_string(),
-                retryable: true,
-            },
+            Err(e) => {
+                tracing::warn!(tool = %self.name, error = %e, "Tool execution failed");
+                ToolResult::Error {
+                    error: e.to_string(),
+                    retryable: true,
+                }
+            }
         }
     }
 }

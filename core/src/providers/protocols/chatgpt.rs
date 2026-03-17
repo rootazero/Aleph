@@ -146,10 +146,14 @@ impl ChatGptProtocol {
             tool_defs
                 .iter()
                 .map(|td| {
-                    // Ensure parameters schema has required "properties" field
-                    // OpenAI rejects object schemas without it
+                    // Clean schemars-generated schema for Codex Responses API:
+                    // - Migrate draft-07 → 2020-12 (remove $schema, rename definitions)
+                    // - Remove title (not part of OpenAI tool schema)
+                    // - Ensure required "properties" field exists
                     let mut params = td.parameters.clone();
+                    crate::tools::schema_strictify::migrate_to_draft_2020_12(&mut params);
                     if let Some(obj) = params.as_object_mut() {
+                        obj.remove("title");
                         if !obj.contains_key("properties") {
                             obj.insert(
                                 "properties".to_string(),
@@ -403,9 +407,16 @@ impl ProtocolAdapter for ChatGptProtocol {
             .await
             .map_err(|e| AlephError::provider(format!("Failed to read Codex response: {}", e)))?;
 
-        // Parse SSE events, looking for the Completed event with full response
+        // Parse SSE events, looking for the Completed event with full response.
+        // Function call arguments arrive via delta events and must be accumulated
+        // separately, since the Completed event may have empty arguments.
         let mut result = String::new();
         let mut tool_calls: Vec<NativeToolCall> = Vec::new();
+        // Accumulate function_call arguments by item_id
+        let mut fc_args: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+        // Track function_call metadata (call_id, name) by item_id
+        let mut fc_meta: std::collections::HashMap<String, (String, String)> = std::collections::HashMap::new();
+
         for line in text.lines() {
             let data = if let Some(d) = line.strip_prefix("data: ") {
                 d
@@ -417,13 +428,57 @@ impl ProtocolAdapter for ChatGptProtocol {
                     StreamEvent::TextDelta { delta, .. } => {
                         result.push_str(&delta);
                     }
+                    StreamEvent::OutputItemAdded {
+                        item: crate::providers::chatgpt::types::OutputItem::FunctionCall {
+                            ref id, ref call_id, ref name, ref arguments,
+                        },
+                        ..
+                    } => {
+                        fc_meta.insert(id.clone(), (call_id.clone(), name.clone()));
+                        // OutputItemAdded may already contain partial arguments
+                        if !arguments.is_empty() {
+                            fc_args.entry(id.clone()).or_default().push_str(arguments);
+                        }
+                    }
+                    StreamEvent::FunctionCallArgumentsDelta {
+                        ref item_id,
+                        ref delta,
+                        ..
+                    } => {
+                        fc_args.entry(item_id.clone()).or_default().push_str(delta);
+                    }
+                    StreamEvent::FunctionCallArgumentsDone {
+                        ref item_id,
+                        ref arguments,
+                        ..
+                    } => {
+                        // Prefer the done event's complete arguments
+                        fc_args.insert(item_id.clone(), arguments.clone());
+                    }
                     StreamEvent::Completed { ref response } => {
-                        // Prefer extracting from completed response for accuracy
+                        // Prefer extracting text from completed response for accuracy
                         if let Some(full_text) = Self::extract_text(response) {
                             result = full_text;
                         }
-                        // Extract function calls
-                        tool_calls = Self::extract_tool_calls(response);
+                        // Build tool_calls: use accumulated arguments, fallback to Completed response
+                        let completed_calls = Self::extract_tool_calls(response);
+                        if !fc_args.is_empty() {
+                            // Merge: use accumulated arguments over completed response's empty ones
+                            for (item_id, (call_id, name)) in &fc_meta {
+                                let args_str = fc_args.get(item_id).cloned().unwrap_or_default();
+                                let args = serde_json::from_str(&args_str)
+                                    .unwrap_or_else(|_| serde_json::Value::String(args_str));
+                                debug!("Codex function_call: name={} call_id={} arguments={}", name, call_id, args);
+                                tool_calls.push(NativeToolCall {
+                                    id: call_id.clone(),
+                                    name: name.clone(),
+                                    arguments: args,
+                                });
+                            }
+                        } else {
+                            // No streaming args — use completed response directly
+                            tool_calls = completed_calls;
+                        }
                     }
                     StreamEvent::Failed { response } => {
                         let msg = response

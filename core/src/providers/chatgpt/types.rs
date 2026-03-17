@@ -188,6 +188,24 @@ pub enum StreamEvent {
         content_index: usize,
     },
 
+    /// Function call arguments delta (streaming tool call arguments)
+    #[serde(rename = "response.function_call_arguments.delta")]
+    FunctionCallArgumentsDelta {
+        item_id: String,
+        #[serde(default)]
+        output_index: Option<usize>,
+        delta: String,
+    },
+
+    /// Function call arguments complete
+    #[serde(rename = "response.function_call_arguments.done")]
+    FunctionCallArgumentsDone {
+        item_id: String,
+        #[serde(default)]
+        output_index: Option<usize>,
+        arguments: String,
+    },
+
     #[serde(rename = "response.completed")]
     Completed { response: ResponseResource },
 

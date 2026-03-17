@@ -223,7 +223,14 @@ impl<P: LoopProvider> AgentLoop<P> {
                     input: tc.arguments.clone(),
                 };
 
-                match self.safety_guard.check(&safety_call) {
+                let safety_result = self.safety_guard.check(&safety_call);
+                tracing::info!(
+                    tool = %tc.name,
+                    result = ?safety_result.as_ref().map(|_| "allowed").unwrap_or("denied"),
+                    "Tool call safety check"
+                );
+
+                match safety_result {
                     Err(SafetyError::Blocked { ref tool, ref pattern }) => {
                         let err = SafetyError::Blocked {
                             tool: tool.clone(),
@@ -269,8 +276,10 @@ impl<P: LoopProvider> AgentLoop<P> {
                     }
                     Ok(()) => {
                         // Safe — execute the tool
+                        tracing::info!(tool = %tc.name, "Executing tool");
                         callback.on_tool_start(&tc.name, &tc.arguments);
                         let result = self.tool_registry.execute(&tc.name, tc.arguments.clone()).await;
+                        tracing::info!(tool = %tc.name, is_error = matches!(&result, ToolResult::Error { .. }), "Tool execution complete");
                         callback.on_tool_done(&tc.name, &result);
 
                         let (output_text, is_error, should_stop) = match &result {
