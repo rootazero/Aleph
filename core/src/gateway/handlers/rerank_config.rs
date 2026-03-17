@@ -3,6 +3,8 @@
 //! Dedicated handlers for cross-encoder reranking provider configuration,
 //! decoupled from the broader memory_config module.
 //!
+//! API keys are stored in the encrypted vault, never in config.toml.
+//!
 //! | Method | Description |
 //! |--------|-------------|
 //! | rerank_config.get | Get current rerank configuration |
@@ -10,44 +12,68 @@
 //! | rerank_config.test | Test rerank provider connectivity |
 
 use serde_json::json;
+use tracing::{error, info, warn};
 
 use crate::config::Config;
 use crate::gateway::event_bus::{ConfigChangedEvent, GatewayEvent, GatewayEventBus};
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
+use crate::gateway::security::SharedTokenManager;
 use crate::memory::rerank::{self, RerankConfig};
 #[cfg(test)]
 use crate::memory::rerank::RerankProviderType;
 use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
 
+const VAULT_KEY: &str = "rerank:api_key";
+
+/// Resolve API key from vault
+fn resolve_api_key(vault: &SharedTokenManager) -> Option<String> {
+    match vault.get_secret(VAULT_KEY) {
+        Ok(Some(secret)) => Some(secret.expose().to_string()),
+        Ok(None) => None,
+        Err(e) => {
+            warn!(error = %e, "Failed to read rerank API key from vault");
+            None
+        }
+    }
+}
+
 /// Handle rerank_config.get request
 pub async fn handle_get(
     request: JsonRpcRequest,
     config: Arc<RwLock<Config>>,
+    vault: Arc<SharedTokenManager>,
 ) -> JsonRpcResponse {
     let cfg = config.read().await;
 
-    let rerank = serde_json::to_value(&cfg.memory.rerank)
+    let mut rerank = serde_json::to_value(&cfg.memory.rerank)
         .unwrap_or_else(|_| json!({}));
+
+    // Inject API key from vault (api_key is #[serde(skip_serializing)] so won't be in the value)
+    if let Some(key) = resolve_api_key(&vault) {
+        if let Some(obj) = rerank.as_object_mut() {
+            obj.insert("api_key".into(), json!(key));
+        }
+    }
 
     JsonRpcResponse::success(request.id, rerank)
 }
 
 /// Handle rerank_config.update request
 ///
-/// Updates only the rerank section of memory config, leaving all other
-/// memory settings untouched.
+/// Stores API key in vault, saves remaining config to config.toml.
 pub async fn handle_update(
     request: JsonRpcRequest,
     config: Arc<RwLock<Config>>,
     event_bus: Arc<GatewayEventBus>,
+    vault: Arc<SharedTokenManager>,
 ) -> JsonRpcResponse {
     let params = match request.params {
         Some(p) => p,
         None => return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Missing params"),
     };
 
-    let rerank_config: RerankConfig = match serde_json::from_value(params) {
+    let mut rerank_config: RerankConfig = match serde_json::from_value(params) {
         Ok(c) => c,
         Err(e) => {
             return JsonRpcResponse::error(
@@ -57,6 +83,15 @@ pub async fn handle_update(
             )
         }
     };
+
+    // Store API key in vault if provided
+    if !rerank_config.api_key.is_empty() {
+        if let Err(e) = vault.store_secret(VAULT_KEY, &rerank_config.api_key) {
+            error!(error = %e, "Failed to store rerank API key in vault");
+        }
+    }
+    // Clear api_key before saving to config (it's in vault now)
+    rerank_config.api_key = String::new();
 
     {
         let mut cfg = config.write().await;
@@ -79,27 +114,26 @@ pub async fn handle_update(
     });
     let _ = event_bus.publish_json(&event);
 
+    info!("Rerank config updated via RPC");
     JsonRpcResponse::success(request.id, json!({ "success": true }))
 }
 
 /// Handle rerank_config.test request
 ///
-/// Builds a rerank provider from the supplied config and sends a test query
-/// with 3 sample documents. Returns success/failure with score info.
-pub async fn handle_test(request: JsonRpcRequest) -> JsonRpcResponse {
-    tracing::info!("rerank_config.test called");
-
+/// Builds a rerank provider from the supplied config and sends a test query.
+/// If no api_key in request, falls back to vault.
+pub async fn handle_test(
+    request: JsonRpcRequest,
+    vault: Arc<SharedTokenManager>,
+) -> JsonRpcResponse {
     let params = match &request.params {
         Some(p) => p.clone(),
         None => return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Missing params"),
     };
 
-    tracing::info!(params = %params, "rerank_config.test params");
-
-    let config: RerankConfig = match serde_json::from_value(params) {
+    let mut config: RerankConfig = match serde_json::from_value(params) {
         Ok(c) => c,
         Err(e) => {
-            tracing::error!(error = %e, "rerank_config.test: failed to parse config");
             return JsonRpcResponse::error(
                 request.id,
                 INVALID_PARAMS,
@@ -108,7 +142,13 @@ pub async fn handle_test(request: JsonRpcRequest) -> JsonRpcResponse {
         }
     };
 
-    tracing::info!(provider = ?config.provider, "rerank_config.test: building provider");
+    // If no api_key in request, fall back to vault
+    if config.api_key.is_empty() {
+        if let Some(key) = resolve_api_key(&vault) {
+            config.api_key = key;
+        }
+    }
+
     let provider = rerank::build_provider(&config);
 
     let test_docs = vec![
@@ -117,7 +157,6 @@ pub async fn handle_test(request: JsonRpcRequest) -> JsonRpcResponse {
         "Memory optimization is an important task.".to_string(),
     ];
 
-    tracing::info!("rerank_config.test: calling rerank API...");
     match provider
         .rerank(
             "What programming language does the user prefer?",
@@ -127,7 +166,6 @@ pub async fn handle_test(request: JsonRpcRequest) -> JsonRpcResponse {
         .await
     {
         Ok(results) => {
-            tracing::info!(count = results.len(), "rerank_config.test: success");
             JsonRpcResponse::success(
                 request.id,
                 json!({
@@ -138,7 +176,6 @@ pub async fn handle_test(request: JsonRpcRequest) -> JsonRpcResponse {
             )
         }
         Err(e) => {
-            tracing::warn!(error = %e, "rerank_config.test: rerank failed");
             JsonRpcResponse::success(
                 request.id,
                 json!({
@@ -158,25 +195,31 @@ mod tests {
     #[tokio::test]
     async fn test_handle_get_default() {
         let config = Arc::new(RwLock::new(Config::default()));
+        let store = Arc::new(crate::gateway::security::SecurityStore::in_memory().unwrap());
+        let vault = Arc::new(SharedTokenManager::new(store, "/tmp/test_rerank.vault"));
+        let _ = vault.generate_token();
+
         let request =
             JsonRpcRequest::with_id("rerank_config.get", None, serde_json::json!(1));
-        let response = handle_get(request, config).await;
+        let response = handle_get(request, config, vault).await;
         assert!(response.is_success());
 
         let result = response.result.unwrap();
-        // Default: disabled
         assert_eq!(result["enabled"].as_bool(), Some(false));
     }
 
     #[tokio::test]
-    async fn test_handle_update_valid() {
+    async fn test_handle_update_stores_key_in_vault() {
         let config = Arc::new(RwLock::new(Config::default()));
         let event_bus = Arc::new(GatewayEventBus::new());
+        let store = Arc::new(crate::gateway::security::SecurityStore::in_memory().unwrap());
+        let vault = Arc::new(SharedTokenManager::new(store, "/tmp/test_rerank_update.vault"));
+        let _ = vault.generate_token();
 
         let params = json!({
             "enabled": true,
             "provider": "jina",
-            "api_key": "test-key",
+            "api_key": "test-secret-key",
             "model": "jina-reranker-v2-base-multilingual",
             "timeout_ms": 3000,
             "rerank_weight": 0.7,
@@ -187,36 +230,38 @@ mod tests {
             Some(params),
             serde_json::json!(1),
         );
-        let response = handle_update(request, config.clone(), event_bus).await;
+        let response = handle_update(request, config.clone(), event_bus, vault.clone()).await;
         assert!(response.is_success());
 
-        // Verify stored config
+        // Verify api_key is NOT in config
         let cfg = config.read().await;
         assert!(cfg.memory.rerank.enabled);
         assert_eq!(cfg.memory.rerank.provider, RerankProviderType::Jina);
-        assert_eq!(cfg.memory.rerank.api_key, "test-key");
-        assert_eq!(cfg.memory.rerank.timeout_ms, 3000);
+        assert!(cfg.memory.rerank.api_key.is_empty(), "api_key should be empty in config");
+
+        // Verify api_key IS in vault
+        let secret = vault.get_secret(VAULT_KEY).unwrap().unwrap();
+        assert_eq!(secret.expose(), "test-secret-key");
     }
 
     #[tokio::test]
     async fn test_handle_update_invalid() {
         let config = Arc::new(RwLock::new(Config::default()));
         let event_bus = Arc::new(GatewayEventBus::new());
+        let store = Arc::new(crate::gateway::security::SecurityStore::in_memory().unwrap());
+        let vault = Arc::new(SharedTokenManager::new(store, "/tmp/test_rerank_invalid.vault"));
+        let _ = vault.generate_token();
 
-        // Invalid: provider is a number instead of string
         let params = json!({ "provider": 42 });
         let request = JsonRpcRequest::with_id(
             "rerank_config.update",
             Some(params),
             serde_json::json!(1),
         );
-        let response = handle_update(request, config, event_bus).await;
+        let response = handle_update(request, config, event_bus, vault).await;
         assert!(response.is_error());
     }
 
-    /// Verify that rerank_config.update only modifies `cfg.memory.rerank`,
-    /// not other memory fields. Uses a direct unit test on the Config struct
-    /// to avoid file-save race conditions with `Config::save()`.
     #[test]
     fn test_update_preserves_other_memory_fields() {
         let mut cfg = Config::default();
@@ -224,7 +269,6 @@ mod tests {
         cfg.memory.max_context_items = 42;
         cfg.memory.retention_days = 365;
 
-        // Simulate what handle_update does (minus file save)
         cfg.memory.rerank = RerankConfig {
             enabled: true,
             provider: RerankProviderType::Voyage,
@@ -232,11 +276,8 @@ mod tests {
             ..Default::default()
         };
 
-        // Rerank updated
         assert!(cfg.memory.rerank.enabled);
         assert_eq!(cfg.memory.rerank.provider, RerankProviderType::Voyage);
-
-        // Other memory fields preserved
         assert!(cfg.memory.enabled);
         assert_eq!(cfg.memory.max_context_items, 42);
         assert_eq!(cfg.memory.retention_days, 365);

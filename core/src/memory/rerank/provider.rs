@@ -70,8 +70,8 @@ pub struct RerankConfig {
     #[serde(default)]
     pub api_base: String,
 
-    /// API key for authentication
-    #[serde(default)]
+    /// API key for authentication (runtime only — stored in vault, never serialized to config)
+    #[serde(default, skip_serializing)]
     pub api_key: String,
 
     /// Model identifiers (first is the active model)
