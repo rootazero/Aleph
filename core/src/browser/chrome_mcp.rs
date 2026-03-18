@@ -50,7 +50,10 @@ impl ChromeMcpDriver {
             .get(profile_name)
             .ok_or_else(|| BrowserError::ChromeMcpError("Session not found after creation".into()))?;
 
-        let result = match session.client.call_tool(tool_name, args).await {
+        // MCP tools are namespaced with server prefix: "chrome-mcp-{profile}:{tool}"
+        let server_name = format!("chrome-mcp-{profile_name}");
+        let full_tool_name = format!("{server_name}:{tool_name}");
+        let result = match session.client.call_tool(&full_tool_name, args).await {
             Ok(r) => r,
             Err(e) => {
                 let err_str = e.to_string();
@@ -116,7 +119,7 @@ impl ChromeMcpDriver {
             env: HashMap::new(),
             cwd: None,
             requires_runtime: Some("node".into()),
-            timeout_seconds: Some(30),
+            timeout_seconds: Some(60),
         };
 
         let client = McpClient::new();
@@ -146,7 +149,7 @@ impl ChromeMcpDriver {
                     env: HashMap::new(),
                     cwd: None,
                     requires_runtime: Some("node".into()),
-                    timeout_seconds: Some(30),
+                    timeout_seconds: Some(60),
                 };
 
                 let retry_client = McpClient::new();
@@ -294,14 +297,65 @@ mod integration_tests {
 
     #[tokio::test]
     #[ignore] // Requires Chrome + npx chrome-devtools-mcp installed
+    async fn test_chrome_mcp_list_tools() {
+        let config = ChromeMcpConfig::default();
+        let driver = Arc::new(ChromeMcpDriver::new(config));
+        // Ensure session is created
+        driver.ensure_session("user").await.expect("session should start");
+        let sessions = driver.sessions.read().await;
+        let session = sessions.get("user").expect("session exists");
+        let tools = session.client.list_tools().await;
+        println!("=== Available MCP tools ({}) ===", tools.len());
+        for tool in &tools {
+            println!("  {} — {}", tool.name, tool.description);
+        }
+        assert!(!tools.is_empty(), "Should have tools available");
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn test_chrome_mcp_list_tabs_raw() {
+        let config = ChromeMcpConfig::default();
+        let driver = Arc::new(ChromeMcpDriver::new(config));
+        driver.ensure_session("user").await.expect("session");
+        let sessions = driver.sessions.read().await;
+        let session = sessions.get("user").expect("session");
+
+        // Call directly via client with full prefixed name
+        println!("=== Calling chrome-mcp-user:list_pages via client...");
+        let r1 = session.client.call_tool("chrome-mcp-user:list_pages", serde_json::json!({})).await;
+        println!("=== client result: {r1:?}");
+
+        // Also try raw without prefix via the connection directly
+        // Let's just see what tool names the server actually has
+        let tools = session.client.list_tools().await;
+        let page_tools: Vec<_> = tools.iter()
+            .filter(|t| t.name.contains("page"))
+            .map(|t| &t.name)
+            .collect();
+        println!("=== page-related tools: {page_tools:?}");
+    }
+
+    #[tokio::test]
+    #[ignore]
     async fn test_chrome_mcp_list_tabs() {
         let config = ChromeMcpConfig::default();
         let driver = Arc::new(ChromeMcpDriver::new(config));
         let backend = ChromeMcpBackend::new(driver, "user".to_string());
 
-        let tabs = backend.list_tabs().await.expect("list_tabs should succeed");
-        assert!(!tabs.is_empty(), "Should have at least one tab open");
-        println!("Open tabs: {tabs:?}");
+        println!("Calling list_tabs...");
+        match backend.list_tabs().await {
+            Ok(tabs) => {
+                println!("Open tabs ({}):", tabs.len());
+                for t in &tabs {
+                    println!("  [{}] {}", t.id, t.url);
+                }
+                assert!(!tabs.is_empty(), "Should have at least one tab open");
+            }
+            Err(e) => {
+                panic!("list_tabs failed: {e}");
+            }
+        }
     }
 
     #[tokio::test]
@@ -312,7 +366,10 @@ mod integration_tests {
         let backend = ChromeMcpBackend::new(driver, "user".to_string());
 
         let tabs = backend.list_tabs().await.expect("list_tabs");
-        let tab_id = &tabs[0].id;
+        println!("Tabs for snapshot: {tabs:?}");
+        // Use second tab (skip chrome://inspect which may not have useful content)
+        let tab_id = tabs.get(1).or(tabs.first()).expect("need at least one tab").id.clone();
+        let tab_id = &tab_id;
 
         let snapshot = backend.snapshot(tab_id).await.expect("snapshot should succeed");
         assert!(!snapshot.elements.is_empty(), "Snapshot should have elements");
