@@ -1,7 +1,7 @@
 //! Daemon process management for Aleph Gateway
 //!
 //! This module handles PID file management, process lifecycle,
-//! and Unix daemonization.
+//! instance locking, and Unix daemonization.
 
 use std::path::PathBuf;
 
@@ -47,6 +47,96 @@ pub fn write_pid_file(pid_file: &str) -> std::io::Result<()> {
 pub fn remove_pid_file(pid_file: &str) {
     let path = expand_path(pid_file);
     let _ = std::fs::remove_file(&path);
+}
+
+/// Acquire an exclusive instance lock to prevent concurrent Aleph processes.
+///
+/// Uses `flock(LOCK_EX | LOCK_NB)` on `~/.aleph/data/aleph.lock`. The lock is
+/// automatically released by the OS when the process exits (including crashes),
+/// so there is no risk of stale locks.
+///
+/// Returns the lock file handle which MUST be kept alive for the server's
+/// entire lifetime. Dropping it releases the lock.
+#[cfg(unix)]
+pub fn acquire_instance_lock() -> Result<std::fs::File, Box<dyn std::error::Error>> {
+    use std::os::unix::io::AsRawFd;
+
+    let lock_path = dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("/tmp"))
+        .join(".aleph/data/aleph.lock");
+
+    if let Some(parent) = lock_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(&lock_path)
+        .map_err(|e| format!("Cannot open lock file {}: {}", lock_path.display(), e))?;
+
+    // Write our PID so the user can identify which process holds the lock
+    use std::io::Write;
+    let mut f = &file;
+    let _ = f.write_all(format!("{}\n", std::process::id()).as_bytes());
+    let _ = f.flush();
+
+    let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    if rc != 0 {
+        // Lock held by another process — read its PID for diagnostics
+        let other_pid = std::fs::read_to_string(&lock_path)
+            .ok()
+            .and_then(|s| s.trim().parse::<i32>().ok());
+
+        let msg = if let Some(pid) = other_pid {
+            if is_process_running(pid) {
+                format!(
+                    "Another Aleph instance is already running (PID {}).\n\
+                     Running multiple instances simultaneously will corrupt the vault \
+                     and destroy all stored API keys.\n\
+                     Stop the other instance first: kill {} or `aleph stop`",
+                    pid, pid
+                )
+            } else {
+                format!(
+                    "Lock file exists with stale PID {}. \
+                     This should not happen — the OS should have released the lock. \
+                     Try removing {} manually.",
+                    pid, lock_path.display()
+                )
+            }
+        } else {
+            format!(
+                "Another Aleph instance appears to be running (lock file: {}).\n\
+                 Stop it first to prevent vault corruption.",
+                lock_path.display()
+            )
+        };
+        return Err(msg.into());
+    }
+
+    Ok(file)
+}
+
+#[cfg(not(unix))]
+pub fn acquire_instance_lock() -> Result<std::fs::File, Box<dyn std::error::Error>> {
+    // On non-Unix, fall back to a best-effort PID check
+    let lock_path = dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("/tmp"))
+        .join(".aleph/data/aleph.lock");
+    if let Some(parent) = lock_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(&lock_path)?;
+    use std::io::Write;
+    let mut f = &file;
+    let _ = f.write_all(format!("{}\n", std::process::id()).as_bytes());
+    Ok(file)
 }
 
 /// Handle stop command
