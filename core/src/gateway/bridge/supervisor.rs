@@ -590,6 +590,7 @@ impl BridgeSupervisor {
     ///
     /// Polls with 100ms sleep intervals until the socket exists or the
     /// timeout is exceeded.
+    #[cfg(unix)]
     async fn wait_for_socket(
         path: &std::path::Path,
         timeout: Duration,

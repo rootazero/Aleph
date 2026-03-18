@@ -142,6 +142,7 @@ impl WhatsAppChannel {
 /// If invalid, a warning is logged but the transition is still applied,
 /// since bridge events reflect the actual WhatsApp connection state and
 /// take priority over the local state machine model.
+#[cfg(unix)]
 async fn transition_state(
     pairing_state: &RwLock<PairingState>,
     new_state: PairingState,
@@ -164,6 +165,7 @@ async fn transition_state(
 ///
 /// Updates pairing state (with transition validation) and forwards inbound
 /// messages to the channel's inbound_tx sender.
+#[cfg(unix)]
 async fn event_loop(
     mut event_rx: mpsc::Receiver<BridgeEvent>,
     pairing_state: Arc<RwLock<PairingState>>,

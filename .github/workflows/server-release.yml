@@ -29,7 +29,7 @@ jobs:
             asset: aleph-windows-x86_64
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Read version from VERSION file
         id: version
@@ -82,7 +82,7 @@ jobs:
           Copy-Item "target/${{ matrix.target }}/release/aleph.exe" aleph.exe
           Compress-Archive -Path aleph.exe -DestinationPath "${{ matrix.asset }}.zip"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: ${{ matrix.asset }}
           path: |
@@ -99,13 +99,13 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Read version from VERSION file
         id: version
         run: echo "value=v$(cat VERSION | tr -d '[:space:]')" >> $GITHUB_OUTPUT
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v5
         with:
           path: artifacts
 

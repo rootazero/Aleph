@@ -115,6 +115,7 @@ impl DaemonCli {
         info!("Starting Aleph daemon with WorldModel and Dispatcher...");
 
         // 1. Load configurations
+        #[cfg(unix)]
         let config = DaemonConfig::default();
 
         // 2. Create EventBus

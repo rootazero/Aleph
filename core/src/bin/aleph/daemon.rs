@@ -35,6 +35,7 @@ pub fn read_pid_file(pid_file: &str) -> Option<i32> {
 }
 
 /// Write PID to file
+#[cfg(unix)]
 pub fn write_pid_file(pid_file: &str) -> std::io::Result<()> {
     let path = expand_path(pid_file);
     if let Some(parent) = path.parent() {

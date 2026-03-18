@@ -32,6 +32,7 @@ use super::types::{DesktopRequest, MouseButton};
 /// Client that sends requests to the macOS App's UDS Desktop Bridge server.
 #[derive(Clone)]
 pub struct DesktopBridgeClient {
+    #[cfg_attr(not(unix), allow(dead_code))]
     socket_path: PathBuf,
 }
 
@@ -163,6 +164,7 @@ impl Default for DesktopBridgeClient {
 /// All params are `serde_json::Value::Object` so the Swift side always receives
 /// `{"method": "...", "params": {...}}` — even for zero-argument methods
 /// (where `params` is `{}`).
+#[cfg(any(unix, test))]
 fn request_to_jsonrpc(request: &DesktopRequest) -> (&'static str, serde_json::Value) {
     use serde_json::json;
     match request {
