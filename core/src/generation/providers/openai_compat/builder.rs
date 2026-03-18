@@ -44,6 +44,8 @@ pub struct OpenAiCompatProviderBuilder {
     pub(crate) supported_types: Vec<GenerationType>,
     /// Request timeout in seconds
     pub(crate) timeout_secs: u64,
+    /// Optional explicit edit endpoint URL
+    pub(crate) edit_endpoint: Option<String>,
 }
 
 impl OpenAiCompatProviderBuilder {
@@ -68,6 +70,7 @@ impl OpenAiCompatProviderBuilder {
             color: DEFAULT_COLOR.to_string(),
             supported_types: vec![GenerationType::Image],
             timeout_secs: DEFAULT_TIMEOUT_SECS,
+            edit_endpoint: None,
         }
     }
 
@@ -108,6 +111,15 @@ impl OpenAiCompatProviderBuilder {
     /// * `secs` - Timeout duration in seconds
     pub fn timeout_secs(mut self, secs: u64) -> Self {
         self.timeout_secs = secs;
+        self
+    }
+
+    /// Set an explicit edit endpoint URL
+    ///
+    /// If not set, edit URL is derived from the generations URL by replacing
+    /// "/generations" with "/edits".
+    pub fn edit_endpoint<S: Into<String>>(mut self, url: S) -> Self {
+        self.edit_endpoint = Some(url.into());
         self
     }
 
@@ -160,14 +172,8 @@ impl OpenAiCompatProviderBuilder {
             .build()
             .map_err(|e| GenerationError::network(format!("Failed to build HTTP client: {}", e)))?;
 
-        // Normalize base URL (remove trailing slash and /v1 suffix)
-        // This prevents duplicate /v1 in the final URL when user provides "https://api.example.com/v1"
-        let endpoint = self
-            .base_url
-            .trim_end_matches('/')
-            .trim_end_matches("/v1")
-            .trim_end_matches('/')
-            .to_string();
+        // base_url is the full endpoint URL — only strip trailing slash
+        let endpoint = self.base_url.trim_end_matches('/').to_string();
 
         Ok(OpenAiCompatProvider {
             name: self.name,
@@ -177,6 +183,7 @@ impl OpenAiCompatProviderBuilder {
             model: self.model,
             color: self.color,
             supported_types: self.supported_types,
+            edit_endpoint: self.edit_endpoint,
         })
     }
 }

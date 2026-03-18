@@ -51,6 +51,8 @@ pub struct OpenAiCompatProvider {
     pub(crate) color: String,
     /// Supported generation types
     pub(crate) supported_types: Vec<GenerationType>,
+    /// Optional explicit edit endpoint URL
+    pub(crate) edit_endpoint: Option<String>,
 }
 
 impl OpenAiCompatProvider {
