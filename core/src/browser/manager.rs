@@ -6,6 +6,7 @@ use std::sync::{Arc, RwLock};
 
 use super::chrome_mcp::ChromeMcpDriver;
 use super::network_policy::{PolicyViolation, SsrfPolicy};
+use super::playwright_mcp::PlaywrightMcpDriver;
 use super::profile::{
     BrowserDriver, BrowserSystemConfig, BrowserType, ProfileConfig, ProfileState,
 };
@@ -17,6 +18,7 @@ pub struct ProfileManager {
     #[allow(dead_code)]
     config: BrowserSystemConfig,
     chrome_mcp_driver: Arc<ChromeMcpDriver>,
+    playwright_mcp_driver: Arc<PlaywrightMcpDriver>,
 }
 
 struct ManagedProfile {
@@ -29,21 +31,17 @@ impl ProfileManager {
     pub fn new(config: BrowserSystemConfig) -> Self {
         let ssrf_policy = SsrfPolicy::new(config.policy.clone());
         let chrome_mcp_driver = Arc::new(ChromeMcpDriver::new(config.chrome_mcp.clone()));
+        let playwright_mcp_driver =
+            Arc::new(PlaywrightMcpDriver::new(config.playwright_mcp.clone()));
 
         let mut profiles = HashMap::new();
 
         if config.profiles.is_empty() {
-            // Create default profile with ExistingSession if none configured.
-            // Managed mode is not yet implemented, so default to ExistingSession
-            // which connects to the user's Chrome via Chrome DevTools MCP.
+            // Create default profile with Managed driver if none configured.
             profiles.insert(
                 "default".into(),
                 ManagedProfile {
-                    config: ProfileConfig {
-                        browser: BrowserType::Chrome,
-                        driver: BrowserDriver::ExistingSession,
-                        ..Default::default()
-                    },
+                    config: ProfileConfig::default(),
                     state: ProfileState::Idle,
                     last_activity: std::time::Instant::now(),
                 },
@@ -61,26 +59,37 @@ impl ProfileManager {
             }
         }
 
-        // Auto-inject "default" and "user" profiles if not already present.
-        // These ensure browser_open works out-of-the-box with its default
-        // profile="default" and that "user" is always available for
-        // ExistingSession mode.
-        for name in &["default", "user"] {
-            if !profiles.contains_key(*name) {
-                profiles.insert(
-                    (*name).into(),
-                    ManagedProfile {
-                        config: ProfileConfig {
-                            browser: BrowserType::Chrome,
-                            driver: BrowserDriver::ExistingSession,
-                            color: Some("#00AA00".into()),
-                            ..Default::default()
-                        },
-                        state: ProfileState::Idle,
-                        last_activity: std::time::Instant::now(),
+        // Auto-inject "default" profile with Managed driver if not already present.
+        if !profiles.contains_key("default") {
+            profiles.insert(
+                "default".into(),
+                ManagedProfile {
+                    config: ProfileConfig {
+                        driver: BrowserDriver::Managed,
+                        color: Some("#00AA00".into()),
+                        ..Default::default()
                     },
-                );
-            }
+                    state: ProfileState::Idle,
+                    last_activity: std::time::Instant::now(),
+                },
+            );
+        }
+
+        // Auto-inject "user" profile with ExistingSession driver if not already present.
+        if !profiles.contains_key("user") {
+            profiles.insert(
+                "user".into(),
+                ManagedProfile {
+                    config: ProfileConfig {
+                        browser: BrowserType::Chrome,
+                        driver: BrowserDriver::ExistingSession,
+                        color: Some("#00AA00".into()),
+                        ..Default::default()
+                    },
+                    state: ProfileState::Idle,
+                    last_activity: std::time::Instant::now(),
+                },
+            );
         }
 
         Self {
@@ -88,12 +97,18 @@ impl ProfileManager {
             ssrf_policy,
             config,
             chrome_mcp_driver,
+            playwright_mcp_driver,
         }
     }
 
     /// Get the shared Chrome MCP driver instance.
     pub fn get_chrome_mcp_driver(&self) -> Arc<ChromeMcpDriver> {
         self.chrome_mcp_driver.clone()
+    }
+
+    /// Get the shared Playwright MCP driver instance.
+    pub fn get_playwright_mcp_driver(&self) -> Arc<PlaywrightMcpDriver> {
+        self.playwright_mcp_driver.clone()
     }
 
     /// Get the driver mode for a named profile.

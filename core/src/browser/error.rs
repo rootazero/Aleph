@@ -41,6 +41,9 @@ pub enum BrowserError {
     #[error("Chrome DevTools MCP error: {0}")]
     ChromeMcpError(String),
 
+    #[error("Playwright MCP error: {0}")]
+    PlaywrightError(String),
+
     #[error("Browser profile not found: {0}")]
     ProfileNotFound(String),
 }
