@@ -223,18 +223,18 @@ impl AgentManager {
             ))
         })?;
         let agent_name = def.name.as_deref().unwrap_or(&def.id);
-        initialize_workspace(&agent_state_dir, agent_name).map_err(|e| {
-            AlephError::IoError(format!(
-                "Failed to initialize identity files for '{}': {}",
-                def.id, e
-            ))
-        })?;
 
-        // Ensure workspace directory exists (for project files)
+        // Workspace directory for project files (SOUL.md, AGENTS.md, etc.)
         let ws_dir = self.workspace_root.join(&def.id);
         std::fs::create_dir_all(&ws_dir).map_err(|e| {
             AlephError::IoError(format!(
                 "Failed to create workspace for '{}': {}",
+                def.id, e
+            ))
+        })?;
+        initialize_workspace(&ws_dir, agent_name).map_err(|e| {
+            AlephError::IoError(format!(
+                "Failed to initialize workspace files for '{}': {}",
                 def.id, e
             ))
         })?;

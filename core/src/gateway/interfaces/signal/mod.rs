@@ -180,8 +180,8 @@ impl Channel for SignalChannel {
         Ok(())
     }
 
-    async fn edit(&self, message_id: &MessageId, new_text: &str) -> ChannelResult<()> {
-        let _ = (message_id, new_text);
+    async fn edit(&self, conversation_id: &ConversationId, message_id: &MessageId, new_text: &str) -> ChannelResult<()> {
+        let _ = (conversation_id, message_id, new_text);
         Err(ChannelError::UnsupportedFeature(
             "Signal does not support message editing".to_string(),
         ))

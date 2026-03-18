@@ -40,7 +40,7 @@ max_context_items = 10
 
     // Load config and test save_incremental
     let config = Config {
-        shortcuts: Some(ShortcutsConfig::default()),
+        behavior: Some(BehaviorConfig::default()),
         ..Config::default()
     };
 
@@ -49,12 +49,12 @@ max_context_items = 10
     let mut existing: toml::Value = toml::from_str(&existing_content).expect("Should parse");
     let current: toml::Value = toml::Value::try_from(&config).expect("Should serialize");
 
-    // Only update shortcuts section
+    // Only update behavior section
     if let (toml::Value::Table(ref mut existing_table), toml::Value::Table(ref current_table)) =
         (&mut existing, &current)
     {
-        if let Some(shortcuts) = current_table.get("shortcuts") {
-            existing_table.insert("shortcuts".to_string(), shortcuts.clone());
+        if let Some(behavior) = current_table.get("behavior") {
+            existing_table.insert("behavior".to_string(), behavior.clone());
         }
     }
 
@@ -85,10 +85,10 @@ max_context_items = 10
         "Custom rule should be preserved"
     );
 
-    // Verify shortcuts section was added
+    // Verify behavior section was added
     assert!(
-        final_content.contains("[shortcuts]"),
-        "Shortcuts section should be added"
+        final_content.contains("[behavior]"),
+        "Behavior section should be added"
     );
 
     // Verify memory config is preserved

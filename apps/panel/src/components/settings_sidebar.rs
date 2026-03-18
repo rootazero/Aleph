@@ -8,7 +8,6 @@
 pub enum SettingsTab {
     // Basic
     General,
-    Shortcuts,
     Behavior,
 
     // AI
@@ -43,7 +42,6 @@ impl SettingsTab {
     pub fn path(&self) -> &'static str {
         match self {
             Self::General => "/settings/general",
-            Self::Shortcuts => "/settings/shortcuts",
             Self::Behavior => "/settings/behavior",
             Self::Providers => "/settings/providers",
             Self::EmbeddingProviders => "/settings/embedding-providers",
@@ -70,7 +68,6 @@ impl SettingsTab {
     pub fn label(&self) -> &'static str {
         match self {
             Self::General => "General",
-            Self::Shortcuts => "Shortcuts",
             Self::Behavior => "Behavior",
             Self::Providers => "AI Providers",
             Self::EmbeddingProviders => "Embedding",
@@ -97,7 +94,6 @@ impl SettingsTab {
     pub fn icon_svg(&self) -> &'static str {
         match self {
             Self::General => r#"<circle cx="12" cy="12" r="3"/><path d="M12 1v6m0 6v6M5.64 5.64l4.24 4.24m4.24 4.24l4.24 4.24M1 12h6m6 0h6M5.64 18.36l4.24-4.24m4.24-4.24l4.24-4.24"/>"#,
-            Self::Shortcuts => r#"<rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/>"#,
             Self::Behavior => r#"<path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2z"/><path d="M12 6v6l4 2"/>"#,
             Self::Providers => r#"<path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/>"#,
             Self::EmbeddingProviders => r#"<circle cx="12" cy="12" r="2"/><circle cx="6" cy="6" r="2"/><circle cx="18" cy="6" r="2"/><circle cx="6" cy="18" r="2"/><circle cx="18" cy="18" r="2"/><line x1="12" y1="10" x2="12" y2="14"/><line x1="7.5" y1="7.5" x2="10.5" y2="10.5"/><line x1="13.5" y1="10.5" x2="16.5" y2="7.5"/><line x1="7.5" y1="16.5" x2="10.5" y2="13.5"/><line x1="13.5" y1="13.5" x2="16.5" y2="16.5"/>"#,
@@ -133,7 +129,6 @@ pub const SETTINGS_GROUPS: &[SettingsGroup] = &[
         label: "Basic",
         tabs: &[
             SettingsTab::General,
-            SettingsTab::Shortcuts,
             SettingsTab::Behavior,
         ],
     },

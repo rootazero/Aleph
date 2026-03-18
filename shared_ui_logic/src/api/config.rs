@@ -40,17 +40,6 @@ pub struct PoliciesConfig {
     pub allow_code_execution: bool,
 }
 
-/// Shortcuts configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ShortcutsConfig {
-    /// Trigger hotkey
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub trigger_hotkey: Option<String>,
-    /// Vision hotkey
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub vision_hotkey: Option<String>,
-}
-
 /// Code execution configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CodeExecConfig {
@@ -177,30 +166,6 @@ impl<C: AlephConnector> ConfigApi<C> {
         }
 
         let result: Result = self.client.call("config.policies.update", config).await?;
-        Ok(result.ok)
-    }
-
-    // Shortcuts configuration
-
-    /// Get shortcuts configuration
-    pub async fn shortcuts_get(&self) -> Result<ShortcutsConfig, RpcError> {
-        #[derive(Deserialize)]
-        struct Result {
-            shortcuts: ShortcutsConfig,
-        }
-
-        let result: Result = self.client.call("config.shortcuts.get", ()).await?;
-        Ok(result.shortcuts)
-    }
-
-    /// Update shortcuts configuration
-    pub async fn shortcuts_update(&self, config: ShortcutsConfig) -> Result<bool, RpcError> {
-        #[derive(Deserialize)]
-        struct Result {
-            ok: bool,
-        }
-
-        let result: Result = self.client.call("config.shortcuts.update", config).await?;
         Ok(result.ok)
     }
 

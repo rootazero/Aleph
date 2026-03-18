@@ -19,7 +19,7 @@ use super::event_emitter::{EventEmitError, EventEmitter, StreamEvent};
 use super::execution_adapter::ExecutionAdapter;
 use super::execution_engine::RunRequest;
 use super::pipeline::EnrichedMessage;
-use super::reply_emitter::ReplyEmitter;
+use super::reply_emitter::{ReplyEmitter, ReplyEmitterConfig};
 
 /// Maximum age for a queued task before it is dropped (5 minutes).
 const MAX_QUEUE_AGE: Duration = Duration::from_secs(300);
@@ -70,6 +70,8 @@ pub struct SessionScheduler {
     execution_adapter: Arc<dyn ExecutionAdapter>,
     agent_registry: Arc<AgentRegistry>,
     channel_registry: Arc<ChannelRegistry>,
+    /// App config for reading output_mode at runtime
+    app_config: Option<Arc<tokio::sync::RwLock<crate::Config>>>,
 }
 
 impl SessionScheduler {
@@ -84,7 +86,14 @@ impl SessionScheduler {
             execution_adapter,
             agent_registry,
             channel_registry,
+            app_config: None,
         }
+    }
+
+    /// Set the app config for reading output_mode at runtime
+    pub fn with_app_config(mut self, config: Arc<tokio::sync::RwLock<crate::Config>>) -> Self {
+        self.app_config = Some(config);
+        self
     }
 
     /// Enqueue a message for execution.
@@ -153,11 +162,22 @@ impl SessionScheduler {
             }
         };
 
-        // Build reply emitter
-        let reply_emitter: Arc<dyn EventEmitter + Send + Sync> = Arc::new(ReplyEmitter::new(
+        // Build reply emitter, respecting configured output_mode
+        let reply_config = match &self.app_config {
+            Some(cfg) => {
+                let cfg = cfg.read().await;
+                let mode = cfg.behavior.as_ref()
+                    .map(|b| b.output_mode.as_str())
+                    .unwrap_or("typewriter");
+                ReplyEmitterConfig::from_output_mode(mode)
+            }
+            None => ReplyEmitterConfig::default(),
+        };
+        let reply_emitter: Arc<dyn EventEmitter + Send + Sync> = Arc::new(ReplyEmitter::with_config(
             self.channel_registry.clone(),
             enriched.merged.primary_context.reply_route.clone(),
             run_id.clone(),
+            reply_config,
             agent.config().display_name.clone(),
             false,
         ));
@@ -171,6 +191,7 @@ impl SessionScheduler {
                 execution_adapter: Arc::clone(&self.execution_adapter),
                 agent_registry: Arc::clone(&self.agent_registry),
                 channel_registry: Arc::clone(&self.channel_registry),
+                app_config: self.app_config.clone(),
             });
 
         // Build metadata
@@ -240,6 +261,7 @@ struct SchedulerEventListener {
     execution_adapter: Arc<dyn ExecutionAdapter>,
     agent_registry: Arc<AgentRegistry>,
     channel_registry: Arc<ChannelRegistry>,
+    app_config: Option<Arc<tokio::sync::RwLock<crate::Config>>>,
 }
 
 impl SchedulerEventListener {
@@ -285,6 +307,7 @@ impl SchedulerEventListener {
                 Arc::clone(&self.execution_adapter),
                 Arc::clone(&self.agent_registry),
                 Arc::clone(&self.channel_registry),
+                self.app_config.clone(),
             )
             .await;
         }
@@ -328,6 +351,7 @@ async fn execute_next(
     execution_adapter: Arc<dyn ExecutionAdapter>,
     agent_registry: Arc<AgentRegistry>,
     channel_registry: Arc<ChannelRegistry>,
+    app_config: Option<Arc<tokio::sync::RwLock<crate::Config>>>,
 ) {
     let ctx = &enriched.merged.primary_context;
     let agent_id = ctx.session_key.agent_id().to_string();
@@ -355,11 +379,22 @@ async fn execute_next(
         }
     };
 
-    // Build reply emitter
-    let reply_emitter: Arc<dyn EventEmitter + Send + Sync> = Arc::new(ReplyEmitter::new(
+    // Build reply emitter, respecting configured output_mode
+    let reply_config = match &app_config {
+        Some(cfg) => {
+            let cfg = cfg.read().await;
+            let mode = cfg.behavior.as_ref()
+                .map(|b| b.output_mode.as_str())
+                .unwrap_or("typewriter");
+            ReplyEmitterConfig::from_output_mode(mode)
+        }
+        None => ReplyEmitterConfig::default(),
+    };
+    let reply_emitter: Arc<dyn EventEmitter + Send + Sync> = Arc::new(ReplyEmitter::with_config(
         channel_registry.clone(),
         enriched.merged.primary_context.reply_route.clone(),
         run_id.clone(),
+        reply_config,
         agent.config().display_name.clone(),
         false,
     ));
@@ -373,6 +408,7 @@ async fn execute_next(
             execution_adapter: Arc::clone(&execution_adapter),
             agent_registry: Arc::clone(&agent_registry),
             channel_registry: Arc::clone(&channel_registry),
+            app_config,
         });
 
     // Build metadata

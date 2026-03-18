@@ -157,14 +157,14 @@ impl LanceMemoryBackend {
         self.create_fts_index_if_needed(&self.memories_table, "ai_output")
             .await?;
 
-        // Scalar BTree indexes on workspace column for efficient filtering
-        self.create_scalar_index_if_needed(&self.facts_table, "workspace")
+        // Scalar BTree indexes on agent column for efficient filtering
+        self.create_scalar_index_if_needed(&self.facts_table, "agent")
             .await?;
-        self.create_scalar_index_if_needed(&self.nodes_table, "workspace")
+        self.create_scalar_index_if_needed(&self.nodes_table, "agent")
             .await?;
-        self.create_scalar_index_if_needed(&self.edges_table, "workspace")
+        self.create_scalar_index_if_needed(&self.edges_table, "agent")
             .await?;
-        self.create_scalar_index_if_needed(&self.memories_table, "workspace")
+        self.create_scalar_index_if_needed(&self.memories_table, "agent")
             .await?;
 
         Ok(())

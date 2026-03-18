@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 use crate::gateway::execution_engine::RunRequest;
 use crate::gateway::inbound_context::InboundContext;
-use crate::gateway::reply_emitter::ReplyEmitter;
+use crate::gateway::reply_emitter::{ReplyEmitter, ReplyEmitterConfig};
 
 use super::types::{RoutingError, SLASH_COMMAND_MODE_KEY};
 use super::InboundMessageRouter;
@@ -70,11 +70,23 @@ impl InboundMessageRouter {
         // Generate a unique run ID
         let run_id = Uuid::new_v4().to_string();
 
-        // Create a ReplyEmitter to route responses back to the channel
-        let emitter = Arc::new(ReplyEmitter::new(
+        // Create a ReplyEmitter to route responses back to the channel,
+        // respecting the configured output_mode (typewriter vs instant)
+        let reply_config = match &self.app_config {
+            Some(cfg) => {
+                let cfg = cfg.read().await;
+                let mode = cfg.behavior.as_ref()
+                    .map(|b| b.output_mode.as_str())
+                    .unwrap_or("typewriter");
+                ReplyEmitterConfig::from_output_mode(mode)
+            }
+            None => ReplyEmitterConfig::default(),
+        };
+        let emitter = Arc::new(ReplyEmitter::with_config(
             self.channel_registry.clone(),
             ctx.reply_route.clone(),
             run_id.clone(),
+            reply_config,
             agent.config().display_name.clone(),
             false,
         ));

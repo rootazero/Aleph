@@ -2,7 +2,7 @@
 
 use cucumber::{given, then, gherkin::Step};
 use crate::world::{AlephWorld, ConfigContext};
-use alephcore::{Config, MemoryConfig, BehaviorConfig, ShortcutsConfig, ProviderConfig, RoutingRuleConfig};
+use alephcore::{Config, MemoryConfig, BehaviorConfig, ProviderConfig, RoutingRuleConfig};
 
 // ═══ Given Steps ═══
 
@@ -22,12 +22,6 @@ async fn given_new_config(w: &mut AlephWorld) {
 async fn given_default_memory_config(w: &mut AlephWorld) {
     let ctx = w.config.get_or_insert_with(ConfigContext::default);
     ctx.memory_config = Some(MemoryConfig::default());
-}
-
-#[given("a default ShortcutsConfig")]
-async fn given_default_shortcuts_config(w: &mut AlephWorld) {
-    let ctx = w.config.get_or_insert_with(ConfigContext::default);
-    ctx.shortcuts_config = Some(ShortcutsConfig::default());
 }
 
 #[given("a default BehaviorConfig")]
@@ -139,22 +133,6 @@ async fn then_dreaming_end(w: &mut AlephWorld, expected: String) {
     let ctx = w.config.as_ref().expect("Config context not initialized");
     let mem = ctx.memory_config.as_ref().expect("MemoryConfig not initialized");
     assert_eq!(mem.dreaming.window_end_local, expected);
-}
-
-// ═══ Then Steps - ShortcutsConfig ═══
-
-#[then(expr = "the summon shortcut should be {string}")]
-async fn then_summon_shortcut(w: &mut AlephWorld, expected: String) {
-    let ctx = w.config.as_ref().expect("Config context not initialized");
-    let shortcuts = ctx.shortcuts_config.as_ref().expect("ShortcutsConfig not initialized");
-    assert_eq!(shortcuts.summon, expected);
-}
-
-#[then(expr = "the cancel shortcut should be {string}")]
-async fn then_cancel_shortcut(w: &mut AlephWorld, expected: String) {
-    let ctx = w.config.as_ref().expect("Config context not initialized");
-    let shortcuts = ctx.shortcuts_config.as_ref().expect("ShortcutsConfig not initialized");
-    assert_eq!(shortcuts.cancel, Some(expected));
 }
 
 // ═══ Then Steps - BehaviorConfig ═══

@@ -501,12 +501,12 @@ pub trait Channel: Send + Sync {
     }
 
     /// Edit a previously sent message
-    async fn edit(&self, message_id: &MessageId, new_text: &str) -> ChannelResult<()> {
+    async fn edit(&self, conversation_id: &ConversationId, message_id: &MessageId, new_text: &str) -> ChannelResult<()> {
         if !self.capabilities().editing {
             return Err(ChannelError::UnsupportedFeature("editing".to_string()));
         }
         // Default implementation does nothing
-        let _ = (message_id, new_text);
+        let _ = (conversation_id, message_id, new_text);
         Ok(())
     }
 

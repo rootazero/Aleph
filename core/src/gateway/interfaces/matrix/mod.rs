@@ -231,12 +231,12 @@ impl Channel for MatrixChannel {
 
     }
 
-    async fn edit(&self, message_id: &MessageId, new_text: &str) -> ChannelResult<()> {
-        // Matrix supports editing via m.replace relation, but we need the room_id
-        // which isn't available in this interface signature.
-        let _ = (message_id, new_text);
+    async fn edit(&self, conversation_id: &ConversationId, message_id: &MessageId, new_text: &str) -> ChannelResult<()> {
+        // Matrix supports editing via m.replace relation, but full implementation
+        // requires matrix-sdk client integration.
+        let _ = (conversation_id, message_id, new_text);
         Err(ChannelError::UnsupportedFeature(
-            "Message editing requires room context (conversation_id + event_id)".to_string(),
+            "Matrix message editing not yet implemented".to_string(),
         ))
     }
 

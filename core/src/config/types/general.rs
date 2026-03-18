@@ -2,7 +2,6 @@
 //!
 //! Contains core application settings:
 //! - GeneralConfig: App-wide settings (default provider, logging, language)
-//! - ShortcutsConfig: Keyboard shortcuts configuration
 //! - BehaviorConfig: Input/output behavior settings
 
 use schemars::JsonSchema;
@@ -47,47 +46,9 @@ pub struct GeneralConfig {
     pub browser: crate::browser::profile::BrowserSystemConfig,
 }
 
-// =============================================================================
-// ShortcutsConfig
-// =============================================================================
-
-/// Shortcuts configuration (Phase 6 - Task 4.2)
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct ShortcutsConfig {
-    /// Legacy summon hotkey - kept for backward compatibility with old config files
-    #[serde(default = "default_summon_hotkey")]
-    pub summon: String,
-    /// Cancel operation hotkey (optional)
-    #[serde(default)]
-    pub cancel: Option<String>,
-    /// Command completion hotkey (e.g., "Option+Space")
-    /// Format: "Modifier1+Modifier2+Key" where modifiers are Command, Option, Control, Shift
-    #[serde(default = "default_command_prompt_hotkey")]
-    pub command_prompt: String,
-}
-
-/// Legacy default hotkey - kept for backward compatibility
+/// Legacy default hotkey - kept for backward compatibility with old config files
 pub fn default_hotkey() -> String {
     "Grave".to_string()
-}
-
-/// Legacy default summon hotkey - kept for backward compatibility
-pub fn default_summon_hotkey() -> String {
-    "Command+Grave".to_string()
-}
-
-pub fn default_command_prompt_hotkey() -> String {
-    "Option+Space".to_string()
-}
-
-impl Default for ShortcutsConfig {
-    fn default() -> Self {
-        Self {
-            summon: default_summon_hotkey(),
-            cancel: Some("Escape".to_string()),
-            command_prompt: default_command_prompt_hotkey(),
-        }
-    }
 }
 
 // =============================================================================

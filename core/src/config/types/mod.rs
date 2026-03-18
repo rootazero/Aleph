@@ -3,7 +3,7 @@
 //! This module contains all struct definitions used in the configuration system.
 //! Types are organized by domain:
 //!
-//! - `general`: Core settings (GeneralConfig, ShortcutsConfig, BehaviorConfig)
+//! - `general`: Core settings (GeneralConfig, BehaviorConfig)
 //! - `provider`: AI provider settings (ProviderConfig, ProviderConfigEntry)
 //! - `routing`: Routing rules (RoutingRuleConfig)
 //! - `memory`: Memory/RAG settings (MemoryConfig)
