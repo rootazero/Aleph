@@ -119,33 +119,6 @@ pub fn get_runtimes_dir() -> Result<PathBuf> {
     Ok(get_config_dir()?.join("runtimes"))
 }
 
-/// Get the output directory for generated files
-///
-/// This directory is used as the default destination for AI-generated content
-/// such as images, PDFs, translated documents, etc. Using a dedicated output
-/// directory avoids permission issues and provides a consistent location for
-/// all generated artifacts.
-///
-/// Returns: `<config_dir>/output/`
-///
-/// The directory is created if it doesn't exist.
-pub fn get_output_dir() -> Result<PathBuf> {
-    let output_dir = get_config_dir()?.join("output");
-
-    // Create directory if it doesn't exist
-    if !output_dir.exists() {
-        std::fs::create_dir_all(&output_dir)
-            .map_err(|e| AlephError::config(format!("Failed to create output directory: {}", e)))?;
-    }
-
-    Ok(output_dir)
-}
-
-/// Get output directory path as String (for UniFFI export)
-pub fn get_output_dir_string() -> Result<String> {
-    Ok(get_output_dir()?.to_string_lossy().to_string())
-}
-
 /// Get the data directory for operational databases
 ///
 /// Returns: `<config_dir>/data/`
@@ -333,53 +306,6 @@ pub fn get_all_skills_dirs(project_dir: Option<&std::path::Path>) -> Result<Vec<
     Ok(dirs)
 }
 
-/// Get the workspace root directory for agent project files
-///
-/// Each agent has its own workspace directory under `~/.aleph/workspace/<agent_id>/`
-/// for storing project files, scratchpads, session history, and other working data.
-///
-/// Returns: `<config_dir>/workspace/`
-///
-/// The directory is created if it doesn't exist.
-pub fn get_workspace_dir() -> Result<PathBuf> {
-    let workspace_dir = get_config_dir()?.join("workspace");
-
-    if !workspace_dir.exists() {
-        std::fs::create_dir_all(&workspace_dir)
-            .map_err(|e| AlephError::config(format!("Failed to create workspace directory: {}", e)))?;
-    }
-
-    Ok(workspace_dir)
-}
-
-/// Get the workspace directory for a specific agent
-///
-/// Returns: `<config_dir>/workspace/<agent_id>/`
-///
-/// The directory is created if it doesn't exist.
-pub fn get_agent_workspace_dir(agent_id: &str) -> Result<PathBuf> {
-    // Validate agent_id to prevent path traversal attacks.
-    if agent_id.contains('/')
-        || agent_id.contains('\\')
-        || agent_id.contains("..")
-        || agent_id.is_empty()
-    {
-        return Err(AlephError::config(format!(
-            "Invalid agent ID '{}': must not contain path separators or '..'",
-            agent_id
-        )));
-    }
-
-    let agent_dir = get_workspace_dir()?.join(agent_id);
-
-    if !agent_dir.exists() {
-        std::fs::create_dir_all(&agent_dir)
-            .map_err(|e| AlephError::config(format!("Failed to create agent workspace directory: {}", e)))?;
-    }
-
-    Ok(agent_dir)
-}
-
 /// Get the identity/config directory for a specific agent
 ///
 /// Agent capabilities (skills, plugins) and identity files are stored here.
@@ -407,23 +333,6 @@ pub fn get_agent_config_dir(agent_id: &str) -> Result<PathBuf> {
     }
 
     Ok(agent_dir)
-}
-
-/// Get the tool output directory for storing full outputs
-///
-/// Returns: `<config_dir>/tool_output/`
-///
-/// The directory is created if it doesn't exist.
-pub fn get_tool_output_dir() -> Result<PathBuf> {
-    let output_dir = get_config_dir()?.join("tool_output");
-
-    // Create directory if it doesn't exist
-    if !output_dir.exists() {
-        std::fs::create_dir_all(&output_dir)
-            .map_err(|e| AlephError::config(format!("Failed to create tool output directory: {}", e)))?;
-    }
-
-    Ok(output_dir)
 }
 
 /// Migrate legacy flat database files from ~/.aleph/*.db to ~/.aleph/data/*.db

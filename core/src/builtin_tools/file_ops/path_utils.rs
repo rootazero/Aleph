@@ -57,7 +57,7 @@ pub fn get_denied_paths() -> Vec<String> {
 /// 4. Relative paths - resolved relative to:
 ///    a. `output_dir_override` if provided (workspace-scoped output dir from ToolContext)
 ///    b. Session working directory (if set)
-///    c. Default output directory (~/.aleph/output/) as final fallback
+///    c. Error if neither is available — no global fallback
 pub fn check_and_resolve_path(
     path: &Path,
     denied_paths: &[String],
@@ -108,7 +108,7 @@ pub fn check_and_resolve_path(
         // Relative paths are resolved to:
         // 1. ToolContext output_dir override (workspace-scoped, set by ExecutionEngine)
         // 2. Current working directory (if set by session/topic)
-        // 3. Default output directory (~/.aleph/output/)
+        // 3. Error if neither is available — callers must provide a base directory
         let base_dir = if let Some(override_dir) = output_dir_override {
             info!(output_dir = %override_dir.display(), "check_path: using ToolContext output_dir override");
             override_dir.to_path_buf()
@@ -116,11 +116,10 @@ pub fn check_and_resolve_path(
             info!(working_dir = %wd.display(), "check_path: using session working directory");
             wd
         } else {
-            let output_dir = crate::utils::paths::get_output_dir().map_err(|e| {
-                ToolError::Execution(format!("Failed to get output directory: {}", e))
-            })?;
-            info!(output_dir = %output_dir.display(), "check_path: using default output directory");
-            output_dir
+            return Err(ToolError::InvalidArgs(
+                "Relative path requires an output directory override or an active working directory; \
+                 provide an absolute path or set a working directory first".to_string(),
+            ));
         };
         base_dir.join(expanded_str)
     } else {

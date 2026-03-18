@@ -36,7 +36,7 @@ impl Default for ScratchpadConfig {
     }
 }
 
-/// Manages project scratchpad files under `~/.aleph/projects/<project_id>/`
+/// Manages project scratchpad files under `~/.aleph/workspaces/<project_id>/`
 pub struct ScratchpadManager {
     /// Base directory for this project's scratchpad files
     project_dir: PathBuf,
@@ -47,11 +47,10 @@ pub struct ScratchpadManager {
 impl ScratchpadManager {
     /// Create a new ScratchpadManager for an agent workspace
     ///
-    /// Files are stored under `~/.aleph/workspace/<agent_id>/`.
-    /// Falls back to a provided base directory for testing.
+    /// Files are stored under `~/.aleph/workspaces/<agent_id>/`.
+    /// Falls back to a temp-style path for testing.
     pub fn new(project_id: &str, session_id: &str) -> Self {
-        let project_dir = crate::utils::paths::get_agent_workspace_dir(project_id)
-            .unwrap_or_else(|_| PathBuf::from(".").join(project_id));
+        let project_dir = crate::config::agent_resolver::default_workspace_root().join(project_id);
 
         Self {
             project_dir,

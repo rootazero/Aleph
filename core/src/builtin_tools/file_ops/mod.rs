@@ -156,13 +156,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_mkdir_relative_in_output_dir() {
-        // Test that relative paths resolve to the output directory correctly
+        // Test that mkdir works correctly with an absolute path to a temp directory.
+        // Relative paths without a working directory or output_dir override are rejected.
+        let dir = tempdir().unwrap();
         let tool = FileOpsTool::new();
+        let new_dir = dir.path().join("test_mkdir_relative_subdir");
 
-        // "test_subdir" should resolve to ~/.aleph/output/test_subdir
         let args = FileOpsArgs {
             operation: FileOperation::Mkdir,
-            path: "test_mkdir_relative_subdir".to_string(),
+            path: new_dir.to_string_lossy().to_string(),
             destination: None,
             content: None,
             pattern: None,
@@ -170,26 +172,9 @@ mod tests {
         };
 
         let result = AlephTool::call(&tool, args).await;
-
-        // This should succeed - output directory should be writable
-        match &result {
-            Ok(output) => {
-                assert!(output.success);
-                println!("mkdir succeeded: {}", output.message);
-                // Clean up - delete the created directory
-                let output_dir = crate::utils::paths::get_output_dir().unwrap();
-                let created_path = output_dir.join("test_mkdir_relative_subdir");
-                if created_path.exists() {
-                    fs::remove_dir(&created_path).ok();
-                }
-            }
-            Err(e) => {
-                panic!(
-                    "mkdir for relative path should succeed in output dir, but got error: {:?}",
-                    e
-                );
-            }
-        }
+        assert!(result.is_ok());
+        assert!(result.unwrap().success);
+        assert!(new_dir.exists());
     }
 
     #[tokio::test]
@@ -210,23 +195,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_check_path_allows_output_subdir() {
+    async fn test_check_path_allows_absolute_subdir() {
+        let dir = tempdir().unwrap();
         let tool = FileOpsTool::new();
 
-        // Test that output subdirectories are allowed
-        // Relative paths like "chapter-1" should resolve to ~/.aleph/output/chapter-1
-        let result = tool.check_path(std::path::Path::new("chapter-1"));
+        // Absolute paths within a non-denied directory should be allowed.
+        let abs_path = dir.path().join("chapter-1");
+        let result = tool.check_path(&abs_path);
         assert!(
             result.is_ok(),
-            "Relative path 'chapter-1' should be allowed in output directory"
+            "Absolute path under a temp directory should be allowed, got: {:?}",
+            result
         );
 
-        if let Ok(canonical) = result {
-            let output_dir = crate::utils::paths::get_output_dir().unwrap();
-            assert!(
-                canonical.starts_with(&output_dir),
-                "Resolved path should be under output directory"
-            );
-        }
+        // Relative paths without a working directory or output_dir override are rejected.
+        let rel_result = tool.check_path(std::path::Path::new("chapter-1"));
+        assert!(
+            rel_result.is_err(),
+            "Relative path without a working dir should be rejected"
+        );
     }
 }
