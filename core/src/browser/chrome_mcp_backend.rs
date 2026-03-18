@@ -51,69 +51,119 @@ impl ChromeMcpBackend {
             .call_tool(&self.profile_name, tool_name, args)
             .await
     }
+
+    /// Select a page by its index before performing operations on it.
+    /// Chrome DevTools MCP uses `pageId` (number) for page selection.
+    async fn select_page(&self, tab_id: &str) -> Result<(), BrowserError> {
+        let page_id: u32 = tab_id.parse().unwrap_or(1);
+        self.call("select_page", json!({ "pageId": page_id })).await?;
+        Ok(())
+    }
+
+    /// Extract text content from Chrome DevTools MCP response.
+    /// MCP responses have format: {"content": [{"text": "...", "type": "text"}]}
+    fn extract_text(result: &serde_json::Value) -> String {
+        // Try content[0].text (standard MCP format)
+        if let Some(content) = result.get("content").and_then(|v| v.as_array()) {
+            for item in content {
+                if let Some(text) = item.get("text").and_then(|v| v.as_str()) {
+                    return text.to_string();
+                }
+            }
+        }
+        // Try as plain string
+        if let Some(s) = result.as_str() {
+            return s.to_string();
+        }
+        // Fallback to JSON serialization
+        result.to_string()
+    }
+
+    /// Parse "N: URL [selected]" lines from list_pages text output.
+    fn parse_pages_text(text: &str) -> Vec<TabInfo> {
+        let mut tabs = Vec::new();
+        for line in text.lines() {
+            let line = line.trim();
+            // Match lines like "1: https://example.com [selected]" or "2: https://example.com"
+            if let Some(colon_pos) = line.find(": ") {
+                let id_str = line[..colon_pos].trim();
+                // Verify it starts with a number
+                if id_str.chars().all(|c| c.is_ascii_digit()) && !id_str.is_empty() {
+                    let rest = &line[colon_pos + 2..];
+                    let (url, _selected) = if let Some(bracket_pos) = rest.rfind(" [") {
+                        (&rest[..bracket_pos], true)
+                    } else {
+                        (rest, false)
+                    };
+                    tabs.push(TabInfo {
+                        id: id_str.to_string(),
+                        url: url.to_string(),
+                        title: String::new(),
+                    });
+                }
+            }
+        }
+        tabs
+    }
 }
 
 #[async_trait]
 impl BrowserBackend for ChromeMcpBackend {
     async fn open_tab(&self, url: &str) -> Result<TabId, BrowserError> {
         let result = self.call("new_page", json!({ "url": url })).await?;
-        let page_id = result
-            .get("pageId")
-            .or_else(|| result.get("id"))
-            .and_then(|v| v.as_str())
-            .or_else(|| result.as_str())
-            .unwrap_or("unknown")
-            .to_string();
-        Ok(page_id)
+        // After opening, list pages to find the new page's index
+        let text = Self::extract_text(&result);
+        // The response usually confirms the new page — re-list to get its ID
+        let tabs = self.list_tabs().await?;
+        Ok(tabs.last().map(|t| t.id.clone()).unwrap_or_else(|| {
+            // Fallback: try to extract from response text
+            text.lines()
+                .filter(|l| l.contains(url))
+                .filter_map(|l| l.split(':').next())
+                .next()
+                .unwrap_or("1")
+                .trim()
+                .to_string()
+        }))
     }
 
     async fn close_tab(&self, tab_id: &str) -> Result<(), BrowserError> {
-        self.call("close_page", json!({ "pageId": tab_id }))
-            .await?;
+        let page_id: u32 = tab_id.parse().unwrap_or(1);
+        self.call("close_page", json!({ "pageId": page_id })).await?;
         Ok(())
     }
 
     async fn list_tabs(&self) -> Result<Vec<TabInfo>, BrowserError> {
         let result = self.call("list_pages", json!({})).await?;
-        let pages = result
-            .as_array()
-            .or_else(|| result.get("pages").and_then(|v| v.as_array()))
-            .cloned()
-            .unwrap_or_default();
-        let tabs = pages
-            .iter()
-            .map(|page| TabInfo {
-                id: page
-                    .get("pageId")
-                    .or_else(|| page.get("id"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("unknown")
-                    .to_string(),
-                url: page
-                    .get("url")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string(),
-                title: page
-                    .get("title")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string(),
-            })
-            .collect();
+        // Chrome DevTools MCP returns text format: "## Pages\n1: URL [selected]\n2: URL\n..."
+        let text = Self::extract_text(&result);
+        let tabs = Self::parse_pages_text(&text);
+        if tabs.is_empty() {
+            // Fallback: try JSON parsing for future structured content support
+            if let Some(pages) = result.as_array()
+                .or_else(|| result.get("pages").and_then(|v| v.as_array()))
+            {
+                return Ok(pages.iter().map(|page| TabInfo {
+                    id: page.get("pageId").or_else(|| page.get("id"))
+                        .and_then(|v| v.as_str()).unwrap_or("unknown").to_string(),
+                    url: page.get("url").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                    title: page.get("title").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                }).collect());
+            }
+        }
         Ok(tabs)
     }
 
     async fn navigate(&self, tab_id: &str, url: &str) -> Result<(), BrowserError> {
-        self.call("navigate_page", json!({ "pageId": tab_id, "url": url }))
-            .await?;
+        self.select_page(tab_id).await?;
+        self.call("navigate_page", json!({ "url": url })).await?;
         Ok(())
     }
 
     async fn click(&self, tab_id: &str, target: ActionTarget) -> Result<(), BrowserError> {
         let element = Self::extract_element_ref(&target)?;
-        self.call("click", json!({ "pageId": tab_id, "element": element }))
-            .await?;
+        self.select_page(tab_id).await?;
+        self.call("click", json!({ "uid": element })).await?;
         Ok(())
     }
 
@@ -124,11 +174,9 @@ impl BrowserBackend for ChromeMcpBackend {
         text: &str,
     ) -> Result<(), BrowserError> {
         let element = Self::extract_element_ref(&target)?;
-        self.call(
-            "fill",
-            json!({ "pageId": tab_id, "element": element, "value": text }),
-        )
-        .await?;
+        self.select_page(tab_id).await?;
+        self.call("fill", json!({ "uid": element, "value": text }))
+            .await?;
         Ok(())
     }
 
@@ -139,18 +187,16 @@ impl BrowserBackend for ChromeMcpBackend {
         value: &str,
     ) -> Result<(), BrowserError> {
         let element = Self::extract_element_ref(&target)?;
-        self.call(
-            "fill",
-            json!({ "pageId": tab_id, "element": element, "value": value }),
-        )
-        .await?;
+        self.select_page(tab_id).await?;
+        self.call("fill", json!({ "uid": element, "value": value }))
+            .await?;
         Ok(())
     }
 
     async fn hover(&self, tab_id: &str, target: ActionTarget) -> Result<(), BrowserError> {
         let element = Self::extract_element_ref(&target)?;
-        self.call("hover", json!({ "pageId": tab_id, "element": element }))
-            .await?;
+        self.select_page(tab_id).await?;
+        self.call("hover", json!({ "uid": element })).await?;
         Ok(())
     }
 
@@ -166,8 +212,8 @@ impl BrowserBackend for ChromeMcpBackend {
             ScrollDirection::Left => "Home",
             ScrollDirection::Right => "End",
         };
-        self.call("press_key", json!({ "pageId": tab_id, "key": key }))
-            .await?;
+        self.select_page(tab_id).await?;
+        self.call("press_key", json!({ "key": key })).await?;
         Ok(())
     }
 
@@ -176,17 +222,26 @@ impl BrowserBackend for ChromeMcpBackend {
         tab_id: &str,
         _opts: ScreenshotOpts,
     ) -> Result<ScreenshotResult, BrowserError> {
-        let result = self
-            .call("take_screenshot", json!({ "pageId": tab_id }))
-            .await?;
-        let data_base64 = result
-            .get("data")
-            .or_else(|| result.get("image"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
+        self.select_page(tab_id).await?;
+        let result = self.call("take_screenshot", json!({})).await?;
+        // Screenshot response may have base64 in content[0].data or content[0].text
+        let text = Self::extract_text(&result);
+        // Check if result has image content type
+        if let Some(content) = result.get("content").and_then(|v| v.as_array()) {
+            for item in content {
+                if item.get("type").and_then(|v| v.as_str()) == Some("image") {
+                    let data = item.get("data").and_then(|v| v.as_str()).unwrap_or("");
+                    return Ok(ScreenshotResult {
+                        data_base64: data.to_string(),
+                        width: 0,
+                        height: 0,
+                        format: "png".to_string(),
+                    });
+                }
+            }
+        }
         Ok(ScreenshotResult {
-            data_base64,
+            data_base64: text,
             width: 0,
             height: 0,
             format: "png".to_string(),
@@ -194,15 +249,16 @@ impl BrowserBackend for ChromeMcpBackend {
     }
 
     async fn snapshot(&self, tab_id: &str) -> Result<AriaSnapshot, BrowserError> {
-        let result = self
-            .call("take_snapshot", json!({ "pageId": tab_id }))
-            .await?;
+        self.select_page(tab_id).await?;
+        let result = self.call("take_snapshot", json!({})).await?;
+        // Try structured content first, then fall back to text parsing
         let snapshot_data = result.get("snapshot").unwrap_or(&result);
         convert_chrome_mcp_snapshot(snapshot_data)
     }
 
     async fn evaluate(&self, tab_id: &str, js: &str) -> Result<serde_json::Value, BrowserError> {
-        self.call("evaluate_script", json!({ "pageId": tab_id, "script": js }))
+        self.select_page(tab_id).await?;
+        self.call("evaluate_script", json!({ "function": js }))
             .await
     }
 
