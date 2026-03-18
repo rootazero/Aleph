@@ -63,7 +63,7 @@ impl AlephTool for BrowserOpenTool {
         self.manager.record_activity(&args.profile);
 
         let driver = self.manager.get_driver(&args.profile);
-        tracing::info!(profile = %args.profile, driver = ?driver, "browser_open: driver selected");
+        tracing::debug!(profile = %args.profile, driver = ?driver, "browser_open: driver selected");
         match driver {
             Some(BrowserDriver::ExistingSession) => {
                 let chrome_mcp = self.manager.get_chrome_mcp_driver();

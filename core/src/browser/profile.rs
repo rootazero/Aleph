@@ -143,7 +143,7 @@ fn default_mcp_command() -> String {
 }
 
 fn default_mcp_args() -> Vec<String> {
-    vec!["@playwright/mcp".to_string(), "--headless".to_string()]
+    vec!["@playwright/mcp".to_string()]
 }
 
 impl Default for PlaywrightMcpConfig {

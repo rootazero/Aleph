@@ -16,6 +16,8 @@ pub struct ProfileInfo {
     pub name: String,
     /// Current state (e.g. "Idle", "Running").
     pub state: String,
+    /// Driver mode: "managed" (headless, default) or "existing_session" (visible browser, use only when user explicitly requests).
+    pub driver: String,
 }
 
 /// Action to perform on browser profiles.
@@ -73,9 +75,17 @@ impl AlephTool for BrowserProfileTool {
                     .manager
                     .list_profiles()
                     .into_iter()
-                    .map(|(name, state)| ProfileInfo {
-                        name,
-                        state: format!("{:?}", state),
+                    .map(|(name, state)| {
+                        let driver = self
+                            .manager
+                            .get_driver(&name)
+                            .map(|d| format!("{:?}", d))
+                            .unwrap_or_else(|| "unknown".to_string());
+                        ProfileInfo {
+                            name,
+                            state: format!("{:?}", state),
+                            driver,
+                        }
                     })
                     .collect::<Vec<_>>();
 
