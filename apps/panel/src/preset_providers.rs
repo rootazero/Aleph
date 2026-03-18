@@ -87,30 +87,6 @@ impl PresetProviders {
                 base_url: None,
                 is_unsupported: false,
             },
-            PresetProvider {
-                id: "runway".to_string(),
-                name: "Runway".to_string(),
-                icon: "▶️".to_string(),
-                color: "#00D4AA".to_string(),
-                provider_type: "runway".to_string(),
-                capabilities: vec![GenerationType::Video],
-                default_model: "gen-3".to_string(),
-                description: "Runway Gen-3 video generation".to_string(),
-                base_url: Some("https://api.runwayml.com/v1".to_string()),
-                is_unsupported: true,
-            },
-            PresetProvider {
-                id: "pika".to_string(),
-                name: "Pika".to_string(),
-                icon: "🔍".to_string(),
-                color: "#FF6B6B".to_string(),
-                provider_type: "pika".to_string(),
-                capabilities: vec![GenerationType::Video],
-                default_model: "pika-1.0".to_string(),
-                description: "Pika video generation".to_string(),
-                base_url: Some("https://api.pika.art/v1".to_string()),
-                is_unsupported: true,
-            },
         ]
     }
 
