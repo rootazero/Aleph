@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::browser::backend::BrowserBackend;
 use crate::browser::chrome_mcp_backend::ChromeMcpBackend;
+use crate::browser::playwright_mcp_backend::PlaywrightMcpBackend;
 use crate::browser::manager::ProfileManager;
 use crate::browser::profile::BrowserDriver;
 use crate::browser::types::ActionTarget;
@@ -123,15 +124,45 @@ impl AlephTool for BrowserClickTool {
                     }),
                 }
             }
-            _ => {
-                // Placeholder for managed mode
-                Ok(BrowserClickOutput {
-                    success: true,
-                    message: Some(format!(
-                        "Clicked {} in profile '{}'",
-                        target_desc, args.profile
-                    )),
-                })
+            Some(BrowserDriver::Managed) | None => {
+                let playwright = self.manager.get_playwright_mcp_driver();
+                let backend = PlaywrightMcpBackend::new(playwright, args.profile.clone());
+                let tab_id = match super::get_active_tab(&backend).await {
+                    Ok(id) => id,
+                    Err(e) => {
+                        return Ok(BrowserClickOutput {
+                            success: false,
+                            message: Some(format!("{e}")),
+                        });
+                    }
+                };
+
+                let target = if let Some(ref sel) = args.selector {
+                    ActionTarget::Selector { css: sel.clone() }
+                } else if let Some(ref rid) = args.ref_id {
+                    ActionTarget::Ref {
+                        ref_id: rid.clone(),
+                    }
+                } else {
+                    ActionTarget::Coordinates {
+                        x: args.x.unwrap(),
+                        y: args.y.unwrap(),
+                    }
+                };
+
+                match backend.click(&tab_id, target).await {
+                    Ok(()) => Ok(BrowserClickOutput {
+                        success: true,
+                        message: Some(format!(
+                            "Clicked {} in profile '{}' (headless)",
+                            target_desc, args.profile
+                        )),
+                    }),
+                    Err(e) => Ok(BrowserClickOutput {
+                        success: false,
+                        message: Some(format!("Click failed: {e}")),
+                    }),
+                }
             }
         }
     }

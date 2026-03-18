@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::browser::backend::BrowserBackend;
 use crate::browser::chrome_mcp_backend::ChromeMcpBackend;
+use crate::browser::playwright_mcp_backend::PlaywrightMcpBackend;
 use crate::browser::manager::ProfileManager;
 use crate::browser::profile::BrowserDriver;
 use crate::error::Result;
@@ -79,13 +80,24 @@ impl AlephTool for BrowserOpenTool {
                     }),
                 }
             }
-            _ => {
-                // Placeholder for managed mode
-                Ok(BrowserOpenOutput {
-                    success: true,
-                    tab_id: Some("tab-1".into()),
-                    message: Some(format!("Opened {} in profile '{}'", args.url, args.profile)),
-                })
+            Some(BrowserDriver::Managed) | None => {
+                let playwright = self.manager.get_playwright_mcp_driver();
+                let backend = PlaywrightMcpBackend::new(playwright, args.profile.clone());
+                match backend.open_tab(&args.url).await {
+                    Ok(tab_id) => Ok(BrowserOpenOutput {
+                        success: true,
+                        tab_id: Some(tab_id),
+                        message: Some(format!(
+                            "Opened {} in profile '{}' (headless)",
+                            args.url, args.profile
+                        )),
+                    }),
+                    Err(e) => Ok(BrowserOpenOutput {
+                        success: false,
+                        tab_id: None,
+                        message: Some(format!("Failed to open tab: {e}")),
+                    }),
+                }
             }
         }
     }

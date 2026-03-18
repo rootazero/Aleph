@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::browser::backend::BrowserBackend;
 use crate::browser::chrome_mcp_backend::ChromeMcpBackend;
+use crate::browser::playwright_mcp_backend::PlaywrightMcpBackend;
 use crate::browser::manager::ProfileManager;
 use crate::browser::profile::BrowserDriver;
 use crate::browser::types::ActionTarget;
@@ -112,17 +113,46 @@ impl AlephTool for BrowserTypeTool {
                     }),
                 }
             }
-            _ => {
-                // Placeholder for managed mode
-                Ok(BrowserTypeOutput {
-                    success: true,
-                    message: Some(format!(
-                        "Typed {} chars into {} in profile '{}'",
-                        args.text.len(),
-                        target_desc,
-                        args.profile
-                    )),
-                })
+            Some(BrowserDriver::Managed) | None => {
+                let playwright = self.manager.get_playwright_mcp_driver();
+                let backend = PlaywrightMcpBackend::new(playwright, args.profile.clone());
+                let tab_id = match super::get_active_tab(&backend).await {
+                    Ok(id) => id,
+                    Err(e) => {
+                        return Ok(BrowserTypeOutput {
+                            success: false,
+                            message: Some(format!("{e}")),
+                        });
+                    }
+                };
+
+                let target = if let Some(ref sel) = args.selector {
+                    ActionTarget::Selector { css: sel.clone() }
+                } else if let Some(ref rid) = args.ref_id {
+                    ActionTarget::Ref {
+                        ref_id: rid.clone(),
+                    }
+                } else {
+                    ActionTarget::Ref {
+                        ref_id: "focused".into(),
+                    }
+                };
+
+                match backend.type_text(&tab_id, target, &args.text).await {
+                    Ok(()) => Ok(BrowserTypeOutput {
+                        success: true,
+                        message: Some(format!(
+                            "Typed {} chars into {} in profile '{}' (headless)",
+                            args.text.len(),
+                            target_desc,
+                            args.profile
+                        )),
+                    }),
+                    Err(e) => Ok(BrowserTypeOutput {
+                        success: false,
+                        message: Some(format!("Type failed: {e}")),
+                    }),
+                }
             }
         }
     }

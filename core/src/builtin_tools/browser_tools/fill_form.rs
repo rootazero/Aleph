@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::browser::backend::BrowserBackend;
 use crate::browser::chrome_mcp_backend::ChromeMcpBackend;
+use crate::browser::playwright_mcp_backend::PlaywrightMcpBackend;
 use crate::browser::manager::ProfileManager;
 use crate::browser::profile::BrowserDriver;
 use crate::browser::types::ActionTarget;
@@ -66,8 +67,6 @@ impl AlephTool for BrowserFillFormTool {
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         self.manager.record_activity(&args.profile);
 
-        let count = args.fields.len();
-
         let driver = self.manager.get_driver(&args.profile);
         match driver {
             Some(BrowserDriver::ExistingSession) => {
@@ -124,14 +123,57 @@ impl AlephTool for BrowserFillFormTool {
                     )),
                 })
             }
-            _ => {
-                // Placeholder for managed mode
+            Some(BrowserDriver::Managed) | None => {
+                let playwright = self.manager.get_playwright_mcp_driver();
+                let backend = PlaywrightMcpBackend::new(playwright, args.profile.clone());
+                let tab_id = match super::get_active_tab(&backend).await {
+                    Ok(id) => id,
+                    Err(e) => {
+                        return Ok(BrowserFillFormOutput {
+                            success: false,
+                            filled_count: 0,
+                            message: Some(format!("{e}")),
+                        });
+                    }
+                };
+
+                let mut filled = 0;
+                for field in &args.fields {
+                    let target = if let Some(ref ref_id) = field.ref_id {
+                        ActionTarget::Ref { ref_id: ref_id.clone() }
+                    } else if let Some(ref css) = field.selector {
+                        ActionTarget::Selector { css: css.clone() }
+                    } else {
+                        return Ok(BrowserFillFormOutput {
+                            success: false,
+                            filled_count: filled,
+                            message: Some("Each field must have either 'selector' or 'ref_id'".into()),
+                        });
+                    };
+                    let field_name = field.ref_id.as_deref()
+                        .or(field.selector.as_deref())
+                        .unwrap_or("unknown");
+                    match backend.fill(&tab_id, target, &field.value).await {
+                        Ok(()) => filled += 1,
+                        Err(e) => {
+                            return Ok(BrowserFillFormOutput {
+                                success: false,
+                                filled_count: filled,
+                                message: Some(format!(
+                                    "Failed on field '{}': {e}",
+                                    field_name
+                                )),
+                            });
+                        }
+                    }
+                }
+
                 Ok(BrowserFillFormOutput {
                     success: true,
-                    filled_count: count,
+                    filled_count: filled,
                     message: Some(format!(
-                        "Filled {} field(s) in profile '{}'",
-                        count, args.profile
+                        "Filled {} field(s) in profile '{}' (headless)",
+                        filled, args.profile
                     )),
                 })
             }

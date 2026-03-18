@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::browser::backend::BrowserBackend;
 use crate::browser::chrome_mcp_backend::ChromeMcpBackend;
+use crate::browser::playwright_mcp_backend::PlaywrightMcpBackend;
 use crate::browser::manager::ProfileManager;
 use crate::browser::profile::BrowserDriver;
 use crate::error::Result;
@@ -86,17 +87,36 @@ impl AlephTool for BrowserEvaluateTool {
                     }),
                 }
             }
-            _ => {
-                // Placeholder for managed mode
-                Ok(BrowserEvaluateOutput {
-                    success: true,
-                    result: Some(serde_json::Value::Null),
-                    message: Some(format!(
-                        "Evaluated {} chars of JS in profile '{}'",
-                        args.script.len(),
-                        args.profile
-                    )),
-                })
+            Some(BrowserDriver::Managed) | None => {
+                let playwright = self.manager.get_playwright_mcp_driver();
+                let backend = PlaywrightMcpBackend::new(playwright, args.profile.clone());
+                let tab_id = match super::get_active_tab(&backend).await {
+                    Ok(id) => id,
+                    Err(e) => {
+                        return Ok(BrowserEvaluateOutput {
+                            success: false,
+                            result: None,
+                            message: Some(format!("{e}")),
+                        });
+                    }
+                };
+
+                match backend.evaluate(&tab_id, &args.script).await {
+                    Ok(value) => Ok(BrowserEvaluateOutput {
+                        success: true,
+                        result: Some(value),
+                        message: Some(format!(
+                            "Evaluated {} chars of JS in profile '{}' (headless)",
+                            args.script.len(),
+                            args.profile
+                        )),
+                    }),
+                    Err(e) => Ok(BrowserEvaluateOutput {
+                        success: false,
+                        result: None,
+                        message: Some(format!("Evaluate failed: {e}")),
+                    }),
+                }
             }
         }
     }
