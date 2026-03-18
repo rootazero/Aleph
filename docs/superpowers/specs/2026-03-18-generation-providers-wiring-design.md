@@ -23,7 +23,7 @@ Three changes:
 
 **File:** `core/src/bin/aleph/commands/start/builder/agent_init.rs`
 
-Before building `BuiltinToolConfig`, create and populate the generation registry:
+Create and populate the generation registry **unconditionally** (independent of whether an AI chat provider exists, since generation and chat are separate capabilities):
 
 ```rust
 let generation_registry = {
@@ -40,7 +40,7 @@ let generation_registry = {
 };
 ```
 
-Then inject:
+Then inject into `BuiltinToolConfig`:
 
 ```rust
 let tool_config = BuiltinToolConfig {
@@ -50,6 +50,7 @@ let tool_config = BuiltinToolConfig {
 ```
 
 **Rules:**
+- Created at top level of `register_agent_handlers`, outside the AI provider conditional block
 - Skip `enabled: false` and empty API key providers
 - Warn on creation failure, never panic
 - Uses existing `Arc<std::sync::RwLock<GenerationProviderRegistry>>` type
@@ -58,39 +59,52 @@ let tool_config = BuiltinToolConfig {
 
 **File:** `core/src/bin/aleph/commands/start/builder/agent_init.rs`
 
-After startup wiring, spawn a background task:
+After startup wiring, spawn a background task. The task needs access to the vault (`SharedTokenManager`) because RPC handlers set `api_key = None` in config and store keys in the vault separately.
 
 ```rust
 {
     let gen_reg = generation_registry.clone();
-    let config_handle = config.clone();  // Arc<RwLock<Config>>
+    let config_handle = config.clone();       // Arc<tokio::sync::RwLock<Config>>
+    let vault = shared_token_mgr.clone();     // Arc<SharedTokenManager>
     let mut rx = event_bus.subscribe();
 
     tokio::spawn(async move {
         while let Ok(event_json) = rx.recv().await {
-            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&event_json) {
-                if val.get("topic").and_then(|t| t.as_str())
-                    != Some("config.generation.providers.changed")
-                {
-                    continue;
-                }
-            } else {
-                continue;
-            }
+            // Only react to generation provider changes
+            let is_gen_event = serde_json::from_str::<serde_json::Value>(&event_json)
+                .ok()
+                .and_then(|v| v.get("topic")?.as_str().map(|s| s.to_string()))
+                == Some("config.generation.providers.changed".to_string());
+            if !is_gen_event { continue; }
 
-            let cfg = config_handle.read().await;
+            // Snapshot config (drop read guard before creating providers)
+            let providers_snapshot = {
+                let cfg = config_handle.read().await;
+                cfg.generation.providers.clone()
+            };
+
+            // Rebuild registry with vault-resolved API keys
             let mut new_registry = GenerationProviderRegistry::new();
-            for (name, provider_cfg) in &cfg.generation.providers {
+            for (name, mut provider_cfg) in providers_snapshot {
                 if !provider_cfg.enabled { continue; }
+
+                // Resolve API key from vault (RPC handlers store keys there, not in config)
+                if provider_cfg.api_key.is_none() {
+                    if let Ok(Some(secret)) = vault.get_secret(&format!("gen:{}", name)) {
+                        provider_cfg.api_key = Some(secret.expose().to_string());
+                    }
+                }
                 if provider_cfg.api_key.as_ref().map(|k| k.is_empty()).unwrap_or(true) {
                     continue;
                 }
-                match generation::providers::create_provider(name, provider_cfg) {
+
+                match generation::providers::create_provider(&name, &provider_cfg) {
                     Ok(provider) => { new_registry.register(name.clone(), provider).ok(); }
                     Err(e) => { tracing::warn!(provider = %name, error = %e, "Skip gen provider reload"); }
                 }
             }
 
+            // Atomic swap
             let mut guard = gen_reg.write().unwrap_or_else(|e| e.into_inner());
             *guard = new_registry;
             tracing::info!("Generation provider registry reloaded ({} providers)", guard.len());
@@ -101,10 +115,10 @@ After startup wiring, spawn a background task:
 
 **Strategy:** Full registry rebuild on every change event.
 
-**Rationale:**
-- Provider instance creation is cheap (just HTTP client construction)
-- Full rebuild avoids partial state risks
-- Simplest possible code
+**Key points:**
+- Config read guard is dropped before provider creation (defensive, avoids holding lock during I/O)
+- API keys resolved from vault via `SharedTokenManager` (same pattern as startup in `start/mod.rs`)
+- Lock poison handled with `unwrap_or_else(|e| e.into_inner())`
 
 ### 3. openai_compat URL Fix
 
@@ -130,7 +144,24 @@ Add `edit_endpoint: Option<String>` field to `OpenAiCompatProvider` struct.
 
 **File:** `core/src/generation/providers/openai_compat/builder.rs`
 
-Add `edit_endpoint()` method to builder, wire it through to struct construction.
+Two changes:
+
+1. Add `edit_endpoint: Option<String>` field and `edit_endpoint()` builder method
+2. **Remove the `/v1` normalization** in `build()`. Currently the builder strips `/v1` from the URL:
+
+```rust
+// REMOVE this normalization:
+let endpoint = self.base_url
+    .trim_end_matches('/')
+    .trim_end_matches("/v1")
+    .trim_end_matches('/')
+    .to_string();
+
+// REPLACE with simple trailing-slash strip:
+let endpoint = self.base_url.trim_end_matches('/').to_string();
+```
+
+This is necessary because `base_url` is now the full endpoint URL. The old normalization would destroy paths like `/v1/images/generations` → `/images/generations`.
 
 #### 3d. URL logic change
 
@@ -153,6 +184,10 @@ pub(crate) fn edits_url(&self) -> String {
     if let Some(ref edit_url) = self.edit_endpoint {
         return edit_url.clone();
     }
+    // Heuristic: replace "/generations" with "/edits" for standard OpenAI-style URLs.
+    // For non-standard URLs (e.g. /suno/generate), this returns unchanged — which is fine
+    // because those providers typically don't support editing. Users with non-standard edit
+    // endpoints should set `edit_url` explicitly.
     self.endpoint.replace("/generations", "/edits")
 }
 ```
@@ -189,10 +224,10 @@ In `create_provider()`, pass `config.edit_url` to `OpenAiCompatProviderBuilder`:
 
 | File | Change |
 |------|--------|
-| `core/src/bin/aleph/commands/start/builder/agent_init.rs` | Startup wiring + hot-reload task |
+| `core/src/bin/aleph/commands/start/builder/agent_init.rs` | Startup wiring + hot-reload task (needs vault access) |
 | `core/src/generation/providers/openai_compat/helpers.rs` | URL logic: use endpoint directly |
 | `core/src/generation/providers/openai_compat/provider.rs` | Add `edit_endpoint` field |
-| `core/src/generation/providers/openai_compat/builder.rs` | Add `edit_endpoint()` method |
+| `core/src/generation/providers/openai_compat/builder.rs` | Add `edit_endpoint()` method; remove `/v1` normalization |
 | `core/src/generation/providers/mod.rs` | Pass `edit_url` in factory |
 | `core/src/config/types/generation/provider.rs` | Add `edit_url` field |
 | `apps/panel/src/views/settings/generation_providers.rs` | Label change + edit_url input |
@@ -203,7 +238,7 @@ In `create_provider()`, pass `config.edit_url` to `OpenAiCompatProviderBuilder`:
 - `GenerationProvider` trait
 - `GenerationProviderRegistry`
 - RPC handlers (already complete)
-- 10 specialized provider implementations
+- 10 specialized provider implementations (openai_image, stability, etc. keep their own URL logic)
 - `response_parser`
 - Builtin tools (`generate_image` / `generate_video` / `generate_audio`)
 
@@ -237,4 +272,4 @@ model = "dall-e-3"
 
 ## Estimated Size
 
-~100 lines Rust + ~20 lines Leptos UI adjustment
+~120 lines Rust + ~20 lines Leptos UI adjustment
