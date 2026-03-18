@@ -26,11 +26,19 @@ pub fn AcpHarnessesView() -> impl IntoView {
     let loading = RwSignal::new(true);
     let selected_id = RwSignal::new(Option::<String>::None);
     let show_add_form = RwSignal::new(false);
+    let acp_enabled = RwSignal::new(true);
+    let toggling = RwSignal::new(false);
 
-    // Load harness list on mount
+    // Load ACP enabled state + harness list on mount
     Effect::new(move || {
         if state.is_connected.get() {
             spawn_local(async move {
+                // Load ACP enabled state
+                if let Ok(enabled) = AcpApi::get_acp_enabled(&state).await {
+                    acp_enabled.set(enabled);
+                }
+
+                // Load harness list (will be empty if ACP disabled)
                 loading.set(true);
                 match AcpApi::list(&state).await {
                     Ok(list) => {
@@ -51,17 +59,55 @@ pub fn AcpHarnessesView() -> impl IntoView {
         }
     });
 
+    // Toggle ACP enabled state
+    let on_toggle_acp = move |_| {
+        let new_val = !acp_enabled.get_untracked();
+        toggling.set(true);
+        spawn_local(async move {
+            match AcpApi::set_acp_enabled(&state, new_val).await {
+                Ok(()) => {
+                    acp_enabled.set(new_val);
+                    // Note: ACP handler registration requires server restart.
+                    // The toggle persists the config so next restart picks it up.
+                }
+                Err(_e) => {
+                    // Revert on failure
+                }
+            }
+            toggling.set(false);
+        });
+    };
+
     view! {
         <div class="flex h-full">
             // Left panel — harness list
             <div class="flex flex-col w-5/12 min-w-[400px] border-r border-border">
                 <div class="px-6 py-4 border-b border-border">
-                    <h1 class="text-2xl font-semibold text-text-primary">
-                        "ACP Agent CLI"
-                    </h1>
-                    <p class="mt-1 text-sm text-text-secondary">
-                        "Manage external CLI tools that Aleph can delegate tasks to"
-                    </p>
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <h1 class="text-2xl font-semibold text-text-primary">
+                                "ACP Agent CLI"
+                            </h1>
+                            <p class="mt-1 text-sm text-text-secondary">
+                                "Manage external CLI tools that Aleph can delegate tasks to"
+                            </p>
+                        </div>
+                        <button
+                            on:click=on_toggle_acp
+                            disabled=move || toggling.get()
+                            class="relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none"
+                            class:bg-primary=move || acp_enabled.get()
+                            class:bg-gray-500=move || !acp_enabled.get()
+                            class:opacity-50=move || toggling.get()
+                            title="Enable/disable ACP (requires restart)"
+                        >
+                            <span
+                                class="pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out"
+                                class:translate-x-5=move || acp_enabled.get()
+                                class:translate-x-0=move || !acp_enabled.get()
+                            />
+                        </button>
+                    </div>
                 </div>
 
                 <div class="flex-1 overflow-auto">

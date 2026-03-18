@@ -2102,4 +2102,24 @@ impl AcpApi {
         let result = state.rpc_call("acp.presets", Value::Null).await?;
         Ok(result)
     }
+
+    /// Get the top-level ACP enabled state from config.
+    /// Uses config.get since acp.* handlers may not be registered when ACP is disabled.
+    pub async fn get_acp_enabled(state: &DashboardState) -> Result<bool, String> {
+        let result = state.rpc_call("config.get", serde_json::json!({ "key": "acp.enabled" })).await;
+        match result {
+            Ok(val) => Ok(val.as_bool().unwrap_or(true)),
+            Err(_) => Ok(true), // default to enabled
+        }
+    }
+
+    /// Set the top-level ACP enabled state via config.patch.
+    /// Uses config.patch since acp.* handlers may not be registered when ACP is disabled.
+    pub async fn set_acp_enabled(state: &DashboardState, enabled: bool) -> Result<(), String> {
+        state.rpc_call("config.patch", serde_json::json!({
+            "path": "acp",
+            "patch": { "enabled": enabled }
+        })).await?;
+        Ok(())
+    }
 }
