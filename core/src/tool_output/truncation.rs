@@ -5,11 +5,10 @@
 //!
 //! Inspired by OpenCode's tool/truncation.ts.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::error::Result;
-use crate::utils::paths;
 
 /// Maximum lines before truncation (default: 2000, matches OpenCode)
 pub const MAX_LINES: usize = 2000;
@@ -142,10 +141,11 @@ impl TruncationResult {
 /// # Arguments
 /// * `text` - The tool output text
 /// * `config` - Truncation configuration
+/// * `tool_output_dir` - Workspace-scoped directory for saving full outputs
 ///
 /// # Returns
 /// * `TruncationResult` - Either the original content or truncated content with metadata
-pub fn truncate_output(text: &str, config: &TruncationConfig) -> Result<TruncationResult> {
+pub fn truncate_output(text: &str, config: &TruncationConfig, tool_output_dir: &Path) -> Result<TruncationResult> {
     let lines: Vec<&str> = text.lines().collect();
     let line_count = lines.len();
     let byte_count = text.len();
@@ -190,7 +190,7 @@ pub fn truncate_output(text: &str, config: &TruncationConfig) -> Result<Truncati
     };
 
     // Save full output to file
-    let output_path = save_full_output(text)?;
+    let output_path = save_full_output(text, tool_output_dir)?;
 
     // Build hint message
     let hint = if config.has_task_tool {
@@ -235,11 +235,11 @@ pub fn truncate_output(text: &str, config: &TruncationConfig) -> Result<Truncati
 /// Save full output to a file
 ///
 /// Files are saved with ascending IDs for easy identification and cleanup.
-fn save_full_output(content: &str) -> Result<PathBuf> {
-    let output_dir = get_tool_output_dir()?;
+fn save_full_output(content: &str, tool_output_dir: &Path) -> Result<PathBuf> {
+    let output_dir = tool_output_dir;
 
     // Ensure directory exists
-    std::fs::create_dir_all(&output_dir)?;
+    std::fs::create_dir_all(output_dir)?;
 
     // Generate unique ID
     let id = OUTPUT_COUNTER.fetch_add(1, Ordering::SeqCst);
@@ -254,21 +254,17 @@ fn save_full_output(content: &str) -> Result<PathBuf> {
     Ok(path)
 }
 
-/// Get the tool output directory
-pub fn get_tool_output_dir() -> Result<PathBuf> {
-    paths::get_tool_output_dir()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+    use tempfile::tempdir;
 
     #[test]
     fn test_no_truncation_needed() {
+        let dir = tempdir().unwrap();
         let text = "Short output";
         let config = TruncationConfig::default();
-        let result = truncate_output(text, &config).unwrap();
+        let result = truncate_output(text, &config, dir.path()).unwrap();
 
         assert!(!result.was_truncated());
         assert_eq!(result.content(), text);
@@ -276,11 +272,12 @@ mod tests {
 
     #[test]
     fn test_truncation_by_lines_head() {
+        let dir = tempdir().unwrap();
         let lines: Vec<String> = (0..3000).map(|i| format!("Line {}", i)).collect();
         let text = lines.join("\n");
         let config = TruncationConfig::new(100, usize::MAX).with_direction(TruncationDirection::Head);
 
-        let result = truncate_output(&text, &config).unwrap();
+        let result = truncate_output(&text, &config, dir.path()).unwrap();
 
         assert!(result.was_truncated());
         assert!(result.output_path().is_some());
@@ -293,11 +290,12 @@ mod tests {
 
     #[test]
     fn test_truncation_by_lines_tail() {
+        let dir = tempdir().unwrap();
         let lines: Vec<String> = (0..3000).map(|i| format!("Line {}", i)).collect();
         let text = lines.join("\n");
         let config = TruncationConfig::new(100, usize::MAX).with_direction(TruncationDirection::Tail);
 
-        let result = truncate_output(&text, &config).unwrap();
+        let result = truncate_output(&text, &config, dir.path()).unwrap();
 
         assert!(result.was_truncated());
         // Check that content ends with last lines
@@ -308,10 +306,11 @@ mod tests {
 
     #[test]
     fn test_truncation_by_bytes_head() {
+        let dir = tempdir().unwrap();
         let text = "x".repeat(100_000); // 100KB
         let config = TruncationConfig::new(usize::MAX, 1000).with_direction(TruncationDirection::Head);
 
-        let result = truncate_output(&text, &config).unwrap();
+        let result = truncate_output(&text, &config, dir.path()).unwrap();
 
         assert!(result.was_truncated());
         if let TruncationResult::Truncated(t) = &result {
@@ -322,11 +321,12 @@ mod tests {
 
     #[test]
     fn test_hint_with_task_tool() {
+        let dir = tempdir().unwrap();
         let lines: Vec<String> = (0..3000).map(|i| format!("Line {}", i)).collect();
         let text = lines.join("\n");
         let config = TruncationConfig::new(100, usize::MAX).with_task_tool(true);
 
-        let result = truncate_output(&text, &config).unwrap();
+        let result = truncate_output(&text, &config, dir.path()).unwrap();
         let content = result.content();
 
         assert!(content.contains("Task tool"));
@@ -334,11 +334,12 @@ mod tests {
 
     #[test]
     fn test_hint_without_task_tool() {
+        let dir = tempdir().unwrap();
         let lines: Vec<String> = (0..3000).map(|i| format!("Line {}", i)).collect();
         let text = lines.join("\n");
         let config = TruncationConfig::new(100, usize::MAX).with_task_tool(false);
 
-        let result = truncate_output(&text, &config).unwrap();
+        let result = truncate_output(&text, &config, dir.path()).unwrap();
         let content = result.content();
 
         assert!(content.contains("Grep to search"));
@@ -346,11 +347,12 @@ mod tests {
 
     #[test]
     fn test_utf8_safe_truncation() {
+        let dir = tempdir().unwrap();
         // Test that byte truncation respects UTF-8 boundaries
         let text = "你好世界".repeat(1000); // Chinese characters (3 bytes each)
         let config = TruncationConfig::new(usize::MAX, 100);
 
-        let result = truncate_output(&text, &config).unwrap();
+        let result = truncate_output(&text, &config, dir.path()).unwrap();
 
         assert!(result.was_truncated());
         // Content should still be valid UTF-8

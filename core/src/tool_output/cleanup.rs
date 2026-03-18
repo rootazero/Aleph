@@ -11,7 +11,6 @@ use std::time::{Duration, SystemTime};
 use tokio::time::interval;
 use tracing::{debug, info, warn};
 
-use super::truncation::get_tool_output_dir;
 use crate::error::Result;
 
 /// Default retention period (7 days, matches OpenCode)
@@ -57,67 +56,81 @@ impl CleanupConfig {
     }
 }
 
-/// Clean up old tool output files
+/// Clean up old tool output files across all workspace-scoped `.tool_output` directories
 ///
-/// Deletes files older than the retention period from the tool-output directory.
+/// Enumerates all agent workspaces under `~/.aleph/workspaces/` and deletes files
+/// older than the retention period from each workspace's `.tool_output` directory.
 /// Errors during deletion are logged but don't stop the cleanup process.
 ///
 /// # Returns
 /// * Number of files deleted
 pub fn cleanup_old_outputs(config: &CleanupConfig) -> Result<usize> {
-    let output_dir = get_tool_output_dir()?;
+    let workspace_root = crate::config::agent_resolver::default_workspace_root();
+    let mut all_dirs = Vec::new();
+    if workspace_root.is_dir() {
+        if let Ok(entries) = std::fs::read_dir(&workspace_root) {
+            for entry in entries.flatten() {
+                let tool_output = entry.path().join(".tool_output");
+                if tool_output.is_dir() {
+                    all_dirs.push(tool_output);
+                }
+            }
+        }
+    }
 
-    if !output_dir.exists() {
-        debug!("Tool output directory doesn't exist, nothing to clean up");
+    if all_dirs.is_empty() {
+        debug!("No workspace .tool_output directories found, nothing to clean up");
         return Ok(0);
     }
 
     let cutoff = SystemTime::now() - config.retention_duration();
     let mut deleted_count = 0;
 
-    // Read directory entries
-    let entries = match std::fs::read_dir(&output_dir) {
-        Ok(entries) => entries,
-        Err(e) => {
-            warn!("Failed to read tool output directory: {}", e);
-            return Ok(0);
-        }
-    };
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-
-        // Only process tool_* files
-        if !is_tool_output_file(&path) {
-            continue;
-        }
-
-        // Check file modification time
-        let metadata = match std::fs::metadata(&path) {
-            Ok(m) => m,
+    for output_dir in &all_dirs {
+        // Read directory entries
+        let entries = match std::fs::read_dir(output_dir) {
+            Ok(entries) => entries,
             Err(e) => {
-                debug!("Failed to get metadata for {}: {}", path.display(), e);
+                warn!("Failed to read tool output directory {}: {}", output_dir.display(), e);
                 continue;
             }
         };
 
-        let modified = match metadata.modified() {
-            Ok(t) => t,
-            Err(e) => {
-                debug!("Failed to get modification time for {}: {}", path.display(), e);
+        for entry in entries.flatten() {
+            let path = entry.path();
+
+            // Only process tool_* files
+            if !is_tool_output_file(&path) {
                 continue;
             }
-        };
 
-        // Delete if older than cutoff
-        if modified < cutoff {
-            match std::fs::remove_file(&path) {
-                Ok(_) => {
-                    debug!("Deleted old tool output: {}", path.display());
-                    deleted_count += 1;
-                }
+            // Check file modification time
+            let metadata = match std::fs::metadata(&path) {
+                Ok(m) => m,
                 Err(e) => {
-                    warn!("Failed to delete old tool output {}: {}", path.display(), e);
+                    debug!("Failed to get metadata for {}: {}", path.display(), e);
+                    continue;
+                }
+            };
+
+            let modified = match metadata.modified() {
+                Ok(t) => t,
+                Err(e) => {
+                    debug!("Failed to get modification time for {}: {}", path.display(), e);
+                    continue;
+                }
+            };
+
+            // Delete if older than cutoff
+            if modified < cutoff {
+                match std::fs::remove_file(&path) {
+                    Ok(_) => {
+                        debug!("Deleted old tool output: {}", path.display());
+                        deleted_count += 1;
+                    }
+                    Err(e) => {
+                        warn!("Failed to delete old tool output {}: {}", path.display(), e);
+                    }
                 }
             }
         }

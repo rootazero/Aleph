@@ -658,7 +658,7 @@ fn resolve_user_path(path: &Path) -> PathBuf {
 }
 
 /// Default workspace root directory: `~/.aleph/agents`.
-fn default_workspace_root() -> PathBuf {
+pub(crate) fn default_workspace_root() -> PathBuf {
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("/tmp"))
         .join(".aleph")
