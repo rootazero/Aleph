@@ -173,56 +173,6 @@ impl BuiltinToolRegistry {
             &config,
         );
 
-        // Add subagent management tools (if SubAgentDispatcher is available)
-        let (subagent_spawn_tool, subagent_steer_tool, subagent_kill_tool) =
-            if let Some(ref dispatcher) = config.sub_agent_dispatcher {
-                use crate::builtin_tools::subagent_manage;
-                let spawn = subagent_manage::SubagentSpawnTool::new(Arc::clone(dispatcher));
-                let steer = config.sub_agent_registry.as_ref().map(|reg| {
-                    subagent_manage::SubagentSteerTool::new(Arc::clone(dispatcher), Arc::clone(reg))
-                });
-                let kill = config.sub_agent_registry.as_ref().map(|reg| {
-                    subagent_manage::SubagentKillTool::new(Arc::clone(dispatcher), Arc::clone(reg))
-                });
-
-                // Register tool metadata with parameter schemas
-                {
-                    let spawn_def = spawn.definition();
-                    let mut ut = UnifiedTool::new(
-                        "builtin:subagent_spawn", "subagent_spawn",
-                        subagent_manage::SubagentSpawnTool::DESCRIPTION, ToolSource::Builtin,
-                    );
-                    ut = ut.with_parameters_schema(spawn_def.parameters.clone());
-                    tools.insert("subagent_spawn".to_string(), ut);
-                }
-                if let Some(ref s) = steer {
-                    let def = s.definition();
-                    let mut ut = UnifiedTool::new(
-                        "builtin:subagent_steer", "subagent_steer",
-                        subagent_manage::SubagentSteerTool::DESCRIPTION, ToolSource::Builtin,
-                    );
-                    ut = ut.with_parameters_schema(def.parameters.clone());
-                    tools.insert("subagent_steer".to_string(), ut);
-                }
-                if let Some(ref k) = kill {
-                    let def = k.definition();
-                    let mut ut = UnifiedTool::new(
-                        "builtin:subagent_kill", "subagent_kill",
-                        subagent_manage::SubagentKillTool::DESCRIPTION, ToolSource::Builtin,
-                    );
-                    ut = ut.with_parameters_schema(def.parameters.clone());
-                    tools.insert("subagent_kill".to_string(), ut);
-                }
-
-                info!("Registered subagent management tools (subagent_spawn{}{})",
-                    if steer.is_some() { ", subagent_steer" } else { "" },
-                    if kill.is_some() { ", subagent_kill" } else { "" },
-                );
-                (Some(spawn), steer, kill)
-            } else {
-                (None, None, None)
-            };
-
         // Add agent management tools (if AgentRegistry + WorkspaceManager are available)
         let (agent_create_tool, agent_switch_tool, agent_list_tool, agent_delete_tool, session_context_handle) =
             if let (Some(ref ar), Some(ref wm)) = (&config.agent_registry, &config.workspace_manager) {
@@ -363,7 +313,6 @@ impl BuiltinToolRegistry {
             memory_workspace_handle,
             generation_registry: config.generation_registry.clone(),
             dispatcher_registry: config.dispatcher_registry.clone(),
-            sub_agent_dispatcher: config.sub_agent_dispatcher.clone(),
             gateway_context: config.gateway_context.clone(),
             session_new_tool: config.gateway_context.as_ref().map(|ctx| {
                 crate::builtin_tools::sessions::SessionNewTool::new(Arc::clone(ctx.session_manager()))
@@ -371,9 +320,6 @@ impl BuiltinToolRegistry {
             cron_manage_tool: config.cron_service.as_ref().map(|svc| {
                 crate::builtin_tools::cron_manage::CronManageTool::new(Arc::clone(svc))
             }),
-            subagent_spawn_tool,
-            subagent_steer_tool,
-            subagent_kill_tool,
             browser_open_tool,
             browser_click_tool,
             browser_type_tool,
@@ -554,14 +500,6 @@ impl BuiltinToolRegistry {
             reg(tools, "get_tool_schema", GetToolSchemaTool::DESCRIPTION,
                 serde_json::to_value(schema_for!(crate::builtin_tools::meta_tools::GetToolSchemaArgs)).unwrap_or_default());
             info!("Registered meta tools (list_tools, get_tool_schema) in BuiltinToolRegistry");
-        }
-
-        // Delegate tool for sub-agent delegation
-        if config.sub_agent_dispatcher.is_some() {
-            reg(tools, "delegate",
-                "Delegate a task to a specialized sub-agent for tool discovery (MCP tools or skill workflows)",
-                serde_json::to_value(schema_for!(crate::agents::sub_agents::DelegateArgs)).unwrap_or_default());
-            info!("Registered delegate tool in BuiltinToolRegistry");
         }
 
         // Cron management tool (requires SharedCronService)

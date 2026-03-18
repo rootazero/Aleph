@@ -46,7 +46,6 @@ mod tests {
 
     use tokio::sync::RwLock;
 
-    use crate::agents::sub_agents::SubAgentDispatcher;
     use crate::dispatcher::{ToolRegistry as DispatcherToolRegistry, ToolSource};
 
     use super::*;
@@ -124,59 +123,6 @@ mod tests {
 
         assert!(registry.get_tool("list_tools").is_some());
         assert!(registry.get_tool("get_tool_schema").is_some());
-    }
-
-    #[tokio::test]
-    async fn test_delegate_tool_not_registered_without_dispatcher() {
-        // Without sub_agent_dispatcher, delegate tool should not be registered
-        let registry = BuiltinToolRegistry::new().await;
-
-        assert!(registry.get_tool("delegate").is_none());
-    }
-
-    #[tokio::test]
-    async fn test_delegate_tool_registered_with_dispatcher() {
-        // With sub_agent_dispatcher, delegate tool should be registered
-        let tool_registry = Arc::new(RwLock::new(DispatcherToolRegistry::new()));
-        let sub_agent_dispatcher = Arc::new(RwLock::new(
-            SubAgentDispatcher::with_defaults(tool_registry)
-        ));
-        let config = BuiltinToolConfig {
-            sub_agent_dispatcher: Some(sub_agent_dispatcher),
-            ..Default::default()
-        };
-        let registry = BuiltinToolRegistry::with_config(config).await;
-
-        assert!(registry.get_tool("delegate").is_some());
-        let delegate = registry.get_tool("delegate").unwrap();
-        assert_eq!(delegate.name, "delegate");
-        assert_eq!(delegate.id, "builtin:delegate");
-    }
-
-    #[tokio::test]
-    async fn test_delegate_tool_execution() {
-        // With sub_agent_dispatcher, delegate tool should execute
-        let tool_registry = Arc::new(RwLock::new(DispatcherToolRegistry::new()));
-        let sub_agent_dispatcher = Arc::new(RwLock::new(
-            SubAgentDispatcher::with_defaults(tool_registry)
-        ));
-        let config = BuiltinToolConfig {
-            sub_agent_dispatcher: Some(sub_agent_dispatcher),
-            ..Default::default()
-        };
-        let registry = BuiltinToolRegistry::with_config(config).await;
-
-        // Execute delegate tool
-        let result = registry.execute_tool(
-            "delegate",
-            serde_json::json!({
-                "prompt": "List available MCP tools",
-                "agent": "mcp"
-            })
-        ).await;
-
-        // Should succeed (even with no tools available, it returns info about available servers)
-        assert!(result.is_ok());
     }
 
     // ========================================================================

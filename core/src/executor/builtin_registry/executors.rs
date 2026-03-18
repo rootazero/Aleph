@@ -2,14 +2,12 @@
 //!
 //! Note: Most tools now use AlephTool::call_json directly from registry.rs.
 //! This file only contains execute_* methods for tools that haven't been
-//! migrated to AlephTool (video/audio generation, delegate).
+//! migrated to AlephTool (video/audio generation).
 
 use serde_json::Value;
 use tracing::info;
 
-use crate::agents::sub_agents::{DelegateArgs, DelegateTool};
 use crate::error::{AlephError, Result};
-use crate::tools::AlephTool;
 
 use super::BuiltinToolRegistry;
 
@@ -154,28 +152,4 @@ impl BuiltinToolRegistry {
         Ok(result)
     }
 
-    /// Execute the delegate tool for sub-agent delegation
-    pub(crate) async fn execute_delegate(&self, arguments: Value) -> Result<Value> {
-        let dispatcher = self.sub_agent_dispatcher.as_ref().ok_or_else(|| {
-            AlephError::tool("delegate not available: no sub_agent_dispatcher configured")
-        })?;
-
-        let args: DelegateArgs = serde_json::from_value(arguments).map_err(|e| {
-            AlephError::tool(format!("Invalid delegate arguments: {}", e))
-        })?;
-
-        info!(
-            prompt = %args.prompt.chars().take(100).collect::<String>(),
-            agent = ?args.agent,
-            target = ?args.target,
-            "Delegating to sub-agent"
-        );
-
-        // Create a temporary DelegateTool and execute via AlephTool trait
-        let tool = DelegateTool::new(std::sync::Arc::clone(dispatcher));
-        let result = AlephTool::call(&tool, args).await?;
-
-        serde_json::to_value(result)
-            .map_err(|e| AlephError::tool(format!("Failed to serialize result: {}", e)))
-    }
 }

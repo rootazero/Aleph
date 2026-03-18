@@ -251,17 +251,13 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         embedder_out = embedder.clone();
 
         // Create SubAgentDispatcher only when A2A is enabled.
-        // Without A2A, the dispatcher would be empty and the delegate tool
-        // would always return NotFound, so we skip registration entirely.
-        let sub_agent_dispatcher = if app_config.a2a.enabled {
+        // Used by A2A subsystem to register A2ASubAgent for remote delegation.
+        if app_config.a2a.enabled {
             let disp = Arc::new(tokio::sync::RwLock::new(
                 alephcore::agents::sub_agents::SubAgentDispatcher::new(),
             ));
-            sub_agent_disp = Some(disp.clone());
-            Some(disp)
-        } else {
-            None
-        };
+            sub_agent_disp = Some(disp);
+        }
 
         // Get extension manager for plugin tool execution
         let extension_manager = {
@@ -279,7 +275,6 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             event_bus: Some(event_bus.clone()),
             tool_policy: Some(alephcore::builtin_tools::agent_manage::new_tool_policy_handle()),
             agent_manager: Some(agent_manager.clone()),
-            sub_agent_dispatcher,
             extension_manager: extension_manager.clone(),
             acp_manager: acp_manager.clone(),
             cron_service: cron_service.clone(),

@@ -2,7 +2,7 @@
 //!
 //! This module provides:
 //!
-//! ## Sub-agent delegation (`agents::`)
+//! ## Agent types and registry (`agents::`)
 //! - `AgentDef`: Agent definition with tools and limits
 //! - `AgentMode`: Primary vs SubAgent distinction
 //! - `AgentRegistry`: Registry for managing agents
@@ -14,11 +14,8 @@
 //! - `BuiltinToolConfig`: Configuration for built-in tools
 //! - `create_builtin_tool_server`: Create a ToolServer with built-in tools
 //!
-//! ## Specialized Sub-Agents (`agents::sub_agents::`)
-//! - `SubAgent`: Trait for specialized sub-agents
-//! - `McpSubAgent`: Sub-agent for MCP tool execution
-//! - `SkillSubAgent`: Sub-agent for skill execution
-//! - `DelegateTool`: Tool for delegating to sub-agents
+//! ## Sub-agent infrastructure (`agents::sub_agents::`)
+//! - `SubAgent`: Trait for specialized sub-agents (used by A2A)
 //! - `SubAgentDispatcher`: Routes requests to appropriate sub-agents
 
 mod registry;

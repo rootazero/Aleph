@@ -7,7 +7,6 @@ use crate::sync_primitives::Arc;
 use serde_json::Value;
 use tracing::{debug, error, info};
 
-use crate::agents::sub_agents::SubAgentDispatcher;
 use crate::builtin_tools::meta_tools::{ListToolsTool, GetToolSchemaTool};
 use crate::builtin_tools::sessions::{SessionsListTool, SessionsSendTool};
 use crate::dispatcher::{ToolRegistry as DispatcherToolRegistry, ToolSource, UnifiedTool};
@@ -67,8 +66,6 @@ pub struct BuiltinToolRegistry {
     pub(crate) generation_registry: Option<Arc<std::sync::RwLock<GenerationProviderRegistry>>>,
     /// Dispatcher tool registry for meta tools (smart tool discovery)
     pub(crate) dispatcher_registry: Option<Arc<RwLock<DispatcherToolRegistry>>>,
-    /// Sub-agent dispatcher for delegation (smart tool discovery)
-    pub(crate) sub_agent_dispatcher: Option<Arc<RwLock<SubAgentDispatcher>>>,
     /// Gateway context for sessions tools (sessions_list, sessions_send)
     pub(crate) gateway_context: Option<Arc<GatewayContext>>,
     /// Session new tool (optional - requires SessionManager)
@@ -80,10 +77,6 @@ pub struct BuiltinToolRegistry {
     pub(crate) agent_switch_tool: Option<crate::builtin_tools::agent_manage::AgentSwitchTool>,
     pub(crate) agent_list_tool: Option<crate::builtin_tools::agent_manage::AgentListTool>,
     pub(crate) agent_delete_tool: Option<crate::builtin_tools::agent_manage::AgentDeleteTool>,
-    /// Subagent management tools (optional - requires SubAgentDispatcher + SubAgentRegistry)
-    pub(crate) subagent_spawn_tool: Option<crate::builtin_tools::subagent_manage::SubagentSpawnTool>,
-    pub(crate) subagent_steer_tool: Option<crate::builtin_tools::subagent_manage::SubagentSteerTool>,
-    pub(crate) subagent_kill_tool: Option<crate::builtin_tools::subagent_manage::SubagentKillTool>,
     /// Browser tools (always available, share a single ProfileManager)
     pub(crate) browser_open_tool: crate::builtin_tools::browser_tools::BrowserOpenTool,
     pub(crate) browser_click_tool: crate::builtin_tools::browser_tools::BrowserClickTool,
@@ -248,9 +241,6 @@ impl ToolRegistry for BuiltinToolRegistry {
                 tool.call_json(arguments).await
             }),
 
-            // Delegate tool for sub-agent delegation (uses AlephTool)
-            "delegate" => Box::pin(async move { self.execute_delegate(arguments).await }),
-
             // Skill reading tools - use call_json
             "read_skill" => Box::pin(async move { self.read_skill_tool.call_json(arguments).await }),
             "list_skills" => Box::pin(async move { self.list_skills_tool.call_json(arguments).await }),
@@ -305,26 +295,6 @@ impl ToolRegistry for BuiltinToolRegistry {
                 // Note: GatewayContext doesn't implement Clone, so we dereference and clone
                 // the inner context for SessionsSendTool which expects GatewayContext by value
                 let tool = SessionsSendTool::with_context((**context).clone(), "main");
-                tool.call_json(arguments).await
-            }),
-
-            // Subagent management tools
-            "subagent_spawn" => Box::pin(async move {
-                let tool = self.subagent_spawn_tool.as_ref().ok_or_else(|| {
-                    AlephError::tool("subagent_spawn not available: no SubAgentDispatcher configured")
-                })?;
-                tool.call_json(arguments).await
-            }),
-            "subagent_steer" => Box::pin(async move {
-                let tool = self.subagent_steer_tool.as_ref().ok_or_else(|| {
-                    AlephError::tool("subagent_steer not available: no SubAgentDispatcher/SubAgentRegistry configured")
-                })?;
-                tool.call_json(arguments).await
-            }),
-            "subagent_kill" => Box::pin(async move {
-                let tool = self.subagent_kill_tool.as_ref().ok_or_else(|| {
-                    AlephError::tool("subagent_kill not available: no SubAgentDispatcher/SubAgentRegistry configured")
-                })?;
                 tool.call_json(arguments).await
             }),
 
