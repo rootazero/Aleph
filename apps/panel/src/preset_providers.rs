@@ -114,8 +114,8 @@ impl PresetProviders {
         ]
     }
 
-    // Audio Providers
-    pub fn audio_providers() -> Vec<PresetProvider> {
+    // Speech Providers (TTS)
+    pub fn speech_providers() -> Vec<PresetProvider> {
         vec![
             PresetProvider {
                 id: "openai-tts".to_string(),
@@ -135,10 +135,28 @@ impl PresetProviders {
                 icon: "🔊".to_string(),
                 color: "#000000".to_string(),
                 provider_type: "elevenlabs".to_string(),
-                capabilities: vec![GenerationType::Speech, GenerationType::Audio],
+                capabilities: vec![GenerationType::Speech],
                 default_model: "eleven_multilingual_v2".to_string(),
                 description: "ElevenLabs voice synthesis".to_string(),
                 base_url: Some("https://api.elevenlabs.io".to_string()),
+                is_unsupported: false,
+            },
+        ]
+    }
+
+    // Audio Providers (music generation)
+    pub fn audio_providers() -> Vec<PresetProvider> {
+        vec![
+            PresetProvider {
+                id: "suno".to_string(),
+                name: "Suno".to_string(),
+                icon: "🎵".to_string(),
+                color: "#FF6B35".to_string(),
+                provider_type: "openai_compat".to_string(),
+                capabilities: vec![GenerationType::Audio],
+                default_model: "suno_music".to_string(),
+                description: "AI music generation by Suno".to_string(),
+                base_url: None,
                 is_unsupported: false,
             },
         ]
@@ -149,6 +167,7 @@ impl PresetProviders {
         let mut all = Vec::new();
         all.extend(Self::image_providers());
         all.extend(Self::video_providers());
+        all.extend(Self::speech_providers());
         all.extend(Self::audio_providers());
         all
     }
@@ -158,7 +177,8 @@ impl PresetProviders {
         match category {
             GenerationType::Image => Self::image_providers(),
             GenerationType::Video => Self::video_providers(),
-            GenerationType::Audio | GenerationType::Speech => Self::audio_providers(),
+            GenerationType::Audio => Self::audio_providers(),
+            GenerationType::Speech => Self::speech_providers(),
         }
     }
 
