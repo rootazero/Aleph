@@ -16,7 +16,7 @@ pub struct GenerationConfigDto {
     pub default_video_provider: Option<String>,
     pub default_audio_provider: Option<String>,
     pub default_speech_provider: Option<String>,
-    pub output_dir: String,
+    pub output_dir: Option<String>,
     pub auto_paste_threshold_mb: u32,
     pub background_task_threshold_seconds: u32,
     pub smart_routing_enabled: bool,
@@ -35,7 +35,7 @@ pub async fn handle_get(
         default_video_provider: generation.default_video_provider.clone(),
         default_audio_provider: generation.default_audio_provider.clone(),
         default_speech_provider: generation.default_speech_provider.clone(),
-        output_dir: generation.output_dir.to_string_lossy().to_string(),
+        output_dir: generation.output_dir.as_ref().map(|p| p.to_string_lossy().to_string()),
         auto_paste_threshold_mb: generation.auto_paste_threshold_mb,
         background_task_threshold_seconds: generation.background_task_threshold_seconds,
         smart_routing_enabled: generation.smart_routing_enabled,
@@ -97,7 +97,7 @@ pub async fn handle_update(
         generation.default_video_provider = dto.default_video_provider.clone();
         generation.default_audio_provider = dto.default_audio_provider.clone();
         generation.default_speech_provider = dto.default_speech_provider.clone();
-        generation.output_dir = std::path::PathBuf::from(&dto.output_dir);
+        generation.output_dir = dto.output_dir.as_ref().map(|s| std::path::PathBuf::from(s));
         generation.auto_paste_threshold_mb = dto.auto_paste_threshold_mb;
         generation.background_task_threshold_seconds = dto.background_task_threshold_seconds;
         generation.smart_routing_enabled = dto.smart_routing_enabled;

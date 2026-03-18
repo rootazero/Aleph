@@ -137,11 +137,11 @@ mod tests {
     #[test]
     fn test_generation_config_output_dir_expansion() {
         let config = GenerationConfig {
-            output_dir: PathBuf::from("~/test-output"),
+            output_dir: Some(PathBuf::from("~/test-output")),
             ..Default::default()
         };
-
-        let expanded = config.get_output_dir();
+        let fallback = PathBuf::from("/tmp/fallback");
+        let expanded = config.resolve_output_dir(&fallback);
         assert!(!expanded.to_string_lossy().contains("~"));
     }
 

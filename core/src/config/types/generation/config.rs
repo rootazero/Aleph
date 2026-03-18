@@ -55,9 +55,10 @@ pub struct GenerationConfig {
     pub default_speech_provider: Option<String>,
 
     /// Output directory for generated files
-    /// Supports ~ for home directory expansion
-    #[serde(default = "default_output_dir")]
-    pub output_dir: PathBuf,
+    /// Supports ~ for home directory expansion.
+    /// When None, the workspace ToolContext fallback is used.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_dir: Option<PathBuf>,
 
     /// File size threshold (MB) for auto-pasting to clipboard
     /// Files larger than this will be saved to disk instead
@@ -76,13 +77,6 @@ pub struct GenerationConfig {
     /// Provider configurations
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub providers: HashMap<String, GenerationProviderConfig>,
-}
-
-fn default_output_dir() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_default()
-        .join(".aleph")
-        .join("generation")
 }
 
 fn default_auto_paste_threshold_mb() -> u32 {
@@ -104,7 +98,7 @@ impl Default for GenerationConfig {
             default_video_provider: None,
             default_audio_provider: None,
             default_speech_provider: None,
-            output_dir: default_output_dir(),
+            output_dir: None,
             auto_paste_threshold_mb: default_auto_paste_threshold_mb(),
             background_task_threshold_seconds: default_background_task_threshold_seconds(),
             smart_routing_enabled: default_smart_routing_enabled(),
@@ -193,18 +187,24 @@ impl GenerationConfig {
         }
     }
 
-    /// Get the expanded output directory path
-    pub fn get_output_dir(&self) -> PathBuf {
-        let path_str = self.output_dir.to_string_lossy();
-        if let Some(stripped) = path_str.strip_prefix("~/") {
-            if let Some(home) = dirs::home_dir() {
-                return home.join(stripped);
+    /// Resolve the output directory with fallback to workspace default.
+    ///
+    /// Priority: explicit user config (from config.toml) > workspace ToolContext fallback
+    pub fn resolve_output_dir(&self, fallback: &std::path::Path) -> PathBuf {
+        if let Some(ref configured) = self.output_dir {
+            let path_str = configured.to_string_lossy();
+            if let Some(stripped) = path_str.strip_prefix("~/") {
+                if let Some(home) = dirs::home_dir() {
+                    return home.join(stripped);
+                }
+            } else if path_str == "~" {
+                if let Some(home) = dirs::home_dir() {
+                    return home;
+                }
             }
-        } else if path_str == "~" {
-            if let Some(home) = dirs::home_dir() {
-                return home;
-            }
+            configured.clone()
+        } else {
+            fallback.to_path_buf()
         }
-        self.output_dir.clone()
     }
 }
