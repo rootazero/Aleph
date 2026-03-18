@@ -43,6 +43,7 @@ impl<R: ToolRegistry + 'static> LoopTool for RegistryToolAdapter<R> {
     }
 
     async fn execute(&self, input: Value) -> ToolResult {
+        tracing::debug!(tool = %self.name, args = %input, "Tool call raw arguments from LLM");
         // Inject default working_dir for bash/code_exec if not provided by LLM
         let input = if WORKING_DIR_TOOLS.contains(&self.name.as_str()) {
             if let Some(ref dir) = self.default_working_dir {

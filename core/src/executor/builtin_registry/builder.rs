@@ -123,24 +123,32 @@ impl BuiltinToolRegistry {
         // Register always-available tool metadata
         Self::register_core_tools(&mut tools);
 
-        // Register browser tools metadata
-        for (name, desc) in [
-            ("browser_open", BrowserOpenTool::DESCRIPTION),
-            ("browser_click", BrowserClickTool::DESCRIPTION),
-            ("browser_type", BrowserTypeTool::DESCRIPTION),
-            ("browser_screenshot", BrowserScreenshotTool::DESCRIPTION),
-            ("browser_snapshot", BrowserSnapshotTool::DESCRIPTION),
-            ("browser_navigate", BrowserNavigateTool::DESCRIPTION),
-            ("browser_tabs", BrowserTabsTool::DESCRIPTION),
-            ("browser_select", BrowserSelectTool::DESCRIPTION),
-            ("browser_evaluate", BrowserEvaluateTool::DESCRIPTION),
-            ("browser_fill_form", BrowserFillFormTool::DESCRIPTION),
-            ("browser_profile", BrowserProfileTool::DESCRIPTION),
-        ] {
-            tools.insert(
-                name.to_string(),
-                UnifiedTool::new(format!("builtin:{name}"), name, desc, ToolSource::Builtin),
-            );
+        // Register browser tools metadata (with parameter schemas from AlephTool::definition)
+        {
+            use crate::tools::AlephTool;
+            let browser_tool_defs = [
+                browser_open_tool.definition(),
+                browser_click_tool.definition(),
+                browser_type_tool.definition(),
+                browser_screenshot_tool.definition(),
+                browser_snapshot_tool.definition(),
+                browser_navigate_tool.definition(),
+                browser_tabs_tool.definition(),
+                browser_select_tool.definition(),
+                browser_evaluate_tool.definition(),
+                browser_fill_form_tool.definition(),
+                browser_profile_tool.definition(),
+            ];
+            for td in &browser_tool_defs {
+                let mut ut = UnifiedTool::new(
+                    format!("builtin:{}", td.name),
+                    &td.name,
+                    &td.description,
+                    ToolSource::Builtin,
+                );
+                ut = ut.with_parameters_schema(td.parameters.clone());
+                tools.insert(td.name.clone(), ut);
+            }
         }
         info!("Registered browser tools (11 tools) in BuiltinToolRegistry");
 
@@ -169,37 +177,33 @@ impl BuiltinToolRegistry {
                     subagent_manage::SubagentKillTool::new(Arc::clone(dispatcher), Arc::clone(reg))
                 });
 
-                // Register tool metadata
-                tools.insert(
-                    "subagent_spawn".to_string(),
-                    UnifiedTool::new(
-                        "builtin:subagent_spawn",
-                        "subagent_spawn",
-                        subagent_manage::SubagentSpawnTool::DESCRIPTION,
-                        ToolSource::Builtin,
-                    ),
-                );
-                if steer.is_some() {
-                    tools.insert(
-                        "subagent_steer".to_string(),
-                        UnifiedTool::new(
-                            "builtin:subagent_steer",
-                            "subagent_steer",
-                            subagent_manage::SubagentSteerTool::DESCRIPTION,
-                            ToolSource::Builtin,
-                        ),
+                // Register tool metadata with parameter schemas
+                {
+                    let spawn_def = spawn.definition();
+                    let mut ut = UnifiedTool::new(
+                        "builtin:subagent_spawn", "subagent_spawn",
+                        subagent_manage::SubagentSpawnTool::DESCRIPTION, ToolSource::Builtin,
                     );
+                    ut = ut.with_parameters_schema(spawn_def.parameters.clone());
+                    tools.insert("subagent_spawn".to_string(), ut);
                 }
-                if kill.is_some() {
-                    tools.insert(
-                        "subagent_kill".to_string(),
-                        UnifiedTool::new(
-                            "builtin:subagent_kill",
-                            "subagent_kill",
-                            subagent_manage::SubagentKillTool::DESCRIPTION,
-                            ToolSource::Builtin,
-                        ),
+                if let Some(ref s) = steer {
+                    let def = s.definition();
+                    let mut ut = UnifiedTool::new(
+                        "builtin:subagent_steer", "subagent_steer",
+                        subagent_manage::SubagentSteerTool::DESCRIPTION, ToolSource::Builtin,
                     );
+                    ut = ut.with_parameters_schema(def.parameters.clone());
+                    tools.insert("subagent_steer".to_string(), ut);
+                }
+                if let Some(ref k) = kill {
+                    let def = k.definition();
+                    let mut ut = UnifiedTool::new(
+                        "builtin:subagent_kill", "subagent_kill",
+                        subagent_manage::SubagentKillTool::DESCRIPTION, ToolSource::Builtin,
+                    );
+                    ut = ut.with_parameters_schema(def.parameters.clone());
+                    tools.insert("subagent_kill".to_string(), ut);
                 }
 
                 info!("Registered subagent management tools (subagent_spawn{}{})",
@@ -270,35 +274,52 @@ impl BuiltinToolRegistry {
                 use crate::builtin_tools::acp_tools::{ClaudeCodeTool, CodexTool, GeminiCliTool, AcpSwitchTool};
                 info!("Creating ACP delegate tools");
 
+                // All ACP tools share AcpDelegateArgs; acp_switch uses AcpSwitchArgs
+                use schemars::schema_for;
+                let acp_schema = serde_json::to_value(
+                    schema_for!(crate::builtin_tools::acp_tools::AcpDelegateArgs)
+                ).unwrap_or_default();
+                let acp_switch_schema = serde_json::to_value(
+                    schema_for!(crate::builtin_tools::acp_tools::AcpSwitchArgs)
+                ).unwrap_or_default();
+
                 let cc = if manager.has_harness("claude-code").await {
-                    tools.insert("claude_code".to_string(), UnifiedTool::new(
+                    let mut ut = UnifiedTool::new(
                         "builtin:claude_code", "claude_code",
                         ClaudeCodeTool::DESCRIPTION, ToolSource::Builtin,
-                    ));
+                    );
+                    ut.parameters_schema = Some(acp_schema.clone());
+                    tools.insert("claude_code".to_string(), ut);
                     Some(ClaudeCodeTool::new(Arc::clone(manager)))
                 } else { None };
 
                 let cx = if manager.has_harness("codex").await {
-                    tools.insert("codex".to_string(), UnifiedTool::new(
+                    let mut ut = UnifiedTool::new(
                         "builtin:codex", "codex",
                         CodexTool::DESCRIPTION, ToolSource::Builtin,
-                    ));
+                    );
+                    ut.parameters_schema = Some(acp_schema.clone());
+                    tools.insert("codex".to_string(), ut);
                     Some(CodexTool::new(Arc::clone(manager)))
                 } else { None };
 
                 let gm = if manager.has_harness("gemini").await {
-                    tools.insert("gemini_cli".to_string(), UnifiedTool::new(
+                    let mut ut = UnifiedTool::new(
                         "builtin:gemini_cli", "gemini_cli",
                         GeminiCliTool::DESCRIPTION, ToolSource::Builtin,
-                    ));
+                    );
+                    ut.parameters_schema = Some(acp_schema.clone());
+                    tools.insert("gemini_cli".to_string(), ut);
                     Some(GeminiCliTool::new(Arc::clone(manager)))
                 } else { None };
 
                 // acp_switch is always available when manager exists
-                tools.insert("acp_switch".to_string(), UnifiedTool::new(
+                let mut ut = UnifiedTool::new(
                     "builtin:acp_switch", "acp_switch",
                     AcpSwitchTool::DESCRIPTION, ToolSource::Builtin,
-                ));
+                );
+                ut.parameters_schema = Some(acp_switch_schema);
+                tools.insert("acp_switch".to_string(), ut);
                 let sw = Some(AcpSwitchTool::new(Arc::clone(manager)));
 
                 info!("Registered ACP tools (claude_code={}, codex={}, gemini_cli={}, acp_switch=true)",
@@ -434,47 +455,46 @@ impl BuiltinToolRegistry {
         image_generate_tool: &Option<ImageGenerateTool>,
         config: &BuiltinToolConfig,
     ) {
+        use schemars::schema_for;
+
+        // Helper: register tool with schema from schemars
+        fn reg(
+            tools: &mut HashMap<String, UnifiedTool>,
+            name: &str,
+            desc: &str,
+            schema: serde_json::Value,
+        ) {
+            let mut ut = UnifiedTool::new(
+                format!("builtin:{name}"),
+                name,
+                desc,
+                ToolSource::Builtin,
+            );
+            ut.parameters_schema = Some(schema);
+            tools.insert(name.to_string(), ut);
+        }
+
         // Memory tools
         if memory_search_tool.is_some() {
-            tools.insert(
-                "memory_search".to_string(),
-                UnifiedTool::new(
-                    "builtin:memory_search", "memory_search",
-                    MemorySearchTool::DESCRIPTION, ToolSource::Builtin,
-                ),
-            );
+            reg(tools, "memory_search", MemorySearchTool::DESCRIPTION,
+                serde_json::to_value(schema_for!(crate::builtin_tools::memory_search::MemorySearchArgs)).unwrap_or_default());
             info!("Registered memory_search tool in BuiltinToolRegistry");
         }
         if memory_browse_tool.is_some() {
-            tools.insert(
-                "memory_browse".to_string(),
-                UnifiedTool::new(
-                    "builtin:memory_browse", "memory_browse",
-                    MemoryBrowseTool::DESCRIPTION, ToolSource::Builtin,
-                ),
-            );
+            reg(tools, "memory_browse", MemoryBrowseTool::DESCRIPTION,
+                serde_json::to_value(schema_for!(crate::builtin_tools::memory_browse::MemoryBrowseArgs)).unwrap_or_default());
             info!("Registered memory_browse tool in BuiltinToolRegistry");
         }
 
         // Config tools
         if config_read_tool.is_some() {
-            tools.insert(
-                "config_read".to_string(),
-                UnifiedTool::new(
-                    "builtin:config_read", "config_read",
-                    ConfigReadTool::DESCRIPTION, ToolSource::Builtin,
-                ),
-            );
+            reg(tools, "config_read", ConfigReadTool::DESCRIPTION,
+                serde_json::to_value(schema_for!(crate::builtin_tools::config_read::ConfigReadArgs)).unwrap_or_default());
             info!("Registered config_read tool in BuiltinToolRegistry");
         }
         if config_update_tool.is_some() {
-            tools.insert(
-                "config_update".to_string(),
-                UnifiedTool::new(
-                    "builtin:config_update", "config_update",
-                    ConfigUpdateTool::DESCRIPTION, ToolSource::Builtin,
-                ),
-            );
+            reg(tools, "config_update", ConfigUpdateTool::DESCRIPTION,
+                serde_json::to_value(schema_for!(crate::builtin_tools::config_update::ConfigUpdateArgs)).unwrap_or_default());
             info!("Registered config_update tool in BuiltinToolRegistry");
         }
 
@@ -482,38 +502,37 @@ impl BuiltinToolRegistry {
         let generation_registry = config.generation_registry.clone();
         if let Some(ref registry) = generation_registry {
             if image_generate_tool.is_some() {
-                tools.insert(
-                    "generate_image".to_string(),
-                    UnifiedTool::new(
-                        "builtin:generate_image", "generate_image",
-                        ImageGenerateTool::DESCRIPTION, ToolSource::Builtin,
-                    ),
-                );
+                reg(tools, "generate_image", ImageGenerateTool::DESCRIPTION,
+                    serde_json::to_value(schema_for!(crate::builtin_tools::ImageGenerateArgs)).unwrap_or_default());
                 info!("Registered generate_image tool in BuiltinToolRegistry");
             }
 
-            if let Ok(reg) = registry.read() {
+            if let Ok(reg_inner) = registry.read() {
                 use crate::generation::GenerationType;
 
-                if reg.first_for_type(GenerationType::Video).is_some() {
-                    tools.insert(
-                        "generate_video".to_string(),
-                        UnifiedTool::new(
-                            "builtin:generate_video", "generate_video",
-                            "Generate videos from text descriptions", ToolSource::Builtin,
-                        ),
-                    );
+                if reg_inner.first_for_type(GenerationType::Video).is_some() {
+                    reg(tools, "generate_video", "Generate videos from text descriptions",
+                        serde_json::json!({
+                            "type": "object",
+                            "properties": {
+                                "prompt": { "type": "string", "description": "Text description of the video to generate" },
+                                "provider": { "type": "string", "description": "Optional provider name" }
+                            },
+                            "required": ["prompt"]
+                        }));
                     info!("Registered generate_video tool in BuiltinToolRegistry");
                 }
 
-                if reg.first_for_type(GenerationType::Audio).is_some() {
-                    tools.insert(
-                        "generate_audio".to_string(),
-                        UnifiedTool::new(
-                            "builtin:generate_audio", "generate_audio",
-                            "Generate audio/music from text descriptions", ToolSource::Builtin,
-                        ),
-                    );
+                if reg_inner.first_for_type(GenerationType::Audio).is_some() {
+                    reg(tools, "generate_audio", "Generate audio/music from text descriptions",
+                        serde_json::json!({
+                            "type": "object",
+                            "properties": {
+                                "prompt": { "type": "string", "description": "Text description of the audio to generate" },
+                                "provider": { "type": "string", "description": "Optional provider name" }
+                            },
+                            "required": ["prompt"]
+                        }));
                     info!("Registered generate_audio tool in BuiltinToolRegistry");
                 }
             }
@@ -521,33 +540,18 @@ impl BuiltinToolRegistry {
 
         // Meta tools for smart tool discovery
         if config.dispatcher_registry.is_some() {
-            tools.insert(
-                "list_tools".to_string(),
-                UnifiedTool::new(
-                    "builtin:list_tools", "list_tools",
-                    ListToolsTool::DESCRIPTION, ToolSource::Builtin,
-                ),
-            );
-            tools.insert(
-                "get_tool_schema".to_string(),
-                UnifiedTool::new(
-                    "builtin:get_tool_schema", "get_tool_schema",
-                    GetToolSchemaTool::DESCRIPTION, ToolSource::Builtin,
-                ),
-            );
+            reg(tools, "list_tools", ListToolsTool::DESCRIPTION,
+                serde_json::to_value(schema_for!(crate::builtin_tools::meta_tools::ListToolsArgs)).unwrap_or_default());
+            reg(tools, "get_tool_schema", GetToolSchemaTool::DESCRIPTION,
+                serde_json::to_value(schema_for!(crate::builtin_tools::meta_tools::GetToolSchemaArgs)).unwrap_or_default());
             info!("Registered meta tools (list_tools, get_tool_schema) in BuiltinToolRegistry");
         }
 
         // Delegate tool for sub-agent delegation
         if config.sub_agent_dispatcher.is_some() {
-            tools.insert(
-                "delegate".to_string(),
-                UnifiedTool::new(
-                    "builtin:delegate", "delegate",
-                    "Delegate a task to a specialized sub-agent for tool discovery (MCP tools or skill workflows)",
-                    ToolSource::Builtin,
-                ),
-            );
+            reg(tools, "delegate",
+                "Delegate a task to a specialized sub-agent for tool discovery (MCP tools or skill workflows)",
+                serde_json::to_value(schema_for!(crate::agents::sub_agents::DelegateArgs)).unwrap_or_default());
             info!("Registered delegate tool in BuiltinToolRegistry");
         }
 
@@ -556,14 +560,7 @@ impl BuiltinToolRegistry {
             use crate::builtin_tools::cron_manage::CronManageTool;
             let tmp_tool = CronManageTool::new(Arc::clone(cron_svc));
             let def = AlephTool::definition(&tmp_tool);
-            let mut ut = UnifiedTool::new(
-                "builtin:cron_manage",
-                "cron_manage",
-                CronManageTool::DESCRIPTION,
-                ToolSource::Builtin,
-            );
-            ut = ut.with_parameters_schema(def.parameters.clone());
-            tools.insert("cron_manage".to_string(), ut);
+            reg(tools, "cron_manage", CronManageTool::DESCRIPTION, def.parameters.clone());
             info!("Registered cron_manage tool in BuiltinToolRegistry");
         }
 
@@ -572,33 +569,16 @@ impl BuiltinToolRegistry {
             use crate::builtin_tools::sessions::SessionNewTool;
             let tmp_tool = SessionNewTool::new(Arc::clone(ctx.session_manager()));
             let def = AlephTool::definition(&tmp_tool);
-            let mut ut = UnifiedTool::new(
-                "builtin:session_new",
-                "session_new",
-                SessionNewTool::DESCRIPTION,
-                ToolSource::Builtin,
-            );
-            ut = ut.with_parameters_schema(def.parameters.clone());
-            tools.insert("session_new".to_string(), ut);
+            reg(tools, "session_new", SessionNewTool::DESCRIPTION, def.parameters.clone());
             info!("Registered session_new tool in BuiltinToolRegistry");
         }
 
         // Sessions tools
         if config.gateway_context.is_some() {
-            tools.insert(
-                "sessions_list".to_string(),
-                UnifiedTool::new(
-                    "builtin:sessions_list", "sessions_list",
-                    SessionsListTool::DESCRIPTION, ToolSource::Builtin,
-                ),
-            );
-            tools.insert(
-                "sessions_send".to_string(),
-                UnifiedTool::new(
-                    "builtin:sessions_send", "sessions_send",
-                    SessionsSendTool::DESCRIPTION, ToolSource::Builtin,
-                ),
-            );
+            reg(tools, "sessions_list", SessionsListTool::DESCRIPTION,
+                serde_json::to_value(schema_for!(crate::builtin_tools::sessions::SessionsListArgs)).unwrap_or_default());
+            reg(tools, "sessions_send", SessionsSendTool::DESCRIPTION,
+                serde_json::to_value(schema_for!(crate::builtin_tools::sessions::SessionsSendArgs)).unwrap_or_default());
             info!("Registered sessions tools (sessions_list, sessions_send) in BuiltinToolRegistry");
         }
     }

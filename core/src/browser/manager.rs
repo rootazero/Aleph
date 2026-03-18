@@ -33,11 +33,17 @@ impl ProfileManager {
         let mut profiles = HashMap::new();
 
         if config.profiles.is_empty() {
-            // Create default profile if none configured
+            // Create default profile with ExistingSession if none configured.
+            // Managed mode is not yet implemented, so default to ExistingSession
+            // which connects to the user's Chrome via Chrome DevTools MCP.
             profiles.insert(
                 "default".into(),
                 ManagedProfile {
-                    config: ProfileConfig::default(),
+                    config: ProfileConfig {
+                        browser: BrowserType::Chrome,
+                        driver: BrowserDriver::ExistingSession,
+                        ..Default::default()
+                    },
                     state: ProfileState::Idle,
                     last_activity: std::time::Instant::now(),
                 },
@@ -55,21 +61,26 @@ impl ProfileManager {
             }
         }
 
-        // Auto-inject "user" profile if not already present
-        if !profiles.contains_key("user") {
-            profiles.insert(
-                "user".into(),
-                ManagedProfile {
-                    config: ProfileConfig {
-                        browser: BrowserType::Chrome,
-                        driver: BrowserDriver::ExistingSession,
-                        color: Some("#00AA00".into()),
-                        ..Default::default()
+        // Auto-inject "default" and "user" profiles if not already present.
+        // These ensure browser_open works out-of-the-box with its default
+        // profile="default" and that "user" is always available for
+        // ExistingSession mode.
+        for name in &["default", "user"] {
+            if !profiles.contains_key(*name) {
+                profiles.insert(
+                    (*name).into(),
+                    ManagedProfile {
+                        config: ProfileConfig {
+                            browser: BrowserType::Chrome,
+                            driver: BrowserDriver::ExistingSession,
+                            color: Some("#00AA00".into()),
+                            ..Default::default()
+                        },
+                        state: ProfileState::Idle,
+                        last_activity: std::time::Instant::now(),
                     },
-                    state: ProfileState::Idle,
-                    last_activity: std::time::Instant::now(),
-                },
-            );
+                );
+            }
         }
 
         Self {
@@ -88,7 +99,14 @@ impl ProfileManager {
     /// Get the driver mode for a named profile.
     pub fn get_driver(&self, name: &str) -> Option<BrowserDriver> {
         let profiles = self.profiles.read().unwrap_or_else(|e| e.into_inner());
-        profiles.get(name).map(|p| p.config.driver.clone())
+        let result = profiles.get(name).map(|p| p.config.driver.clone());
+        tracing::debug!(
+            profile = name,
+            driver = ?result,
+            available_profiles = ?profiles.keys().collect::<Vec<_>>(),
+            "ProfileManager::get_driver"
+        );
+        result
     }
 
     /// List all profiles with their current state.
