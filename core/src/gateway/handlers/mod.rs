@@ -81,6 +81,7 @@ pub mod group_chat;
 pub mod pairing;
 pub mod runs;
 pub mod chat;
+pub mod clawhub;
 pub mod cron;
 pub mod exec_approvals;
 pub mod wizard;
@@ -266,6 +267,12 @@ impl HandlerRegistry {
         registry.register("skills.install", skills::handle_install);
         registry.register("skills.installFromZip", skills::handle_install_from_zip);
         registry.register("skills.delete", skills::handle_delete);
+
+        // ClawHub handlers
+        registry.register("clawhub.search", clawhub::handle_search);
+        registry.register("clawhub.browse", clawhub::handle_browse);
+        registry.register("clawhub.detail", clawhub::handle_detail);
+        registry.register("clawhub.install", clawhub::handle_install);
 
         // Identity handlers (placeholders - actual handlers wired with IdentityResolver)
         registry.register("identity.get", |req| async move {
