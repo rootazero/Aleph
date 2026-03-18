@@ -90,6 +90,11 @@ pub fn GenerationProvidersView() -> impl IntoView {
                             selected=selected_category
                             on_select=set_selected_category
                         />
+                        <CategoryTab
+                            category=GenerationType::Speech
+                            selected=selected_category
+                            on_select=set_selected_category
+                        />
                     </div>
                 </div>
 
@@ -153,10 +158,7 @@ pub fn GenerationProvidersView() -> impl IntoView {
                                         let custom: Vec<_> = provider_list.into_iter()
                                             .filter(|p| {
                                                 !preset_ids.contains(&p.name)
-                                                    && p.config.capabilities.iter().any(|c| {
-                                                        *c == current_cat
-                                                            || (current_cat == GenerationType::Audio && *c == GenerationType::Speech)
-                                                    })
+                                                    && p.config.capabilities.contains(&current_cat)
                                             })
                                             .collect();
                                         if custom.is_empty() {
