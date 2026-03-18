@@ -168,6 +168,7 @@ impl<P: LoopProvider> AgentLoop<P> {
         let mut hit_limit = false;
         let mut stop_requested = false;
         let mut consecutive_errors: usize = 0;
+        let mut nudge_sent = false;
         const MAX_CONSECUTIVE_ERRORS: usize = 10;
 
         let start = Instant::now();
@@ -204,8 +205,27 @@ impl<P: LoopProvider> AgentLoop<P> {
             // Push complete assistant message from response
             messages.push(UnifiedMessage::from_provider_response(&response));
 
-            // If no tool calls and EndTurn → done
+            // If no tool calls and EndTurn → check persistence nudge before stopping
             if !response.has_tool_calls() && response.stop_reason == StopReason::EndTurn {
+                if consecutive_errors > 0 && !nudge_sent {
+                    // Persistence nudge: the LLM is giving up after errors.
+                    // Challenge it to try harder before accepting the stop.
+                    nudge_sent = true;
+                    consecutive_errors = 0;
+                    tracing::info!(
+                        iteration = iterations,
+                        "Persistence nudge: LLM tried to stop after errors, injecting retry prompt"
+                    );
+                    messages.push(UnifiedMessage::user(
+                        "[SYSTEM] Your task is not yet fully resolved — the last tool calls \
+                         failed and you stopped without a successful outcome. Do NOT apologize \
+                         or explain the failure. Instead: try a different approach, use different \
+                         parameters, or attempt an alternative strategy to complete the user's \
+                         original request. If you have genuinely exhausted ALL possible approaches, \
+                         explain each approach you tried and why it failed.",
+                    ));
+                    continue;
+                }
                 break;
             }
 
@@ -291,8 +311,10 @@ impl<P: LoopProvider> AgentLoop<P> {
                                 tracing::info!(tool = %tc.name, "Tool returned SuccessAndStopLoop — will break loop");
                                 (serde_json::to_string(output).unwrap_or_default(), false, true)
                             },
-                            ToolResult::Error { error, .. } => {
-                                consecutive_errors += 1;
+                            ToolResult::Error { error, retryable } => {
+                                if !retryable {
+                                    consecutive_errors += 1;
+                                }
                                 if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
                                     tracing::warn!(
                                         consecutive_errors,
@@ -447,7 +469,7 @@ mod tests {
         }
     }
 
-    /// A tool that always returns an error.
+    /// A tool that always returns a non-retryable error.
     struct FailTool;
 
     #[async_trait]
@@ -464,6 +486,28 @@ mod tests {
         async fn execute(&self, _input: Value) -> ToolResult {
             ToolResult::Error {
                 error: "intentional failure".into(),
+                retryable: false,
+            }
+        }
+    }
+
+    /// A tool that always returns a retryable error.
+    struct RetryableFailTool;
+
+    #[async_trait]
+    impl super::super::tool::LoopTool for RetryableFailTool {
+        fn name(&self) -> &str {
+            "fail_retryable"
+        }
+        fn description(&self) -> &str {
+            "Always fails but retryable"
+        }
+        fn schema(&self) -> Value {
+            json!({ "type": "object", "properties": {} })
+        }
+        async fn execute(&self, _input: Value) -> ToolResult {
+            ToolResult::Error {
+                error: "transient failure".into(),
                 retryable: true,
             }
         }
@@ -953,7 +997,16 @@ mod tests {
                 usage: None,
             });
         }
-        // Final text
+        // Final text (LLM tries to stop — but persistence nudge will fire
+        // because consecutive_errors > 0 from the second batch of fails)
+        responses.push(ProviderResponse {
+            text: Some("Trying to stop.".to_string()),
+            tool_calls: vec![],
+            thinking: None,
+            stop_reason: StopReason::EndTurn,
+            usage: None,
+        });
+        // After nudge: LLM acknowledges and finishes
         responses.push(ProviderResponse {
             text: Some("Survived.".to_string()),
             tool_calls: vec![],
@@ -984,8 +1037,10 @@ mod tests {
 
         assert!(!result.hit_limit);
         assert_eq!(result.final_text.as_deref(), Some("Survived."));
-        // 5 fails + 1 echo + 5 fails = 11 tool calls
+        // 5 fails + 1 echo + 5 fails = 11 tool calls, +1 nudge iteration
         assert_eq!(result.tool_calls_made, 11);
+        // 11 tool iterations + 1 EndTurn (nudge fires) + 1 post-nudge EndTurn = 13
+        assert_eq!(result.iterations, 13);
     }
 
     // =========================================================================
@@ -1294,6 +1349,305 @@ mod tests {
                 );
             }
             _ => panic!("expected Assistant message with full content"),
+        }
+    }
+
+    // =========================================================================
+    // L10: Persistence nudge fires when EndTurn follows errors
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_persistence_nudge_on_premature_stop() {
+        let captured = Arc::new(Mutex::new(Vec::<Vec<UnifiedMessage>>::new()));
+        let provider = CapturingMockProvider::new(
+            vec![
+                // Turn 1: call a tool that fails
+                ProviderResponse {
+                    text: None,
+                    tool_calls: vec![NativeToolCall {
+                        id: "call_1".to_string(),
+                        name: "fail".to_string(),
+                        arguments: json!({}),
+                    }],
+                    thinking: None,
+                    stop_reason: StopReason::ToolUse,
+                    usage: None,
+                },
+                // Turn 2: LLM tries to give up
+                ProviderResponse {
+                    text: Some("Sorry, the tool failed.".to_string()),
+                    tool_calls: vec![],
+                    thinking: None,
+                    stop_reason: StopReason::EndTurn,
+                    usage: None,
+                },
+                // Turn 3: After nudge, LLM retries with a different tool
+                ProviderResponse {
+                    text: None,
+                    tool_calls: vec![NativeToolCall {
+                        id: "call_2".to_string(),
+                        name: "echo".to_string(),
+                        arguments: json!({ "message": "retried" }),
+                    }],
+                    thinking: None,
+                    stop_reason: StopReason::ToolUse,
+                    usage: None,
+                },
+                // Turn 4: Final success
+                ProviderResponse {
+                    text: Some("Done after retry.".to_string()),
+                    tool_calls: vec![],
+                    thinking: None,
+                    stop_reason: StopReason::EndTurn,
+                    usage: None,
+                },
+            ],
+            captured.clone(),
+        );
+
+        let mut registry = LoopToolRegistry::new();
+        registry.register(Box::new(FailTool));
+        registry.register(Box::new(EchoTool));
+        let agent = AgentLoop::new(
+            provider,
+            registry,
+            PromptBuilder::new(),
+            SafetyGuard::default_guard(),
+            LoopConfig {
+                max_iterations: 10,
+                token_budget: 100_000,
+                timeout_secs: 60,
+            },
+        );
+
+        let mut cb = TrackingCallback::default();
+        let result = agent.run("do something", &mut cb).await.unwrap();
+
+        // The loop continued past the first EndTurn thanks to the nudge
+        assert_eq!(result.iterations, 4);
+        assert_eq!(result.final_text.as_deref(), Some("Done after retry."));
+        assert!(!result.hit_limit);
+
+        // Verify the nudge message was injected
+        let caps = captured.lock().unwrap_or_else(|e| e.into_inner());
+        // The 3rd call's messages should contain a user nudge message
+        let third_call_msgs = &caps[2];
+        let has_nudge = third_call_msgs.iter().any(|m| {
+            if let UnifiedMessage::User { content } = m {
+                content.iter().any(|b| {
+                    if let ContentBlock::Text { text } = b {
+                        text.contains("not yet fully resolved")
+                    } else {
+                        false
+                    }
+                })
+            } else {
+                false
+            }
+        });
+        assert!(has_nudge, "Expected a persistence nudge message");
+    }
+
+    // =========================================================================
+    // L11: Persistence nudge fires only once
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_persistence_nudge_fires_only_once() {
+        let provider = MockProvider::new(vec![
+            // Turn 1: fail
+            ProviderResponse {
+                text: None,
+                tool_calls: vec![NativeToolCall {
+                    id: "call_1".to_string(),
+                    name: "fail".to_string(),
+                    arguments: json!({}),
+                }],
+                thinking: None,
+                stop_reason: StopReason::ToolUse,
+                usage: None,
+            },
+            // Turn 2: LLM gives up (nudge will fire)
+            ProviderResponse {
+                text: Some("Failed.".to_string()),
+                tool_calls: vec![],
+                thinking: None,
+                stop_reason: StopReason::EndTurn,
+                usage: None,
+            },
+            // Turn 3: After nudge, fail again
+            ProviderResponse {
+                text: None,
+                tool_calls: vec![NativeToolCall {
+                    id: "call_2".to_string(),
+                    name: "fail".to_string(),
+                    arguments: json!({}),
+                }],
+                thinking: None,
+                stop_reason: StopReason::ToolUse,
+                usage: None,
+            },
+            // Turn 4: LLM gives up again (no nudge this time — already sent)
+            ProviderResponse {
+                text: Some("Truly cannot do it.".to_string()),
+                tool_calls: vec![],
+                thinking: None,
+                stop_reason: StopReason::EndTurn,
+                usage: None,
+            },
+        ]);
+
+        let mut registry = LoopToolRegistry::new();
+        registry.register(Box::new(FailTool));
+        let agent = AgentLoop::new(
+            provider,
+            registry,
+            PromptBuilder::new(),
+            SafetyGuard::default_guard(),
+            LoopConfig {
+                max_iterations: 10,
+                token_budget: 100_000,
+                timeout_secs: 60,
+            },
+        );
+
+        let mut cb = TrackingCallback::default();
+        let result = agent.run("keep failing", &mut cb).await.unwrap();
+
+        // Nudge fired once, then LLM stopped for real
+        assert_eq!(result.iterations, 4);
+        assert_eq!(result.final_text.as_deref(), Some("Truly cannot do it."));
+        assert!(!result.hit_limit);
+    }
+
+    // =========================================================================
+    // L12: Retryable errors don't count toward consecutive limit
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_retryable_errors_dont_count_toward_limit() {
+        // 12 retryable errors — should NOT hit the 10-consecutive-errors limit
+        let mut responses: Vec<ProviderResponse> = (0..12)
+            .map(|i| ProviderResponse {
+                text: None,
+                tool_calls: vec![NativeToolCall {
+                    id: format!("call_{}", i),
+                    name: "fail_retryable".to_string(),
+                    arguments: json!({}),
+                }],
+                thinking: None,
+                stop_reason: StopReason::ToolUse,
+                usage: None,
+            })
+            .collect();
+        // Final text (EndTurn with consecutive_errors=0 since retryable doesn't count)
+        responses.push(ProviderResponse {
+            text: Some("Done after retryable errors.".to_string()),
+            tool_calls: vec![],
+            thinking: None,
+            stop_reason: StopReason::EndTurn,
+            usage: None,
+        });
+
+        let provider = MockProvider::new(responses);
+        let mut registry = LoopToolRegistry::new();
+        registry.register(Box::new(RetryableFailTool));
+
+        let agent = AgentLoop::new(
+            provider,
+            registry,
+            PromptBuilder::new(),
+            SafetyGuard::default_guard(),
+            LoopConfig {
+                max_iterations: 25,
+                token_budget: 100_000,
+                timeout_secs: 60,
+            },
+        );
+
+        let mut cb = TrackingCallback::default();
+        let result = agent.run("retryable failures", &mut cb).await.unwrap();
+
+        // Did NOT hit the consecutive error limit
+        assert!(!result.hit_limit);
+        assert_eq!(result.iterations, 13);
+        assert_eq!(result.tool_calls_made, 12);
+        assert_eq!(
+            result.final_text.as_deref(),
+            Some("Done after retryable errors.")
+        );
+    }
+
+    // =========================================================================
+    // L13: No nudge when EndTurn without errors (normal completion)
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_no_nudge_on_clean_completion() {
+        let captured = Arc::new(Mutex::new(Vec::<Vec<UnifiedMessage>>::new()));
+        let provider = CapturingMockProvider::new(
+            vec![
+                // Turn 1: successful tool call
+                ProviderResponse {
+                    text: None,
+                    tool_calls: vec![NativeToolCall {
+                        id: "call_1".to_string(),
+                        name: "echo".to_string(),
+                        arguments: json!({ "message": "ok" }),
+                    }],
+                    thinking: None,
+                    stop_reason: StopReason::ToolUse,
+                    usage: None,
+                },
+                // Turn 2: clean EndTurn
+                ProviderResponse {
+                    text: Some("All good.".to_string()),
+                    tool_calls: vec![],
+                    thinking: None,
+                    stop_reason: StopReason::EndTurn,
+                    usage: None,
+                },
+            ],
+            captured.clone(),
+        );
+
+        let mut registry = LoopToolRegistry::new();
+        registry.register(Box::new(EchoTool));
+        let agent = AgentLoop::new(
+            provider,
+            registry,
+            PromptBuilder::new(),
+            SafetyGuard::default_guard(),
+            LoopConfig {
+                max_iterations: 10,
+                token_budget: 100_000,
+                timeout_secs: 60,
+            },
+        );
+
+        let mut cb = TrackingCallback::default();
+        let result = agent.run("clean task", &mut cb).await.unwrap();
+
+        assert_eq!(result.iterations, 2);
+        assert_eq!(result.final_text.as_deref(), Some("All good."));
+
+        // No nudge should have been injected
+        let caps = captured.lock().unwrap_or_else(|e| e.into_inner());
+        for call_msgs in caps.iter() {
+            let has_nudge = call_msgs.iter().any(|m| {
+                if let UnifiedMessage::User { content } = m {
+                    content.iter().any(|b| {
+                        if let ContentBlock::Text { text } = b {
+                            text.contains("not yet fully resolved")
+                        } else {
+                            false
+                        }
+                    })
+                } else {
+                    false
+                }
+            });
+            assert!(!has_nudge, "No nudge should fire on clean completion");
         }
     }
 }
