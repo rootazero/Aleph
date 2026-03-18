@@ -130,9 +130,11 @@ pub fn ClawHubView() -> impl IntoView {
     let is_searching = RwSignal::new(false);
 
     // Load initial data when connected
+    // Note: clawhub.browse returns empty (ClawHub API known issue), so we use
+    // a broad search query to populate the initial "Hot Skills" view.
     Effect::new(move || {
         if state.is_connected.get() {
-            load_browse(state, skills, loading, error, cursor, has_more, false);
+            load_search(state, skills, loading, error, "agent".to_string());
             load_installed_slugs(state, installed_slugs);
         } else {
             loading.set(false);
@@ -148,7 +150,7 @@ pub fn ClawHubView() -> impl IntoView {
             is_searching.set(false);
             cursor.set(None);
             has_more.set(false);
-            load_browse(state, skills, loading, error, cursor, has_more, false);
+            load_search(state, skills, loading, error, "agent".to_string());
         } else {
             is_searching.set(true);
             load_search(state, skills, loading, error, query);
@@ -166,7 +168,7 @@ pub fn ClawHubView() -> impl IntoView {
         is_searching.set(false);
         cursor.set(None);
         has_more.set(false);
-        load_browse(state, skills, loading, error, cursor, has_more, false);
+        load_search(state, skills, loading, error, "agent".to_string());
         load_installed_slugs(state, installed_slugs);
     };
 
@@ -224,7 +226,7 @@ pub fn ClawHubView() -> impl IntoView {
                 <Show when=move || !loading.get() || !skills.get().is_empty()>
                     <div class="flex items-center gap-2">
                         <h2 class="text-lg font-medium text-text-primary">
-                            {move || if is_searching.get() { "Search Results" } else { "Hot Skills" }}
+                            {move || if is_searching.get() { "Search Results" } else { "Recommended Skills" }}
                         </h2>
                         <span class="px-2 py-0.5 rounded-full text-xs font-medium bg-primary-subtle text-primary">
                             {move || format!("{}", skills.get().len())}
