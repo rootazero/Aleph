@@ -8,14 +8,21 @@ use super::provider::OpenAiCompatProvider;
 use super::types::{ImageGenerationRequest, OpenAiErrorResponse};
 
 impl OpenAiCompatProvider {
-    /// Get the full URL for the images/generations endpoint
+    /// Get the full URL for the generations endpoint
+    /// base_url is already the full endpoint URL (e.g. "https://ai.t8star.cn/v1/images/generations")
     pub(crate) fn generations_url(&self) -> String {
-        format!("{}/v1/images/generations", self.endpoint)
+        self.endpoint.clone()
     }
 
-    /// Get the full URL for the images/edits endpoint
+    /// Get the full URL for the edits endpoint
+    /// Uses explicit edit_endpoint if set, otherwise derives from generations URL
     pub(crate) fn edits_url(&self) -> String {
-        format!("{}/v1/images/edits", self.endpoint)
+        if let Some(ref edit_url) = self.edit_endpoint {
+            return edit_url.clone();
+        }
+        // Heuristic for standard OpenAI-style URLs: /generations → /edits
+        // For non-standard URLs, returns unchanged (those providers don't support editing)
+        self.endpoint.replace("/generations", "/edits")
     }
 
     /// Build the API request body from a GenerationRequest
