@@ -154,7 +154,7 @@ impl ClawHubTool {
         })?;
 
         // Determine the skill directory name from slug (e.g. "owner/skill-name" -> "skill-name")
-        let skill_name = slug.split('/').last().unwrap_or(slug);
+        let skill_name = slug.split('/').next_back().unwrap_or(slug);
         let dest_dir = Self::skills_dir().join(skill_name);
 
         // Create destination directory
@@ -359,7 +359,7 @@ impl AlephTool for ClawHubTool {
                 })?;
 
                 // Check installed version
-                let skill_name = slug.split('/').last().unwrap_or(&slug);
+                let skill_name = slug.split('/').next_back().unwrap_or(&slug);
                 let meta_path = Self::skills_dir().join(skill_name).join(".clawhub.json");
 
                 let local_meta: ClawHubMeta = if meta_path.exists() {
