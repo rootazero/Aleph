@@ -383,6 +383,7 @@ impl BuiltinToolRegistry {
             agent_delete_tool,
             session_context_handle,
             tool_policy_handle,
+            tool_context_handle: config.tool_context.clone(),
             event_bus: config.event_bus.clone(),
             extension_manager: config.extension_manager.clone(),
             claude_code_tool,

@@ -100,6 +100,8 @@ pub struct BuiltinToolRegistry {
     pub(super) session_context_handle: Option<crate::builtin_tools::agent_manage::SessionContextHandle>,
     /// Tool policy handle for per-agent tool access control
     pub(super) tool_policy_handle: Option<crate::builtin_tools::agent_manage::ToolPolicyHandle>,
+    /// Tool context handle for workspace-scoped output paths
+    pub(super) tool_context_handle: Option<crate::tools::ToolContextHandle>,
     /// Event bus for lifecycle event emission (held for future use; tools get their own clones)
     #[allow(dead_code)]
     pub(super) event_bus: Option<Arc<crate::gateway::event_bus::GatewayEventBus>>,
@@ -175,6 +177,10 @@ impl ToolRegistry for BuiltinToolRegistry {
 
     fn tool_policy_handle(&self) -> Option<Arc<RwLock<crate::builtin_tools::agent_manage::ToolPolicy>>> {
         self.tool_policy_handle.clone()
+    }
+
+    fn tool_context_handle(&self) -> Option<crate::tools::ToolContextHandle> {
+        self.tool_context_handle.clone()
     }
 
     fn execute_tool(

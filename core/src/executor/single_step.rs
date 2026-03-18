@@ -130,6 +130,14 @@ pub trait ToolRegistry: Send + Sync {
     ) -> Option<std::sync::Arc<tokio::sync::RwLock<crate::builtin_tools::agent_manage::ToolPolicy>>> {
         None
     }
+
+    /// Get the shared tool context handle for workspace-scoped output paths.
+    ///
+    /// The execution engine writes the active agent's ToolContext here so
+    /// tools that write output files use the correct workspace directory.
+    fn tool_context_handle(&self) -> Option<crate::tools::ToolContextHandle> {
+        None
+    }
 }
 
 /// Single-step executor for Agent Loop

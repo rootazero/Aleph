@@ -56,4 +56,6 @@ pub struct BuiltinToolConfig {
     pub acp_manager: Option<Arc<AcpHarnessManager>>,
     /// Cron service for scheduled task management
     pub cron_service: Option<crate::cron::SharedCronService>,
+    /// Tool context handle for workspace-scoped output paths
+    pub tool_context: Option<crate::tools::ToolContextHandle>,
 }
