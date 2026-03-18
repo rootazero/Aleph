@@ -153,7 +153,10 @@ pub fn GenerationProvidersView() -> impl IntoView {
                                         let custom: Vec<_> = provider_list.into_iter()
                                             .filter(|p| {
                                                 !preset_ids.contains(&p.name)
-                                                    && p.config.capabilities.contains(&current_cat)
+                                                    && p.config.capabilities.iter().any(|c| {
+                                                        *c == current_cat
+                                                            || (current_cat == GenerationType::Audio && *c == GenerationType::Speech)
+                                                    })
                                             })
                                             .collect();
                                         if custom.is_empty() {
