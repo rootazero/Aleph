@@ -1335,6 +1335,8 @@ pub struct GenerationProviderConfig {
     pub color: String,
     pub capabilities: Vec<GenerationType>,
     pub timeout_seconds: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub edit_url: Option<String>,
     #[serde(default)]
     pub verified: bool,
 }

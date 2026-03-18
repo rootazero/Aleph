@@ -449,103 +449,178 @@ fn ProviderDetailView(
 ) -> impl IntoView {
     let state = expect_context::<DashboardState>();
 
-    // Clone values needed by closures
-    let provider_name_for_delete = provider.name.clone();
-    let provider_name_for_default = provider.name.clone();
-    let provider_type = provider.config.provider_type.clone();
-    let api_key = provider.config.api_key.clone();
-    let base_url = provider.config.base_url.clone();
-    let model = provider.config.model.clone();
-    let capabilities = provider.config.capabilities.clone();
+    let provider_name = provider.name.clone();
     let is_default_for = provider.is_default_for.clone();
 
-    // Pre-compute values outside view!
-    let capabilities_str = capabilities.iter()
-        .map(|c| c.display_name())
-        .collect::<Vec<_>>()
-        .join(", ");
+    // Editable form signals
+    let form_api_key = RwSignal::new(String::new());
+    let form_base_url = RwSignal::new(provider.config.base_url.clone().unwrap_or_default());
+    let form_edit_url = RwSignal::new(provider.config.edit_url.clone().unwrap_or_default());
+    let form_model = RwSignal::new(provider.config.model.clone().unwrap_or_default());
+    let form_timeout = RwSignal::new(provider.config.timeout_seconds);
+    let form_enabled = RwSignal::new(provider.config.enabled);
 
-    let default_for_str = is_default_for.iter()
-        .map(|t| t.display_name())
-        .collect::<Vec<_>>()
-        .join(", ");
+    // Capability checkboxes
+    let cap_image = RwSignal::new(provider.config.capabilities.contains(&GenerationType::Image));
+    let cap_video = RwSignal::new(provider.config.capabilities.contains(&GenerationType::Video));
+    let cap_audio = RwSignal::new(provider.config.capabilities.contains(&GenerationType::Audio));
+    let cap_speech = RwSignal::new(provider.config.capabilities.contains(&GenerationType::Speech));
 
-    let has_defaults = !is_default_for.is_empty();
+    // Action state
+    let saving = RwSignal::new(false);
+    let deleting = RwSignal::new(false);
+    let testing = RwSignal::new(false);
+    let setting_default = RwSignal::new(false);
+    let action_error = RwSignal::new(Option::<String>::None);
+    let test_result = RwSignal::new(Option::<(bool, String)>::None);
+    let save_success = RwSignal::new(false);
 
-    // State for actions
-    let (deleting, set_deleting) = signal(false);
-    let (testing, set_testing) = signal(false);
-    let (setting_default, set_setting_default) = signal(false);
-    let (action_error, set_action_error) = signal(Option::<String>::None);
-    let (test_result, set_test_result) = signal(Option::<(bool, String)>::None);
+    let build_capabilities = move || {
+        let mut caps = Vec::new();
+        if cap_image.get() { caps.push(GenerationType::Image); }
+        if cap_video.get() { caps.push(GenerationType::Video); }
+        if cap_audio.get() { caps.push(GenerationType::Audio); }
+        if cap_speech.get() { caps.push(GenerationType::Speech); }
+        caps
+    };
 
-    // Delete handler
-    let handle_delete = move |_| {
-        let name = provider_name_for_delete.clone();
-        set_deleting.set(true);
-        set_action_error.set(None);
+    // Pre-clone values captured by build_config closure
+    let config_provider_type = provider.config.provider_type.clone();
+    let display_provider_type = provider.config.provider_type.clone();
+    let config_color = provider.config.color.clone();
+    let config_verified = provider.config.verified;
+
+    let build_config = move || -> GenerationProviderConfig {
+        GenerationProviderConfig {
+            provider_type: config_provider_type.clone(),
+            api_key: {
+                let key = form_api_key.get();
+                if key.is_empty() { None } else { Some(key) }
+            },
+            secret_name: None,
+            base_url: {
+                let url = form_base_url.get();
+                if url.is_empty() { None } else { Some(url) }
+            },
+            edit_url: {
+                let url = form_edit_url.get();
+                if url.is_empty() { None } else { Some(url) }
+            },
+            model: {
+                let m = form_model.get();
+                if m.is_empty() { None } else { Some(m) }
+            },
+            enabled: form_enabled.get(),
+            color: config_color.clone(),
+            capabilities: build_capabilities(),
+            timeout_seconds: form_timeout.get(),
+            verified: config_verified,
+        }
+    };
+
+    let build_config = Rc::new(build_config);
+
+    // Save handler
+    let provider_name_save = provider_name.clone();
+    let build_config_save = build_config.clone();
+    let on_save = move |_| {
+        saving.set(true);
+        action_error.set(None);
+        save_success.set(false);
+        let config = build_config_save();
+        let name = provider_name_save.clone();
 
         spawn_local(async move {
-            match GenerationProvidersApi::delete(&state, &name).await {
+            match GenerationProvidersApi::update(&state, &name, config).await {
                 Ok(_) => {
-                    set_deleting.set(false);
+                    saving.set(false);
+                    save_success.set(true);
+                    set_timeout(move || save_success.set(false), std::time::Duration::from_secs(2));
                     on_reload();
                 }
                 Err(e) => {
-                    set_deleting.set(false);
-                    set_action_error.set(Some(format!("Delete failed: {}", e)));
+                    saving.set(false);
+                    action_error.set(Some(format!("Save failed: {}", e)));
                 }
             }
         });
     };
 
     // Test connection handler
+    let build_config_test = build_config.clone();
     let handle_test = move |_| {
-        set_testing.set(true);
-        set_test_result.set(None);
-        set_action_error.set(None);
-
-        let ptype = provider_type.clone();
-        let key = api_key.clone();
-        let url = base_url.clone();
-        let mdl = model.clone();
+        testing.set(true);
+        test_result.set(None);
+        action_error.set(None);
+        let config = build_config_test();
 
         spawn_local(async move {
-            match GenerationProvidersApi::test_connection(&state, &ptype, key, url, mdl).await {
+            match GenerationProvidersApi::test_connection(
+                &state,
+                &config.provider_type,
+                config.api_key,
+                config.base_url,
+                config.model,
+            ).await {
                 Ok(result) => {
-                    set_testing.set(false);
-                    set_test_result.set(Some((result.success, result.message)));
+                    testing.set(false);
+                    test_result.set(Some((result.success, result.message)));
                 }
                 Err(e) => {
-                    set_testing.set(false);
-                    set_test_result.set(Some((false, e)));
+                    testing.set(false);
+                    test_result.set(Some((false, e)));
                 }
             }
         });
     };
 
-    // Set default handler - wrap in Rc for cloning
+    // Delete handler
+    let provider_name_delete = provider_name.clone();
+    let handle_delete = move |_| {
+        let name = provider_name_delete.clone();
+        deleting.set(true);
+        action_error.set(None);
+
+        spawn_local(async move {
+            match GenerationProvidersApi::delete(&state, &name).await {
+                Ok(_) => {
+                    deleting.set(false);
+                    on_reload();
+                }
+                Err(e) => {
+                    deleting.set(false);
+                    action_error.set(Some(format!("Delete failed: {}", e)));
+                }
+            }
+        });
+    };
+
+    // Set default handler
+    let provider_name_default = provider_name.clone();
     let handle_set_default = Rc::new({
-        let name = provider_name_for_default.clone();
+        let name = provider_name_default;
         move |gen_type: GenerationType| {
             let name = name.clone();
-            set_setting_default.set(true);
-            set_action_error.set(None);
+            setting_default.set(true);
+            action_error.set(None);
 
             spawn_local(async move {
                 match GenerationProvidersApi::set_default(&state, &name, gen_type).await {
                     Ok(_) => {
-                        set_setting_default.set(false);
+                        setting_default.set(false);
                         on_reload();
                     }
                     Err(e) => {
-                        set_setting_default.set(false);
-                        set_action_error.set(Some(format!("Set default failed: {}", e)));
+                        setting_default.set(false);
+                        action_error.set(Some(format!("Set default failed: {}", e)));
                     }
                 }
             });
         }
     });
+
+    let capabilities = provider.config.capabilities.clone();
+    let is_preset = PresetProviders::all().iter().any(|p| p.id == provider_name);
 
     view! {
         <div class="flex flex-col h-full">
@@ -557,67 +632,143 @@ fn ProviderDetailView(
                             {provider.name.clone()}
                         </h2>
                         <p class="text-sm text-text-tertiary mt-0.5">
-                            {provider.config.provider_type.clone()}
+                            {display_provider_type.clone()}
                         </p>
                     </div>
-                    <span class=move || {
-                        if provider.config.enabled {
-                            "px-2.5 py-1 rounded-full text-xs font-medium bg-success-subtle text-success"
-                        } else {
-                            "px-2.5 py-1 rounded-full text-xs font-medium bg-surface-sunken text-text-tertiary"
-                        }
-                    }>
-                        {if provider.config.enabled { "Enabled" } else { "Disabled" }}
-                    </span>
+                    <label class="flex items-center gap-2 cursor-pointer">
+                        <input
+                            type="checkbox"
+                            checked=move || form_enabled.get()
+                            on:change=move |ev| form_enabled.set(event_target_checked(&ev))
+                            class="w-4 h-4 rounded"
+                        />
+                        <span class="text-sm text-text-secondary">"Enabled"</span>
+                    </label>
                 </div>
             </div>
 
             // Scrollable content
             <div class="flex-1 overflow-y-auto p-6 space-y-6">
 
-            // Configuration card
+            // Configuration form card
             <div class="bg-surface-raised border border-border rounded-xl p-4 space-y-4">
                 <h3 class="text-xs font-semibold text-text-tertiary uppercase tracking-wider">"CONFIGURATION"</h3>
-                <DetailField label="API Key" value=if provider.config.api_key.is_some() { "••••••••".to_string() } else { "Not set".to_string() } />
-                <DetailField label="Model" value=provider.config.model.clone().unwrap_or_else(|| "N/A".to_string()) />
-                <DetailField label="Base URL" value=provider.config.base_url.clone().unwrap_or_else(|| "N/A".to_string()) />
-                <DetailField label="Timeout" value=format!("{} seconds", provider.config.timeout_seconds) />
-                <DetailField label="Capabilities" value=capabilities_str.clone() />
+
+                // API Key
+                <div>
+                    <label class="block text-sm font-medium text-text-secondary mb-1">"API Key"</label>
+                    <SecretInput
+                        value=Signal::derive(move || form_api_key.get())
+                        on_change=move |v| form_api_key.set(v)
+                        placeholder="Enter new key to update (leave empty to keep current)"
+                        monospace=true
+                    />
+                    <p class="mt-1 text-xs text-text-tertiary">"Leave empty to keep existing key"</p>
+                </div>
+
+                // Model
+                <div>
+                    <label class="block text-sm font-medium text-text-secondary mb-1">"Model"</label>
+                    <input
+                        type="text"
+                        prop:value=move || form_model.get()
+                        on:input=move |ev| form_model.set(event_target_value(&ev))
+                        placeholder="e.g. dall-e-3, stable-diffusion-xl"
+                        class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+                    />
+                </div>
+
+                // API Endpoint URL
+                <div>
+                    <label class="block text-sm font-medium text-text-secondary mb-1">"API Endpoint URL"</label>
+                    <input
+                        type="text"
+                        prop:value=move || form_base_url.get()
+                        on:input=move |ev| form_base_url.set(event_target_value(&ev))
+                        placeholder="https://api.example.com/v1/images/generations"
+                        class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+                    />
+                </div>
+
+                // Edit Endpoint URL (optional)
+                <div>
+                    <label class="block text-sm font-medium text-text-secondary mb-1">"Edit Endpoint URL (optional)"</label>
+                    <input
+                        type="text"
+                        prop:value=move || form_edit_url.get()
+                        on:input=move |ev| form_edit_url.set(event_target_value(&ev))
+                        placeholder="https://api.example.com/v1/images/edits"
+                        class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+                    />
+                    <p class="mt-1 text-xs text-text-tertiary">"For image editing. Leave empty to auto-derive."</p>
+                </div>
+
+                // Timeout
+                <div>
+                    <label class="block text-sm font-medium text-text-secondary mb-1">
+                        "Timeout: " {move || form_timeout.get()} "s"
+                    </label>
+                    <input
+                        type="range" min="10" max="600" step="10"
+                        prop:value=move || form_timeout.get()
+                        on:input=move |ev| {
+                            if let Ok(v) = event_target_value(&ev).parse::<u64>() { form_timeout.set(v); }
+                        }
+                        class="w-full h-2 bg-surface-sunken rounded-lg appearance-none cursor-pointer accent-primary"
+                    />
+                </div>
             </div>
 
-            // Default status
-            {move || {
-                if has_defaults {
-                    view! {
-                        <div class="p-3 bg-primary-subtle border border-primary/20 rounded-lg">
-                            <p class="text-sm text-primary">
-                                "Default provider for: "
-                                {default_for_str.clone()}
-                            </p>
-                        </div>
-                    }.into_any()
-                } else {
-                    view! { <div></div> }.into_any()
-                }
-            }}
+            // Capabilities card
+            <div class="bg-surface-raised border border-border rounded-xl p-4 space-y-3">
+                <h3 class="text-xs font-semibold text-text-tertiary uppercase tracking-wider">"CAPABILITIES"</h3>
+                <label class="flex items-center gap-3 cursor-pointer">
+                    <input type="checkbox"
+                        checked=move || cap_image.get()
+                        on:change=move |ev| cap_image.set(event_target_checked(&ev))
+                        class="w-4 h-4 rounded"
+                    />
+                    <span class="text-sm text-text-primary">"Image Generation"</span>
+                </label>
+                <label class="flex items-center gap-3 cursor-pointer">
+                    <input type="checkbox"
+                        checked=move || cap_video.get()
+                        on:change=move |ev| cap_video.set(event_target_checked(&ev))
+                        class="w-4 h-4 rounded"
+                    />
+                    <span class="text-sm text-text-primary">"Video Generation"</span>
+                </label>
+                <label class="flex items-center gap-3 cursor-pointer">
+                    <input type="checkbox"
+                        checked=move || cap_audio.get()
+                        on:change=move |ev| cap_audio.set(event_target_checked(&ev))
+                        class="w-4 h-4 rounded"
+                    />
+                    <span class="text-sm text-text-primary">"Audio Generation"</span>
+                </label>
+                <label class="flex items-center gap-3 cursor-pointer">
+                    <input type="checkbox"
+                        checked=move || cap_speech.get()
+                        on:change=move |ev| cap_speech.set(event_target_checked(&ev))
+                        class="w-4 h-4 rounded"
+                    />
+                    <span class="text-sm text-text-primary">"Speech Synthesis"</span>
+                </label>
+            </div>
 
-            // Test result
+            // Test result feedback
             {move || {
                 if let Some((success, message)) = test_result.get() {
                     if success {
                         view! {
                             <div class="p-3 bg-success-subtle border border-success/20 rounded-lg">
-                                <p class="text-sm text-success">
-                                    {message}
-                                </p>
+                                <p class="text-sm text-success">{message}</p>
                             </div>
                         }.into_any()
                     } else {
                         view! {
                             <div class="p-3 bg-danger-subtle border border-danger/20 rounded-lg">
-                                <p class="text-sm text-danger">
-                                    {message}
-                                </p>
+                                <p class="text-sm text-danger">{message}</p>
                             </div>
                         }.into_any()
                     }
@@ -626,21 +777,31 @@ fn ProviderDetailView(
                 }
             }}
 
-            // Action error
-            {move || action_error.get().map(|e| view! {
-                <div class="p-3 bg-danger-subtle border border-danger/20 rounded-lg text-danger text-sm">
-                    {e}
-                </div>
+            // Save success feedback
+            {move || save_success.get().then(|| view! {
+                <div class="p-3 bg-success-subtle border border-success/20 rounded-lg text-success text-sm">"Saved successfully"</div>
             })}
 
-            // Actions
-            <div class="flex flex-row gap-3 pt-2">
+            // Action error
+            {move || action_error.get().map(|e| view! {
+                <div class="p-3 bg-danger-subtle border border-danger/20 rounded-lg text-danger text-sm">{e}</div>
+            })}
+
+            // Action buttons: Test + Save
+            <div class="flex flex-row gap-3">
                 <button
                     on:click=handle_test
                     disabled=move || testing.get()
                     class="flex-1 px-4 py-2.5 bg-info text-white rounded-lg hover:bg-primary-hover disabled:opacity-50 transition-colors font-medium"
                 >
                     {move || if testing.get() { "Testing..." } else { "Test Connection" }}
+                </button>
+                <button
+                    on:click=on_save
+                    disabled=move || saving.get()
+                    class="flex-1 px-4 py-2.5 bg-primary text-white rounded-lg hover:bg-primary-hover disabled:opacity-50 transition-colors font-medium"
+                >
+                    {move || if saving.get() { "Saving..." } else { "Save" }}
                 </button>
             </div>
 
@@ -657,7 +818,7 @@ fn ProviderDetailView(
                             on:click=move |_| set_default(gen_type)
                             disabled=move || setting_default.get() || is_default
                             class=move || {
-                                let base = "w-full px-4 py-2.5 rounded-lg transition-colors font-medium";
+                                let base = "w-full px-4 py-2.5 rounded-lg transition-colors font-medium text-sm";
                                 if is_default {
                                     format!("{} bg-primary-subtle text-primary cursor-not-allowed", base)
                                 } else {
@@ -665,47 +826,30 @@ fn ProviderDetailView(
                                 }
                             }
                         >
-                            {gen_type.icon()} " " {gen_type.display_name()}
+                            {gen_type.display_name()}
                             {if is_default { " (Current)" } else { "" }}
                         </button>
                     }
                 }).collect_view()}
             </div>
 
-            // Delete button (only for custom providers, not presets)
-            {
-                let is_preset = PresetProviders::all().iter().any(|p| p.id == provider_name_for_default);
-                if !is_preset {
-                    view! {
-                        <button
-                            on:click=handle_delete
-                            disabled=move || deleting.get()
-                            class="w-full px-4 py-2.5 bg-danger-subtle text-danger rounded-lg hover:bg-danger-subtle disabled:opacity-50 transition-colors font-medium"
-                        >
-                            {move || if deleting.get() { "Deleting..." } else { "Delete Provider" }}
-                        </button>
-                    }.into_any()
-                } else {
-                    view! { <span></span> }.into_any()
-                }
-            }
+            // Delete button
+            {if !is_preset {
+                view! {
+                    <button
+                        on:click=handle_delete
+                        disabled=move || deleting.get()
+                        class="w-full px-4 py-2.5 bg-danger-subtle text-danger rounded-lg hover:bg-danger-subtle disabled:opacity-50 transition-colors font-medium"
+                    >
+                        {move || if deleting.get() { "Deleting..." } else { "Delete Provider" }}
+                    </button>
+                }.into_any()
+            } else {
+                view! { <span></span> }.into_any()
+            }}
 
             </div> // scrollable content
         </div> // flex wrapper
-    }
-}
-
-#[component]
-fn DetailField(label: &'static str, value: String) -> impl IntoView {
-    view! {
-        <div>
-            <label class="block text-sm font-medium text-text-secondary mb-1">
-                {label}
-            </label>
-            <div class="text-text-primary">
-                {value}
-            </div>
-        </div>
     }
 }
 
@@ -725,6 +869,7 @@ fn AddCustomProviderPanel(
     let provider_type = RwSignal::new(String::new());
     let api_key = RwSignal::new(String::new());
     let base_url = RwSignal::new(String::new());
+    let edit_url = RwSignal::new(String::new());
     let form_model = RwSignal::new(String::new());
     let timeout = RwSignal::new(60u64);
 
@@ -758,6 +903,10 @@ fn AddCustomProviderPanel(
             secret_name: None,
             base_url: {
                 let url = base_url.get();
+                if url.is_empty() { None } else { Some(url) }
+            },
+            edit_url: {
+                let url = edit_url.get();
                 if url.is_empty() { None } else { Some(url) }
             },
             model: if form_model.get().is_empty() { None } else { Some(form_model.get()) },
@@ -895,16 +1044,29 @@ fn AddCustomProviderPanel(
                     <p class="mt-1 text-xs text-text-tertiary">"Enter multiple models, separated by commas"</p>
                 </div>
 
-                // Base URL
+                // API Endpoint URL
                 <div>
-                    <label class="block text-sm font-medium text-text-secondary mb-1">"Base URL"</label>
+                    <label class="block text-sm font-medium text-text-secondary mb-1">"API Endpoint URL"</label>
                     <input
                         type="text"
                         value=move || base_url.get()
                         on:input=move |ev| base_url.set(event_target_value(&ev))
-                        placeholder="https://api.example.com/v1"
+                        placeholder="https://api.example.com/v1/images/generations"
                         class="w-full px-3 py-2 border border-border rounded bg-surface text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
                     />
+                </div>
+
+                // Edit Endpoint URL (optional)
+                <div>
+                    <label class="block text-sm font-medium text-text-secondary mb-1">"Edit Endpoint URL (optional)"</label>
+                    <input
+                        type="text"
+                        value=move || edit_url.get()
+                        on:input=move |ev| edit_url.set(event_target_value(&ev))
+                        placeholder="https://api.example.com/v1/images/edits"
+                        class="w-full px-3 py-2 border border-border rounded bg-surface text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
+                    />
+                    <p class="mt-1 text-xs text-text-tertiary">"For image editing. Leave empty to auto-derive."</p>
                 </div>
 
                 // Timeout
