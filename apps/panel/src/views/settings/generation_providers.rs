@@ -304,7 +304,7 @@ fn CategoryTab(
     view! {
         <button
             class=move || {
-                let base = "px-4 py-2 rounded-lg font-medium transition-colors";
+                let base = "flex-1 flex flex-col items-center gap-1 px-3 py-2 rounded-lg font-medium transition-colors text-sm";
                 if is_selected() {
                     format!("{} bg-info text-white", base)
                 } else {
@@ -313,8 +313,8 @@ fn CategoryTab(
             }
             on:click=move |_| on_select.set(category)
         >
-            <span class="mr-2">{category.icon()}</span>
-            {category.display_name()}
+            <span class="text-lg">{category.icon()}</span>
+            <span>{category.display_name()}</span>
         </button>
     }
 }
