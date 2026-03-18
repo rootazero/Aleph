@@ -134,6 +134,71 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         Arc::new(std::sync::RwLock::new(registry))
     };
 
+    // Hot-reload: rebuild generation registry when Panel updates providers
+    {
+        let gen_reg = generation_registry.clone();
+        let config_handle = app_config_arc.clone();
+        let vault = shared_token_mgr.clone();
+        let mut rx = event_bus.subscribe();
+
+        tokio::spawn(async move {
+            while let Ok(event_json) = rx.recv().await {
+                let is_gen_event = serde_json::from_str::<serde_json::Value>(&event_json)
+                    .ok()
+                    .and_then(|v| v.get("topic")?.as_str().map(|s| s.to_string()))
+                    == Some("config.generation.providers.changed".to_string());
+                if !is_gen_event {
+                    continue;
+                }
+
+                // Snapshot config (drop read guard before creating providers)
+                let providers_snapshot = {
+                    let cfg = config_handle.read().await;
+                    cfg.generation.providers.clone()
+                };
+
+                let mut new_registry = GenerationProviderRegistry::new();
+                for (name, mut provider_cfg) in providers_snapshot {
+                    if !provider_cfg.enabled {
+                        continue;
+                    }
+                    // Resolve API key from vault (RPC handlers store keys in vault, not config)
+                    if provider_cfg.api_key.is_none() {
+                        if let Ok(Some(secret)) = vault.get_secret(&format!("gen:{}", name)) {
+                            provider_cfg.api_key = Some(secret.expose().to_string());
+                        }
+                    }
+                    if provider_cfg
+                        .api_key
+                        .as_ref()
+                        .map(|k| k.is_empty())
+                        .unwrap_or(true)
+                    {
+                        continue;
+                    }
+                    match gen_providers::create_provider(&name, &provider_cfg) {
+                        Ok(provider) => {
+                            new_registry.register(name.clone(), provider).ok();
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                provider = %name, error = %e,
+                                "Skip generation provider on reload"
+                            );
+                        }
+                    }
+                }
+
+                let mut guard = gen_reg.write().unwrap_or_else(|e| e.into_inner());
+                *guard = new_registry;
+                tracing::info!(
+                    "Generation provider registry reloaded ({} providers)",
+                    guard.len()
+                );
+            }
+        });
+    }
+
     // Try to create provider: env vars first, then app config
     let initial_provider = if can_create_provider_from_env() {
         create_provider_registry_from_env()
