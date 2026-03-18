@@ -304,7 +304,10 @@ mod tests {
         let r = resp.result.unwrap();
         assert!(r.get("token").unwrap().is_null(), "no token generated yet");
 
-        // Reset generates a new one
+        // Generate initial token so reset_token can decrypt (empty) vault
+        let _initial = shared_mgr.generate_token().unwrap();
+
+        // Reset generates a new one (re-encrypts vault)
         let req = JsonRpcRequest::with_id("auth.reset_token", None, json!(2));
         let resp = handle_auth_reset_token(req, ctx.clone()).await;
         let r = resp.result.unwrap();

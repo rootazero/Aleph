@@ -36,19 +36,6 @@ pub enum SharedTokenError {
     Storage(String),
 }
 
-/// Result of trying to load a token from a file.
-#[derive(Debug)]
-pub enum LoadTokenResult {
-    /// Token loaded and validated successfully.
-    Ok(String),
-    /// Token file does not exist or is empty — safe to generate a new token.
-    NotFound,
-    /// Token file exists but HMAC validation failed — vault data at risk!
-    /// Generating a new token would make all existing vault secrets unreadable.
-    HmacMismatch,
-    /// Other validation error.
-    Error(String),
-}
 
 impl SharedTokenManager {
     /// Create a new manager, restoring persisted HMAC secret if available.
@@ -93,13 +80,14 @@ impl SharedTokenManager {
     }
 
     /// Generate a new shared token (invalidates any previous one).
-    /// Persists both the hash and the HMAC secret so the token survives restarts.
+    /// Persists hash, HMAC secret, and plaintext so the token survives restarts
+    /// even if the token file is lost.
     pub fn generate_token(&self) -> Result<String, SharedTokenError> {
         let token = format!("aleph-{}", Uuid::new_v4());
         let hash = hmac_sign(&self.secret, &token);
 
         self.store
-            .set_shared_token_with_secret(&hash, &self.secret)
+            .set_shared_token_with_secret(&hash, &self.secret, &token)
             .map_err(|e| SharedTokenError::Storage(e.to_string()))?;
 
         let mut current = self.current_token.lock().unwrap_or_else(|e| e.into_inner());
@@ -115,51 +103,36 @@ impl SharedTokenManager {
             .map_err(|e| SharedTokenError::Storage(e.to_string()))
     }
 
-    /// Try to load and validate an existing token from a file.
-    /// Returns `Some(token)` if the file exists and the token validates.
-    pub fn try_load_token_from_file(&self, path: &std::path::Path) -> Option<String> {
-        match self.try_load_token_from_file_detailed(path) {
-            LoadTokenResult::Ok(token) => Some(token),
-            _ => None,
-        }
-    }
-
-    /// Try to load and validate an existing token from a file (detailed result).
-    pub fn try_load_token_from_file_detailed(&self, path: &std::path::Path) -> LoadTokenResult {
-        let token = match std::fs::read_to_string(path) {
-            Ok(t) => t.trim().to_string(),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                tracing::info!("SharedTokenManager: no token file at {:?} — first start", path);
-                return LoadTokenResult::NotFound;
+    /// Try to load the token from the database.
+    ///
+    /// Returns `Some(token)` if the DB has a plaintext token that passes HMAC validation.
+    pub fn try_load_token_from_db(&self) -> Option<String> {
+        let token = match self.store.get_shared_token_plaintext() {
+            Ok(Some(t)) => t,
+            Ok(None) => {
+                tracing::info!("SharedTokenManager: no token in DB — first start");
+                return None;
             }
             Err(e) => {
-                tracing::warn!("SharedTokenManager: failed to read token file {:?}: {}", path, e);
-                return LoadTokenResult::Error(e.to_string());
+                tracing::warn!("SharedTokenManager: failed to read plaintext token from DB: {}", e);
+                return None;
             }
         };
-        if token.is_empty() {
-            tracing::warn!("SharedTokenManager: token file {:?} is empty", path);
-            return LoadTokenResult::NotFound;
-        }
+        // Validate the recovered token against the stored hash
         match self.validate(&token) {
             Ok(true) => {
-                tracing::info!("SharedTokenManager: existing token validated successfully from {:?}", path);
+                tracing::info!("SharedTokenManager: loaded existing token from DB");
                 let mut current = self.current_token.lock().unwrap_or_else(|e| e.into_inner());
                 *current = Some(token.clone());
-                LoadTokenResult::Ok(token)
+                Some(token)
             }
             Ok(false) => {
-                tracing::error!(
-                    "SharedTokenManager: token from {:?} failed HMAC validation! \
-                     Another process may have overwritten the token file. \
-                     Refusing to generate a new token to protect vault secrets.",
-                    path
-                );
-                LoadTokenResult::HmacMismatch
+                tracing::warn!("SharedTokenManager: DB plaintext token failed HMAC validation (inconsistent state)");
+                None
             }
             Err(e) => {
-                tracing::warn!("SharedTokenManager: token validation error for {:?}: {}", path, e);
-                LoadTokenResult::Error(e.to_string())
+                tracing::warn!("SharedTokenManager: token validation error during DB recovery: {}", e);
+                None
             }
         }
     }
@@ -369,16 +342,12 @@ mod tests {
         let token = mgr1.generate_token().unwrap();
         assert!(mgr1.validate(&token).unwrap());
 
-        // Write token to a temp file
-        let tmp = dir.path().join("aleph_test_token");
-        std::fs::write(&tmp, &token).unwrap();
-
         // Second "boot" — simulates restart, creates new manager from same store
         let mgr2 = SharedTokenManager::new(store.clone(), dir.path().join("test2.vault"));
         // Should restore the persisted secret and validate the old token
         assert!(mgr2.validate(&token).unwrap());
-        // Should load from file
-        let loaded = mgr2.try_load_token_from_file(&tmp);
+        // Should load from DB
+        let loaded = mgr2.try_load_token_from_db();
         assert_eq!(loaded.as_deref(), Some(token.as_str()));
         assert_eq!(mgr2.get_current_token().as_deref(), Some(token.as_str()));
     }
@@ -499,19 +468,43 @@ mod tests {
     fn test_secret_persists_with_same_token() {
         let dir = tempfile::TempDir::new().unwrap();
         let vault_path = dir.path().join("persist.vault");
-        let token_file = dir.path().join("token");
         let store = Arc::new(SecurityStore::in_memory().unwrap());
 
         // First session: generate token, store secret
         let mgr1 = SharedTokenManager::new(store.clone(), &vault_path);
-        let token = mgr1.generate_token().unwrap();
-        std::fs::write(&token_file, &token).unwrap();
+        let _token = mgr1.generate_token().unwrap();
         mgr1.store_secret("anthropic", "sk-ant-persist").unwrap();
 
-        // Second session: load same token, should access same secret
+        // Second session: load token from DB, should access same secret
         let mgr2 = SharedTokenManager::new(store, &vault_path);
-        mgr2.try_load_token_from_file(&token_file);
+        assert!(mgr2.try_load_token_from_db().is_some());
         let secret = mgr2.get_secret("anthropic").unwrap().unwrap();
         assert_eq!(secret.expose(), "sk-ant-persist");
+    }
+
+    #[test]
+    fn test_load_token_from_db() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let store = Arc::new(SecurityStore::in_memory().unwrap());
+
+        // First session: generate token
+        let mgr1 = SharedTokenManager::new(store.clone(), dir.path().join("test.vault"));
+        let token = mgr1.generate_token().unwrap();
+
+        // Second session: load from DB
+        let mgr2 = SharedTokenManager::new(store.clone(), dir.path().join("test2.vault"));
+        let loaded = mgr2.try_load_token_from_db();
+        assert_eq!(loaded.as_deref(), Some(token.as_str()));
+        assert_eq!(mgr2.get_current_token().as_deref(), Some(token.as_str()));
+    }
+
+    #[test]
+    fn test_load_token_from_db_empty() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let store = Arc::new(SecurityStore::in_memory().unwrap());
+
+        // No token generated — DB is empty
+        let mgr = SharedTokenManager::new(store, dir.path().join("test.vault"));
+        assert!(mgr.try_load_token_from_db().is_none());
     }
 }

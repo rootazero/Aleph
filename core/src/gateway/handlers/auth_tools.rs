@@ -18,7 +18,7 @@ pub async fn handle_auth_show_token(
         })),
         None => JsonRpcResponse::success(request.id, json!({
             "token": null,
-            "message": "Token not in memory. Check ~/.aleph/data/.shared_token"
+            "message": "No token in memory. Server may need restart."
         })),
     }
 }
@@ -28,33 +28,17 @@ pub async fn handle_auth_reset_token(
     request: JsonRpcRequest,
     ctx: Arc<AuthContext>,
 ) -> JsonRpcResponse {
-    match ctx.shared_token_mgr.generate_token() {
+    match ctx.shared_token_mgr.reset_token() {
         Ok(token) => {
-            // Update file
-            if let Some(home) = dirs::home_dir() {
-                let path = home.join(".aleph/data/.shared_token");
-                if let Err(e) = std::fs::write(&path, &token) {
-                    tracing::warn!("Failed to write token file: {}", e);
-                } else {
-                    #[cfg(unix)]
-                    {
-                        use std::os::unix::fs::PermissionsExt;
-                        let _ = std::fs::set_permissions(
-                            &path,
-                            std::fs::Permissions::from_mode(0o600),
-                        );
-                    }
-                }
-            }
             JsonRpcResponse::success(request.id, json!({
                 "token": token,
-                "message": "Token regenerated. All existing sessions are now invalid."
+                "message": "Token regenerated. Vault secrets re-encrypted. All existing sessions are now invalid."
             }))
         }
         Err(e) => JsonRpcResponse::error(
             request.id,
             -32603,
-            format!("Failed to generate token: {}", e),
+            format!("Failed to reset token: {}", e),
         ),
     }
 }
@@ -189,6 +173,8 @@ mod tests {
     #[tokio::test]
     async fn test_reset_token() {
         let ctx = create_test_context();
+        // reset_token() needs an existing token to decrypt vault entries
+        let _initial = ctx.shared_token_mgr.generate_token().unwrap();
         let req = JsonRpcRequest::with_id("auth.reset_token", None, json!(1));
         let resp = handle_auth_reset_token(req, ctx).await;
         assert!(resp.is_success());

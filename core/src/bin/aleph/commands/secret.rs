@@ -5,10 +5,10 @@
 
 use std::error::Error;
 use std::io::Write;
-use std::path::PathBuf;
 
 use alephcore::gateway::security::{SharedTokenManager, store::SecurityStore};
 use alephcore::utils::paths;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::cli::SecretAction;
@@ -42,33 +42,29 @@ pub fn validate_secret_name(name: &str) -> Result<String, String> {
     Ok(normalized.to_string())
 }
 
-/// Build a SharedTokenManager and load the existing token from file.
+/// Build a SharedTokenManager and load the existing token from DB.
 /// Returns an error if no token exists (server must be started at least once).
-fn open_token_manager() -> Result<(SharedTokenManager, PathBuf), Box<dyn Error>> {
+fn open_token_manager() -> Result<SharedTokenManager, Box<dyn Error>> {
     let security_store_path = paths::get_security_db_path()
         .unwrap_or_else(|_| PathBuf::from("/tmp/aleph_security.db"));
     let security_store = Arc::new(
         SecurityStore::open(&security_store_path)
-            .unwrap_or_else(|e| {
-                eprintln!("Warning: Failed to load security store from {:?}: {}. Using in-memory.", security_store_path, e);
-                SecurityStore::in_memory().expect("Failed to create in-memory security store")
-            })
+            .map_err(|e| format!("Failed to open security store: {}", e))?
     );
 
     let data_dir = dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("/tmp"))
         .join(".aleph/data");
     let vault_path = data_dir.join("secrets.vault");
-    let token_file = data_dir.join(".shared_token");
 
     let manager = SharedTokenManager::new(security_store, vault_path);
 
-    // Load existing token from file
-    if manager.try_load_token_from_file(&token_file).is_none() {
+    // Load existing token from DB
+    if manager.try_load_token_from_db().is_none() {
         return Err("No valid token found. Start the server at least once to generate one.".into());
     }
 
-    Ok((manager, token_file))
+    Ok(manager)
 }
 
 fn resolve_secret_value(value: Option<String>) -> Result<String, Box<dyn Error>> {
@@ -86,7 +82,7 @@ fn resolve_secret_value(value: Option<String>) -> Result<String, Box<dyn Error>>
 }
 
 fn handle_secret_init() -> Result<(), Box<dyn Error>> {
-    let (manager, _) = open_token_manager()?;
+    let manager = open_token_manager()?;
     let count = manager.list_secret_names()
         .map(|names| names.len())
         .unwrap_or(0);
@@ -98,7 +94,7 @@ fn handle_secret_set(name: String, value: Option<String>) -> Result<(), Box<dyn 
     let name = validate_secret_name(&name)?;
     let value = resolve_secret_value(value)?;
 
-    let (manager, _) = open_token_manager()?;
+    let manager = open_token_manager()?;
     manager.store_secret(&name, &value)
         .map_err(|e| format!("Failed to store secret: {}", e))?;
 
@@ -107,7 +103,7 @@ fn handle_secret_set(name: String, value: Option<String>) -> Result<(), Box<dyn 
 }
 
 fn handle_secret_list() -> Result<(), Box<dyn Error>> {
-    let (manager, _) = open_token_manager()?;
+    let manager = open_token_manager()?;
     let mut names = manager.list_secret_names()
         .map_err(|e| format!("Failed to list secrets: {}", e))?;
     names.sort();
@@ -127,7 +123,7 @@ fn handle_secret_list() -> Result<(), Box<dyn Error>> {
 
 fn handle_secret_delete(name: String) -> Result<(), Box<dyn Error>> {
     let name = validate_secret_name(&name)?;
-    let (manager, _) = open_token_manager()?;
+    let manager = open_token_manager()?;
 
     let deleted = manager.delete_secret(&name)
         .map_err(|e| format!("Failed to delete secret: {}", e))?;
@@ -142,7 +138,7 @@ fn handle_secret_delete(name: String) -> Result<(), Box<dyn Error>> {
 
 fn handle_secret_verify(name: String) -> Result<(), Box<dyn Error>> {
     let name = validate_secret_name(&name)?;
-    let (manager, _) = open_token_manager()?;
+    let manager = open_token_manager()?;
 
     match manager.get_secret(&name) {
         Ok(Some(secret)) => {

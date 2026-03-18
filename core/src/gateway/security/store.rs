@@ -10,7 +10,7 @@ use crate::sync_primitives::Mutex;
 use tracing::{debug, info};
 
 /// Schema version for migrations
-const SCHEMA_VERSION: i32 = 5;
+const SCHEMA_VERSION: i32 = 6;
 
 /// Unified security storage backed by SQLite
 pub struct SecurityStore {
@@ -116,6 +116,24 @@ impl SecurityStore {
 
             let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
             conn.execute_batch(SCHEMA_V5)?;
+            drop(conn);
+        }
+
+        if version < 6 {
+            info!(
+                from = version,
+                to = 6,
+                "Migrating security schema to v6 (plaintext token persistence)"
+            );
+
+            let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+            // Idempotent: only add column if it doesn't already exist
+            let has_column: bool = conn
+                .prepare("SELECT plaintext_token FROM shared_token LIMIT 0")
+                .is_ok();
+            if !has_column {
+                conn.execute_batch(SCHEMA_V6)?;
+            }
             drop(conn);
         }
 
@@ -472,13 +490,13 @@ impl SecurityStore {
         Ok(())
     }
 
-    /// Store shared token hash together with the HMAC secret for persistence across restarts.
-    pub fn set_shared_token_with_secret(&self, hash: &str, secret: &[u8; 32]) -> SqliteResult<()> {
+    /// Store shared token hash together with the HMAC secret and plaintext for persistence across restarts.
+    pub fn set_shared_token_with_secret(&self, hash: &str, secret: &[u8; 32], plaintext: &str) -> SqliteResult<()> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute("DELETE FROM shared_token", [])?;
         conn.execute(
-            "INSERT INTO shared_token (token_hash, created_at, hmac_secret) VALUES (?1, ?2, ?3)",
-            params![hash, current_timestamp_ms(), &secret[..]],
+            "INSERT INTO shared_token (token_hash, created_at, hmac_secret, plaintext_token) VALUES (?1, ?2, ?3, ?4)",
+            params![hash, current_timestamp_ms(), &secret[..], plaintext],
         )?;
         Ok(())
     }
@@ -501,6 +519,22 @@ impl SecurityStore {
                 Ok(Some(arr))
             }
             Ok(_) => Ok(None), // wrong length
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Load the persisted plaintext token (if any) from the shared_token table.
+    pub fn get_shared_token_plaintext(&self) -> SqliteResult<Option<String>> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let result = conn.query_row(
+            "SELECT plaintext_token FROM shared_token WHERE plaintext_token IS NOT NULL LIMIT 1",
+            [],
+            |row| row.get::<_, String>(0),
+        );
+        match result {
+            Ok(token) if !token.is_empty() => Ok(Some(token)),
+            Ok(_) => Ok(None),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(e),
         }
@@ -912,6 +946,11 @@ CREATE TABLE IF NOT EXISTS token_manager_secret (
     hmac_secret BLOB NOT NULL,
     created_at  INTEGER NOT NULL
 );
+"#;
+
+/// Schema v6 SQL — store plaintext token in DB for recovery when file is lost
+const SCHEMA_V6: &str = r#"
+ALTER TABLE shared_token ADD COLUMN plaintext_token TEXT;
 "#;
 
 #[cfg(test)]

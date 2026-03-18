@@ -227,8 +227,8 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     use alephcore::gateway::server::GatewayConfig as ServerConfig;
 
     // CRITICAL: Acquire exclusive instance lock BEFORE anything else.
-    // Multiple concurrent Aleph processes will compete for .shared_token,
-    // causing HMAC mismatch and permanent vault data loss (all API keys).
+    // Multiple concurrent Aleph processes writing to security.db simultaneously
+    // can cause corruption and permanent vault data loss (all API keys).
     let _instance_lock = crate::daemon::acquire_instance_lock()?;
 
     // Ensure ~/.aleph/ directory structure exists
