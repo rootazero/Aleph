@@ -13,8 +13,9 @@ pub async fn execute_search(
     dir: &Path,
     pattern: &str,
     denied_paths: &[String],
+    output_dir_override: Option<&std::path::Path>,
 ) -> Result<FileOpsOutput, ToolError> {
-    let canonical = check_and_resolve_path(dir, denied_paths)?;
+    let canonical = check_and_resolve_path(dir, denied_paths, output_dir_override)?;
 
     if !canonical.exists() {
         return Err(ToolError::Execution(format!(

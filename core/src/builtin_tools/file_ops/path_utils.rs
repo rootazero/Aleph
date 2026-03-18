@@ -54,8 +54,15 @@ pub fn get_denied_paths() -> Vec<String> {
 /// 1. Environment variables ($HOME, $USER, etc.) - expanded first
 /// 2. Absolute paths (starting with `/`) - used as-is
 /// 3. Home paths (starting with `~`) - expanded to home directory
-/// 4. Relative paths - resolved relative to output directory (~/.aleph/output/)
-pub fn check_and_resolve_path(path: &Path, denied_paths: &[String]) -> Result<PathBuf, ToolError> {
+/// 4. Relative paths - resolved relative to:
+///    a. `output_dir_override` if provided (workspace-scoped output dir from ToolContext)
+///    b. Session working directory (if set)
+///    c. Default output directory (~/.aleph/output/) as final fallback
+pub fn check_and_resolve_path(
+    path: &Path,
+    denied_paths: &[String],
+    output_dir_override: Option<&Path>,
+) -> Result<PathBuf, ToolError> {
     info!(path = %path.display(), "check_path: input path");
 
     // First, expand environment variables in the path string
@@ -99,9 +106,13 @@ pub fn check_and_resolve_path(path: &Path, denied_paths: &[String]) -> Result<Pa
         home.join(expanded_str.strip_prefix("~").unwrap())
     } else if expanded_str.is_relative() {
         // Relative paths are resolved to:
-        // 1. Current working directory (if set by session/topic)
-        // 2. Default output directory (~/.aleph/output/)
-        let base_dir = if let Some(wd) = get_working_dir() {
+        // 1. ToolContext output_dir override (workspace-scoped, set by ExecutionEngine)
+        // 2. Current working directory (if set by session/topic)
+        // 3. Default output directory (~/.aleph/output/)
+        let base_dir = if let Some(override_dir) = output_dir_override {
+            info!(output_dir = %override_dir.display(), "check_path: using ToolContext output_dir override");
+            override_dir.to_path_buf()
+        } else if let Some(wd) = get_working_dir() {
             info!(working_dir = %wd.display(), "check_path: using session working directory");
             wd
         } else {

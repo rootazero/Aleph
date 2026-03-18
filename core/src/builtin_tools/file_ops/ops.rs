@@ -13,8 +13,9 @@ use super::types::{FileInfo, FileOpsOutput};
 pub async fn execute_list(
     path: &Path,
     denied_paths: &[String],
+    output_dir_override: Option<&std::path::Path>,
 ) -> Result<FileOpsOutput, ToolError> {
-    let canonical = check_and_resolve_path(path, denied_paths)?;
+    let canonical = check_and_resolve_path(path, denied_paths, output_dir_override)?;
 
     if !canonical.exists() {
         return Err(ToolError::Execution(format!(
@@ -79,8 +80,9 @@ pub async fn execute_read(
     path: &Path,
     denied_paths: &[String],
     max_read_size: u64,
+    output_dir_override: Option<&std::path::Path>,
 ) -> Result<FileOpsOutput, ToolError> {
-    let canonical = check_and_resolve_path(path, denied_paths)?;
+    let canonical = check_and_resolve_path(path, denied_paths, output_dir_override)?;
 
     if !canonical.exists() {
         return Err(ToolError::Execution(format!(
@@ -129,8 +131,9 @@ pub async fn execute_write(
     content: &str,
     create_parents: bool,
     denied_paths: &[String],
+    output_dir_override: Option<&std::path::Path>,
 ) -> Result<FileOpsOutput, ToolError> {
-    let canonical = check_and_resolve_path(path, denied_paths)?;
+    let canonical = check_and_resolve_path(path, denied_paths, output_dir_override)?;
 
     // Create parent directories if needed
     if create_parents {
@@ -170,9 +173,10 @@ pub async fn execute_move(
     to: &Path,
     create_parents: bool,
     denied_paths: &[String],
+    output_dir_override: Option<&std::path::Path>,
 ) -> Result<FileOpsOutput, ToolError> {
-    let from_canonical = check_and_resolve_path(from, denied_paths)?;
-    let to_canonical = check_and_resolve_path(to, denied_paths)?;
+    let from_canonical = check_and_resolve_path(from, denied_paths, output_dir_override)?;
+    let to_canonical = check_and_resolve_path(to, denied_paths, output_dir_override)?;
 
     if !from_canonical.exists() {
         return Err(ToolError::Execution(format!(
@@ -218,9 +222,10 @@ pub async fn execute_copy(
     to: &Path,
     create_parents: bool,
     denied_paths: &[String],
+    output_dir_override: Option<&std::path::Path>,
 ) -> Result<FileOpsOutput, ToolError> {
-    let from_canonical = check_and_resolve_path(from, denied_paths)?;
-    let to_canonical = check_and_resolve_path(to, denied_paths)?;
+    let from_canonical = check_and_resolve_path(from, denied_paths, output_dir_override)?;
+    let to_canonical = check_and_resolve_path(to, denied_paths, output_dir_override)?;
 
     if !from_canonical.exists() {
         return Err(ToolError::Execution(format!(
@@ -300,8 +305,9 @@ fn copy_dir_recursive(from: &Path, to: &Path) -> Result<u64, ToolError> {
 pub async fn execute_delete(
     path: &Path,
     denied_paths: &[String],
+    output_dir_override: Option<&std::path::Path>,
 ) -> Result<FileOpsOutput, ToolError> {
-    let canonical = check_and_resolve_path(path, denied_paths)?;
+    let canonical = check_and_resolve_path(path, denied_paths, output_dir_override)?;
 
     if !canonical.exists() {
         return Err(ToolError::Execution(format!(
@@ -343,8 +349,9 @@ pub async fn execute_mkdir(
     path: &Path,
     create_parents: bool,
     denied_paths: &[String],
+    output_dir_override: Option<&std::path::Path>,
 ) -> Result<FileOpsOutput, ToolError> {
-    let canonical = check_and_resolve_path(path, denied_paths)?;
+    let canonical = check_and_resolve_path(path, denied_paths, output_dir_override)?;
 
     if canonical.exists() {
         if canonical.is_dir() {

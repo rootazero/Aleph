@@ -18,14 +18,15 @@ pub async fn execute_batch_move(
     dest: &Path,
     create_parents: bool,
     denied_paths: &[String],
+    output_dir_override: Option<&std::path::Path>,
 ) -> Result<FileOpsOutput, ToolError> {
-    let canonical = check_and_resolve_path(dir, denied_paths)?;
+    let canonical = check_and_resolve_path(dir, denied_paths, output_dir_override)?;
     let dest_canonical = if dest.exists() {
-        check_and_resolve_path(dest, denied_paths)?
+        check_and_resolve_path(dest, denied_paths, output_dir_override)?
     } else if create_parents {
         // Security: check destination path BEFORE creating it, to prevent
         // writing into denied directories (e.g., ~/.ssh with create_parents=true).
-        let checked_dest = check_and_resolve_path(dest, denied_paths)?;
+        let checked_dest = check_and_resolve_path(dest, denied_paths, output_dir_override)?;
         // Create destination if needed
         fs::create_dir_all(&checked_dest).map_err(|e| {
             ToolError::Execution(format!("Failed to create destination: {}", e))
@@ -126,8 +127,9 @@ pub async fn execute_organize(
     dir: &Path,
     create_parents: bool,
     denied_paths: &[String],
+    output_dir_override: Option<&std::path::Path>,
 ) -> Result<FileOpsOutput, ToolError> {
-    let canonical = check_and_resolve_path(dir, denied_paths)?;
+    let canonical = check_and_resolve_path(dir, denied_paths, output_dir_override)?;
 
     if !canonical.is_dir() {
         return Err(ToolError::InvalidArgs(format!(

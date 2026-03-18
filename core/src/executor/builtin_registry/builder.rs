@@ -36,7 +36,11 @@ impl BuiltinToolRegistry {
     pub async fn with_config(config: BuiltinToolConfig) -> Self {
         let search_tool = SearchTool::with_api_key(config.tavily_api_key.clone());
         let web_fetch_tool = WebFetchTool::new();
-        let file_ops_tool = FileOpsTool::new();
+        let file_ops_tool = if let Some(ref tc) = config.tool_context {
+            FileOpsTool::new().with_tool_context(std::sync::Arc::clone(tc))
+        } else {
+            FileOpsTool::new()
+        };
         let bash_tool = BashExecTool::new();
         let code_exec_tool = CodeExecTool::new();
         let pdf_generate_tool = PdfGenerateTool::new();

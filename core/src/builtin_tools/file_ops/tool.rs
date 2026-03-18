@@ -23,6 +23,8 @@ pub struct FileOpsTool {
     max_read_size: u64,
     /// Denied path patterns (security)
     denied_paths: Vec<String>,
+    /// Optional ToolContext handle for workspace-scoped output path resolution
+    tool_context_handle: Option<crate::tools::ToolContextHandle>,
 }
 
 impl FileOpsTool {
@@ -59,12 +61,30 @@ IMPORTANT: For organizing multiple files, use 'organize' or 'batch_move' instead
         Self {
             max_read_size: 100 * 1024 * 1024, // 100MB
             denied_paths,
+            tool_context_handle: None,
+        }
+    }
+
+    /// Configure the tool to use a ToolContext handle for workspace-scoped output paths
+    pub fn with_tool_context(mut self, handle: crate::tools::ToolContextHandle) -> Self {
+        self.tool_context_handle = Some(handle);
+        self
+    }
+
+    /// Resolve the output directory from the ToolContext handle (if available).
+    /// Returns the workspace `documents/` subdirectory when a handle is wired in.
+    async fn resolve_output_dir(&self) -> Option<std::path::PathBuf> {
+        if let Some(ref handle) = self.tool_context_handle {
+            let ctx = handle.read().await;
+            Some(ctx.output_dir.join("documents"))
+        } else {
+            None
         }
     }
 
     /// Check if path is allowed (exposed for testing)
     pub fn check_path(&self, path: &Path) -> std::result::Result<std::path::PathBuf, ToolError> {
-        check_and_resolve_path(path, &self.denied_paths)
+        check_and_resolve_path(path, &self.denied_paths, None)
     }
 
     /// Execute file operation based on args (internal implementation)
@@ -98,38 +118,43 @@ IMPORTANT: For organizing multiple files, use 'organize' or 'batch_move' instead
 
         let path = Path::new(&args.path);
 
+        // Resolve workspace-scoped output directory from ToolContext (if wired in).
+        // This overrides the global get_output_dir() for relative path resolution.
+        let output_dir = self.resolve_output_dir().await;
+        let output_dir_ref = output_dir.as_deref();
+
         let result = match args.operation {
-            FileOperation::List => execute_list(path, &self.denied_paths).await,
+            FileOperation::List => execute_list(path, &self.denied_paths, output_dir_ref).await,
             FileOperation::Read => {
-                execute_read(path, &self.denied_paths, self.max_read_size).await
+                execute_read(path, &self.denied_paths, self.max_read_size, output_dir_ref).await
             }
             FileOperation::Write => {
                 let content = args.content.ok_or_else(|| {
                     ToolError::InvalidArgs("Content required for write operation".to_string())
                 })?;
-                execute_write(path, &content, args.create_parents, &self.denied_paths).await
+                execute_write(path, &content, args.create_parents, &self.denied_paths, output_dir_ref).await
             }
             FileOperation::Move => {
                 let dest = args.destination.ok_or_else(|| {
                     ToolError::InvalidArgs("Destination required for move operation".to_string())
                 })?;
-                execute_move(path, Path::new(&dest), args.create_parents, &self.denied_paths).await
+                execute_move(path, Path::new(&dest), args.create_parents, &self.denied_paths, output_dir_ref).await
             }
             FileOperation::Copy => {
                 let dest = args.destination.ok_or_else(|| {
                     ToolError::InvalidArgs("Destination required for copy operation".to_string())
                 })?;
-                execute_copy(path, Path::new(&dest), args.create_parents, &self.denied_paths).await
+                execute_copy(path, Path::new(&dest), args.create_parents, &self.denied_paths, output_dir_ref).await
             }
-            FileOperation::Delete => execute_delete(path, &self.denied_paths).await,
+            FileOperation::Delete => execute_delete(path, &self.denied_paths, output_dir_ref).await,
             FileOperation::Mkdir => {
-                execute_mkdir(path, args.create_parents, &self.denied_paths).await
+                execute_mkdir(path, args.create_parents, &self.denied_paths, output_dir_ref).await
             }
             FileOperation::Search => {
                 let pattern = args.pattern.ok_or_else(|| {
                     ToolError::InvalidArgs("Pattern required for search operation".to_string())
                 })?;
-                execute_search(path, &pattern, &self.denied_paths).await
+                execute_search(path, &pattern, &self.denied_paths, output_dir_ref).await
             }
             FileOperation::BatchMove => {
                 let pattern = args.pattern.ok_or_else(|| {
@@ -148,11 +173,12 @@ IMPORTANT: For organizing multiple files, use 'organize' or 'batch_move' instead
                     Path::new(&dest),
                     args.create_parents,
                     &self.denied_paths,
+                    output_dir_ref,
                 )
                 .await
             }
             FileOperation::Organize => {
-                execute_organize(path, args.create_parents, &self.denied_paths).await
+                execute_organize(path, args.create_parents, &self.denied_paths, output_dir_ref).await
             }
         };
 
@@ -181,6 +207,7 @@ impl Clone for FileOpsTool {
         Self {
             max_read_size: self.max_read_size,
             denied_paths: self.denied_paths.clone(),
+            tool_context_handle: self.tool_context_handle.clone(),
         }
     }
 }
