@@ -43,7 +43,11 @@ impl BuiltinToolRegistry {
         };
         let bash_tool = BashExecTool::new();
         let code_exec_tool = CodeExecTool::new();
-        let pdf_generate_tool = PdfGenerateTool::new();
+        let pdf_generate_tool = if let Some(ref tc) = config.tool_context {
+            PdfGenerateTool::new().with_tool_context(std::sync::Arc::clone(tc))
+        } else {
+            PdfGenerateTool::new()
+        };
 
         // Skill reading tools (Progressive Disclosure pattern)
         let read_skill_tool = ReadSkillTool::default();

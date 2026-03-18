@@ -23,7 +23,7 @@ mod styles;
 #[cfg(test)]
 mod tests;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
 use tracing::{info, warn};
@@ -37,8 +37,8 @@ pub use args::{ContentFormat, PageSize, PdfGenerateArgs, PdfGenerateOutput, Rend
 /// PDF generation tool
 #[derive(Clone)]
 pub struct PdfGenerateTool {
-    /// Default output directory
-    default_output_dir: Option<PathBuf>,
+    /// Handle to workspace-scoped tool context (provides output_dir, etc.)
+    pub tool_context_handle: Option<crate::tools::ToolContextHandle>,
 }
 
 impl PdfGenerateTool {
@@ -65,15 +65,14 @@ Examples:\n\
     /// Create a new PDF generation tool
     pub fn new() -> Self {
         Self {
-            default_output_dir: None,
+            tool_context_handle: None,
         }
     }
 
-    /// Create with custom output directory
-    pub fn with_output_dir(output_dir: PathBuf) -> Self {
-        Self {
-            default_output_dir: Some(output_dir),
-        }
+    /// Attach a ToolContext handle for workspace-scoped output path resolution
+    pub fn with_tool_context(mut self, handle: crate::tools::ToolContextHandle) -> Self {
+        self.tool_context_handle = Some(handle);
+        self
     }
 
     /// Resolve the output path from user-provided string
@@ -81,24 +80,37 @@ Examples:\n\
     /// Path resolution rules:
     /// 1. Absolute paths (starting with `/`) - used as-is
     /// 2. Home paths (starting with `~`) - expanded to home directory
-    /// 3. Relative paths - resolved to output directory (~/.aleph/output/)
-    fn resolve_output_path(&self, output_path: &str) -> std::result::Result<PathBuf, ToolError> {
-        if output_path.starts_with('/') {
-            Ok(PathBuf::from(output_path))
-        } else if output_path.starts_with('~') {
-            Ok(PathBuf::from(
-                output_path
-                    .replace('~', dirs::home_dir().unwrap_or_default().to_str().unwrap_or("")),
-            ))
-        } else if let Some(ref dir) = self.default_output_dir {
-            Ok(dir.join(output_path))
-        } else {
-            // Use the default output directory for relative paths
-            let output_dir = crate::utils::paths::get_output_dir().map_err(|e| {
-                ToolError::Execution(format!("Failed to get output directory: {}", e))
-            })?;
-            Ok(output_dir.join(output_path))
+    /// 3. Relative paths - resolved via ToolContext output_dir, or global fallback
+    async fn resolve_output_path(&self, output_path: &str) -> std::result::Result<PathBuf, ToolError> {
+        let output_path = Path::new(output_path);
+
+        if output_path.starts_with("/") {
+            return Ok(output_path.to_path_buf());
         }
+
+        if let Some(s) = output_path.to_str() {
+            if s.starts_with('~') {
+                return Ok(PathBuf::from(
+                    s.replace('~', dirs::home_dir().unwrap_or_default().to_str().unwrap_or("")),
+                ));
+            }
+        }
+
+        // For relative paths, resolve from ToolContext
+        let output_dir = if let Some(ref handle) = self.tool_context_handle {
+            let ctx = handle.read().await;
+            ctx.output_dir.join("documents")
+        } else {
+            dirs::home_dir()
+                .unwrap_or_default()
+                .join(".aleph")
+                .join("workspaces")
+                .join("main")
+                .join("output")
+                .join("documents")
+        };
+
+        Ok(output_dir.join(output_path))
     }
 }
 
@@ -137,7 +149,7 @@ DEFAULT OUTPUT: Use relative paths like \"article.pdf\" or \"translated.pdf\" fo
             }
         }
 
-        let output_path = self.resolve_output_path(&args.output_path)?;
+        let output_path = self.resolve_output_path(&args.output_path).await?;
 
         let result = match args.render_engine {
             RenderEngine::Browser => {
