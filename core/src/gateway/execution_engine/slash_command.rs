@@ -74,9 +74,18 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         run_id: &str,
         mode_json: &str,
         request: &RunRequest,
-        _agent: Arc<AgentInstance>,
+        agent: Arc<AgentInstance>,
         emitter: Arc<E>,
     ) -> Result<String, ExecutionError> {
+        // Write workspace-scoped output paths (same as run_agent_loop)
+        if let Some(tc_handle) = self.tool_registry.tool_context_handle() {
+            let workspace_path = agent.workspace();
+            if let Ok(ctx) = crate::tools::ToolContext::from_workspace(workspace_path) {
+                let mut tc = tc_handle.write().await;
+                *tc = ctx;
+            }
+        }
+
         let mode: serde_json::Value = serde_json::from_str(mode_json)
             .map_err(|e| ExecutionError::Failed(format!("Invalid slash command metadata: {}", e)))?;
 

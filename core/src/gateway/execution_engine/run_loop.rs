@@ -42,6 +42,20 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
 
         info!(run_id = run_id, "Starting agent loop (think->act)");
 
+        // Write workspace-scoped output paths to tool context handle
+        if let Some(tc_handle) = self.tool_registry.tool_context_handle() {
+            let workspace_path = agent.workspace();
+            match crate::tools::ToolContext::from_workspace(workspace_path) {
+                Ok(ctx) => {
+                    let mut tc = tc_handle.write().await;
+                    *tc = ctx;
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to create ToolContext from workspace {}: {}", workspace_path.display(), e);
+                }
+            }
+        }
+
         // Get provider
         let provider = self.provider_registry.default_provider();
         let bridge = AiProviderBridge::new(provider);

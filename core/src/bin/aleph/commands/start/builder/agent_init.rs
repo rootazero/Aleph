@@ -284,6 +284,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             acp_manager: acp_manager.clone(),
             cron_service: cron_service.clone(),
             generation_registry: Some(generation_registry.clone()),
+            tool_context: Some(alephcore::tools::new_tool_context_handle()),
             ..Default::default()
         };
         let mut tool_registry = BuiltinToolRegistry::with_config(tool_config).await;
