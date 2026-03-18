@@ -1,0 +1,56 @@
+//! Tool execution context — workspace-scoped paths for tool output.
+
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use crate::error::Result;
+
+/// Runtime context providing workspace-scoped output paths to tools.
+///
+/// Injected via shared handle on `BuiltinToolRegistry`.
+/// Tools that need output paths read from the handle; others ignore it.
+#[derive(Debug, Clone)]
+pub struct ToolContext {
+    /// Workspace output directory (e.g. ~/.aleph/workspaces/{agent_id}/output/)
+    pub output_dir: PathBuf,
+    /// Hidden tool output directory for truncation storage
+    /// (e.g. ~/.aleph/workspaces/{agent_id}/.tool_output/)
+    pub tool_output_dir: PathBuf,
+}
+
+impl ToolContext {
+    /// Build from a resolved workspace path, creating directories if needed.
+    pub fn from_workspace(workspace_path: &Path) -> Result<Self> {
+        let output_dir = workspace_path.join("output");
+        let tool_output_dir = workspace_path.join(".tool_output");
+
+        fs::create_dir_all(&output_dir)
+            .map_err(|e| crate::error::AlephError::config(
+                format!("Failed to create output directory {}: {}", output_dir.display(), e)
+            ))?;
+        fs::create_dir_all(&tool_output_dir)
+            .map_err(|e| crate::error::AlephError::config(
+                format!("Failed to create tool output directory {}: {}", tool_output_dir.display(), e)
+            ))?;
+
+        Ok(Self { output_dir, tool_output_dir })
+    }
+}
+
+/// Type alias for the shared handle, matching existing handle patterns.
+pub type ToolContextHandle = std::sync::Arc<tokio::sync::RwLock<ToolContext>>;
+
+/// Create a new ToolContext handle with default paths (main workspace).
+pub fn new_tool_context_handle() -> ToolContextHandle {
+    let default_workspace = dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("/tmp"))
+        .join(".aleph")
+        .join("workspaces")
+        .join("main");
+    let ctx = ToolContext::from_workspace(&default_workspace)
+        .unwrap_or_else(|_| ToolContext {
+            output_dir: default_workspace.join("output"),
+            tool_output_dir: default_workspace.join(".tool_output"),
+        });
+    std::sync::Arc::new(tokio::sync::RwLock::new(ctx))
+}
