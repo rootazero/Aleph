@@ -9,6 +9,7 @@ mod loop_core;
 mod prompt_builder;
 pub mod provider_bridge;
 mod safety;
+pub mod subagent_tool;
 mod tool;
 
 #[cfg(test)]
