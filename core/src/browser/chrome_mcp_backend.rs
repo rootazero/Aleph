@@ -251,9 +251,24 @@ impl BrowserBackend for ChromeMcpBackend {
     async fn snapshot(&self, tab_id: &str) -> Result<AriaSnapshot, BrowserError> {
         self.select_page(tab_id).await?;
         let result = self.call("take_snapshot", json!({})).await?;
-        // Try structured content first, then fall back to text parsing
-        let snapshot_data = result.get("snapshot").unwrap_or(&result);
-        convert_chrome_mcp_snapshot(snapshot_data)
+
+        // MCP responses wrap content as: {"content": [{"type": "text", "text": "..."}]}
+        // The snapshot tree may be a JSON string inside the text field.
+        // Try multiple extraction strategies:
+
+        // 1. Direct "snapshot" key (future structured format)
+        if let Some(snapshot_data) = result.get("snapshot") {
+            return convert_chrome_mcp_snapshot(snapshot_data);
+        }
+
+        // 2. Extract text from MCP wrapper and parse as JSON
+        let text = Self::extract_text(&result);
+        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&text) {
+            return convert_chrome_mcp_snapshot(&parsed);
+        }
+
+        // 3. Fallback: try the raw result
+        convert_chrome_mcp_snapshot(&result)
     }
 
     async fn evaluate(&self, tab_id: &str, js: &str) -> Result<serde_json::Value, BrowserError> {
