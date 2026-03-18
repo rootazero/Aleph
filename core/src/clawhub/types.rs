@@ -23,7 +23,10 @@ impl SortOrder {
     }
 }
 
-/// A skill from search or browse results
+/// A skill from search or browse results (unified internal type).
+///
+/// This is the stable type used by builtin tools and gateway handlers.
+/// Raw API responses are converted into this via `From` impls.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SkillSearchResult {
     pub slug: String,
@@ -49,7 +52,7 @@ pub struct BrowseResponse {
     pub has_more: bool,
 }
 
-/// Skill detail
+/// Skill detail (internal unified type, built from nested API response)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SkillDetail {
     pub slug: String,
@@ -60,9 +63,7 @@ pub struct SkillDetail {
     pub tags: Vec<String>,
     #[serde(default)]
     pub owner: Option<OwnerInfo>,
-    #[serde(rename = "latestVersion")]
     pub latest_version: Option<VersionInfo>,
-    #[serde(rename = "moderationInfo")]
     pub moderation: Option<ModerationInfo>,
 }
 
@@ -75,36 +76,81 @@ pub struct ModerationInfo {
     pub reason_codes: Vec<String>,
     #[serde(default)]
     pub summary: String,
+    #[serde(default, rename = "isSuspicious")]
+    pub is_suspicious_flag: bool,
+    #[serde(default, rename = "isMalwareBlocked")]
+    pub is_malware_blocked_flag: bool,
 }
 
 impl ModerationInfo {
     pub fn is_malware_blocked(&self) -> bool {
-        self.verdict == "malware"
+        self.is_malware_blocked_flag || self.verdict == "malware"
     }
 
     pub fn is_suspicious(&self) -> bool {
-        self.verdict == "suspicious"
+        self.is_suspicious_flag || self.verdict == "suspicious"
     }
 }
 
 /// Version info
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VersionInfo {
-    #[serde(alias = "number")]
+    /// Version string (e.g. "1.0.0")
+    #[serde(alias = "version")]
     pub number: String,
     #[serde(default)]
     pub changelog: String,
-    /// RFC 3339 timestamp
-    #[serde(default, rename = "publishedAt")]
+    /// Timestamp — may be RFC 3339 string or Unix ms number.
+    /// Stored as string for display; converted from number if needed.
+    #[serde(default)]
     pub published_at: String,
     #[serde(default)]
     pub files: Vec<String>,
 }
 
-/// Versions list response
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Versions list response: `{ items: [...], nextCursor: ... }`
+#[derive(Debug, Clone, Deserialize)]
 pub struct VersionsResponse {
-    pub versions: Vec<VersionInfo>,
+    #[serde(default)]
+    pub items: Vec<RawVersionItem>,
+    #[serde(default, rename = "nextCursor")]
+    pub next_cursor: Option<String>,
+}
+
+/// Raw version item from the versions API
+#[derive(Debug, Clone, Deserialize)]
+pub struct RawVersionItem {
+    #[serde(default)]
+    pub version: String,
+    #[serde(default)]
+    pub changelog: Option<String>,
+    /// Unix milliseconds timestamp
+    #[serde(default, rename = "createdAt")]
+    pub created_at: Option<u64>,
+    #[serde(default, rename = "changelogSource")]
+    pub changelog_source: Option<String>,
+}
+
+impl From<RawVersionItem> for VersionInfo {
+    fn from(item: RawVersionItem) -> Self {
+        let published_at = item
+            .created_at
+            .map(|ms| {
+                // Convert unix ms to RFC 3339 string
+                let secs = (ms / 1000) as i64;
+                let nanos = ((ms % 1000) * 1_000_000) as u32;
+                chrono::DateTime::from_timestamp(secs, nanos)
+                    .map(|dt| dt.to_rfc3339())
+                    .unwrap_or_default()
+            })
+            .unwrap_or_default();
+        Self {
+            number: item.version,
+            changelog: item.changelog.unwrap_or_default(),
+            published_at,
+            files: Vec::new(),
+        }
+    }
 }
 
 /// Owner info
@@ -112,7 +158,7 @@ pub struct VersionsResponse {
 pub struct OwnerInfo {
     #[serde(default)]
     pub handle: String,
-    #[serde(default, rename = "displayName")]
+    #[serde(default, alias = "displayName")]
     pub display_name: String,
 }
 
@@ -128,22 +174,65 @@ pub struct ClawHubMeta {
     pub owner: String,
 }
 
-/// Search API raw response (array of search hits)
+// =============================================================================
+// Raw API response types (for deserialization only)
+// =============================================================================
+
+/// Search API response: `{ results: [...] }`
 #[derive(Debug, Clone, Deserialize)]
-pub struct SearchHit {
-    pub skill: SearchHitSkill,
-    #[serde(default, rename = "ownerHandle")]
-    pub owner_handle: String,
+pub struct SearchApiResponse {
+    #[serde(default)]
+    pub results: Vec<SearchHit>,
 }
 
+/// A single search hit from the search API
 #[derive(Debug, Clone, Deserialize)]
-pub struct SearchHitSkill {
+pub struct SearchHit {
+    #[serde(default)]
+    pub score: f64,
+    #[serde(default)]
     pub slug: String,
-    pub name: String,
+    #[serde(default, alias = "displayName")]
+    pub display_name: String,
     #[serde(default)]
     pub summary: String,
     #[serde(default)]
-    pub tags: Vec<String>,
+    pub version: Option<String>,
+    #[serde(default, rename = "updatedAt")]
+    pub updated_at: Option<u64>,
+}
+
+impl From<SearchHit> for SkillSearchResult {
+    fn from(hit: SearchHit) -> Self {
+        Self {
+            slug: hit.slug,
+            name: hit.display_name,
+            summary: hit.summary,
+            tags: Vec::new(),
+            downloads: 0,
+            stars: 0,
+            owner_handle: String::new(),
+        }
+    }
+}
+
+/// Browse API response: `{ items: [...], nextCursor: ... }`
+#[derive(Debug, Clone, Deserialize)]
+pub struct BrowseApiResponse {
+    #[serde(default)]
+    pub items: Vec<BrowseSkill>,
+    #[serde(default, rename = "nextCursor")]
+    pub next_cursor: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct BrowseSkill {
+    #[serde(default)]
+    pub slug: String,
+    #[serde(default, alias = "displayName")]
+    pub display_name: String,
+    #[serde(default)]
+    pub summary: String,
     #[serde(default)]
     pub stats: Option<SkillStats>,
 }
@@ -152,50 +241,16 @@ pub struct SearchHitSkill {
 pub struct SkillStats {
     #[serde(default)]
     pub downloads: u64,
+    #[serde(default, rename = "installsAllTime")]
+    pub installs_all_time: u64,
+    #[serde(default, rename = "installsCurrent")]
+    pub installs_current: u64,
     #[serde(default)]
     pub stars: u64,
-}
-
-impl From<SearchHit> for SkillSearchResult {
-    fn from(hit: SearchHit) -> Self {
-        let (downloads, stars) = hit
-            .skill
-            .stats
-            .map(|s| (s.downloads, s.stars))
-            .unwrap_or((0, 0));
-        Self {
-            slug: hit.skill.slug,
-            name: hit.skill.name,
-            summary: hit.skill.summary,
-            tags: hit.skill.tags,
-            downloads,
-            stars,
-            owner_handle: hit.owner_handle,
-        }
-    }
-}
-
-/// Browse API raw response
-#[derive(Debug, Clone, Deserialize)]
-pub struct BrowseApiResponse {
-    pub skills: Vec<BrowseSkill>,
-    pub cursor: Option<String>,
-    #[serde(default, rename = "hasMore")]
-    pub has_more: bool,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct BrowseSkill {
-    pub slug: String,
-    pub name: String,
     #[serde(default)]
-    pub summary: String,
+    pub comments: u64,
     #[serde(default)]
-    pub tags: Vec<String>,
-    #[serde(default)]
-    pub stats: Option<SkillStats>,
-    #[serde(default, rename = "ownerHandle")]
-    pub owner_handle: String,
+    pub versions: u64,
 }
 
 impl From<BrowseSkill> for SkillSearchResult {
@@ -203,12 +258,100 @@ impl From<BrowseSkill> for SkillSearchResult {
         let (downloads, stars) = s.stats.map(|s| (s.downloads, s.stars)).unwrap_or((0, 0));
         Self {
             slug: s.slug,
-            name: s.name,
+            name: s.display_name,
             summary: s.summary,
-            tags: s.tags,
+            tags: Vec::new(),
             downloads,
             stars,
-            owner_handle: s.owner_handle,
+            owner_handle: String::new(),
+        }
+    }
+}
+
+/// Detail API response: `{ skill: {...}, latestVersion: {...}, owner: {...}, moderation: {...} }`
+#[derive(Debug, Clone, Deserialize)]
+pub struct DetailApiResponse {
+    pub skill: DetailApiSkill,
+    #[serde(default, rename = "latestVersion")]
+    pub latest_version: Option<DetailApiVersion>,
+    #[serde(default)]
+    pub owner: Option<OwnerInfo>,
+    #[serde(default)]
+    pub moderation: Option<ModerationInfo>,
+    #[serde(default)]
+    pub metadata: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct DetailApiSkill {
+    #[serde(default)]
+    pub slug: String,
+    #[serde(default, alias = "displayName")]
+    pub display_name: String,
+    #[serde(default)]
+    pub summary: String,
+    /// Tags is a map like `{"latest": "1.0.0"}` in the actual API
+    #[serde(default)]
+    pub tags: serde_json::Value,
+    #[serde(default)]
+    pub stats: Option<SkillStats>,
+    #[serde(default, rename = "createdAt")]
+    pub created_at: Option<u64>,
+    #[serde(default, rename = "updatedAt")]
+    pub updated_at: Option<u64>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct DetailApiVersion {
+    #[serde(default)]
+    pub version: String,
+    #[serde(default)]
+    pub changelog: Option<String>,
+    #[serde(default)]
+    pub license: Option<String>,
+    #[serde(default, rename = "createdAt")]
+    pub created_at: Option<u64>,
+}
+
+impl From<DetailApiResponse> for SkillDetail {
+    fn from(resp: DetailApiResponse) -> Self {
+        // Extract tag names: if tags is a map, use the keys; if array, try strings
+        let tags = match &resp.skill.tags {
+            serde_json::Value::Object(map) => map.keys().cloned().collect(),
+            serde_json::Value::Array(arr) => arr
+                .iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect(),
+            _ => Vec::new(),
+        };
+
+        let latest_version = resp.latest_version.map(|v| {
+            let published_at = v
+                .created_at
+                .map(|ms| {
+                    let secs = (ms / 1000) as i64;
+                    let nanos = ((ms % 1000) * 1_000_000) as u32;
+                    chrono::DateTime::from_timestamp(secs, nanos)
+                        .map(|dt| dt.to_rfc3339())
+                        .unwrap_or_default()
+                })
+                .unwrap_or_default();
+            VersionInfo {
+                number: v.version,
+                changelog: v.changelog.unwrap_or_default(),
+                published_at,
+                files: Vec::new(),
+            }
+        });
+
+        Self {
+            slug: resp.skill.slug,
+            name: resp.skill.display_name,
+            summary: resp.skill.summary,
+            tags,
+            owner: resp.owner,
+            latest_version,
+            moderation: resp.moderation,
         }
     }
 }

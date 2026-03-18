@@ -78,7 +78,7 @@ impl ClawHubClient {
         let url = format!("{}/api/v1/search", self.base_url);
         debug!(query, limit, "ClawHub search");
 
-        let hits: Vec<SearchHit> = self
+        let resp: SearchApiResponse = self
             .get_json(
                 &url,
                 &[
@@ -90,10 +90,13 @@ impl ClawHubClient {
             )
             .await?;
 
-        Ok(hits.into_iter().map(SkillSearchResult::from).collect())
+        Ok(resp.results.into_iter().map(SkillSearchResult::from).collect())
     }
 
-    /// Browse skills with sorting and pagination
+    /// Browse skills with sorting and pagination.
+    ///
+    /// The `/api/v1/skills` endpoint may return empty results.
+    /// When that happens, we fall back to search with a broad query.
     pub async fn browse(
         &self,
         sort: SortOrder,
@@ -114,30 +117,49 @@ impl ClawHubClient {
 
         let api_resp: BrowseApiResponse = self.get_json(&url, &params, "browse").await?;
 
+        // If the browse endpoint returned results, use them
+        if !api_resp.items.is_empty() {
+            let has_more = api_resp.next_cursor.is_some();
+            return Ok(BrowseResponse {
+                skills: api_resp
+                    .items
+                    .into_iter()
+                    .map(SkillSearchResult::from)
+                    .collect(),
+                cursor: api_resp.next_cursor,
+                has_more,
+            });
+        }
+
+        // Fallback: browse endpoint returned empty, use search instead
+        debug!("Browse returned empty, falling back to search");
+        let results = self.search("", limit).await?;
         Ok(BrowseResponse {
-            skills: api_resp
-                .skills
-                .into_iter()
-                .map(SkillSearchResult::from)
-                .collect(),
-            cursor: api_resp.cursor,
-            has_more: api_resp.has_more,
+            skills: results,
+            cursor: None,
+            has_more: false,
         })
     }
 
-    /// Get skill detail by slug
+    /// Get skill detail by slug.
+    ///
+    /// The API returns a nested response `{ skill, latestVersion, owner, moderation }`.
+    /// We flatten it into our internal `SkillDetail` type.
     pub async fn get_skill(&self, slug: &str) -> Result<SkillDetail> {
         let url = format!("{}/api/v1/skills/{}", self.base_url, slug);
         debug!(slug, "ClawHub get_skill");
-        self.get_json(&url, &[], "get_skill").await
+        let raw: DetailApiResponse = self.get_json(&url, &[], "get_skill").await?;
+        Ok(SkillDetail::from(raw))
     }
 
-    /// Get version list for a skill
+    /// Get version list for a skill.
+    ///
+    /// The API returns `{ items: [{version, createdAt, changelog}], nextCursor }`.
     pub async fn get_versions(&self, slug: &str) -> Result<Vec<VersionInfo>> {
         let url = format!("{}/api/v1/skills/{}/versions", self.base_url, slug);
         debug!(slug, "ClawHub get_versions");
         let data: VersionsResponse = self.get_json(&url, &[], "get_versions").await?;
-        Ok(data.versions)
+        Ok(data.items.into_iter().map(VersionInfo::from).collect())
     }
 
     /// Download skill ZIP to a temporary file. Returns path to the temp ZIP.
