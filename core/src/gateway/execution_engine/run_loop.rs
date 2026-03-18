@@ -69,11 +69,41 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             .collect();
 
         let default_working_dir = Some(agent.workspace().to_string_lossy().to_string());
-        let tool_registry = build_registry_from_tools(
+        let mut tool_registry = build_registry_from_tools(
             self.tool_registry.clone(),
             &allowed_tools,
-            default_working_dir,
+            default_working_dir.clone(),
         );
+
+        // Register subagent tool — runs a sub-AgentLoop with same tools minus "subagent"
+        {
+            use crate::agent_loop::subagent_tool::{SubagentTool, ToolRegistryFactory, SafetyGuardFactory};
+
+            let sub_provider = self.provider_registry.default_provider();
+            let sub_tool_registry = self.tool_registry.clone();
+            let sub_allowed_tools: Vec<_> = allowed_tools
+                .iter()
+                .filter(|t| t.name != "subagent")
+                .cloned()
+                .collect();
+            let sub_working_dir = default_working_dir.clone();
+
+            let factory: ToolRegistryFactory = Arc::new(move || {
+                build_registry_from_tools(
+                    sub_tool_registry.clone(),
+                    &sub_allowed_tools,
+                    sub_working_dir.clone(),
+                )
+            });
+
+            let global_perms = self.global_tool_permissions.clone();
+            let agent_perms_clone = agent.config().tool_permissions();
+            let safety_factory: SafetyGuardFactory = Arc::new(move || {
+                SafetyGuard::from_permissions(&global_perms, &agent_perms_clone)
+            });
+
+            tool_registry.register(Box::new(SubagentTool::new(sub_provider, factory, safety_factory)));
+        }
 
         debug!(
             run_id = run_id,
