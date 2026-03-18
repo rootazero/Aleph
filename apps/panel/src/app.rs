@@ -148,6 +148,7 @@ fn SettingsRouter() -> impl IntoView {
             "/settings/mcp" => view! { <McpView /> }.into_any(),
             "/settings/plugins" => view! { <PluginsView /> }.into_any(),
             "/settings/skills" => view! { <SkillsView /> }.into_any(),
+            "/settings/clawhub" => view! { <ClawHubView /> }.into_any(),
             "/settings/acp" => view! { <AcpHarnessesView /> }.into_any(),
 
             // Security
