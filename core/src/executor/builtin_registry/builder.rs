@@ -336,6 +336,12 @@ impl BuiltinToolRegistry {
             dispatcher_registry: config.dispatcher_registry.clone(),
             sub_agent_dispatcher: config.sub_agent_dispatcher.clone(),
             gateway_context: config.gateway_context.clone(),
+            session_new_tool: config.gateway_context.as_ref().map(|ctx| {
+                crate::builtin_tools::sessions::SessionNewTool::new(Arc::clone(ctx.session_manager()))
+            }),
+            cron_manage_tool: config.cron_service.as_ref().map(|svc| {
+                crate::builtin_tools::cron_manage::CronManageTool::new(Arc::clone(svc))
+            }),
             subagent_spawn_tool,
             subagent_steer_tool,
             subagent_kill_tool,
@@ -362,6 +368,7 @@ impl BuiltinToolRegistry {
             codex_tool,
             gemini_cli_tool,
             acp_switch_tool,
+            clawhub_tool: crate::builtin_tools::clawhub::ClawHubTool::new(),
             tools,
         }
     }
@@ -413,6 +420,8 @@ impl BuiltinToolRegistry {
             serde_json::to_value(schema_for!(crate::builtin_tools::profile_update::ProfileUpdateArgs)).unwrap_or_default());
         reg(tools, "scratchpad", ScratchpadTool::DESCRIPTION,
             serde_json::to_value(schema_for!(crate::builtin_tools::scratchpad::ScratchpadArgs)).unwrap_or_default());
+        reg(tools, "clawhub", crate::builtin_tools::clawhub::ClawHubTool::DESCRIPTION,
+            serde_json::to_value(schema_for!(crate::builtin_tools::clawhub::ClawHubArgs)).unwrap_or_default());
     }
 
     /// Register metadata for optional tools (only when their dependencies are available)
@@ -540,6 +549,38 @@ impl BuiltinToolRegistry {
                 ),
             );
             info!("Registered delegate tool in BuiltinToolRegistry");
+        }
+
+        // Cron management tool (requires SharedCronService)
+        if let Some(ref cron_svc) = config.cron_service {
+            use crate::builtin_tools::cron_manage::CronManageTool;
+            let tmp_tool = CronManageTool::new(Arc::clone(cron_svc));
+            let def = AlephTool::definition(&tmp_tool);
+            let mut ut = UnifiedTool::new(
+                "builtin:cron_manage",
+                "cron_manage",
+                CronManageTool::DESCRIPTION,
+                ToolSource::Builtin,
+            );
+            ut = ut.with_parameters_schema(def.parameters.clone());
+            tools.insert("cron_manage".to_string(), ut);
+            info!("Registered cron_manage tool in BuiltinToolRegistry");
+        }
+
+        // Session new tool (requires SessionManager from gateway_context)
+        if let Some(ref ctx) = config.gateway_context {
+            use crate::builtin_tools::sessions::SessionNewTool;
+            let tmp_tool = SessionNewTool::new(Arc::clone(ctx.session_manager()));
+            let def = AlephTool::definition(&tmp_tool);
+            let mut ut = UnifiedTool::new(
+                "builtin:session_new",
+                "session_new",
+                SessionNewTool::DESCRIPTION,
+                ToolSource::Builtin,
+            );
+            ut = ut.with_parameters_schema(def.parameters.clone());
+            tools.insert("session_new".to_string(), ut);
+            info!("Registered session_new tool in BuiltinToolRegistry");
         }
 
         // Sessions tools

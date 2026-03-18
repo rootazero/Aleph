@@ -71,6 +71,10 @@ pub struct BuiltinToolRegistry {
     pub(crate) sub_agent_dispatcher: Option<Arc<RwLock<SubAgentDispatcher>>>,
     /// Gateway context for sessions tools (sessions_list, sessions_send)
     pub(crate) gateway_context: Option<Arc<GatewayContext>>,
+    /// Session new tool (optional - requires SessionManager)
+    pub(crate) session_new_tool: Option<crate::builtin_tools::sessions::SessionNewTool>,
+    /// Cron management tool (optional - requires SharedCronService)
+    pub(crate) cron_manage_tool: Option<crate::builtin_tools::cron_manage::CronManageTool>,
     /// Agent management tools (optional - requires AgentRegistry + WorkspaceManager)
     pub(crate) agent_create_tool: Option<crate::builtin_tools::agent_manage::AgentCreateTool>,
     pub(crate) agent_switch_tool: Option<crate::builtin_tools::agent_manage::AgentSwitchTool>,
@@ -106,6 +110,8 @@ pub struct BuiltinToolRegistry {
     pub(crate) codex_tool: Option<crate::builtin_tools::acp_tools::CodexTool>,
     pub(crate) gemini_cli_tool: Option<crate::builtin_tools::acp_tools::GeminiCliTool>,
     pub(crate) acp_switch_tool: Option<crate::builtin_tools::acp_tools::AcpSwitchTool>,
+    /// ClawHub tool instance
+    pub(crate) clawhub_tool: crate::builtin_tools::clawhub::ClawHubTool,
     /// Tool metadata for lookup
     pub(super) tools: HashMap<String, UnifiedTool>,
 }
@@ -329,6 +335,35 @@ impl ToolRegistry for BuiltinToolRegistry {
             "browser_fill_form" => Box::pin(async move { self.browser_fill_form_tool.call_json(arguments).await }),
             "browser_profile" => Box::pin(async move { self.browser_profile_tool.call_json(arguments).await }),
 
+            // Session new tool — inject session key from session context
+            "session_new" => {
+                let arguments = {
+                    let mut args = arguments;
+                    if let Some(ref h) = self.session_context_handle {
+                        if let Ok(ctx) = h.try_read() {
+                            if let Some(obj) = args.as_object_mut() {
+                                obj.insert("__session_key".into(), serde_json::Value::String(ctx.session_key_str.clone()));
+                            }
+                        }
+                    }
+                    args
+                };
+                Box::pin(async move {
+                    let tool = self.session_new_tool.as_ref().ok_or_else(|| {
+                        AlephError::tool("session_new not available: no SessionManager configured")
+                    })?;
+                    tool.call_json(arguments).await
+                })
+            }
+
+            // Cron management tool
+            "cron_manage" => Box::pin(async move {
+                let tool = self.cron_manage_tool.as_ref().ok_or_else(|| {
+                    AlephError::tool("cron_manage not available: cron service not configured")
+                })?;
+                tool.call_json(arguments).await
+            }),
+
             // Agent management tools — snapshot session context into arguments
             // to avoid race conditions from concurrent reads of the shared handle.
             "agent_create" | "agent_switch" | "agent_list" | "agent_delete" => {
@@ -374,6 +409,9 @@ impl ToolRegistry for BuiltinToolRegistry {
                     _ => unreachable!(),
                 }
             }
+
+            // ClawHub tool
+            "clawhub" => Box::pin(async move { self.clawhub_tool.call_json(arguments).await }),
 
             // ACP delegate tools
             "claude_code" => Box::pin(async move {

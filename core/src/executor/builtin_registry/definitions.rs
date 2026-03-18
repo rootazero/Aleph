@@ -136,6 +136,16 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         requires_config: false,
     },
     BuiltinToolDefinition {
+        name: "session_new",
+        description: "Start a new conversation session, closing the current one",
+        requires_config: true, // Requires SessionManager (via gateway_context)
+    },
+    BuiltinToolDefinition {
+        name: "cron_manage",
+        description: "Manage scheduled tasks — create, list, delete, enable/disable cron jobs",
+        requires_config: true, // Requires SharedCronService
+    },
+    BuiltinToolDefinition {
         name: "agent_create",
         description: "Create a new agent with an isolated workspace and register it for use",
         requires_config: true, // Requires agent_registry + workspace_manager
@@ -242,6 +252,11 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         description: "Extract text and structured data from documents",
         requires_config: true, // Requires media_pipeline
     },
+    BuiltinToolDefinition {
+        name: "clawhub",
+        description: "Search, browse, install, and update skills from ClawHub registry",
+        requires_config: false,
+    },
 ];
 
 /// Create a boxed tool instance by name
@@ -306,6 +321,10 @@ pub fn create_tool_boxed(
         // so they cannot be created via create_tool_boxed. They are created
         // dynamically in BuiltinToolRegistry::execute_tool().
         "sessions_list" | "sessions_send" => None,
+        // Session new tool requires SessionManager (from gateway_context) at runtime
+        "session_new" => None,
+        // Cron management tool requires SharedCronService at runtime
+        "cron_manage" => None,
         // Agent management tools require agent_registry + workspace_manager + session_context,
         // created dynamically in BuiltinToolRegistry::with_config().
         "agent_create" | "agent_switch" | "agent_list" | "agent_delete" => None,
@@ -329,6 +348,7 @@ pub fn create_tool_boxed(
                 Box::new(crate::builtin_tools::media_tools::DocumentExtractTool::new(Arc::clone(pipeline))) as Box<dyn AlephToolDyn>
             })
         }
+        "clawhub" => Some(Box::new(crate::builtin_tools::clawhub::ClawHubTool::new())),
         // Browser tools — create ProfileManager from config or use default
         "browser_open" | "browser_click" | "browser_type" | "browser_screenshot"
         | "browser_snapshot" | "browser_navigate" | "browser_tabs" | "browser_select"

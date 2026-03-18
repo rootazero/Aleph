@@ -54,4 +54,6 @@ pub struct BuiltinToolConfig {
     pub extension_manager: Option<Arc<crate::extension::ExtensionManager>>,
     /// ACP harness manager for delegate tools (claude_code, codex, gemini_cli, acp_switch)
     pub acp_manager: Option<Arc<AcpHarnessManager>>,
+    /// Cron service for scheduled task management
+    pub cron_service: Option<crate::cron::SharedCronService>,
 }
