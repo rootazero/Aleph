@@ -160,6 +160,10 @@ pub fn create_provider(
 
             builder = builder.color(&config.color);
 
+            if let Some(ref edit_url) = config.edit_url {
+                builder = builder.edit_endpoint(edit_url);
+            }
+
             // Use capabilities directly (already Vec<GenerationType>)
             if !config.capabilities.is_empty() {
                 builder = builder.supported_types(config.capabilities.clone());
@@ -352,7 +356,7 @@ mod tests {
         let config = GenerationProviderConfig {
             provider_type: "openai_compat".to_string(),
             api_key: Some("api-key".to_string()),
-            base_url: Some("https://api.example.com".to_string()),
+            base_url: Some("https://api.example.com/v1/images/generations".to_string()),
             models: vec!["custom-model".to_string()],
             color: "#ff5500".to_string(),
             capabilities: vec![GenerationType::Image, GenerationType::Video],
@@ -443,7 +447,7 @@ mod tests {
         let config = GenerationProviderConfig {
             provider_type: "openai_compat".to_string(),
             api_key: Some("api-key".to_string()),
-            base_url: Some("https://custom.api.com/v2".to_string()),
+            base_url: Some("https://custom.api.com/v2/generate".to_string()),
             ..Default::default()
         };
 
