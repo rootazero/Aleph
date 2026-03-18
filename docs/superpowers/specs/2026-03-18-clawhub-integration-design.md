@@ -71,6 +71,11 @@ pub struct ClawHubClient {
 - `Clone + Send + Sync`, shared via `Arc`
 - Uses existing `reqwest` dependency — zero new crates
 - No authentication (all endpoints are public read-only)
+- API contract verified from OpenClaw source code and clawhub CLI package (v0.7.0)
+
+### Initialization
+
+`ClawHubClient::new()` is called during server startup in the builder pipeline (`core/src/bin/aleph/commands/start/builder/agent_init.rs`), injected into `BuiltinToolConfig.clawhub_client` and shared with gateway handlers via `Arc<ClawHubClient>`. No config required — the client works out of the box with the default registry URL.
 
 ### API Methods
 
@@ -122,7 +127,7 @@ pub struct ModerationInfo {
 pub struct VersionInfo {
     pub number: String,
     pub changelog: String,
-    pub published_at: String,
+    pub published_at: String,  // RFC 3339 (e.g., "2026-03-18T10:30:00Z")
     pub files: Vec<String>,
 }
 
@@ -137,6 +142,20 @@ pub struct OwnerInfo {
 - **Malware blocked** (`is_malware_blocked: true`): refuse download, return error
 - **Suspicious** (`is_suspicious: true`): include warning in output, proceed with download
 - **Rate limiting**: respect HTTP 429 + `Retry-After`, surface error to caller
+- **Caching**: no client-side cache in v1 (YAGNI). Future optimization: TTL cache for browse results if traffic becomes a concern.
+
+### Error Handling
+
+| Error Case | HTTP Status | Behavior |
+|-----------|-------------|----------|
+| Slug not found | 404 | Return "skill not found" error |
+| Malware blocked | 403 | Refuse download, return error with explanation |
+| Pending security scan | 423 | Return "skill is pending review, try later" |
+| Rate limited | 429 | Return error with retry-after duration |
+| Network timeout | — | Return "ClawHub unreachable" error |
+| Download + invalid SKILL.md | — | Clean up temp dir, return "invalid skill package" error |
+
+All errors use existing `AlephError` type. Partial failure cleanup: temp directories are always cleaned up on error (use `scopeguard` or manual cleanup in finally block).
 
 ---
 
@@ -196,8 +215,10 @@ pub struct ClawHubUpdateArgs {
 Flow:
 1. Read `~/.aleph/skills/{slug}/.clawhub.json` — get current version
 2. `get_versions(slug)` — get latest remote version
-3. Semver compare — if newer, run install flow (overwrite)
+3. Version compare — if newer, run install flow (overwrite)
 4. If already latest — return "already up to date"
+
+Version comparison: use the `semver` crate (already in dependency tree via Cargo ecosystem). If version string is not valid semver, fall back to string inequality check — if local != remote latest, treat as updatable.
 
 ### Registration
 
@@ -224,6 +245,10 @@ Flow:
 - Returns JSON directly (no LLM-friendly text formatting)
 - `install` emits EventBus event after completion to refresh local skills list
 - Shares same `ClawHubClient` instance as builtin tools
+
+### Relationship with existing `skills.*` RPCs
+
+`clawhub.*` and `skills.*` are independent RPC namespaces. `skills.install` handles GitHub URL installation; `clawhub.install` handles ClawHub registry installation. Both write to `~/.aleph/skills/`. Once installed, ClawHub skills appear in `skills.list` alongside locally installed skills — they are indistinguishable at the skill discovery level. Uninstall uses the existing Panel skills list delete button (which calls `skills.delete`).
 
 ### Registration
 
@@ -269,6 +294,7 @@ pub struct OpenClawInstallSpec {
 - Both namespaces coexist — a SKILL.md can have `aleph` + `openclaw` simultaneously
 - No deep conversion: each namespace retains its semantics
 - Runtime reads: `openclaw.os` for platform eligibility, `openclaw.install` for install hints
+- Data flow: `openclaw` metadata comes from parsing the downloaded SKILL.md frontmatter (not from the ClawHub API). Platform eligibility (`openclaw.os`) is checked *after* download, during SKILL.md validation. Pre-download filtering is not needed — ZIP files are small.
 
 ### Example dual-namespace SKILL.md
 
@@ -340,6 +366,13 @@ New **"ClawHub" tab** alongside existing local skills tab:
 4. Scroll to bottom → cursor-based pagination, load more
 5. Cross-reference local `.clawhub.json` to show "Installed" status
 
+### Error States
+
+- **ClawHub unreachable**: show "Unable to connect to ClawHub" banner with retry button
+- **Search returns empty**: show "No skills found for '{query}'"
+- **Malware-flagged skill**: card shows warning badge, install button disabled with tooltip
+- **Install failure**: toast notification with error message, button resets to "Install"
+
 ---
 
 ## Component 6: Installation Metadata
@@ -375,7 +408,7 @@ download ZIP → extract to temp dir → validate SKILL.md parses
 
 ### Uninstall
 
-No dedicated tool. Delete `~/.aleph/skills/{slug}/` directory (existing `skills.delete` RPC or manual deletion). `.clawhub.json` removed with directory.
+No dedicated ClawHub uninstall tool. ClawHub-installed skills appear in the Panel's local skills list alongside all other skills. Users uninstall via the existing delete button in the Panel skills list (which calls `skills.delete` RPC). The `.clawhub.json` file is removed with the skill directory. The LLM can also use existing skill deletion capabilities.
 
 ---
 
