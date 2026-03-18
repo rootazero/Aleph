@@ -202,12 +202,11 @@ impl Channel for SlackChannel {
         Ok(())
     }
 
-    async fn edit(&self, message_id: &MessageId, new_text: &str) -> ChannelResult<()> {
-        // Note: Editing requires both message ts and channel ID
-        // which we don't have in this interface signature.
-        let _ = (message_id, new_text);
+    async fn edit(&self, conversation_id: &ConversationId, message_id: &MessageId, new_text: &str) -> ChannelResult<()> {
+        // Slack chat.update requires channel + ts + text
+        let _ = (conversation_id, message_id, new_text);
         Err(ChannelError::UnsupportedFeature(
-            "Message editing requires channel context (conversation_id + ts)".to_string(),
+            "Slack message editing not yet implemented".to_string(),
         ))
 
     }

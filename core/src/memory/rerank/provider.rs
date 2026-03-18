@@ -72,6 +72,7 @@ pub struct RerankConfig {
 
     /// API key for authentication (runtime only — stored in vault, never serialized to config)
     #[serde(default, skip_serializing)]
+    #[schemars(skip)]
     pub api_key: String,
 
     /// Model identifiers (first is the active model)

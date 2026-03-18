@@ -1,6 +1,6 @@
 //! Extended Config RPC Handlers
 //!
-//! Handlers for config sub-domains: behavior, search, policies, shortcuts, triggers, security, modelProfiles.
+//! Handlers for config sub-domains: behavior, search, policies, triggers, security, modelProfiles.
 
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -149,45 +149,6 @@ pub async fn handle_policies_update(request: JsonRpcRequest) -> JsonRpcResponse 
 
     // TODO: Update config file and reload
     tracing::info!("Policies config updated");
-    JsonRpcResponse::success(request.id, json!({ "ok": true }))
-}
-
-// ============================================================================
-// Shortcuts
-// ============================================================================
-
-/// Shortcuts config for JSON
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ShortcutsConfigJson {
-    #[serde(default)]
-    pub trigger_hotkey: Option<String>,
-    #[serde(default)]
-    pub vision_hotkey: Option<String>,
-}
-
-/// Get shortcuts config
-pub async fn handle_shortcuts_get(request: JsonRpcRequest) -> JsonRpcResponse {
-    // TODO: Get from config
-    JsonRpcResponse::success(
-        request.id,
-        json!({
-            "shortcuts": {
-                "trigger_hotkey": "Option+Space",
-                "vision_hotkey": "Option+V"
-            }
-        }),
-    )
-}
-
-/// Update shortcuts config
-pub async fn handle_shortcuts_update(request: JsonRpcRequest) -> JsonRpcResponse {
-    let _params: ShortcutsConfigJson = match parse_params(&request) {
-        Ok(p) => p,
-        Err(e) => return e,
-    };
-
-    // TODO: Update config file and reload
-    tracing::info!("Shortcuts config updated");
     JsonRpcResponse::success(request.id, json!({ "ok": true }))
 }
 

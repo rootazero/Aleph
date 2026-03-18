@@ -3,29 +3,17 @@
 //! The ReplyEmitter implements EventEmitter to capture streaming events from the
 //! agent loop and route responses back to the originating channel/conversation.
 //!
-//! # Features
+//! # Output Modes
 //!
-//! - Buffers response chunks to avoid sending too many small messages
-//! - Flushes buffer when threshold is reached or on completion
-//! - Handles errors gracefully, sending error messages to users
-//! - Supports optional streaming mode for channels that support it
+//! - **Typewriter** (`stream_enabled = true`): Sends an initial message, then
+//!   progressively edits it with more content, creating a streaming visual effect.
+//!   Falls back to instant behavior if the channel doesn't support editing.
+//! - **Instant** (`stream_enabled = false`): Buffers all content, sends once on
+//!   completion.
 //!
-//! # Usage
-//!
-//! ```rust,ignore
-//! use alephcore::gateway::{ReplyEmitter, ChannelRegistry, ReplyRoute};
-//!
-//! let emitter = ReplyEmitter::new(
-//!     channel_registry.clone(),
-//!     reply_route,
-//!     "run-123".to_string(),
-//!     None,
-//!     false,
-//! );
-//!
-//! // Use emitter as EventEmitter for agent execution
-//! execution_engine.run_with_emitter(request, Arc::new(emitter)).await;
-//! ```
+//! Mode is controlled by `BehaviorConfig.output_mode` in config.toml.
+
+use std::time::Duration;
 
 use async_trait::async_trait;
 use crate::sync_primitives::{AtomicBool, AtomicU64, Ordering};
@@ -45,8 +33,8 @@ pub struct ReplyEmitterConfig {
     /// Default: 500 characters
     pub buffer_threshold: usize,
 
-    /// Whether to stream responses to the channel
-    /// Default: false (iMessage and most channels don't handle streaming well)
+    /// Whether to stream responses to the channel (typewriter mode)
+    /// Default: false
     pub stream_enabled: bool,
 }
 
@@ -59,38 +47,44 @@ impl Default for ReplyEmitterConfig {
     }
 }
 
-/// Routes Agent output back to the originating channel/conversation
+impl ReplyEmitterConfig {
+    /// Create config from output_mode string ("typewriter" or "instant")
+    pub fn from_output_mode(mode: &str) -> Self {
+        Self {
+            buffer_threshold: 500,
+            stream_enabled: mode == "typewriter",
+        }
+    }
+}
+
+/// Routes Agent output back to the originating channel/conversation.
 ///
-/// ReplyEmitter captures streaming events from the agent loop and accumulates
-/// response text, then sends it back to the user via the appropriate channel.
+/// In typewriter mode, all response chunks are buffered silently. When
+/// `RunComplete` fires, the emitter sends an initial message and then
+/// progressively edits it with more content (300ms intervals), creating
+/// a streaming visual similar to ChatGPT's Telegram bot.
+///
+/// In instant mode, the full response is sent as one message on completion.
 pub struct ReplyEmitter {
-    /// Channel registry for sending messages
     channel_registry: Arc<ChannelRegistry>,
-
-    /// Route for sending replies back
     route: ReplyRoute,
-
-    /// Configuration
     config: ReplyEmitterConfig,
 
-    /// Buffer for accumulating response text
+    /// Accumulated response text (both modes)
     buffer: Mutex<String>,
 
-    /// Sequence counter for events
     seq_counter: AtomicU64,
-
-    /// Whether content has been sent to the channel (to avoid duplicate sends)
     has_sent: AtomicBool,
-
-    /// Run ID for this execution
     run_id: String,
-
-    /// Agent display name for identity prefix
     agent_display_name: Option<String>,
-
-    /// Whether the target channel natively shows agent identity
     native_identity: bool,
 }
+
+/// Interval between progressive edits in typewriter mode.
+const TYPEWRITER_EDIT_INTERVAL: Duration = Duration::from_millis(300);
+
+/// Number of characters to reveal per edit step.
+const TYPEWRITER_CHARS_PER_STEP: usize = 80;
 
 /// Prepend agent identity prefix if agent has a display name.
 fn apply_agent_prefix(text: &str, agent_name: &Option<String>) -> String {
@@ -101,7 +95,7 @@ fn apply_agent_prefix(text: &str, agent_name: &Option<String>) -> String {
 }
 
 impl ReplyEmitter {
-    /// Create a new ReplyEmitter with default configuration
+    /// Create a new ReplyEmitter with default configuration (instant mode)
     pub fn new(
         channel_registry: Arc<ChannelRegistry>,
         route: ReplyRoute,
@@ -144,50 +138,141 @@ impl ReplyEmitter {
         }
     }
 
-    /// Get the run ID
     pub fn run_id(&self) -> &str {
         &self.run_id
     }
 
-    /// Get the reply route
     pub fn route(&self) -> &ReplyRoute {
         &self.route
     }
 
-    /// Buffer text content
-    ///
-    /// If the buffer exceeds the threshold, it will be automatically flushed.
-    async fn buffer_text(&self, text: &str) {
-        let mut buffer = self.buffer.lock().await;
-        buffer.push_str(text);
-
-        // Auto-flush if threshold exceeded and streaming is enabled
-        if self.config.stream_enabled && buffer.len() >= self.config.buffer_threshold {
-            let content = std::mem::take(&mut *buffer);
-            drop(buffer); // Release lock before sending
-            self.send_to_channel(&content).await;
+    /// Apply agent prefix for first message if needed
+    fn format_content(&self, content: &str, is_first: bool) -> String {
+        if is_first && !self.native_identity {
+            apply_agent_prefix(content, &self.agent_display_name)
+        } else {
+            content.to_string()
         }
     }
 
-    /// Flush the buffer, sending accumulated content to the channel
-    async fn flush(&self) {
-        let mut buffer = self.buffer.lock().await;
-        if buffer.is_empty() {
+    // ── Typewriter mode ─────────────────────────────────────────────────
+
+    /// Send the buffered content with progressive edit-in-place streaming.
+    ///
+    /// 1. Send initial message with a small portion of the text
+    /// 2. Edit the message with progressively more content (every 300ms)
+    /// 3. Final edit with the complete text
+    ///
+    /// Falls back to instant send if the channel doesn't support editing.
+    async fn send_typewriter(&self, full_text: &str) {
+        if full_text.is_empty() {
             return;
         }
 
-        let content = std::mem::take(&mut *buffer);
-        drop(buffer); // Release lock before sending
+        let formatted = self.format_content(full_text, true);
+        self.has_sent.store(true, Ordering::SeqCst);
 
-        self.send_to_channel(&content).await;
+        // For short responses, just send directly (no need for progressive editing)
+        if formatted.chars().count() <= TYPEWRITER_CHARS_PER_STEP * 2 {
+            self.send_to_channel(&formatted).await;
+            return;
+        }
+
+        // Step 1: Send initial message with first portion
+        let char_indices: Vec<usize> = formatted.char_indices().map(|(i, _)| i).collect();
+        let total_chars = char_indices.len();
+        let first_end = TYPEWRITER_CHARS_PER_STEP.min(total_chars);
+        let first_byte_end = if first_end < total_chars {
+            char_indices[first_end]
+        } else {
+            formatted.len()
+        };
+        let initial_text = &formatted[..first_byte_end];
+
+        // Append "▍" cursor indicator
+        let initial_with_cursor = format!("{}▍", initial_text);
+
+        let message = OutboundMessage {
+            conversation_id: self.route.conversation_id.clone(),
+            text: initial_with_cursor,
+            attachments: vec![],
+            reply_to: self.route.reply_to.clone(),
+            inline_keyboard: None,
+            metadata: Default::default(),
+            agent_display_name: self.agent_display_name.clone(),
+        };
+
+        let msg_id = match self.channel_registry.send(&self.route.channel_id, message).await {
+            Ok(result) => {
+                debug!(
+                    "Typewriter: sent initial message {} ({}B)",
+                    result.message_id.as_str(),
+                    initial_text.len()
+                );
+                result.message_id
+            }
+            Err(e) => {
+                error!("Typewriter: failed to send initial message: {}", e);
+                // Fall back: send everything at once
+                self.send_to_channel(&formatted).await;
+                return;
+            }
+        };
+
+        // Step 2: Progressive edits
+        let mut revealed_chars = first_end;
+
+        while revealed_chars < total_chars {
+            tokio::time::sleep(TYPEWRITER_EDIT_INTERVAL).await;
+
+            revealed_chars = (revealed_chars + TYPEWRITER_CHARS_PER_STEP).min(total_chars);
+            let byte_end = if revealed_chars < total_chars {
+                char_indices[revealed_chars]
+            } else {
+                formatted.len()
+            };
+
+            let partial = &formatted[..byte_end];
+            let edit_text = if revealed_chars < total_chars {
+                format!("{}▍", partial) // Still typing
+            } else {
+                partial.to_string() // Done — remove cursor
+            };
+
+            match self.channel_registry.edit(
+                &self.route.channel_id,
+                &self.route.conversation_id,
+                &msg_id,
+                &edit_text,
+            ).await {
+                Ok(()) => {
+                    debug!(
+                        "Typewriter: edited message ({}/{} chars)",
+                        revealed_chars, total_chars
+                    );
+                }
+                Err(e) => {
+                    // Edit failed — likely unsupported channel, stop trying
+                    debug!("Typewriter: edit failed ({}), stopping progressive edits", e);
+                    break;
+                }
+            }
+        }
+
+        // Step 3: Final edit to ensure complete text is shown (without cursor)
+        let _ = self.channel_registry.edit(
+            &self.route.channel_id,
+            &self.route.conversation_id,
+            &msg_id,
+            &formatted,
+        ).await;
     }
 
-    /// Maximum message length for channel messages.
-    /// Telegram limits to 4096, other channels may vary.
-    /// We use a conservative limit that works for most channels.
+    // ── Shared helpers ──────────────────────────────────────────────────
+
     const MAX_MESSAGE_LENGTH: usize = 4000;
 
-    /// Send content to the channel, splitting into chunks if too long
+    /// Send content to the channel, splitting into chunks if too long (instant mode)
     async fn send_to_channel(&self, content: &str) {
         if content.is_empty() {
             return;
@@ -196,12 +281,7 @@ impl ReplyEmitter {
         let is_first_send = !self.has_sent.load(Ordering::SeqCst);
         self.has_sent.store(true, Ordering::SeqCst);
 
-        // Apply agent prefix only on first send, if channel lacks native identity
-        let content = if is_first_send && !self.native_identity {
-            apply_agent_prefix(content, &self.agent_display_name)
-        } else {
-            content.to_string()
-        };
+        let content = self.format_content(content, is_first_send);
 
         let chunks = Self::split_message(&content, Self::MAX_MESSAGE_LENGTH);
         let total_chunks = chunks.len();
@@ -249,9 +329,6 @@ impl ReplyEmitter {
         }
     }
 
-    /// Split a message into chunks that fit within the max length.
-    /// Splits at paragraph boundaries (\n\n), then line boundaries (\n),
-    /// then at the max length as a last resort — all UTF-8 safe.
     fn split_message(content: &str, max_len: usize) -> Vec<String> {
         if content.len() <= max_len {
             return vec![content.to_string()];
@@ -266,7 +343,6 @@ impl ReplyEmitter {
                 break;
             }
 
-            // Find the best split point within max_len
             let split_at = Self::find_split_point(remaining, max_len);
             let (chunk, rest) = remaining.split_at(split_at);
             chunks.push(chunk.trim_end().to_string());
@@ -276,9 +352,7 @@ impl ReplyEmitter {
         chunks
     }
 
-    /// Find the best split point: prefer \n\n, then \n, then char boundary
     fn find_split_point(text: &str, max_len: usize) -> usize {
-        // Ensure we don't split in the middle of a multi-byte character
         let mut safe_max = max_len;
         while safe_max > 0 && !text.is_char_boundary(safe_max) {
             safe_max -= 1;
@@ -286,25 +360,21 @@ impl ReplyEmitter {
 
         let search_range = &text[..safe_max];
 
-        // Try to split at paragraph boundary
         if let Some(pos) = search_range.rfind("\n\n") {
             if pos > safe_max / 4 {
-                return pos + 1; // Include one \n, the other will be trimmed
+                return pos + 1;
             }
         }
 
-        // Try to split at line boundary
         if let Some(pos) = search_range.rfind('\n') {
             if pos > safe_max / 4 {
                 return pos + 1;
             }
         }
 
-        // Last resort: split at char boundary
         safe_max
     }
 
-    /// Send an error message to the user
     async fn send_error(&self, error: &str) {
         let error_message = format!("Error: {}", error);
         self.send_to_channel(&error_message).await;
@@ -318,21 +388,39 @@ impl EventEmitter for ReplyEmitter {
             StreamEvent::ResponseChunk {
                 content, is_final, ..
             } => {
-                // Buffer the response text
-                self.buffer_text(&content).await;
-
-                // Flush on final chunk
-                if is_final {
-                    self.flush().await;
+                // Both modes: accumulate text into buffer
+                if !content.is_empty() {
+                    self.buffer.lock().await.push_str(&content);
                 }
+
+                // Instant mode: flush on final chunk
+                if !self.config.stream_enabled && is_final {
+                    let mut buffer = self.buffer.lock().await;
+                    if !buffer.is_empty() {
+                        let text = std::mem::take(&mut *buffer);
+                        drop(buffer);
+                        self.send_to_channel(&text).await;
+                    }
+                }
+                // Typewriter mode: do nothing here, wait for RunComplete
             }
 
             StreamEvent::RunComplete { summary, .. } => {
-                // Flush any remaining buffer (from ResponseChunk events)
-                self.flush().await;
+                // Flush accumulated buffer
+                let text = {
+                    let mut buffer = self.buffer.lock().await;
+                    std::mem::take(&mut *buffer)
+                };
 
-                // If nothing was sent yet (no ResponseChunks or AskUser events
-                // produced output), send the final_response as a fallback.
+                if !text.is_empty() && !self.has_sent.load(Ordering::SeqCst) {
+                    if self.config.stream_enabled {
+                        self.send_typewriter(&text).await;
+                    } else {
+                        self.send_to_channel(&text).await;
+                    }
+                }
+
+                // Fallback: if nothing was sent, use final_response from summary
                 if !self.has_sent.load(Ordering::SeqCst) {
                     if let Some(ref final_response) = summary.final_response {
                         if !final_response.is_empty() {
@@ -341,7 +429,11 @@ impl EventEmitter for ReplyEmitter {
                                 self.run_id,
                                 final_response.len()
                             );
-                            self.send_to_channel(final_response).await;
+                            if self.config.stream_enabled {
+                                self.send_typewriter(final_response).await;
+                            } else {
+                                self.send_to_channel(final_response).await;
+                            }
                         }
                     }
                 }
@@ -349,22 +441,32 @@ impl EventEmitter for ReplyEmitter {
 
             StreamEvent::RunError { error, .. } => {
                 // Flush any partial response
-                self.flush().await;
+                let text = {
+                    let mut buffer = self.buffer.lock().await;
+                    std::mem::take(&mut *buffer)
+                };
+                if !text.is_empty() {
+                    self.send_to_channel(&text).await;
+                }
 
-                // Send error message to user
                 warn!("Run {} failed: {}", self.run_id, error);
                 self.send_error(&error).await;
             }
 
             StreamEvent::AskUser { question, .. } => {
                 // Flush buffer first
-                self.flush().await;
+                let text = {
+                    let mut buffer = self.buffer.lock().await;
+                    std::mem::take(&mut *buffer)
+                };
+                if !text.is_empty() {
+                    self.send_to_channel(&text).await;
+                }
 
-                // Send the question to the user
                 self.send_to_channel(&question).await;
             }
 
-            // Other events are not routed to the channel
+            // Other events are not routed to channels
             StreamEvent::RunAccepted { .. }
             | StreamEvent::Reasoning { .. }
             | StreamEvent::ToolStart { .. }
@@ -373,7 +475,6 @@ impl EventEmitter for ReplyEmitter {
             | StreamEvent::ReasoningBlock { .. }
             | StreamEvent::UncertaintySignal { .. }
             | StreamEvent::SessionUpdated { .. } => {
-                // These events are for WebSocket clients, not channel users
                 debug!("Ignoring event for channel routing: {:?}", event);
             }
         }
@@ -396,6 +497,15 @@ mod tests {
         let config = ReplyEmitterConfig::default();
         assert_eq!(config.buffer_threshold, 500);
         assert!(!config.stream_enabled);
+    }
+
+    #[test]
+    fn test_config_from_output_mode() {
+        let tw = ReplyEmitterConfig::from_output_mode("typewriter");
+        assert!(tw.stream_enabled);
+
+        let instant = ReplyEmitterConfig::from_output_mode("instant");
+        assert!(!instant.stream_enabled);
     }
 
     #[test]
@@ -449,7 +559,6 @@ mod tests {
         let registry = Arc::new(ChannelRegistry::new());
         let emitter = ReplyEmitter::new(registry, route, "run-789".to_string(), None, false);
 
-        // Sequence should start at 0 and increment
         assert_eq!(emitter.next_seq(), 0);
         assert_eq!(emitter.next_seq(), 1);
         assert_eq!(emitter.next_seq(), 2);
@@ -465,11 +574,9 @@ mod tests {
         let registry = Arc::new(ChannelRegistry::new());
         let emitter = ReplyEmitter::new(registry, route, "run-test".to_string(), None, false);
 
-        // Buffer some text
-        emitter.buffer_text("Hello ").await;
-        emitter.buffer_text("World!").await;
+        emitter.buffer.lock().await.push_str("Hello ");
+        emitter.buffer.lock().await.push_str("World!");
 
-        // Check buffer contents
         let buffer = emitter.buffer.lock().await;
         assert_eq!(*buffer, "Hello World!");
     }
@@ -499,7 +606,6 @@ mod tests {
 
     #[test]
     fn test_split_message_no_boundary() {
-        // No newlines at all — should force-split at char boundary
         let content = "A".repeat(200);
         let chunks = ReplyEmitter::split_message(&content, 100);
         assert_eq!(chunks.len(), 2);
@@ -509,21 +615,18 @@ mod tests {
 
     #[test]
     fn test_split_message_utf8_safe() {
-        // Chinese characters are 3 bytes each
-        let content = "中".repeat(100); // 300 bytes
+        let content = "中".repeat(100);
         let chunks = ReplyEmitter::split_message(&content, 150);
-        // Should not panic, and all chunks should be valid UTF-8
         assert!(chunks.len() >= 2);
         for chunk in &chunks {
             assert!(chunk.len() <= 150);
-            // Verify it's valid UTF-8 (implicit — String type guarantees this)
         }
     }
 
     #[test]
     fn test_apply_agent_prefix_with_name() {
         let result = apply_agent_prefix("Hello", &Some("Trading Bot".to_string()));
-        assert_eq!(result, "\\[Trading Bot\\]\nHello");
+        assert_eq!(result, "*Trading Bot*\nHello");
     }
 
     #[test]
@@ -541,6 +644,6 @@ mod tests {
     #[test]
     fn test_apply_agent_prefix_chinese_name() {
         let result = apply_agent_prefix("今天BTC价格是...", &Some("交易助手".to_string()));
-        assert_eq!(result, "\\[交易助手\\]\n今天BTC价格是...");
+        assert_eq!(result, "*交易助手*\n今天BTC价格是...");
     }
 }

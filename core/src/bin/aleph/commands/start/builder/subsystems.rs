@@ -326,6 +326,7 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
     default_provider: Option<Arc<dyn alephcore::providers::AiProvider>>,
     dispatch_registry: Option<Arc<alephcore::dispatcher::ToolRegistry>>,
     session_manager: Option<Arc<alephcore::gateway::session_manager::SessionManager>>,
+    app_config: Option<Arc<tokio::sync::RwLock<alephcore::Config>>>,
     daemon: bool,
 ) {
     let routing_config = RoutingConfig::default();
@@ -416,6 +417,11 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
         if !daemon {
             println!("  Inbound router: session management enabled (/new command)");
         }
+    }
+
+    // Wire app config for output_mode-aware reply emitters
+    if let Some(cfg) = app_config {
+        inbound_router = inbound_router.with_app_config(cfg);
     }
 
     let inbound_router = Arc::new(inbound_router);

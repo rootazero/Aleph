@@ -6,7 +6,7 @@ use super::super::*;
 fn test_config_serialization() {
     let config = Config::default();
     let json = serde_json::to_string(&config).unwrap();
-    assert!(json.contains("Command+Grave"));
+    assert!(json.contains("Grave")); // default_hotkey
     assert!(json.contains("memory"));
 }
 
@@ -69,18 +69,6 @@ fn test_memory_config_deserialization() {
     assert_eq!(config.dreaming.window_start_local, "01:00");
     assert_eq!(config.graph_decay.min_score, 0.2);
     assert_eq!(config.memory_decay.protected_types.len(), 2);
-}
-
-#[test]
-fn test_shortcuts_config_serialization() {
-    let shortcuts = ShortcutsConfig {
-        summon: "Command+Shift+A".to_string(),
-        cancel: Some("Escape".to_string()),
-        command_prompt: "Option+Space".to_string(),
-    };
-    let json = serde_json::to_string(&shortcuts).unwrap();
-    assert!(json.contains("Command+Shift+A"));
-    assert!(json.contains("Escape"));
 }
 
 #[test]
@@ -180,14 +168,7 @@ fn test_full_config_conversion() {
 
 #[test]
 fn test_config_toml_round_trip() {
-    let mut config = Config {
-        shortcuts: Some(ShortcutsConfig {
-            summon: "Command+Shift+A".to_string(),
-            cancel: Some("Escape".to_string()),
-            command_prompt: "Option+Space".to_string(),
-        }),
-        ..Config::default()
-    };
+    let mut config = Config::default();
 
     config.behavior = Some(BehaviorConfig {
         output_mode: "instant".to_string(),
@@ -212,10 +193,6 @@ fn test_config_toml_round_trip() {
 
     // Verify all fields
     assert_eq!(deserialized.default_hotkey, config.default_hotkey);
-    assert_eq!(
-        deserialized.shortcuts.as_ref().unwrap().summon,
-        "Command+Shift+A"
-    );
     assert_eq!(
         deserialized.behavior.as_ref().unwrap().output_mode,
         "instant"

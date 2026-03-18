@@ -32,9 +32,6 @@ pub struct Config {
     /// Routing rules for smart AI provider selection (Phase 5)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub rules: Vec<RoutingRuleConfig>,
-    /// Shortcuts configuration (Phase 6)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub shortcuts: Option<ShortcutsConfig>,
     /// Behavior configuration (Phase 6)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub behavior: Option<BehaviorConfig>,
@@ -227,8 +224,6 @@ pub struct FullConfig {
     pub providers: Vec<ProviderConfigEntry>,
     pub rules: Vec<RoutingRuleConfig>,
     #[serde(default)]
-    pub shortcuts: Option<ShortcutsConfig>,
-    #[serde(default)]
     pub behavior: Option<BehaviorConfig>,
     #[serde(default)]
     pub search: Option<SearchConfig>,
@@ -256,7 +251,6 @@ impl From<Config> for FullConfig {
             memory: config.memory,
             providers,
             rules: config.rules,
-            shortcuts: config.shortcuts,
             behavior: config.behavior,
             search,
             smart_matching: config.smart_matching,
@@ -279,7 +273,6 @@ impl Default for Config {
             providers: HashMap::new(),
             // AI-first: no builtin rules, user defines custom rules in config.toml
             rules: vec![],
-            shortcuts: Some(ShortcutsConfig::default()),
             behavior: Some(BehaviorConfig::default()),
             search: None,
             skills: SkillsConfig::default(),

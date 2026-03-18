@@ -7,7 +7,6 @@ pub mod generation_providers;
 pub mod embedding_providers;
 pub mod reranking_providers;
 pub mod general;
-pub mod shortcuts;
 pub mod behavior;
 pub mod search;
 pub mod plugins;
@@ -26,7 +25,6 @@ pub use generation_providers::GenerationProvidersView;
 pub use embedding_providers::EmbeddingProvidersView;
 pub use reranking_providers::RerankingProvidersView;
 pub use general::GeneralView;
-pub use shortcuts::ShortcutsView;
 pub use behavior::BehaviorView;
 pub use search::SearchView;
 pub use plugins::PluginsView;
@@ -63,7 +61,6 @@ pub fn Settings() -> impl IntoView {
                     </p>
                     <ul class="space-y-2 text-sm text-text-secondary">
                         <li>"• Set up AI providers and API keys"</li>
-                        <li>"• Configure keyboard shortcuts"</li>
                         <li>"• Customize agent behavior"</li>
                         <li>"• Enable memory and knowledge base"</li>
                     </ul>

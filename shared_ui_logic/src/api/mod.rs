@@ -106,7 +106,6 @@ pub use alerts::{
 };
 pub use config::{
     BehaviorConfig, CodeExecConfig, ConfigApi, FileOpsConfig, PoliciesConfig, SearchConfig,
-    ShortcutsConfig,
 };
 pub use memory::{MemoryApi, MemorySearchItem, MemoryStats};
 pub use plugins::{PluginInfo, PluginsApi};

@@ -462,12 +462,11 @@ impl Channel for DiscordChannel {
         Ok(())
     }
 
-    async fn edit(&self, message_id: &MessageId, new_text: &str) -> ChannelResult<()> {
-        // Note: Editing requires channel_id which we don't have in this interface
-        // Would need to track message_id -> channel_id mapping
-        let _ = (message_id, new_text);
+    async fn edit(&self, conversation_id: &ConversationId, message_id: &MessageId, new_text: &str) -> ChannelResult<()> {
+        // Discord edit requires channel_id + message_id + text
+        let _ = (conversation_id, message_id, new_text);
         Err(ChannelError::UnsupportedFeature(
-            "Message editing requires channel context".to_string(),
+            "Discord message editing not yet implemented via Channel trait".to_string(),
         ))
     }
 

@@ -482,7 +482,6 @@ pub(in crate::commands::start) fn register_config_handlers(
     use alephcore::gateway::handlers::embedding_providers;
     use alephcore::gateway::handlers::agent_config;
     use alephcore::gateway::handlers::general_config;
-    use alephcore::gateway::handlers::shortcuts_config;
     use alephcore::gateway::handlers::behavior_config;
     use alephcore::gateway::handlers::generation_config;
     use alephcore::gateway::handlers::search_config;
@@ -573,10 +572,6 @@ pub(in crate::commands::start) fn register_config_handlers(
     // General config
     register_handler!(server, "general_config.get", general_config::handle_get, config);
     register_handler!(server, "general_config.update", general_config::handle_update, config, event_bus);
-
-    // Shortcuts config
-    register_handler!(server, "shortcuts_config.get", shortcuts_config::handle_get, config);
-    register_handler!(server, "shortcuts_config.update", shortcuts_config::handle_update, config, event_bus);
 
     // Behavior config
     register_handler!(server, "behavior_config.get", behavior_config::handle_get, config);

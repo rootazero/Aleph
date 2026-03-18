@@ -386,7 +386,8 @@ mod tests {
         let channel = XmppChannel::new("xmpp", config);
 
         let msg_id = MessageId::new("test-msg");
-        let result = channel.edit(&msg_id, "new text").await;
+        let conv_id = ConversationId::new("test-conv");
+        let result = channel.edit(&conv_id, &msg_id, "new text").await;
         assert!(matches!(result, Err(ChannelError::UnsupportedFeature(_))));
     }
 

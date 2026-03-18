@@ -98,6 +98,8 @@ pub struct InboundMessageRouter {
     pub(super) debounce_buffer: Option<Arc<crate::gateway::pipeline::DebounceBuffer>>,
     /// Session manager for session lifecycle
     pub(super) session_manager: Option<Arc<super::session_manager::SessionManager>>,
+    /// App config for reading output_mode at runtime
+    pub(super) app_config: Option<Arc<tokio::sync::RwLock<crate::Config>>>,
 }
 
 impl InboundMessageRouter {
@@ -125,6 +127,7 @@ impl InboundMessageRouter {
             command_parser: None,
             debounce_buffer: None,
             session_manager: None,
+            app_config: None,
         }
     }
 
@@ -208,6 +211,12 @@ impl InboundMessageRouter {
     /// Set the debounce buffer for message merging
     pub fn with_debounce_buffer(mut self, buffer: Arc<crate::gateway::pipeline::DebounceBuffer>) -> Self {
         self.debounce_buffer = Some(buffer);
+        self
+    }
+
+    /// Set the app config for reading output_mode at runtime
+    pub fn with_app_config(mut self, config: Arc<tokio::sync::RwLock<crate::Config>>) -> Self {
+        self.app_config = Some(config);
         self
     }
 

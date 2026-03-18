@@ -244,6 +244,23 @@ impl ChannelRegistry {
         channel.send(message).await
     }
 
+    /// Edit a previously sent message through a specific channel
+    pub async fn edit(
+        &self,
+        channel_id: &ChannelId,
+        conversation_id: &ConversationId,
+        message_id: &super::channel::MessageId,
+        new_text: &str,
+    ) -> ChannelResult<()> {
+        let channel_arc = self
+            .get(channel_id)
+            .await
+            .ok_or_else(|| ChannelError::NotConnected(format!("Channel not found: {}", channel_id)))?;
+
+        let channel = channel_arc.read().await;
+        channel.edit(conversation_id, message_id, new_text).await
+    }
+
     /// Broadcast a message to all channels
     pub async fn broadcast(&self, message: OutboundMessage) -> Vec<(ChannelId, ChannelResult<SendResult>)> {
         let channels = self.channels.read().await;

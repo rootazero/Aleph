@@ -133,7 +133,6 @@ fn SettingsRouter() -> impl IntoView {
         match path.as_str() {
             // Basic
             "/settings" | "/settings/general" => view! { <GeneralView /> }.into_any(),
-            "/settings/shortcuts" => view! { <ShortcutsView /> }.into_any(),
             "/settings/behavior" => view! { <BehaviorView /> }.into_any(),
 
             // AI

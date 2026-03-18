@@ -229,7 +229,7 @@ impl Channel for MattermostChannel {
 
     }
 
-    async fn edit(&self, message_id: &MessageId, new_text: &str) -> ChannelResult<()> {
+    async fn edit(&self, _conversation_id: &ConversationId, message_id: &MessageId, new_text: &str) -> ChannelResult<()> {
         // Mattermost edit requires PUT /api/v4/posts/{post_id}
         let server = self.config.server_url_trimmed().to_string();
         let url = format!("{server}/api/v4/posts/{}", message_id.as_str());

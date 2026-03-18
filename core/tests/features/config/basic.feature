@@ -24,11 +24,6 @@ Feature: Basic Configuration
     And dreaming window_start should be "02:00"
     And dreaming window_end should be "05:00"
 
-  Scenario: Shortcuts config has expected defaults
-    Given a default ShortcutsConfig
-    Then the summon shortcut should be "Command+Grave"
-    And the cancel shortcut should be "Escape"
-
   Scenario: Behavior config has expected defaults
     Given a default BehaviorConfig
     Then the output_mode should be "typewriter"

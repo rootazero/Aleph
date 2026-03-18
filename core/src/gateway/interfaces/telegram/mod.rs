@@ -594,13 +594,8 @@ impl Channel for TelegramChannel {
         Ok(())
     }
 
-    async fn edit(&self, message_id: &MessageId, new_text: &str) -> ChannelResult<()> {
-        // Note: Editing requires both message_id and chat_id
-        // This is a limitation - we'd need to track chat_id per message
-        let _ = (message_id, new_text);
-        Err(ChannelError::UnsupportedFeature(
-            "Message editing requires chat context".to_string(),
-        ))
+    async fn edit(&self, conversation_id: &ConversationId, message_id: &MessageId, new_text: &str) -> ChannelResult<()> {
+        self.edit_message(conversation_id, message_id, Some(new_text), None).await
     }
 
     async fn delete(&self, message_id: &MessageId) -> ChannelResult<()> {
