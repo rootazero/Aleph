@@ -9,7 +9,7 @@ members = [
     "crates/logging",
     "shared/protocol",
     "shared/ui_logic",
-    "shared_ui_logic",
+
     "apps/cli",
     "apps/tui",
     "apps/shared",
