@@ -25,6 +25,7 @@ use alephcore::gateway::handlers::chat as chat_handlers;
 use alephcore::executor::BuiltinToolRegistry;
 use alephcore::ProviderRegistry;
 
+use alephcore::generation::{GenerationProviderRegistry, providers as gen_providers};
 use crate::server_init::{handle_run_with_engine, handle_chat_send_with_engine};
 use alephcore::providers::message::UnifiedMessage;
 use alephcore::providers::adapter::RequestPayload;
@@ -110,6 +111,29 @@ pub(in crate::commands::start) async fn register_agent_handlers(
     let mut compression_out: Option<std::sync::Arc<alephcore::memory::compression::CompressionService>> = None;
     let mut swappable_reg: Option<Arc<alephcore::SwappableProviderRegistry>> = None;
 
+    // Build generation provider registry (independent of chat AI provider)
+    let generation_registry = {
+        let mut registry = GenerationProviderRegistry::new();
+        for (name, provider_cfg) in &app_config.generation.providers {
+            if !provider_cfg.enabled { continue; }
+            if provider_cfg.api_key.as_ref().map(|k| k.is_empty()).unwrap_or(true) { continue; }
+            match gen_providers::create_provider(name, provider_cfg) {
+                Ok(provider) => {
+                    if registry.register(name.clone(), provider).is_ok() {
+                        tracing::info!(provider = %name, "Registered generation provider");
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(provider = %name, error = %e, "Skip generation provider");
+                }
+            }
+        }
+        if !registry.is_empty() && !daemon {
+            println!("  Generation providers: {} registered", registry.len());
+        }
+        Arc::new(std::sync::RwLock::new(registry))
+    };
+
     // Try to create provider: env vars first, then app config
     let initial_provider = if can_create_provider_from_env() {
         create_provider_registry_from_env()
@@ -194,6 +218,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             extension_manager: extension_manager.clone(),
             acp_manager: acp_manager.clone(),
             cron_service: cron_service.clone(),
+            generation_registry: Some(generation_registry.clone()),
             ..Default::default()
         };
         let mut tool_registry = BuiltinToolRegistry::with_config(tool_config).await;
