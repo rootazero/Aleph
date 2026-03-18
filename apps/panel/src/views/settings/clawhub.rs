@@ -181,7 +181,7 @@ pub fn ClawHubView() -> impl IntoView {
                         "ClawHub Skill Marketplace"
                     </h1>
                     <p class="text-sm text-text-secondary">
-                        "Browse and install community skills from ClawHub"
+                        "Search and install community skills from ClawHub"
                     </p>
                 </div>
 
@@ -226,7 +226,7 @@ pub fn ClawHubView() -> impl IntoView {
                 <Show when=move || !loading.get() || !skills.get().is_empty()>
                     <div class="flex items-center gap-2">
                         <h2 class="text-lg font-medium text-text-primary">
-                            {move || if is_searching.get() { "Search Results" } else { "Recommended Skills" }}
+                            {move || if is_searching.get() { "Search Results" } else { "Popular Skills" }}
                         </h2>
                         <span class="px-2 py-0.5 rounded-full text-xs font-medium bg-primary-subtle text-primary">
                             {move || format!("{}", skills.get().len())}
@@ -257,7 +257,7 @@ pub fn ClawHubView() -> impl IntoView {
                     <div class="text-center py-6 border border-dashed border-border rounded">
                         <p class="text-sm text-text-secondary">"No skills found"</p>
                         <p class="text-xs text-text-tertiary mt-1">
-                            {move || if is_searching.get() { "Try a different search query" } else { "Check your connection and try again" }}
+                            {move || if is_searching.get() { "Try a different search query" } else { "Use the search bar to find skills on ClawHub" }}
                         </p>
                     </div>
                 </Show>
@@ -393,15 +393,25 @@ fn ClawHubSkillCard(
                     }
                 })}
 
-                // Stats + error
-                <div class="flex items-center gap-3">
-                    <span class="text-xs text-text-tertiary">
-                        {format!("↓{}", format_count(skill.downloads))}
-                    </span>
-                    <span class="text-xs text-text-tertiary">
-                        {format!("★{}", format_count(skill.stars))}
-                    </span>
-                </div>
+                // Stats (only shown when available — search results don't include stats)
+                {(skill.downloads > 0 || skill.stars > 0).then(|| {
+                    let downloads = skill.downloads;
+                    let stars = skill.stars;
+                    view! {
+                        <div class="flex items-center gap-3">
+                            {(downloads > 0).then(|| view! {
+                                <span class="text-xs text-text-tertiary">
+                                    {format!("↓{}", format_count(downloads))}
+                                </span>
+                            })}
+                            {(stars > 0).then(|| view! {
+                                <span class="text-xs text-text-tertiary">
+                                    {format!("★{}", format_count(stars))}
+                                </span>
+                            })}
+                        </div>
+                    }
+                })}
 
                 {move || install_error.get().map(|err| view! {
                     <p class="text-xs text-danger">{err}</p>
