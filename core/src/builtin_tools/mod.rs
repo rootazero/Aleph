@@ -67,6 +67,8 @@ pub mod vision;
 pub mod escalate_task;
 pub mod subagent_manage;
 pub mod acp_tools;
+pub mod cron_manage;
+pub mod clawhub;
 
 pub use agent_manage::{
     AgentCreateArgs, AgentCreateOutput, AgentCreateTool, AgentDeleteArgs, AgentDeleteOutput,
@@ -124,6 +126,8 @@ pub use acp_tools::{
     ClaudeCodeTool, CodexTool, GeminiCliTool,
     AcpSwitchArgs, AcpSwitchOutput, AcpSwitchTool,
 };
+pub use cron_manage::{CronAction, CronManageArgs, CronManageOutput, CronManageTool};
+pub use clawhub::{ClawHubAction, ClawHubArgs, ClawHubOutput, ClawHubTool};
 
 
 // Message tool re-exports
