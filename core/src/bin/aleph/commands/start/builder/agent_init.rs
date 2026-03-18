@@ -96,7 +96,9 @@ pub(in crate::commands::start) async fn register_agent_handlers(
     workspace_manager: Option<Arc<alephcore::gateway::WorkspaceManager>>,
     agent_manager: Arc<alephcore::AgentManager>,
     acp_manager: Option<Arc<alephcore::acp::manager::AcpHarnessManager>>,
+    cron_service: Option<alephcore::cron::SharedCronService>,
     daemon: bool,
+    shared_token_mgr: Arc<alephcore::gateway::security::SharedTokenManager>,
 ) -> AgentHandlersResult {
     let run_manager = Arc::new(AgentRunManager::new(router.clone(), event_bus.clone()));
     let mut exec_adapter: Option<Arc<dyn alephcore::gateway::ExecutionAdapter>> = None;
@@ -191,6 +193,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             sub_agent_dispatcher,
             extension_manager: extension_manager.clone(),
             acp_manager: acp_manager.clone(),
+            cron_service: cron_service.clone(),
             ..Default::default()
         };
         let mut tool_registry = BuiltinToolRegistry::with_config(tool_config).await;

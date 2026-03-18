@@ -18,7 +18,7 @@ use alephcore::gateway::{
     SessionManager, SessionManagerConfig,
 };
 use alephcore::gateway::pairing_store::SqlitePairingStore;
-// use alephcore::cron::CronService; // Temporarily disabled during cron rewrite
+use alephcore::cron::{CronService, SharedCronService};
 use alephcore::group_chat::{GroupChatExecutor, GroupChatOrchestrator};
 use alephcore::ProviderRegistry as _; // trait needed for .default_provider()
 
@@ -429,10 +429,41 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         dirs::home_dir().unwrap_or_default().join(".aleph/trash"),
     ));
 
+    // Initialize CronService from app config (before agent handlers so tool gets registered)
+    let cron_service: Option<SharedCronService> = {
+        let app_cfg = app_config.read().await;
+        let cron_config = app_cfg.cron.clone();
+        drop(app_cfg);
+
+        if cron_config.enabled {
+            match CronService::new(cron_config) {
+                Ok(svc) => {
+                    let shared: SharedCronService = Arc::new(tokio::sync::Mutex::new(svc));
+                    register_cron_handlers(&mut server, &shared, args.daemon);
+                    Some(shared)
+                }
+                Err(e) => {
+                    if !args.daemon {
+                        eprintln!("Warning: Failed to initialize cron service: {}. Cron disabled.", e);
+                    }
+                    None
+                }
+            }
+        } else {
+            if !args.daemon {
+                println!("Cron service: disabled");
+                println!();
+            }
+            None
+        }
+    };
+
     let agent_result = register_agent_handlers(
         &mut server, session_manager.clone(), event_bus.clone(),
         router.clone(), &full_config, &*app_config.read().await, app_config.clone(), &memory_db,
-        workspace_manager.clone(), agent_manager.clone(), acp_manager.clone(), args.daemon,
+        workspace_manager.clone(), agent_manager.clone(), acp_manager.clone(),
+        cron_service.clone(), args.daemon,
+        auth_bundle.auth_ctx.shared_token_mgr.clone(),
     ).await;
 
     let config_patcher = {
@@ -582,13 +613,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         }
     }
 
-    // CronService initialization temporarily disabled during cron rewrite (Tasks 2/2b).
-    // Will be restored when CronService is rewritten in Tasks 6-10.
-    // {
-    //     let app_cfg = app_config_for_channels.read().await;
-    //     let cron_config = app_cfg.cron.clone();
-    //     ...
-    // }
+    // CronService init moved before register_agent_handlers (see above)
 
     // Initialize GroupChat Orchestrator + Executor
     // (shared_orch and gc_executor are kept alive for both RPC handlers and InboundMessageRouter)
