@@ -150,6 +150,7 @@ impl MarkdownSkillGenerator {
         // Build metadata
         let metadata = SkillMetadata {
             requires: RequiresSpec { bins },
+            openclaw: None,
             aleph: Some(AlephExtensions {
                 security: SecuritySpec {
                     sandbox: self.config.default_sandbox.clone(),

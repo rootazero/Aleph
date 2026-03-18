@@ -34,6 +34,10 @@ pub struct SkillMetadata {
     /// Aleph extensions (optional)
     #[serde(default)]
     pub aleph: Option<AlephExtensions>,
+
+    /// OpenClaw metadata namespace (ClawHub compatibility)
+    #[serde(default)]
+    pub openclaw: Option<OpenClawMetadata>,
 }
 
 /// Required binaries specification
@@ -62,6 +66,45 @@ pub struct AlephExtensions {
     /// Docker execution configuration
     #[serde(default)]
     pub docker: Option<DockerConfig>,
+}
+
+/// OpenClaw metadata namespace — compatible with ClawHub skill format.
+///
+/// Allows SKILL.md files from ClawHub to work natively in Aleph.
+/// Both `aleph` and `openclaw` namespaces can coexist.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct OpenClawMetadata {
+    #[serde(default)]
+    pub emoji: Option<String>,
+    #[serde(default, rename = "primaryEnv")]
+    pub primary_env: Option<String>,
+    #[serde(default)]
+    pub homepage: Option<String>,
+    #[serde(default)]
+    pub os: Option<Vec<String>>,
+    #[serde(default)]
+    pub always: Option<bool>,
+    #[serde(default)]
+    pub install: Option<Vec<OpenClawInstallSpec>>,
+}
+
+/// OpenClaw install specification
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OpenClawInstallSpec {
+    pub id: String,
+    pub kind: String,
+    #[serde(default)]
+    pub formula: Option<String>,
+    #[serde(default)]
+    pub package: Option<String>,
+    #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default)]
+    pub bins: Option<Vec<String>>,
+    #[serde(default)]
+    pub label: Option<String>,
+    #[serde(default)]
+    pub os: Option<Vec<String>>,
 }
 
 /// Security specification
