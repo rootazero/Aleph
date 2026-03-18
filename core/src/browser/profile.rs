@@ -143,7 +143,7 @@ fn default_mcp_command() -> String {
 }
 
 fn default_mcp_args() -> Vec<String> {
-    vec!["@anthropic/mcp-playwright".to_string()]
+    vec!["@playwright/mcp".to_string()]
 }
 
 impl Default for PlaywrightMcpConfig {
