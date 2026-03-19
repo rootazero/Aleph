@@ -43,6 +43,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // Map common shorthand commands to their actual tool names
         let cmd_name = match cmd_name.as_str() {
             "switch" => "agent_switch".to_string(),
+            "rename" => "session_set_topic".to_string(),
             other => other.to_string(),
         };
 
@@ -257,6 +258,9 @@ fn build_tool_arguments(tool_id: &str, args_str: &str, raw_input: &str) -> serde
         }),
         "agent_create" => serde_json::json!({
             "input": args_str,
+        }),
+        "session_set_topic" => serde_json::json!({
+            "topic": args_str,
         }),
         // URL-based tools
         "browser_open" | "web_fetch" => serde_json::json!({
