@@ -223,6 +223,8 @@ pub async fn handle_chat_send_with_engine<P, R>(
     agent_registry: Arc<AgentRegistry>,
     app_config: Arc<tokio::sync::RwLock<alephcore::Config>>,
     workspace_manager: Option<Arc<alephcore::gateway::WorkspaceManager>>,
+    provider_registry: Arc<P>,
+    session_manager: Arc<alephcore::gateway::SessionManager>,
 ) -> alephcore::gateway::JsonRpcResponse
 where
     P: alephcore::thinker::ProviderRegistry + 'static,
@@ -328,6 +330,9 @@ where
         metadata,
     };
 
+    // Capture agent model before agent is moved into execution spawn
+    let agent_model = agent.config().model.clone();
+
     // Spawn execution task
     let engine_clone = engine.clone();
     let emitter_clone = emitter.clone();
@@ -345,6 +350,73 @@ where
             }
         }
     });
+
+    // Spawn async topic generation for new sessions
+    // session_key here is the legacy gateway::router::SessionKey (returned by router.route()).
+    // Event topic mapping: backend emits "stream.session_updated" via event_bus,
+    // the panel message loop converts it to GatewayEvent { topic: "run.session_updated" },
+    // and the sidebar handler checks for "run.session_updated" — this chain already works.
+    let is_new_session = params.session_key.is_none();
+    if is_new_session {
+        let topic_provider = {
+            // Prefer lightweight model, fallback to agent's model, then default
+            provider_registry
+                .get("haiku")
+                .or_else(|| provider_registry.get(&agent_model))
+                .unwrap_or_else(|| provider_registry.default_provider())
+        };
+        let topic_session_key = session_key.clone();
+        let topic_event_bus = event_bus.clone();
+        let topic_session_manager = session_manager.clone();
+        let topic_message = params.message.clone();
+        tokio::spawn(async move {
+            use alephcore::providers::adapter::RequestPayload;
+            use alephcore::providers::message::UnifiedMessage;
+
+            let prompt = format!(
+                "Generate a concise topic title (5-10 characters, same language as the message) \
+                 for a conversation that starts with: {}",
+                topic_message
+            );
+            let messages = vec![UnifiedMessage::user(&prompt)];
+            let payload = RequestPayload {
+                messages: &messages,
+                system_prompt: Some("You are a title generator. Output ONLY the title, nothing else."),
+                tools: None,
+                think_level: None,
+                temperature: Some(0.3),
+                max_tokens: Some(30),
+            };
+
+            match topic_provider.process(payload).await {
+                Ok(response) => {
+                    let topic_text = response.text_content().trim().to_string();
+                    if !topic_text.is_empty() {
+                        if let Err(e) = topic_session_manager.set_topic(&topic_session_key, &topic_text).await {
+                            tracing::warn!(error = %e, "Failed to set session topic");
+                        } else {
+                            let event_json = serde_json::json!({
+                                "method": "stream.session_updated",
+                                "params": {
+                                    "session_key": topic_session_key.to_key_string(),
+                                    "topic": topic_text,
+                                }
+                            });
+                            topic_event_bus.publish(event_json.to_string());
+                            tracing::debug!(
+                                session_key = %topic_session_key.to_key_string(),
+                                topic = %topic_text,
+                                "Auto-generated session topic"
+                            );
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "Topic generation failed, session will show as 'New Chat'");
+                }
+            }
+        });
+    }
 
     // Return immediate response
     let result = ChatSendResult {

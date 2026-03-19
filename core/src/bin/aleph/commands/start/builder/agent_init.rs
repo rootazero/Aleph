@@ -405,6 +405,9 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         // Capture default provider before provider_registry is moved into engine
         default_prov = Some(provider_registry.default_provider());
 
+        // Clone provider registry for topic generation before it's moved into engine
+        let topic_provider_registry = provider_registry.clone();
+
         let engine_config = ExecutionEngineConfig::default();
         let mut engine = ExecutionEngine::new(
             engine_config,
@@ -531,6 +534,8 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         let agent_registry_chat = agent_registry.clone();
         let app_config_chat = app_config_arc.clone();
         let wm_chat = workspace_manager.clone();
+        let pr_chat = topic_provider_registry.clone();
+        let sm_chat = session_manager.clone();
         server.handlers_mut().register("chat.send", move |req| {
             let engine = engine_chat.clone();
             let event_bus = event_bus_chat.clone();
@@ -538,8 +543,10 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             let agent_registry = agent_registry_chat.clone();
             let cfg = app_config_chat.clone();
             let wm = wm_chat.clone();
+            let pr = pr_chat.clone();
+            let sm = sm_chat.clone();
             async move {
-                handle_chat_send_with_engine(req, engine, event_bus, router, agent_registry, cfg, wm).await
+                handle_chat_send_with_engine(req, engine, event_bus, router, agent_registry, cfg, wm, pr, sm).await
             }
         });
 
