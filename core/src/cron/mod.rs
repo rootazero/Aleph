@@ -55,13 +55,6 @@ use clock::{Clock, SystemClock};
 use service::ServiceState;
 use store::CronStore;
 
-/// Callback for job execution
-pub type JobExecutor = Arc<
-    dyn Fn(String, String, String) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String, String>> + Send>>
-        + Send
-        + Sync,
->;
-
 /// Shared handle to CronService for use in gateway handlers
 pub type SharedCronService = Arc<tokio::sync::Mutex<CronService>>;
 
