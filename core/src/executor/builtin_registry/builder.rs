@@ -314,12 +314,14 @@ impl BuiltinToolRegistry {
             generation_registry: config.generation_registry.clone(),
             dispatcher_registry: config.dispatcher_registry.clone(),
             gateway_context: config.gateway_context.clone(),
-            session_new_tool: config.gateway_context.as_ref().map(|ctx| {
-                crate::builtin_tools::sessions::SessionNewTool::new(Arc::clone(ctx.session_manager()))
-            }),
-            session_set_topic_tool: config.gateway_context.as_ref().map(|ctx| {
-                crate::builtin_tools::sessions::SessionSetTopicTool::new(Arc::clone(ctx.session_manager()))
-            }),
+            session_new_tool: config.gateway_context.as_ref()
+                .map(|ctx| Arc::clone(ctx.session_manager()))
+                .or_else(|| config.session_manager.clone())
+                .map(|sm| crate::builtin_tools::sessions::SessionNewTool::new(sm)),
+            session_set_topic_tool: config.gateway_context.as_ref()
+                .map(|ctx| Arc::clone(ctx.session_manager()))
+                .or_else(|| config.session_manager.clone())
+                .map(|sm| crate::builtin_tools::sessions::SessionSetTopicTool::new(sm)),
             cron_manage_tool: config.cron_service.as_ref().map(|svc| {
                 crate::builtin_tools::cron_manage::CronManageTool::new(Arc::clone(svc))
             }),
@@ -514,20 +516,21 @@ impl BuiltinToolRegistry {
             info!("Registered cron_manage tool in BuiltinToolRegistry");
         }
 
-        // Session new tool (requires SessionManager from gateway_context)
-        if let Some(ref ctx) = config.gateway_context {
-            use crate::builtin_tools::sessions::SessionNewTool;
-            let tmp_tool = SessionNewTool::new(Arc::clone(ctx.session_manager()));
-            let def = AlephTool::definition(&tmp_tool);
+        // Session tools (require SessionManager — from gateway_context or direct session_manager)
+        let session_mgr = config.gateway_context.as_ref()
+            .map(|ctx| Arc::clone(ctx.session_manager()))
+            .or_else(|| config.session_manager.clone());
+
+        if let Some(ref sm) = session_mgr {
+            use crate::builtin_tools::sessions::{SessionNewTool, SessionSetTopicTool};
+
+            let tmp_new = SessionNewTool::new(Arc::clone(sm));
+            let def = AlephTool::definition(&tmp_new);
             reg(tools, "session_new", SessionNewTool::DESCRIPTION, def.parameters.clone());
             info!("Registered session_new tool in BuiltinToolRegistry");
-        }
 
-        // Session set-topic tool (requires SessionManager from gateway_context)
-        if let Some(ref ctx) = config.gateway_context {
-            use crate::builtin_tools::sessions::SessionSetTopicTool;
-            let tmp_tool = SessionSetTopicTool::new(Arc::clone(ctx.session_manager()));
-            let def = AlephTool::definition(&tmp_tool);
+            let tmp_topic = SessionSetTopicTool::new(Arc::clone(sm));
+            let def = AlephTool::definition(&tmp_topic);
             reg(tools, "session_set_topic", SessionSetTopicTool::DESCRIPTION, def.parameters.clone());
             info!("Registered session_set_topic tool in BuiltinToolRegistry");
         }

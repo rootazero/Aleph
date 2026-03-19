@@ -31,6 +31,9 @@ pub struct BuiltinToolConfig {
     pub embedder: Option<Arc<dyn EmbeddingProvider>>,
     /// Gateway context for sessions tools (sessions_list, sessions_send)
     pub gateway_context: Option<Arc<GatewayContext>>,
+    /// Session manager for session tools (session_new, session_set_topic).
+    /// Used when gateway_context is not available (e.g., agent loop without full gateway).
+    pub session_manager: Option<Arc<crate::gateway::SessionManager>>,
     /// Agent registry for agent management tools
     pub agent_registry: Option<Arc<crate::gateway::agent_instance::AgentRegistry>>,
     /// Workspace manager for agent management tools
