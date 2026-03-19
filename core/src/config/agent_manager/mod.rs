@@ -7,7 +7,7 @@
 
 mod crud;
 mod toml_ops;
-mod workspace_files;
+mod agent_files;
 
 #[cfg(test)]
 mod tests;

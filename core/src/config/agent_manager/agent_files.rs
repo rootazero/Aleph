@@ -1,4 +1,4 @@
-//! Workspace file operations — list, read, write, delete files in agent workspaces
+//! Agent identity file operations — list, read, write, delete files in agent identity directories
 
 use std::fs;
 
@@ -7,16 +7,16 @@ use crate::error::{AlephError, Result};
 use super::{AgentManager, WorkspaceFile, BOOTSTRAP_FILES};
 
 impl AgentManager {
-    /// List files in an agent's workspace directory
+    /// List files in an agent's identity directory
     pub fn list_files(&self, agent_id: &str) -> Result<Vec<WorkspaceFile>> {
-        let ws_dir = self.workspace_root.join(agent_id);
-        if !ws_dir.exists() {
+        let agent_dir = self.agents_root.join(agent_id);
+        if !agent_dir.exists() {
             return Ok(Vec::new());
         }
 
         let mut files = Vec::new();
-        let entries = fs::read_dir(&ws_dir).map_err(|e| {
-            AlephError::IoError(format!("Failed to read workspace dir: {}", e))
+        let entries = fs::read_dir(&agent_dir).map_err(|e| {
+            AlephError::IoError(format!("Failed to read agent dir: {}", e))
         })?;
 
         for entry in entries {
@@ -51,10 +51,10 @@ impl AgentManager {
         Ok(files)
     }
 
-    /// Read a file from an agent's workspace
+    /// Read a file from an agent's identity directory
     pub fn read_file(&self, agent_id: &str, filename: &str) -> Result<String> {
         self.validate_filename(filename)?;
-        let path = self.workspace_root.join(agent_id).join(filename);
+        let path = self.agents_root.join(agent_id).join(filename);
         fs::read_to_string(&path).map_err(|e| {
             AlephError::IoError(format!(
                 "Failed to read file '{}': {}",
@@ -64,14 +64,14 @@ impl AgentManager {
         })
     }
 
-    /// Write a file to an agent's workspace
+    /// Write a file to an agent's identity directory
     pub fn write_file(&self, agent_id: &str, filename: &str, content: &str) -> Result<()> {
         self.validate_filename(filename)?;
-        let ws_dir = self.workspace_root.join(agent_id);
-        fs::create_dir_all(&ws_dir).map_err(|e| {
-            AlephError::IoError(format!("Failed to create workspace dir: {}", e))
+        let agent_dir = self.agents_root.join(agent_id);
+        fs::create_dir_all(&agent_dir).map_err(|e| {
+            AlephError::IoError(format!("Failed to create agent dir: {}", e))
         })?;
-        let path = ws_dir.join(filename);
+        let path = agent_dir.join(filename);
         fs::write(&path, content).map_err(|e| {
             AlephError::IoError(format!(
                 "Failed to write file '{}': {}",
@@ -81,10 +81,10 @@ impl AgentManager {
         })
     }
 
-    /// Delete a file from an agent's workspace
+    /// Delete a file from an agent's identity directory
     pub fn delete_file(&self, agent_id: &str, filename: &str) -> Result<()> {
         self.validate_filename(filename)?;
-        let path = self.workspace_root.join(agent_id).join(filename);
+        let path = self.agents_root.join(agent_id).join(filename);
         if path.exists() {
             fs::remove_file(&path).map_err(|e| {
                 AlephError::IoError(format!(
