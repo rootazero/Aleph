@@ -58,6 +58,11 @@ pub struct SessionListRow {
     /// Recent messages (if message_limit > 0)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub messages: Option<Vec<StoredMessage>>,
+    /// Agent that owns this session
+    pub agent_id: String,
+    /// Session topic (generated from first message)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub topic: Option<String>,
 }
 
 /// Output from the sessions_list tool
@@ -127,6 +132,13 @@ impl SessionsListTool {
             (meta.session_type.clone(), "unknown".to_string())
         };
 
+        // Extract topic from metadata_json
+        let topic = meta
+            .metadata_json
+            .as_deref()
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+            .and_then(|v| v.get("topic").and_then(|t| t.as_str()).map(String::from));
+
         SessionListRow {
             key: meta.key.clone(),
             kind,
@@ -134,6 +146,8 @@ impl SessionsListTool {
             updated_at: Some(meta.last_active_at),
             message_count: meta.message_count as usize,
             messages: None,
+            agent_id: meta.agent_id.clone(),
+            topic,
         }
     }
 }
@@ -437,6 +451,7 @@ mod tests {
 
         let result = AlephTool::call(&tool, args).await.unwrap();
         assert_eq!(result.count, 2);
+        assert_eq!(result.sessions[0].agent_id, "main");
     }
 
     #[tokio::test]
