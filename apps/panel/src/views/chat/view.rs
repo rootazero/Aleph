@@ -256,15 +256,7 @@ fn InputArea() -> impl IntoView {
             .collect();
 
         let session_key = chat.session_key.get();
-        // Extract agent_id from session_key (format: "agent:AGENT_ID:...")
-        let agent_id = session_key.as_deref().and_then(|sk| {
-            let parts: Vec<&str> = sk.split(':').collect();
-            if parts.len() >= 2 && parts[0] == "agent" {
-                Some(parts[1].to_string())
-            } else {
-                None
-            }
-        });
+        let agent_id = chat.agent_id.get();
         let dash = dashboard;
         spawn_local(async move {
             let sk = session_key.as_deref();

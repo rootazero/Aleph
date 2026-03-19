@@ -48,6 +48,8 @@ pub struct ChatState {
     pub active_run_id: RwSignal<Option<String>>,
     /// Resolved session key from first chat.send response.
     pub session_key: RwSignal<Option<String>>,
+    /// Currently selected agent ID for routing.
+    pub agent_id: RwSignal<Option<String>>,
     /// Accumulated reasoning text for the current run.
     pub reasoning_text: RwSignal<String>,
     /// Error message (set when run_error arrives).
@@ -63,6 +65,7 @@ impl ChatState {
             phase: RwSignal::new(ChatPhase::Idle),
             active_run_id: RwSignal::new(None),
             session_key: RwSignal::new(None),
+            agent_id: RwSignal::new(None),
             reasoning_text: RwSignal::new(String::new()),
             error_message: RwSignal::new(None),
             next_msg_id: RwSignal::new(0),
@@ -175,7 +178,19 @@ impl ChatState {
         self.phase.set(ChatPhase::Idle);
         self.active_run_id.set(None);
         self.session_key.set(None);
+        self.agent_id.set(None);
         self.reasoning_text.set(String::new());
         self.error_message.set(None);
+    }
+
+    /// Clear session state but keep agent_id (for new chat within same agent).
+    pub fn clear_session(&self) {
+        self.messages.set(Vec::new());
+        self.phase.set(ChatPhase::Idle);
+        self.active_run_id.set(None);
+        self.session_key.set(None);
+        self.reasoning_text.set(String::new());
+        self.error_message.set(None);
+        // agent_id is intentionally preserved
     }
 }
