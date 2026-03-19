@@ -425,6 +425,44 @@ impl SessionManager {
         Ok(())
     }
 
+    /// Set the topic for a session without closing it.
+    /// Used by async topic generation on first message.
+    pub async fn set_topic(
+        &self,
+        key: &SessionKey,
+        topic: &str,
+    ) -> Result<(), SessionManagerError> {
+        let key_str = key.to_key_string();
+        let conn = self.conn.lock().map_err(|e|
+            SessionManagerError::DatabaseError(format!("Lock error: {}", e)))?;
+
+        // Get existing metadata
+        let existing_json: Option<String> = conn
+            .query_row("SELECT metadata FROM sessions WHERE key = ?", params![&key_str], |row| row.get(0))
+            .optional()
+            .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?
+            .flatten();
+
+        let mut meta: serde_json::Value = existing_json
+            .as_deref()
+            .and_then(|s| serde_json::from_str(s).ok())
+            .unwrap_or_else(|| serde_json::json!({}));
+
+        if let Some(obj) = meta.as_object_mut() {
+            obj.insert("topic".to_string(), serde_json::json!(topic));
+        }
+
+        let meta_json = serde_json::to_string(&meta)
+            .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
+
+        conn.execute(
+            "UPDATE sessions SET metadata = ? WHERE key = ?",
+            params![&meta_json, &key_str],
+        ).map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
+
+        Ok(())
+    }
+
     /// Get current epoch for a base key pattern (e.g. "agent:main:main")
     pub async fn get_current_epoch(
         &self,
