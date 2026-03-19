@@ -231,13 +231,13 @@ impl AgentDefinitionResolver {
                 "Failed to create workspace directory"
             );
         }
-        // Workspace files (SOUL.md, AGENTS.md, etc.) go in workspace_path for user editing
-        if let Err(e) = initialize_workspace(&workspace_path, agent_name) {
+        // Identity files (SOUL.md, AGENTS.md, etc.) go in agent_dir
+        if let Err(e) = initialize_workspace(&agent_dir, agent_name) {
             tracing::warn!(
                 agent_id = %agent.id,
-                path = %workspace_path.display(),
+                path = %agent_dir.display(),
                 error = %e,
-                "Failed to initialize workspace identity files"
+                "Failed to initialize agent identity files"
             );
         }
 
