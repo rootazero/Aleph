@@ -75,7 +75,7 @@ impl AlephTool for AgentDeleteTool {
     const NAME: &'static str = "agent_delete";
     const DESCRIPTION: &'static str =
         "Delete an agent and archive its workspace. The 'main' agent cannot be deleted. \
-         If the deleted agent is currently active, the session switches to 'main'.";
+         If the deleted agent is bound to a channel, the binding is cleared.";
 
     type Args = AgentDeleteArgs;
     type Output = AgentDeleteOutput;
@@ -108,28 +108,10 @@ impl AlephTool for AgentDeleteTool {
             )));
         }
 
-        // 3. If active, switch to main first (channel/peer_id injected by registry snapshot)
-        let channel = args.__channel.clone();
+        // 3. Unbind agent from its channel if bound (peer_id injected by registry snapshot)
         let peer_id = args.__peer_id.clone();
-        if !channel.is_empty() && !peer_id.is_empty() {
-            let current_active = self
-                .workspace_mgr
-                .get_active_agent(&channel, &peer_id)
-                .ok()
-                .flatten();
-
-            if current_active.as_deref() == Some(args.agent_id.as_str()) {
-                info!(
-                    agent_id = %args.agent_id,
-                    "Deleted agent is active, switching to main"
-                );
-                if let Err(e) = self
-                    .workspace_mgr
-                    .set_active_agent(&channel, &peer_id, "main")
-                {
-                    warn!("Failed to switch to main after deletion: {}", e);
-                }
-            }
+        if let Ok(Some(bound_channel)) = self.workspace_mgr.get_channel_for_agent(&args.agent_id) {
+            let _ = self.workspace_mgr.clear_active_agent(&bound_channel, &peer_id);
         }
 
         // 4. Remove from registry

@@ -41,8 +41,8 @@ pub struct AgentListInfo {
     pub workspace_path: String,
     /// LLM model used by this agent
     pub model: String,
-    /// Whether this agent is currently active for the caller's session
-    pub is_active: bool,
+    /// Channel this agent is bound to (if any)
+    pub bound_channel: Option<String>,
 }
 
 /// Output from listing agents.
@@ -53,8 +53,6 @@ pub struct AgentListOutput {
     pub display_text: String,
     /// All registered agents
     pub agents: Vec<AgentListInfo>,
-    /// Currently active agent for the caller's session (if any)
-    pub active_agent: Option<String>,
     /// Total number of agents
     pub total: usize,
 }
@@ -64,13 +62,11 @@ impl fmt::Display for AgentListOutput {
         writeln!(f, "Agents ({} total):", self.total)?;
         writeln!(f)?;
         for agent in &self.agents {
-            let active_marker = if agent.is_active { " *" } else { "" };
-            writeln!(f, "  {} ({}){}", agent.name, agent.id, active_marker)?;
+            writeln!(f, "  {} ({})", agent.name, agent.id)?;
             writeln!(f, "    model: {}", agent.model)?;
-        }
-        if let Some(ref active) = self.active_agent {
-            writeln!(f)?;
-            writeln!(f, "Active: {}", active)?;
+            if let Some(ref ch) = agent.bound_channel {
+                writeln!(f, "    bound to: {}", ch)?;
+            }
         }
         Ok(())
     }
@@ -115,20 +111,13 @@ impl AlephTool for AgentListTool {
         ])
     }
 
-    async fn call(&self, args: Self::Args) -> Result<Self::Output> {
+    async fn call(&self, _args: Self::Args) -> Result<Self::Output> {
         info!("Agent list requested");
 
-        // 1. Get active agent for current session (channel/peer_id injected by registry snapshot)
-        let channel = args.__channel.clone();
-        let peer_id = args.__peer_id.clone();
-        let active_agent = if !channel.is_empty() && !peer_id.is_empty() {
-            self.workspace_mgr
-                .get_active_agent(&channel, &peer_id)
-                .ok()
-                .flatten()
-        } else {
-            None
-        };
+        // 1. Get all agent→channel bindings
+        let bindings = self.workspace_mgr
+            .get_all_agent_bindings()
+            .unwrap_or_default();
 
         // 2. List all agents from registry
         let agent_ids = self.registry.list().await;
@@ -141,7 +130,7 @@ impl AlephTool for AgentListTool {
                     name: instance.display_name().to_string(),
                     workspace_path: instance.workspace().to_string_lossy().to_string(),
                     model: instance.config().model.clone(),
-                    is_active: active_agent.as_deref() == Some(id.as_str()),
+                    bound_channel: bindings.get(id).cloned(),
                 });
             }
         }
@@ -151,12 +140,11 @@ impl AlephTool for AgentListTool {
 
         let total = agents.len();
 
-        info!(total, active = ?active_agent, "Agent list complete");
+        info!(total, "Agent list complete");
 
         let mut output = AgentListOutput {
             display_text: String::new(),
             agents,
-            active_agent,
             total,
         };
         output.display_text = output.to_string();

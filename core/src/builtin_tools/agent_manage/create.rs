@@ -139,8 +139,6 @@ pub struct AgentCreateOutput {
     pub agent_id: String,
     /// Path to the agent's workspace directory
     pub workspace_path: String,
-    /// Whether the agent was auto-switched to
-    pub switched: bool,
     /// Human-readable status message
     pub message: String,
 }
@@ -153,6 +151,7 @@ pub struct AgentCreateOutput {
 #[derive(Clone)]
 pub struct AgentCreateTool {
     registry: Arc<AgentRegistry>,
+    #[allow(dead_code)]
     workspace_mgr: Arc<WorkspaceManager>,
     agent_manager: Option<Arc<AgentManager>>,
 }
@@ -179,9 +178,9 @@ impl AgentCreateTool {
 impl AlephTool for AgentCreateTool {
     const NAME: &'static str = "agent_create";
     const DESCRIPTION: &'static str =
-        "Create a new agent with its own workspace and memory. The new agent is \
-         automatically activated for the current conversation. Use this when the \
-         user wants a specialized assistant (e.g., trading, coding, health).";
+        "Create a new agent with its own workspace and memory. Use this when the \
+         user wants a specialized assistant (e.g., trading, coding, health). \
+         After creation, bind the agent to a channel with agent_bind.";
 
     type Args = AgentCreateArgs;
     type Output = AgentCreateOutput;
@@ -350,37 +349,14 @@ impl AlephTool for AgentCreateTool {
             }
         }
 
-        // 9. Auto-switch via WorkspaceManager (channel/peer_id injected by registry snapshot)
-        let channel = args.__channel.clone();
-        let peer_id = args.__peer_id.clone();
-        let switched = if !channel.is_empty() && !peer_id.is_empty() {
-            self.workspace_mgr
-                .set_active_agent(&channel, &peer_id, &args.id)
-                .map(|_| true)
-                .unwrap_or(false)
-        } else {
-            false
-        };
-
         let workspace_str = workspace_path.to_string_lossy().to_string();
-        let msg = if switched {
-            format!(
-                "Agent '{}' created and activated. Workspace: {}",
-                args.id, workspace_str
-            )
-        } else {
-            format!(
-                "Agent '{}' created. Workspace: {}",
-                args.id, workspace_str
-            )
-        };
+        let msg = format!("Agent '{}' created. Workspace: {}", args.id, workspace_str);
 
-        info!(agent_id = %args.id, switched, "Agent created successfully");
+        info!(agent_id = %args.id, "Agent created successfully");
 
         Ok(AgentCreateOutput {
             agent_id: args.id,
             workspace_path: workspace_str,
-            switched,
             message: msg,
         })
     }
