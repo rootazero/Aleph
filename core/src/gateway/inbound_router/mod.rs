@@ -275,9 +275,21 @@ impl InboundMessageRouter {
             msg.text.chars().take(50).collect::<String>()
         );
 
-        // Resolve agent ID using unified routing (async)
-        let sender_id = msg.sender_id.as_str();
-        let agent_id = self.resolve_agent_id_async(channel_id, sender_id).await;
+        // Resolve agent ID from 1:1 channel binding (single-tier)
+        let agent_id = match self.resolve_agent_id_async(channel_id, msg.sender_id.as_str()).await {
+            Some(id) => id,
+            None => {
+                // Unbound channel — send fixed message
+                let reply = OutboundMessage::text(
+                    msg.conversation_id.as_str(),
+                    "此频道未绑定 Agent，请在 Panel 中配置",
+                );
+                if let Err(e) = self.channel_registry.send(&msg.channel_id, reply).await {
+                    error!("[Router] Failed to send unbound-channel message: {}", e);
+                }
+                return Ok(());
+            }
+        };
 
         // Check link access control
         if let Some(ref registry) = self.agent_registry {

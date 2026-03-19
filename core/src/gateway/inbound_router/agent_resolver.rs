@@ -16,36 +16,18 @@ use crate::gateway::interfaces::imessage::normalize_phone;
 use super::normalize_phone;
 
 impl InboundMessageRouter {
-    /// Resolve agent ID from channel using AgentRouter bindings and workspace manager (async)
+    /// Resolve agent ID from channel binding (single-tier).
     ///
-    /// Resolution priority (highest to lowest):
-    /// 1. User's explicit agent switch (WorkspaceManager)
-    /// 2. Config-layer route bindings (AgentRouter)
-    /// 3. default_agent (RoutingConfig)
-    pub(super) async fn resolve_agent_id_async(&self, channel: &str, sender_id: &str) -> String {
-        // 1. User's explicit agent switch (highest priority)
+    /// Looks up the 1:1 channel-agent binding. Returns None if unbound.
+    pub(super) async fn resolve_agent_id_async(&self, channel: &str, sender_id: &str) -> Option<String> {
         if let Some(ref manager) = self.workspace_manager {
             if let Ok(Some(agent_id)) = manager.get_active_agent(channel, sender_id) {
-                debug!(
-                    "Using user-override agent '{}' for {}:{}",
-                    agent_id, channel, sender_id
-                );
-                return agent_id;
+                debug!("Channel '{}' bound to agent '{}'", channel, agent_id);
+                return Some(agent_id);
             }
         }
-
-        // 2. Config-layer route bindings
-        if let Some(router) = &self.agent_router {
-            let resolved = router.route(None, Some(channel), None, None).await;
-            let resolved_id = resolved.agent_id();
-            // Only use if it differs from the default (meaning a binding matched)
-            if resolved_id != router.default_agent() {
-                return resolved_id.to_string();
-            }
-        }
-
-        // 3. Fall back to default agent
-        self.config.default_agent.clone()
+        debug!("Channel '{}' has no agent binding", channel);
+        None
     }
 
     /// Build InboundContext from message with pre-resolved agent ID
