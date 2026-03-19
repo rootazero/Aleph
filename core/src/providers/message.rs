@@ -151,6 +151,40 @@ impl UnifiedMessage {
         parts.join("\n")
     }
 
+    /// Extract all text content from a message as a single concatenated string.
+    ///
+    /// Covers Text blocks and Json (serialized). Used for token estimation.
+    pub fn text_content(&self) -> String {
+        let mut parts = Vec::new();
+        for block in self.content_blocks() {
+            match block {
+                ContentBlock::Text { text } => parts.push(text.as_str().to_owned()),
+                ContentBlock::Thinking { thinking } => parts.push(thinking.as_str().to_owned()),
+                ContentBlock::Json { value } => parts.push(value.to_string()),
+                ContentBlock::ToolCall { name, arguments, .. } => {
+                    parts.push(format!("{} {}", name, arguments));
+                }
+                ContentBlock::Image { .. } => {}
+            }
+        }
+        parts.join(" ")
+    }
+
+    /// Returns true if this is an Assistant message.
+    pub fn is_assistant(&self) -> bool {
+        matches!(self, Self::Assistant { .. })
+    }
+
+    /// Returns true if this is a User message.
+    pub fn is_user(&self) -> bool {
+        matches!(self, Self::User { .. })
+    }
+
+    /// Returns true if this is a ToolResult message.
+    pub fn is_tool_result(&self) -> bool {
+        matches!(self, Self::ToolResult { .. })
+    }
+
     /// Check if this is a ToolCall-bearing Assistant message
     pub fn has_tool_calls(&self) -> bool {
         match self {
