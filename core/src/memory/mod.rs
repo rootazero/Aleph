@@ -55,8 +55,9 @@ pub mod retrieval_trace;
 pub mod query_expander;
 pub mod reflection;
 pub mod scoring_pipeline;
+pub mod session_compactor;
 pub mod vfs;
-// workspace has been moved to gateway::workspace (WorkspaceManager, SQLite-backed)
+// workspace has been moved to gateway::agent_env (AgentEnvStore, SQLite-backed)
 
 #[cfg(test)]
 mod integration_tests;
@@ -141,6 +142,7 @@ pub use vfs::{compute_directory_hash, L1Generator, bootstrap_agent_context, migr
 pub use store::lance::LanceMemoryBackend;
 pub use store::types::{SearchFilter, ScoredFact, MemoryFilter};
 pub use store::MemoryBackend;
-// Workspace types are now canonical in gateway::workspace; re-export for backward compatibility
-pub use crate::gateway::workspace::{Workspace, WorkspaceContext, WorkspaceFilter, DEFAULT_WORKSPACE};
+// Workspace types are now canonical in gateway::agent_env; re-export for backward compatibility
+pub use crate::gateway::agent_env::{AgentEnv, AgentEnvContext, AgentEnvFilter, DEFAULT_AGENT};
 pub use scoring_pipeline::{ScoringPipeline, ScoringPipelineConfig, ScoringContext};
+pub use session_compactor::SessionCompactorConfig;

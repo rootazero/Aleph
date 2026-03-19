@@ -143,6 +143,8 @@ pub enum FactSource {
     Document,
     /// User-created manually
     Manual,
+    /// Compressed summary produced by SessionCompactor during an active session
+    SessionCompressed,
 }
 
 impl FactSource {
@@ -152,6 +154,7 @@ impl FactSource {
             Self::Summary => "summary",
             Self::Document => "document",
             Self::Manual => "manual",
+            Self::SessionCompressed => "session_compressed",
         }
     }
 
@@ -161,6 +164,7 @@ impl FactSource {
             "summary" => Self::Summary,
             "document" => Self::Document,
             "manual" => Self::Manual,
+            "session_compressed" => Self::SessionCompressed,
             _ => Self::Extracted,
         }
     }
@@ -175,6 +179,7 @@ impl std::str::FromStr for FactSource {
             "summary" => Ok(Self::Summary),
             "document" => Ok(Self::Document),
             "manual" => Ok(Self::Manual),
+            "session_compressed" => Ok(Self::SessionCompressed),
             _ => Err(format!("Unknown fact source: {}", s)),
         }
     }
@@ -357,6 +362,7 @@ impl std::fmt::Display for MemoryTier {
 /// - **Global**: visible everywhere
 /// - **Agent**: visible only within a specific agent
 /// - **Persona**: visible only to a specific persona
+/// - **SessionLocal**: visible only within the current session (ephemeral, not persisted long-term)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum MemoryScope {
@@ -367,6 +373,8 @@ pub enum MemoryScope {
     Agent,
     /// Visible only to a specific persona.
     Persona,
+    /// Visible only within the current session; used by SessionCompactor for intra-session facts.
+    SessionLocal,
 }
 
 impl MemoryScope {
@@ -375,6 +383,7 @@ impl MemoryScope {
             Self::Global => "global",
             Self::Agent => "agent",
             Self::Persona => "persona",
+            Self::SessionLocal => "session_local",
         }
     }
 
@@ -391,6 +400,7 @@ impl std::str::FromStr for MemoryScope {
             "global" => Ok(Self::Global),
             "agent" => Ok(Self::Agent),
             "persona" => Ok(Self::Persona),
+            "session_local" => Ok(Self::SessionLocal),
             _ => Err(format!("Unknown memory scope: {}", s)),
         }
     }
