@@ -453,8 +453,9 @@ pub fn ChatSidebar() -> impl IntoView {
                                             <div class="w-full px-3 py-2 rounded-lg bg-surface-sunken border border-primary/40">
                                                 <input
                                                     node_ref=edit_input_ref
-                                                    class="w-full bg-transparent text-xs text-text-primary outline-none"
+                                                    class="w-full bg-transparent text-xs text-text-primary outline-none disabled:opacity-50"
                                                     prop:value=move || edit_text.get()
+                                                    prop:disabled=move || is_saving.get()
                                                     maxlength=100
                                                     on:input=move |ev| {
                                                         edit_text.set(event_target_value(&ev));
@@ -498,13 +499,22 @@ pub fn ChatSidebar() -> impl IntoView {
                                         // --- Delete-confirm mode ---
                                         let key_for_del = key.clone();
                                         view! {
-                                            <div class="w-full px-3 py-2 rounded-lg bg-red-500/10 border border-red-500/30
-                                                        flex items-center justify-between text-xs">
+                                            <div
+                                                tabindex=0
+                                                class="w-full px-3 py-2 rounded-lg bg-red-500/10 border border-red-500/30
+                                                        flex items-center justify-between text-xs outline-none"
+                                                on:keydown=move |ev: web_sys::KeyboardEvent| {
+                                                    if ev.key() == "Escape" {
+                                                        clear_action_states();
+                                                    }
+                                                }
+                                            >
                                                 <span class="text-red-400 font-medium">"确认删除?"</span>
                                                 <div class="flex items-center gap-1.5">
                                                     <button
                                                         class="px-2 py-0.5 rounded bg-red-500 text-white text-[10px] font-medium
-                                                               hover:bg-red-600 transition-colors"
+                                                               hover:bg-red-600 transition-colors disabled:opacity-50"
+                                                        prop:disabled=move || is_saving.get()
                                                         on:click=move |ev: web_sys::MouseEvent| {
                                                             ev.stop_propagation();
                                                             do_delete(key_for_del.clone());
