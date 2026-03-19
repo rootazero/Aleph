@@ -15,6 +15,7 @@ use crate::components::forms::{
     SwitchInput, TextInput,
 };
 use crate::components::ui::channel_status::{ChannelStatus, ChannelStatusBadge};
+use crate::components::ui::AgentBindingSelector;
 use crate::components::ui::SecretInput;
 use crate::components::ui::TagListInput;
 use crate::context::DashboardState;
@@ -313,6 +314,9 @@ pub fn ChannelConfigTemplate(
                     {msg}
                 </div>
             })}
+
+            // ---- Agent binding selector ----
+            <AgentBindingSelector channel_id=channel_id.clone() />
 
             // ---- Loading state OR field section ----
             {move || {

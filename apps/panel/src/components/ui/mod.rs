@@ -1,3 +1,4 @@
+pub mod agent_binding_selector;
 pub mod button;
 pub mod card;
 pub mod badge;
@@ -7,6 +8,7 @@ pub mod channel_status;
 pub mod channel_card;
 pub mod tag_list_input;
 
+pub use agent_binding_selector::AgentBindingSelector;
 pub use button::{Button, ButtonVariant, ButtonSize};
 pub use card::{Card, CardHeader, CardContent, CardTitle, CardDescription};
 pub use badge::{Badge, BadgeVariant, StatusBadge};

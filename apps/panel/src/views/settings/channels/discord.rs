@@ -10,6 +10,7 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 use leptos_router::components::A;
 use crate::components::forms::ErrorMessageDynamic;
+use crate::components::ui::AgentBindingSelector;
 use crate::context::DashboardState;
 use crate::api::DiscordApi;
 
@@ -141,6 +142,9 @@ pub fn DiscordChannelView() -> impl IntoView {
 
                 // Error banner — uses shared ErrorMessageDynamic component
                 <ErrorMessageDynamic error=error.into() />
+
+                // Agent binding selector
+                <AgentBindingSelector channel_id=channel_id.to_string() />
 
                 // Section 1: Bot Identity
                 <BotIdentitySection bot_identity=bot_identity />
