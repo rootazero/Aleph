@@ -12,6 +12,8 @@ use crate::api::chat::ChatApi;
 use crate::context::DashboardState;
 use crate::views::chat::state::ChatState;
 
+use web_sys::HtmlInputElement;
+
 /// A session entry returned by the backend (sessions.list).
 #[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
@@ -49,6 +51,14 @@ pub fn ChatSidebar() -> impl IntoView {
     let is_loading = RwSignal::new(false);
     // Which agent is selected in the dropdown (synced with chat.agent_id)
     let selected_agent = RwSignal::new(Option::<String>::None);
+
+    // Session action states (edit/delete/menu — mutually exclusive)
+    let editing_key = RwSignal::new(Option::<String>::None);
+    let deleting_key = RwSignal::new(Option::<String>::None);
+    let edit_text = RwSignal::new(String::new());
+    let menu_open_key = RwSignal::new(Option::<String>::None);
+    let is_saving = RwSignal::new(false);
+    let edit_input_ref = NodeRef::<leptos::html::Input>::new();
 
     // Reusable closure: fetch both agents and sessions from the backend.
     let reload_data = Arc::new(move |dash: DashboardState| {
@@ -205,6 +215,109 @@ pub fn ChatSidebar() -> impl IntoView {
         }
     };
 
+    // --- Session action helpers ---
+
+    let clear_action_states = move || {
+        editing_key.set(None);
+        deleting_key.set(None);
+        menu_open_key.set(None);
+        edit_text.set(String::new());
+    };
+
+    let reload_for_rename = reload_data.clone();
+    let do_rename = Arc::new(move |session_key: String, topic: String| {
+        if is_saving.get_untracked() {
+            return;
+        }
+        let topic = topic.trim().to_string();
+        if topic.is_empty() {
+            editing_key.set(None);
+            edit_text.set(String::new());
+            return;
+        }
+        is_saving.set(true);
+        let dash = dashboard;
+        let reload = reload_for_rename.clone();
+        leptos::task::spawn_local(async move {
+            let params = serde_json::json!({
+                "session_key": session_key,
+                "topic": topic,
+            });
+            match dash.rpc_call("sessions.set_topic", params).await {
+                Ok(_) => {
+                    reload(dash);
+                }
+                Err(e) => {
+                    web_sys::console::error_1(
+                        &format!("Failed to rename session: {e}").into(),
+                    );
+                }
+            }
+            is_saving.set(false);
+            editing_key.set(None);
+            edit_text.set(String::new());
+        });
+    });
+
+    let reload_for_delete = reload_data.clone();
+    let do_delete = Arc::new(move |session_key: String| {
+        if is_saving.get_untracked() {
+            return;
+        }
+        is_saving.set(true);
+        let dash = dashboard;
+        let reload = reload_for_delete.clone();
+        leptos::task::spawn_local(async move {
+            let params = serde_json::json!({
+                "session_key": session_key,
+            });
+            match dash.rpc_call("sessions.delete", params).await {
+                Ok(_) => {
+                    // If deleting the active session, clear it
+                    if chat.session_key.get_untracked().as_deref() == Some(&session_key) {
+                        chat.clear_session();
+                    }
+                    reload(dash);
+                }
+                Err(e) => {
+                    web_sys::console::error_1(
+                        &format!("Failed to delete session: {e}").into(),
+                    );
+                }
+            }
+            is_saving.set(false);
+            deleting_key.set(None);
+        });
+    });
+
+    // Auto-focus edit input when entering edit mode
+    Effect::new(move || {
+        let _key = editing_key.get();
+        if _key.is_some() {
+            leptos::task::spawn_local(async move {
+                gloo_timers::future::TimeoutFuture::new(10).await;
+                if let Some(el) = edit_input_ref.get() {
+                    let input: &HtmlInputElement = &el;
+                    let _ = input.focus();
+                    let _ = input.select();
+                }
+            });
+        }
+    });
+
+    // Auto-dismiss delete confirmation after 5 seconds
+    Effect::new(move || {
+        let key = deleting_key.get();
+        if let Some(k) = key {
+            leptos::task::spawn_local(async move {
+                gloo_timers::future::TimeoutFuture::new(5000).await;
+                if deleting_key.get_untracked().as_deref() == Some(&k) {
+                    deleting_key.set(None);
+                }
+            });
+        }
+    });
+
     view! {
         <div class="flex flex-col h-full">
             // Agent selector + New Chat button
@@ -257,12 +370,25 @@ pub fn ChatSidebar() -> impl IntoView {
                 </div>
             </div>
 
+            // Click-outside overlay for dropdown menu
+            {move || {
+                if menu_open_key.get().is_some() {
+                    view! { <div class="fixed inset-0 z-40" on:click=move |_| menu_open_key.set(None) /> }.into_any()
+                } else {
+                    view! { <span /> }.into_any()
+                }
+            }}
+
             // Session list (filtered by selected agent)
             <div class="flex-1 overflow-y-auto px-3 py-2 space-y-1">
                 {move || {
                     let session_list = sessions.get();
                     let sel_agent = selected_agent.get();
                     let _active_key = chat.session_key.get(); // track for reactivity
+                    // Track action states for reactivity
+                    let _editing = editing_key.get();
+                    let _deleting = deleting_key.get();
+                    let _menu = menu_open_key.get();
 
                     if is_loading.get() && session_list.is_empty() {
                         return view! {
@@ -288,13 +414,14 @@ pub fn ChatSidebar() -> impl IntoView {
                     }
 
                     let on_select = on_select_session.clone();
+                    let do_rename = do_rename.clone();
+                    let do_delete = do_delete.clone();
                     view! {
                         <div class="space-y-0.5">
                             {filtered
                                 .into_iter()
                                 .map(|session| {
                                     let key = session.key.clone();
-                                    let key_for_click = key.clone();
                                     let session_agent_id = session.agent_id.clone();
                                     let is_active = {
                                         let key = key.clone();
@@ -308,28 +435,185 @@ pub fn ChatSidebar() -> impl IntoView {
                                         .unwrap_or_else(|| "New Chat".to_string());
                                     let subtitle = format_session_subtitle(&session);
                                     let on_select = on_select.clone();
-                                    view! {
-                                        <button
-                                            class=move || format!(
-                                                "w-full text-left px-3 py-2.5 rounded-lg text-sm transition-colors {}",
-                                                if is_active() {
-                                                    "bg-primary/10 text-primary font-medium"
+                                    let do_rename = do_rename.clone();
+                                    let do_delete = do_delete.clone();
+
+                                    // Determine which mode this session row is in
+                                    let is_editing = _editing.as_deref() == Some(&key);
+                                    let is_deleting = _deleting.as_deref() == Some(&key);
+                                    let is_menu_open = _menu.as_deref() == Some(&key);
+
+                                    if is_editing {
+                                        // --- Edit mode ---
+                                        let key_for_save = key.clone();
+                                        let key_for_save2 = key.clone();
+                                        let do_rename_keydown = do_rename.clone();
+                                        let do_rename_blur = do_rename.clone();
+                                        view! {
+                                            <div class="w-full px-3 py-2 rounded-lg bg-surface-sunken border border-primary/40">
+                                                <input
+                                                    node_ref=edit_input_ref
+                                                    class="w-full bg-transparent text-xs text-text-primary outline-none"
+                                                    prop:value=move || edit_text.get()
+                                                    maxlength=100
+                                                    on:input=move |ev| {
+                                                        edit_text.set(event_target_value(&ev));
+                                                    }
+                                                    on:keydown=move |ev: web_sys::KeyboardEvent| {
+                                                        let k = ev.key();
+                                                        if k == "Enter" {
+                                                            let text = edit_text.get_untracked();
+                                                            if text.trim().is_empty() {
+                                                                editing_key.set(None);
+                                                                edit_text.set(String::new());
+                                                            } else {
+                                                                do_rename_keydown(key_for_save.clone(), text);
+                                                            }
+                                                        } else if k == "Escape" {
+                                                            editing_key.set(None);
+                                                            edit_text.set(String::new());
+                                                        }
+                                                    }
+                                                    on:blur=move |_| {
+                                                        // Small delay to allow Enter keydown to fire first
+                                                        let key_c = key_for_save2.clone();
+                                                        let do_rename_c = do_rename_blur.clone();
+                                                        leptos::task::spawn_local(async move {
+                                                            gloo_timers::future::TimeoutFuture::new(100).await;
+                                                            if editing_key.get_untracked().as_deref() == Some(&key_c) {
+                                                                let text = edit_text.get_untracked();
+                                                                if text.trim().is_empty() {
+                                                                    editing_key.set(None);
+                                                                    edit_text.set(String::new());
+                                                                } else {
+                                                                    do_rename_c(key_c, text);
+                                                                }
+                                                            }
+                                                        });
+                                                    }
+                                                />
+                                            </div>
+                                        }.into_any()
+                                    } else if is_deleting {
+                                        // --- Delete-confirm mode ---
+                                        let key_for_del = key.clone();
+                                        view! {
+                                            <div class="w-full px-3 py-2 rounded-lg bg-red-500/10 border border-red-500/30
+                                                        flex items-center justify-between text-xs">
+                                                <span class="text-red-400 font-medium">"确认删除?"</span>
+                                                <div class="flex items-center gap-1.5">
+                                                    <button
+                                                        class="px-2 py-0.5 rounded bg-red-500 text-white text-[10px] font-medium
+                                                               hover:bg-red-600 transition-colors"
+                                                        on:click=move |ev: web_sys::MouseEvent| {
+                                                            ev.stop_propagation();
+                                                            do_delete(key_for_del.clone());
+                                                        }
+                                                    >
+                                                        "确认"
+                                                    </button>
+                                                    <button
+                                                        class="px-2 py-0.5 rounded bg-surface-sunken text-text-secondary text-[10px]
+                                                               hover:bg-surface-raised transition-colors"
+                                                        on:click=move |ev: web_sys::MouseEvent| {
+                                                            ev.stop_propagation();
+                                                            clear_action_states();
+                                                        }
+                                                    >
+                                                        "取消"
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        }.into_any()
+                                    } else {
+                                        // --- Normal mode ---
+                                        let key_for_click = key.clone();
+                                        let key_for_menu = key.clone();
+                                        let key_for_edit = key.clone();
+                                        let key_for_del_menu = key.clone();
+                                        let label_for_edit = label.clone();
+                                        view! {
+                                            <div class="relative group">
+                                                <button
+                                                    class=move || format!(
+                                                        "w-full text-left px-3 py-2.5 rounded-lg text-sm transition-colors flex items-center justify-between {}",
+                                                        if is_active() {
+                                                            "bg-primary/10 text-primary font-medium"
+                                                        } else {
+                                                            "text-text-secondary hover:bg-surface-sunken hover:text-text-primary"
+                                                        }
+                                                    )
+                                                    on:click=move |_| {
+                                                        clear_action_states();
+                                                        on_select(
+                                                            key_for_click.clone(),
+                                                            session_agent_id.clone(),
+                                                        );
+                                                    }
+                                                >
+                                                    <div class="flex-1 min-w-0">
+                                                        <div class="truncate font-medium text-xs">
+                                                            {label}
+                                                        </div>
+                                                        <div class="truncate text-[10px] text-text-tertiary mt-0.5">
+                                                            {subtitle}
+                                                        </div>
+                                                    </div>
+                                                    // ⋯ button (visible on hover)
+                                                    <button
+                                                        class="opacity-0 group-hover:opacity-100 ml-1 px-1.5 py-0.5
+                                                               rounded text-text-tertiary hover:text-text-primary
+                                                               hover:bg-surface-raised transition-all text-xs flex-shrink-0"
+                                                        on:click=move |ev: web_sys::MouseEvent| {
+                                                            ev.stop_propagation();
+                                                            let current = menu_open_key.get_untracked();
+                                                            if current.as_deref() == Some(&key_for_menu) {
+                                                                menu_open_key.set(None);
+                                                            } else {
+                                                                clear_action_states();
+                                                                menu_open_key.set(Some(key_for_menu.clone()));
+                                                            }
+                                                        }
+                                                    >
+                                                        "⋯"
+                                                    </button>
+                                                </button>
+                                                // Dropdown menu
+                                                {if is_menu_open {
+                                                    view! {
+                                                        <div class="absolute right-0 top-full mt-1 z-50 min-w-[120px]
+                                                                    bg-surface-raised border border-border rounded-lg shadow-lg
+                                                                    py-1 text-xs">
+                                                            <button
+                                                                class="w-full text-left px-3 py-1.5 text-text-secondary
+                                                                       hover:bg-surface-sunken hover:text-text-primary transition-colors"
+                                                                on:click=move |ev: web_sys::MouseEvent| {
+                                                                    ev.stop_propagation();
+                                                                    menu_open_key.set(None);
+                                                                    edit_text.set(label_for_edit.clone());
+                                                                    editing_key.set(Some(key_for_edit.clone()));
+                                                                }
+                                                            >
+                                                                "重命名"
+                                                            </button>
+                                                            <button
+                                                                class="w-full text-left px-3 py-1.5 text-red-400
+                                                                       hover:bg-red-500/10 transition-colors"
+                                                                on:click=move |ev: web_sys::MouseEvent| {
+                                                                    ev.stop_propagation();
+                                                                    menu_open_key.set(None);
+                                                                    deleting_key.set(Some(key_for_del_menu.clone()));
+                                                                }
+                                                            >
+                                                                "删除"
+                                                            </button>
+                                                        </div>
+                                                    }.into_any()
                                                 } else {
-                                                    "text-text-secondary hover:bg-surface-sunken hover:text-text-primary"
-                                                }
-                                            )
-                                            on:click=move |_| on_select(
-                                                key_for_click.clone(),
-                                                session_agent_id.clone(),
-                                            )
-                                        >
-                                            <div class="truncate font-medium text-xs">
-                                                {label}
+                                                    view! { <span /> }.into_any()
+                                                }}
                                             </div>
-                                            <div class="truncate text-[10px] text-text-tertiary mt-0.5">
-                                                {subtitle}
-                                            </div>
-                                        </button>
+                                        }.into_any()
                                     }
                                 })
                                 .collect::<Vec<_>>()}
