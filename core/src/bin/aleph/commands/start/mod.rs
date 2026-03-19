@@ -19,6 +19,9 @@ use alephcore::gateway::{
 };
 use alephcore::gateway::pairing_store::SqlitePairingStore;
 use alephcore::cron::{CronService, SharedCronService};
+use alephcore::cron::executor::build_cron_executor_fn;
+use alephcore::cron::service::timer::run_timer_loop;
+use alephcore::cron::service::catchup::run_startup_catchup;
 use alephcore::group_chat::{GroupChatExecutor, GroupChatOrchestrator};
 use alephcore::ProviderRegistry as _; // trait needed for .default_provider()
 
@@ -617,7 +620,56 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         }
     }
 
-    // CronService init moved before register_agent_handlers (see above)
+    // Spawn cron timer loop (after agent handlers, so AgentRegistry is populated)
+    if let Some(ref cron_svc) = cron_service {
+        if let (Some(ref exec_adapter), Some(ref registry)) =
+            (&agent_result.execution_adapter, &agent_result.agent_registry)
+        {
+            let cron_state = {
+                let guard = cron_svc.lock().await;
+                guard.state().clone()
+            };
+
+            let executor_fn = build_cron_executor_fn(
+                Arc::clone(exec_adapter),
+                Arc::clone(registry),
+            );
+
+            let cron_config = cron_state.config.clone();
+            tokio::spawn(async move {
+                // Run startup catchup before entering the timer loop
+                match run_startup_catchup(
+                    &cron_state.store,
+                    cron_state.clock.as_ref(),
+                    cron_config.max_missed_jobs_per_restart,
+                    cron_config.catchup_stagger_ms,
+                ).await {
+                    Ok(report) => {
+                        if report.stale_markers_cleared > 0
+                            || report.immediate_count > 0
+                            || report.deferred_count > 0
+                        {
+                            tracing::info!(
+                                stale_cleared = report.stale_markers_cleared,
+                                immediate = report.immediate_count,
+                                deferred = report.deferred_count,
+                                "Cron startup catchup complete"
+                            );
+                        }
+                    }
+                    Err(e) => tracing::error!("Cron startup catchup failed: {}", e),
+                }
+                // Start timer loop (runs until shutdown)
+                run_timer_loop(cron_state, executor_fn).await;
+            });
+
+            if !args.daemon {
+                println!("Cron timer loop: started");
+            }
+        } else if !args.daemon {
+            println!("Cron timer loop: skipped (no execution adapter)");
+        }
+    }
 
     // Initialize GroupChat Orchestrator + Executor
     // (shared_orch and gc_executor are kept alive for both RPC handlers and InboundMessageRouter)
