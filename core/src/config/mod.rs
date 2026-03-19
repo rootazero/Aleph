@@ -28,6 +28,7 @@ pub mod presets_override;
 pub mod prompts_override;
 pub mod agent_manager;
 pub mod agent_resolver;
+pub mod guides;
 
 // Re-export main types
 pub use structs::{Config, FullConfig, ChannelInstanceConfig};

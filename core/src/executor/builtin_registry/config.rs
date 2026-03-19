@@ -56,4 +56,6 @@ pub struct BuiltinToolConfig {
     pub cron_service: Option<crate::cron::SharedCronService>,
     /// Tool context handle for workspace-scoped output paths
     pub tool_context: Option<crate::tools::ToolContextHandle>,
+    /// Shared token manager for vault_store tool
+    pub shared_token_manager: Option<Arc<crate::gateway::security::SharedTokenManager>>,
 }

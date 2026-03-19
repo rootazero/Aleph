@@ -31,7 +31,7 @@ pub static TOOL_GROUPS: &[ToolGroup] = &[
     ToolGroup {
         id: "memory_knowledge",
         name: "记忆与知识",
-        tools: &["memory_search", "memory_browse", "read_skill", "list_skills"],
+        tools: &["memory_search", "memory_browse", "list_skills"],
     },
     ToolGroup {
         id: "content_gen",
@@ -41,7 +41,7 @@ pub static TOOL_GROUPS: &[ToolGroup] = &[
     ToolGroup {
         id: "system_config",
         name: "系统与配置",
-        tools: &["desktop", "config_read", "config_update"],
+        tools: &["desktop", "read_config_guide", "vault_store"],
     },
     ToolGroup {
         id: "browser",

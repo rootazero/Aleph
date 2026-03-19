@@ -128,6 +128,7 @@ pub use crate::config::{
     patcher::ConfigPatcher,
     agent_resolver::{AgentDefinitionResolver, ResolvedAgent},
     agent_manager::AgentManager,
+    guides::deploy_guides,
     policies::CompressionPolicy,
     types::acp::{AcpConfig, AcpHarnessEntry, HarnessModeSerde, OutputFormatSerde},
 };

@@ -68,6 +68,8 @@ pub mod escalate_task;
 pub mod acp_tools;
 pub mod cron_manage;
 pub mod clawhub;
+pub mod config_guide;
+pub mod vault_store;
 
 pub use agent_manage::{
     AgentCreateArgs, AgentCreateOutput, AgentCreateTool, AgentDeleteArgs, AgentDeleteOutput,
@@ -95,8 +97,7 @@ pub use meta_tools::{
 pub use pdf_generate::{PdfGenerateArgs, PdfGenerateTool};
 pub use search::{SearchArgs, SearchTool};
 pub use skill_reader::{
-    ListSkillsArgs, ListSkillsOutput, ListSkillsTool, ReadSkillArgs, ReadSkillOutput,
-    ReadSkillTool, SkillSummary,
+    ListSkillsArgs, ListSkillsOutput, ListSkillsTool, SkillSummary,
 };
 pub use web_fetch::{WebFetchArgs, WebFetchTool};
 pub use mcp_resource::{McpReadResourceArgs, McpReadResourceOutput, McpReadResourceTool};
@@ -104,11 +105,7 @@ pub use mcp_prompt::{McpGetPromptArgs, McpGetPromptOutput, McpGetPromptTool, Pro
 pub use desktop::{DesktopArgs, DesktopOutput, DesktopTool};
 pub use pim::{PimArgs, PimOutput, PimTool};
 pub use browser::{BrowserAction, BrowserArgs, BrowserOutput, BrowserTool};
-pub use config_read::{ConfigReadArgs, ConfigReadOutput, ConfigReadTool};
-pub use config_update::{ConfigUpdateArgs, ConfigUpdateOutput, ConfigUpdateTool};
-pub use profile_update::{ProfileField, ProfileOperation, ProfileUpdateArgs, ProfileUpdateOutput, ProfileUpdateTool};
 pub use scratchpad::{ScratchpadAction, ScratchpadArgs, ScratchpadOutput, ScratchpadTool};
-pub use soul_update::{SoulField, SoulOperation, SoulUpdateArgs, SoulUpdateOutput, SoulUpdateTool};
 pub use vision::{VisionAction, VisionArgs, VisionOutput, VisionTool};
 pub use media_tools::{
     AudioTranscribeArgs, AudioTranscribeOutput, AudioTranscribeTool, DocumentExtractArgs,
@@ -123,6 +120,8 @@ pub use acp_tools::{
 };
 pub use cron_manage::{CronAction, CronManageArgs, CronManageOutput, CronManageTool};
 pub use clawhub::{ClawHubAction, ClawHubArgs, ClawHubOutput, ClawHubTool};
+pub use config_guide::{GuideTopic, ReadConfigGuideArgs, ReadConfigGuideOutput, ReadConfigGuideTool};
+pub use vault_store::{VaultAction, VaultStoreArgs, VaultStoreOutput, VaultStoreTool};
 
 
 // Message tool re-exports

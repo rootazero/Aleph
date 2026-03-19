@@ -234,6 +234,10 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // Ensure ~/.aleph/ directory structure exists
     if let Ok(config_dir) = alephcore::utils::paths::get_config_dir() {
         let _ = std::fs::create_dir_all(&config_dir);
+        // Deploy config guide files for LLM self-management
+        if let Err(e) = alephcore::deploy_guides(&config_dir) {
+            tracing::warn!("Failed to deploy config guides: {}", e);
+        }
     }
 
     // Migrate legacy database files from ~/.aleph/*.db to ~/.aleph/data/*.db

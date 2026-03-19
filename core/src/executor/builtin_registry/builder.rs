@@ -9,14 +9,14 @@ use crate::sync_primitives::Arc;
 
 use tracing::info;
 
-use crate::builtin_tools::{BashExecTool, CodeExecTool, ConfigReadTool, ConfigUpdateTool, DesktopTool, FileOpsTool, ImageGenerateTool, MemoryBrowseTool, MemorySearchTool, PdfGenerateTool, PimTool, ProfileUpdateTool, ScratchpadTool, SearchTool, SoulUpdateTool, WebFetchTool};
+use crate::builtin_tools::{BashExecTool, CodeExecTool, DesktopTool, FileOpsTool, ImageGenerateTool, MemoryBrowseTool, MemorySearchTool, PdfGenerateTool, PimTool, ReadConfigGuideTool, ScratchpadTool, SearchTool, VaultStoreTool, WebFetchTool};
 use crate::builtin_tools::browser_tools::{
     BrowserOpenTool, BrowserClickTool, BrowserTypeTool, BrowserScreenshotTool,
     BrowserSnapshotTool, BrowserNavigateTool, BrowserTabsTool, BrowserSelectTool,
     BrowserEvaluateTool, BrowserFillFormTool, BrowserProfileTool,
 };
 use crate::builtin_tools::meta_tools::{ListToolsTool, GetToolSchemaTool};
-use crate::builtin_tools::skill_reader::{ReadSkillTool, ListSkillsTool as SkillListTool};
+use crate::builtin_tools::skill_reader::ListSkillsTool as SkillListTool;
 use crate::builtin_tools::sessions::{SessionsListTool, SessionsSendTool};
 use crate::dispatcher::{ToolSource, UnifiedTool};
 use crate::tools::AlephTool;
@@ -49,9 +49,17 @@ impl BuiltinToolRegistry {
             PdfGenerateTool::new()
         };
 
-        // Skill reading tools (Progressive Disclosure pattern)
-        let read_skill_tool = ReadSkillTool::default();
+        // Skill listing tool (read_skill replaced by read_config_guide)
         let list_skills_tool = SkillListTool::default();
+
+        // Config guide tool (Progressive Disclosure for self-management)
+        let config_guide_tool = ReadConfigGuideTool::default();
+
+        // Vault store tool (requires SharedTokenManager)
+        let vault_store_tool = config.shared_token_manager.as_ref().map(|mgr| {
+            info!("Creating VaultStoreTool");
+            VaultStoreTool::new(Arc::clone(mgr))
+        });
 
         // Desktop bridge tool — use native in-process path,
         // with fallback to IPC bridge for unsupported actions
@@ -63,12 +71,6 @@ impl BuiltinToolRegistry {
         // PIM tool (Calendar, Reminders, Notes, Contacts via Desktop Bridge)
         let pim_tool = PimTool::new();
 
-        // Soul update tool — evolves AI identity via ~/.aleph/soul.md
-        let aleph_dir = dirs::home_dir()
-            .unwrap_or_else(|| std::path::PathBuf::from("."))
-            .join(".aleph");
-        let soul_update_tool = SoulUpdateTool::new(aleph_dir.join("soul.md"));
-        let profile_update_tool = ProfileUpdateTool::new(aleph_dir.join("user_profile.md"));
         let scratchpad_tool = ScratchpadTool::new();
 
         // Browser tools — always available, use ProfileManager from config or create default
@@ -88,16 +90,6 @@ impl BuiltinToolRegistry {
         let browser_evaluate_tool = BrowserEvaluateTool::new(Arc::clone(&browser_profile_manager));
         let browser_fill_form_tool = BrowserFillFormTool::new(Arc::clone(&browser_profile_manager));
         let browser_profile_tool = BrowserProfileTool::new(browser_profile_manager);
-
-        // Create config tools if handles are provided
-        let config_read_tool = config.config.as_ref().map(|cfg| {
-            info!("Creating ConfigReadTool with config handle");
-            ConfigReadTool::new(Arc::clone(cfg))
-        });
-        let config_update_tool = config.config_patcher.as_ref().map(|patcher| {
-            info!("Creating ConfigUpdateTool with ConfigPatcher");
-            ConfigUpdateTool::new(Arc::clone(patcher))
-        });
 
         // Create memory tools if backend and embedder are provided
         let (memory_search_tool, memory_browse_tool, memory_workspace_handle) =
@@ -160,16 +152,15 @@ impl BuiltinToolRegistry {
         }
         info!("Registered browser tools (11 tools) in BuiltinToolRegistry");
 
-        info!("Registered skill reading tools (read_skill, list_skills) in BuiltinToolRegistry");
+        info!("Registered list_skills and read_config_guide tools in BuiltinToolRegistry");
 
         // Register optional tool metadata
         Self::register_optional_tools(
             &mut tools,
             &memory_search_tool,
             &memory_browse_tool,
-            &config_read_tool,
-            &config_update_tool,
             &image_generate_tool,
+            &vault_store_tool,
             &config,
         );
 
@@ -299,15 +290,12 @@ impl BuiltinToolRegistry {
             code_exec_tool,
             pdf_generate_tool,
             image_generate_tool,
-            read_skill_tool,
             list_skills_tool,
+            config_guide_tool,
+            vault_store_tool,
             desktop_tool,
             pim_tool,
-            soul_update_tool,
-            profile_update_tool,
             scratchpad_tool,
-            config_read_tool,
-            config_update_tool,
             memory_search_tool,
             memory_browse_tool,
             memory_workspace_handle,
@@ -387,18 +375,14 @@ impl BuiltinToolRegistry {
             serde_json::to_value(schema_for!(crate::builtin_tools::code_exec::CodeExecArgs)).unwrap_or_default());
         reg(tools, "pdf_generate", PdfGenerateTool::DESCRIPTION,
             serde_json::to_value(schema_for!(crate::builtin_tools::pdf_generate::PdfGenerateArgs)).unwrap_or_default());
-        reg(tools, "read_skill", ReadSkillTool::DESCRIPTION,
-            serde_json::to_value(schema_for!(crate::builtin_tools::skill_reader::ReadSkillArgs)).unwrap_or_default());
         reg(tools, "list_skills", SkillListTool::DESCRIPTION,
             serde_json::json!({"type": "object", "properties": {}, "required": []}));
+        reg(tools, "read_config_guide", ReadConfigGuideTool::DESCRIPTION,
+            serde_json::to_value(schema_for!(crate::builtin_tools::config_guide::ReadConfigGuideArgs)).unwrap_or_default());
         reg(tools, "desktop", DesktopTool::DESCRIPTION,
             serde_json::to_value(schema_for!(crate::builtin_tools::desktop::DesktopArgs)).unwrap_or_default());
         reg(tools, "pim", PimTool::DESCRIPTION,
             serde_json::to_value(schema_for!(crate::builtin_tools::pim::PimArgs)).unwrap_or_default());
-        reg(tools, "soul_update", SoulUpdateTool::DESCRIPTION,
-            serde_json::to_value(schema_for!(crate::builtin_tools::soul_update::SoulUpdateArgs)).unwrap_or_default());
-        reg(tools, "profile_update", ProfileUpdateTool::DESCRIPTION,
-            serde_json::to_value(schema_for!(crate::builtin_tools::profile_update::ProfileUpdateArgs)).unwrap_or_default());
         reg(tools, "scratchpad", ScratchpadTool::DESCRIPTION,
             serde_json::to_value(schema_for!(crate::builtin_tools::scratchpad::ScratchpadArgs)).unwrap_or_default());
         reg(tools, "clawhub", crate::builtin_tools::clawhub::ClawHubTool::DESCRIPTION,
@@ -410,9 +394,8 @@ impl BuiltinToolRegistry {
         tools: &mut HashMap<String, UnifiedTool>,
         memory_search_tool: &Option<MemorySearchTool>,
         memory_browse_tool: &Option<MemoryBrowseTool>,
-        config_read_tool: &Option<ConfigReadTool>,
-        config_update_tool: &Option<ConfigUpdateTool>,
         image_generate_tool: &Option<ImageGenerateTool>,
+        vault_store_tool: &Option<VaultStoreTool>,
         config: &BuiltinToolConfig,
     ) {
         use schemars::schema_for;
@@ -446,16 +429,11 @@ impl BuiltinToolRegistry {
             info!("Registered memory_browse tool in BuiltinToolRegistry");
         }
 
-        // Config tools
-        if config_read_tool.is_some() {
-            reg(tools, "config_read", ConfigReadTool::DESCRIPTION,
-                serde_json::to_value(schema_for!(crate::builtin_tools::config_read::ConfigReadArgs)).unwrap_or_default());
-            info!("Registered config_read tool in BuiltinToolRegistry");
-        }
-        if config_update_tool.is_some() {
-            reg(tools, "config_update", ConfigUpdateTool::DESCRIPTION,
-                serde_json::to_value(schema_for!(crate::builtin_tools::config_update::ConfigUpdateArgs)).unwrap_or_default());
-            info!("Registered config_update tool in BuiltinToolRegistry");
+        // Vault store tool
+        if vault_store_tool.is_some() {
+            reg(tools, "vault_store", VaultStoreTool::DESCRIPTION,
+                serde_json::to_value(schema_for!(crate::builtin_tools::vault_store::VaultStoreArgs)).unwrap_or_default());
+            info!("Registered vault_store tool in BuiltinToolRegistry");
         }
 
         // Generation tools

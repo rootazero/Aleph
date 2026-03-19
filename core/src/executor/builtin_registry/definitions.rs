@@ -19,8 +19,9 @@
 use crate::sync_primitives::Arc;
 
 use crate::builtin_tools::{
-    BashExecTool, CodeExecTool, ConfigReadTool, ConfigUpdateTool, DesktopTool, EscalateTaskTool,
-    FileOpsTool, ImageGenerateTool, PdfGenerateTool, ReadSkillTool, SearchTool, WebFetchTool,
+    BashExecTool, CodeExecTool, DesktopTool, EscalateTaskTool,
+    FileOpsTool, ImageGenerateTool, PdfGenerateTool, ReadConfigGuideTool,
+    SearchTool, VaultStoreTool, WebFetchTool,
 };
 use crate::builtin_tools::browser_tools::{
     BrowserOpenTool, BrowserClickTool, BrowserTypeTool, BrowserScreenshotTool,
@@ -86,11 +87,6 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         requires_config: true, // Requires generation registry
     },
     BuiltinToolDefinition {
-        name: "read_skill",
-        description: "Read skill file content for Progressive Disclosure pattern",
-        requires_config: false,
-    },
-    BuiltinToolDefinition {
         name: "list_skills",
         description: "List all installed skills",
         requires_config: false,
@@ -101,14 +97,14 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         requires_config: false,
     },
     BuiltinToolDefinition {
-        name: "config_read",
-        description: "Read current Aleph configuration with sensitive fields masked",
-        requires_config: true, // Requires config Arc<RwLock<Config>>
+        name: "read_config_guide",
+        description: "Get Aleph configuration manual for self-management operations",
+        requires_config: false,
     },
     BuiltinToolDefinition {
-        name: "config_update",
-        description: "Update Aleph configuration with schema validation and secret vault integration",
-        requires_config: true, // Requires ConfigPatcher
+        name: "vault_store",
+        description: "Manage encrypted secret vault (store/delete/list API keys)",
+        requires_config: true, // Requires SharedTokenManager
     },
     BuiltinToolDefinition {
         name: "memory_search",
@@ -287,25 +283,13 @@ pub fn create_tool_boxed(
             }
             None // Requires generation registry
         }
-        "read_skill" => Some(Box::new(ReadSkillTool::default())),
         "list_skills" => Some(Box::new(SkillListTool::default())),
+        "read_config_guide" => Some(Box::new(ReadConfigGuideTool::default())),
         "desktop" => Some(Box::new(DesktopTool::new())),
-        // Config tools require runtime context (config handle / patcher)
-        "config_read" => {
-            if let Some(cfg) = config {
-                if let Some(ref config_handle) = cfg.config {
-                    return Some(Box::new(ConfigReadTool::new(Arc::clone(config_handle))));
-                }
-            }
-            None
-        }
-        "config_update" => {
-            if let Some(cfg) = config {
-                if let Some(ref patcher) = cfg.config_patcher {
-                    return Some(Box::new(ConfigUpdateTool::new(Arc::clone(patcher))));
-                }
-            }
-            None
+        "vault_store" => {
+            config.and_then(|c| c.shared_token_manager.as_ref()).map(|mgr| {
+                Box::new(VaultStoreTool::new(Arc::clone(mgr))) as Box<dyn AlephToolDyn>
+            })
         }
         // Sessions tools require gateway_context and caller_agent_id at runtime,
         // so they cannot be created via create_tool_boxed. They are created
@@ -399,8 +383,9 @@ mod tests {
         assert!(names.contains(&"code_exec".to_string()));
         assert!(names.contains(&"pdf_generate".to_string()));
         assert!(names.contains(&"generate_image".to_string()));
-        assert!(names.contains(&"read_skill".to_string()));
         assert!(names.contains(&"list_skills".to_string()));
+        assert!(names.contains(&"read_config_guide".to_string()));
+        assert!(names.contains(&"vault_store".to_string()));
 
         // Verify browser tools
         assert!(names.contains(&"browser_open".to_string()));

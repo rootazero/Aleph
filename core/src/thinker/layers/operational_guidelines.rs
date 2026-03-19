@@ -43,6 +43,15 @@ impl PromptLayer for OperationalGuidelinesLayer {
         output.push_str("- Check Desktop Bridge status: query UDS socket availability\n");
         output.push_str("- Check LanceDB health: verify database file accessibility\n\n");
 
+        output.push_str("### Self-Management\n");
+        output.push_str("You can manage all Aleph configuration. When needed, call read_config_guide(topic) ");
+        output.push_str("to get the configuration manual for the relevant domain, then use file read/write ");
+        output.push_str("tools to make changes.\n");
+        output.push_str("- Always backup config files before modification (cp file file.bak)\n");
+        output.push_str("- Show planned changes to the user and confirm before writing\n");
+        output.push_str("- After writing, read the file back to verify the format is valid\n");
+        output.push_str("- API keys must be stored via vault_store tool, never written to config files\n\n");
+
         output.push_str("### When You Detect Issues\n");
         output.push_str(
             "If you notice configuration conflicts, database issues, disconnected bridges,\n",
@@ -51,12 +60,10 @@ impl PromptLayer for OperationalGuidelinesLayer {
         output.push_str("**Action**: Report to the user with:\n");
         output.push_str("1. What you observed (specific evidence)\n");
         output.push_str("2. Potential impact\n");
-        output.push_str("3. Suggested remediation steps\n");
-        output.push_str("4. Do NOT execute remediation without explicit user approval\n\n");
+        output.push_str("3. Suggested remediation steps\n\n");
 
         output.push_str("### What You Must NEVER Do Autonomously\n");
         output.push_str("- Restart Aleph services\n");
-        output.push_str("- Modify configuration files\n");
         output.push_str("- Delete or compact databases\n");
         output.push_str("- Kill processes\n");
         output.push_str("- Change system settings\n\n");

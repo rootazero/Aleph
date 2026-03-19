@@ -38,24 +38,18 @@ pub struct BuiltinToolRegistry {
     pub(crate) pdf_generate_tool: crate::builtin_tools::PdfGenerateTool,
     /// Image generation tool instance (optional - requires generation registry)
     pub(crate) image_generate_tool: Option<crate::builtin_tools::ImageGenerateTool>,
-    /// Read skill tool instance (for Progressive Disclosure pattern)
-    pub(crate) read_skill_tool: crate::builtin_tools::skill_reader::ReadSkillTool,
     /// List skills tool instance
     pub(crate) list_skills_tool: crate::builtin_tools::skill_reader::ListSkillsTool,
+    /// Config guide tool instance (progressive disclosure for self-management)
+    pub(crate) config_guide_tool: crate::builtin_tools::ReadConfigGuideTool,
+    /// Vault store tool instance (optional - requires SharedTokenManager)
+    pub(crate) vault_store_tool: Option<crate::builtin_tools::VaultStoreTool>,
     /// Desktop bridge tool instance
     pub(crate) desktop_tool: crate::builtin_tools::DesktopTool,
     /// PIM (Personal Information Management) tool instance
     pub(crate) pim_tool: crate::builtin_tools::PimTool,
-    /// Soul update tool instance (identity evolution via soul_update)
-    pub(crate) soul_update_tool: crate::builtin_tools::SoulUpdateTool,
-    /// Profile update tool instance (user profile management)
-    pub(crate) profile_update_tool: crate::builtin_tools::ProfileUpdateTool,
     /// Scratchpad tool instance (project working memory)
     pub(crate) scratchpad_tool: crate::builtin_tools::ScratchpadTool,
-    /// Config read tool instance (optional - requires config handle)
-    pub(crate) config_read_tool: Option<crate::builtin_tools::ConfigReadTool>,
-    /// Config update tool instance (optional - requires ConfigPatcher)
-    pub(crate) config_update_tool: Option<crate::builtin_tools::ConfigUpdateTool>,
     /// Memory search tool instance (optional - requires memory_db + embedder)
     pub(crate) memory_search_tool: Option<crate::builtin_tools::MemorySearchTool>,
     /// Memory browse tool instance (optional - requires memory_db)
@@ -243,28 +237,18 @@ impl ToolRegistry for BuiltinToolRegistry {
                 tool.call_json(arguments).await
             }),
 
-            // Skill reading tools - use call_json
-            "read_skill" => Box::pin(async move { self.read_skill_tool.call_json(arguments).await }),
+            // Self-management tools
             "list_skills" => Box::pin(async move { self.list_skills_tool.call_json(arguments).await }),
+            "read_config_guide" => Box::pin(async move { self.config_guide_tool.call_json(arguments).await }),
+            "vault_store" => Box::pin(async move {
+                let tool = self.vault_store_tool.as_ref().ok_or_else(|| {
+                    AlephError::tool("vault_store not available: no SharedTokenManager configured")
+                })?;
+                tool.call_json(arguments).await
+            }),
             "desktop" => Box::pin(async move { self.desktop_tool.call_json(arguments).await }),
             "pim" => Box::pin(async move { self.pim_tool.call_json(arguments).await }),
-            "soul_update" => Box::pin(async move { self.soul_update_tool.call_json(arguments).await }),
-            "profile_update" => Box::pin(async move { self.profile_update_tool.call_json(arguments).await }),
             "scratchpad" => Box::pin(async move { self.scratchpad_tool.call_json(arguments).await }),
-
-            // Config tools - read/update Aleph configuration
-            "config_read" => Box::pin(async move {
-                let tool = self.config_read_tool.as_ref().ok_or_else(|| {
-                    AlephError::tool("config_read not available: no config handle configured")
-                })?;
-                tool.call_json(arguments).await
-            }),
-            "config_update" => Box::pin(async move {
-                let tool = self.config_update_tool.as_ref().ok_or_else(|| {
-                    AlephError::tool("config_update not available: no ConfigPatcher configured")
-                })?;
-                tool.call_json(arguments).await
-            }),
 
             // Memory tools - search and browse personal memory
             "memory_search" => Box::pin(async move {
