@@ -250,9 +250,6 @@ pub struct OutboundMessage {
     /// Additional metadata
     #[serde(default)]
     pub metadata: HashMap<String, String>,
-    /// Agent display name for identity indication
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub agent_display_name: Option<String>,
 }
 
 impl OutboundMessage {
@@ -265,7 +262,6 @@ impl OutboundMessage {
             reply_to: None,
             inline_keyboard: None,
             metadata: HashMap::new(),
-            agent_display_name: None,
         }
     }
 
@@ -565,12 +561,6 @@ pub struct ChannelConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_outbound_message_agent_display_name() {
-        let msg = OutboundMessage::text("conv-1", "hello");
-        assert!(msg.agent_display_name.is_none());
-    }
 
     #[test]
     fn test_outbound_message_builder() {

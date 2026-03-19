@@ -76,8 +76,6 @@ pub struct ReplyEmitter {
     seq_counter: AtomicU64,
     has_sent: AtomicBool,
     run_id: String,
-    agent_display_name: Option<String>,
-    native_identity: bool,
 }
 
 /// Interval between progressive edits in typewriter mode.
@@ -86,22 +84,12 @@ const TYPEWRITER_EDIT_INTERVAL: Duration = Duration::from_millis(300);
 /// Number of characters to reveal per edit step.
 const TYPEWRITER_CHARS_PER_STEP: usize = 80;
 
-/// Prepend agent identity prefix if agent has a display name.
-fn apply_agent_prefix(text: &str, agent_name: &Option<String>) -> String {
-    match agent_name {
-        Some(name) if !name.is_empty() => format!("*{}*\n{}", name, text),
-        _ => text.to_string(),
-    }
-}
-
 impl ReplyEmitter {
     /// Create a new ReplyEmitter with default configuration (instant mode)
     pub fn new(
         channel_registry: Arc<ChannelRegistry>,
         route: ReplyRoute,
         run_id: String,
-        agent_display_name: Option<String>,
-        native_identity: bool,
     ) -> Self {
         Self {
             channel_registry,
@@ -111,8 +99,6 @@ impl ReplyEmitter {
             seq_counter: AtomicU64::new(0),
             has_sent: AtomicBool::new(false),
             run_id,
-            agent_display_name,
-            native_identity,
         }
     }
 
@@ -122,8 +108,6 @@ impl ReplyEmitter {
         route: ReplyRoute,
         run_id: String,
         config: ReplyEmitterConfig,
-        agent_display_name: Option<String>,
-        native_identity: bool,
     ) -> Self {
         Self {
             channel_registry,
@@ -133,8 +117,6 @@ impl ReplyEmitter {
             seq_counter: AtomicU64::new(0),
             has_sent: AtomicBool::new(false),
             run_id,
-            agent_display_name,
-            native_identity,
         }
     }
 
@@ -146,13 +128,8 @@ impl ReplyEmitter {
         &self.route
     }
 
-    /// Apply agent prefix for first message if needed
-    fn format_content(&self, content: &str, is_first: bool) -> String {
-        if is_first && !self.native_identity {
-            apply_agent_prefix(content, &self.agent_display_name)
-        } else {
-            content.to_string()
-        }
+    fn format_content(&self, content: &str, _is_first: bool) -> String {
+        content.to_string()
     }
 
     // ── Typewriter mode ─────────────────────────────────────────────────
@@ -199,7 +176,6 @@ impl ReplyEmitter {
             reply_to: self.route.reply_to.clone(),
             inline_keyboard: None,
             metadata: Default::default(),
-            agent_display_name: self.agent_display_name.clone(),
         };
 
         let msg_id = match self.channel_registry.send(&self.route.channel_id, message).await {
@@ -298,7 +274,6 @@ impl ReplyEmitter {
                 },
                 inline_keyboard: None,
                 metadata: Default::default(),
-                agent_display_name: self.agent_display_name.clone(),
             };
 
             match self
@@ -516,7 +491,7 @@ mod tests {
         );
 
         let registry = Arc::new(ChannelRegistry::new());
-        let emitter = ReplyEmitter::new(registry, route.clone(), "run-123".to_string(), None, false);
+        let emitter = ReplyEmitter::new(registry, route.clone(), "run-123".to_string());
 
         assert_eq!(emitter.run_id(), "run-123");
         assert_eq!(emitter.route().channel_id.as_str(), "imessage");
@@ -541,8 +516,6 @@ mod tests {
             route,
             "run-456".to_string(),
             config,
-            None,
-            false,
         );
 
         assert_eq!(emitter.config.buffer_threshold, 1000);
@@ -557,7 +530,7 @@ mod tests {
         );
 
         let registry = Arc::new(ChannelRegistry::new());
-        let emitter = ReplyEmitter::new(registry, route, "run-789".to_string(), None, false);
+        let emitter = ReplyEmitter::new(registry, route, "run-789".to_string());
 
         assert_eq!(emitter.next_seq(), 0);
         assert_eq!(emitter.next_seq(), 1);
@@ -572,7 +545,7 @@ mod tests {
         );
 
         let registry = Arc::new(ChannelRegistry::new());
-        let emitter = ReplyEmitter::new(registry, route, "run-test".to_string(), None, false);
+        let emitter = ReplyEmitter::new(registry, route, "run-test".to_string());
 
         emitter.buffer.lock().await.push_str("Hello ");
         emitter.buffer.lock().await.push_str("World!");
@@ -623,27 +596,4 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_apply_agent_prefix_with_name() {
-        let result = apply_agent_prefix("Hello", &Some("Trading Bot".to_string()));
-        assert_eq!(result, "*Trading Bot*\nHello");
-    }
-
-    #[test]
-    fn test_apply_agent_prefix_none() {
-        let result = apply_agent_prefix("Hello", &None);
-        assert_eq!(result, "Hello");
-    }
-
-    #[test]
-    fn test_apply_agent_prefix_empty_name() {
-        let result = apply_agent_prefix("Hello", &Some(String::new()));
-        assert_eq!(result, "Hello");
-    }
-
-    #[test]
-    fn test_apply_agent_prefix_chinese_name() {
-        let result = apply_agent_prefix("今天BTC价格是...", &Some("交易助手".to_string()));
-        assert_eq!(result, "*交易助手*\n今天BTC价格是...");
-    }
 }

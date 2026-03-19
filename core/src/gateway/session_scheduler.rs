@@ -178,8 +178,6 @@ impl SessionScheduler {
             enriched.merged.primary_context.reply_route.clone(),
             run_id.clone(),
             reply_config,
-            agent.config().display_name.clone(),
-            false,
         ));
 
         // Wrap with scheduler event listener
@@ -395,8 +393,6 @@ async fn execute_next(
         enriched.merged.primary_context.reply_route.clone(),
         run_id.clone(),
         reply_config,
-        agent.config().display_name.clone(),
-        false,
     ));
 
     // Wrap with a new listener for the next run

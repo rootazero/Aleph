@@ -87,8 +87,6 @@ impl InboundMessageRouter {
             ctx.reply_route.clone(),
             run_id.clone(),
             reply_config,
-            agent.config().display_name.clone(),
-            false,
         ));
 
         // Build the run request metadata
