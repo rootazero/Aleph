@@ -855,16 +855,16 @@ mod tests {
         assert_eq!(resolved.len(), 1);
         let agent = &resolved[0];
 
-        // Workspace content dir
+        // Workspace dir (tool output only)
         assert_eq!(agent.workspace_path, workspace_root.join("coder"));
-        assert!(agent.workspace_path.join("SOUL.md").exists());
 
-        // Agent state dir
+        // Agent identity dir has identity files + sessions
         assert_eq!(agent.agent_dir, agents_root.join("coder"));
+        assert!(agent.agent_dir.join("SOUL.md").exists());
         assert!(agent.agent_dir.join("sessions").is_dir());
 
-        // sessions/ should NOT be in workspace
-        assert!(!agent.workspace_path.join("sessions").exists());
+        // Identity files should NOT be in workspace
+        assert!(!agent.workspace_path.join("SOUL.md").exists());
     }
 
     #[test]
