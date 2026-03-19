@@ -1,12 +1,11 @@
 // apps/panel/src/components/chat_sidebar.rs
 //
-// Chat mode sidebar — two-level agent/session hierarchy.
-// Fetches agents from agents.list and sessions from sessions.list,
-// auto-refreshed via stream.session_updated Gateway events.
+// Chat mode sidebar — agent dropdown + session list.
+// Top dropdown selects agent, list shows that agent's sessions.
+// Auto-refreshed via stream.session_updated Gateway events.
 //
 use leptos::prelude::*;
 use serde::Deserialize;
-use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::api::chat::ChatApi;
@@ -48,10 +47,10 @@ pub fn ChatSidebar() -> impl IntoView {
     let agents = RwSignal::new(Vec::<AgentEntry>::new());
     let sessions = RwSignal::new(Vec::<SessionEntry>::new());
     let is_loading = RwSignal::new(false);
-    let collapsed = RwSignal::new(HashSet::<String>::new());
+    // Which agent is selected in the dropdown (synced with chat.agent_id)
+    let selected_agent = RwSignal::new(Option::<String>::None);
 
     // Reusable closure: fetch both agents and sessions from the backend.
-    // Wrapped in Arc so it can be shared between the initial Effect and the event handler.
     let reload_data = Arc::new(move |dash: DashboardState| {
         is_loading.set(true);
         leptos::task::spawn_local(async move {
@@ -65,6 +64,18 @@ pub fn ChatSidebar() -> impl IntoView {
                         if let Ok(list) =
                             serde_json::from_value::<Vec<AgentEntry>>(arr.clone())
                         {
+                            // Auto-select default agent if none selected
+                            if selected_agent.get_untracked().is_none() {
+                                let default_id = list
+                                    .iter()
+                                    .find(|a| a.is_default)
+                                    .or(list.first())
+                                    .map(|a| a.id.clone());
+                                if let Some(id) = default_id {
+                                    selected_agent.set(Some(id.clone()));
+                                    chat.agent_id.set(Some(id));
+                                }
+                            }
                             agents.set(list);
                         }
                     }
@@ -111,8 +122,6 @@ pub fn ChatSidebar() -> impl IntoView {
     });
 
     // Subscribe to session_updated events so the list refreshes automatically.
-    // The Gateway emits stream.session_updated which the message loop converts
-    // to GatewayEvent { topic: "run.session_updated", .. }.
     let reload_for_event = reload_data.clone();
     let sub_dash = dashboard;
     let subscription_id = dashboard.subscribe_events(move |event| {
@@ -148,7 +157,8 @@ pub fn ChatSidebar() -> impl IntoView {
             return;
         }
         chat.clear_session();
-        chat.agent_id.set(Some(agent_id));
+        chat.agent_id.set(Some(agent_id.clone()));
+        selected_agent.set(Some(agent_id));
         chat.session_key.set(Some(key.clone()));
 
         leptos::task::spawn_local(async move {
@@ -177,16 +187,66 @@ pub fn ChatSidebar() -> impl IntoView {
         });
     };
 
-    // Start a new chat for an agent.
-    let on_new_chat = move |agent_id: String| {
-        chat.clear_session();
-        chat.agent_id.set(Some(agent_id));
+    // Handle agent dropdown change
+    let on_agent_change = move |ev: web_sys::Event| {
+        let val = event_target_value(&ev);
+        if !val.is_empty() {
+            selected_agent.set(Some(val.clone()));
+            chat.agent_id.set(Some(val));
+            // Don't clear session — user might just be browsing agents
+        }
+    };
+
+    // Start a new chat for the selected agent.
+    let on_new_chat = move |_: web_sys::MouseEvent| {
+        if let Some(agent_id) = selected_agent.get_untracked() {
+            chat.clear_session();
+            chat.agent_id.set(Some(agent_id));
+        }
     };
 
     view! {
         <div class="flex flex-col h-full">
-            // Search
-            <div class="p-3">
+            // Agent selector + New Chat button
+            <div class="p-3 space-y-2">
+                <div class="flex items-center gap-2">
+                    <select
+                        class="flex-1 px-3 py-1.5 rounded-lg bg-surface-sunken border border-border
+                               text-sm text-text-primary focus:outline-none focus:ring-2
+                               focus:ring-primary/30 focus:border-primary"
+                        on:change=on_agent_change
+                    >
+                        {move || {
+                            let agent_list = agents.get();
+                            let sel = selected_agent.get();
+                            agent_list
+                                .into_iter()
+                                .map(|agent| {
+                                    let id = agent.id.clone();
+                                    let name = agent
+                                        .name
+                                        .clone()
+                                        .unwrap_or_else(|| agent.id.clone());
+                                    let is_selected = sel.as_deref() == Some(&id);
+                                    view! {
+                                        <option value={id} selected=is_selected>
+                                            {name}
+                                        </option>
+                                    }
+                                })
+                                .collect::<Vec<_>>()
+                        }}
+                    </select>
+                    <button
+                        class="px-3 py-1.5 rounded-lg bg-primary text-white text-sm font-medium
+                               hover:bg-primary/90 transition-colors whitespace-nowrap"
+                        on:click=on_new_chat
+                    >
+                        "+ New"
+                    </button>
+                </div>
+
+                // Search
                 <div class="flex items-center gap-2 px-3 py-2 rounded-lg bg-surface-sunken border border-border text-sm">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                          stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-text-tertiary flex-shrink-0">
@@ -197,15 +257,14 @@ pub fn ChatSidebar() -> impl IntoView {
                 </div>
             </div>
 
-            // Agent/session list
+            // Session list (filtered by selected agent)
             <div class="flex-1 overflow-y-auto px-3 py-2 space-y-1">
                 {move || {
-                    let agent_list = agents.get();
                     let session_list = sessions.get();
-                    let _active_key = chat.session_key.get();
-                    let _active_agent = chat.agent_id.get();
+                    let sel_agent = selected_agent.get();
+                    let _active_key = chat.session_key.get(); // track for reactivity
 
-                    if is_loading.get() && agent_list.is_empty() {
+                    if is_loading.get() && session_list.is_empty() {
                         return view! {
                             <p class="text-xs text-text-tertiary px-3 py-4 text-center">
                                 "Loading..."
@@ -213,154 +272,64 @@ pub fn ChatSidebar() -> impl IntoView {
                         }.into_any();
                     }
 
-                    if agent_list.is_empty() {
+                    // Filter sessions for selected agent, sorted by updated_at desc
+                    let mut filtered: Vec<SessionEntry> = session_list
+                        .into_iter()
+                        .filter(|s| sel_agent.as_deref() == Some(&s.agent_id))
+                        .collect();
+                    filtered.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+
+                    if filtered.is_empty() {
                         return view! {
                             <p class="text-xs text-text-tertiary px-3 py-4 text-center">
-                                "No agents configured"
+                                "No conversations yet"
                             </p>
                         }.into_any();
                     }
 
-                    // Build agent groups
-                    let groups: Vec<(AgentEntry, Vec<SessionEntry>)> = agent_list
-                        .iter()
-                        .map(|agent| {
-                            let mut agent_sessions: Vec<SessionEntry> = session_list
-                                .iter()
-                                .filter(|s| s.agent_id == agent.id)
-                                .cloned()
-                                .collect();
-                            // Sort by updated_at descending (most recent first)
-                            agent_sessions.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
-                            (agent.clone(), agent_sessions)
-                        })
-                        .collect();
-
+                    let on_select = on_select_session.clone();
                     view! {
-                        <div class="space-y-1">
-                            {groups
+                        <div class="space-y-0.5">
+                            {filtered
                                 .into_iter()
-                                .map(|(agent, agent_sessions)| {
-                                    let agent_id = agent.id.clone();
-                                    let agent_id_for_toggle = agent_id.clone();
-                                    let agent_id_for_new = agent_id.clone();
-                                    let agent_name = agent
-                                        .name
+                                .map(|session| {
+                                    let key = session.key.clone();
+                                    let key_for_click = key.clone();
+                                    let session_agent_id = session.agent_id.clone();
+                                    let is_active = {
+                                        let key = key.clone();
+                                        move || {
+                                            chat.session_key.get().as_deref() == Some(&key)
+                                        }
+                                    };
+                                    let label = session
+                                        .topic
                                         .clone()
-                                        .unwrap_or_else(|| agent.id.clone());
-                                    let session_count = agent_sessions.len();
-
-                                    // Auto-expand active agent's group
-                                    let agent_id_for_check = agent_id.clone();
-                                    let agent_id_for_check2 = agent_id.clone();
-                                    let is_collapsed_icon = move || {
-                                        let c = collapsed.get();
-                                        let active = chat.agent_id.get();
-                                        if active.as_deref() == Some(&agent_id_for_check) && !c.contains(&agent_id_for_check) {
-                                            return false;
-                                        }
-                                        c.contains(&agent_id_for_check)
-                                    };
-                                    let is_collapsed_body = move || {
-                                        let c = collapsed.get();
-                                        let active = chat.agent_id.get();
-                                        if active.as_deref() == Some(&agent_id_for_check2) && !c.contains(&agent_id_for_check2) {
-                                            return false;
-                                        }
-                                        c.contains(&agent_id_for_check2)
-                                    };
-
-                                    let toggle_collapse = move |_: web_sys::MouseEvent| {
-                                        collapsed.update(|set| {
-                                            if set.contains(&agent_id_for_toggle) {
-                                                set.remove(&agent_id_for_toggle);
-                                            } else {
-                                                set.insert(agent_id_for_toggle.clone());
-                                            }
-                                        });
-                                    };
-
-                                    let on_new = on_new_chat.clone();
-                                    let new_chat_click = move |ev: web_sys::MouseEvent| {
-                                        ev.stop_propagation();
-                                        on_new(agent_id_for_new.clone());
-                                    };
-
-                                    let on_select = on_select_session.clone();
-
+                                        .unwrap_or_else(|| "New Chat".to_string());
+                                    let subtitle = format_session_subtitle(&session);
+                                    let on_select = on_select.clone();
                                     view! {
-                                        <div class="mb-2">
-                                            // Agent header
-                                            <button
-                                                class="w-full flex items-center gap-1.5 px-2 py-1.5 rounded-md text-xs font-semibold text-text-secondary hover:bg-surface-sunken transition-colors group"
-                                                on:click=toggle_collapse
-                                            >
-                                                <span class="text-text-tertiary text-[10px] w-3">
-                                                    {move || if is_collapsed_icon() { "\u{25B6}" } else { "\u{25BC}" }}
-                                                </span>
-                                                <span class="truncate flex-1 text-left">{agent_name}</span>
-                                                <span class="text-text-tertiary text-[10px]">
-                                                    {session_count}
-                                                </span>
-                                                <button
-                                                    class="opacity-0 group-hover:opacity-100 text-text-tertiary hover:text-text-primary transition-opacity px-1"
-                                                    on:click=new_chat_click
-                                                    title="New chat"
-                                                >
-                                                    "+"
-                                                </button>
-                                            </button>
-
-                                            // Session list (collapsible)
-                                            <Show when=move || !is_collapsed_body()>
-                                                <div class="ml-3 mt-0.5 space-y-0.5">
-                                                    {agent_sessions
-                                                        .clone()
-                                                        .into_iter()
-                                                        .map(|session| {
-                                                            let key = session.key.clone();
-                                                            let key_for_click = key.clone();
-                                                            let session_agent_id = session.agent_id.clone();
-                                                            let is_active = {
-                                                                let key = key.clone();
-                                                                move || {
-                                                                    chat.session_key.get().as_deref() == Some(&key)
-                                                                }
-                                                            };
-                                                            let label = session
-                                                                .topic
-                                                                .clone()
-                                                                .unwrap_or_else(|| "New Chat".to_string());
-                                                            let subtitle = format_session_subtitle(&session);
-                                                            let on_select = on_select.clone();
-                                                            view! {
-                                                                <button
-                                                                    class=move || format!(
-                                                                        "w-full text-left px-3 py-2 rounded-lg text-sm transition-colors {}",
-                                                                        if is_active() {
-                                                                            "bg-primary/10 text-primary font-medium"
-                                                                        } else {
-                                                                            "text-text-secondary hover:bg-surface-sunken hover:text-text-primary"
-                                                                        }
-                                                                    )
-                                                                    on:click=move |_| on_select(
-                                                                        key_for_click.clone(),
-                                                                        session_agent_id.clone(),
-                                                                    )
-                                                                >
-                                                                    <div class="truncate font-medium text-xs">
-                                                                        {label}
-                                                                    </div>
-                                                                    <div class="truncate text-[10px] text-text-tertiary mt-0.5">
-                                                                        {subtitle}
-                                                                    </div>
-                                                                </button>
-                                                            }
-                                                        })
-                                                        .collect::<Vec<_>>()}
-                                                </div>
-                                            </Show>
-                                        </div>
+                                        <button
+                                            class=move || format!(
+                                                "w-full text-left px-3 py-2.5 rounded-lg text-sm transition-colors {}",
+                                                if is_active() {
+                                                    "bg-primary/10 text-primary font-medium"
+                                                } else {
+                                                    "text-text-secondary hover:bg-surface-sunken hover:text-text-primary"
+                                                }
+                                            )
+                                            on:click=move |_| on_select(
+                                                key_for_click.clone(),
+                                                session_agent_id.clone(),
+                                            )
+                                        >
+                                            <div class="truncate font-medium text-xs">
+                                                {label}
+                                            </div>
+                                            <div class="truncate text-[10px] text-text-tertiary mt-0.5">
+                                                {subtitle}
+                                            </div>
+                                        </button>
                                     }
                                 })
                                 .collect::<Vec<_>>()}
