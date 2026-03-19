@@ -30,13 +30,6 @@ pub enum AgentLifecycleEvent {
     Unregistered {
         agent_id: String,
     },
-    /// Active agent was switched for a session
-    Switched {
-        agent_id: String,
-        channel: String,
-        peer_id: String,
-        previous_agent_id: String,
-    },
     /// Agent was deleted and its workspace archived
     Deleted {
         agent_id: String,
@@ -63,7 +56,6 @@ impl AgentLifecycleEvent {
             Self::Started { .. } => "agent.lifecycle.started",
             Self::Completed { .. } => "agent.lifecycle.completed",
             Self::Unregistered { .. } => "agent.lifecycle.unregistered",
-            Self::Switched { .. } => "agent.lifecycle.switched",
             Self::Deleted { .. } => "agent.lifecycle.deleted",
             Self::SubagentSpawned { .. } => "agent.lifecycle.subagent_spawned",
             Self::SubagentCompleted { .. } => "agent.lifecycle.subagent_completed",

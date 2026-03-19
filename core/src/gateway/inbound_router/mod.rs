@@ -28,7 +28,6 @@ use super::execution_adapter::ExecutionAdapter;
 use super::handlers::group_chat::SharedOrchestrator;
 
 use super::pairing_store::PairingStore;
-use super::router::AgentRouter;
 use super::routing_config::RoutingConfig;
 use super::workspace::WorkspaceManager;
 use crate::command::CommandParser;
@@ -76,8 +75,6 @@ pub struct InboundMessageRouter {
     pub(super) agent_registry: Option<Arc<AgentRegistry>>,
     /// Execution adapter for running agents
     pub(super) execution_adapter: Option<Arc<dyn ExecutionAdapter>>,
-    /// Agent router for binding-based agent selection
-    pub(super) agent_router: Option<Arc<AgentRouter>>,
     /// Workspace manager for channel-level active agent lookup
     pub(super) workspace_manager: Option<Arc<WorkspaceManager>>,
     /// Inbound message deduplication tracker
@@ -115,7 +112,6 @@ impl InboundMessageRouter {
             channel_configs: HashMap::new(),
             agent_registry: None,
             execution_adapter: None,
-            agent_router: None,
             workspace_manager: None,
             dedup_tracker: Mutex::new(InboundDedupTracker::new()),
             group_chat_orch: None,
@@ -141,28 +137,6 @@ impl InboundMessageRouter {
         router.agent_registry = Some(agent_registry);
         router.execution_adapter = Some(execution_adapter);
         router
-    }
-
-    /// Create a new inbound message router with full execution support and unified routing
-    pub fn with_unified_routing(
-        channel_registry: Arc<ChannelRegistry>,
-        pairing_store: Arc<dyn PairingStore>,
-        config: RoutingConfig,
-        agent_registry: Arc<AgentRegistry>,
-        execution_adapter: Arc<dyn ExecutionAdapter>,
-        agent_router: Arc<AgentRouter>,
-    ) -> Self {
-        let mut router = Self::with_execution(
-            channel_registry, pairing_store, config, agent_registry, execution_adapter,
-        );
-        router.agent_router = Some(agent_router);
-        router
-    }
-
-    /// Set the agent router for unified routing
-    pub fn with_agent_router(mut self, router: Arc<AgentRouter>) -> Self {
-        self.agent_router = Some(router);
-        self
     }
 
     /// Set the workspace manager for channel-level active agent lookup

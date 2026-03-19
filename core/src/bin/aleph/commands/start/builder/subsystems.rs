@@ -11,7 +11,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use alephcore::gateway::GatewayServer;
-use alephcore::gateway::router::AgentRouter;
 use alephcore::gateway::{
     AgentRegistry, ChannelRegistry, InboundMessageRouter, RoutingConfig,
 };
@@ -273,11 +272,9 @@ pub(in crate::commands::start) async fn initialize_channels(
 // ── initialize_inbound_router ────────────────────────────────────────────────
 
 /// Initialize InboundMessageRouter and start it.
-/// Connects the channel registry to the agent router for unified routing.
 #[allow(clippy::too_many_arguments)]
 pub(in crate::commands::start) async fn initialize_inbound_router(
     channel_registry: Arc<ChannelRegistry>,
-    router: Arc<AgentRouter>,
     execution_adapter: Option<Arc<dyn alephcore::gateway::ExecutionAdapter>>,
     agent_registry: Option<Arc<AgentRegistry>>,
     pairing_store: Arc<dyn alephcore::gateway::pairing_store::PairingStore>,
@@ -298,13 +295,12 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
             if !daemon {
                 println!("  Inbound router: execution support enabled");
             }
-            InboundMessageRouter::with_unified_routing(
+            InboundMessageRouter::with_execution(
                 channel_registry.clone(),
                 pairing_store.clone(),
                 routing_config,
                 ar,
                 ea,
-                router.clone(),
             )
         }
         _ => {
@@ -316,7 +312,6 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
                 pairing_store.clone(),
                 routing_config,
             )
-            .with_agent_router(router.clone())
         }
     };
 

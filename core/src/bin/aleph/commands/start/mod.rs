@@ -711,7 +711,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     let app_config_snapshot = app_config_for_channels.read().await.clone();
     let channel_registry = initialize_channels(&mut server, &app_config_snapshot, &app_config_for_channels, agent_result.dispatch_registry.as_deref(), args.daemon).await;
     initialize_inbound_router(
-        channel_registry, router,
+        channel_registry,
         agent_result.execution_adapter, agent_result.agent_registry,
         channel_pairing_store,
         shared_orch, gc_executor,
