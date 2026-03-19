@@ -141,18 +141,11 @@ where
     let session_key_str = session_key.to_key_string();
     let accepted_at = chrono::Utc::now().to_rfc3339();
 
-    let channel_id = params.channel.as_deref().unwrap_or("panel");
-    let peer_id = params.peer_id.as_deref().unwrap_or("local");
+    // Resolve agent from session_key (which encodes the correct agent_id)
+    let resolved_agent_id = session_key.agent_id().to_string();
 
-    // Resolve active agent: check WorkspaceManager override first, then default
     let agent = {
-        let active_agent_id = workspace_manager.as_ref()
-            .and_then(|wm| wm.get_active_agent(channel_id, peer_id).ok().flatten());
-        let agent_opt = if let Some(ref aid) = active_agent_id {
-            agent_registry.get(aid).await
-        } else {
-            None
-        };
+        let agent_opt = agent_registry.get(&resolved_agent_id).await;
         match agent_opt.or(agent_registry.get_default().await) {
             Some(a) => a,
             None => {
@@ -164,6 +157,9 @@ where
             }
         }
     };
+
+    let channel_id = params.channel.as_deref().unwrap_or("panel");
+    let peer_id = params.peer_id.as_deref().unwrap_or("local");
 
     // Create emitter for streaming events, respecting output_mode config
     let output_mode = {
@@ -278,30 +274,23 @@ where
     // Generate run ID
     let run_id = uuid::Uuid::new_v4().to_string();
 
-    // Resolve session key
+    // Resolve session key (with explicit agent_id from Panel if provided)
     let session_key = router
         .route(
             params.session_key.as_deref(),
             params.channel.as_deref(),
             None,
-            None,
+            params.agent_id.as_deref(),
         )
         .await;
 
     let session_key_str = session_key.to_key_string();
 
-    let channel_id = params.channel.as_deref().unwrap_or("panel");
-    let peer_id = "local"; // Panel doesn't have per-user peer IDs
+    // Resolve agent from session_key (which now encodes the correct agent_id)
+    let resolved_agent_id = session_key.agent_id().to_string();
 
-    // Resolve active agent: check WorkspaceManager override first, then default
     let agent = {
-        let active_agent_id = workspace_manager.as_ref()
-            .and_then(|wm| wm.get_active_agent(channel_id, peer_id).ok().flatten());
-        let agent_opt = if let Some(ref aid) = active_agent_id {
-            agent_registry.get(aid).await
-        } else {
-            None
-        };
+        let agent_opt = agent_registry.get(&resolved_agent_id).await;
         match agent_opt.or(agent_registry.get_default().await) {
             Some(a) => a,
             None => {
@@ -313,6 +302,9 @@ where
             }
         }
     };
+
+    let channel_id = params.channel.as_deref().unwrap_or("panel");
+    let peer_id = "local"; // Panel doesn't have per-user peer IDs
 
     // Create emitter for streaming events, respecting output_mode config
     let output_mode = {
