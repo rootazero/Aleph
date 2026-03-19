@@ -70,7 +70,6 @@ pub static TOOL_GROUPS: &[ToolGroup] = &[
         name: "Agent 管理",
         tools: &[
             "agent_create",
-            "agent_switch",
             "agent_list",
             "agent_delete",
             "session_new",

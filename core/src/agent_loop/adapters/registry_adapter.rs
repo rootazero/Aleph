@@ -73,13 +73,7 @@ impl<R: ToolRegistry + 'static> LoopTool for RegistryToolAdapter<R> {
         };
         match self.registry.execute_tool(&self.name, input).await {
             Ok(output) => {
-                // agent_switch should terminate the current loop so the next
-                // message is routed to the newly-selected agent.
-                if self.name == "agent_switch" {
-                    ToolResult::SuccessAndStopLoop { output }
-                } else {
-                    ToolResult::Success { output }
-                }
+                ToolResult::Success { output }
             }
             Err(e) => {
                 tracing::warn!(tool = %self.name, error = %e, "Tool execution failed");

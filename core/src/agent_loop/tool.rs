@@ -15,8 +15,6 @@ pub enum ToolResult {
     Success { output: Value },
     Error { error: String, retryable: bool },
     /// Tool succeeded and the agent loop should stop after this iteration.
-    /// Used by agent_switch to terminate the current loop so the next message
-    /// is routed to the new agent.
     SuccessAndStopLoop { output: Value },
 }
 

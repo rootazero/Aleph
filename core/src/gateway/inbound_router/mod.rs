@@ -9,7 +9,7 @@ mod dedup;
 mod executor;
 mod group_chat_handler;
 mod permission;
-mod switch_intent;
+
 mod types;
 
 pub use types::{
@@ -26,7 +26,7 @@ use super::channel::{InboundMessage, OutboundMessage};
 use super::channel_registry::ChannelRegistry;
 use super::execution_adapter::ExecutionAdapter;
 use super::handlers::group_chat::SharedOrchestrator;
-use super::intent_detector::IntentDetector;
+
 use super::pairing_store::PairingStore;
 use super::router::AgentRouter;
 use super::routing_config::RoutingConfig;
@@ -88,8 +88,7 @@ pub struct InboundMessageRouter {
     pub(super) group_chat_executor: Option<Arc<GroupChatExecutor>>,
     /// Active group chat sessions: "channel_id:conversation_id" -> session_id
     pub(super) active_group_sessions: Mutex<HashMap<String, String>>,
-    /// Intent detector for natural language agent switching
-    pub(super) intent_detector: Option<IntentDetector>,
+
     /// LLM provider for intent classification and soul generation
     pub(super) llm_provider: Option<Arc<dyn crate::providers::AiProvider>>,
     /// Command parser for unified slash command resolution
@@ -122,7 +121,6 @@ impl InboundMessageRouter {
             group_chat_orch: None,
             group_chat_executor: None,
             active_group_sessions: Mutex::new(HashMap::new()),
-            intent_detector: None,
             llm_provider: None,
             command_parser: None,
             debounce_buffer: None,
@@ -181,12 +179,6 @@ impl InboundMessageRouter {
     ) -> Self {
         self.group_chat_orch = Some(orch);
         self.group_chat_executor = Some(executor);
-        self
-    }
-
-    /// Set the intent detector for natural language agent switching
-    pub fn with_intent_detector(mut self, detector: IntentDetector) -> Self {
-        self.intent_detector = Some(detector);
         self
     }
 
@@ -329,11 +321,6 @@ impl InboundMessageRouter {
             // Try unified command resolution first (async, all sources)
             if let Some(ref parser) = self.command_parser {
                 if let Some(parsed) = parser.parse_async(slash_text).await {
-                    if parsed.command_name == "switch" {
-                        if let Some(args) = &parsed.arguments {
-                            return self.handle_switch_command(args.trim(), &msg, &ctx).await;
-                        }
-                    }
                     if parsed.command_name == "groupchat" {
                         return self.handle_groupchat_command(&msg).await;
                     }
@@ -352,13 +339,6 @@ impl InboundMessageRouter {
                 }
             }
 
-            // Fallback: /switch without unified registry
-            if let Some(new_agent) = slash_text.strip_prefix("/switch ").map(|s| s.trim().to_string()) {
-                if !new_agent.is_empty() {
-                    return self.handle_switch_command(&new_agent, &msg, &ctx).await;
-                }
-            }
-
             // Fallback: /groupchat without unified registry
             if slash_text.starts_with("/groupchat") && self.group_chat_orch.is_some() {
                 return self.handle_groupchat_command(&msg).await;
@@ -368,11 +348,6 @@ impl InboundMessageRouter {
             if slash_text.trim() == "/new" {
                 return self.handle_new_session(&msg, &ctx).await;
             }
-        }
-
-        // Natural language switch intent detection
-        if let Some(result) = self.try_handle_switch_intent(&msg).await {
-            return result;
         }
 
         // Group chat: check for active sessions

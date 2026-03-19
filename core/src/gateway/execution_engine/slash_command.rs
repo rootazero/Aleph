@@ -42,7 +42,6 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
 
         // Map common shorthand commands to their actual tool names
         let cmd_name = match cmd_name.as_str() {
-            "switch" => "agent_switch".to_string(),
             "rename" => "session_set_topic".to_string(),
             other => other.to_string(),
         };
@@ -135,7 +134,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         }
     }
 
-    /// Execute a direct tool slash command (e.g. /agent_switch, /search).
+    /// Execute a direct tool slash command (e.g. /search, /bash).
     async fn execute_direct_tool<E: EventEmitter + Send + Sync + 'static>(
         &self,
         run_id: &str,
@@ -253,7 +252,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
 /// names for each tool's expected schema.
 fn build_tool_arguments(tool_id: &str, args_str: &str, raw_input: &str) -> serde_json::Value {
     match tool_id {
-        "agent_switch" | "agent_delete" => serde_json::json!({
+        "agent_delete" => serde_json::json!({
             "agent_id": args_str,
         }),
         "agent_create" => serde_json::json!({

@@ -3,7 +3,7 @@
 pub mod create;
 pub mod delete;
 pub mod list;
-pub mod switch;
+
 
 use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
@@ -16,6 +16,8 @@ use tokio::sync::RwLock;
 pub struct SessionContext {
     pub channel: String,
     pub peer_id: String,
+    /// Serialized session key string (e.g. "main:default:0" or "main:dm:telegram:user123:0")
+    pub session_key_str: String,
 }
 
 pub type SessionContextHandle = Arc<RwLock<SessionContext>>;
@@ -54,7 +56,7 @@ pub fn new_tool_policy_handle() -> ToolPolicyHandle {
 pub use create::{AgentCreateArgs, AgentCreateOutput, AgentCreateTool};
 pub use delete::{AgentDeleteArgs, AgentDeleteOutput, AgentDeleteTool};
 pub use list::{AgentListArgs, AgentListInfo, AgentListOutput, AgentListTool};
-pub use switch::{AgentSwitchArgs, AgentSwitchOutput, AgentSwitchTool};
+
 
 #[cfg(test)]
 mod policy_tests {

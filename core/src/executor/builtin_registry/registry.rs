@@ -70,7 +70,7 @@ pub struct BuiltinToolRegistry {
     pub(crate) cron_manage_tool: Option<crate::builtin_tools::cron_manage::CronManageTool>,
     /// Agent management tools (optional - requires AgentRegistry + WorkspaceManager)
     pub(crate) agent_create_tool: Option<crate::builtin_tools::agent_manage::AgentCreateTool>,
-    pub(crate) agent_switch_tool: Option<crate::builtin_tools::agent_manage::AgentSwitchTool>,
+
     pub(crate) agent_list_tool: Option<crate::builtin_tools::agent_manage::AgentListTool>,
     pub(crate) agent_delete_tool: Option<crate::builtin_tools::agent_manage::AgentDeleteTool>,
     /// Browser tools (always available, share a single ProfileManager)
@@ -181,7 +181,7 @@ impl ToolRegistry for BuiltinToolRegistry {
 
         // Enforce per-agent tool policy.
         // Uses try_read() (non-blocking) since this is a synchronous function.
-        // Contention is extremely unlikely — policy is only written during agent_switch.
+        // Contention is extremely unlikely — policy is rarely written.
         if let Some(ref policy_handle) = self.tool_policy_handle {
             if let Ok(policy) = policy_handle.try_read() {
                 if !policy.is_allowed(tool_name) {
@@ -349,7 +349,7 @@ impl ToolRegistry for BuiltinToolRegistry {
 
             // Agent management tools — snapshot session context into arguments
             // to avoid race conditions from concurrent reads of the shared handle.
-            "agent_create" | "agent_switch" | "agent_list" | "agent_delete" => {
+            "agent_create" | "agent_list" | "agent_delete" => {
                 // Snapshot session context into tool arguments before async execution
                 let arguments = {
                     let mut args = arguments;
@@ -368,12 +368,6 @@ impl ToolRegistry for BuiltinToolRegistry {
                     "agent_create" => Box::pin(async move {
                         let tool = self.agent_create_tool.as_ref().ok_or_else(|| {
                             AlephError::tool("agent_create not available: no AgentRegistry/WorkspaceManager configured")
-                        })?;
-                        tool.call_json(arguments).await
-                    }),
-                    "agent_switch" => Box::pin(async move {
-                        let tool = self.agent_switch_tool.as_ref().ok_or_else(|| {
-                            AlephError::tool("agent_switch not available: no AgentRegistry/WorkspaceManager configured")
                         })?;
                         tool.call_json(arguments).await
                     }),

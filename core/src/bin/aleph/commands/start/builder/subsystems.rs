@@ -291,7 +291,6 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
     daemon: bool,
 ) {
     let routing_config = RoutingConfig::default();
-    let agent_registry_ref = agent_registry.clone();
 
     // Use full execution support when available, otherwise basic routing
     let mut inbound_router = match (execution_adapter, agent_registry) {
@@ -329,38 +328,14 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
         }
     }
 
-    // Wire workspace manager for /switch command and channel-level agent routing
+    // Wire workspace manager for channel-level agent routing
     if let Some(wm) = workspace_manager {
         inbound_router = inbound_router.with_workspace_manager(wm);
     }
 
-    // Wire intent detector for natural language agent switching (LLM-based)
-    {
-        use alephcore::gateway::IntentDetector;
-        use alephcore::gateway::intent_detector::AgentInfo;
-
-        let mut detector = IntentDetector::new();
-        if let Some(ref provider) = default_provider {
-            detector = detector.with_llm_provider(provider.clone());
-        }
-        // Provide available agent list from the agent registry
-        if let Some(ref registry) = agent_registry_ref {
-            let agents: Vec<AgentInfo> = registry.list().await
-                .into_iter()
-                .map(|name| AgentInfo {
-                    id: name.clone(),
-                    name,
-                })
-                .collect();
-            detector = detector.with_available_agents(agents);
-        }
-        inbound_router = inbound_router.with_intent_detector(detector);
-        if let Some(provider) = default_provider {
-            inbound_router = inbound_router.with_llm_provider(provider);
-        }
-        if !daemon {
-            println!("  Inbound router: intent detection enabled (LLM semantic understanding)");
-        }
+    // Wire LLM provider for session topic generation
+    if let Some(provider) = default_provider {
+        inbound_router = inbound_router.with_llm_provider(provider);
     }
 
     // Wire command parser for unified slash command resolution

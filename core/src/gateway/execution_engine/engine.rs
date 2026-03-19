@@ -228,12 +228,13 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
 
         // ================================================================
         // Propagate session context BEFORE fast path so agent management
-        // tools (agent_create, agent_switch) can auto-switch correctly.
+        // tools (agent_create, agent_delete) can resolve the session correctly.
         // ================================================================
         if let Some(sc_handle) = self.tool_registry.session_context_handle() {
             let mut sc = sc_handle.write().await;
             sc.channel = request.metadata.get("channel_id").cloned().unwrap_or_default();
             sc.peer_id = request.metadata.get("sender_id").cloned().unwrap_or_default();
+            sc.session_key_str = request.session_key.to_key_string();
         }
 
         // ================================================================

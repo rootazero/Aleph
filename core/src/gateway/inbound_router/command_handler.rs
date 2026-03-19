@@ -9,7 +9,7 @@ use crate::intent::{DirectToolSource, IntentResult};
 use crate::providers::adapter::RequestPayload;
 use crate::providers::message::UnifiedMessage;
 
-use super::types::{RoutingError, check_link_access};
+use super::types::RoutingError;
 use super::InboundMessageRouter;
 
 /// Strip @botname suffix from Telegram-style slash commands.
@@ -71,74 +71,6 @@ pub(super) fn serialize_intent_result(result: &IntentResult) -> Option<String> {
 }
 
 impl InboundMessageRouter {
-    /// Handle /switch command: change active agent for this channel+peer
-    pub(super) async fn handle_switch_command(
-        &self,
-        agent_name: &str,
-        msg: &InboundMessage,
-        ctx: &InboundContext,
-    ) -> Result<(), RoutingError> {
-        let channel_id = ctx.message.channel_id.as_str();
-        let sender_id = msg.sender_id.as_str();
-
-        if let Some(ref manager) = self.workspace_manager {
-            let agent_exists = if let Some(ref registry) = self.agent_registry {
-                registry.get(agent_name).await.is_some()
-            } else {
-                false
-            };
-
-            let reply_text = if agent_exists {
-                // Check link access control before switching
-                let access_denied = if let Some(ref registry) = self.agent_registry {
-                    if let Some(allowed_links) = registry.get_allowed_links(agent_name).await {
-                        check_link_access(&allowed_links, channel_id, agent_name).err()
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                };
-
-                if let Some(e) = access_denied {
-                    format!("\u{26d4} {}", e)
-                } else {
-                    // Close current session before switching
-                    let topic = self.generate_session_topic(&ctx.session_key).await;
-                    if let Some(ref sm) = self.session_manager {
-                        if let Err(e) = sm.close_session(&ctx.session_key, topic).await {
-                            warn!("[Router] Failed to close session on switch: {}", e);
-                        }
-                    }
-
-                    match manager.set_active_agent(channel_id, sender_id, agent_name) {
-                        Ok(()) => {
-                            info!("[Router] Switched agent for {}:{} -> {}", channel_id, sender_id, agent_name);
-                            format!("✅ Switched to agent: {}", agent_name)
-                        }
-                        Err(e) => {
-                            error!("[Router] Failed to switch agent: {}", e);
-                            format!("❌ Failed to switch agent: {}", e)
-                        }
-                    }
-                }
-            } else {
-                let available = if let Some(ref registry) = self.agent_registry {
-                    registry.list().await.join(", ")
-                } else {
-                    "unknown".to_string()
-                };
-                format!("❌ Agent '{}' not found. Available: {}", agent_name, available)
-            };
-
-            let reply = OutboundMessage::text(msg.conversation_id.as_str(), reply_text);
-            if let Err(e) = self.channel_registry.send(&msg.channel_id, reply).await {
-                error!("[Router] Failed to send /switch reply: {}", e);
-            }
-        }
-        Ok(())
-    }
-
     /// Handle /new command: close current session with topic, create new epoch
     pub(super) async fn handle_new_session(
         &self,

@@ -165,7 +165,7 @@ impl BuiltinToolRegistry {
         );
 
         // Add agent management tools (if AgentRegistry + WorkspaceManager are available)
-        let (agent_create_tool, agent_switch_tool, agent_list_tool, agent_delete_tool, session_context_handle) =
+        let (agent_create_tool, agent_list_tool, agent_delete_tool, session_context_handle) =
             if let (Some(ref ar), Some(ref wm)) = (&config.agent_registry, &config.workspace_manager) {
                 use crate::builtin_tools::agent_manage;
                 let ctx = agent_manage::new_session_context_handle();
@@ -179,9 +179,6 @@ impl BuiltinToolRegistry {
                         tool
                     }
                 };
-                let switch = agent_manage::AgentSwitchTool::new(
-                    Arc::clone(ar), Arc::clone(wm), config.event_bus.clone(),
-                );
                 let list = agent_manage::AgentListTool::new(
                     Arc::clone(ar), Arc::clone(wm),
                 );
@@ -190,12 +187,11 @@ impl BuiltinToolRegistry {
                 );
 
                 // Register agent tools WITH their parameter schemas so LLMs
-                // know which arguments to pass (e.g. agent_id for agent_switch).
+                // know which arguments to pass.
                 {
                     use crate::tools::AlephTool;
                     let tool_defs = [
                         create.definition(),
-                        switch.definition(),
                         list.definition(),
                         delete.definition(),
                     ];
@@ -211,10 +207,10 @@ impl BuiltinToolRegistry {
                     }
                 }
 
-                info!("Registered agent management tools (agent_create, agent_switch, agent_list, agent_delete)");
-                (Some(create), Some(switch), Some(list), Some(delete), Some(ctx))
+                info!("Registered agent management tools (agent_create, agent_list, agent_delete)");
+                (Some(create), Some(list), Some(delete), Some(ctx))
             } else {
-                (None, None, None, None, None)
+                (None, None, None, None)
             };
 
         // Add ACP delegate tools (if AcpHarnessManager is provided)
@@ -325,7 +321,6 @@ impl BuiltinToolRegistry {
             browser_fill_form_tool,
             browser_profile_tool,
             agent_create_tool,
-            agent_switch_tool,
             agent_list_tool,
             agent_delete_tool,
             session_context_handle,
