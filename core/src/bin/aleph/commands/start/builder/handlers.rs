@@ -129,17 +129,19 @@ pub(in crate::commands::start) fn register_session_handlers(
     register_handler!(server, "session.usage", session_handlers::handle_usage_db, session_manager);
     register_handler!(server, "session.compact", session_handlers::handle_compact_db, session_manager);
     register_handler!(server, "sessions.new", session_handlers::handle_new_session_db, session_manager);
+    register_handler!(server, "sessions.set_topic", session_handlers::handle_set_topic_db, session_manager);
 
     if !daemon {
         println!("Session methods:");
-        println!("  - sessions.list   : List all sessions");
-        println!("  - sessions.history: Get session message history");
-        println!("  - sessions.reset  : Clear session messages");
-        println!("  - sessions.delete : Delete a session");
-        println!("  - sessions.new    : Close current session and start new one");
-        println!("  - session.create  : Create a new session");
-        println!("  - session.usage   : Get session token/message stats");
-        println!("  - session.compact : Compact session history");
+        println!("  - sessions.list      : List all sessions");
+        println!("  - sessions.history   : Get session message history");
+        println!("  - sessions.reset     : Clear session messages");
+        println!("  - sessions.delete    : Delete a session");
+        println!("  - sessions.new       : Close current session and start new one");
+        println!("  - sessions.set_topic : Set session topic/title");
+        println!("  - session.create     : Create a new session");
+        println!("  - session.usage      : Get session token/message stats");
+        println!("  - session.compact    : Compact session history");
         println!();
     }
 }
@@ -716,4 +718,29 @@ pub(in crate::commands::start) fn register_agents_handlers(
     server.handlers_mut().register("agents.tools_schema", |req| async move {
         agents::handle_tools_schema(req).await
     });
+}
+
+// ─── register_cron_handlers ─────────────────────────────────────────────────
+
+pub(in crate::commands::start) fn register_cron_handlers(
+    server: &mut GatewayServer,
+    cron_service: &alephcore::cron::SharedCronService,
+    daemon: bool,
+) {
+    use alephcore::gateway::handlers::cron;
+
+    register_handler!(server, "cron.list", cron::handle_list, cron_service);
+    register_handler!(server, "cron.get", cron::handle_get, cron_service);
+    register_handler!(server, "cron.create", cron::handle_create, cron_service);
+    register_handler!(server, "cron.update", cron::handle_update, cron_service);
+    register_handler!(server, "cron.delete", cron::handle_delete, cron_service);
+    register_handler!(server, "cron.status", cron::handle_status, cron_service);
+    register_handler!(server, "cron.run", cron::handle_run, cron_service);
+    register_handler!(server, "cron.runs", cron::handle_runs, cron_service);
+    register_handler!(server, "cron.toggle", cron::handle_toggle, cron_service);
+
+    if !daemon {
+        println!("Cron service: enabled (RPC handlers registered)");
+        println!();
+    }
 }
