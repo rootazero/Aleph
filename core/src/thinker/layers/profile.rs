@@ -50,7 +50,7 @@ mod tests {
     use crate::config::ProfileConfig;
     use crate::thinker::prompt_builder::PromptConfig;
     use crate::thinker::soul::SoulManifest;
-    use crate::thinker::workspace_files::{WorkspaceFile, WorkspaceFiles};
+    use crate::thinker::identity_files::{IdentityFile, IdentityFiles};
     use std::path::PathBuf;
 
     #[test]
@@ -131,9 +131,9 @@ mod tests {
             system_prompt: Some("You are a senior Rust engineer.".to_string()),
             ..Default::default()
         };
-        let ws = WorkspaceFiles {
+        let ws = IdentityFiles {
             workspace_dir: PathBuf::from("/tmp/test"),
-            files: vec![WorkspaceFile {
+            files: vec![IdentityFile {
                 name: "AGENTS.md",
                 content: Some("Custom agent instructions".to_string()),
                 truncated: false,
@@ -164,9 +164,9 @@ mod tests {
             ..Default::default()
         };
         // Workspace exists but has no AGENTS.md
-        let ws = WorkspaceFiles {
+        let ws = IdentityFiles {
             workspace_dir: PathBuf::from("/tmp/test"),
-            files: vec![WorkspaceFile {
+            files: vec![IdentityFile {
                 name: "IDENTITY.md",
                 content: Some("identity content".to_string()),
                 truncated: false,

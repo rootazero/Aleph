@@ -19,7 +19,7 @@ use crate::error::Result;
 use crate::thinker::inbound_context::InboundContext;
 use crate::thinker::prompt_budget::TokenBudget;
 use crate::thinker::prompt_builder::PromptConfig;
-use crate::thinker::workspace_files::WorkspaceFile;
+use crate::thinker::identity_files::IdentityFile;
 
 // ---------------------------------------------------------------------------
 // Hook 1: BootstrapHook — full control over workspace files
@@ -37,7 +37,7 @@ pub struct BootstrapHookContext {
     /// Channel kind (e.g. "telegram", "discord", "cli").
     pub channel: String,
     /// Loaded workspace files — hooks may mutate this list freely.
-    pub files: Vec<WorkspaceFile>,
+    pub files: Vec<IdentityFile>,
 }
 
 /// Hook with full control over workspace file loading.
@@ -363,7 +363,7 @@ mod tests {
             workspace_dir: PathBuf::from("/tmp/ws"),
             session_key: "test:session".to_string(),
             channel: "cli".to_string(),
-            files: vec![WorkspaceFile {
+            files: vec![IdentityFile {
                 name: "SOUL.md",
                 content: Some("soul content".to_string()),
                 truncated: false,

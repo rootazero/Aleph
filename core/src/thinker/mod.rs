@@ -32,7 +32,7 @@ pub mod user_profile;
 pub mod virtual_tools;
 pub mod memory_context;
 pub mod memory_context_provider;
-pub mod workspace_files;
+pub mod identity_files;
 
 use crate::sync_primitives::Arc;
 

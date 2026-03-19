@@ -122,7 +122,7 @@ mod tests {
     use crate::thinker::prompt_builder::PromptConfig;
     use crate::thinker::prompt_mode::PromptMode;
     use crate::thinker::soul::{SoulManifest, SoulVoice, Verbosity};
-    use crate::thinker::workspace_files::{WorkspaceFile, WorkspaceFiles};
+    use crate::thinker::identity_files::{IdentityFile, IdentityFiles};
     use std::path::PathBuf;
 
     #[test]
@@ -227,9 +227,9 @@ mod tests {
             },
             ..Default::default()
         };
-        let workspace = WorkspaceFiles {
+        let workspace = IdentityFiles {
             workspace_dir: PathBuf::from("/tmp/test"),
-            files: vec![WorkspaceFile {
+            files: vec![IdentityFile {
                 name: "SOUL.md",
                 content: Some("You are a custom soul from workspace.".to_string()),
                 truncated: false,
@@ -264,7 +264,7 @@ mod tests {
             ..Default::default()
         };
         // Workspace with no SOUL.md
-        let workspace = WorkspaceFiles {
+        let workspace = IdentityFiles {
             workspace_dir: PathBuf::from("/tmp/test"),
             files: vec![],
         };

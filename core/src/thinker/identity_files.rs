@@ -1,14 +1,14 @@
-//! Standardized workspace files for system prompt injection.
+//! Standardized identity files for system prompt injection.
 //!
-//! Loads user-editable workspace files (SOUL.md, IDENTITY.md, etc.) from the
-//! workspace directory, applying per-file and total budget constraints.
+//! Loads user-editable identity files (SOUL.md, IDENTITY.md, etc.) from the
+//! identity directory, applying per-file and total budget constraints.
 
 use std::path::{Path, PathBuf};
 
 use crate::thinker::prompt_budget::truncate_with_head_tail;
 
-/// Canonical workspace file names, loaded in this order.
-pub const WORKSPACE_FILE_NAMES: &[&str] = &[
+/// Canonical identity file names, loaded in this order.
+pub const IDENTITY_FILE_NAMES: &[&str] = &[
     "SOUL.md",
     "IDENTITY.md",
     "AGENTS.md",
@@ -17,16 +17,16 @@ pub const WORKSPACE_FILE_NAMES: &[&str] = &[
     "HEARTBEAT.md",
 ];
 
-/// Configuration for workspace file loading and truncation.
+/// Configuration for identity file loading and truncation.
 #[derive(Debug, Clone)]
-pub struct WorkspaceFilesConfig {
+pub struct IdentityFilesConfig {
     /// Maximum characters per individual file before truncation.
     pub per_file_max_chars: usize,
     /// Maximum total characters across all loaded files.
     pub total_max_chars: usize,
 }
 
-impl Default for WorkspaceFilesConfig {
+impl Default for IdentityFilesConfig {
     fn default() -> Self {
         Self {
             per_file_max_chars: 20_000,
@@ -35,9 +35,9 @@ impl Default for WorkspaceFilesConfig {
     }
 }
 
-/// A single loaded workspace file with truncation metadata.
+/// A single loaded identity file with truncation metadata.
 #[derive(Debug, Clone)]
-pub struct WorkspaceFile {
+pub struct IdentityFile {
     /// Canonical file name (e.g. "SOUL.md").
     pub name: &'static str,
     /// File content after truncation, or None if not found / empty.
@@ -48,13 +48,13 @@ pub struct WorkspaceFile {
     pub original_size: usize,
 }
 
-/// Collection of loaded workspace files from a workspace directory.
+/// Collection of loaded identity files from an identity directory.
 #[derive(Debug, Clone)]
-pub struct WorkspaceFiles {
+pub struct IdentityFiles {
     /// The workspace directory these files were loaded from.
     pub workspace_dir: PathBuf,
     /// Loaded files in canonical order.
-    pub files: Vec<WorkspaceFile>,
+    pub files: Vec<IdentityFile>,
 }
 
 /// Resolve the path for a workspace file.
@@ -73,17 +73,17 @@ pub fn resolve_path(workspace: &Path, filename: &str) -> Option<PathBuf> {
     None
 }
 
-impl WorkspaceFiles {
-    /// Load all workspace files from the given directory, applying truncation.
+impl IdentityFiles {
+    /// Load all identity files from the given directory, applying truncation.
     ///
-    /// Files are loaded in `WORKSPACE_FILE_NAMES` order. Each file is
+    /// Files are loaded in `IDENTITY_FILE_NAMES` order. Each file is
     /// individually capped at `config.per_file_max_chars`, and the total
     /// across all files is capped at `config.total_max_chars`.
-    pub fn load(workspace: &Path, config: &WorkspaceFilesConfig) -> Self {
-        let mut files = Vec::with_capacity(WORKSPACE_FILE_NAMES.len());
+    pub fn load(workspace: &Path, config: &IdentityFilesConfig) -> Self {
+        let mut files = Vec::with_capacity(IDENTITY_FILE_NAMES.len());
         let mut total_chars = 0usize;
 
-        for &name in WORKSPACE_FILE_NAMES {
+        for &name in IDENTITY_FILE_NAMES {
             let path = resolve_path(workspace, name);
 
             let raw = path.and_then(|p| std::fs::read_to_string(p).ok());
@@ -92,7 +92,7 @@ impl WorkspaceFiles {
             let raw = match raw {
                 Some(ref s) if !s.trim().is_empty() => s,
                 _ => {
-                    files.push(WorkspaceFile {
+                    files.push(IdentityFile {
                         name,
                         content: None,
                         truncated: false,
@@ -110,7 +110,7 @@ impl WorkspaceFiles {
 
             if effective_limit == 0 {
                 // Total budget exhausted
-                files.push(WorkspaceFile {
+                files.push(IdentityFile {
                     name,
                     content: None,
                     truncated: true,
@@ -128,7 +128,7 @@ impl WorkspaceFiles {
             };
 
             total_chars += content.len();
-            files.push(WorkspaceFile {
+            files.push(IdentityFile {
                 name,
                 content: Some(content),
                 truncated,
@@ -142,7 +142,7 @@ impl WorkspaceFiles {
         }
     }
 
-    /// Get the content of a workspace file by name.
+    /// Get the content of an identity file by name.
     ///
     /// Returns the (possibly truncated) content, or None if not loaded.
     pub fn get(&self, name: &str) -> Option<&str> {
@@ -161,18 +161,18 @@ mod tests {
 
     #[test]
     fn workspace_file_names_match_spec() {
-        assert_eq!(WORKSPACE_FILE_NAMES.len(), 6);
-        assert_eq!(WORKSPACE_FILE_NAMES[0], "SOUL.md");
-        assert_eq!(WORKSPACE_FILE_NAMES[1], "IDENTITY.md");
-        assert_eq!(WORKSPACE_FILE_NAMES[2], "AGENTS.md");
-        assert_eq!(WORKSPACE_FILE_NAMES[3], "TOOLS.md");
-        assert_eq!(WORKSPACE_FILE_NAMES[4], "MEMORY.md");
-        assert_eq!(WORKSPACE_FILE_NAMES[5], "HEARTBEAT.md");
+        assert_eq!(IDENTITY_FILE_NAMES.len(), 6);
+        assert_eq!(IDENTITY_FILE_NAMES[0], "SOUL.md");
+        assert_eq!(IDENTITY_FILE_NAMES[1], "IDENTITY.md");
+        assert_eq!(IDENTITY_FILE_NAMES[2], "AGENTS.md");
+        assert_eq!(IDENTITY_FILE_NAMES[3], "TOOLS.md");
+        assert_eq!(IDENTITY_FILE_NAMES[4], "MEMORY.md");
+        assert_eq!(IDENTITY_FILE_NAMES[5], "HEARTBEAT.md");
     }
 
     #[test]
     fn default_config_values() {
-        let config = WorkspaceFilesConfig::default();
+        let config = IdentityFilesConfig::default();
         assert_eq!(config.per_file_max_chars, 20_000);
         assert_eq!(config.total_max_chars, 100_000);
     }
@@ -183,10 +183,10 @@ mod tests {
         fs::write(dir.path().join("SOUL.md"), "You are Aleph.").unwrap();
         fs::write(dir.path().join("IDENTITY.md"), "Name: Aleph").unwrap();
 
-        let config = WorkspaceFilesConfig::default();
-        let ws = WorkspaceFiles::load(dir.path(), &config);
+        let config = IdentityFilesConfig::default();
+        let ws = IdentityFiles::load(dir.path(), &config);
 
-        assert_eq!(ws.files.len(), WORKSPACE_FILE_NAMES.len());
+        assert_eq!(ws.files.len(), IDENTITY_FILE_NAMES.len());
         assert_eq!(ws.get("SOUL.md"), Some("You are Aleph."));
         assert_eq!(ws.get("IDENTITY.md"), Some("Name: Aleph"));
     }
@@ -196,8 +196,8 @@ mod tests {
         let dir = TempDir::new().unwrap();
         // No files created
 
-        let config = WorkspaceFilesConfig::default();
-        let ws = WorkspaceFiles::load(dir.path(), &config);
+        let config = IdentityFilesConfig::default();
+        let ws = IdentityFiles::load(dir.path(), &config);
 
         for file in &ws.files {
             assert!(file.content.is_none());
@@ -212,8 +212,8 @@ mod tests {
         fs::write(dir.path().join("SOUL.md"), "").unwrap();
         fs::write(dir.path().join("IDENTITY.md"), "   \n  ").unwrap();
 
-        let config = WorkspaceFilesConfig::default();
-        let ws = WorkspaceFiles::load(dir.path(), &config);
+        let config = IdentityFilesConfig::default();
+        let ws = IdentityFiles::load(dir.path(), &config);
 
         assert!(ws.get("SOUL.md").is_none());
         assert!(ws.get("IDENTITY.md").is_none());
@@ -225,11 +225,11 @@ mod tests {
         let large_content = "A".repeat(5000);
         fs::write(dir.path().join("SOUL.md"), &large_content).unwrap();
 
-        let config = WorkspaceFilesConfig {
+        let config = IdentityFilesConfig {
             per_file_max_chars: 200,
             total_max_chars: 100_000,
         };
-        let ws = WorkspaceFiles::load(dir.path(), &config);
+        let ws = IdentityFiles::load(dir.path(), &config);
 
         let soul = ws.files.iter().find(|f| f.name == "SOUL.md").unwrap();
         assert!(soul.truncated);
@@ -244,15 +244,15 @@ mod tests {
     fn load_respects_total_budget() {
         let dir = TempDir::new().unwrap();
         // Each file 500 chars, total budget 900 — not all can fit
-        for name in WORKSPACE_FILE_NAMES {
+        for name in IDENTITY_FILE_NAMES {
             fs::write(dir.path().join(name), "X".repeat(500)).unwrap();
         }
 
-        let config = WorkspaceFilesConfig {
+        let config = IdentityFilesConfig {
             per_file_max_chars: 10_000,
             total_max_chars: 900,
         };
-        let ws = WorkspaceFiles::load(dir.path(), &config);
+        let ws = IdentityFiles::load(dir.path(), &config);
 
         let total: usize = ws
             .files
@@ -276,8 +276,8 @@ mod tests {
     #[test]
     fn get_returns_none_for_unknown_name() {
         let dir = TempDir::new().unwrap();
-        let config = WorkspaceFilesConfig::default();
-        let ws = WorkspaceFiles::load(dir.path(), &config);
+        let config = IdentityFilesConfig::default();
+        let ws = IdentityFiles::load(dir.path(), &config);
 
         assert!(ws.get("NONEXISTENT.md").is_none());
     }
@@ -287,8 +287,8 @@ mod tests {
         let dir = TempDir::new().unwrap();
         fs::write(dir.path().join("TOOLS.md"), "tool: bash").unwrap();
 
-        let config = WorkspaceFilesConfig::default();
-        let ws = WorkspaceFiles::load(dir.path(), &config);
+        let config = IdentityFilesConfig::default();
+        let ws = IdentityFiles::load(dir.path(), &config);
 
         assert_eq!(ws.get("TOOLS.md"), Some("tool: bash"));
         assert!(ws.get("SOUL.md").is_none());
@@ -308,8 +308,8 @@ mod tests {
         assert_eq!(resolved, aleph_dir.join("SOUL.md"));
 
         // Load should pick the .aleph/ version
-        let config = WorkspaceFilesConfig::default();
-        let ws = WorkspaceFiles::load(dir.path(), &config);
+        let config = IdentityFilesConfig::default();
+        let ws = IdentityFiles::load(dir.path(), &config);
         assert_eq!(ws.get("SOUL.md"), Some("aleph version"));
     }
 

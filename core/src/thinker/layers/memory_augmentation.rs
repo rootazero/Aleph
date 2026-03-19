@@ -1,6 +1,6 @@
 //! MemoryAugmentationLayer — inject pre-fetched LanceDB memory context (priority 1575)
 //!
-//! Sits between WorkspaceFilesLayer (1550) and LanguageLayer (1600).
+//! Sits between IdentityFilesLayer (1550) and LanguageLayer (1600).
 //! The async retrieval happens before prompt assembly; this layer only
 //! formats and injects the pre-fetched results.
 

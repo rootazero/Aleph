@@ -22,7 +22,7 @@ impl PromptLayer for CustomInstructionsLayer {
         ]
     }
     fn inject(&self, output: &mut String, input: &LayerInput) {
-        // If workspace IDENTITY.md exists, skip — handled by WorkspaceFilesLayer
+        // If workspace IDENTITY.md exists, skip — handled by IdentityFilesLayer
         if input.workspace_file("IDENTITY.md").is_some() {
             return;
         }
@@ -61,7 +61,7 @@ mod tests {
 
     #[test]
     fn skips_when_workspace_identity_exists() {
-        use crate::thinker::workspace_files::{WorkspaceFile, WorkspaceFiles};
+        use crate::thinker::identity_files::{IdentityFile, IdentityFiles};
         use std::path::PathBuf;
 
         let layer = CustomInstructionsLayer;
@@ -69,9 +69,9 @@ mod tests {
             custom_instructions: Some("Always be concise.".to_string()),
             ..Default::default()
         };
-        let ws = WorkspaceFiles {
+        let ws = IdentityFiles {
             workspace_dir: PathBuf::from("/tmp"),
-            files: vec![WorkspaceFile {
+            files: vec![IdentityFile {
                 name: "IDENTITY.md",
                 content: Some("You are Aleph.".to_string()),
                 truncated: false,

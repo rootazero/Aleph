@@ -207,7 +207,7 @@ impl PromptPipeline {
     /// **Dynamic zone** (per-request, not cacheable):
     /// 1700  InboundContextLayer
     /// 1710  RuntimeContextLayer
-    /// 1730  WorkspaceFilesLayer
+    /// 1730  IdentityFilesLayer
     /// 1740  MemoryAugmentationLayer
     pub fn default_layers() -> Self {
         Self::new(vec![
@@ -233,7 +233,7 @@ impl PromptPipeline {
             Box::new(ThinkingGuidanceLayer),
             Box::new(SkillModeLayer),
             Box::new(CustomInstructionsLayer),
-            Box::new(WorkspaceFilesLayer),
+            Box::new(IdentityFilesLayer),
             Box::new(MemoryAugmentationLayer),
             Box::new(LanguageLayer),
         ])
@@ -591,7 +591,7 @@ mod stability_tests {
 
         assert!(dynamic_names.contains(&"inbound_context"));
         assert!(dynamic_names.contains(&"runtime_context"));
-        assert!(dynamic_names.contains(&"workspace_files"));
+        assert!(dynamic_names.contains(&"identity_files"));
         assert!(dynamic_names.contains(&"memory_augmentation"));
         assert_eq!(dynamic_names.len(), 4, "Exactly 4 dynamic layers expected");
     }

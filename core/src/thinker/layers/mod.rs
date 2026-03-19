@@ -36,8 +36,8 @@ mod protocol_tokens;
 mod heartbeat;
 mod operational_guidelines;
 
-// --- Workspace files layer ---
-mod workspace_files;
+// --- Identity files layer ---
+mod identity_files;
 
 // --- Memory augmentation layer ---
 mod memory_augmentation;
@@ -74,6 +74,6 @@ pub use security::SecurityLayer;
 pub use protocol_tokens::ProtocolTokensLayer;
 pub use heartbeat::HeartbeatLayer;
 pub use operational_guidelines::OperationalGuidelinesLayer;
-pub use workspace_files::WorkspaceFilesLayer;
+pub use identity_files::IdentityFilesLayer;
 pub use memory_augmentation::MemoryAugmentationLayer;
 pub use bootstrap::BootstrapLayer;

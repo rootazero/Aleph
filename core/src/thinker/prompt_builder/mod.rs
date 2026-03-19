@@ -19,7 +19,7 @@ use super::prompt_layer::{AssemblyPath, LayerInput};
 use super::prompt_mode::PromptMode;
 use super::prompt_pipeline::PromptPipeline;
 use super::soul::SoulManifest;
-use super::workspace_files::WorkspaceFiles;
+use super::identity_files::IdentityFiles;
 
 /// System prompt part with optional cache flag
 ///
@@ -221,7 +221,7 @@ impl PromptBuilder {
         tools: &[ToolInfo],
         soul: &SoulManifest,
         profile: Option<&ProfileConfig>,
-        workspace: Option<&WorkspaceFiles>,
+        workspace: Option<&IdentityFiles>,
         inbound: Option<&InboundContext>,
         memory_context: Option<&super::memory_context::MemoryContext>,
     ) -> String {

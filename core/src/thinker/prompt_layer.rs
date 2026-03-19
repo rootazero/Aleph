@@ -7,7 +7,7 @@ use super::inbound_context::InboundContext;
 use super::prompt_builder::PromptConfig;
 use super::prompt_mode::PromptMode;
 use super::soul::SoulManifest;
-use super::workspace_files::WorkspaceFiles;
+use super::identity_files::IdentityFiles;
 
 /// Whether a layer's content is stable across requests or changes per request.
 ///
@@ -56,7 +56,7 @@ pub struct LayerInput<'a> {
     /// Per-request inbound context (sender, channel, session metadata)
     pub inbound: Option<&'a InboundContext>,
     /// Loaded workspace files (SOUL.md, IDENTITY.md, etc.)
-    pub workspace: Option<&'a WorkspaceFiles>,
+    pub workspace: Option<&'a IdentityFiles>,
     /// Pre-fetched memory context from LanceDB (facts + memory summaries).
     pub memory_context: Option<&'a super::memory_context::MemoryContext>,
 }
@@ -101,7 +101,7 @@ impl<'a> LayerInput<'a> {
     }
 
     /// Attach workspace files to this input.
-    pub fn with_workspace(mut self, workspace: &'a WorkspaceFiles) -> Self {
+    pub fn with_workspace(mut self, workspace: &'a IdentityFiles) -> Self {
         self.workspace = Some(workspace);
         self
     }
@@ -113,7 +113,7 @@ impl<'a> LayerInput<'a> {
     }
 
     /// Attach optional workspace files to this input.
-    pub fn with_workspace_opt(mut self, workspace: Option<&'a WorkspaceFiles>) -> Self {
+    pub fn with_workspace_opt(mut self, workspace: Option<&'a IdentityFiles>) -> Self {
         self.workspace = workspace;
         self
     }
@@ -177,7 +177,7 @@ pub trait PromptLayer: Send + Sync {
 mod workspace_inbound_tests {
     use super::*;
     use crate::thinker::prompt_builder::PromptConfig;
-    use crate::thinker::workspace_files::{WorkspaceFiles, WorkspaceFile};
+    use crate::thinker::identity_files::{IdentityFiles, IdentityFile};
     use crate::thinker::inbound_context::{InboundContext, SenderInfo};
 
     fn make_config() -> PromptConfig {
@@ -187,10 +187,10 @@ mod workspace_inbound_tests {
     #[test]
     fn layer_input_workspace_file_access() {
         let config = make_config();
-        let ws = WorkspaceFiles {
+        let ws = IdentityFiles {
             workspace_dir: std::path::PathBuf::from("/tmp"),
             files: vec![
-                WorkspaceFile {
+                IdentityFile {
                     name: "SOUL.md",
                     content: Some("You are Aleph.".to_string()),
                     truncated: false,
@@ -226,7 +226,7 @@ mod workspace_inbound_tests {
     #[test]
     fn with_opt_methods_work() {
         let config = make_config();
-        let ws = WorkspaceFiles {
+        let ws = IdentityFiles {
             workspace_dir: std::path::PathBuf::from("/tmp"),
             files: vec![],
         };

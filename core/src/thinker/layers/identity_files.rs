@@ -1,4 +1,4 @@
-//! WorkspaceFilesLayer — inject remaining workspace files (priority 1550)
+//! IdentityFilesLayer — inject remaining identity files (priority 1730)
 //!
 //! SOUL.md is handled by SoulLayer (priority 50), AGENTS.md by ProfileLayer
 //! (priority 75). This layer injects the rest: IDENTITY.md, TOOLS.md,
@@ -10,11 +10,11 @@ use crate::thinker::prompt_mode::PromptMode;
 /// File names handled by dedicated layers — excluded from this layer.
 const HANDLED_ELSEWHERE: &[&str] = &["SOUL.md", "AGENTS.md"];
 
-pub struct WorkspaceFilesLayer;
+pub struct IdentityFilesLayer;
 
-impl PromptLayer for WorkspaceFilesLayer {
+impl PromptLayer for IdentityFilesLayer {
     fn name(&self) -> &'static str {
-        "workspace_files"
+        "identity_files"
     }
 
     fn priority(&self) -> u32 {
@@ -69,18 +69,18 @@ mod tests {
     use super::*;
     use crate::thinker::prompt_builder::PromptConfig;
     use crate::thinker::prompt_mode::PromptMode;
-    use crate::thinker::workspace_files::{WorkspaceFile, WorkspaceFiles};
+    use crate::thinker::identity_files::{IdentityFile, IdentityFiles};
     use std::path::PathBuf;
 
-    fn make_workspace(files: Vec<WorkspaceFile>) -> WorkspaceFiles {
-        WorkspaceFiles {
+    fn make_workspace(files: Vec<IdentityFile>) -> IdentityFiles {
+        IdentityFiles {
             workspace_dir: PathBuf::from("/tmp/test"),
             files,
         }
     }
 
-    fn make_file(name: &'static str, content: &str) -> WorkspaceFile {
-        WorkspaceFile {
+    fn make_file(name: &'static str, content: &str) -> IdentityFile {
+        IdentityFile {
             name,
             content: Some(content.to_string()),
             truncated: false,
@@ -88,8 +88,8 @@ mod tests {
         }
     }
 
-    fn make_empty_file(name: &'static str) -> WorkspaceFile {
-        WorkspaceFile {
+    fn make_empty_file(name: &'static str) -> IdentityFile {
+        IdentityFile {
             name,
             content: None,
             truncated: false,
@@ -99,8 +99,8 @@ mod tests {
 
     #[test]
     fn metadata() {
-        let layer = WorkspaceFilesLayer;
-        assert_eq!(layer.name(), "workspace_files");
+        let layer = IdentityFilesLayer;
+        assert_eq!(layer.name(), "identity_files");
         assert_eq!(layer.priority(), 1730);
         assert_eq!(layer.paths().len(), 5);
         assert!(layer.paths().contains(&AssemblyPath::Basic));
@@ -110,7 +110,7 @@ mod tests {
 
     #[test]
     fn supports_full_and_compact_not_minimal() {
-        let layer = WorkspaceFilesLayer;
+        let layer = IdentityFilesLayer;
         assert!(layer.supports_mode(PromptMode::Full));
         assert!(layer.supports_mode(PromptMode::Compact));
         assert!(!layer.supports_mode(PromptMode::Minimal));
@@ -118,7 +118,7 @@ mod tests {
 
     #[test]
     fn injects_remaining_files_excludes_soul_and_agents() {
-        let layer = WorkspaceFilesLayer;
+        let layer = IdentityFilesLayer;
         let config = PromptConfig::default();
 
         let ws = make_workspace(vec![
@@ -156,7 +156,7 @@ mod tests {
 
     #[test]
     fn skips_when_no_workspace() {
-        let layer = WorkspaceFilesLayer;
+        let layer = IdentityFilesLayer;
         let config = PromptConfig::default();
         let input = LayerInput::basic(&config, &[]);
         let mut out = String::new();
@@ -167,7 +167,7 @@ mod tests {
 
     #[test]
     fn skips_files_with_no_content() {
-        let layer = WorkspaceFilesLayer;
+        let layer = IdentityFilesLayer;
         let config = PromptConfig::default();
 
         let ws = make_workspace(vec![
@@ -187,7 +187,7 @@ mod tests {
 
     #[test]
     fn empty_when_all_files_missing_or_excluded() {
-        let layer = WorkspaceFilesLayer;
+        let layer = IdentityFilesLayer;
         let config = PromptConfig::default();
 
         let ws = make_workspace(vec![
