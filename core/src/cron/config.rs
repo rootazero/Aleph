@@ -309,6 +309,10 @@ pub struct CronJob {
     /// Agent ID to invoke
     pub agent_id: String,
 
+    /// Channel where this cron job was created (for result delivery)
+    #[serde(default)]
+    pub source_channel_id: Option<String>,
+
     /// Message to send to the agent
     pub prompt: String,
 
@@ -385,6 +389,7 @@ impl CronJob {
             id: uuid::Uuid::new_v4().to_string(),
             name: name.into(),
             agent_id: agent_id.into(),
+            source_channel_id: None,
             prompt: prompt.into(),
             enabled: true,
             timezone: None,
@@ -417,6 +422,8 @@ impl CronJob {
 pub struct JobSnapshot {
     pub id: String,
     pub agent_id: Option<String>,
+    /// Channel to deliver results to
+    pub source_channel_id: Option<String>,
     /// Template-rendered prompt
     pub prompt: String,
     pub model: Option<String>,
@@ -453,6 +460,7 @@ pub struct CronJobView {
     pub enabled: bool,
     pub schedule_kind: ScheduleKind,
     pub agent_id: String,
+    pub source_channel_id: Option<String>,
     pub prompt: String,
     pub timezone: Option<String>,
     pub tags: Vec<String>,
@@ -472,6 +480,7 @@ impl From<&CronJob> for CronJobView {
             enabled: job.enabled,
             schedule_kind: job.schedule_kind.clone(),
             agent_id: job.agent_id.clone(),
+            source_channel_id: job.source_channel_id.clone(),
             prompt: job.prompt.clone(),
             timezone: job.timezone.clone(),
             tags: job.tags.clone(),

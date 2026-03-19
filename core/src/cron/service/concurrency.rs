@@ -55,6 +55,7 @@ pub async fn phase1_mark_due_jobs<C: Clock>(
         snapshots.push(JobSnapshot {
             id: job.id.clone(),
             agent_id: Some(job.agent_id.clone()),
+            source_channel_id: job.source_channel_id.clone(),
             prompt: job.prompt.clone(),
             model: None,
             timeout_ms: Some(job.timeout_ms()),
@@ -98,6 +99,7 @@ pub async fn phase1_mark_manual<C: Clock>(
     let snapshot = JobSnapshot {
         id: job.id.clone(),
         agent_id: Some(job.agent_id.clone()),
+        source_channel_id: job.source_channel_id.clone(),
         prompt: job.prompt.clone(),
         model: None,
         timeout_ms: Some(job.timeout_ms()),

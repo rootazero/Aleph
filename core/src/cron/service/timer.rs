@@ -206,6 +206,7 @@ mod tests {
         JobSnapshot {
             id: id.to_string(),
             agent_id: Some("test-agent".to_string()),
+            source_channel_id: None,
             prompt: "test prompt".to_string(),
             model: None,
             timeout_ms: Some(300_000),
