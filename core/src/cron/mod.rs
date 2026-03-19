@@ -32,6 +32,7 @@ pub mod chain;
 pub mod clock;
 pub mod config;
 pub mod delivery;
+pub mod executor;
 pub mod execution;
 pub mod history;
 pub mod schedule;
