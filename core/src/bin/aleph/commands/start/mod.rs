@@ -394,7 +394,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             }
             Err(e) => {
                 if !args.daemon {
-                    eprintln!("Warning: Failed to initialize workspace manager: {}. workspace.switch/getActive disabled.", e);
+                    eprintln!("Warning: Failed to initialize workspace manager: {}. channels.set_agent/agents.bindings disabled.", e);
                 }
                 None
             }

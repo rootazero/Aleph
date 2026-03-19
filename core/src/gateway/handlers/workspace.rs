@@ -1,6 +1,7 @@
 //! Workspace RPC Handlers
 //!
-//! Handlers for workspace management: create, list, get, update, archive, switch, getActive.
+//! Handlers for workspace management: create, list, get, update, archive.
+//! Channel agent binding: channels.set_agent, agents.bindings.
 //! All handlers delegate to WorkspaceManager (SQLite-backed).
 
 use serde::Deserialize;
@@ -253,151 +254,67 @@ pub async fn handle_archive(
 }
 
 // ============================================================================
-// Switch
+// Channel Agent Binding (1:1 model)
 // ============================================================================
 
-/// Parameters for workspace.switch
+/// Parameters for channels.set_agent
 #[derive(Debug, Deserialize)]
-pub struct SwitchParams {
-    /// Agent (workspace) identifier to switch to
-    pub agent_id: String,
-    /// Channel identifier (e.g., "telegram", "rpc")
-    #[serde(default = "default_channel")]
-    pub channel: String,
-    /// Peer identifier within the channel
-    #[serde(default = "default_peer_id")]
-    pub peer_id: String,
+pub struct SetAgentParams {
+    pub channel_id: String,
+    pub agent_id: Option<String>,
 }
 
-fn default_channel() -> String {
-    "rpc".to_string()
-}
-
-fn default_peer_id() -> String {
-    "owner".to_string()
-}
-
-/// Switch the active agent/workspace for a channel+peer
+/// Bind or unbind an agent to/from a channel.
+///
+/// If `agent_id` is Some, binds the agent (with 1:1 constraint).
+/// If `agent_id` is None, unbinds the current agent.
 ///
 /// # Example Request
 ///
 /// ```json
-/// {"jsonrpc":"2.0","method":"workspace.switch","params":{"agent_id":"project-x","channel":"rpc","peer_id":"owner"},"id":1}
+/// {"jsonrpc":"2.0","method":"channels.set_agent","params":{"channel_id":"rpc","agent_id":"project-x"},"id":1}
 /// ```
-pub async fn handle_switch(
+pub async fn handle_set_agent(
     request: JsonRpcRequest,
     workspace_manager: Arc<WorkspaceManager>,
 ) -> JsonRpcResponse {
-    let params: SwitchParams = match parse_params(&request) {
+    let params: SetAgentParams = match serde_json::from_value(request.params.clone().unwrap_or_default()) {
         Ok(p) => p,
-        Err(e) => return e,
+        Err(e) => return JsonRpcResponse::error(request.id, INVALID_PARAMS, e.to_string()),
     };
 
-    // Verify workspace exists
-    match workspace_manager.get(&params.agent_id).await {
-        Ok(Some(_)) => {}
-        Ok(None) => {
-            return JsonRpcResponse::error(
-                request.id,
-                RESOURCE_NOT_FOUND,
-                format!("Workspace '{}' not found", params.agent_id),
-            );
+    match params.agent_id {
+        Some(agent_id) => {
+            // Use a fixed peer_id for the binding (Panel-initiated)
+            match workspace_manager.set_active_agent(&params.channel_id, "panel", &agent_id) {
+                Ok(()) => JsonRpcResponse::success(request.id, json!({"ok": true})),
+                Err(e) => JsonRpcResponse::error(request.id, INTERNAL_ERROR, e.to_string()),
+            }
         }
-        Err(e) => {
-            return JsonRpcResponse::error(
-                request.id,
-                INTERNAL_ERROR,
-                format!("Failed to get workspace: {}", e),
-            );
+        None => {
+            match workspace_manager.clear_active_agent(&params.channel_id, "panel") {
+                Ok(()) => JsonRpcResponse::success(request.id, json!({"ok": true})),
+                Err(e) => JsonRpcResponse::error(request.id, INTERNAL_ERROR, e.to_string()),
+            }
         }
     }
-
-    // Set active agent for the channel+peer
-    if let Err(e) = workspace_manager.set_active_agent(&params.channel, &params.peer_id, &params.agent_id) {
-        return JsonRpcResponse::error(
-            request.id,
-            INTERNAL_ERROR,
-            format!("Failed to switch workspace: {}", e),
-        );
-    }
-
-    // Touch the workspace to update last_active_at
-    let _ = workspace_manager.touch(&params.agent_id).await;
-
-    JsonRpcResponse::success(
-        request.id,
-        json!({
-            "ok": true,
-            "agent_id": params.agent_id,
-        }),
-    )
 }
 
-// ============================================================================
-// GetActive
-// ============================================================================
-
-/// Parameters for workspace.getActive
-#[derive(Debug, Deserialize)]
-pub struct GetActiveParams {
-    /// Channel identifier (e.g., "telegram", "rpc")
-    #[serde(default = "default_channel")]
-    pub channel: String,
-    /// Peer identifier within the channel
-    #[serde(default = "default_peer_id")]
-    pub peer_id: String,
-}
-
-/// Get the current active agent/workspace for a channel+peer
-///
-/// Returns the active agent_id or "main" as default.
+/// Get all agent→channel bindings for the Panel.
 ///
 /// # Example Request
 ///
 /// ```json
-/// {"jsonrpc":"2.0","method":"workspace.getActive","params":{"channel":"rpc","peer_id":"owner"},"id":1}
+/// {"jsonrpc":"2.0","method":"agents.bindings","id":1}
 /// ```
-pub async fn handle_get_active(
+pub async fn handle_agent_bindings(
     request: JsonRpcRequest,
     workspace_manager: Arc<WorkspaceManager>,
 ) -> JsonRpcResponse {
-    // Parse params — allow missing params (defaults applied)
-    let (channel, peer_id) = match &request.params {
-        Some(p) => {
-            let params: GetActiveParams = match serde_json::from_value(p.clone()) {
-                Ok(p) => p,
-                Err(e) => {
-                    return JsonRpcResponse::error(
-                        request.id,
-                        INVALID_PARAMS,
-                        format!("Invalid params: {}", e),
-                    );
-                }
-            };
-            (params.channel, params.peer_id)
-        }
-        None => (default_channel(), default_peer_id()),
-    };
-
-    let agent_id = workspace_manager
-        .get_active_agent(&channel, &peer_id)
-        .unwrap_or(None)
-        .unwrap_or_else(|| "main".to_string());
-
-    // Fetch workspace to get the profile name
-    let profile = match workspace_manager.get(&agent_id).await {
-        Ok(Some(ws)) => ws.profile,
-        _ => "default".to_string(),
-    };
-
-    JsonRpcResponse::success(
-        request.id,
-        json!({
-            "agent_id": agent_id,
-            "workspace_id": agent_id,
-            "profile": profile,
-        }),
-    )
+    match workspace_manager.get_all_agent_bindings() {
+        Ok(bindings) => JsonRpcResponse::success(request.id, json!({"bindings": bindings})),
+        Err(e) => JsonRpcResponse::error(request.id, INTERNAL_ERROR, e.to_string()),
+    }
 }
 
 #[cfg(test)]
@@ -454,36 +371,18 @@ mod tests {
     }
 
     #[test]
-    fn test_switch_params_deserialization() {
-        let json = serde_json::json!({"agent_id": "project-x"});
-        let params: SwitchParams = serde_json::from_value(json).unwrap();
-        assert_eq!(params.agent_id, "project-x");
-        assert_eq!(params.channel, "rpc"); // default
-        assert_eq!(params.peer_id, "owner"); // default
+    fn test_set_agent_params_with_agent() {
+        let json = serde_json::json!({"channel_id": "rpc", "agent_id": "project-x"});
+        let params: SetAgentParams = serde_json::from_value(json).unwrap();
+        assert_eq!(params.channel_id, "rpc");
+        assert_eq!(params.agent_id.as_deref(), Some("project-x"));
     }
 
     #[test]
-    fn test_switch_params_with_channel() {
-        let json = serde_json::json!({"agent_id": "project-x", "channel": "telegram", "peer_id": "user-123"});
-        let params: SwitchParams = serde_json::from_value(json).unwrap();
-        assert_eq!(params.agent_id, "project-x");
-        assert_eq!(params.channel, "telegram");
-        assert_eq!(params.peer_id, "user-123");
-    }
-
-    #[test]
-    fn test_get_active_params_deserialization() {
-        let json = serde_json::json!({});
-        let params: GetActiveParams = serde_json::from_value(json).unwrap();
-        assert_eq!(params.channel, "rpc"); // default
-        assert_eq!(params.peer_id, "owner"); // default
-    }
-
-    #[test]
-    fn test_get_active_params_with_channel() {
-        let json = serde_json::json!({"channel": "telegram", "peer_id": "bob"});
-        let params: GetActiveParams = serde_json::from_value(json).unwrap();
-        assert_eq!(params.channel, "telegram");
-        assert_eq!(params.peer_id, "bob");
+    fn test_set_agent_params_unbind() {
+        let json = serde_json::json!({"channel_id": "rpc"});
+        let params: SetAgentParams = serde_json::from_value(json).unwrap();
+        assert_eq!(params.channel_id, "rpc");
+        assert!(params.agent_id.is_none());
     }
 }

@@ -444,8 +444,8 @@ pub(in crate::commands::start) fn register_workspace_handlers(
     register_handler!(server, "workspace.get", workspace_handlers::handle_get, workspace_manager);
     register_handler!(server, "workspace.update", workspace_handlers::handle_update, workspace_manager);
     register_handler!(server, "workspace.archive", workspace_handlers::handle_archive, workspace_manager);
-    register_handler!(server, "workspace.switch", workspace_handlers::handle_switch, workspace_manager);
-    register_handler!(server, "workspace.getActive", workspace_handlers::handle_get_active, workspace_manager);
+    register_handler!(server, "channels.set_agent", workspace_handlers::handle_set_agent, workspace_manager);
+    register_handler!(server, "agents.bindings", workspace_handlers::handle_agent_bindings, workspace_manager);
 
     if !daemon {
         println!("Workspace methods:");
@@ -454,8 +454,8 @@ pub(in crate::commands::start) fn register_workspace_handlers(
         println!("  - workspace.get       : Get workspace by ID");
         println!("  - workspace.update    : Update workspace metadata");
         println!("  - workspace.archive   : Archive (soft-delete) a workspace");
-        println!("  - workspace.switch    : Switch active workspace");
-        println!("  - workspace.getActive : Get current active workspace");
+        println!("  - channels.set_agent  : Bind or unbind an agent to a channel");
+        println!("  - agents.bindings     : Get all agent->channel bindings");
         println!();
     }
 }

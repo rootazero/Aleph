@@ -363,18 +363,18 @@ impl HandlerRegistry {
                 "workspace.archive requires WorkspaceManager - wire Gateway runtime first".to_string(),
             )
         });
-        registry.register("workspace.switch", |req| async move {
+        registry.register("channels.set_agent", |req| async move {
             JsonRpcResponse::error(
                 req.id,
                 INTERNAL_ERROR,
-                "workspace.switch requires WorkspaceManager - wire Gateway runtime first".to_string(),
+                "channels.set_agent requires WorkspaceManager - wire Gateway runtime first".to_string(),
             )
         });
-        registry.register("workspace.getActive", |req| async move {
+        registry.register("agents.bindings", |req| async move {
             JsonRpcResponse::error(
                 req.id,
                 INTERNAL_ERROR,
-                "workspace.getActive requires WorkspaceManager - wire Gateway runtime first".to_string(),
+                "agents.bindings requires WorkspaceManager - wire Gateway runtime first".to_string(),
             )
         });
 
@@ -713,7 +713,7 @@ mod tests {
         assert!(registry.has_method("workspace.get"));
         assert!(registry.has_method("workspace.update"));
         assert!(registry.has_method("workspace.archive"));
-        assert!(registry.has_method("workspace.switch"));
-        assert!(registry.has_method("workspace.getActive"));
+        assert!(registry.has_method("channels.set_agent"));
+        assert!(registry.has_method("agents.bindings"));
     }
 }
