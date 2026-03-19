@@ -1495,23 +1495,6 @@ fn GenerationSettingsPanel() -> impl IntoView {
             } else {
                 view! {
                     <div class="space-y-4">
-                        // Output Directory
-                        <div class="bg-surface-raised rounded-lg border border-border p-4">
-                            <label class="block text-sm font-medium text-text-secondary mb-2">
-                                "Output Directory"
-                            </label>
-                            <input
-                                type="text"
-                                value=move || output_dir.get()
-                                on:input=move |ev| output_dir.set(event_target_value(&ev))
-                                placeholder="~/.aleph/generation"
-                                class="w-full px-3 py-2 border border-border rounded bg-surface text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
-                            />
-                            <p class="mt-1 text-xs text-text-tertiary">
-                                "Where generated files (images, videos, audio) will be saved"
-                            </p>
-                        </div>
-
                         // Thresholds
                         <div class="bg-surface-raised rounded-lg border border-border p-4 space-y-4">
                             <div>
