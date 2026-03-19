@@ -70,10 +70,10 @@ impl AgentManager {
         mgr
     }
 
-    /// Scan workspace_root for directories that have no matching config entry
+    /// Scan agents_root for directories that have no matching config entry
     /// and register them as minimal agent definitions.
     fn reconcile_orphan_workspaces(&self) {
-        let entries = match fs::read_dir(&self.workspace_root) {
+        let entries = match fs::read_dir(&self.agents_root) {
             Ok(entries) => entries,
             Err(_) => return,
         };
@@ -224,7 +224,15 @@ impl AgentManager {
         })?;
         let agent_name = def.name.as_deref().unwrap_or(&def.id);
 
-        // Workspace directory for project files (SOUL.md, AGENTS.md, etc.)
+        // Identity files (SOUL.md, AGENTS.md, etc.) go in agent state directory
+        initialize_workspace(&agent_state_dir, agent_name).map_err(|e| {
+            AlephError::IoError(format!(
+                "Failed to initialize identity files for '{}': {}",
+                def.id, e
+            ))
+        })?;
+
+        // Workspace directory for tool output (separate from identity)
         let ws_dir = self.workspace_root.join(&def.id);
         std::fs::create_dir_all(&ws_dir).map_err(|e| {
             AlephError::IoError(format!(
@@ -232,16 +240,11 @@ impl AgentManager {
                 def.id, e
             ))
         })?;
-        initialize_workspace(&ws_dir, agent_name).map_err(|e| {
-            AlephError::IoError(format!(
-                "Failed to initialize workspace files for '{}': {}",
-                def.id, e
-            ))
-        })?;
 
         info!(
-            "Created agent '{}' with workspace at {}",
+            "Created agent '{}' (identity: {}, workspace: {})",
             def.id,
+            agent_state_dir.display(),
             ws_dir.display()
         );
         Ok(())
