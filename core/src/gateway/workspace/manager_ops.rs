@@ -288,10 +288,15 @@ impl WorkspaceManager {
             });
         }
 
+        // Clear all existing bindings for this channel (any peer_id) before inserting
+        conn.execute(
+            "DELETE FROM channel_active_agent WHERE channel = ?1",
+            params![channel],
+        ).map_err(|e| WorkspaceError::Database(e.to_string()))?;
+
         conn.execute(
             "INSERT INTO channel_active_agent (channel, peer_id, agent_id, updated_at)
-             VALUES (?1, ?2, ?3, ?4)
-             ON CONFLICT(channel, peer_id) DO UPDATE SET agent_id = ?3, updated_at = ?4",
+             VALUES (?1, ?2, ?3, ?4)",
             params![channel, peer_id, agent_id, now],
         ).map_err(|e| WorkspaceError::Database(e.to_string()))?;
         Ok(())
@@ -301,11 +306,12 @@ impl WorkspaceManager {
     ///
     /// This restores default routing (config bindings / default_agent) for
     /// the given channel+peer. Called when user switches back to "main".
-    pub fn clear_active_agent(&self, channel: &str, peer_id: &str) -> Result<(), WorkspaceError> {
+    pub fn clear_active_agent(&self, channel: &str, _peer_id: &str) -> Result<(), WorkspaceError> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        // Clear all bindings for this channel (any peer_id) to ensure clean unbind
         conn.execute(
-            "DELETE FROM channel_active_agent WHERE channel = ?1 AND peer_id = ?2",
-            params![channel, peer_id],
+            "DELETE FROM channel_active_agent WHERE channel = ?1",
+            params![channel],
         ).map_err(|e| WorkspaceError::Database(e.to_string()))?;
         Ok(())
     }
