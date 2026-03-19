@@ -651,6 +651,9 @@ pub enum WorkspaceError {
 
     #[error("Cannot modify global workspace")]
     CannotModifyGlobal,
+
+    #[error("Agent '{agent_id}' is already bound to channel '{channel}'")]
+    AgentAlreadyBound { agent_id: String, channel: String },
 }
 
 // =============================================================================

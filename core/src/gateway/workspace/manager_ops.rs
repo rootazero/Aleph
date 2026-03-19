@@ -1,7 +1,7 @@
 //! Workspace CRUD, channel active agent, and maintenance operations
 
 use chrono::{DateTime, Utc};
-use rusqlite::params;
+use rusqlite::{params, OptionalExtension};
 use std::collections::HashMap;
 use tracing::{debug, info};
 
@@ -265,10 +265,29 @@ impl WorkspaceManager {
     // Channel Active Agent
     // =========================================================================
 
-    /// Set the active agent for a channel+peer combination
+    /// Set the active agent for a channel+peer combination.
+    ///
+    /// Enforces 1:1 constraint: an agent may only be bound to one channel at a time.
+    /// Returns `AgentAlreadyBound` if the agent is already bound to a different channel.
     pub fn set_active_agent(&self, channel: &str, peer_id: &str, agent_id: &str) -> Result<(), WorkspaceError> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let now = Utc::now().timestamp();
+
+        // 1:1 constraint: check if agent is already bound to another channel
+        let existing: Option<String> = conn.prepare(
+            "SELECT channel FROM channel_active_agent WHERE agent_id = ?1 AND channel != ?2"
+        ).map_err(|e| WorkspaceError::Database(e.to_string()))?
+        .query_row(params![agent_id, channel], |row| row.get(0))
+        .optional()
+        .map_err(|e| WorkspaceError::Database(e.to_string()))?;
+
+        if let Some(occupied_channel) = existing {
+            return Err(WorkspaceError::AgentAlreadyBound {
+                agent_id: agent_id.to_string(),
+                channel: occupied_channel,
+            });
+        }
+
         conn.execute(
             "INSERT INTO channel_active_agent (channel, peer_id, agent_id, updated_at)
              VALUES (?1, ?2, ?3, ?4)
@@ -303,6 +322,37 @@ impl WorkspaceManager {
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(WorkspaceError::Database(e.to_string())),
         }
+    }
+
+    /// Reverse lookup: which channel is this agent bound to?
+    pub fn get_channel_for_agent(&self, agent_id: &str) -> Result<Option<String>, WorkspaceError> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let mut stmt = conn.prepare(
+            "SELECT channel FROM channel_active_agent WHERE agent_id = ?1 LIMIT 1"
+        ).map_err(|e| WorkspaceError::Database(e.to_string()))?;
+        let result = stmt.query_row(params![agent_id], |row| row.get::<_, String>(0));
+        match result {
+            Ok(ch) => Ok(Some(ch)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(WorkspaceError::Database(e.to_string())),
+        }
+    }
+
+    /// Get all agent→channel bindings (for Panel agents.bindings RPC).
+    pub fn get_all_agent_bindings(&self) -> Result<std::collections::HashMap<String, String>, WorkspaceError> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let mut stmt = conn.prepare(
+            "SELECT DISTINCT agent_id, channel FROM channel_active_agent"
+        ).map_err(|e| WorkspaceError::Database(e.to_string()))?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        }).map_err(|e| WorkspaceError::Database(e.to_string()))?;
+        let mut map = std::collections::HashMap::new();
+        for row in rows {
+            let (agent_id, channel) = row.map_err(|e| WorkspaceError::Database(e.to_string()))?;
+            map.insert(agent_id, channel);
+        }
+        Ok(map)
     }
 
     // =========================================================================
