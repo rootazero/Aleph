@@ -24,19 +24,20 @@ This flexibility causes confusion in practice. Adding agent name prefixes to rep
 
 **Reuse `channel_active_agent` table.** Semantic shift from "per-user dynamic override" to "channel-agent binding config."
 
-- `peer_id` fixed to constant `"default"` — preserves schema for future multi-user expansion
-- `WorkspaceManager` method signatures simplified:
-  - `get_active_agent(channel) -> Option<String>` (drop `peer_id` param, hardcode `"default"`)
-  - `set_active_agent(channel, agent_id) -> Result<()>` (drop `peer_id`, add 1:1 constraint)
-  - `clear_active_agent(channel) -> Result<()>` (drop `peer_id`)
+- `peer_id` 保持原样传递实际 sender_id（Telegram 用户 ID 等），**方法签名不变**
+- `WorkspaceManager` 现有方法签名保留 3 参数 (`channel, peer_id, agent_id`)：
+  - `get_active_agent(channel, peer_id)` — 不变
+  - `set_active_agent(channel, peer_id, agent_id)` — 增加 1:1 约束
+  - `clear_active_agent(channel, peer_id)` — 不变
   - **New**: `get_channel_for_agent(agent_id) -> Option<String>` (reverse lookup for Panel)
+  - **New**: `get_all_agent_bindings() -> HashMap<String, String>` (bulk lookup for Panel)
 
 **1:1 constraint enforcement** in `set_active_agent`:
 - Check-and-set within a single SQLite transaction to avoid TOCTOU race
 - Before binding, query if any other channel already binds the target agent
 - If occupied, return error with the occupying channel name (Panel displays this to user)
 
-**Data migration**: On upgrade, delete all rows from `channel_active_agent` where `peer_id != "default"`. Existing dynamic overrides are stale and should not be carried forward.
+**No data migration needed**: peer_id 保持原样，现有数据无需清理。
 
 ### Agent Resolution (Simplified)
 
@@ -128,7 +129,7 @@ Inbound Message → get_active_agent(channel)
 
 | Location | Change |
 |----------|--------|
-| `WorkspaceManager` (`manager_ops.rs`) | Simplify `get/set/clear_active_agent` signatures (drop `peer_id`), add 1:1 constraint in transaction, add `get_channel_for_agent()`, add migration to clean stale `peer_id` rows |
+| `WorkspaceManager` (`manager_ops.rs`) | Keep method signatures unchanged, add 1:1 constraint to `set_active_agent`, add `get_channel_for_agent()` and `get_all_agent_bindings()` |
 | `agent_resolver.rs` | Single-tier: bound → agent, unbound → fixed message |
 | `agent_create` tool | Remove auto-switch-on-create behavior |
 | `agent_delete` tool | Add unbind-on-delete behavior |
