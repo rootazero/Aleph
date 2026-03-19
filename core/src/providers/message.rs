@@ -185,6 +185,36 @@ impl UnifiedMessage {
         matches!(self, Self::ToolResult { .. })
     }
 
+    /// Extract (tool_name, content_text) from a ToolResult message.
+    ///
+    /// Returns `None` if this is not a ToolResult.
+    pub fn tool_result_info(&self) -> Option<(&str, String)> {
+        match self {
+            Self::ToolResult { tool_name, content, .. } => {
+                let text = content
+                    .iter()
+                    .map(|b| match b {
+                        ContentBlock::Text { text } => text.as_str().to_owned(),
+                        ContentBlock::Json { value } => value.to_string(),
+                        _ => String::new(),
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                Some((tool_name.as_str(), text))
+            }
+            _ => None,
+        }
+    }
+
+    /// Replace the content of a ToolResult message with a single text block.
+    ///
+    /// No-op if this is not a ToolResult.
+    pub fn replace_tool_result_content(&mut self, new_content: String) {
+        if let Self::ToolResult { content, .. } = self {
+            *content = vec![ContentBlock::Text { text: new_content }];
+        }
+    }
+
     /// Check if this is a ToolCall-bearing Assistant message
     pub fn has_tool_calls(&self) -> bool {
         match self {
