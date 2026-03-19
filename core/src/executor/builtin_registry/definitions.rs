@@ -141,6 +141,11 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         requires_config: true, // Requires SessionManager (via gateway_context)
     },
     BuiltinToolDefinition {
+        name: "session_set_topic",
+        description: "Rename the current session's topic/title",
+        requires_config: true, // Requires SessionManager (via gateway_context)
+    },
+    BuiltinToolDefinition {
         name: "cron_manage",
         description: "Manage scheduled tasks — create, list, delete, enable/disable cron jobs",
         requires_config: true, // Requires SharedCronService
@@ -308,6 +313,8 @@ pub fn create_tool_boxed(
         "sessions_list" | "sessions_send" => None,
         // Session new tool requires SessionManager (from gateway_context) at runtime
         "session_new" => None,
+        // Session set-topic tool requires SessionManager (from gateway_context) at runtime
+        "session_set_topic" => None,
         // Cron management tool requires SharedCronService at runtime
         "cron_manage" => None,
         // Agent management tools require agent_registry + workspace_manager + session_context,

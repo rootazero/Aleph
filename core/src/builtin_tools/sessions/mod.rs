@@ -68,7 +68,9 @@
 
 pub mod helpers;
 pub mod list_tool;
+pub mod new_tool;
 pub mod send_tool;
+pub mod set_topic_tool;
 pub mod spawn_tool;
 
 pub use helpers::{
@@ -86,3 +88,6 @@ pub use send_tool::{
 pub use spawn_tool::{
     CleanupPolicy, SessionsSpawnArgs, SessionsSpawnOutput, SessionsSpawnTool, SpawnStatus,
 };
+
+pub use new_tool::{SessionNewArgs, SessionNewOutput, SessionNewTool};
+pub use set_topic_tool::{SessionSetTopicArgs, SessionSetTopicOutput, SessionSetTopicTool};

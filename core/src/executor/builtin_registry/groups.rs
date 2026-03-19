@@ -74,6 +74,7 @@ pub static TOOL_GROUPS: &[ToolGroup] = &[
             "agent_list",
             "agent_delete",
             "session_new",
+            "session_set_topic",
             "sessions_list",
             "sessions_send",
             "subagent_spawn",

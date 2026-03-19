@@ -70,6 +70,8 @@ pub struct BuiltinToolRegistry {
     pub(crate) gateway_context: Option<Arc<GatewayContext>>,
     /// Session new tool (optional - requires SessionManager)
     pub(crate) session_new_tool: Option<crate::builtin_tools::sessions::SessionNewTool>,
+    /// Session set-topic tool (optional - requires SessionManager)
+    pub(crate) session_set_topic_tool: Option<crate::builtin_tools::sessions::SessionSetTopicTool>,
     /// Cron management tool (optional - requires SharedCronService)
     pub(crate) cron_manage_tool: Option<crate::builtin_tools::cron_manage::CronManageTool>,
     /// Agent management tools (optional - requires AgentRegistry + WorkspaceManager)
@@ -327,6 +329,27 @@ impl ToolRegistry for BuiltinToolRegistry {
                 Box::pin(async move {
                     let tool = self.session_new_tool.as_ref().ok_or_else(|| {
                         AlephError::tool("session_new not available: no SessionManager configured")
+                    })?;
+                    tool.call_json(arguments).await
+                })
+            }
+
+            // Session set-topic tool — inject session key from session context
+            "session_set_topic" => {
+                let arguments = {
+                    let mut args = arguments;
+                    if let Some(ref h) = self.session_context_handle {
+                        if let Ok(ctx) = h.try_read() {
+                            if let Some(obj) = args.as_object_mut() {
+                                obj.insert("__session_key".into(), serde_json::Value::String(ctx.session_key_str.clone()));
+                            }
+                        }
+                    }
+                    args
+                };
+                Box::pin(async move {
+                    let tool = self.session_set_topic_tool.as_ref().ok_or_else(|| {
+                        AlephError::tool("session_set_topic not available: no SessionManager configured")
                     })?;
                     tool.call_json(arguments).await
                 })

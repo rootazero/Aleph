@@ -317,6 +317,9 @@ impl BuiltinToolRegistry {
             session_new_tool: config.gateway_context.as_ref().map(|ctx| {
                 crate::builtin_tools::sessions::SessionNewTool::new(Arc::clone(ctx.session_manager()))
             }),
+            session_set_topic_tool: config.gateway_context.as_ref().map(|ctx| {
+                crate::builtin_tools::sessions::SessionSetTopicTool::new(Arc::clone(ctx.session_manager()))
+            }),
             cron_manage_tool: config.cron_service.as_ref().map(|svc| {
                 crate::builtin_tools::cron_manage::CronManageTool::new(Arc::clone(svc))
             }),
@@ -518,6 +521,15 @@ impl BuiltinToolRegistry {
             let def = AlephTool::definition(&tmp_tool);
             reg(tools, "session_new", SessionNewTool::DESCRIPTION, def.parameters.clone());
             info!("Registered session_new tool in BuiltinToolRegistry");
+        }
+
+        // Session set-topic tool (requires SessionManager from gateway_context)
+        if let Some(ref ctx) = config.gateway_context {
+            use crate::builtin_tools::sessions::SessionSetTopicTool;
+            let tmp_tool = SessionSetTopicTool::new(Arc::clone(ctx.session_manager()));
+            let def = AlephTool::definition(&tmp_tool);
+            reg(tools, "session_set_topic", SessionSetTopicTool::DESCRIPTION, def.parameters.clone());
+            info!("Registered session_set_topic tool in BuiltinToolRegistry");
         }
 
         // Sessions tools
