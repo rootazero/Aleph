@@ -192,7 +192,9 @@ pub async fn handle_status(
     match registry.get(&channel_id).await {
         Some(channel_arc) => {
             let channel = channel_arc.read().await;
-            let info = ChannelInfoResponse::from(channel.info());
+            let mut live_info = channel.info().clone();
+            live_info.status = channel.status(); // override with live status
+            let info = ChannelInfoResponse::from(&live_info);
             JsonRpcResponse::success(request.id, json!(info))
         }
         None => JsonRpcResponse::error(
