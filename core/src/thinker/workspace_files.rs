@@ -15,7 +15,6 @@ pub const WORKSPACE_FILE_NAMES: &[&str] = &[
     "TOOLS.md",
     "MEMORY.md",
     "HEARTBEAT.md",
-    "BOOTSTRAP.md",
 ];
 
 /// Configuration for workspace file loading and truncation.
@@ -162,14 +161,13 @@ mod tests {
 
     #[test]
     fn workspace_file_names_match_spec() {
-        assert_eq!(WORKSPACE_FILE_NAMES.len(), 7);
+        assert_eq!(WORKSPACE_FILE_NAMES.len(), 6);
         assert_eq!(WORKSPACE_FILE_NAMES[0], "SOUL.md");
         assert_eq!(WORKSPACE_FILE_NAMES[1], "IDENTITY.md");
         assert_eq!(WORKSPACE_FILE_NAMES[2], "AGENTS.md");
         assert_eq!(WORKSPACE_FILE_NAMES[3], "TOOLS.md");
         assert_eq!(WORKSPACE_FILE_NAMES[4], "MEMORY.md");
         assert_eq!(WORKSPACE_FILE_NAMES[5], "HEARTBEAT.md");
-        assert_eq!(WORKSPACE_FILE_NAMES[6], "BOOTSTRAP.md");
     }
 
     #[test]

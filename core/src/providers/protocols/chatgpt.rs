@@ -10,6 +10,7 @@ use crate::providers::message::{ContentBlock, UnifiedMessage};
 use crate::providers::chatgpt::types::{
     FunctionToolDef, InputItem, ReasoningConfig, ResponseResource, ResponsesRequest, StreamEvent,
 };
+use super::chatgpt_utils::{extract_chatgpt_account_id, ensure_properties_recursive};
 use async_trait::async_trait;
 use futures::stream::BoxStream;
 use futures::TryStreamExt;
@@ -24,64 +25,6 @@ const CODEX_ENDPOINT: &str = "/backend-api/codex/responses";
 /// Responses API format used by chatgpt.com/backend-api/codex/responses.
 pub struct ChatGptProtocol {
     client: Client,
-}
-
-/// Extract chatgpt_account_id from a Codex OAuth JWT token.
-///
-/// The token payload contains `{"https://api.openai.com/auth": {"chatgpt_account_id": "..."}}`
-fn extract_chatgpt_account_id(token: &str) -> Option<String> {
-    use base64::Engine;
-    let mut parts = token.split('.');
-    let _header = parts.next()?;
-    let payload = parts.next()?;
-    let _signature = parts.next()?;
-    if parts.next().is_some() {
-        return None; // Not a valid JWT (too many parts)
-    }
-
-    let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .decode(payload)
-        .or_else(|_| base64::engine::general_purpose::URL_SAFE.decode(payload))
-        .ok()?;
-    let payload_json: serde_json::Value = serde_json::from_slice(&decoded).ok()?;
-    payload_json
-        .get("https://api.openai.com/auth")
-        .and_then(|auth| auth.get("chatgpt_account_id"))
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToString::to_string)
-}
-
-/// Recursively ensure all object schemas have a "properties" field.
-/// Codex Responses API rejects object schemas without it.
-fn ensure_properties_recursive(schema: &mut serde_json::Value) {
-    let Some(obj) = schema.as_object_mut() else { return };
-
-    if obj.get("type").and_then(|v| v.as_str()) == Some("object") {
-        if !obj.contains_key("properties") {
-            obj.insert("properties".into(), serde_json::Value::Object(serde_json::Map::new()));
-        }
-        if !obj.contains_key("required") {
-            obj.insert("required".into(), serde_json::Value::Array(vec![]));
-        }
-    }
-
-    // Recurse into nested schemas
-    let keys: Vec<String> = obj.keys().cloned().collect();
-    for key in keys {
-        if let Some(v) = obj.get_mut(&key) {
-            match v {
-                serde_json::Value::Object(_) => ensure_properties_recursive(v),
-                serde_json::Value::Array(arr) => {
-                    for item in arr {
-                        ensure_properties_recursive(item);
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
 }
 
 impl ChatGptProtocol {
@@ -260,119 +203,6 @@ impl ChatGptProtocol {
             None
         } else {
             Some(texts.join(""))
-        }
-    }
-
-    /// Parse the XML-tagged input string into native Responses API InputItems.
-    ///
-    /// Recognizes these tags from `AiProviderBridge::format_messages`:
-    /// - `<user>...</user>` → Message { role: "user" }
-    /// - `<assistant>...</assistant>` → Message { role: "assistant" }
-    /// - `<tool_use id="..." name="...">...</tool_use>` → FunctionCall
-    /// - `<tool_result id="...">...</tool_result>` → FunctionCallOutput
-    /// - `<tool_error id="...">...</tool_error>` → FunctionCallOutput (with error prefix)
-    #[allow(dead_code)]
-    fn parse_input_items(input: &str) -> Vec<InputItem> {
-        let mut items = Vec::new();
-        debug!("parse_input_items: input length={}", input.len());
-        let mut remaining = input;
-
-        while !remaining.is_empty() {
-            // Find the next opening tag
-            let Some(tag_start) = remaining.find('<') else {
-                // No more tags — remaining text is plain content, skip it
-                break;
-            };
-
-            // Skip any text before the tag
-            remaining = &remaining[tag_start..];
-
-            // Try each known tag type
-            if let Some(item) = Self::try_parse_tag(&mut remaining, "user") {
-                items.push(item);
-            } else if let Some(item) = Self::try_parse_tag(&mut remaining, "assistant") {
-                items.push(item);
-            } else if let Some(item) = Self::try_parse_tag(&mut remaining, "tool_use") {
-                items.push(item);
-            } else if let Some(item) = Self::try_parse_tag(&mut remaining, "tool_result") {
-                items.push(item);
-            } else if let Some(item) = Self::try_parse_tag(&mut remaining, "tool_error") {
-                items.push(item);
-            } else {
-                // Unknown tag or malformed — skip past '<'
-                remaining = &remaining[1..];
-            }
-        }
-
-        // Fallback: if no tags were found, treat the whole input as a user message
-        if items.is_empty() {
-            items.push(InputItem::Message {
-                role: "user".to_string(),
-                content: input.to_string(),
-            });
-        }
-
-        items
-    }
-
-    /// Try to parse a specific XML tag from the start of `remaining`.
-    /// On success, advances `remaining` past the closing tag and returns the InputItem.
-    #[allow(dead_code)]
-    fn try_parse_tag(remaining: &mut &str, tag: &str) -> Option<InputItem> {
-        let open_prefix = format!("<{}", tag);
-        if !remaining.starts_with(&open_prefix) {
-            return None;
-        }
-
-        // Find end of opening tag '>'
-        let after_tag_name = &remaining[open_prefix.len()..];
-        let gt_pos = after_tag_name.find('>')?;
-        let attrs_str = &after_tag_name[..gt_pos].trim();
-        let after_open = &after_tag_name[gt_pos + 1..];
-
-        // Find closing tag
-        let close_tag = format!("</{}>", tag);
-        let close_pos = after_open.find(&close_tag)?;
-        let content = after_open[..close_pos].trim();
-
-        // Advance remaining past the closing tag
-        *remaining = &after_open[close_pos + close_tag.len()..];
-
-        // Parse attributes (id="..." name="...")
-        let parse_attr = |key: &str| -> String {
-            let needle = format!("{}=\"", key);
-            if let Some(start) = attrs_str.find(&needle) {
-                let val_start = start + needle.len();
-                if let Some(end) = attrs_str[val_start..].find('"') {
-                    return attrs_str[val_start..val_start + end].to_string();
-                }
-            }
-            String::new()
-        };
-
-        match tag {
-            "user" => Some(InputItem::Message {
-                role: "user".to_string(),
-                content: content.to_string(),
-            }),
-            "assistant" => Some(InputItem::Message {
-                role: "assistant".to_string(),
-                content: content.to_string(),
-            }),
-            "tool_use" => Some(InputItem::FunctionCall {
-                call_id: parse_attr("id"),
-                name: parse_attr("name"),
-                arguments: content.to_string(),
-            }),
-            "tool_result" => Some(InputItem::FunctionCallOutput {
-                call_id: parse_attr("id"),
-                output: content.to_string(),
-            }),
-            "tool_error" => Some(InputItem::FunctionCallOutput {
-                call_id: parse_attr("id"),
-                output: format!("ERROR: {}", content),
-            }),
-            _ => None,
         }
     }
 

@@ -63,7 +63,7 @@ mod tests {
 
     fn make_store() -> CronStore {
         let dir = TempDir::new().unwrap();
-        let path = dir.path().join("cron.json");
+        let path = dir.path().join("cron.db");
         CronStore::load(path).unwrap()
     }
 

@@ -49,6 +49,7 @@ pub mod external;
 pub mod jsonrpc;
 pub mod manager;
 mod notifications;
+pub mod protocol;
 mod prompts;
 mod resources;
 pub mod sampling;
@@ -63,10 +64,9 @@ pub use auth::{
 pub use client::{ExternalServerConfig, McpClient, McpClientBuilder, McpStartupReport};
 pub use context_injector::{ContextInjector, InjectedContext, ResourceContext, ToolContext};
 pub use external::{check_runtime, McpServerConnection, RuntimeKind};
-pub use jsonrpc::{
-    mcp::ApprovalDecision, mcp::ApprovalRequest, mcp::ApprovalResponse, mcp::IncludeContext,
-    mcp::SamplingChunk, IdGenerator, JsonRpcError, JsonRpcNotification, JsonRpcRequest,
-    JsonRpcResponse,
+pub use jsonrpc::{IdGenerator, JsonRpcError, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse};
+pub use protocol::{
+    ApprovalDecision, ApprovalRequest, ApprovalResponse, IncludeContext, SamplingChunk,
 };
 pub use notifications::{McpEvent, McpEventHandler, McpNotificationRouter};
 pub use prompts::{McpPrompt, McpPromptArgument, McpPromptManager, PromptContent, PromptMessage, PromptResult};

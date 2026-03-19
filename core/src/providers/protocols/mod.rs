@@ -5,6 +5,7 @@
 pub mod openai;
 pub mod anthropic;
 pub mod chatgpt;
+mod chatgpt_utils;
 pub mod gemini;
 pub mod definition;
 pub mod registry;

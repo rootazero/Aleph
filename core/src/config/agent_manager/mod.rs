@@ -24,9 +24,7 @@ use crate::config::types::agents_def::{
 // Constants
 // =============================================================================
 
-/// Bootstrap files recognized in agent workspaces.
-/// Auto-created: SOUL.md, AGENTS.md, MEMORY.md
-/// Optional (user-created): IDENTITY.md, TOOLS.md, HEARTBEAT.md, BOOTSTRAP.md
+/// Identity files recognized in agent directories.
 pub(super) const BOOTSTRAP_FILES: &[&str] = &[
     "SOUL.md",
     "IDENTITY.md",
@@ -34,7 +32,6 @@ pub(super) const BOOTSTRAP_FILES: &[&str] = &[
     "TOOLS.md",
     "MEMORY.md",
     "HEARTBEAT.md",
-    "BOOTSTRAP.md",
 ];
 
 /// Maximum length for agent IDs

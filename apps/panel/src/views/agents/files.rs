@@ -1,9 +1,19 @@
-// Files Tab — workspace file browser with inline editor
+// Files Tab — fixed 6 identity files with inline editor
 
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use crate::api::agents::{AgentsApi, WorkspaceFile};
 use crate::context::DashboardState;
+
+/// The 6 canonical identity files, displayed in this order.
+const IDENTITY_FILES: &[&str] = &[
+    "SOUL.md",
+    "IDENTITY.md",
+    "AGENTS.md",
+    "TOOLS.md",
+    "MEMORY.md",
+    "HEARTBEAT.md",
+];
 
 #[component]
 pub fn FilesTab(agent_id: String) -> impl IntoView {
@@ -16,8 +26,6 @@ pub fn FilesTab(agent_id: String) -> impl IntoView {
     let is_loading = RwSignal::new(true);
     let is_saving = RwSignal::new(false);
     let save_message = RwSignal::new(Option::<(bool, String)>::None);
-    let show_create = RwSignal::new(false);
-    let new_filename = RwSignal::new(String::new());
 
     // Reload file list
     let reload_files = move || {
@@ -41,6 +49,7 @@ pub fn FilesTab(agent_id: String) -> impl IntoView {
     // Select and load file content
     let select_file = move |filename: String| {
         selected_file.set(Some(filename.clone()));
+        save_message.set(None);
         let id = agent_id.get_value();
         let dash = state;
         spawn_local(async move {
@@ -51,88 +60,83 @@ pub fn FilesTab(agent_id: String) -> impl IntoView {
         });
     };
 
+    // Create a missing file with empty content, then select it
+    let create_file = move |filename: String| {
+        let id = agent_id.get_value();
+        let dash = state;
+        spawn_local(async move {
+            match AgentsApi::files_set(&dash, &id, &filename, "").await {
+                Ok(()) => {
+                    reload_files();
+                    selected_file.set(Some(filename));
+                    file_content.set(String::new());
+                }
+                Err(e) => web_sys::console::error_1(&format!("Create failed: {e}").into()),
+            }
+        });
+    };
+
     view! {
         <div class="flex gap-6 min-h-[400px]">
-            // File list panel
+            // File list panel — fixed 7 identity files
             <div class="w-64 flex-shrink-0 bg-surface-raised border border-border rounded-xl overflow-hidden">
-                <div class="p-3 border-b border-border flex items-center justify-between">
-                    <h3 class="text-sm font-medium text-text-primary">"Files"</h3>
-                    <button
-                        on:click=move |_| show_create.update(|v| *v = !*v)
-                        class="text-xs text-primary hover:text-primary-hover"
-                    >
-                        "+ New"
-                    </button>
+                <div class="p-3 border-b border-border">
+                    <h3 class="text-sm font-medium text-text-primary">"Identity Files"</h3>
                 </div>
-
-                {move || show_create.get().then(|| view! {
-                    <div class="p-2 border-b border-border flex gap-1">
-                        <input
-                            type="text"
-                            placeholder="filename.md"
-                            prop:value=move || new_filename.get()
-                            on:input=move |ev| new_filename.set(event_target_value(&ev))
-                            class="flex-1 px-2 py-1 bg-surface-sunken border border-border rounded text-xs text-text-primary"
-                        />
-                        <button
-                            on:click=move |_| {
-                                let filename = new_filename.get();
-                                if filename.is_empty() { return; }
-                                let id = agent_id.get_value();
-                                let dash = state;
-                                spawn_local(async move {
-                                    match AgentsApi::files_set(&dash, &id, &filename, "").await {
-                                        Ok(()) => {
-                                            show_create.set(false);
-                                            new_filename.set(String::new());
-                                            reload_files();
-                                            selected_file.set(Some(filename));
-                                            file_content.set(String::new());
-                                        }
-                                        Err(e) => web_sys::console::error_1(&format!("Create failed: {e}").into()),
-                                    }
-                                });
-                            }
-                            class="px-2 py-1 bg-primary text-white rounded text-xs"
-                        >
-                            "OK"
-                        </button>
-                    </div>
-                })}
 
                 <div class="overflow-y-auto">
                     {move || {
                         if is_loading.get() {
                             view! { <div class="p-3 text-xs text-text-tertiary">"Loading..."</div> }.into_any()
                         } else {
+                            let current_files = files.get();
                             let current_selected = selected_file.get();
                             view! {
                                 <div>
-                                    {files.get().into_iter().map(|f| {
-                                        let fname = f.filename.clone();
-                                        let fname_click = fname.clone();
-                                        let is_sel = current_selected.as_ref() == Some(&fname);
+                                    {IDENTITY_FILES.iter().map(|&name| {
+                                        let existing = current_files.iter().find(|f| f.filename == name);
+                                        let is_missing = existing.is_none();
+                                        let size = existing.map(|f| f.size_bytes).unwrap_or(0);
+                                        let is_sel = current_selected.as_deref() == Some(name);
+                                        let name_owned = name.to_string();
+                                        let name_click = name_owned.clone();
+                                        let name_create = name_owned.clone();
                                         view! {
-                                            <button
-                                                on:click=move |_| select_file(fname_click.clone())
-                                                class=move || {
-                                                    if is_sel {
-                                                        "w-full text-left px-3 py-2 text-sm bg-sidebar-active text-sidebar-accent"
-                                                    } else {
-                                                        "w-full text-left px-3 py-2 text-sm text-text-secondary hover:bg-sidebar-active/50"
-                                                    }
+                                            <div class=move || {
+                                                if is_sel {
+                                                    "w-full px-3 py-2 bg-sidebar-active"
+                                                } else {
+                                                    "w-full px-3 py-2 hover:bg-sidebar-active/50"
                                                 }
-                                            >
-                                                <div class="flex items-center gap-2">
-                                                    <span class="truncate">{fname}</span>
-                                                    {f.is_bootstrap.then(|| view! {
-                                                        <span class="text-[10px] text-info bg-info/10 px-1 rounded">"boot"</span>
-                                                    })}
+                                            }>
+                                                <div class="flex items-center justify-between">
+                                                    {if is_missing {
+                                                        view! {
+                                                            <span class="text-sm text-text-tertiary">{name_owned}</span>
+                                                            <button
+                                                                on:click=move |_| create_file(name_create.clone())
+                                                                class="text-[10px] text-primary hover:text-primary-hover bg-primary/10 px-1.5 py-0.5 rounded cursor-pointer"
+                                                            >
+                                                                "create"
+                                                            </button>
+                                                        }.into_any()
+                                                    } else {
+                                                        view! {
+                                                            <button
+                                                                on:click=move |_| select_file(name_click.clone())
+                                                                class="text-left flex-1"
+                                                            >
+                                                                <span class=move || {
+                                                                    if is_sel { "text-sm text-sidebar-accent" } else { "text-sm text-text-secondary" }
+                                                                }>{name_owned}</span>
+                                                            </button>
+                                                            <span class="text-[10px] text-text-tertiary">
+                                                                {format!("{} B", size)}
+                                                            </span>
+                                                        }.into_any()
+                                                    }}
                                                 </div>
-                                                <div class="text-[10px] text-text-tertiary mt-0.5">
-                                                    {format!("{} bytes", f.size_bytes)}
-                                                </div>
-                                            </button>
+                                            </div>
                                         }
                                     }).collect_view()}
                                 </div>
@@ -152,23 +156,6 @@ pub fn FilesTab(agent_id: String) -> impl IntoView {
                                     <span class="text-sm font-medium text-text-primary font-mono">
                                         {move || selected_file.get().unwrap_or_default()}
                                     </span>
-                                    <button
-                                        on:click=move |_| {
-                                            let Some(filename) = selected_file.get() else { return };
-                                            let id = agent_id.get_value();
-                                            let dash = state;
-                                            spawn_local(async move {
-                                                if AgentsApi::files_delete(&dash, &id, &filename).await.is_ok() {
-                                                    selected_file.set(None);
-                                                    file_content.set(String::new());
-                                                    reload_files();
-                                                }
-                                            });
-                                        }
-                                        class="text-xs text-danger hover:text-danger/80"
-                                    >
-                                        "Delete"
-                                    </button>
                                 </div>
                                 <textarea
                                     prop:value=move || file_content.get()

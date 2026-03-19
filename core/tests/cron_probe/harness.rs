@@ -39,7 +39,7 @@ impl CronTestHarness {
     /// Create a new harness with a custom CronConfig.
     pub fn with_config(config: CronConfig) -> Self {
         let temp_dir = TempDir::new().expect("failed to create temp dir");
-        let store_path = temp_dir.path().join("cron.json");
+        let store_path = temp_dir.path().join("cron.db");
         let store = CronStore::load(store_path.clone()).expect("failed to create store");
 
         let clock = Arc::new(FakeClock::new(1_000_000));
@@ -295,9 +295,21 @@ impl CronTestHarness {
         ops::list_jobs(&store)
     }
 
-    /// Read the raw store file content.
+    /// Read all persisted job data from the SQLite store.
+    ///
+    /// Opens a separate connection and reads all `data` column values,
+    /// concatenating them into a single string for assertion checks.
     pub fn store_file_content(&self) -> String {
-        std::fs::read_to_string(&self.store_path)
-            .unwrap_or_else(|_| String::new())
+        let Ok(conn) = rusqlite::Connection::open(&self.store_path) else {
+            return String::new();
+        };
+        let Ok(mut stmt) = conn.prepare("SELECT data FROM cron_jobs") else {
+            return String::new();
+        };
+        let rows: Vec<String> = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .map(|iter| iter.filter_map(|r| r.ok()).collect())
+            .unwrap_or_default();
+        rows.join("\n")
     }
 }

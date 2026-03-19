@@ -66,7 +66,7 @@ mod tests {
 
     fn make_state() -> ServiceState<FakeClock> {
         let dir = TempDir::new().unwrap();
-        let path = dir.path().join("cron.json");
+        let path = dir.path().join("cron.db");
         let store = CronStore::load(path).unwrap();
         ServiceState::new(
             Arc::new(tokio::sync::Mutex::new(store)),

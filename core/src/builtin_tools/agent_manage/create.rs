@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use tracing::{info, warn};
 
 use crate::config::agent_manager::AgentManager;
-use crate::config::agent_resolver::initialize_workspace;
+use crate::config::agent_resolver::initialize_agent_identity;
 use crate::config::types::agents_def::AgentDefinition;
 use crate::error::Result;
 use crate::gateway::agent_instance::{AgentInstance, AgentInstanceConfig, AgentRegistry};
@@ -241,7 +241,7 @@ impl AlephTool for AgentCreateTool {
 
         // 4. Initialize agent identity directory (SOUL.md, AGENTS.md, etc.)
         let display_name = args.name.as_deref().unwrap_or(&args.id);
-        initialize_workspace(&agent_state_dir, display_name)
+        initialize_agent_identity(&agent_state_dir, display_name)
             .map_err(|e| crate::error::AlephError::other(format!(
                 "Failed to initialize identity files for '{}': {}",
                 args.id, e

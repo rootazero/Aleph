@@ -157,7 +157,35 @@ impl ToolRegistrar {
             .register_with_conflict_resolution(groupchat_cmd)
             .await;
 
-        info!("Registered 7 builtin tools (2 generation + 2 skill reading + snapshot + switch + groupchat)");
+        // New session command
+        let new_cmd = UnifiedTool::new(
+            "builtin:new",
+            "new",
+            "Start a new conversation session",
+            ToolSource::Builtin,
+        )
+        .with_usage("/new")
+        .with_sort_order(82);
+
+        conflict_resolver
+            .register_with_conflict_resolution(new_cmd)
+            .await;
+
+        // Cron management command
+        let cron_cmd = UnifiedTool::new(
+            "builtin:cron",
+            "cron",
+            "Manage scheduled tasks",
+            ToolSource::Builtin,
+        )
+        .with_usage("/cron list | /cron create <task>")
+        .with_sort_order(83);
+
+        conflict_resolver
+            .register_with_conflict_resolution(cron_cmd)
+            .await;
+
+        info!("Registered 9 builtin tools (2 generation + 2 skill reading + snapshot + switch + groupchat + new + cron)");
     }
 
     /// Register MCP tools from tool info list (Flat Namespace Mode)

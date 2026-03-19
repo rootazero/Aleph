@@ -75,28 +75,12 @@ pub struct CronService {
 impl CronService {
     /// Create a new CronService from configuration.
     ///
-    /// Loads (or creates) the JSON store and initializes the service state.
+    /// Opens (or creates) the SQLite store and initializes the service state.
     pub fn new(config: CronConfig) -> Result<Self, String> {
         config.validate().map_err(|e| format!("invalid config: {e}"))?;
 
-        // Resolve store path: change .db to .json for the new store format
         let db_path = config.expand_db_path();
-        let store_path = if db_path.ends_with(".db") {
-            format!("{}on", db_path) // .db -> .dbon (not ideal)
-        } else {
-            db_path.clone()
-        };
-        // Use a .json path derived from the configured path
-        let store_path = store_path
-            .replace("cron.db", "cron.json")
-            .replace("cron.dbon", "cron.json");
-
-        // Create parent directory if needed
-        let path = std::path::PathBuf::from(&store_path);
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| format!("failed to create store directory: {e}"))?;
-        }
+        let path = std::path::PathBuf::from(&db_path);
 
         let store = CronStore::load(path)?;
         let clock = Arc::new(SystemClock);
@@ -198,7 +182,7 @@ mod tests {
     #[tokio::test]
     async fn cron_service_basic_lifecycle() {
         let dir = tempfile::TempDir::new().unwrap();
-        let db_path = dir.path().join("cron.json").to_string_lossy().to_string();
+        let db_path = dir.path().join("cron.db").to_string_lossy().to_string();
 
         let config = CronConfig {
             db_path,
@@ -252,7 +236,7 @@ mod tests {
     #[tokio::test]
     async fn cron_service_update() {
         let dir = tempfile::TempDir::new().unwrap();
-        let db_path = dir.path().join("cron.json").to_string_lossy().to_string();
+        let db_path = dir.path().join("cron.db").to_string_lossy().to_string();
 
         let config = CronConfig {
             db_path,

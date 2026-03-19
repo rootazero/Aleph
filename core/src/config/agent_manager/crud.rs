@@ -5,7 +5,7 @@ use std::fs;
 use toml_edit::Array;
 use tracing::{info, warn};
 
-use crate::config::agent_resolver::{initialize_agent_dir, initialize_workspace};
+use crate::config::agent_resolver::{initialize_agent_dir, initialize_agent_identity};
 use crate::config::types::agents_def::AgentDefinition;
 use crate::error::{AlephError, Result};
 
@@ -225,7 +225,7 @@ impl AgentManager {
         let agent_name = def.name.as_deref().unwrap_or(&def.id);
 
         // Identity files (SOUL.md, AGENTS.md, etc.) go in agent state directory
-        initialize_workspace(&agent_state_dir, agent_name).map_err(|e| {
+        initialize_agent_identity(&agent_state_dir, agent_name).map_err(|e| {
             AlephError::IoError(format!(
                 "Failed to initialize identity files for '{}': {}",
                 def.id, e

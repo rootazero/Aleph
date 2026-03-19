@@ -16,7 +16,6 @@ const BOOTSTRAP_FILES: &[&str] = &[
     "TOOLS.md",
     "MEMORY.md",
     "HEARTBEAT.md",
-    "BOOTSTRAP.md",
 ];
 
 /// Layer that injects workspace bootstrap files into the system prompt.

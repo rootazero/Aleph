@@ -205,7 +205,7 @@ mod tests {
 
     fn make_store() -> (Arc<tokio::sync::Mutex<CronStore>>, TempDir) {
         let dir = TempDir::new().unwrap();
-        let path = dir.path().join("cron.json");
+        let path = dir.path().join("cron.db");
         let store = CronStore::load(path).unwrap();
         (Arc::new(tokio::sync::Mutex::new(store)), dir)
     }

@@ -325,7 +325,7 @@ args = ["./mcp-server.js"]
         let config = PlaywrightMcpConfig::default();
         assert!(config.enabled);
         assert_eq!(config.command, "npx");
-        assert_eq!(config.args, vec!["@anthropic/mcp-playwright"]);
+        assert_eq!(config.args, vec!["@playwright/mcp"]);
     }
 
     #[test]

@@ -348,6 +348,7 @@ dependencies = [
  "schemars 0.8.22",
  "scraper",
  "secrecy 0.10.3",
+ "semver",
  "serde",
  "serde_json",
  "serde_yaml",

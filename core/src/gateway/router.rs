@@ -440,14 +440,14 @@ mod tests {
     #[tokio::test]
     async fn test_router_default() {
         let router = AgentRouter::new();
-        let key = router.route(None, None, None).await;
+        let key = router.route(None, None, None, None).await;
         assert_eq!(key.agent_id(), "main");
     }
 
     #[tokio::test]
     async fn test_router_explicit_key() {
         let router = AgentRouter::new();
-        let key = router.route(Some("agent:work:main"), None, None).await;
+        let key = router.route(Some("agent:work:main"), None, None, None).await;
         assert_eq!(key.agent_id(), "work");
     }
 
@@ -457,18 +457,18 @@ mod tests {
         router.register_agent("work").await;
         router.add_binding("cli:*", "work").await;
 
-        let key = router.route(None, Some("cli:term1"), None).await;
+        let key = router.route(None, Some("cli:term1"), None, None).await;
         assert_eq!(key.agent_id(), "work");
 
         // GUI should still go to default
-        let key = router.route(None, Some("gui:window1"), None).await;
+        let key = router.route(None, Some("gui:window1"), None, None).await;
         assert_eq!(key.agent_id(), "main");
     }
 
     #[tokio::test]
     async fn test_router_peer_creates_peer_session() {
         let router = AgentRouter::new();
-        let key = router.route(None, Some("gui:window1"), Some("telegram:123")).await;
+        let key = router.route(None, Some("gui:window1"), Some("telegram:123"), None).await;
 
         assert!(matches!(key, SessionKey::PerPeer { peer_id, .. } if peer_id == "telegram:123"));
     }

@@ -10,7 +10,7 @@ use tempfile::TempDir;
 
 fn make_store() -> (CronStore, TempDir) {
     let dir = TempDir::new().unwrap();
-    let path = dir.path().join("cron.json");
+    let path = dir.path().join("cron.db");
     let store = CronStore::load(path).unwrap();
     (store, dir)
 }

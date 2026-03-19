@@ -4,10 +4,13 @@
 //! and priority-based scheduling for browser tasks.
 
 mod dag;
+mod executor;
 mod priority;
+mod retry;
 pub mod integration;
 
-pub use dag::{DagScheduler, ExecutionResult, GraphTaskExecutor};
+pub use dag::DagScheduler;
+pub use executor::{ExecutionResult, GraphTaskExecutor};
 pub use priority::{
     PriorityScheduler, PrioritySchedulerConfig, PriorityTier, RiskLevel, TaskMetadata,
 };

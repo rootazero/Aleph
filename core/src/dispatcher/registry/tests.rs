@@ -13,12 +13,12 @@ async fn test_register_builtin_tools() {
     let registry = ToolRegistry::new();
     registry.register_builtin_tools().await;
 
-    // Should register 7 builtin tools (2 generation + 2 skill reading + snapshot + switch + groupchat)
-    assert_eq!(registry.count().await, 7);
+    // Should register 9 builtin tools (2 generation + 2 skill reading + snapshot + switch + groupchat + new + cron)
+    assert_eq!(registry.count().await, 9);
 
     // Builtins should include generation tools
     let builtins = registry.list_builtin_tools().await;
-    assert_eq!(builtins.len(), 7);
+    assert_eq!(builtins.len(), 9);
 
     // Verify tool names
     let names: Vec<_> = builtins.iter().map(|t| t.name.as_str()).collect();
@@ -43,8 +43,8 @@ async fn test_list_root_commands() {
     registry.register_custom_commands(&rules).await;
 
     let roots = registry.list_root_commands().await;
-    // 7 builtin tools + 1 custom = 8
-    assert_eq!(roots.len(), 8);
+    // 9 builtin tools + 1 custom = 10
+    assert_eq!(roots.len(), 10);
 
     // First should be builtins (sorted by priority)
     assert!(roots.iter().any(|t| t.name == "generate_image"));
@@ -138,7 +138,7 @@ async fn test_list_by_source_type() {
     registry.register_skills(&skills).await;
 
     let builtin = registry.list_by_source_type("Builtin").await;
-    assert_eq!(builtin.len(), 7); // 7 builtin tools (2 generation + 2 skill reading + snapshot + switch + groupchat)
+    assert_eq!(builtin.len(), 9); // 9 builtin tools (2 generation + 2 skill reading + snapshot + switch + groupchat + new + cron)
 
     let skill = registry.list_by_source_type("Skill").await;
     assert_eq!(skill.len(), 1);

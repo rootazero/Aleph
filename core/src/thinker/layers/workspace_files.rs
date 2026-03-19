@@ -2,7 +2,7 @@
 //!
 //! SOUL.md is handled by SoulLayer (priority 50), AGENTS.md by ProfileLayer
 //! (priority 75). This layer injects the rest: IDENTITY.md, TOOLS.md,
-//! MEMORY.md, HEARTBEAT.md, BOOTSTRAP.md.
+//! MEMORY.md, HEARTBEAT.md.
 
 use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, LayerStability, PromptLayer};
 use crate::thinker::prompt_mode::PromptMode;
@@ -128,7 +128,6 @@ mod tests {
             make_file("TOOLS.md", "tools content"),
             make_file("MEMORY.md", "memory content"),
             make_file("HEARTBEAT.md", "heartbeat content"),
-            make_file("BOOTSTRAP.md", "bootstrap content"),
         ]);
 
         let input = LayerInput::basic(&config, &[]).with_workspace(&ws);
@@ -147,8 +146,6 @@ mod tests {
         assert!(out.contains("memory content"));
         assert!(out.contains("### HEARTBEAT.md"));
         assert!(out.contains("heartbeat content"));
-        assert!(out.contains("### BOOTSTRAP.md"));
-        assert!(out.contains("bootstrap content"));
 
         // Should NOT include SOUL.md or AGENTS.md
         assert!(!out.contains("### SOUL.md"));

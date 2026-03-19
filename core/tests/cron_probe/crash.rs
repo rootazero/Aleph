@@ -36,7 +36,7 @@ fn make_job(id: &str) -> CronJob {
 #[tokio::test]
 async fn crash_mid_execution_recovers() {
     let temp_dir = TempDir::new().expect("failed to create temp dir");
-    let store_path = temp_dir.path().join("cron.json");
+    let store_path = temp_dir.path().join("cron.db");
 
     let initial_time = 1_000_000_i64;
     let interval = 60_000_i64;
@@ -118,7 +118,7 @@ async fn crash_mid_execution_recovers() {
 #[tokio::test]
 async fn crash_after_phase1_before_phase2() {
     let temp_dir = TempDir::new().expect("failed to create temp dir");
-    let store_path = temp_dir.path().join("cron.json");
+    let store_path = temp_dir.path().join("cron.db");
 
     let initial_time = 2_000_000_i64;
     let interval = 60_000_i64;
@@ -142,13 +142,17 @@ async fn crash_after_phase1_before_phase2() {
             .await
             .expect("phase1 should succeed");
 
-        // Verify the raw JSON file contains running_at_ms
-        let raw_json = std::fs::read_to_string(&store_path)
-            .expect("should be able to read store file");
-        assert!(
-            raw_json.contains("running_at_ms"),
-            "raw JSON should contain running_at_ms after Phase 1"
-        );
+        // Verify the DB contains running_at_ms in persisted data
+        {
+            let conn = rusqlite::Connection::open(&store_path).expect("open DB for verification");
+            let data: String = conn
+                .query_row("SELECT data FROM cron_jobs WHERE id = 'phase1-crash'", [], |row| row.get(0))
+                .expect("job should be persisted");
+            assert!(
+                data.contains("running_at_ms"),
+                "persisted data should contain running_at_ms after Phase 1"
+            );
+        }
 
         // CRASH: drop
     }
@@ -186,7 +190,7 @@ async fn crash_after_phase1_before_phase2() {
 #[tokio::test]
 async fn crash_preserves_store_integrity() {
     let temp_dir = TempDir::new().expect("failed to create temp dir");
-    let store_path = temp_dir.path().join("cron.json");
+    let store_path = temp_dir.path().join("cron.db");
 
     let clock = FakeClock::new(5_000_000);
 
@@ -200,19 +204,14 @@ async fn crash_preserves_store_integrity() {
         store.persist().expect("persist should succeed");
     }
 
-    // Verify file is valid JSON
-    let raw_json = std::fs::read_to_string(&store_path)
-        .expect("should be able to read store file");
-    let parsed: serde_json::Value =
-        serde_json::from_str(&raw_json).expect("store file should be valid JSON");
-    let jobs_array = parsed["jobs"]
-        .as_array()
-        .expect("should have a jobs array");
-    assert_eq!(
-        jobs_array.len(),
-        5,
-        "JSON should contain exactly 5 jobs"
-    );
+    // Verify DB contains 5 jobs
+    {
+        let conn = rusqlite::Connection::open(&store_path).expect("open DB for verification");
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM cron_jobs", [], |row| row.get(0))
+            .expect("should be able to count jobs");
+        assert_eq!(count, 5, "DB should contain exactly 5 jobs");
+    }
 
     // Reload and verify count
     let store = CronStore::load(store_path).expect("reload store");

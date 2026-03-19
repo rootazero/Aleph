@@ -232,7 +232,7 @@ impl AgentDefinitionResolver {
             );
         }
         // Identity files (SOUL.md, AGENTS.md, etc.) go in agent_dir
-        if let Err(e) = initialize_workspace(&agent_dir, agent_name) {
+        if let Err(e) = initialize_agent_identity(&agent_dir, agent_name) {
             tracing::warn!(
                 agent_id = %agent.id,
                 path = %agent_dir.display(),
@@ -357,23 +357,17 @@ pub fn initialize_agent_dir(path: &Path) -> Result<(), io::Error> {
 /// └── MEMORY.md         # Persistent memory notes
 /// ```
 ///
-/// Optional files (not auto-created, recognized by bootstrap layer):
-/// - `IDENTITY.md` — Extended identity definition
-/// - `TOOLS.md` — Tool usage guidelines
-/// - `HEARTBEAT.md` — Periodic status / heartbeat notes
-/// - `BOOTSTRAP.md` — Additional bootstrap instructions
-pub fn initialize_workspace(path: &Path, agent_name: &str) -> Result<(), io::Error> {
-    // Ensure workspace directory exists
+pub fn initialize_agent_identity(path: &Path, agent_name: &str) -> Result<(), io::Error> {
+    // Ensure directory exists
     fs::create_dir_all(path)?;
 
-    // Write each bootstrap file (skip if already exists — never overwrite user content)
+    // Write each identity file (skip if already exists — never overwrite user content)
     write_if_missing(path, "SOUL.md", &default_soul(agent_name))?;
     write_if_missing(path, "AGENTS.md", &default_agents(agent_name))?;
     write_if_missing(path, "IDENTITY.md", &default_identity(agent_name))?;
     write_if_missing(path, "MEMORY.md", DEFAULT_MEMORY)?;
     write_if_missing(path, "TOOLS.md", DEFAULT_TOOLS)?;
     write_if_missing(path, "HEARTBEAT.md", DEFAULT_HEARTBEAT)?;
-    write_if_missing(path, "BOOTSTRAP.md", &default_bootstrap(agent_name))?;
 
     Ok(())
 }
@@ -804,7 +798,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let workspace = tmp.path().join("test-agent");
 
-        initialize_workspace(&workspace, "Test Agent").unwrap();
+        initialize_agent_identity(&workspace, "Test Agent").unwrap();
 
         // AGENTS.md should exist with template content
         let agents_md = fs::read_to_string(workspace.join("AGENTS.md")).unwrap();
@@ -816,7 +810,6 @@ mod tests {
         assert!(workspace.join("IDENTITY.md").exists());
         assert!(workspace.join("MEMORY.md").exists());
         assert!(workspace.join("HEARTBEAT.md").exists());
-        assert!(workspace.join("BOOTSTRAP.md").exists());
 
         // SOUL.md should contain the agent name
         let soul_md = fs::read_to_string(workspace.join("SOUL.md")).unwrap();
@@ -824,7 +817,7 @@ mod tests {
 
         // Running again should not overwrite AGENTS.md
         fs::write(workspace.join("AGENTS.md"), "Custom content").unwrap();
-        initialize_workspace(&workspace, "Test Agent").unwrap();
+        initialize_agent_identity(&workspace, "Test Agent").unwrap();
         let agents_md_after = fs::read_to_string(workspace.join("AGENTS.md")).unwrap();
         assert_eq!(agents_md_after, "Custom content");
     }
@@ -878,7 +871,7 @@ mod tests {
         let old_sessions = ws.join("sessions");
         fs::create_dir_all(&old_sessions).unwrap();
         fs::write(old_sessions.join("test-session.json"), "{}").unwrap();
-        // Pre-create content files so initialize_workspace doesn't overwrite
+        // Pre-create content files so initialize_agent_identity doesn't overwrite
         fs::create_dir_all(ws.join("memory")).unwrap();
         fs::write(ws.join("SOUL.md"), "# Migrator").unwrap();
         fs::write(ws.join("AGENTS.md"), "# WS").unwrap();

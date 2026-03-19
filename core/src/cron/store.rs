@@ -1,200 +1,114 @@
-//! JSON Atomic Store for Cron Jobs
+//! SQLite Store for Cron Jobs
 //!
-//! Crash-safe JSON file persistence using tmp+fsync+rename pattern.
+//! Persistent storage using SQLite with in-memory cache.
+//! The CronStore maintains a `Vec<CronJob>` in memory for fast access,
+//! and writes changes to SQLite on `persist()`. This keeps the same
+//! API as the previous JSON store while gaining query capabilities
+//! and consistency with other Aleph subsystems.
+//!
 //! The CronStore is designed to be wrapped in a `tokio::sync::Mutex`
 //! by the service layer.
 
-use std::fs;
-use std::io::{self, Write as _};
 use std::path::PathBuf;
-use std::time::SystemTime;
 
-use rand::Rng;
-use serde::{Deserialize, Serialize};
-use tracing::warn;
+use rusqlite::{params, Connection, OptionalExtension};
+use tracing::{info, warn};
 
 use crate::cron::config::CronJob;
 
-/// Current store format version
+/// Current schema version
 const CURRENT_VERSION: u32 = 1;
 
-// ── On-disk format ─────────────────────────────────────────────────────
+// ── CronStore ────────────────────────────────────────────────────────
 
-/// On-disk JSON format for cron job persistence
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CronStoreFile {
-    pub version: u32,
-    pub jobs: Vec<CronJob>,
-}
-
-// ── In-memory store ────────────────────────────────────────────────────
-
-/// In-memory store with dirty tracking and atomic persistence
+/// SQLite-backed cron job store with in-memory cache.
 pub struct CronStore {
-    path: PathBuf,
-    file: CronStoreFile,
-    last_mtime: Option<SystemTime>,
+    conn: Connection,
+    /// In-memory cache of all jobs (the authoritative working copy)
+    jobs: Vec<CronJob>,
+    /// Dirty flag: true when in-memory state differs from DB
     dirty: bool,
 }
 
-// ── Atomic write ───────────────────────────────────────────────────────
-
-/// Write data to a file atomically using tmp+fsync+rename pattern.
-fn atomic_write(path: &PathBuf, data: &[u8]) -> io::Result<()> {
-    // Create parent dirs if needed
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-
-    // Build tmp file name: {filename}.{pid}.{rand:08x}.tmp
-    let pid = std::process::id();
-    let rand_suffix: u32 = rand::thread_rng().gen();
-    let file_name = path
-        .file_name()
-        .unwrap_or_default()
-        .to_string_lossy();
-    let tmp_name = format!("{}.{}.{:08x}.tmp", file_name, pid, rand_suffix);
-    let tmp_path = path.with_file_name(&tmp_name);
-
-    // Write to tmp file
-    let mut f = fs::File::create(&tmp_path)?;
-    f.write_all(data)?;
-    f.sync_all()?;
-
-    // Rename existing file to .bak (best-effort)
-    if path.exists() {
-        let bak_path = path.with_extension("bak");
-        let _ = fs::rename(path, &bak_path);
-    }
-
-    // Atomic swap: rename tmp to target
-    fs::rename(&tmp_path, path)?;
-
-    Ok(())
-}
-
-// ── Migration ──────────────────────────────────────────────────────────
-
-/// Apply store migrations from older versions to current.
-fn migrate_store(file: &mut CronStoreFile) {
-    if file.version < 1 {
-        // Version 0→1: placeholder for future migrations
-        file.version = 1;
-    }
-    // Future migrations go here: if file.version < 2 { ... file.version = 2; }
-}
-
-// ── CronStore impl ────────────────────────────────────────────────────
-
 impl CronStore {
-    /// Load the store from disk, recovering from .bak if needed.
+    /// Open (or create) the SQLite store at the given path.
     ///
-    /// - If `path` exists: read and parse JSON, apply migrations if needed.
-    /// - If `path` doesn't exist but `.bak` does: rename bak→path and retry.
-    /// - If neither exists: return empty store with version=1.
+    /// Creates the schema if needed, runs migrations, and loads all
+    /// jobs into memory.
     pub fn load(path: PathBuf) -> Result<Self, String> {
-        if path.exists() {
-            let data =
-                fs::read_to_string(&path).map_err(|e| format!("failed to read store: {e}"))?;
-            let mut file: CronStoreFile =
-                serde_json::from_str(&data).map_err(|e| format!("failed to parse store: {e}"))?;
-
-            if file.version < CURRENT_VERSION {
-                migrate_store(&mut file);
-            }
-
-            let mtime = fs::metadata(&path).ok().and_then(|m| m.modified().ok());
-
-            Ok(Self {
-                path,
-                file,
-                last_mtime: mtime,
-                dirty: false,
-            })
-        } else {
-            // Try .bak recovery
-            let bak_path = path.with_extension("bak");
-            if bak_path.exists() {
-                warn!("store file missing, recovering from .bak");
-                fs::rename(&bak_path, &path)
-                    .map_err(|e| format!("failed to recover .bak: {e}"))?;
-                return Self::load(path);
-            }
-
-            // No file at all — empty store
-            Ok(Self {
-                path,
-                file: CronStoreFile {
-                    version: CURRENT_VERSION,
-                    jobs: Vec::new(),
-                },
-                last_mtime: None,
-                dirty: false,
-            })
+        // Create parent directory if needed
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("failed to create store directory: {e}"))?;
         }
+
+        let conn = Connection::open(&path)
+            .map_err(|e| format!("failed to open cron DB at {}: {e}", path.display()))?;
+
+        // WAL mode for better concurrent read performance
+        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;")
+            .map_err(|e| format!("failed to set pragmas: {e}"))?;
+
+        init_schema(&conn)?;
+        migrate_schema(&conn)?;
+
+        // Load all jobs into memory
+        let jobs = load_all_jobs(&conn)?;
+        info!(count = jobs.len(), path = %path.display(), "Cron store loaded");
+
+        Ok(Self {
+            conn,
+            jobs,
+            dirty: false,
+        })
     }
 
-    /// Reload from disk if the file's mtime has changed.
-    /// Returns true if the store was actually reloaded.
+    /// Reload all jobs from the database, discarding in-memory changes.
+    /// Returns true if the data actually changed.
     pub fn reload_if_changed(&mut self) -> Result<bool, String> {
-        if !self.path.exists() {
-            return Ok(false);
-        }
-
-        let current_mtime = fs::metadata(&self.path)
-            .ok()
-            .and_then(|m| m.modified().ok());
-
-        if current_mtime == self.last_mtime {
-            return Ok(false);
-        }
-
+        // SQLite is always authoritative; reload unconditionally
         self.force_reload()?;
         Ok(true)
     }
 
-    /// Always reload from disk, discarding in-memory state.
+    /// Always reload from database, discarding in-memory state.
     pub fn force_reload(&mut self) -> Result<(), String> {
-        if !self.path.exists() {
-            return Ok(());
-        }
-
-        let data =
-            fs::read_to_string(&self.path).map_err(|e| format!("failed to read store: {e}"))?;
-        let mut file: CronStoreFile =
-            serde_json::from_str(&data).map_err(|e| format!("failed to parse store: {e}"))?;
-
-        if file.version < CURRENT_VERSION {
-            migrate_store(&mut file);
-        }
-
-        self.last_mtime = fs::metadata(&self.path)
-            .ok()
-            .and_then(|m| m.modified().ok());
-        self.file = file;
+        self.jobs = load_all_jobs(&self.conn)?;
         self.dirty = false;
-
         Ok(())
     }
 
-    /// Persist the store to disk if dirty.
-    /// Uses atomic write (tmp+fsync+rename) for crash safety.
+    /// Persist in-memory changes to the database.
+    ///
+    /// Uses a transaction to atomically replace all rows.
+    /// Only writes when the dirty flag is set.
     pub fn persist(&mut self) -> Result<(), String> {
         if !self.dirty {
             return Ok(());
         }
 
-        let data = serde_json::to_string_pretty(&self.file)
-            .map_err(|e| format!("failed to serialize store: {e}"))?;
+        let tx = self.conn.transaction()
+            .map_err(|e| format!("failed to begin transaction: {e}"))?;
 
-        atomic_write(&self.path, data.as_bytes())
-            .map_err(|e| format!("failed to write store: {e}"))?;
+        // Delete all existing rows and re-insert from memory.
+        // For a small number of jobs (< 1000) this is simpler and safer
+        // than tracking individual row changes.
+        tx.execute("DELETE FROM cron_jobs", [])
+            .map_err(|e| format!("failed to clear jobs: {e}"))?;
 
-        self.last_mtime = fs::metadata(&self.path)
-            .ok()
-            .and_then(|m| m.modified().ok());
+        for job in &self.jobs {
+            let json = serde_json::to_string(job)
+                .map_err(|e| format!("failed to serialize job '{}': {e}", job.id))?;
+            tx.execute(
+                "INSERT INTO cron_jobs (id, name, agent_id, enabled, data) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![job.id, job.name, job.agent_id, job.enabled, json],
+            ).map_err(|e| format!("failed to insert job '{}': {e}", job.id))?;
+        }
+
+        tx.commit()
+            .map_err(|e| format!("failed to commit transaction: {e}"))?;
+
         self.dirty = false;
-
         Ok(())
     }
 
@@ -207,43 +121,144 @@ impl CronStore {
 
     /// Get an immutable slice of all jobs.
     pub fn jobs(&self) -> &[CronJob] {
-        &self.file.jobs
+        &self.jobs
     }
 
     /// Get a mutable reference to the jobs vec. Auto-marks dirty.
     pub fn jobs_mut(&mut self) -> &mut Vec<CronJob> {
         self.dirty = true;
-        &mut self.file.jobs
+        &mut self.jobs
     }
 
     /// Find a job by ID.
     pub fn get_job(&self, id: &str) -> Option<&CronJob> {
-        self.file.jobs.iter().find(|j| j.id == id)
+        self.jobs.iter().find(|j| j.id == id)
     }
 
     /// Find a job by ID (mutable). Auto-marks dirty.
     pub fn get_job_mut(&mut self, id: &str) -> Option<&mut CronJob> {
         self.dirty = true;
-        self.file.jobs.iter_mut().find(|j| j.id == id)
+        self.jobs.iter_mut().find(|j| j.id == id)
     }
 
     /// Add a job. Marks dirty.
     pub fn add_job(&mut self, job: CronJob) {
-        self.file.jobs.push(job);
+        self.jobs.push(job);
         self.dirty = true;
     }
 
     /// Remove a job by ID. Returns the removed job if found. Marks dirty.
     pub fn remove_job(&mut self, id: &str) -> Option<CronJob> {
-        let pos = self.file.jobs.iter().position(|j| j.id == id)?;
+        let pos = self.jobs.iter().position(|j| j.id == id)?;
         self.dirty = true;
-        Some(self.file.jobs.remove(pos))
+        Some(self.jobs.remove(pos))
     }
 
     /// Number of jobs in the store.
     pub fn job_count(&self) -> usize {
-        self.file.jobs.len()
+        self.jobs.len()
     }
+}
+
+// ── Schema management ────────────────────────────────────────────────
+
+/// Create the cron_jobs table if it doesn't exist.
+fn init_schema(conn: &Connection) -> Result<(), String> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS cron_jobs (
+            id      TEXT PRIMARY KEY,
+            name    TEXT NOT NULL,
+            agent_id TEXT NOT NULL DEFAULT 'main',
+            enabled INTEGER NOT NULL DEFAULT 1,
+            data    TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS cron_meta (
+            key   TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );"
+    ).map_err(|e| format!("failed to create cron schema: {e}"))?;
+
+    // Set initial version if not present
+    let version: Option<String> = conn
+        .query_row(
+            "SELECT value FROM cron_meta WHERE key = 'version'",
+            [],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|e| format!("failed to read schema version: {e}"))?;
+
+    if version.is_none() {
+        conn.execute(
+            "INSERT INTO cron_meta (key, value) VALUES ('version', ?1)",
+            params![CURRENT_VERSION.to_string()],
+        ).map_err(|e| format!("failed to set schema version: {e}"))?;
+    }
+
+    Ok(())
+}
+
+/// Run schema migrations.
+fn migrate_schema(conn: &Connection) -> Result<(), String> {
+    let version_str: String = conn
+        .query_row(
+            "SELECT value FROM cron_meta WHERE key = 'version'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|e| format!("failed to read schema version: {e}"))?;
+
+    let version: u32 = version_str.parse().unwrap_or(0);
+
+    if version < CURRENT_VERSION {
+        // Future migrations go here
+        conn.execute(
+            "UPDATE cron_meta SET value = ?1 WHERE key = 'version'",
+            params![CURRENT_VERSION.to_string()],
+        ).map_err(|e| format!("failed to update schema version: {e}"))?;
+        info!(from = version, to = CURRENT_VERSION, "Cron schema migrated");
+    }
+
+    Ok(())
+}
+
+/// Load all jobs from the database.
+fn load_all_jobs(conn: &Connection) -> Result<Vec<CronJob>, String> {
+    let mut stmt = conn
+        .prepare("SELECT data FROM cron_jobs ORDER BY rowid")
+        .map_err(|e| format!("failed to prepare query: {e}"))?;
+
+    let jobs: Vec<CronJob> = stmt
+        .query_map([], |row| {
+            let json: String = row.get(0)?;
+            Ok(json)
+        })
+        .map_err(|e| format!("failed to query jobs: {e}"))?
+        .filter_map(|r| match r {
+            Ok(json) => match serde_json::from_str::<CronJob>(&json) {
+                Ok(job) => Some(job),
+                Err(e) => {
+                    warn!(error = %e, "Skipping corrupt cron job row");
+                    None
+                }
+            },
+            Err(e) => {
+                warn!(error = %e, "Failed to read cron job row");
+                None
+            }
+        })
+        .collect();
+
+    Ok(jobs)
+}
+
+// ── Re-export for backward compat ────────────────────────────────────
+
+/// Legacy type alias (no longer used but kept for any external references)
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct CronStoreFile {
+    pub version: u32,
+    pub jobs: Vec<CronJob>,
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────
@@ -269,17 +284,16 @@ mod tests {
     #[test]
     fn load_empty_creates_new_store() {
         let dir = TempDir::new().unwrap();
-        let path = dir.path().join("cron.json");
+        let path = dir.path().join("cron.db");
 
         let store = CronStore::load(path).unwrap();
-        assert_eq!(store.file.version, 1);
         assert_eq!(store.job_count(), 0);
     }
 
     #[test]
     fn add_persist_reload() {
         let dir = TempDir::new().unwrap();
-        let path = dir.path().join("cron.json");
+        let path = dir.path().join("cron.db");
 
         // Create, add job, persist
         {
@@ -301,7 +315,7 @@ mod tests {
     #[test]
     fn remove_job() {
         let dir = TempDir::new().unwrap();
-        let path = dir.path().join("cron.json");
+        let path = dir.path().join("cron.db");
 
         let mut store = CronStore::load(path).unwrap();
         let job1 = make_test_job("Job A");
@@ -325,62 +339,30 @@ mod tests {
     #[test]
     fn persist_skips_when_not_dirty() {
         let dir = TempDir::new().unwrap();
-        let path = dir.path().join("cron.json");
+        let path = dir.path().join("cron.db");
 
-        let mut store = CronStore::load(path.clone()).unwrap();
-        // Not dirty, persist should be a no-op
+        let mut store = CronStore::load(path).unwrap();
+        // Not dirty, persist should be a no-op (returns Ok)
         store.persist().unwrap();
-        // File should not exist since we never wrote anything
-        assert!(!path.exists());
     }
 
     #[test]
-    fn bak_recovery() {
+    fn force_reload_from_db() {
         let dir = TempDir::new().unwrap();
-        let path = dir.path().join("cron.json");
-        let bak_path = dir.path().join("cron.bak");
+        let path = dir.path().join("cron.db");
 
-        // Write a .bak file with a job
-        let store_file = CronStoreFile {
-            version: 1,
-            jobs: vec![make_test_job("Recovered Job")],
-        };
-        let data = serde_json::to_string_pretty(&store_file).unwrap();
-        fs::write(&bak_path, data).unwrap();
-
-        // Load should recover from .bak
-        let store = CronStore::load(path.clone()).unwrap();
-        assert_eq!(store.job_count(), 1);
-        assert_eq!(store.jobs()[0].name, "Recovered Job");
-
-        // .bak should have been renamed to the main path
-        assert!(path.exists());
-        assert!(!bak_path.exists());
-    }
-
-    #[test]
-    fn force_reload_picks_up_external_changes() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("cron.json");
-
-        // Create and persist initial store
-        let mut store = CronStore::load(path.clone()).unwrap();
+        let mut store = CronStore::load(path).unwrap();
         store.add_job(make_test_job("Original"));
         store.persist().unwrap();
         assert_eq!(store.job_count(), 1);
 
-        // Externally modify the file
-        let external_file = CronStoreFile {
-            version: 1,
-            jobs: vec![make_test_job("External A"), make_test_job("External B")],
-        };
-        let data = serde_json::to_string_pretty(&external_file).unwrap();
-        fs::write(&path, data).unwrap();
-
-        // force_reload should pick up the external changes
-        store.force_reload().unwrap();
+        // Add in-memory but don't persist
+        store.add_job(make_test_job("Ephemeral"));
         assert_eq!(store.job_count(), 2);
-        assert_eq!(store.jobs()[0].name, "External A");
-        assert_eq!(store.jobs()[1].name, "External B");
+
+        // force_reload should discard unpersisted changes
+        store.force_reload().unwrap();
+        assert_eq!(store.job_count(), 1);
+        assert_eq!(store.jobs()[0].name, "Original");
     }
 }

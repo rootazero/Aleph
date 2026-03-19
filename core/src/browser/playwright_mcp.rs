@@ -1,6 +1,6 @@
 //! PlaywrightMcpDriver — manages Playwright MCP sessions.
 //!
-//! Spawns `@anthropic/mcp-playwright` as a stdio MCP server per session key.
+//! Spawns `@playwright/mcp` as a stdio MCP server per session key.
 //! Sessions are lazily created on first tool call and cached by session key.
 
 use std::collections::HashMap;
