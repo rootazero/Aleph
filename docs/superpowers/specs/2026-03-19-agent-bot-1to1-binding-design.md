@@ -8,6 +8,7 @@
 
 Current design allows dynamic agent switching within a bot/channel via:
 - `agent_switch` tool (LLM-driven)
+- `/switch` slash command (`command_handler.rs`)
 - Natural language intent detection (`switch_intent.rs`)
 - Three-tier agent resolution (dynamic override > router rules > default)
 
@@ -31,8 +32,11 @@ This flexibility causes confusion in practice. Adding agent name prefixes to rep
   - **New**: `get_channel_for_agent(agent_id) -> Option<String>` (reverse lookup for Panel)
 
 **1:1 constraint enforcement** in `set_active_agent`:
+- Check-and-set within a single SQLite transaction to avoid TOCTOU race
 - Before binding, query if any other channel already binds the target agent
 - If occupied, return error with the occupying channel name (Panel displays this to user)
+
+**Data migration**: On upgrade, delete all rows from `channel_active_agent` where `peer_id != "default"`. Existing dynamic overrides are stale and should not be carried forward.
 
 ### Agent Resolution (Simplified)
 
@@ -48,11 +52,38 @@ Inbound Message → get_active_agent(channel)
 - Layer 1: Dynamic per-peer override lookup
 - Layer 2: `AgentRouter` multi-rule routing
 
+**No auto-binding**: New installations require manual binding through Panel. The default `main` agent exists but is not auto-bound to any channel.
+
 ### Reply Layer Cleanup
 
 - Delete `apply_agent_prefix()` from `reply_emitter.rs` and all call sites
-- Keep `agent_display_name` field on `OutboundMessage` (useful for logs/Panel), but no longer used for text prefixing
+- Remove `agent_display_name` field from `OutboundMessage` and related `native_identity` / `format_content` prefix logic
 - `executor.rs` stops passing `display_name` to `ReplyEmitter` for prefix purposes
+
+### Agent Tool Behavioral Changes
+
+**`agent_create`** (`builtin_tools/agent_manage/create.rs`):
+- Remove auto-switch logic: creating an agent no longer calls `set_active_agent` to bind it to the current channel
+- Agent is created in unbound state; user binds it via Panel
+
+**`agent_delete`** (`builtin_tools/agent_manage/delete.rs`):
+- On deletion, unbind the agent from its channel (call `clear_active_agent` for the bound channel)
+- Use `get_channel_for_agent(agent_id)` to find which channel to unbind
+
+**`agent_list`** (`builtin_tools/agent_manage/list.rs`):
+- Update display: show binding status (bound to which channel) instead of per-peer active status
+
+### Intent Detection Cleanup
+
+- Delete `inbound_router/switch_intent.rs` entirely
+- Remove `DetectedIntent::SwitchAgent` variant from `IntentDetector` enum
+- If `IntentDetector` has no remaining variants/purposes, delete the entire module
+- Clean up `InboundMessageRouter` field `intent_detector: Option<IntentDetector>` and `with_intent_detector()` builder method
+
+### Event System Cleanup
+
+- Remove `AgentLifecycleEvent::Switched` variant (no longer emitted by any code path)
+- If the variant is the only lifecycle event, evaluate whether the event type itself should be removed
 
 ### Panel UI
 
@@ -73,28 +104,44 @@ Inbound Message → get_active_agent(channel)
 | `channels.set_agent` | `(channel_id: String, agent_id: Option<String>)` | Bind or unbind agent. Enforces 1:1 constraint. |
 | `agents.bindings` | `() -> HashMap<String, String>` | Returns `agent_id → channel_name` mapping |
 
+### Existing RPC Migration
+
+| Old Method | Action |
+|------------|--------|
+| `workspace.switchActive` | Delete — replaced by `channels.set_agent` |
+| `workspace.getActive` | Delete — replaced by `get_active_agent` in new resolution flow |
+
 ## Deletions
 
 | File/Module | Action |
 |-------------|--------|
 | `builtin_tools/agent_manage/switch.rs` | Delete file, unregister `agent_switch` tool |
 | `inbound_router/switch_intent.rs` | Delete entire file |
+| `inbound_router/command_handler.rs` — `/switch` command | Remove handler and command registration |
 | `agent_resolver.rs` — `AgentRouter` dependency and multi-layer fallback | Remove, replace with single-tier lookup |
 | `reply_emitter.rs` — `apply_agent_prefix()` | Delete function and all call sites |
+| `IntentDetector` — `SwitchAgent` variant | Remove variant; delete module if no other variants remain |
+| `AgentLifecycleEvent::Switched` | Remove variant |
+| `workspace.switchActive` / `workspace.getActive` RPC | Delete handlers |
 
 ## Modifications
 
 | Location | Change |
 |----------|--------|
-| `WorkspaceManager` (`manager_ops.rs`) | Simplify `get/set/clear_active_agent` signatures (drop `peer_id`), add 1:1 constraint, add `get_channel_for_agent()` |
+| `WorkspaceManager` (`manager_ops.rs`) | Simplify `get/set/clear_active_agent` signatures (drop `peer_id`), add 1:1 constraint in transaction, add `get_channel_for_agent()`, add migration to clean stale `peer_id` rows |
 | `agent_resolver.rs` | Single-tier: bound → agent, unbound → fixed message |
+| `agent_create` tool | Remove auto-switch-on-create behavior |
+| `agent_delete` tool | Add unbind-on-delete behavior |
+| `agent_list` tool | Show binding status instead of per-peer active status |
 | Panel Channel settings | Add agent dropdown with empty option, disable occupied agents |
 | Panel Agent list | Read-only display of bound channel |
 
 ## Behavioral Changes
 
 1. Bot replies no longer prefixed with agent name
-2. No agent switching via conversation (tool or natural language)
+2. No agent switching via conversation (tool, slash command, or natural language)
 3. Unbound channels return fixed prompt instead of falling back to default agent
 4. Agent binding is managed exclusively through Panel Channel settings
 5. 1:1 constraint: an agent can only be bound to one channel at a time; rebinding requires unbinding first
+6. Creating an agent no longer auto-binds it to the current channel
+7. Deleting an agent automatically unbinds it from its channel
