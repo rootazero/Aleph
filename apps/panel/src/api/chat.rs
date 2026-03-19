@@ -38,11 +38,15 @@ pub struct ChatApi;
 
 impl ChatApi {
     /// Send a message and start an agent run.
+    ///
+    /// `agent_id` — explicit target agent (bypasses channel binding resolution).
+    /// Extracted from the current session_key when available.
     pub async fn send(
         state: &DashboardState,
         message: &str,
         session_key: Option<&str>,
         attachments: Vec<ChatAttachment>,
+        agent_id: Option<&str>,
     ) -> Result<ChatSendResponse, String> {
         let attachments_json: Vec<Value> = attachments
             .iter()
@@ -59,6 +63,7 @@ impl ChatApi {
             "channel": "gui:chat",
             "stream": true,
             "attachments": attachments_json,
+            "agent_id": agent_id,
         });
         let result = state.rpc_call("chat.send", params).await?;
         serde_json::from_value(result).map_err(|e| e.to_string())

@@ -134,6 +134,7 @@ where
             params.session_key.as_deref(),
             params.channel.as_deref(),
             params.peer_id.as_deref(),
+            None, // agent_id: legacy path, no explicit agent
         )
         .await;
 
@@ -282,6 +283,7 @@ where
         .route(
             params.session_key.as_deref(),
             params.channel.as_deref(),
+            None,
             None,
         )
         .await;

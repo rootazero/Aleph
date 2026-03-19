@@ -330,6 +330,7 @@ impl AgentRouter {
         session_key: Option<&str>,
         channel: Option<&str>,
         peer_id: Option<&str>,
+        agent_id: Option<&str>,
     ) -> SessionKey {
         // 1. If explicit session key provided, parse and use it
         if let Some(key_str) = session_key {
@@ -338,13 +339,21 @@ impl AgentRouter {
             }
         }
 
-        // 2. Try to match channel/peer against bindings
-        let agent_id = self.resolve_agent(channel, peer_id).await;
+        // 2. If explicit agent_id provided (e.g., from panel UI), use it directly
+        if let Some(aid) = agent_id {
+            return match peer_id {
+                Some(pid) => SessionKey::peer(aid, pid),
+                None => SessionKey::main(aid),
+            };
+        }
 
-        // 3. Create appropriate session key
+        // 3. Try to match channel/peer against bindings
+        let resolved_agent = self.resolve_agent(channel, peer_id).await;
+
+        // 4. Create appropriate session key
         match peer_id {
-            Some(pid) => SessionKey::peer(&agent_id, pid),
-            None => SessionKey::main(&agent_id),
+            Some(pid) => SessionKey::peer(&resolved_agent, pid),
+            None => SessionKey::main(&resolved_agent),
         }
     }
 

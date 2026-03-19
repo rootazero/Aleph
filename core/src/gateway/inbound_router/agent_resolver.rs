@@ -36,7 +36,7 @@ impl InboundMessageRouter {
 
         // 2. Config-layer route bindings
         if let Some(router) = &self.agent_router {
-            let resolved = router.route(None, Some(channel), None).await;
+            let resolved = router.route(None, Some(channel), None, None).await;
             let resolved_id = resolved.agent_id();
             // Only use if it differs from the default (meaning a binding matched)
             if resolved_id != router.default_agent() {

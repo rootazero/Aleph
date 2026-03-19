@@ -44,6 +44,9 @@ pub struct SendParams {
     /// File attachments sent with the message
     #[serde(default)]
     pub attachments: Vec<Attachment>,
+    /// Explicit target agent ID (bypasses channel binding resolution)
+    #[serde(default)]
+    pub agent_id: Option<String>,
 }
 
 fn default_stream() -> bool {
@@ -141,6 +144,7 @@ pub async fn handle_send(
         stream: params.stream,
         thinking: params.thinking,
         attachments: params.attachments,
+        agent_id: params.agent_id,
     };
 
     // Start the run

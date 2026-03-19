@@ -56,6 +56,9 @@ pub struct AgentRunParams {
     /// File attachments sent with the message
     #[serde(default)]
     pub attachments: Vec<Attachment>,
+    /// Explicit target agent ID (bypasses channel binding resolution)
+    #[serde(default)]
+    pub agent_id: Option<String>,
 }
 
 fn default_stream() -> bool {
@@ -119,6 +122,7 @@ impl AgentRunManager {
                 params.session_key.as_deref(),
                 params.channel.as_deref(),
                 params.peer_id.as_deref(),
+                params.agent_id.as_deref(),
             )
             .await;
 
@@ -466,6 +470,7 @@ mod tests {
             stream: false,
             thinking: None,
             attachments: vec![],
+            agent_id: None,
         };
 
         let result = manager.start_run(params).await.unwrap();
@@ -487,6 +492,7 @@ mod tests {
             stream: false,
             thinking: None,
             attachments: vec![],
+            agent_id: None,
         };
 
         let result = manager.start_run(params).await.unwrap();
