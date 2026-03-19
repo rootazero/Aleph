@@ -94,12 +94,11 @@ fn test_create_agent() {
     let new_agent = agents.iter().find(|a| a.id == "researcher").unwrap();
     assert_eq!(new_agent.name, Some("Research Agent".to_string()));
 
-    // Verify workspace directory was created
-    let ws_dir = mgr.workspace_root.join("researcher");
-    assert!(ws_dir.exists());
+    // Verify agent identity directory was created with SOUL.md
+    let agent_dir = mgr.agents_root.join("researcher");
+    assert!(agent_dir.exists());
 
-    // Verify SOUL.md was created
-    let soul = fs::read_to_string(ws_dir.join("SOUL.md")).unwrap();
+    let soul = fs::read_to_string(agent_dir.join("SOUL.md")).unwrap();
     assert!(soul.contains("Research Agent"));
 
     // Verify TOML is valid by re-parsing
@@ -224,15 +223,13 @@ fn test_create_creates_both_directories() {
 
     mgr.create(def).unwrap();
 
-    // Workspace content dir
-    assert!(mgr.workspace_root.join("dual").join("SOUL.md").exists());
-    assert!(mgr.workspace_root.join("dual").join("MEMORY.md").exists());
-
-    // Agent state dir
+    // Agent identity dir has identity files + sessions
+    assert!(mgr.agents_root.join("dual").join("SOUL.md").exists());
+    assert!(mgr.agents_root.join("dual").join("MEMORY.md").exists());
     assert!(mgr.agents_root.join("dual").join("sessions").is_dir());
 
-    // sessions/ should NOT be in workspace
-    assert!(!mgr.workspace_root.join("dual").join("sessions").exists());
+    // Identity files should NOT be in workspace
+    assert!(!mgr.workspace_root.join("dual").join("SOUL.md").exists());
 }
 
 #[test]
@@ -241,12 +238,12 @@ fn test_delete_trashes_both_directories() {
 
     // Pre-create both dirs for coder
     fs::create_dir_all(mgr.workspace_root.join("coder")).unwrap();
+    fs::create_dir_all(mgr.agents_root.join("coder").join("sessions")).unwrap();
     fs::write(
-        mgr.workspace_root.join("coder").join("SOUL.md"),
+        mgr.agents_root.join("coder").join("SOUL.md"),
         "test",
     )
     .unwrap();
-    fs::create_dir_all(mgr.agents_root.join("coder").join("sessions")).unwrap();
 
     mgr.delete("coder").unwrap();
 
