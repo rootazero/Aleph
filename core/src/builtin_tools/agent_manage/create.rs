@@ -228,34 +228,43 @@ impl AlephTool for AgentCreateTool {
             )));
         }
 
-        // 3. Determine workspace path
+        // 3. Determine paths
+        let agents_state_root = dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("/tmp"))
+            .join(".aleph/agents");
+        let agent_state_dir = agents_state_root.join(&args.id);
+
         let workspaces_dir = dirs::home_dir()
             .unwrap_or_else(|| PathBuf::from("/tmp"))
             .join(".aleph/workspaces");
         let workspace_path = workspaces_dir.join(&args.id);
 
-        // 4. Initialize workspace directory
+        // 4. Initialize agent identity directory (SOUL.md, AGENTS.md, etc.)
         let display_name = args.name.as_deref().unwrap_or(&args.id);
-        initialize_workspace(&workspace_path, display_name)
+        initialize_workspace(&agent_state_dir, display_name)
             .map_err(|e| crate::error::AlephError::other(format!(
-                "Failed to initialize workspace for '{}': {}",
+                "Failed to initialize identity files for '{}': {}",
                 args.id, e
             )))?;
 
-        // Initialize agent state directory
-        let agents_state_root = dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("/tmp"))
-            .join(".aleph/agents");
-        let agent_state_dir = agents_state_root.join(&args.id);
+        // Initialize agent state directory (sessions/)
         crate::config::agent_resolver::initialize_agent_dir(&agent_state_dir)
             .map_err(|e| crate::error::AlephError::other(format!(
                 "Failed to initialize agent state dir for '{}': {}",
                 args.id, e
             )))?;
 
+        // Create workspace directory for tool output
+        std::fs::create_dir_all(&workspace_path).map_err(|e| {
+            crate::error::AlephError::other(format!(
+                "Failed to create workspace for '{}': {}",
+                args.id, e
+            ))
+        })?;
+
         // 5. Write custom system_prompt to AGENTS.md if provided
         if let Some(ref prompt) = args.system_prompt {
-            let agents_md = workspace_path.join("AGENTS.md");
+            let agents_md = agent_state_dir.join("AGENTS.md");
             let content = format!(
                 "# {} Workspace\n\n\
                  ## System Prompt\n\n\
@@ -272,7 +281,7 @@ impl AlephTool for AgentCreateTool {
         }
 
         // 6. Generate template files (non-fatal if write fails)
-        let soul_path = workspace_path.join("SOUL.md");
+        let soul_path = agent_state_dir.join("SOUL.md");
         if !soul_path.exists() {
             let soul_content = if let Some(ref prompt) = args.system_prompt {
                 prompt.clone()
@@ -295,17 +304,17 @@ impl AlephTool for AgentCreateTool {
             let _ = std::fs::write(&soul_path, soul_content);
         }
 
-        let identity_path = workspace_path.join("IDENTITY.md");
+        let identity_path = agent_state_dir.join("IDENTITY.md");
         if !identity_path.exists() {
             let identity_name = args.name.as_deref().unwrap_or(&args.id);
             let identity_content = format!(
-                "- Name: {}\n- Emoji: 🤖\n- Theme: professional\n",
+                "- Name: {}\n- Emoji: \u{1f916}\n- Theme: professional\n",
                 identity_name
             );
             let _ = std::fs::write(&identity_path, identity_content);
         }
 
-        let tools_path = workspace_path.join("TOOLS.md");
+        let tools_path = agent_state_dir.join("TOOLS.md");
         if !tools_path.exists() {
             let tools_content = "# Tool Notes\n\nRecord your tool usage preferences and notes here.\n";
             let _ = std::fs::write(&tools_path, tools_content);
