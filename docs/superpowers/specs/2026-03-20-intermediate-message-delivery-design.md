@@ -127,6 +127,10 @@ StreamEvent::ResponseChunk { content, is_final, is_intermediate, .. } => {
 }
 ```
 
+### 6. GatewayEventEmitter Instant Mode (event_emitter/impls.rs)
+
+The `GatewayEventEmitter` has its own instant-mode buffering that merges non-final `ResponseChunk` events. Intermediate chunks must bypass this buffer and be emitted immediately to SSE/WebSocket clients, otherwise they would be silently swallowed. Update the instant-mode guard to check `is_intermediate` before buffering.
+
 ## What Does NOT Change
 
 - **Session persistence** — Only the final assistant message is stored. Intermediate messages are fire-and-forget to the channel. No changes to `engine.rs` or `AgentInstance.add_message()`.
@@ -220,6 +224,10 @@ AgentLoop iteration 3 (final):
 | `core/src/gateway/event_emitter/types.rs` | Add `is_intermediate` field to `ResponseChunk` |
 | `core/src/gateway/execution_engine/run_loop.rs` | Implement `on_intermediate_text` in `StreamCallback` |
 | `core/src/gateway/reply_emitter.rs` | Handle `is_intermediate` in `emit()` |
+| `core/src/gateway/event_emitter/impls.rs` | Bypass instant-mode buffering for `is_intermediate` chunks |
+| `core/src/gateway/event_emitter/mod.rs` | Add `is_intermediate: false` to `emit_response_chunk()` helper |
+| `core/src/gateway/execution_engine/simple.rs` | Add `is_intermediate: false` to constructions |
+| `core/src/gateway/execution_engine/slash_command.rs` | Add `is_intermediate: false` to constructions |
 | `core/src/agent_loop/prompt_builder.rs` | Add intermediate message guidance to `BASE_BEHAVIOR` |
 | `core/src/config/agent_resolver.rs` | Add "Communication" section to `default_soul()` template |
 | `~/.aleph/agents/*/SOUL.md` (5 files) | Add "Communication" section to existing agents |
