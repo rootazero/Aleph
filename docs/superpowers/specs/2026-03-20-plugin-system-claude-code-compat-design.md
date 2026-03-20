@@ -119,16 +119,9 @@ When no manifest is found, scan default locations (aligned with Claude Code beha
 - `commands/*.md` → commands (legacy)
 - `hooks/hooks.json` → hooks
 - `.mcp.json` → MCP servers
-- `.lsp.json` → LSP servers
+- `.lsp.json` → LSP servers (deferred — parsed but ignored at runtime)
 
 Plugin name derived from directory name.
-
-### Environment Variables
-
-Available in skill/agent content, hook commands, MCP/LSP configs:
-
-- `${CLAUDE_PLUGIN_ROOT}` — absolute path to plugin installation directory
-- `${CLAUDE_PLUGIN_DATA}` — persistent data directory (`~/.aleph/plugins/data/{id}/`)
 
 ### AlephExtensions Struct Definition
 
@@ -140,18 +133,26 @@ pub struct AlephExtensions {
     pub runtime: AlephRuntime,
     /// WASM entry point (only for runtime = "wasm")
     pub entry: Option<PathBuf>,
-    /// Messaging channel integrations
+    /// Messaging channel integrations (maps to existing ChannelSection)
     pub channels: Vec<ChannelDef>,
-    /// Custom LLM provider backends
+    /// Custom LLM provider backends (maps to existing ProviderSection)
     pub providers: Vec<ProviderDef>,
-    /// Background services
+    /// Background services (maps to existing ServiceSection)
     pub services: Vec<ServiceDef>,
-    /// Permission grants (network, filesystem, shell, env)
+    /// Permission grants (maps to existing PermissionsSection)
     pub permissions: PluginPermissions,
     /// WASM-specific capabilities (HTTP, secrets, tool invocation, workspace)
     /// Preserved from current [capabilities] section for WASM plugins
     pub capabilities: Option<WasmCapabilities>,
 }
+
+// Type mapping to existing codebase:
+// - AlephRuntime: new enum { Mcp, Wasm, Static } (replaces PluginKind)
+// - ChannelDef = existing ChannelSection (manifest/aleph_plugin_toml/types.rs)
+// - ProviderDef = existing ProviderSection
+// - ServiceDef = existing ServiceSection
+// - PluginPermissions = existing PermissionsSection
+// - WasmCapabilities = existing WasmCapabilityConfig (runtime/wasm/)
 ```
 
 ### PluginManifest Unified Mapping
