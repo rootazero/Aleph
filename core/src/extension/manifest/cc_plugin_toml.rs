@@ -173,7 +173,7 @@ impl Default for AlephExtensionsToml {
 fn runtime_to_kind(runtime: &str) -> PluginKind {
     match runtime {
         "wasm" => PluginKind::Wasm,
-        "mcp" => PluginKind::NodeJs,
+        "mcp" => PluginKind::Mcp,
         "static" => PluginKind::Static,
         _ => PluginKind::Static,
     }
@@ -412,7 +412,7 @@ models = ["gpt-4", "claude-3"]
         let manifest = parse_cc_plugin_toml_content(content, &test_dir()).unwrap();
 
         assert_eq!(manifest.id, "channel-plugin");
-        assert_eq!(manifest.kind, PluginKind::NodeJs);
+        assert_eq!(manifest.kind, PluginKind::Mcp);
 
         let ext = manifest.aleph_extensions.unwrap();
         assert_eq!(ext.channels.len(), 1);
@@ -447,14 +447,14 @@ runtime = "wasm"
         let manifest = parse_cc_plugin_toml_content(content, &test_dir()).unwrap();
         assert_eq!(manifest.kind, PluginKind::Wasm);
 
-        // mcp → NodeJs
+        // mcp → Mcp
         let content = r#"
 name = "mcp-test"
 [aleph]
 runtime = "mcp"
 "#;
         let manifest = parse_cc_plugin_toml_content(content, &test_dir()).unwrap();
-        assert_eq!(manifest.kind, PluginKind::NodeJs);
+        assert_eq!(manifest.kind, PluginKind::Mcp);
 
         // static → Static
         let content = r#"
@@ -493,7 +493,7 @@ name = "mcp-defaults"
 runtime = "mcp"
 "#;
         let manifest = parse_cc_plugin_toml_content(content, &test_dir()).unwrap();
-        assert_eq!(manifest.entry, PathBuf::from("index.js"));
+        assert_eq!(manifest.entry, PathBuf::from(".mcp.json"));
     }
 
     #[test]
