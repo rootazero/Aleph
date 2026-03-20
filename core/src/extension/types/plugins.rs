@@ -198,6 +198,42 @@ impl LoadSummary {
 // Plugin Record
 // =============================================================================
 
+/// Installation scope for plugins.
+///
+/// Determines where a plugin is installed and its resolution priority
+/// when multiple scopes define the same plugin.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PluginScope {
+    /// Installed for the current user (~/.aleph/plugins/)
+    User,
+    /// Installed for the current project (.aleph/plugins/)
+    Project,
+    /// Installed locally for development (symlinked or path-based)
+    Local,
+}
+
+impl PluginScope {
+    /// Get the resolution priority of this scope (higher = takes precedence).
+    pub fn priority(&self) -> u8 {
+        match self {
+            Self::Local => 3,
+            Self::Project => 2,
+            Self::User => 1,
+        }
+    }
+}
+
+impl std::fmt::Display for PluginScope {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::User => write!(f, "user"),
+            Self::Project => write!(f, "project"),
+            Self::Local => write!(f, "local"),
+        }
+    }
+}
+
 /// Plugin record - comprehensive plugin information for registry tracking
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginRecord {
