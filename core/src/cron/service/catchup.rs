@@ -5,6 +5,7 @@ use std::sync::Arc;
 use tracing::info;
 
 use crate::cron::clock::Clock;
+use crate::cron::service::ops::recompute_next_run_full;
 use crate::cron::store::CronStore;
 
 /// Summary of what the catchup pass did.
@@ -54,6 +55,15 @@ pub async fn run_startup_catchup<C: Clock>(
                 report.stale_markers_cleared += 1;
                 changed = true;
             }
+        }
+    }
+
+    // Phase 1.5: Recompute next_run_at_ms for enabled jobs that have None
+    // (e.g. after manual DB edits or data migration)
+    for job in guard.jobs_mut().iter_mut() {
+        if job.enabled && job.state.next_run_at_ms.is_none() {
+            recompute_next_run_full(job, clock);
+            changed = true;
         }
     }
 
