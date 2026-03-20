@@ -173,7 +173,7 @@ impl HandlerRegistry {
         // Commands handlers
         registry.register("commands.list", commands::handle_list);
 
-        // Plugin handlers
+        // Plugin handlers (plural — legacy namespace, kept for backward compatibility)
         registry.register("plugins.list", plugins::handle_list);
         registry.register("plugins.install", plugins::handle_install);
         registry.register("plugins.installFromZip", plugins::handle_install_from_zip);
@@ -184,6 +184,18 @@ impl HandlerRegistry {
         registry.register("plugins.unload", plugins::handle_unload);
         registry.register("plugins.callTool", plugins::handle_call_tool);
         registry.register("plugins.executeCommand", plugins::handle_execute_command);
+
+        // Plugin handlers (singular — canonical CC-compatible namespace)
+        registry.register("plugin.list", plugins::handle_list);
+        registry.register("plugin.install", plugins::handle_install);
+        registry.register("plugin.installFromZip", plugins::handle_install_from_zip);
+        registry.register("plugin.uninstall", plugins::handle_uninstall);
+        registry.register("plugin.enable", plugins::handle_enable);
+        registry.register("plugin.disable", plugins::handle_disable);
+        registry.register("plugin.load", plugins::handle_load);
+        registry.register("plugin.unload", plugins::handle_unload);
+        registry.register("plugin.callTool", plugins::handle_call_tool);
+        registry.register("plugin.executeCommand", plugins::handle_execute_command);
 
         // Service handlers
         registry.register("services.start", services::handle_start);
