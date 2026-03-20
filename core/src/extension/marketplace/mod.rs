@@ -8,7 +8,7 @@ pub mod manifest;
 pub mod types;
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use github_source::sync_github_marketplace;
 use local_source::resolve_local_marketplace;
@@ -129,7 +129,7 @@ impl MarketplaceManager {
         let all = self.all_marketplaces();
         let mut errors: Vec<String> = Vec::new();
 
-        for (name, _) in &all {
+        for name in all.keys() {
             if let Err(e) = self.update(name) {
                 errors.push(format!("{name}: {e}"));
             }
@@ -213,7 +213,7 @@ fn builtin_config() -> MarketplaceConfig {
 ///
 /// The `source` field uses `./`-prefixed paths (e.g. `"./plugins/diagnostics"`).
 /// Strip the leading `./` (or `.`) and join with the marketplace root.
-fn resolve_plugin_path(marketplace_dir: &PathBuf, source: &str) -> PathBuf {
+fn resolve_plugin_path(marketplace_dir: &Path, source: &str) -> PathBuf {
     // Strip leading "./" or "." to get a plain relative component.
     let relative = source
         .strip_prefix("./")
