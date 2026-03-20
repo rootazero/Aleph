@@ -23,6 +23,7 @@
 //!     (unified hooks)                    (Markdown parsing)
 //! ```
 
+pub mod component_id;
 pub mod config;
 pub mod discovery;
 pub mod hooks;
@@ -47,6 +48,7 @@ mod template;
 mod types;
 pub mod watcher;
 
+pub use component_id::ComponentId;
 pub use channel_manager::{ChannelHandle, ChannelManager};
 pub use error::*;
 pub use http_handler::{match_path, PluginHttpHandler};
