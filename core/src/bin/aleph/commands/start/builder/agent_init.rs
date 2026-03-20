@@ -446,10 +446,13 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         {
             let sc_config = app_config.policies.memory.session_compactor.clone();
             if sc_config.enabled {
-                let compactor = alephcore::memory::session_compactor::SessionCompactor::new(
+                let mut compactor = alephcore::memory::session_compactor::SessionCompactor::new(
                     memory_db.clone(),
                     sc_config,
                 );
+                if let Some(ref prov) = default_prov {
+                    compactor = compactor.with_provider(prov.clone());
+                }
                 let compactor = std::sync::Arc::new(compactor);
                 engine = engine.with_session_compactor(compactor);
                 if !daemon {
