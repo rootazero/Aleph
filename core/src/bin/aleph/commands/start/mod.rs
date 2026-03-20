@@ -384,10 +384,10 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // Wrap app config in Arc<RwLock> early so agent handlers can read output_mode dynamically
     let app_config = Arc::new(tokio::sync::RwLock::new(loaded_app_config));
 
-    // Initialize WorkspaceManager early so agent management tools can use it
-    let workspace_manager: Option<Arc<alephcore::gateway::WorkspaceManager>> = {
-        use alephcore::gateway::WorkspaceManager;
-        match WorkspaceManager::with_defaults() {
+    // Initialize AgentEnvStore early so agent management tools can use it
+    let workspace_manager: Option<Arc<alephcore::gateway::AgentEnvStore>> = {
+        use alephcore::gateway::AgentEnvStore;
+        match AgentEnvStore::with_defaults() {
             Ok(wm) => {
                 let wm = Arc::new(wm);
                 if !args.daemon {

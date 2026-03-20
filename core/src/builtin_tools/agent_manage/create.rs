@@ -11,7 +11,7 @@ use crate::config::agent_resolver::initialize_agent_identity;
 use crate::config::types::agents_def::AgentDefinition;
 use crate::error::Result;
 use crate::gateway::agent_instance::{AgentInstance, AgentInstanceConfig, AgentRegistry};
-use crate::gateway::workspace::WorkspaceManager;
+use crate::gateway::agent_env::AgentEnvStore;
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
 
@@ -126,10 +126,6 @@ pub struct AgentCreateArgs {
     #[serde(default)]
     #[schemars(skip)]
     pub __channel: String,
-    /// Injected by registry — session peer_id (internal, hidden from LLM schema)
-    #[serde(default)]
-    #[schemars(skip)]
-    pub __peer_id: String,
 }
 
 /// Output from agent creation.
@@ -152,14 +148,14 @@ pub struct AgentCreateOutput {
 pub struct AgentCreateTool {
     registry: Arc<AgentRegistry>,
     #[allow(dead_code)]
-    workspace_mgr: Arc<WorkspaceManager>,
+    workspace_mgr: Arc<AgentEnvStore>,
     agent_manager: Option<Arc<AgentManager>>,
 }
 
 impl AgentCreateTool {
     pub fn new(
         registry: Arc<AgentRegistry>,
-        workspace_mgr: Arc<WorkspaceManager>,
+        workspace_mgr: Arc<AgentEnvStore>,
     ) -> Self {
         Self {
             registry,
@@ -378,17 +374,17 @@ impl AlephTool for AgentCreateTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gateway::workspace::WorkspaceManagerConfig;
+    use crate::gateway::agent_env::AgentEnvStoreConfig;
     use tempfile::tempdir;
 
-    fn test_workspace_mgr() -> Arc<WorkspaceManager> {
+    fn test_workspace_mgr() -> Arc<AgentEnvStore> {
         let temp = tempdir().unwrap();
-        let config = WorkspaceManagerConfig {
+        let config = AgentEnvStoreConfig {
             db_path: temp.into_path().join("test.db"),
             default_profile: "default".to_string(),
             archive_after_days: 0,
         };
-        Arc::new(WorkspaceManager::new(config).unwrap())
+        Arc::new(AgentEnvStore::new(config).unwrap())
     }
 
     #[test]

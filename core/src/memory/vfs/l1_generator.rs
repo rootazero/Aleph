@@ -11,7 +11,7 @@ use crate::memory::namespace::NamespaceScope;
 use crate::memory::EmbeddingProvider;
 use crate::memory::store::{MemoryBackend, MemoryStore};
 use crate::memory::vfs::compute_directory_hash;
-use crate::gateway::workspace::WorkspaceFilter;
+use crate::gateway::agent_env::AgentEnvFilter;
 use crate::memory::{FactSource, MemoryFact, MemoryLayer, SearchFilter};
 use crate::providers::AiProvider;
 use crate::providers::adapter::RequestPayload;
@@ -131,7 +131,7 @@ impl L1Generator {
     async fn get_l2_facts(&self, path: &str) -> Result<Vec<MemoryFact>, AlephError> {
         let filter = SearchFilter::new()
             .with_valid_only()
-            .with_workspace(WorkspaceFilter::Single("default".to_string()))
+            .with_agent_filter(AgentEnvFilter::Single("default".to_string()))
             .with_layer(MemoryLayer::L2Detail);
 
         let facts = self

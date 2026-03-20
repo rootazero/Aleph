@@ -5,7 +5,7 @@
 
 use crate::memory::context::{FactType, MemoryCategory, MemoryFact, MemoryLayer, MemoryScope, MemoryTier};
 use crate::memory::namespace::NamespaceScope;
-use crate::gateway::workspace::WorkspaceFilter;
+use crate::gateway::agent_env::AgentEnvFilter;
 
 // ---------------------------------------------------------------------------
 // SQL String Escaping — prevent injection in LanceDB/DataFusion filter strings
@@ -46,8 +46,8 @@ pub fn escape_sql_string(s: &str) -> String {
 pub struct SearchFilter {
     /// Restrict to a specific namespace scope.
     pub namespace: Option<NamespaceScope>,
-    /// Restrict to a specific workspace.
-    pub workspace: Option<WorkspaceFilter>,
+    /// Restrict to a specific agent.
+    pub agent_filter: Option<AgentEnvFilter>,
     /// Restrict to a specific fact type.
     pub fact_type: Option<FactType>,
     /// Restrict to a specific memory layer.
@@ -84,7 +84,7 @@ impl SearchFilter {
     pub fn valid_only(namespace: Option<NamespaceScope>) -> Self {
         Self {
             namespace,
-            workspace: None,
+            agent_filter: None,
             is_valid: Some(true),
             ..Default::default()
         }
@@ -98,9 +98,9 @@ impl SearchFilter {
         self
     }
 
-    /// Set workspace filter.
-    pub fn with_workspace(mut self, ws: WorkspaceFilter) -> Self {
-        self.workspace = Some(ws);
+    /// Set agent filter.
+    pub fn with_agent_filter(mut self, ws: AgentEnvFilter) -> Self {
+        self.agent_filter = Some(ws);
         self
     }
 
@@ -202,9 +202,9 @@ impl SearchFilter {
             clauses.push(format!("namespace = '{}'", escape_sql_string(&val)));
         }
 
-        if let Some(ref ws) = self.workspace {
+        if let Some(ref ws) = self.agent_filter {
             match ws {
-                WorkspaceFilter::All => {} // no filter needed
+                AgentEnvFilter::All => {} // no filter needed
                 _ => clauses.push(ws.to_sql_filter()),
             }
         }
@@ -295,8 +295,8 @@ pub struct MemoryFilter {
     pub window_title: Option<String>,
     /// Restrict to a specific namespace scope.
     pub namespace: Option<NamespaceScope>,
-    /// Restrict to a specific workspace.
-    pub workspace: Option<WorkspaceFilter>,
+    /// Restrict to a specific agent.
+    pub agent_filter: Option<AgentEnvFilter>,
     /// Only memories created at or after this Unix timestamp (seconds).
     pub after_timestamp: Option<i64>,
     /// Filter to memories from specific sessions.
@@ -332,9 +332,9 @@ impl MemoryFilter {
             clauses.push(format!("namespace = '{}'", escape_sql_string(&val)));
         }
 
-        if let Some(ref ws) = self.workspace {
+        if let Some(ref ws) = self.agent_filter {
             match ws {
-                WorkspaceFilter::All => {} // no filter needed
+                AgentEnvFilter::All => {} // no filter needed
                 _ => clauses.push(ws.to_sql_filter()),
             }
         }
@@ -434,34 +434,34 @@ mod tests {
     }
 
     #[test]
-    fn search_filter_workspace_single() {
+    fn search_filter_agent_single() {
         let f = SearchFilter::new()
-            .with_workspace(WorkspaceFilter::Single("crypto".into()));
+            .with_agent_filter(AgentEnvFilter::Single("crypto".into()));
         let sql = f.to_lance_filter().unwrap();
         assert_eq!(sql, "agent = 'crypto'");
     }
 
     #[test]
-    fn search_filter_workspace_multiple() {
+    fn search_filter_agent_multiple() {
         let f = SearchFilter::new()
-            .with_workspace(WorkspaceFilter::Multiple(vec!["a".into(), "b".into()]));
+            .with_agent_filter(AgentEnvFilter::Multiple(vec!["a".into(), "b".into()]));
         let sql = f.to_lance_filter().unwrap();
         assert_eq!(sql, "agent IN ('a', 'b')");
     }
 
     #[test]
-    fn search_filter_workspace_all_no_filter() {
+    fn search_filter_agent_all_no_filter() {
         let f = SearchFilter::new()
-            .with_workspace(WorkspaceFilter::All);
-        // All means no workspace filtering, so no SQL generated
+            .with_agent_filter(AgentEnvFilter::All);
+        // All means no agent filtering, so no SQL generated
         assert!(f.to_lance_filter().is_none());
     }
 
     #[test]
-    fn search_filter_combined_namespace_workspace() {
+    fn search_filter_combined_namespace_agent() {
         let f = SearchFilter::new()
             .with_namespace(NamespaceScope::Owner)
-            .with_workspace(WorkspaceFilter::Single("crypto".into()))
+            .with_agent_filter(AgentEnvFilter::Single("crypto".into()))
             .with_valid_only();
         let sql = f.to_lance_filter().unwrap();
         assert!(sql.contains("agent = 'crypto'"));
@@ -481,9 +481,9 @@ mod tests {
     }
 
     #[test]
-    fn memory_filter_with_workspace() {
+    fn memory_filter_with_agent() {
         let f = MemoryFilter {
-            workspace: Some(WorkspaceFilter::Single("novel".into())),
+            agent_filter: Some(AgentEnvFilter::Single("novel".into())),
             ..Default::default()
         };
         let sql = f.to_lance_filter().unwrap();

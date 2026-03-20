@@ -2,7 +2,7 @@
 //!
 //! Organized by module with shared common steps.
 
-mod agent_loop_steps;
+// TODO: removed — module deleted: mod agent_loop_steps;
 mod common;
 mod config_steps;
 mod daemon_steps;
@@ -12,9 +12,8 @@ mod extension_steps;
 mod gateway_steps;
 mod logging_steps;
 mod memory_steps;
-mod message_builder_steps;
-mod models_steps;
-mod poe_steps;
+// TODO: removed — module deleted: mod message_builder_steps;
+// TODO: removed — module deleted: mod models_steps;
 mod protocol_steps;
 mod scheduler_steps;
 mod scripting_steps;

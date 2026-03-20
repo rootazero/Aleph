@@ -549,22 +549,13 @@ async fn given_memory_config_threshold(w: &mut AlephWorld, threshold: f32) {
 }
 
 #[given(expr = "a context anchor for {string} with document {string}")]
-async fn given_context_anchor(w: &mut AlephWorld, app: String, doc: String) {
+async fn given_context_anchor(w: &mut AlephWorld, app: String, _doc: String) {
     let ctx = w.memory.get_or_insert_with(MemoryContext::default);
-    ctx.set_context(&app, &doc);
+    ctx.set_context(&app);
 }
 
-#[given("a prompt augmenter")]
-async fn given_prompt_augmenter(w: &mut AlephWorld) {
-    let ctx = w.memory.get_or_insert_with(MemoryContext::default);
-    ctx.init_augmenter();
-}
-
-#[given(expr = "a prompt augmenter with max {int} memories")]
-async fn given_prompt_augmenter_max(w: &mut AlephWorld, max: i32) {
-    let ctx = w.memory.get_or_insert_with(MemoryContext::default);
-    ctx.init_augmenter_with_config(max as usize, false);
-}
+// TODO: removed — PromptAugmenter type deleted:
+// given_prompt_augmenter and given_prompt_augmenter_max steps removed
 
 // --- When Steps ---
 
@@ -628,37 +619,13 @@ async fn when_retrieve_memories(w: &mut AlephWorld, query: String) {
 }
 
 #[when(expr = "I switch to context anchor for {string} with document {string}")]
-async fn when_switch_context(w: &mut AlephWorld, app: String, doc: String) {
+async fn when_switch_context(w: &mut AlephWorld, app: String, _doc: String) {
     let ctx = w.memory.get_or_insert_with(MemoryContext::default);
-    ctx.set_context(&app, &doc);
+    ctx.set_context(&app);
 }
 
-#[when(expr = "I augment prompt {string} with memories and query {string}")]
-async fn when_augment_prompt(w: &mut AlephWorld, base_prompt: String, query: String) {
-    let ctx = w.memory.as_mut().expect("Memory context not initialized");
-    let augmenter = ctx.augmenter.as_ref().expect("Augmenter not initialized");
-
-    let augmented = augmenter.augment_prompt(&base_prompt, &ctx.memories, &query);
-    ctx.augmented_prompt = Some(augmented);
-}
-
-#[when(expr = "I augment prompt {string} with no memories and query {string}")]
-async fn when_augment_prompt_no_memories(w: &mut AlephWorld, base_prompt: String, query: String) {
-    let ctx = w.memory.as_mut().expect("Memory context not initialized");
-    let augmenter = ctx.augmenter.as_ref().expect("Augmenter not initialized");
-
-    let augmented = augmenter.augment_prompt(&base_prompt, &[], &query);
-    ctx.augmented_prompt = Some(augmented);
-}
-
-#[when("I get the memory summary")]
-async fn when_get_memory_summary(w: &mut AlephWorld) {
-    let ctx = w.memory.as_mut().expect("Memory context not initialized");
-    let augmenter = ctx.augmenter.as_ref().expect("Augmenter not initialized");
-
-    let summary = augmenter.get_memory_summary(&ctx.memories);
-    ctx.memory_summary = Some(summary);
-}
+// TODO: removed — PromptAugmenter type deleted:
+// when_augment_prompt, when_augment_prompt_no_memories, when_get_memory_summary steps removed
 
 #[when("I get database stats")]
 async fn when_get_db_stats(w: &mut AlephWorld) {
@@ -1042,64 +1009,9 @@ async fn then_memories_sorted_by_similarity(w: &mut AlephWorld) {
     }
 }
 
-#[then(expr = "the augmented prompt should contain {string}")]
-async fn then_augmented_contains(w: &mut AlephWorld, expected: String) {
-    let ctx = w.memory.as_ref().expect("Memory context not initialized");
-    let augmented = ctx
-        .augmented_prompt
-        .as_ref()
-        .expect("Augmented prompt not set");
-    assert!(
-        augmented.contains(&expected),
-        "Augmented prompt should contain '{}'",
-        expected
-    );
-}
-
-#[then(expr = "the augmented prompt should not contain {string}")]
-async fn then_augmented_not_contains(w: &mut AlephWorld, not_expected: String) {
-    let ctx = w.memory.as_ref().expect("Memory context not initialized");
-    let augmented = ctx
-        .augmented_prompt
-        .as_ref()
-        .expect("Augmented prompt not set");
-    assert!(
-        !augmented.contains(&not_expected),
-        "Augmented prompt should not contain '{}'",
-        not_expected
-    );
-}
-
-#[then(expr = "the augmented prompt should contain at most {int} memory entries")]
-async fn then_augmented_max_entries(w: &mut AlephWorld, max: i32) {
-    let ctx = w.memory.as_ref().expect("Memory context not initialized");
-    let augmented = ctx
-        .augmented_prompt
-        .as_ref()
-        .expect("Augmented prompt not set");
-
-    // Count "Question" occurrences as memory entries
-    let count = augmented.matches("Question").count();
-    assert!(
-        count <= max as usize,
-        "Expected at most {} memory entries, got {}",
-        max,
-        count
-    );
-}
-
-#[then(expr = "the memory summary should contain {string} or {string}")]
-async fn then_summary_contains_or(w: &mut AlephWorld, expected1: String, expected2: String) {
-    let ctx = w.memory.as_ref().expect("Memory context not initialized");
-    let summary = ctx.memory_summary.as_ref().expect("Summary not set");
-    assert!(
-        summary.contains(&expected1) || summary.contains(&expected2),
-        "Summary '{}' should contain '{}' or '{}'",
-        summary,
-        expected1,
-        expected2
-    );
-}
+// TODO: removed — PromptAugmenter type deleted:
+// then_augmented_contains, then_augmented_not_contains, then_augmented_max_entries,
+// then_summary_contains_or steps removed
 
 #[then(expr = "the database should have {int} total memories")]
 async fn then_db_has_n_memories(w: &mut AlephWorld, expected: i32) {

@@ -29,7 +29,7 @@ use super::handlers::group_chat::SharedOrchestrator;
 
 use super::pairing_store::PairingStore;
 use super::routing_config::RoutingConfig;
-use super::workspace::WorkspaceManager;
+use super::agent_env::AgentEnvStore;
 use crate::command::CommandParser;
 use crate::group_chat::GroupChatExecutor;
 
@@ -76,7 +76,7 @@ pub struct InboundMessageRouter {
     /// Execution adapter for running agents
     pub(super) execution_adapter: Option<Arc<dyn ExecutionAdapter>>,
     /// Workspace manager for channel-level active agent lookup
-    pub(super) workspace_manager: Option<Arc<WorkspaceManager>>,
+    pub(super) workspace_manager: Option<Arc<AgentEnvStore>>,
     /// Inbound message deduplication tracker
     dedup_tracker: Mutex<InboundDedupTracker>,
     /// Group chat orchestrator
@@ -140,7 +140,7 @@ impl InboundMessageRouter {
     }
 
     /// Set the workspace manager for channel-level active agent lookup
-    pub fn with_workspace_manager(mut self, manager: Arc<WorkspaceManager>) -> Self {
+    pub fn with_workspace_manager(mut self, manager: Arc<AgentEnvStore>) -> Self {
         self.workspace_manager = Some(manager);
         self
     }
@@ -242,7 +242,7 @@ impl InboundMessageRouter {
         );
 
         // Resolve agent ID from 1:1 channel binding (single-tier)
-        let agent_id = match self.resolve_agent_id_async(channel_id, msg.sender_id.as_str()).await {
+        let agent_id = match self.resolve_agent_id_async(channel_id).await {
             Some(id) => id,
             None => {
                 // Unbound channel — send fixed message

@@ -157,35 +157,9 @@ async fn given_skill_generator(w: &mut AlephWorld) {
     ctx.temp_dir = Some(temp_dir);
 }
 
-#[given(expr = "a suggestion with name {string} and description {string} and confidence {float}")]
-async fn given_suggestion(w: &mut AlephWorld, name: String, description: String, confidence: f32) {
-    let ctx = w.skills.get_or_insert_with(SkillsContext::default);
-    ctx.suggestion = Some(ctx.create_test_suggestion("test-pattern", &name, &description, confidence));
-}
-
-#[given(expr = "the suggestion has pattern_id {string}")]
-async fn given_suggestion_pattern_id(w: &mut AlephWorld, pattern_id: String) {
-    let ctx = w.skills.as_mut().expect("Skills context not initialized");
-    if let Some(ref mut suggestion) = ctx.suggestion {
-        suggestion.pattern_id = pattern_id;
-    }
-}
-
-#[given(expr = "the suggestion has sample contexts {string}")]
-async fn given_suggestion_sample_contexts(w: &mut AlephWorld, contexts_str: String) {
-    let ctx = w.skills.as_mut().expect("Skills context not initialized");
-    if let Some(ref mut suggestion) = ctx.suggestion {
-        suggestion.sample_contexts = contexts_str.split('|').map(String::from).collect();
-    }
-}
-
-#[given(expr = "the suggestion has instructions preview {string}")]
-async fn given_suggestion_instructions(w: &mut AlephWorld, instructions: String) {
-    let ctx = w.skills.as_mut().expect("Skills context not initialized");
-    if let Some(ref mut suggestion) = ctx.suggestion {
-        suggestion.instructions_preview = instructions;
-    }
-}
+// TODO: removed — SolidificationSuggestion type deleted (skill_evolution module):
+// given_suggestion, given_suggestion_pattern_id, given_suggestion_sample_contexts,
+// given_suggestion_instructions steps removed
 
 // =============================================================================
 // Given Steps - Hot Reload
@@ -416,18 +390,8 @@ async fn when_execute_skill(w: &mut AlephWorld) {
 // When Steps - Skill Generator
 // =============================================================================
 
-#[when("I generate the skill")]
-async fn when_generate_skill(w: &mut AlephWorld) {
-    let ctx = w.skills.as_mut().expect("Skills context not initialized");
-    let generator = ctx.generator.as_ref().expect("Generator not initialized");
-    let suggestion = ctx.suggestion.as_ref().expect("Suggestion not set");
-
-    let result = generator.generate(suggestion);
-    if let Ok(path) = result {
-        ctx.generated_skill_path = Some(path.clone());
-        ctx.generated_content = Some(std::fs::read_to_string(&path).unwrap());
-    }
-}
+// TODO: removed — SolidificationSuggestion type deleted:
+// when_generate_skill step removed
 
 #[when("I load the generated skill")]
 async fn when_load_generated_skill(w: &mut AlephWorld) {

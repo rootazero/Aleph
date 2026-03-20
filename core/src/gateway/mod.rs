@@ -76,7 +76,7 @@ pub mod lane;
 pub mod webhook_receiver;
 pub mod webhooks;
 pub mod run_event_bus;
-pub mod workspace;
+pub mod agent_env;
 pub mod workspace_loader;
 pub mod state_version;
 pub mod hello_snapshot;
@@ -142,9 +142,9 @@ pub use run_event_bus::{
     RunEvent, RunStatus as RunEventStatus, RunEndResult,
     WaitError, QueueError, ActiveRunHandle, wait_for_run_end,
 };
-pub use workspace::{
-    Workspace, WorkspaceManager, WorkspaceManagerConfig, WorkspaceError,
-    CacheState, ActiveWorkspace, WorkspaceFilter, WorkspaceContext, DEFAULT_WORKSPACE,
+pub use agent_env::{
+    AgentEnv, AgentEnvStore, AgentEnvStoreConfig, AgentEnvError,
+    CacheState, ActiveAgentEnv, AgentEnvFilter, AgentEnvContext, DEFAULT_AGENT,
 };
 
 // Property-based tests

@@ -1,0 +1,427 @@
+//! AgentEnv CRUD, channel active agent, and maintenance operations
+
+use chrono::{DateTime, Utc};
+use rusqlite::{params, OptionalExtension};
+use std::collections::HashMap;
+use tracing::{debug, info};
+
+use super::{CacheState, AgentEnv, AgentEnvError, AgentEnvStore};
+
+impl AgentEnvStore {
+    // =========================================================================
+    // AgentEnv CRUD
+    // =========================================================================
+
+    /// Create a new agent environment
+    pub async fn create(
+        &self,
+        id: &str,
+        profile: &str,
+        description: Option<&str>,
+    ) -> Result<AgentEnv, AgentEnvError> {
+        // Validate profile exists
+        if self.get_profile(profile).is_none() {
+            return Err(AgentEnvError::ProfileNotFound(profile.to_string()));
+        }
+
+        let now = Utc::now();
+        let env = AgentEnv {
+            id: id.to_string(),
+            profile: profile.to_string(),
+            created_at: now,
+            last_active_at: now,
+            cache_state: CacheState::None,
+            env_vars: HashMap::new(),
+            description: description.map(String::from),
+            name: id.to_string(),
+            icon: None,
+            is_archived: false,
+            decay_rate: None,
+            permanent_fact_types: Vec::new(),
+            default_model: None,
+            system_prompt_override: None,
+            allowed_tools: Vec::new(),
+        };
+
+        let conn = self.conn.lock().map_err(|e| {
+            AgentEnvError::Database(format!("Lock error: {}", e))
+        })?;
+
+        conn.execute(
+            "INSERT INTO agent_envs (id, profile, created_at, last_active_at, description, name)
+             VALUES (?, ?, ?, ?, ?, ?)",
+            params![
+                &env.id,
+                &env.profile,
+                now.timestamp(),
+                now.timestamp(),
+                &env.description,
+                &env.name,
+            ],
+        )
+        .map_err(|e| {
+            if e.to_string().contains("UNIQUE constraint") {
+                AgentEnvError::AlreadyExists(id.to_string())
+            } else {
+                AgentEnvError::Database(format!("Insert failed: {}", e))
+            }
+        })?;
+
+        info!("Created agent env '{}' with profile '{}'", id, profile);
+
+        Ok(env)
+    }
+
+    /// Get an agent environment by ID
+    pub async fn get(&self, id: &str) -> Result<Option<AgentEnv>, AgentEnvError> {
+        let conn = self.conn.lock().map_err(|e| {
+            AgentEnvError::Database(format!("Lock error: {}", e))
+        })?;
+
+        let result = conn.query_row(
+            "SELECT id, profile, created_at, last_active_at, cache_state, env_vars, description,
+                    name, icon, is_archived, decay_rate, permanent_fact_types,
+                    default_model, system_prompt_override, allowed_tools
+             FROM agent_envs WHERE id = ? AND archived = 0",
+            params![id],
+            |row| {
+                Self::row_to_agent_env(row)
+            },
+        );
+
+        match result {
+            Ok(ws) => Ok(Some(ws)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(AgentEnvError::Database(e.to_string())),
+        }
+    }
+
+    /// List all agent environments
+    pub async fn list(&self, include_archived: bool) -> Result<Vec<AgentEnv>, AgentEnvError> {
+        let conn = self.conn.lock().map_err(|e| {
+            AgentEnvError::Database(format!("Lock error: {}", e))
+        })?;
+
+        let query = if include_archived {
+            "SELECT id, profile, created_at, last_active_at, cache_state, env_vars, description,
+                    name, icon, is_archived, decay_rate, permanent_fact_types,
+                    default_model, system_prompt_override, allowed_tools
+             FROM agent_envs ORDER BY last_active_at DESC"
+        } else {
+            "SELECT id, profile, created_at, last_active_at, cache_state, env_vars, description,
+                    name, icon, is_archived, decay_rate, permanent_fact_types,
+                    default_model, system_prompt_override, allowed_tools
+             FROM agent_envs WHERE archived = 0 ORDER BY last_active_at DESC"
+        };
+
+        let mut stmt = conn.prepare(query)
+            .map_err(|e| AgentEnvError::Database(e.to_string()))?;
+
+        let envs = stmt
+            .query_map([], Self::row_to_agent_env)
+            .map_err(|e| AgentEnvError::Database(e.to_string()))?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        Ok(envs)
+    }
+
+    /// Update agent environment metadata (name, description, icon)
+    ///
+    /// Only non-None fields are applied. Uses COALESCE to preserve existing
+    /// values for fields not provided. Returns the updated agent environment,
+    /// or None if the agent environment was not found.
+    pub async fn update(
+        &self,
+        id: &str,
+        name: Option<&str>,
+        description: Option<&str>,
+        icon: Option<&str>,
+    ) -> Result<Option<AgentEnv>, AgentEnvError> {
+        if id == "global" {
+            return Err(AgentEnvError::CannotModifyGlobal);
+        }
+
+        // Scope the MutexGuard so it is dropped before any .await
+        let affected = {
+            let conn = self.conn.lock().map_err(|e| {
+                AgentEnvError::Database(format!("Lock error: {}", e))
+            })?;
+
+            let now = Utc::now().timestamp();
+            let name_owned = name.map(|s| s.to_string());
+            let desc_owned = description.map(|s| s.to_string());
+            let icon_owned = icon.map(|s| s.to_string());
+
+            conn.execute(
+                "UPDATE agent_envs SET
+                    name = COALESCE(?1, name),
+                    description = COALESCE(?2, description),
+                    icon = COALESCE(?3, icon),
+                    last_active_at = ?4
+                 WHERE id = ?5",
+                params![name_owned, desc_owned, icon_owned, now, id],
+            )
+            .map_err(|e| AgentEnvError::Database(format!("Update failed: {}", e)))?
+        };
+
+        if affected == 0 {
+            return Ok(None);
+        }
+
+        debug!("Updated agent env '{}' metadata", id);
+        self.get(id).await
+    }
+
+    /// Update last active timestamp
+    pub async fn touch(&self, id: &str) -> Result<(), AgentEnvError> {
+        let conn = self.conn.lock().map_err(|e| {
+            AgentEnvError::Database(format!("Lock error: {}", e))
+        })?;
+
+        conn.execute(
+            "UPDATE agent_envs SET last_active_at = ? WHERE id = ?",
+            params![Utc::now().timestamp(), id],
+        )
+        .map_err(|e| AgentEnvError::Database(e.to_string()))?;
+
+        Ok(())
+    }
+
+    /// Update cache state
+    pub async fn update_cache_state(
+        &self,
+        id: &str,
+        cache_state: &CacheState,
+    ) -> Result<(), AgentEnvError> {
+        let conn = self.conn.lock().map_err(|e| {
+            AgentEnvError::Database(format!("Lock error: {}", e))
+        })?;
+
+        let cache_json = serde_json::to_string(cache_state)
+            .map_err(|e| AgentEnvError::Database(format!("Serialize error: {}", e)))?;
+
+        conn.execute(
+            "UPDATE agent_envs SET cache_state = ?, last_active_at = ? WHERE id = ?",
+            params![cache_json, Utc::now().timestamp(), id],
+        )
+        .map_err(|e| AgentEnvError::Database(e.to_string()))?;
+
+        debug!("Updated cache state for agent '{}'", id);
+
+        Ok(())
+    }
+
+    /// Archive an agent environment (soft delete)
+    pub async fn archive(&self, id: &str) -> Result<bool, AgentEnvError> {
+        if id == "global" {
+            return Err(AgentEnvError::CannotModifyGlobal);
+        }
+
+        let conn = self.conn.lock().map_err(|e| {
+            AgentEnvError::Database(format!("Lock error: {}", e))
+        })?;
+
+        let affected = conn
+            .execute("UPDATE agent_envs SET archived = 1 WHERE id = ?", params![id])
+            .map_err(|e| AgentEnvError::Database(e.to_string()))?;
+
+        if affected > 0 {
+            info!("Archived agent env '{}'", id);
+        }
+
+        Ok(affected > 0)
+    }
+
+    /// Delete an agent environment permanently
+    pub async fn delete(&self, id: &str) -> Result<bool, AgentEnvError> {
+        if id == "global" {
+            return Err(AgentEnvError::CannotModifyGlobal);
+        }
+
+        let conn = self.conn.lock().map_err(|e| {
+            AgentEnvError::Database(format!("Lock error: {}", e))
+        })?;
+
+        // Remove any channel_active_agent references pointing to this agent (agent_id = agent_id in 1:1 model)
+        conn.execute(
+            "DELETE FROM channel_active_agent WHERE agent_id = ?",
+            params![id],
+        )
+        .ok();
+
+        let affected = conn
+            .execute("DELETE FROM agent_envs WHERE id = ?", params![id])
+            .map_err(|e| AgentEnvError::Database(e.to_string()))?;
+
+        if affected > 0 {
+            info!("Deleted agent env '{}'", id);
+        }
+
+        Ok(affected > 0)
+    }
+
+    // =========================================================================
+    // Channel Active Agent
+    // =========================================================================
+
+    /// Set the active agent for a channel+peer combination.
+    ///
+    /// Bind an agent to a channel (many-to-one).
+    ///
+    /// Multiple channels can be bound to the same agent, but each channel
+    /// can only be bound to one agent. Re-binding a channel replaces the
+    /// previous binding.
+    pub fn set_active_agent(&self, channel: &str, agent_id: &str) -> Result<(), AgentEnvError> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let now = Utc::now().timestamp();
+
+        // Clear existing binding for this channel before inserting
+        conn.execute(
+            "DELETE FROM channel_active_agent WHERE channel = ?1",
+            params![channel],
+        ).map_err(|e| AgentEnvError::Database(e.to_string()))?;
+
+        conn.execute(
+            "INSERT INTO channel_active_agent (channel, agent_id, updated_at)
+             VALUES (?1, ?2, ?3)",
+            params![channel, agent_id, now],
+        ).map_err(|e| AgentEnvError::Database(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Clear the agent binding for a channel.
+    ///
+    /// This restores the channel to an unbound state. Called when unbinding
+    /// an agent or when deleting an agent that is currently bound.
+    pub fn clear_active_agent(&self, channel: &str) -> Result<(), AgentEnvError> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.execute(
+            "DELETE FROM channel_active_agent WHERE channel = ?1",
+            params![channel],
+        ).map_err(|e| AgentEnvError::Database(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Get the active agent for a channel.
+    ///
+    /// Returns the agent_id bound to this channel, or None if unbound.
+    pub fn get_active_agent(&self, channel: &str) -> Result<Option<String>, AgentEnvError> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let mut stmt = conn.prepare(
+            "SELECT agent_id FROM channel_active_agent WHERE channel = ?1"
+        ).map_err(|e| AgentEnvError::Database(e.to_string()))?;
+        let result = stmt.query_row(params![channel], |row| row.get::<_, String>(0));
+        match result {
+            Ok(id) => Ok(Some(id)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(AgentEnvError::Database(e.to_string())),
+        }
+    }
+
+    /// Reverse lookup: which channel is this agent bound to?
+    pub fn get_channel_for_agent(&self, agent_id: &str) -> Result<Option<String>, AgentEnvError> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let mut stmt = conn.prepare(
+            "SELECT channel FROM channel_active_agent WHERE agent_id = ?1 LIMIT 1"
+        ).map_err(|e| AgentEnvError::Database(e.to_string()))?;
+        let result = stmt.query_row(params![agent_id], |row| row.get::<_, String>(0));
+        match result {
+            Ok(ch) => Ok(Some(ch)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(AgentEnvError::Database(e.to_string())),
+        }
+    }
+
+    /// Get all agent→channel bindings (for Panel agents.bindings RPC).
+    pub fn get_all_agent_bindings(&self) -> Result<std::collections::HashMap<String, String>, AgentEnvError> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let mut stmt = conn.prepare(
+            "SELECT DISTINCT agent_id, channel FROM channel_active_agent"
+        ).map_err(|e| AgentEnvError::Database(e.to_string()))?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        }).map_err(|e| AgentEnvError::Database(e.to_string()))?;
+        let mut map = std::collections::HashMap::new();
+        for row in rows {
+            let (agent_id, channel) = row.map_err(|e| AgentEnvError::Database(e.to_string()))?;
+            map.insert(agent_id, channel);
+        }
+        Ok(map)
+    }
+
+    // =========================================================================
+    // Maintenance
+    // =========================================================================
+
+    /// Archive inactive agent environments
+    pub async fn archive_inactive(&self) -> Result<usize, AgentEnvError> {
+        if self.config.archive_after_days == 0 {
+            return Ok(0);
+        }
+
+        let threshold = Utc::now().timestamp()
+            - (self.config.archive_after_days as i64 * 24 * 60 * 60);
+
+        let conn = self.conn.lock().map_err(|e| {
+            AgentEnvError::Database(format!("Lock error: {}", e))
+        })?;
+
+        let affected = conn
+            .execute(
+                "UPDATE agent_envs SET archived = 1
+                 WHERE last_active_at < ? AND id != 'global' AND archived = 0",
+                params![threshold],
+            )
+            .map_err(|e| AgentEnvError::Database(e.to_string()))?;
+
+        if affected > 0 {
+            info!("Archived {} inactive agent environments", affected);
+        }
+
+        Ok(affected)
+    }
+
+    // =========================================================================
+    // Internal Helpers
+    // =========================================================================
+
+    /// Parse an agent environment row from SQLite
+    fn row_to_agent_env(row: &rusqlite::Row) -> rusqlite::Result<AgentEnv> {
+        let cache_state_json: Option<String> = row.get(4)?;
+        let env_vars_json: Option<String> = row.get(5)?;
+        let permanent_fact_types_json: Option<String> = row.get(11)?;
+        let allowed_tools_json: Option<String> = row.get(14)?;
+        let ws_id: String = row.get(0)?;
+        let name: String = row.get::<_, Option<String>>(7)?
+            .unwrap_or_else(|| ws_id.clone());
+
+        Ok(AgentEnv {
+            id: ws_id,
+            profile: row.get(1)?,
+            created_at: DateTime::from_timestamp(row.get::<_, i64>(2)?, 0)
+                .unwrap_or_else(Utc::now),
+            last_active_at: DateTime::from_timestamp(row.get::<_, i64>(3)?, 0)
+                .unwrap_or_else(Utc::now),
+            cache_state: cache_state_json
+                .and_then(|j| serde_json::from_str(&j).ok())
+                .unwrap_or_default(),
+            env_vars: env_vars_json
+                .and_then(|j| serde_json::from_str(&j).ok())
+                .unwrap_or_default(),
+            description: row.get(6)?,
+            name,
+            icon: row.get(8)?,
+            is_archived: row.get::<_, i32>(9).unwrap_or(0) != 0,
+            decay_rate: row.get(10)?,
+            permanent_fact_types: permanent_fact_types_json
+                .and_then(|j| serde_json::from_str(&j).ok())
+                .unwrap_or_default(),
+            default_model: row.get(12)?,
+            system_prompt_override: row.get(13)?,
+            allowed_tools: allowed_tools_json
+                .and_then(|j| serde_json::from_str(&j).ok())
+                .unwrap_or_default(),
+        })
+    }
+}

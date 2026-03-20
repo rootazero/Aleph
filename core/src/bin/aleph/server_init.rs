@@ -57,7 +57,7 @@ pub async fn handle_run_with_engine<P, R>(
     router: Arc<AgentRouter>,
     agent_registry: Arc<AgentRegistry>,
     app_config: Arc<tokio::sync::RwLock<alephcore::Config>>,
-    workspace_manager: Option<Arc<alephcore::gateway::WorkspaceManager>>,
+    workspace_manager: Option<Arc<alephcore::gateway::AgentEnvStore>>,
 ) -> alephcore::gateway::JsonRpcResponse
 where
     P: alephcore::thinker::ProviderRegistry + 'static,
@@ -222,7 +222,7 @@ pub async fn handle_chat_send_with_engine<P, R>(
     router: Arc<AgentRouter>,
     agent_registry: Arc<AgentRegistry>,
     app_config: Arc<tokio::sync::RwLock<alephcore::Config>>,
-    workspace_manager: Option<Arc<alephcore::gateway::WorkspaceManager>>,
+    workspace_manager: Option<Arc<alephcore::gateway::AgentEnvStore>>,
     provider_registry: Arc<P>,
     session_manager: Arc<alephcore::gateway::SessionManager>,
 ) -> alephcore::gateway::JsonRpcResponse

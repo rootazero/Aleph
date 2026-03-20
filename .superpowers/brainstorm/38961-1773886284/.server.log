@@ -1,0 +1,4 @@
+{"type":"server-started","port":60031,"host":"127.0.0.1","url_host":"localhost","url":"http://localhost:60031","screen_dir":"/Users/zouguojun/Workspace/Aleph/.superpowers/brainstorm/38961-1773886284"}
+{"type":"screen-added","file":"/Users/zouguojun/Workspace/Aleph/.superpowers/brainstorm/38961-1773886284/interaction-pattern.html"}
+{"type":"screen-added","file":"/Users/zouguojun/Workspace/Aleph/.superpowers/brainstorm/38961-1773886284/waiting.html"}
+{"type":"server-stopped","reason":"idle timeout"}

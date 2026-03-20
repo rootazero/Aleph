@@ -26,7 +26,7 @@ use alephcore::gateway::{
     SessionManager,
     ChannelRegistry,
     ConfigWatcher, ConfigWatcherConfig, ConfigEvent,
-    WorkspaceManager,
+    AgentEnvStore,
 };
 use alephcore::memory::store::MemoryBackend;
 
@@ -435,7 +435,7 @@ pub(in crate::commands::start) fn init_memory_context_provider(
 
 pub(in crate::commands::start) fn register_workspace_handlers(
     server: &mut GatewayServer,
-    workspace_manager: &Arc<WorkspaceManager>,
+    workspace_manager: &Arc<AgentEnvStore>,
     _memory_db: &MemoryBackend,
     daemon: bool,
 ) {

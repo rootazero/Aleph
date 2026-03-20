@@ -4,7 +4,7 @@ use cucumber::World;
 use tempfile::TempDir;
 use rhai::{Engine, AST};
 
-mod agent_loop_ctx;
+// TODO: removed — module deleted: mod agent_loop_ctx;
 mod config_ctx;
 mod daemon_ctx;
 mod dispatcher_ctx;
@@ -13,9 +13,8 @@ mod extension_ctx;
 mod gateway_ctx;
 mod logging_ctx;
 mod memory_ctx;
-mod message_builder_ctx;
-mod models_ctx;
-mod poe_ctx;
+// TODO: removed — module deleted: mod message_builder_ctx;
+// TODO: removed — module deleted: mod models_ctx;
 mod protocol_ctx;
 mod scheduler_ctx;
 mod security_ctx;
@@ -24,7 +23,7 @@ mod subagent_ctx;
 mod thinker_ctx;
 mod tools_ctx;
 
-pub use agent_loop_ctx::{AgentLoopContext, MockDecision};
+// TODO: removed — module deleted: pub use agent_loop_ctx::{AgentLoopContext, MockDecision};
 pub use config_ctx::ConfigContext;
 pub use daemon_ctx::DaemonContext;
 pub use dispatcher_ctx::DispatcherContext;
@@ -33,9 +32,8 @@ pub use extension_ctx::ExtensionContext;
 pub use gateway_ctx::{GatewayContext, TestEmitter};
 pub use logging_ctx::LoggingContext;
 pub use memory_ctx::MemoryContext;
-pub use message_builder_ctx::MessageBuilderContext;
-pub use models_ctx::ModelsContext;
-pub use poe_ctx::{PoeContext, PoeConstraint, PoeOutcomeType};
+// TODO: removed — module deleted: pub use message_builder_ctx::MessageBuilderContext;
+// TODO: removed — module deleted: pub use models_ctx::ModelsContext;
 pub use protocol_ctx::ProtocolContext;
 pub use scheduler_ctx::SchedulerContext;
 pub use security_ctx::{SecurityContext, SkillExecutionResult};
@@ -73,15 +71,14 @@ pub struct AlephWorld {
     pub gateway: Option<GatewayContext>,
     pub logging: Option<LoggingContext>,
     pub memory: Option<MemoryContext>,
-    pub message_builder: Option<MessageBuilderContext>,
-    pub agent_loop: Option<AgentLoopContext>,
+    // TODO: removed — module deleted: pub message_builder: Option<MessageBuilderContext>,
+    // TODO: removed — module deleted: pub agent_loop: Option<AgentLoopContext>,
     pub extension: Option<ExtensionContext>,
-    pub poe: Option<PoeContext>,
     pub scheduler: Option<SchedulerContext>,
     pub security: Option<SecurityContext>,
     pub thinker: Option<ThinkerContext>,
     pub tools: Option<ToolsContext>,
-    pub models: Option<ModelsContext>,
+    // TODO: removed — module deleted: pub models: Option<ModelsContext>,
     pub protocol: Option<ProtocolContext>,
     pub skills: Option<SkillsContext>,
     pub subagent: Option<SubagentContext>,

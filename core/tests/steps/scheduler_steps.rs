@@ -370,7 +370,7 @@ async fn when_complete_run_in_lane(w: &mut AlephWorld, run_id: String, lane_str:
         .as_ref()
         .expect("LaneScheduler not created");
     let lane = SchedulerContext::parse_lane(&lane_str);
-    scheduler.on_run_complete(&run_id, lane).await;
+    scheduler.on_run_complete(&run_id, lane, None).await;
 }
 
 #[when("I wait for anti-starvation conditions")]
@@ -494,7 +494,7 @@ async fn then_scheduled_run_should_be_from_lane(
         .scheduler
         .as_ref()
         .expect("Scheduler context not initialized");
-    let (run_id, lane) = ctx.last_scheduled.as_ref().expect("No run was scheduled");
+    let (run_id, lane, _guard) = ctx.last_scheduled.as_ref().expect("No run was scheduled");
     let expected_lane = SchedulerContext::parse_lane(&expected_lane_str);
     assert_eq!(
         run_id, &expected_run_id,
@@ -517,7 +517,7 @@ async fn then_scheduled_run_should_be_from_lane_only(
         .scheduler
         .as_ref()
         .expect("Scheduler context not initialized");
-    let (_run_id, lane) = ctx.last_scheduled.as_ref().expect("No run was scheduled");
+    let (_run_id, lane, _guard) = ctx.last_scheduled.as_ref().expect("No run was scheduled");
     let expected_lane = SchedulerContext::parse_lane(&expected_lane_str);
     assert_eq!(
         lane, &expected_lane,

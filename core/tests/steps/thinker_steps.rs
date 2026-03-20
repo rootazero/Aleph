@@ -1,11 +1,13 @@
 //! Step definitions for thinker prompt builder features
 
 use crate::world::{AlephWorld, ThinkerContext};
-use alephcore::agent_loop::{Observation, StepSummary, ToolInfo};
+use alephcore::agent_loop::ToolInfo;
+// TODO: removed — types deleted: Observation, StepSummary
 use alephcore::thinker::{
     Capability, ContextAggregator, DisableReason, InteractionManifest, InteractionParadigm,
-    MessageRole, PromptConfig, SecurityContext,
+    PromptConfig, SecurityContext,
 };
+// TODO: removed — types deleted: MessageRole
 use cucumber::{gherkin::Step, given, then, when};
 use std::path::PathBuf;
 
@@ -65,36 +67,8 @@ async fn given_tools(w: &mut AlephWorld, step: &Step) {
     }
 }
 
-#[given(expr = "an observation with history {string}")]
-async fn given_observation_with_history(w: &mut AlephWorld, history: String) {
-    let ctx = w.thinker.get_or_insert_with(ThinkerContext::new);
-    ctx.observation = Some(Observation {
-        history_summary: history,
-        recent_steps: vec![],
-        available_tools: vec![],
-        attachments: vec![],
-        current_step: 0,
-        total_tokens: 0,
-    });
-}
-
-#[given(expr = "a recent step with action {string} and result {string}")]
-async fn given_recent_step(w: &mut AlephWorld, action: String, result: String) {
-    let ctx = w.thinker.get_or_insert_with(ThinkerContext::new);
-    if let Some(obs) = ctx.observation.as_mut() {
-        obs.recent_steps.push(StepSummary {
-            step_id: obs.recent_steps.len(),
-            reasoning: "Need to search".to_string(),
-            action_type: action,
-            action_args: r#"{"query": "rust"}"#.to_string(),
-            result_summary: result.clone(),
-            result_output: r#"{"results": 10, "items": []}"#.to_string(),
-            success: true,
-        });
-        obs.current_step = obs.recent_steps.len();
-        obs.total_tokens = 500;
-    }
-}
+// TODO: removed — Observation/StepSummary types deleted:
+// given_observation_with_history and given_recent_step steps removed
 
 // ═══════════════════════════════════════════════════════════════════════════
 // When Steps
@@ -112,11 +86,8 @@ async fn when_build_cached_system_prompt(w: &mut AlephWorld) {
     ctx.build_cached_prompt();
 }
 
-#[when(expr = "I build messages for query {string}")]
-async fn when_build_messages(w: &mut AlephWorld, query: String) {
-    let ctx = w.thinker.get_or_insert_with(ThinkerContext::new);
-    ctx.build_messages(&query);
-}
+// TODO: removed — Message/Observation types deleted:
+// when_build_messages step removed
 
 #[when("I build a second cached prompt with tools:")]
 async fn when_build_second_cached_with_tools(w: &mut AlephWorld, step: &Step) {
@@ -133,8 +104,7 @@ async fn when_build_second_cached_with_tools(w: &mut AlephWorld, step: &Step) {
                 second_tools.push(ToolInfo {
                     name: row[0].clone(),
                     description: row[1].clone(),
-                    parameters_schema: row[2].clone(),
-                    category: None,
+                    parameters_schema: serde_json::from_str(&row[2]).ok(),
                 });
             }
         }
@@ -189,45 +159,8 @@ async fn then_section_appears_before(w: &mut AlephWorld, first: String, second: 
     );
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Then Steps - Messages
-// ═══════════════════════════════════════════════════════════════════════════
-
-#[then(expr = "messages should have at least {int} entries")]
-async fn then_messages_have_at_least(w: &mut AlephWorld, count: i32) {
-    let ctx = w.thinker.as_ref().expect("Thinker context not initialized");
-    let actual = ctx.messages_count();
-    assert!(
-        actual >= count as usize,
-        "Expected at least {} messages, got {}",
-        count,
-        actual
-    );
-}
-
-#[then("the first message should be from User")]
-async fn then_first_message_from_user(w: &mut AlephWorld) {
-    let ctx = w.thinker.as_ref().expect("Thinker context not initialized");
-    let first = ctx.first_message().expect("No messages built");
-    assert_eq!(
-        first.role,
-        MessageRole::User,
-        "Expected first message to be from User, got {:?}",
-        first.role
-    );
-}
-
-#[then(expr = "the first message should contain {string}")]
-async fn then_first_message_contains(w: &mut AlephWorld, expected: String) {
-    let ctx = w.thinker.as_ref().expect("Thinker context not initialized");
-    let first = ctx.first_message().expect("No messages built");
-    assert!(
-        first.content.contains(&expected),
-        "Expected first message to contain '{}', got: {}",
-        expected,
-        first.content
-    );
-}
+// TODO: removed — Message/MessageRole types deleted:
+// Messages assertion steps removed (messages_have_at_least, first_message_from_user, first_message_contains)
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Then Steps - Cached Parts
@@ -850,133 +783,8 @@ async fn given_builder_with_thinking_transparency(w: &mut AlephWorld) {
 // CoT Transparency - When Steps
 // ═══════════════════════════════════════════════════════════════════════════
 
-#[when("I parse the structured thinking")]
-async fn when_parse_structured_thinking(w: &mut AlephWorld) {
-    let ctx = w.thinker.get_or_insert_with(ThinkerContext::new);
-    ctx.parse_structured_thinking();
-}
-
-#[when("I parse the decision")]
-async fn when_parse_decision(w: &mut AlephWorld) {
-    let ctx = w.thinker.get_or_insert_with(ThinkerContext::new);
-    // Parse structured thinking from reasoning text
-    ctx.parse_structured_thinking();
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// CoT Transparency - Then Steps
-// ═══════════════════════════════════════════════════════════════════════════
-
-#[then(expr = "the first step should be type {string}")]
-async fn then_first_step_type(w: &mut AlephWorld, expected_type: String) {
-    let ctx = w.thinker.as_ref().expect("No thinker context");
-    let thinking = ctx.structured_thinking.as_ref().expect("No structured thinking");
-    let steps = thinking.steps.as_ref().expect("No steps");
-    let first_step = steps.first().expect("No steps");
-    let actual_type = format!("{:?}", first_step.step_type);
-    assert!(
-        actual_type.contains(&expected_type),
-        "Expected first step type '{}', got '{}'",
-        expected_type,
-        actual_type
-    );
-}
-
-#[then(expr = "step {int} should be type {string}")]
-async fn then_step_n_type(w: &mut AlephWorld, step_num: i32, expected_type: String) {
-    let ctx = w.thinker.as_ref().expect("No thinker context");
-    let thinking = ctx.structured_thinking.as_ref().expect("No structured thinking");
-    let steps = thinking.steps.as_ref().expect("No steps");
-    let step = steps.get((step_num - 1) as usize)
-        .unwrap_or_else(|| panic!("No step {}", step_num));
-    let actual_type = format!("{:?}", step.step_type);
-    assert!(
-        actual_type.contains(&expected_type),
-        "Expected step {} type '{}', got '{}'",
-        step_num,
-        expected_type,
-        actual_type
-    );
-}
-
-#[then(expr = "the confidence should be {string}")]
-async fn then_confidence(w: &mut AlephWorld, expected: String) {
-    let ctx = w.thinker.as_ref().expect("No thinker context");
-    let thinking = ctx.structured_thinking.as_ref().expect("No structured thinking");
-    let actual = format!("{:?}", thinking.confidence);
-    assert!(
-        actual.contains(&expected),
-        "Expected confidence '{}', got '{}'",
-        expected,
-        actual
-    );
-}
-
-#[then(expr = "the alternatives should contain {string}")]
-async fn then_alternatives_contain(w: &mut AlephWorld, expected: String) {
-    let ctx = w.thinker.as_ref().expect("No thinker context");
-    let thinking = ctx.structured_thinking.as_ref().expect("No structured thinking");
-    assert!(
-        thinking.alternatives_considered.iter().any(|a| a.contains(&expected)),
-        "Expected alternatives to contain '{}', got {:?}",
-        expected,
-        thinking.alternatives_considered
-    );
-}
-
-#[then(expr = "the uncertainties should contain {string}")]
-async fn then_uncertainties_contain(w: &mut AlephWorld, expected: String) {
-    let ctx = w.thinker.as_ref().expect("No thinker context");
-    let thinking = ctx.structured_thinking.as_ref().expect("No structured thinking");
-    assert!(
-        thinking.uncertainties.iter().any(|u| u.contains(&expected)),
-        "Expected uncertainties to contain '{}', got {:?}",
-        expected,
-        thinking.uncertainties
-    );
-}
-
-#[then(expr = "the structured thinking should have {int} steps")]
-async fn then_structured_thinking_step_count(w: &mut AlephWorld, count: i32) {
-    let ctx = w.thinker.as_ref().expect("No thinker context");
-    let thinking = ctx.structured_thinking.as_ref().expect("No structured thinking");
-    let steps = thinking.steps.as_ref().expect("No steps");
-    assert_eq!(
-        steps.len(),
-        count as usize,
-        "Expected {} steps, got {}",
-        count,
-        steps.len()
-    );
-}
-
-#[then("the decision should have structured thinking")]
-async fn then_decision_has_structured(w: &mut AlephWorld) {
-    let ctx = w.thinker.as_ref().expect("No thinker context");
-    assert!(
-        ctx.structured_thinking.is_some(),
-        "Expected decision to have structured thinking"
-    );
-}
-
-#[then("the decision should not have structured thinking")]
-async fn then_decision_no_structured(w: &mut AlephWorld) {
-    let ctx = w.thinker.as_ref().expect("No thinker context");
-    assert!(
-        ctx.structured_thinking.is_none() || ctx.reasoning_text.is_none(),
-        "Expected decision to not have structured thinking"
-    );
-}
-
-#[then(expr = "the structured thinking should have at least {int} step")]
-async fn then_structured_thinking_at_least_steps(w: &mut AlephWorld, count: i32) {
-    let ctx = w.thinker.as_ref().expect("No thinker context");
-    let thinking = ctx.structured_thinking.as_ref().expect("No structured thinking");
-    let steps = thinking.steps.as_ref().expect("No steps");
-    assert!(
-        steps.len() >= count as usize,
-        "Expected at least {} steps, got {}",
-        count,
-        steps.len()
-    );
-}
+// TODO: removed — StructuredThinking/ThinkingParser types deleted:
+// All CoT Transparency steps removed (parse_structured_thinking, parse_decision,
+// first_step_type, step_n_type, confidence, alternatives_contain,
+// uncertainties_contain, structured_thinking_step_count,
+// decision_has_structured, decision_no_structured, structured_thinking_at_least_steps)

@@ -196,7 +196,7 @@ impl SessionCompactor {
         };
         let fresh_tail: Vec<UnifiedMessage> = raw_messages[tail_start..]
             .iter()
-            .map(|m| session_message_to_unified(m))
+            .map(session_message_to_unified)
             .collect();
 
         // Step 3: assemble — summaries first, then fresh tail

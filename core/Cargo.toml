@@ -230,5 +230,9 @@ name = "approval_performance"
 harness = false
 
 [[test]]
+name = "cron_probe"
+required-features = ["test-helpers"]
+
+[[test]]
 name = "cucumber"
 harness = false

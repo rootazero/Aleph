@@ -9,7 +9,7 @@ use crate::error::Result;
 use crate::gateway::agent_instance::AgentRegistry;
 use crate::gateway::agent_lifecycle::AgentLifecycleEvent;
 use crate::gateway::event_bus::GatewayEventBus;
-use crate::gateway::workspace::WorkspaceManager;
+use crate::gateway::agent_env::AgentEnvStore;
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
 
@@ -26,10 +26,6 @@ pub struct AgentDeleteArgs {
     #[serde(default)]
     #[schemars(skip)]
     pub __channel: String,
-    /// Injected by registry — session peer_id (internal, hidden from LLM schema)
-    #[serde(default)]
-    #[schemars(skip)]
-    pub __peer_id: String,
 }
 
 /// Output from agent deletion.
@@ -52,14 +48,14 @@ pub struct AgentDeleteOutput {
 #[derive(Clone)]
 pub struct AgentDeleteTool {
     registry: Arc<AgentRegistry>,
-    workspace_mgr: Arc<WorkspaceManager>,
+    workspace_mgr: Arc<AgentEnvStore>,
     event_bus: Option<Arc<GatewayEventBus>>,
 }
 
 impl AgentDeleteTool {
     pub fn new(
         registry: Arc<AgentRegistry>,
-        workspace_mgr: Arc<WorkspaceManager>,
+        workspace_mgr: Arc<AgentEnvStore>,
         event_bus: Option<Arc<GatewayEventBus>>,
     ) -> Self {
         Self {
@@ -108,10 +104,9 @@ impl AlephTool for AgentDeleteTool {
             )));
         }
 
-        // 3. Unbind agent from its channel if bound (peer_id injected by registry snapshot)
-        let peer_id = args.__peer_id.clone();
+        // 3. Unbind agent from its channel if bound
         if let Ok(Some(bound_channel)) = self.workspace_mgr.get_channel_for_agent(&args.agent_id) {
-            let _ = self.workspace_mgr.clear_active_agent(&bound_channel, &peer_id);
+            let _ = self.workspace_mgr.clear_active_agent(&bound_channel);
         }
 
         // 4. Remove from registry
@@ -169,18 +164,18 @@ impl AlephTool for AgentDeleteTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gateway::workspace::WorkspaceManagerConfig;
+    use crate::gateway::agent_env::AgentEnvStoreConfig;
     use crate::tools::AlephTool;
     use tempfile::tempdir;
 
-    fn test_workspace_mgr() -> Arc<WorkspaceManager> {
+    fn test_workspace_mgr() -> Arc<AgentEnvStore> {
         let temp = tempdir().unwrap();
-        let config = WorkspaceManagerConfig {
+        let config = AgentEnvStoreConfig {
             db_path: temp.into_path().join("test.db"),
             default_profile: "default".to_string(),
             archive_after_days: 0,
         };
-        Arc::new(WorkspaceManager::new(config).unwrap())
+        Arc::new(AgentEnvStore::new(config).unwrap())
     }
 
     #[test]

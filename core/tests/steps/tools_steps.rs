@@ -16,7 +16,6 @@ use alephcore::builtin_tools::meta_tools::{
     GetToolSchemaArgs, GetToolSchemaTool, ListToolsArgs, ListToolsTool,
 };
 use alephcore::builtin_tools::search::SearchTool;
-#[cfg(feature = "gateway")]
 use alephcore::builtin_tools::sessions::{
     SessionsListArgs, SessionsListTool, SessionsSendArgs, SessionsSendStatus, SessionsSendTool,
 };

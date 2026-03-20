@@ -8,6 +8,7 @@ async fn p7_01_stale_link_in_whitelist() {
     let mut h = LinkAclHarness::new();
     h.register_link("tg-1").await;
     h.register_agent("main", Some(vec!["deleted-bot".into(), "tg-1".into()])).await;
+    h.bind("tg-1", "main");
     h.send_message("tg-1", "hello").await;
     h.assert_no_denial();
 }
@@ -18,6 +19,7 @@ async fn p7_02_empty_link_id() {
     let mut h = LinkAclHarness::new();
     h.register_link("").await;
     h.register_agent("main", Some(vec!["tg-1".into()])).await;
+    h.bind("", "main");
     h.send_message("", "hello").await;
     // Empty link id not in whitelist → should be denied
     h.assert_denied();
@@ -29,6 +31,7 @@ async fn p7_03_duplicate_entries() {
     let mut h = LinkAclHarness::new();
     h.register_link("tg-1").await;
     h.register_agent("main", Some(vec!["tg-1".into(), "tg-1".into()])).await;
+    h.bind("tg-1", "main");
     h.send_message("tg-1", "hello").await;
     h.assert_no_denial();
 }
@@ -40,6 +43,7 @@ async fn p7_04_empty_agent_id() {
     h.register_link("tg-1").await;
     h.register_agent("main", None).await;
     h.register_agent("", Some(vec!["tg-1".into()])).await;
+    h.bind("tg-1", "main");
     // Try switching to empty-id agent
     h.send_message("tg-1", "/switch ").await;
     // Should not panic — either "not found" or handled gracefully
@@ -53,11 +57,7 @@ async fn p7_05_message_routing_then_acl() {
     h.register_link("tg-1").await;
     h.register_agent("main", None).await;
     h.register_agent("restricted", Some(vec!["dc-1".into()])).await;
-
-    // Set active agent to restricted via workspace_manager
-    h.workspace_manager
-        .set_active_agent("tg-1", "user-1", "restricted")
-        .unwrap();
+    h.bind("tg-1", "restricted");
 
     // Now message from tg-1 resolves to "restricted" which denies tg-1
     h.send_message("tg-1", "should be denied by ACL").await;
@@ -65,12 +65,14 @@ async fn p7_05_message_routing_then_acl() {
 }
 
 #[tokio::test]
+#[ignore = "/switch command removed — needs rewrite for new agent binding model"]
 async fn p7_06_switch_denied_acl_overrides_routing() {
     // AgentRouter would route to agent-X, but ACL denies → denied
     let mut h = LinkAclHarness::new();
     h.register_link("tg-1").await;
     h.register_agent("main", None).await;
     h.register_agent("target", Some(vec!["dc-only".into()])).await;
+    h.bind("tg-1", "main");
 
     h.send_message("tg-1", "/switch target").await;
     h.assert_denied();
@@ -82,6 +84,7 @@ async fn p7_07_concurrent_denials() {
     let mut h = LinkAclHarness::new();
     h.register_link("tg-1").await;
     h.register_agent("main", Some(vec!["dc-1".into()])).await;
+    h.bind("tg-1", "main");
 
     // Send 5 messages rapidly
     for i in 0..5 {

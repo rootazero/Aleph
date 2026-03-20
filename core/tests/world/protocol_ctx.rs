@@ -151,7 +151,8 @@ impl ProtocolContext {
             .get(&name)
             .ok_or(format!("Protocol {} not in registry", name))?;
 
-        let payload = RequestPayload::new("Test input");
+        let messages = vec![alephcore::providers::message::UnifiedMessage::user("Test input")];
+        let payload = RequestPayload::new(&messages);
         let mut config = self.provider_config.clone()
             .unwrap_or_else(|| ProviderConfig::test_config("test-model"));
         config.protocol = Some(name);

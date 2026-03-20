@@ -143,19 +143,19 @@ impl FactRetrieval {
         query: &str,
         workspace: &str,
     ) -> Result<RetrievalResult, AlephError> {
-        use crate::gateway::workspace::WorkspaceFilter;
-        self.retrieve_with_filter(query, WorkspaceFilter::Single(workspace.to_string()))
+        use crate::gateway::agent_env::AgentEnvFilter;
+        self.retrieve_with_filter(query, AgentEnvFilter::Single(workspace.to_string()))
             .await
     }
 
-    /// Retrieve facts across workspaces using a WorkspaceFilter.
+    /// Retrieve facts across workspaces using a AgentEnvFilter.
     ///
     /// Supports Single, Multiple, and All workspace scopes. This is the
     /// generalized form of `retrieve_in_workspace()`.
     pub async fn retrieve_with_filter(
         &self,
         query: &str,
-        filter: crate::gateway::workspace::WorkspaceFilter,
+        filter: crate::gateway::agent_env::AgentEnvFilter,
     ) -> Result<RetrievalResult, AlephError> {
         let query_embedding = self
             .embedder
@@ -172,12 +172,12 @@ impl FactRetrieval {
     async fn retrieve_with_embedding(
         &self,
         query_embedding: &[f32],
-        filter: crate::gateway::workspace::WorkspaceFilter,
+        filter: crate::gateway::agent_env::AgentEnvFilter,
     ) -> Result<RetrievalResult, AlephError> {
         // Build search filter with workspace scope
         let dim_hint = query_embedding.len() as u32;
         let search_filter = SearchFilter::valid_only(Some(NamespaceScope::Owner))
-            .with_workspace(filter.clone());
+            .with_agent_filter(filter.clone());
         let scored_facts = self
             .database
             .vector_search(query_embedding, dim_hint, &search_filter, self.config.max_facts as usize)
@@ -198,7 +198,7 @@ impl FactRetrieval {
             let remaining = self.config.max_raw_fallback;
             if remaining > 0 {
                 let mem_filter = MemoryFilter {
-                    workspace: Some(filter),
+                    agent_filter: Some(filter),
                     ..Default::default()
                 };
                 self.database
@@ -340,7 +340,7 @@ impl FactRetrieval {
         primary_workspace: &str,
         config: &crate::config::types::profile::SmartRecallConfig,
     ) -> Result<SmartRetrievalResult, AlephError> {
-        use crate::gateway::workspace::WorkspaceFilter;
+        use crate::gateway::agent_env::AgentEnvFilter;
         use tracing::debug;
 
         // Embed query ONCE — reused across both phases
@@ -352,7 +352,7 @@ impl FactRetrieval {
 
         // Phase 1: Search primary workspace
         let primary = self
-            .retrieve_with_embedding(&query_embedding, WorkspaceFilter::Single(primary_workspace.to_string()))
+            .retrieve_with_embedding(&query_embedding, AgentEnvFilter::Single(primary_workspace.to_string()))
             .await?;
 
         // Evaluate trigger conditions
@@ -402,7 +402,7 @@ impl FactRetrieval {
         );
 
         let all_results = self
-            .retrieve_with_embedding(&query_embedding, WorkspaceFilter::All)
+            .retrieve_with_embedding(&query_embedding, AgentEnvFilter::All)
             .await?;
 
         // Collect primary fact IDs for deduplication

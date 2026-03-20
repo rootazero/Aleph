@@ -1,13 +1,15 @@
 //! Thinker test context for BDD scenarios
 #![allow(dead_code)]
 
-use alephcore::agent_loop::{Observation, StructuredThinking, ThinkingParser, ToolInfo};
+use alephcore::agent_loop::ToolInfo;
+// TODO: removed — types deleted: Observation, StructuredThinking, ThinkingParser
 use alephcore::thinker::prompt_builder::SystemPromptPart;
 use alephcore::thinker::soul::SoulManifest;
 use alephcore::thinker::identity::IdentityResolver;
 use alephcore::thinker::{
-    InteractionManifest, Message, PromptBuilder, PromptConfig, ResolvedContext, SecurityContext,
+    InteractionManifest, PromptBuilder, PromptConfig, ResolvedContext, SecurityContext,
 };
+// TODO: removed — types deleted: Message, MessageRole
 use std::path::PathBuf;
 
 /// Thinker test context
@@ -29,12 +31,9 @@ pub struct ThinkerContext {
     pub system_prompt: Option<String>,
     /// Cached prompt parts
     pub cached_parts: Option<Vec<SystemPromptPart>>,
-    /// Built messages
-    pub messages: Option<Vec<Message>>,
+    // TODO: removed — Message type deleted: pub messages: Option<Vec<Message>>,
 
-    // ═══ Observation ═══
-    /// Observation for message building
-    pub observation: Option<Observation>,
+    // TODO: removed — Observation type deleted: pub observation: Option<Observation>,
 
     // ═══ Comparison State ═══
     /// Second prompt for comparison tests
@@ -63,8 +62,7 @@ pub struct ThinkerContext {
     // ═══ CoT Transparency ═══
     /// Reasoning text for parsing
     pub reasoning_text: Option<String>,
-    /// Parsed structured thinking
-    pub structured_thinking: Option<StructuredThinking>,
+    // TODO: removed — StructuredThinking type deleted: pub structured_thinking: Option<StructuredThinking>,
 }
 
 impl std::fmt::Debug for ThinkerContext {
@@ -75,13 +73,11 @@ impl std::fmt::Debug for ThinkerContext {
             .field("tools_count", &self.tools.len())
             .field("system_prompt_len", &self.system_prompt.as_ref().map(|s| s.len()))
             .field("cached_parts_count", &self.cached_parts.as_ref().map(|v| v.len()))
-            .field("messages_count", &self.messages.as_ref().map(|v| v.len()))
-            .field("has_observation", &self.observation.is_some())
             .field("has_interaction", &self.interaction.is_some())
             .field("has_security", &self.security.is_some())
             .field("has_resolved", &self.resolved.is_some())
             .field("has_soul", &self.soul.is_some())
-            .field("has_structured_thinking", &self.structured_thinking.is_some())
+            // .field("has_structured_thinking", ...) // removed
             .finish()
     }
 }
@@ -102,8 +98,7 @@ impl ThinkerContext {
         self.tools.push(ToolInfo {
             name: name.to_string(),
             description: description.to_string(),
-            parameters_schema: schema.to_string(),
-            category: None,
+            parameters_schema: serde_json::from_str(schema).ok(),
         });
     }
 
@@ -121,14 +116,8 @@ impl ThinkerContext {
         }
     }
 
-    /// Build messages and store result
-    pub fn build_messages(&mut self, query: &str) {
-        if let Some(builder) = &self.builder {
-            if let Some(observation) = &self.observation {
-                self.messages = Some(builder.build_messages(query, observation));
-            }
-        }
-    }
+    // TODO: removed — Observation/Message types deleted:
+    // pub fn build_messages(&mut self, query: &str) { ... }
 
     /// Check if prompt contains a string
     pub fn prompt_contains(&self, needle: &str) -> bool {
@@ -192,15 +181,9 @@ impl ThinkerContext {
         })
     }
 
-    /// Get the number of messages
-    pub fn messages_count(&self) -> usize {
-        self.messages.as_ref().map(|v| v.len()).unwrap_or(0)
-    }
-
-    /// Get the first message
-    pub fn first_message(&self) -> Option<&Message> {
-        self.messages.as_ref().and_then(|v| v.first())
-    }
+    // TODO: removed — Message type deleted:
+    // pub fn messages_count(&self) -> usize { ... }
+    // pub fn first_message(&self) -> Option<&Message> { ... }
 
     // ═══ Embodiment Engine Helpers ═══
 
@@ -229,10 +212,6 @@ impl ThinkerContext {
 
     // ═══ CoT Transparency Helpers ═══
 
-    /// Parse structured thinking from stored reasoning text
-    pub fn parse_structured_thinking(&mut self) {
-        if let Some(reasoning) = &self.reasoning_text {
-            self.structured_thinking = Some(ThinkingParser::parse(reasoning));
-        }
-    }
+    // TODO: removed — ThinkingParser/StructuredThinking types deleted:
+    // pub fn parse_structured_thinking(&mut self) { ... }
 }

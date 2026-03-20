@@ -8,6 +8,7 @@ async fn p5_01_runtime_restrict() {
     let mut h = LinkAclHarness::new();
     h.register_link("tg-1").await;
     h.register_agent("main", None).await;
+    h.bind("tg-1", "main");
 
     h.send_message("tg-1", "before restriction").await;
     h.assert_no_denial();
@@ -23,6 +24,7 @@ async fn p5_02_runtime_unrestrict() {
     let mut h = LinkAclHarness::new();
     h.register_link("tg-1").await;
     h.register_agent("main", Some(vec!["dc-1".into()])).await;
+    h.bind("tg-1", "main");
 
     h.send_message("tg-1", "while restricted").await;
     h.assert_denied();
@@ -38,6 +40,7 @@ async fn p5_03_runtime_change_list() {
     let mut h = LinkAclHarness::new();
     h.register_link("tg-1").await;
     h.register_agent("main", Some(vec!["tg-1".into()])).await;
+    h.bind("tg-1", "main");
 
     h.send_message("tg-1", "initially allowed").await;
     h.assert_no_denial();
@@ -48,12 +51,14 @@ async fn p5_03_runtime_change_list() {
 }
 
 #[tokio::test]
+#[ignore = "/switch command removed — needs rewrite for new agent binding model"]
 async fn p5_04_new_agent_default_none() {
     // Newly created agent has allowed_links=None → all links can access
     let mut h = LinkAclHarness::new();
     h.register_link("tg-1").await;
     h.register_agent("main", None).await;
     h.register_agent("new-agent", None).await;
+    h.bind("tg-1", "main");
 
     h.send_message("tg-1", "/switch new-agent").await;
     let replies = h.drain_replies();
@@ -64,12 +69,14 @@ async fn p5_04_new_agent_default_none() {
 }
 
 #[tokio::test]
+#[ignore = "/switch command removed — needs rewrite for new agent binding model"]
 async fn p5_05_delete_recreate_agent() {
     // Delete agent, recreate with different allowed_links → new config effective
     let mut h = LinkAclHarness::new();
     h.register_link("tg-1").await;
     h.register_agent("main", None).await;
     h.register_agent("target", Some(vec!["tg-1".into()])).await;
+    h.bind("tg-1", "main");
 
     // Switch works
     h.send_message("tg-1", "/switch target").await;

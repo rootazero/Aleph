@@ -8,7 +8,7 @@ use serde_json::json;
 use super::parse_params;
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR};
 use crate::memory::store::{MemoryBackend, MemoryStore, SessionStore};
-use crate::gateway::workspace::WorkspaceFilter;
+use crate::gateway::agent_env::AgentEnvFilter;
 use crate::sync_primitives::Arc;
 
 /// Memory entry for JSON serialization
@@ -110,7 +110,7 @@ pub async fn handle_search(
 
     let filter = crate::memory::store::types::MemoryFilter {
         window_title: params.window_title.clone(),
-        workspace: params.agent_id.clone().map(WorkspaceFilter::Single),
+        agent_filter: params.agent_id.clone().map(AgentEnvFilter::Single),
         ..Default::default()
     };
 

@@ -1,0 +1,145 @@
+<h2>Sidebar 两级层次结构布局</h2>
+<p class="subtitle">Agent 分组 + Session 列表的展示方式</p>
+
+<div class="cards">
+  <!-- Option A: Collapsible sections -->
+  <div class="card" data-choice="a" onclick="toggleSelect(this)">
+    <div class="card-body">
+      <h3>A. 可折叠分组</h3>
+      <p>每个 Agent 是一个可展开/收起的分组头，下方是该 Agent 的 sessions</p>
+    </div>
+    <div class="card-image" style="padding: 16px; background: #1a1a2e;">
+      <div style="font-family: monospace; font-size: 13px; color: #e0e0e0; line-height: 1.8;">
+        <!-- Search bar -->
+        <div style="background: #252540; border: 1px solid #333; border-radius: 8px; padding: 6px 12px; margin-bottom: 12px; color: #888; font-size: 12px;">
+          Search chats...
+        </div>
+
+        <!-- Agent: Main -->
+        <div style="display: flex; align-items: center; justify-content: space-between; padding: 6px 8px; color: #a0a0c0; font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px;">
+          <span>▼ Main</span>
+          <span style="background: #7c3aed; color: white; border-radius: 50%; width: 18px; height: 18px; display: flex; align-items: center; justify-content: center; font-size: 10px; cursor: pointer;" title="+ New Chat">+</span>
+        </div>
+        <div style="padding-left: 8px;">
+          <div style="background: rgba(124,58,237,0.15); color: #a78bfa; padding: 8px 12px; border-radius: 8px; margin-bottom: 4px;">
+            <div style="font-weight: 500; font-size: 12px;">帮我写一个爬虫</div>
+            <div style="font-size: 10px; color: #888; margin-top: 2px;">12 msgs · 今天</div>
+          </div>
+          <div style="padding: 8px 12px; border-radius: 8px; margin-bottom: 4px; color: #ccc;">
+            <div style="font-size: 12px;">分析用户数据</div>
+            <div style="font-size: 10px; color: #888; margin-top: 2px;">5 msgs · 昨天</div>
+          </div>
+          <div style="padding: 8px 12px; border-radius: 8px; margin-bottom: 4px; color: #ccc;">
+            <div style="font-size: 12px;">Rust 编译错误</div>
+            <div style="font-size: 10px; color: #888; margin-top: 2px;">28 msgs · 03-17</div>
+          </div>
+        </div>
+
+        <!-- Agent: Coder -->
+        <div style="display: flex; align-items: center; justify-content: space-between; padding: 6px 8px; margin-top: 8px; color: #a0a0c0; font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px;">
+          <span>▶ Coder</span>
+          <span style="background: #7c3aed; color: white; border-radius: 50%; width: 18px; height: 18px; display: flex; align-items: center; justify-content: center; font-size: 10px; cursor: pointer;">+</span>
+        </div>
+
+        <!-- Agent: Research -->
+        <div style="display: flex; align-items: center; justify-content: space-between; padding: 6px 8px; margin-top: 4px; color: #a0a0c0; font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px;">
+          <span>▶ Research</span>
+          <span style="background: #7c3aed; color: white; border-radius: 50%; width: 18px; height: 18px; display: flex; align-items: center; justify-content: center; font-size: 10px; cursor: pointer;">+</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Option B: Tab-style agent switcher -->
+  <div class="card" data-choice="b" onclick="toggleSelect(this)">
+    <div class="card-body">
+      <h3>B. 顶部 Agent 切换器</h3>
+      <p>顶部水平 tab 选择 Agent，下方只显示当前 Agent 的 sessions</p>
+    </div>
+    <div class="card-image" style="padding: 16px; background: #1a1a2e;">
+      <div style="font-family: monospace; font-size: 13px; color: #e0e0e0; line-height: 1.8;">
+        <!-- Agent tabs -->
+        <div style="display: flex; gap: 4px; margin-bottom: 12px; overflow-x: auto;">
+          <div style="background: #7c3aed; color: white; padding: 5px 14px; border-radius: 20px; font-size: 12px; font-weight: 500; white-space: nowrap;">Main</div>
+          <div style="background: #252540; color: #a0a0c0; padding: 5px 14px; border-radius: 20px; font-size: 12px; white-space: nowrap;">Coder</div>
+          <div style="background: #252540; color: #a0a0c0; padding: 5px 14px; border-radius: 20px; font-size: 12px; white-space: nowrap;">Research</div>
+        </div>
+
+        <!-- Search -->
+        <div style="background: #252540; border: 1px solid #333; border-radius: 8px; padding: 6px 12px; margin-bottom: 12px; color: #888; font-size: 12px;">
+          Search chats...
+        </div>
+
+        <!-- New chat button -->
+        <div style="border: 1px dashed #444; border-radius: 8px; padding: 8px 12px; margin-bottom: 8px; color: #7c3aed; font-size: 12px; text-align: center; cursor: pointer;">
+          + New Chat with Main
+        </div>
+
+        <!-- Sessions for Main -->
+        <div style="background: rgba(124,58,237,0.15); color: #a78bfa; padding: 8px 12px; border-radius: 8px; margin-bottom: 4px;">
+          <div style="font-weight: 500; font-size: 12px;">帮我写一个爬虫</div>
+          <div style="font-size: 10px; color: #888; margin-top: 2px;">12 msgs · 今天</div>
+        </div>
+        <div style="padding: 8px 12px; border-radius: 8px; margin-bottom: 4px; color: #ccc;">
+          <div style="font-size: 12px;">分析用户数据</div>
+          <div style="font-size: 10px; color: #888; margin-top: 2px;">5 msgs · 昨天</div>
+        </div>
+        <div style="padding: 8px 12px; border-radius: 8px; margin-bottom: 4px; color: #ccc;">
+          <div style="font-size: 12px;">Rust 编译错误</div>
+          <div style="font-size: 10px; color: #888; margin-top: 2px;">28 msgs · 03-17</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Option C: Flat with agent badge -->
+  <div class="card" data-choice="c" onclick="toggleSelect(this)">
+    <div class="card-body">
+      <h3>C. 扁平列表 + Agent 徽标</h3>
+      <p>所有 sessions 按时间排列，每个 session 显示归属 Agent 的小徽标</p>
+    </div>
+    <div class="card-image" style="padding: 16px; background: #1a1a2e;">
+      <div style="font-family: monospace; font-size: 13px; color: #e0e0e0; line-height: 1.8;">
+        <!-- Search -->
+        <div style="background: #252540; border: 1px solid #333; border-radius: 8px; padding: 6px 12px; margin-bottom: 12px; color: #888; font-size: 12px;">
+          Search chats...
+        </div>
+
+        <!-- New chat dropdown -->
+        <div style="border: 1px dashed #444; border-radius: 8px; padding: 8px 12px; margin-bottom: 8px; color: #7c3aed; font-size: 12px; text-align: center;">
+          + New Chat ▾
+        </div>
+
+        <!-- Sessions mixed -->
+        <div style="background: rgba(124,58,237,0.15); color: #a78bfa; padding: 8px 12px; border-radius: 8px; margin-bottom: 4px;">
+          <div style="display: flex; align-items: center; gap: 6px;">
+            <span style="background: #7c3aed; color: white; padding: 1px 6px; border-radius: 4px; font-size: 9px; font-weight: 600;">Main</span>
+            <span style="font-weight: 500; font-size: 12px;">帮我写一个爬虫</span>
+          </div>
+          <div style="font-size: 10px; color: #888; margin-top: 2px; padding-left: 42px;">12 msgs · 今天</div>
+        </div>
+        <div style="padding: 8px 12px; border-radius: 8px; margin-bottom: 4px; color: #ccc;">
+          <div style="display: flex; align-items: center; gap: 6px;">
+            <span style="background: #059669; color: white; padding: 1px 6px; border-radius: 4px; font-size: 9px; font-weight: 600;">Coder</span>
+            <span style="font-size: 12px;">重构认证模块</span>
+          </div>
+          <div style="font-size: 10px; color: #888; margin-top: 2px; padding-left: 52px;">8 msgs · 今天</div>
+        </div>
+        <div style="padding: 8px 12px; border-radius: 8px; margin-bottom: 4px; color: #ccc;">
+          <div style="display: flex; align-items: center; gap: 6px;">
+            <span style="background: #7c3aed; color: white; padding: 1px 6px; border-radius: 4px; font-size: 9px; font-weight: 600;">Main</span>
+            <span style="font-size: 12px;">分析用户数据</span>
+          </div>
+          <div style="font-size: 10px; color: #888; margin-top: 2px; padding-left: 42px;">5 msgs · 昨天</div>
+        </div>
+        <div style="padding: 8px 12px; border-radius: 8px; margin-bottom: 4px; color: #ccc;">
+          <div style="display: flex; align-items: center; gap: 6px;">
+            <span style="background: #d97706; color: white; padding: 1px 6px; border-radius: 4px; font-size: 9px; font-weight: 600;">Research</span>
+            <span style="font-size: 12px;">竞品分析报告</span>
+          </div>
+          <div style="font-size: 10px; color: #888; margin-top: 2px; padding-left: 62px;">3 msgs · 03-17</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>

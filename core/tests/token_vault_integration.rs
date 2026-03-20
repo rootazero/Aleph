@@ -33,23 +33,21 @@ fn restart_manager(
 fn full_lifecycle_startup_configure_restart() {
     let dir = tempfile::TempDir::new().unwrap();
     let vault_path = dir.path().join("secrets.vault");
-    let token_file = dir.path().join("token");
     let store = Arc::new(SecurityStore::in_memory().unwrap());
 
     // First boot: generate token, store 3 provider keys
     let mgr = SharedTokenManager::new(store.clone(), &vault_path);
-    let token = mgr.generate_token().unwrap();
-    std::fs::write(&token_file, &token).unwrap();
+    let _token = mgr.generate_token().unwrap();
 
     mgr.store_secret("anthropic", "sk-ant-key1").unwrap();
     mgr.store_secret("openai", "sk-openai-key1").unwrap();
     mgr.store_secret("google", "sk-google-key1").unwrap();
     drop(mgr);
 
-    // Second boot: recreate from same store + vault path, load token from file
+    // Second boot: recreate from same store + vault path, load token from DB
     let mgr2 = restart_manager(store, &vault_path);
-    let loaded = mgr2.try_load_token_from_file(&token_file);
-    assert!(loaded.is_some(), "Should load token from file");
+    let loaded = mgr2.try_load_token_from_db();
+    assert!(loaded.is_some(), "Should load token from DB");
 
     // Verify all 3 keys readable
     assert_eq!(mgr2.get_secret("anthropic").unwrap().unwrap().expose(), "sk-ant-key1");
@@ -61,19 +59,17 @@ fn full_lifecycle_startup_configure_restart() {
 fn lifecycle_add_update_delete_across_restarts() {
     let dir = tempfile::TempDir::new().unwrap();
     let vault_path = dir.path().join("secrets.vault");
-    let token_file = dir.path().join("token");
     let store = Arc::new(SecurityStore::in_memory().unwrap());
 
     // Boot1: store "anthropic" key
     let mgr = SharedTokenManager::new(store.clone(), &vault_path);
-    let token = mgr.generate_token().unwrap();
-    std::fs::write(&token_file, &token).unwrap();
+    let _token = mgr.generate_token().unwrap();
     mgr.store_secret("anthropic", "sk-v1").unwrap();
     drop(mgr);
 
     // Boot2: update "anthropic" to new value, add "openai"
     let mgr = restart_manager(store.clone(), &vault_path);
-    mgr.try_load_token_from_file(&token_file);
+    mgr.try_load_token_from_db();
     mgr.store_secret("anthropic", "sk-v2").unwrap();
     mgr.store_secret("openai", "sk-openai").unwrap();
     assert_eq!(mgr.get_secret("anthropic").unwrap().unwrap().expose(), "sk-v2");
@@ -81,13 +77,13 @@ fn lifecycle_add_update_delete_across_restarts() {
 
     // Boot3: delete "anthropic"
     let mgr = restart_manager(store.clone(), &vault_path);
-    mgr.try_load_token_from_file(&token_file);
+    mgr.try_load_token_from_db();
     assert!(mgr.delete_secret("anthropic").unwrap());
     drop(mgr);
 
     // Boot4: verify "anthropic" gone, "openai" still there
     let mgr = restart_manager(store, &vault_path);
-    mgr.try_load_token_from_file(&token_file);
+    mgr.try_load_token_from_db();
     assert!(mgr.get_secret("anthropic").unwrap().is_none());
     assert_eq!(mgr.get_secret("openai").unwrap().unwrap().expose(), "sk-openai");
 }
@@ -96,7 +92,6 @@ fn lifecycle_add_update_delete_across_restarts() {
 fn lifecycle_reset_token_then_restart() {
     let dir = tempfile::TempDir::new().unwrap();
     let vault_path = dir.path().join("secrets.vault");
-    let token_file = dir.path().join("token");
     let store = Arc::new(SecurityStore::in_memory().unwrap());
 
     // Store secrets, reset token
@@ -107,12 +102,11 @@ fn lifecycle_reset_token_then_restart() {
 
     let new_token = mgr.reset_token().unwrap();
     assert_ne!(old_token, new_token);
-    std::fs::write(&token_file, &new_token).unwrap();
     drop(mgr);
 
-    // Restart with new token
+    // Restart with new token loaded from DB
     let mgr2 = restart_manager(store.clone(), &vault_path);
-    let loaded = mgr2.try_load_token_from_file(&token_file);
+    let loaded = mgr2.try_load_token_from_db();
     assert!(loaded.is_some());
 
     // All secrets readable
@@ -454,12 +448,10 @@ fn reset_changes_all_ciphertext() {
 fn tampered_vault_file_detected() {
     let dir = tempfile::TempDir::new().unwrap();
     let vault_path = dir.path().join("secrets.vault");
-    let token_file = dir.path().join("token");
     let store = Arc::new(SecurityStore::in_memory().unwrap());
 
     let mgr = SharedTokenManager::new(store.clone(), &vault_path);
-    let token = mgr.generate_token().unwrap();
-    std::fs::write(&token_file, &token).unwrap();
+    let _token = mgr.generate_token().unwrap();
     mgr.store_secret("important", "data").unwrap();
     drop(mgr);
 
@@ -477,7 +469,7 @@ fn tampered_vault_file_detected() {
     // Recreate manager, try to read — should either fail to deserialize vault
     // or fail to decrypt
     let mgr2 = restart_manager(store, &vault_path);
-    let loaded = mgr2.try_load_token_from_file(&token_file);
+    let loaded = mgr2.try_load_token_from_db();
 
     if loaded.is_some() {
         // Vault loaded (deserialization succeeded) but decryption should fail
@@ -553,13 +545,11 @@ fn same_name_overwrite_encrypts_differently() {
 fn vault_file_missing_recreates_empty() {
     let dir = tempfile::TempDir::new().unwrap();
     let vault_path = dir.path().join("secrets.vault");
-    let token_file = dir.path().join("token");
     let store = Arc::new(SecurityStore::in_memory().unwrap());
 
     // Store a secret
     let mgr = SharedTokenManager::new(store.clone(), &vault_path);
-    let token = mgr.generate_token().unwrap();
-    std::fs::write(&token_file, &token).unwrap();
+    let _token = mgr.generate_token().unwrap();
     mgr.store_secret("will_be_lost", "value").unwrap();
     drop(mgr);
 
@@ -568,7 +558,7 @@ fn vault_file_missing_recreates_empty() {
 
     // Recreate manager — vault should be empty but functional
     let mgr2 = restart_manager(store, &vault_path);
-    mgr2.try_load_token_from_file(&token_file);
+    mgr2.try_load_token_from_db();
 
     assert!(mgr2.get_secret("will_be_lost").unwrap().is_none());
     let names = mgr2.list_secret_names().unwrap();

@@ -7,6 +7,7 @@ async fn p1_01_none_allows_all() {
     let mut h = LinkAclHarness::new();
     h.register_link("telegram-bot").await;
     h.register_agent("main", None).await; // None = all allowed
+    h.bind("telegram-bot", "main");
     h.send_message("telegram-bot", "hello").await;
     h.assert_no_denial();
 }
@@ -16,6 +17,7 @@ async fn p1_02_empty_list_allows_all() {
     let mut h = LinkAclHarness::new();
     h.register_link("telegram-bot").await;
     h.register_agent("main", Some(vec![])).await; // empty = all allowed
+    h.bind("telegram-bot", "main");
     h.send_message("telegram-bot", "hello").await;
     h.assert_no_denial();
 }
@@ -25,6 +27,7 @@ async fn p1_03_whitelist_hit() {
     let mut h = LinkAclHarness::new();
     h.register_link("telegram-bot").await;
     h.register_agent("main", Some(vec!["telegram-bot".into()])).await;
+    h.bind("telegram-bot", "main");
     h.send_message("telegram-bot", "hello").await;
     h.assert_no_denial();
 }
@@ -34,6 +37,7 @@ async fn p1_04_whitelist_miss() {
     let mut h = LinkAclHarness::new();
     h.register_link("discord-bot").await;
     h.register_agent("main", Some(vec!["telegram-bot".into()])).await;
+    h.bind("discord-bot", "main");
     h.send_message("discord-bot", "hello").await;
     h.assert_denied();
 }
@@ -43,6 +47,7 @@ async fn p1_05_multi_link_whitelist() {
     let mut h = LinkAclHarness::new();
     h.register_link("tg-2").await;
     h.register_agent("main", Some(vec!["tg-1".into(), "tg-2".into()])).await;
+    h.bind("tg-2", "main");
     h.send_message("tg-2", "hello").await;
     h.assert_no_denial();
 }
@@ -52,6 +57,7 @@ async fn p1_06_single_link_rejects_others() {
     let mut h = LinkAclHarness::new();
     h.register_link("dc-1").await;
     h.register_agent("main", Some(vec!["tg-1".into()])).await;
+    h.bind("dc-1", "main");
     h.send_message("dc-1", "hello").await;
     // Drain manually to check both denial and content
     let replies = h.drain_replies();

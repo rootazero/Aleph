@@ -53,12 +53,9 @@ pub fn partition_fresh_tail_pairs(
 /// An unconsumed tool result means the LLM has not yet seen the result, so it
 /// must not be compacted away.
 pub fn is_tool_result_consumed(messages: &[UnifiedMessage], idx: usize) -> bool {
-    for i in (idx + 1)..messages.len() {
-        if messages[i].is_assistant() {
-            return true;
-        }
-    }
-    false
+    messages[(idx + 1)..]
+        .iter()
+        .any(|m| m.is_assistant())
 }
 
 // === Tests ===

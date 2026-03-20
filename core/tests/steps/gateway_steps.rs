@@ -380,7 +380,7 @@ async fn when_resolve_agent_id(w: &mut AlephWorld, channel: String) {
 
     // If we have an agent_router, use it
     if let Some(ref agent_router) = ctx.agent_router {
-        let session_key = agent_router.route(None, Some(&channel), None).await;
+        let session_key = agent_router.route(None, Some(&channel), None, None).await;
         ctx.resolved_agent_id = Some(session_key.agent_id().to_string());
     } else {
         // Fall back to config default

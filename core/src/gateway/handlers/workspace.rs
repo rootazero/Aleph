@@ -2,7 +2,7 @@
 //!
 //! Handlers for workspace management: create, list, get, update, archive.
 //! Channel agent binding: channels.set_agent, agents.bindings.
-//! All handlers delegate to WorkspaceManager (SQLite-backed).
+//! All handlers delegate to AgentEnvStore (SQLite-backed).
 
 use serde::Deserialize;
 use serde_json::json;
@@ -11,7 +11,7 @@ use super::super::protocol::{
     JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS, RESOURCE_NOT_FOUND,
 };
 use super::parse_params;
-use crate::gateway::workspace::WorkspaceManager;
+use crate::gateway::agent_env::AgentEnvStore;
 use crate::sync_primitives::Arc;
 
 // ============================================================================
@@ -42,7 +42,7 @@ pub struct CreateParams {
 /// ```
 pub async fn handle_create(
     request: JsonRpcRequest,
-    workspace_manager: Arc<WorkspaceManager>,
+    workspace_manager: Arc<AgentEnvStore>,
 ) -> JsonRpcResponse {
     let params: CreateParams = match parse_params(&request) {
         Ok(p) => p,
@@ -97,7 +97,7 @@ pub async fn handle_create(
 /// ```
 pub async fn handle_list(
     request: JsonRpcRequest,
-    workspace_manager: Arc<WorkspaceManager>,
+    workspace_manager: Arc<AgentEnvStore>,
 ) -> JsonRpcResponse {
     match workspace_manager.list(false).await {
         Ok(workspaces) => {
@@ -131,7 +131,7 @@ pub struct GetParams {
 /// ```
 pub async fn handle_get(
     request: JsonRpcRequest,
-    workspace_manager: Arc<WorkspaceManager>,
+    workspace_manager: Arc<AgentEnvStore>,
 ) -> JsonRpcResponse {
     let params: GetParams = match parse_params(&request) {
         Ok(p) => p,
@@ -182,7 +182,7 @@ pub struct UpdateParams {
 /// ```
 pub async fn handle_update(
     request: JsonRpcRequest,
-    workspace_manager: Arc<WorkspaceManager>,
+    workspace_manager: Arc<AgentEnvStore>,
 ) -> JsonRpcResponse {
     let params: UpdateParams = match parse_params(&request) {
         Ok(p) => p,
@@ -231,7 +231,7 @@ pub async fn handle_update(
 /// ```
 pub async fn handle_archive(
     request: JsonRpcRequest,
-    workspace_manager: Arc<WorkspaceManager>,
+    workspace_manager: Arc<AgentEnvStore>,
 ) -> JsonRpcResponse {
     let params: GetParams = match parse_params(&request) {
         Ok(p) => p,
@@ -276,7 +276,7 @@ pub struct SetAgentParams {
 /// ```
 pub async fn handle_set_agent(
     request: JsonRpcRequest,
-    workspace_manager: Arc<WorkspaceManager>,
+    workspace_manager: Arc<AgentEnvStore>,
 ) -> JsonRpcResponse {
     let params: SetAgentParams = match serde_json::from_value(request.params.clone().unwrap_or_default()) {
         Ok(p) => p,
@@ -285,14 +285,13 @@ pub async fn handle_set_agent(
 
     match params.agent_id {
         Some(agent_id) => {
-            // Use a fixed peer_id for the binding (Panel-initiated)
-            match workspace_manager.set_active_agent(&params.channel_id, "panel", &agent_id) {
+            match workspace_manager.set_active_agent(&params.channel_id, &agent_id) {
                 Ok(()) => JsonRpcResponse::success(request.id, json!({"ok": true})),
                 Err(e) => JsonRpcResponse::error(request.id, INTERNAL_ERROR, e.to_string()),
             }
         }
         None => {
-            match workspace_manager.clear_active_agent(&params.channel_id, "panel") {
+            match workspace_manager.clear_active_agent(&params.channel_id) {
                 Ok(()) => JsonRpcResponse::success(request.id, json!({"ok": true})),
                 Err(e) => JsonRpcResponse::error(request.id, INTERNAL_ERROR, e.to_string()),
             }
@@ -309,7 +308,7 @@ pub async fn handle_set_agent(
 /// ```
 pub async fn handle_agent_bindings(
     request: JsonRpcRequest,
-    workspace_manager: Arc<WorkspaceManager>,
+    workspace_manager: Arc<AgentEnvStore>,
 ) -> JsonRpcResponse {
     match workspace_manager.get_all_agent_bindings() {
         Ok(bindings) => JsonRpcResponse::success(request.id, json!({"bindings": bindings})),

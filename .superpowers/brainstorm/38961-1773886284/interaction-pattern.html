@@ -1,0 +1,73 @@
+<h2>Session 操作入口：哪种交互模式？</h2>
+<p class="subtitle">在 sidebar 的 session 列表中，如何触发"重命名"和"删除"操作？</p>
+
+<div class="options">
+  <div class="option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>右键菜单 (Context Menu)</h3>
+      <p>右键点击 session 条目弹出菜单，包含"重命名"和"删除"选项。界面最干净，但可发现性较低。</p>
+      <div class="mockup" style="margin-top:12px;padding:12px;">
+        <div style="background:#1a1a2e;border-radius:8px;padding:8px;font-family:system-ui;color:#ccc;font-size:13px;">
+          <div style="padding:8px 12px;background:#252545;border-radius:6px;margin-bottom:4px;">📝 讨论项目架构</div>
+          <div style="padding:8px 12px;background:#16213e;border-radius:6px;border:1px solid #4a9eff;margin-bottom:4px;position:relative;">
+            🔧 调试 WASM 问题
+            <div style="position:absolute;left:100px;top:30px;background:#2a2a4a;border:1px solid #555;border-radius:6px;padding:4px 0;font-size:12px;z-index:10;min-width:140px;">
+              <div style="padding:6px 16px;color:#eee;">✏️ 重命名</div>
+              <div style="padding:6px 16px;color:#ff6b6b;">🗑️ 删除</div>
+            </div>
+          </div>
+          <div style="padding:8px 12px;background:#252545;border-radius:6px;">💬 New Chat</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>Hover 显示操作按钮</h3>
+      <p>鼠标悬停在 session 条目上时，右侧出现"⋯"按钮，点击展开下拉菜单。ChatGPT 的做法。</p>
+      <div class="mockup" style="margin-top:12px;padding:12px;">
+        <div style="background:#1a1a2e;border-radius:8px;padding:8px;font-family:system-ui;color:#ccc;font-size:13px;">
+          <div style="padding:8px 12px;background:#252545;border-radius:6px;margin-bottom:4px;">📝 讨论项目架构</div>
+          <div style="padding:8px 12px;background:#252545;border-radius:6px;margin-bottom:4px;display:flex;justify-content:space-between;align-items:center;border:1px solid #444;">
+            <span>🔧 调试 WASM 问题</span>
+            <span style="background:#3a3a5a;border-radius:4px;padding:2px 6px;cursor:pointer;position:relative;">
+              ⋯
+              <div style="position:absolute;right:0;top:24px;background:#2a2a4a;border:1px solid #555;border-radius:6px;padding:4px 0;font-size:12px;z-index:10;min-width:140px;">
+                <div style="padding:6px 16px;color:#eee;">✏️ 重命名</div>
+                <div style="padding:6px 16px;color:#ff6b6b;">🗑️ 删除</div>
+              </div>
+            </span>
+          </div>
+          <div style="padding:8px 12px;background:#252545;border-radius:6px;">💬 New Chat</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="c" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>内联图标按钮（始终可见）</h3>
+      <p>每个 session 条目右侧始终显示小图标按钮（编辑、删除）。最直接，但视觉噪音较大。</p>
+      <div class="mockup" style="margin-top:12px;padding:12px;">
+        <div style="background:#1a1a2e;border-radius:8px;padding:8px;font-family:system-ui;color:#ccc;font-size:13px;">
+          <div style="padding:8px 12px;background:#252545;border-radius:6px;margin-bottom:4px;display:flex;justify-content:space-between;align-items:center;">
+            <span>📝 讨论项目架构</span>
+            <span style="font-size:11px;opacity:0.6;">✏️ 🗑️</span>
+          </div>
+          <div style="padding:8px 12px;background:#252545;border-radius:6px;margin-bottom:4px;display:flex;justify-content:space-between;align-items:center;">
+            <span>🔧 调试 WASM 问题</span>
+            <span style="font-size:11px;opacity:0.6;">✏️ 🗑️</span>
+          </div>
+          <div style="padding:8px 12px;background:#252545;border-radius:6px;display:flex;justify-content:space-between;align-items:center;">
+            <span>💬 New Chat</span>
+            <span style="font-size:11px;opacity:0.6;">✏️ 🗑️</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>

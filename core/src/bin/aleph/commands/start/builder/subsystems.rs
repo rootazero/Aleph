@@ -280,7 +280,7 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
     pairing_store: Arc<dyn alephcore::gateway::pairing_store::PairingStore>,
     group_chat_orch: alephcore::gateway::handlers::group_chat::SharedOrchestrator,
     group_chat_executor: Option<Arc<alephcore::group_chat::GroupChatExecutor>>,
-    workspace_manager: Option<Arc<alephcore::gateway::WorkspaceManager>>,
+    workspace_manager: Option<Arc<alephcore::gateway::AgentEnvStore>>,
     default_provider: Option<Arc<dyn alephcore::providers::AiProvider>>,
     dispatch_registry: Option<Arc<alephcore::dispatcher::ToolRegistry>>,
     session_manager: Option<Arc<alephcore::gateway::session_manager::SessionManager>>,

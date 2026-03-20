@@ -376,10 +376,12 @@ async fn when_spawn_worldmodel_loop(w: &mut AlephWorld, timeout_secs: i32) {
     let ctx = w.daemon.as_mut().expect("Daemon context not initialized");
     let worldmodel = ctx.worldmodel.clone().expect("WorldModel not initialized");
 
+    // TODO: WorldModel.run() was removed (event processing removed in agent loop migration)
+    // Now WorldModel is a passive state holder, no run loop needed
     let handle = tokio::spawn(async move {
         let _ = tokio::time::timeout(
             Duration::from_secs(timeout_secs as u64),
-            worldmodel.run(),
+            async { let _ = &worldmodel; tokio::time::sleep(Duration::from_secs(timeout_secs as u64)).await; },
         )
         .await;
     });

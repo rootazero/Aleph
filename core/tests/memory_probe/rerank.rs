@@ -101,7 +101,7 @@ fn p3_05_rerank_config_defaults_are_sane() {
 
     assert!(!config.enabled);
     assert_eq!(config.provider, RerankProviderType::Jina);
-    assert_eq!(config.model, "BAAI/bge-reranker-v2-m3");
+    assert_eq!(config.models[0], "BAAI/bge-reranker-v2-m3");
     assert_eq!(config.timeout_ms, 5000);
     assert!((config.rerank_weight - 0.6).abs() < f32::EPSILON);
 }

@@ -7,6 +7,7 @@ async fn p2_01_unrestricted_agent_any_link() {
     let mut h = LinkAclHarness::new();
     h.register_link("any-bot").await;
     h.register_agent("main", None).await;
+    h.bind("any-bot", "main");
     h.send_message("any-bot", "hello").await;
     h.assert_no_denial();
 }
@@ -16,6 +17,7 @@ async fn p2_02_restricted_agent_allowed_link() {
     let mut h = LinkAclHarness::new();
     h.register_link("tg-1").await;
     h.register_agent("main", Some(vec!["tg-1".into()])).await;
+    h.bind("tg-1", "main");
     h.send_message("tg-1", "hello").await;
     h.assert_no_denial();
 }
@@ -25,6 +27,7 @@ async fn p2_03_restricted_agent_denied_link() {
     let mut h = LinkAclHarness::new();
     h.register_link("tg-1").await;
     h.register_agent("main", Some(vec!["dc-1".into()])).await;
+    h.bind("tg-1", "main");
     h.send_message("tg-1", "hello").await;
     h.assert_denied();
 }
@@ -44,6 +47,7 @@ async fn p2_05_denied_message_not_executed() {
     let mut h = LinkAclHarness::new();
     h.register_link("tg-1").await;
     h.register_agent("main", Some(vec!["dc-1".into()])).await;
+    h.bind("tg-1", "main");
     h.send_message("tg-1", "hello").await;
     h.assert_denied();
     assert!(!h.tracking_adapter.was_called(), "Execution should NOT be called for denied message");
@@ -54,6 +58,7 @@ async fn p2_06_denial_reply_format() {
     let mut h = LinkAclHarness::new();
     h.register_link("tg-1").await;
     h.register_agent("main", Some(vec!["dc-1".into()])).await;
+    h.bind("tg-1", "main");
     h.send_message("tg-1", "hello").await;
     let replies = h.drain_replies();
     let denial = replies.iter().find(|r| r.text.contains('\u{26D4}')).expect("Should have denial reply");
@@ -66,6 +71,7 @@ async fn p2_07_consecutive_denials() {
     let mut h = LinkAclHarness::new();
     h.register_link("tg-1").await;
     h.register_agent("main", Some(vec!["dc-1".into()])).await;
+    h.bind("tg-1", "main");
     // Send twice — both should be denied (no cache/bypass)
     h.send_message("tg-1", "first").await;
     h.send_message("tg-1", "second").await;
@@ -79,6 +85,7 @@ async fn p2_08_group_message_acl() {
     let mut h = LinkAclHarness::new();
     h.register_link("tg-1").await;
     h.register_agent("main", Some(vec!["dc-1".into()])).await;
+    h.bind("tg-1", "main");
     h.send_group_message("tg-1", "hello group").await;
     h.assert_denied();
 }

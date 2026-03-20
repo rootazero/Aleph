@@ -143,10 +143,10 @@ impl CompressionService {
 
     /// Execute a compression operation
     ///
-    /// Extracted facts are tagged with DEFAULT_WORKSPACE ("default").
+    /// Extracted facts are tagged with DEFAULT_AGENT ("default").
     /// Use `compress_in_workspace()` to tag facts with a specific workspace.
     pub async fn compress(&self) -> Result<CompressionResult, AlephError> {
-        self.compress_in_workspace(crate::memory::DEFAULT_WORKSPACE).await
+        self.compress_in_workspace(crate::memory::DEFAULT_AGENT).await
     }
 
     /// Execute a compression operation with workspace tagging.

@@ -155,13 +155,13 @@ impl GatewayContext {
         self.execution_adapter = Some(adapter.clone());
         self.agent_router = Some(agent_router.clone());
 
-        self.router = Some(InboundMessageRouter::with_unified_routing(
+        // TODO: with_unified_routing was removed; using with_execution instead
+        self.router = Some(InboundMessageRouter::with_execution(
             channel_registry,
             store,
             config,
             agent_registry,
             adapter,
-            agent_router,
         ));
     }
 

@@ -52,11 +52,11 @@ pub fn target_tokens(input_tokens: usize, level: FallbackLevel) -> usize {
     match level {
         FallbackLevel::Normal => {
             let target = (input_tokens as f64 * 0.35) as usize;
-            target.max(128).min(800)
+            target.clamp(128, 800)
         }
         FallbackLevel::Aggressive => {
             let target = (input_tokens as f64 * 0.2) as usize;
-            target.max(64).min(400)
+            target.clamp(64, 400)
         }
     }
 }

@@ -14,11 +14,11 @@ use tempfile::TempDir;
 use tokio::sync::mpsc;
 
 use alephcore::gateway::{
-    AgentInstance, AgentInstanceConfig, AgentRegistry, AgentRouter,
+    AgentInstance, AgentInstanceConfig, AgentRegistry,
     Channel, ChannelId, ChannelRegistry, ConversationId, DmPolicy,
     GroupPolicy, InboundMessage, InboundMessageRouter, MessageId,
     RouterChannelConfig, RoutingConfig, RunStatus, SqlitePairingStore, UserId,
-    WorkspaceManager, WorkspaceManagerConfig,
+    AgentEnvStore, AgentEnvStoreConfig,
     SessionManager, SessionManagerConfig,
 };
 use alephcore::gateway::channel::{
@@ -170,7 +170,7 @@ pub struct SessionProbeHarness {
     pub session_manager: Arc<SessionManager>,
     pub channel_registry: Arc<ChannelRegistry>,
     pub agent_registry: Arc<AgentRegistry>,
-    pub workspace_manager: Arc<WorkspaceManager>,
+    pub workspace_manager: Arc<AgentEnvStore>,
     pub tracking_adapter: Arc<TrackingExecutionAdapter>,
     pub mock_llm: Option<Arc<MockLlmProvider>>,
 
@@ -209,25 +209,23 @@ impl SessionProbeHarness {
         let agent_registry = Arc::new(AgentRegistry::new());
         let tracking_adapter = Arc::new(TrackingExecutionAdapter::new());
         let adapter: Arc<dyn alephcore::gateway::ExecutionAdapter> = tracking_adapter.clone();
-        let agent_router = Arc::new(AgentRouter::new());
 
         // Workspace manager
-        let ws_config = WorkspaceManagerConfig {
+        let ws_config = AgentEnvStoreConfig {
             db_path: temp_dir.path().join("workspaces.db"),
             default_profile: "default".to_string(),
             archive_after_days: 0,
         };
         let workspace_manager = Arc::new(
-            WorkspaceManager::new(ws_config).expect("Failed to create WorkspaceManager"),
+            AgentEnvStore::new(ws_config).expect("Failed to create AgentEnvStore"),
         );
 
-        let mut router = InboundMessageRouter::with_unified_routing(
+        let mut router = InboundMessageRouter::with_execution(
             channel_registry.clone(),
             store,
             config,
             agent_registry.clone(),
             adapter,
-            agent_router,
         )
         .with_workspace_manager(workspace_manager.clone())
         .with_session_manager(session_manager.clone());

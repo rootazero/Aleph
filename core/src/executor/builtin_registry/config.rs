@@ -37,7 +37,7 @@ pub struct BuiltinToolConfig {
     /// Agent registry for agent management tools
     pub agent_registry: Option<Arc<crate::gateway::agent_instance::AgentRegistry>>,
     /// Workspace manager for agent management tools
-    pub workspace_manager: Option<Arc<crate::gateway::workspace::WorkspaceManager>>,
+    pub workspace_manager: Option<Arc<crate::gateway::agent_env::AgentEnvStore>>,
     /// Tool policy handle for per-agent tool access control
     pub tool_policy: Option<crate::builtin_tools::agent_manage::ToolPolicyHandle>,
     /// Event bus for lifecycle event emission (agent switch/delete)

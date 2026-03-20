@@ -10,7 +10,7 @@ mod tests {
     use crate::memory::store::lance::LanceMemoryBackend;
     use crate::memory::store::types::SearchFilter;
     use crate::memory::store::{GraphNode, GraphStore, MemoryStore};
-    use crate::gateway::workspace::{WorkspaceContext, WorkspaceFilter, WorkspaceManager, WorkspaceManagerConfig, DEFAULT_WORKSPACE};
+    use crate::gateway::agent_env::{AgentEnvContext, AgentEnvFilter, AgentEnvStore, AgentEnvStoreConfig, DEFAULT_AGENT};
 
     /// Helper: create a MemoryFact with a synthetic embedding and assigned workspace.
     fn make_fact(content: &str, workspace: &str, embedding: Vec<f32>) -> MemoryFact {
@@ -45,7 +45,7 @@ mod tests {
 
         // Search in workspace A — should only return A's fact
         let filter_a = SearchFilter::new()
-            .with_workspace(WorkspaceFilter::Single("ws-a".into()));
+            .with_agent_filter(AgentEnvFilter::Single("ws-a".into()));
         let results_a = backend
             .vector_search(&emb_a, 1024, &filter_a, 10)
             .await
@@ -56,7 +56,7 @@ mod tests {
 
         // Search in workspace B — should only return B's fact
         let filter_b = SearchFilter::new()
-            .with_workspace(WorkspaceFilter::Single("ws-b".into()));
+            .with_agent_filter(AgentEnvFilter::Single("ws-b".into()));
         let results_b = backend
             .vector_search(&emb_b, 1024, &filter_b, 10)
             .await
@@ -67,7 +67,7 @@ mod tests {
 
         // Search with All — should return both
         let filter_all = SearchFilter::new()
-            .with_workspace(WorkspaceFilter::All);
+            .with_agent_filter(AgentEnvFilter::All);
         let results_all = backend
             .vector_search(&emb_a, 1024, &filter_all, 10)
             .await
@@ -153,12 +153,12 @@ mod tests {
 
         // Insert a fact with the default workspace (simulating legacy behavior)
         let emb = vec![0.5f32; 1024];
-        let fact = make_fact("User prefers dark mode", DEFAULT_WORKSPACE, emb.clone());
+        let fact = make_fact("User prefers dark mode", DEFAULT_AGENT, emb.clone());
         backend.insert_fact(&fact).await.unwrap();
 
         // Search with default workspace filter — should find it
         let filter_default = SearchFilter::new()
-            .with_workspace(WorkspaceFilter::Single(DEFAULT_WORKSPACE.to_string()));
+            .with_agent_filter(AgentEnvFilter::Single(DEFAULT_AGENT.to_string()));
         let results = backend
             .vector_search(&emb, 1024, &filter_default, 10)
             .await
@@ -168,7 +168,7 @@ mod tests {
 
         // Search in a nonexistent workspace — should find nothing
         let filter_none = SearchFilter::new()
-            .with_workspace(WorkspaceFilter::Single("nonexistent".to_string()));
+            .with_agent_filter(AgentEnvFilter::Single("nonexistent".to_string()));
         let results_empty = backend
             .vector_search(&emb, 1024, &filter_none, 10)
             .await
@@ -180,13 +180,13 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Test 4: WorkspaceContext filter propagation.
+    // Test 4: AgentEnvContext filter propagation.
     // -----------------------------------------------------------------------
 
     #[tokio::test]
     async fn test_workspace_context_propagation() {
-        // Create a WorkspaceContext for workspace "crypto" with Owner scope
-        let ctx = WorkspaceContext::new("crypto", NamespaceScope::Owner);
+        // Create a AgentEnvContext for workspace "crypto" with Owner scope
+        let ctx = AgentEnvContext::new("crypto", NamespaceScope::Owner);
 
         // Build the search filter
         let filter = ctx.to_search_filter();
@@ -212,8 +212,8 @@ mod tests {
         );
 
         // Verify default_owner() context produces default workspace
-        let default_ctx = WorkspaceContext::default_owner();
-        assert_eq!(default_ctx.workspace_id(), DEFAULT_WORKSPACE);
+        let default_ctx = AgentEnvContext::default_owner();
+        assert_eq!(default_ctx.agent_id(), DEFAULT_AGENT);
         let default_sql = default_ctx
             .to_search_filter()
             .to_lance_filter()
@@ -229,12 +229,12 @@ mod tests {
     async fn test_workspace_crud_operations() {
         let tmp = tempfile::tempdir().unwrap();
         let db_path = tmp.path().join("workspaces.db");
-        let config = WorkspaceManagerConfig {
+        let config = AgentEnvStoreConfig {
             db_path,
             default_profile: "default".to_string(),
             archive_after_days: 0,
         };
-        let manager = WorkspaceManager::new(config).unwrap();
+        let manager = AgentEnvStore::new(config).unwrap();
         manager.load_profiles(std::collections::HashMap::new()); // registers "default" profile
 
         // Create a workspace

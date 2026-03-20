@@ -3,7 +3,8 @@
 use alephcore::memory::store::{LanceMemoryBackend, MemoryBackend};
 use alephcore::memory::{
     ContextAnchor, EmbeddingProvider, FactSpecificity, FactType, MemoryEntry, MemoryFact,
-    MemoryIngestion, MemoryLayer, MemoryRetrieval, MemoryScope, MemoryTier, PromptAugmenter,
+    MemoryIngestion, MemoryLayer, MemoryRetrieval, MemoryScope, MemoryTier,
+    // TODO: removed — type deleted: PromptAugmenter,
     TemporalScope,
 };
 
@@ -40,8 +41,7 @@ pub struct MemoryContext {
     pub ingestion: Option<MemoryIngestion>,
     /// Memory retrieval service
     pub retrieval: Option<MemoryRetrieval>,
-    /// Prompt augmenter
-    pub augmenter: Option<PromptAugmenter>,
+    // TODO: removed — PromptAugmenter type deleted: pub augmenter: Option<PromptAugmenter>,
     /// Context anchor for memory operations
     pub context_anchor: Option<ContextAnchor>,
     /// Retrieved memories (MemoryEntry, not MemoryFact)
@@ -71,7 +71,7 @@ impl std::fmt::Debug for MemoryContext {
             .field("config", &self.config.is_some())
             .field("ingestion", &self.ingestion.is_some())
             .field("retrieval", &self.retrieval.is_some())
-            .field("augmenter", &self.augmenter.is_some())
+            // .field("augmenter", ...) // removed — PromptAugmenter deleted
             .field("context_anchor", &self.context_anchor)
             .field("memories", &self.memories.len())
             .field("last_memory_id", &self.last_memory_id)
@@ -131,7 +131,7 @@ impl MemoryContext {
             parent_path: String::new(),
             embedding_model: String::new(),
             namespace: "owner".to_string(),
-            workspace: "default".to_string(),
+            agent: "main".to_string(),
             tier: MemoryTier::ShortTerm,
             scope: MemoryScope::Global,
             persona_id: None,
@@ -221,15 +221,9 @@ impl MemoryContext {
         self.retrieval = Some(MemoryRetrieval::new(memory_backend, embedder, config));
     }
 
-    /// Initialize prompt augmenter with default settings
-    pub fn init_augmenter(&mut self) {
-        self.augmenter = Some(PromptAugmenter::new());
-    }
-
-    /// Initialize prompt augmenter with custom settings
-    pub fn init_augmenter_with_config(&mut self, max_memories: usize, show_scores: bool) {
-        self.augmenter = Some(PromptAugmenter::with_config(max_memories, show_scores));
-    }
+    // TODO: removed — PromptAugmenter type deleted:
+    // pub fn init_augmenter(&mut self) { ... }
+    // pub fn init_augmenter_with_config(&mut self, ...) { ... }
 
     /// Set context anchor for memory operations
     pub fn set_context(&mut self, window_title: &str) {

@@ -152,7 +152,7 @@ pub fn compress_tool_result(tool_name: &str, content: &str) -> String {
 /// 3. Iterate candidates oldest-first; for each consumed ToolResult, compress it.
 /// 4. Stop as soon as total tokens drop below threshold × budget.
 pub fn compact_if_needed(
-    messages: &mut Vec<UnifiedMessage>,
+    messages: &mut [UnifiedMessage],
     token_budget: u64,
     threshold: f64,
     ratio: f64,

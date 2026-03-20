@@ -6,7 +6,7 @@
 use crate::memory::EmbeddingProvider;
 use crate::memory::store::{MemoryBackend, MemoryStore, SessionStore};
 use crate::memory::store::types::{SearchFilter, MemoryFilter, ScoredFact};
-use crate::gateway::workspace::WorkspaceFilter;
+use crate::gateway::agent_env::AgentEnvFilter;
 use crate::sync_primitives::Arc;
 use super::memory_context::{MemoryContext, MemorySummary};
 use tracing::{debug, warn};
@@ -119,7 +119,7 @@ impl MemoryContextProvider {
         agent_id: &str,
     ) -> Result<Vec<ScoredFact>, ()> {
         let filter = SearchFilter::new()
-            .with_workspace(WorkspaceFilter::Single(agent_id.to_string()));
+            .with_agent_filter(AgentEnvFilter::Single(agent_id.to_string()));
         self.memory_db
             .vector_search(embedding, dim, &filter, self.config.max_facts)
             .await
@@ -139,7 +139,7 @@ impl MemoryContextProvider {
         session_id: Option<&str>,
     ) -> Result<Vec<MemorySummary>, ()> {
         let filter = MemoryFilter {
-            workspace: Some(WorkspaceFilter::Single(agent_id.to_string())),
+            agent_filter: Some(AgentEnvFilter::Single(agent_id.to_string())),
             session_ids: session_id.map(|sid| vec![sid.to_string()]),
             ..Default::default()
         };

@@ -13,11 +13,11 @@ use tempfile::TempDir;
 use tokio::sync::mpsc;
 
 use alephcore::gateway::{
-    AgentInstance, AgentInstanceConfig, AgentRegistry, AgentRouter,
+    AgentInstance, AgentInstanceConfig, AgentRegistry,
     Channel, ChannelId, ChannelRegistry, ConversationId, DmPolicy, ExecutionAdapter,
     GroupPolicy, InboundMessage, InboundMessageRouter, MessageId,
     RouterChannelConfig, RoutingConfig, RunStatus, SqlitePairingStore, UserId,
-    WorkspaceManager, WorkspaceManagerConfig,
+    AgentEnvStore, AgentEnvStoreConfig,
 };
 use alephcore::gateway::execution_engine::{ExecutionError, RunState};
 use alephcore::gateway::event_emitter::{EventEmitter, StreamEvent};
@@ -111,7 +111,7 @@ impl ExecutionAdapter for TrackingExecutionAdapter {
 pub struct LinkAclHarness {
     pub channel_registry: Arc<ChannelRegistry>,
     pub agent_registry: Arc<AgentRegistry>,
-    pub workspace_manager: Arc<WorkspaceManager>,
+    pub workspace_manager: Arc<AgentEnvStore>,
     pub tracking_adapter: Arc<TrackingExecutionAdapter>,
     pub reply_rx: mpsc::UnboundedReceiver<CapturedReply>,
     reply_tx: mpsc::UnboundedSender<CapturedReply>,
@@ -131,25 +131,23 @@ impl LinkAclHarness {
         let agent_registry = Arc::new(AgentRegistry::new());
         let tracking_adapter = Arc::new(TrackingExecutionAdapter::new());
         let adapter: Arc<dyn ExecutionAdapter> = tracking_adapter.clone();
-        let agent_router = Arc::new(AgentRouter::new());
 
-        // Create workspace manager with temp path
-        let ws_config = WorkspaceManagerConfig {
-            db_path: temp_dir.path().join("workspaces.db"),
+        // Create agent env store with temp path
+        let ws_config = AgentEnvStoreConfig {
+            db_path: temp_dir.path().join("agent_envs.db"),
             default_profile: "default".to_string(),
             archive_after_days: 0,
         };
         let workspace_manager = Arc::new(
-            WorkspaceManager::new(ws_config).expect("Failed to create WorkspaceManager"),
+            AgentEnvStore::new(ws_config).expect("Failed to create AgentEnvStore"),
         );
 
-        let router = InboundMessageRouter::with_unified_routing(
+        let router = InboundMessageRouter::with_execution(
             channel_registry.clone(),
             store,
             config,
             agent_registry.clone(),
             adapter,
-            agent_router,
         )
         .with_workspace_manager(workspace_manager.clone());
 
@@ -187,6 +185,13 @@ impl LinkAclHarness {
                 bot_name: None,
             },
         );
+    }
+
+    /// Bind an agent to a channel (link).
+    pub fn bind(&self, link_id: &str, agent_id: &str) {
+        self.workspace_manager
+            .set_active_agent(link_id, agent_id)
+            .expect("Failed to bind agent to link");
     }
 
     /// Register an agent with optional link access whitelist.

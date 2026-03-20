@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 use alephcore::Result;
-use alephcore::providers::AiProvider;
+use alephcore::providers::{AiProvider, ProviderResponse, adapter};
 
 /// Mock LLM provider with call tracking and queued responses.
 pub struct MockLlmProvider {
@@ -82,16 +82,19 @@ impl MockLlmProvider {
 }
 
 impl AiProvider for MockLlmProvider {
-    fn process(
-        &self,
-        input: &str,
-        _system_prompt: Option<&str>,
-    ) -> Pin<Box<dyn Future<Output = Result<String>> + Send + '_>> {
+    fn process<'a>(
+        &'a self,
+        payload: adapter::RequestPayload<'a>,
+    ) -> Pin<Box<dyn Future<Output = Result<ProviderResponse>> + Send + 'a>> {
+        // Extract text from messages for tracking
+        use alephcore::providers::message::UnifiedMessage;
+        let input_text = UnifiedMessage::extract_all_text(payload.messages);
+
         // Record call
         self.call_count.fetch_add(1, Ordering::SeqCst);
         {
             let mut last = self.last_input.lock().unwrap_or_else(|e| e.into_inner());
-            *last = Some(input.to_string());
+            *last = Some(input_text);
         }
 
         let should_fail = self.should_fail.load(Ordering::SeqCst);
@@ -108,7 +111,7 @@ impl AiProvider for MockLlmProvider {
 
         Box::pin(async move {
             match response {
-                Some(r) => Ok(r),
+                Some(r) => Ok(ProviderResponse::text_only(r)),
                 None => Err(alephcore::AlephError::provider(
                     "MockLlmProvider: configured to fail",
                 )),
@@ -128,12 +131,18 @@ impl AiProvider for MockLlmProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alephcore::providers::message::UnifiedMessage;
+
+    fn make_payload(msgs: &[UnifiedMessage]) -> adapter::RequestPayload<'_> {
+        adapter::RequestPayload::new(msgs)
+    }
 
     #[tokio::test]
     async fn default_response() {
         let p = MockLlmProvider::new("hello");
-        let r = p.process("hi", None).await.unwrap();
-        assert_eq!(r, "hello");
+        let msgs = [UnifiedMessage::user("hi")];
+        let r = p.process(make_payload(&msgs)).await.unwrap();
+        assert_eq!(r.text_content(), "hello");
         assert_eq!(p.call_count(), 1);
         assert_eq!(p.last_input().as_deref(), Some("hi"));
     }
@@ -144,15 +153,19 @@ mod tests {
         p.enqueue("first");
         p.enqueue("second");
 
-        assert_eq!(p.process("a", None).await.unwrap(), "first");
-        assert_eq!(p.process("b", None).await.unwrap(), "second");
-        assert_eq!(p.process("c", None).await.unwrap(), "default");
+        let msgs_a = [UnifiedMessage::user("a")];
+        let msgs_b = [UnifiedMessage::user("b")];
+        let msgs_c = [UnifiedMessage::user("c")];
+        assert_eq!(p.process(make_payload(&msgs_a)).await.unwrap().text_content(), "first");
+        assert_eq!(p.process(make_payload(&msgs_b)).await.unwrap().text_content(), "second");
+        assert_eq!(p.process(make_payload(&msgs_c)).await.unwrap().text_content(), "default");
         assert_eq!(p.call_count(), 3);
     }
 
     #[tokio::test]
     async fn failing_mode() {
         let p = MockLlmProvider::failing();
-        assert!(p.process("x", None).await.is_err());
+        let msgs = [UnifiedMessage::user("x")];
+        assert!(p.process(make_payload(&msgs)).await.is_err());
     }
 }

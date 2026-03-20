@@ -12,8 +12,8 @@ use super::error::ToolError;
 use crate::error::Result;
 use crate::memory::namespace::NamespaceScope;
 use crate::memory::store::{MemoryBackend, MemoryStore, PathEntry as StorePathEntry};
-use crate::gateway::workspace::WorkspaceFilter;
-use crate::memory::{FactSource, MemoryFact, MemoryLayer, SearchFilter, DEFAULT_WORKSPACE};
+use crate::gateway::agent_env::AgentEnvFilter;
+use crate::memory::{FactSource, MemoryFact, MemoryLayer, SearchFilter, DEFAULT_AGENT};
 use crate::tools::AlephTool;
 
 /// Browse action type
@@ -96,7 +96,7 @@ pub struct GlobMatch {
 pub struct MemoryBrowseTool {
     database: MemoryBackend,
     /// Shared default workspace ID, set by the execution engine based on active workspace.
-    /// Falls back to DEFAULT_WORKSPACE ("default") when not set.
+    /// Falls back to DEFAULT_AGENT ("default") when not set.
     default_workspace: Arc<RwLock<String>>,
 }
 
@@ -104,7 +104,7 @@ impl MemoryBrowseTool {
     pub fn new(database: MemoryBackend) -> Self {
         Self {
             database,
-            default_workspace: Arc::new(RwLock::new(DEFAULT_WORKSPACE.to_string())),
+            default_workspace: Arc::new(RwLock::new(DEFAULT_AGENT.to_string())),
         }
     }
 
@@ -130,7 +130,7 @@ impl MemoryBrowseTool {
     ) -> std::result::Result<MemoryBrowseOutput, ToolError> {
         use super::{notify_tool_result, notify_tool_start};
 
-        // Resolve workspace: explicit arg > default_workspace (set by execution engine) > DEFAULT_WORKSPACE
+        // Resolve workspace: explicit arg > default_workspace (set by execution engine) > DEFAULT_AGENT
         let default_ws = self.default_workspace.read().await;
         let workspace = args.workspace.as_deref().unwrap_or(&default_ws);
 
@@ -312,7 +312,7 @@ impl MemoryBrowseTool {
     fn detail_filter(&self, workspace: &str) -> SearchFilter {
         SearchFilter::new()
             .with_valid_only()
-            .with_workspace(WorkspaceFilter::Single(workspace.to_string()))
+            .with_agent_filter(AgentEnvFilter::Single(workspace.to_string()))
             .with_layer(MemoryLayer::L2Detail)
     }
 
@@ -323,7 +323,7 @@ impl MemoryBrowseTool {
     ) -> std::result::Result<Option<MemoryFact>, ToolError> {
         let filter = SearchFilter::new()
             .with_valid_only()
-            .with_workspace(WorkspaceFilter::Single(workspace.to_string()));
+            .with_agent_filter(AgentEnvFilter::Single(workspace.to_string()));
 
         let mut summaries: Vec<MemoryFact> = self
             .database

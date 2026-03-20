@@ -19,9 +19,9 @@ impl InboundMessageRouter {
     /// Resolve agent ID from channel binding (single-tier).
     ///
     /// Looks up the 1:1 channel-agent binding. Returns None if unbound.
-    pub(super) async fn resolve_agent_id_async(&self, channel: &str, sender_id: &str) -> Option<String> {
+    pub(super) async fn resolve_agent_id_async(&self, channel: &str) -> Option<String> {
         if let Some(ref manager) = self.workspace_manager {
-            if let Ok(Some(agent_id)) = manager.get_active_agent(channel, sender_id) {
+            if let Ok(Some(agent_id)) = manager.get_active_agent(channel) {
                 debug!("Channel '{}' bound to agent '{}'", channel, agent_id);
                 return Some(agent_id);
             }

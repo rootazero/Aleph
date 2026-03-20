@@ -327,54 +327,54 @@ impl HandlerRegistry {
             )
         });
 
-        // Workspace handlers (placeholders - actual handlers wired with WorkspaceManager)
+        // Workspace handlers (placeholders - actual handlers wired with AgentEnvStore)
         registry.register("workspace.create", |req| async move {
             JsonRpcResponse::error(
                 req.id,
                 INTERNAL_ERROR,
-                "workspace.create requires WorkspaceManager - wire Gateway runtime first".to_string(),
+                "workspace.create requires AgentEnvStore - wire Gateway runtime first".to_string(),
             )
         });
         registry.register("workspace.list", |req| async move {
             JsonRpcResponse::error(
                 req.id,
                 INTERNAL_ERROR,
-                "workspace.list requires WorkspaceManager - wire Gateway runtime first".to_string(),
+                "workspace.list requires AgentEnvStore - wire Gateway runtime first".to_string(),
             )
         });
         registry.register("workspace.get", |req| async move {
             JsonRpcResponse::error(
                 req.id,
                 INTERNAL_ERROR,
-                "workspace.get requires WorkspaceManager - wire Gateway runtime first".to_string(),
+                "workspace.get requires AgentEnvStore - wire Gateway runtime first".to_string(),
             )
         });
         registry.register("workspace.update", |req| async move {
             JsonRpcResponse::error(
                 req.id,
                 INTERNAL_ERROR,
-                "workspace.update requires WorkspaceManager - wire Gateway runtime first".to_string(),
+                "workspace.update requires AgentEnvStore - wire Gateway runtime first".to_string(),
             )
         });
         registry.register("workspace.archive", |req| async move {
             JsonRpcResponse::error(
                 req.id,
                 INTERNAL_ERROR,
-                "workspace.archive requires WorkspaceManager - wire Gateway runtime first".to_string(),
+                "workspace.archive requires AgentEnvStore - wire Gateway runtime first".to_string(),
             )
         });
         registry.register("channels.set_agent", |req| async move {
             JsonRpcResponse::error(
                 req.id,
                 INTERNAL_ERROR,
-                "channels.set_agent requires WorkspaceManager - wire Gateway runtime first".to_string(),
+                "channels.set_agent requires AgentEnvStore - wire Gateway runtime first".to_string(),
             )
         });
         registry.register("agents.bindings", |req| async move {
             JsonRpcResponse::error(
                 req.id,
                 INTERNAL_ERROR,
-                "agents.bindings requires WorkspaceManager - wire Gateway runtime first".to_string(),
+                "agents.bindings requires AgentEnvStore - wire Gateway runtime first".to_string(),
             )
         });
 
