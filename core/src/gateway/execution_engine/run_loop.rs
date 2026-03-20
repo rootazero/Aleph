@@ -283,6 +283,27 @@ impl<E: EventEmitter + Send + Sync + 'static> crate::agent_loop::LoopCallback
         });
     }
 
+    fn on_intermediate_text(&mut self, text: &str) {
+        self.seq += 1;
+        let chunk_index = self.chunk_index;
+        self.chunk_index += 1;
+
+        let event = StreamEvent::ResponseChunk {
+            run_id: self.run_id.clone(),
+            seq: self.seq,
+            content: text.to_string(),
+            chunk_index,
+            is_final: false,
+            is_intermediate: true,
+        };
+
+        // Fire-and-forget emit (LoopCallback is sync, emitter is async)
+        let emitter = self.emitter.clone();
+        tokio::spawn(async move {
+            let _ = emitter.emit(event).await;
+        });
+    }
+
     fn on_tool_start(&mut self, name: &str, input: &serde_json::Value) {
         self.seq += 1;
         let event = StreamEvent::ToolStart {

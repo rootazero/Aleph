@@ -361,23 +361,31 @@ impl EventEmitter for ReplyEmitter {
     async fn emit(&self, event: StreamEvent) -> Result<(), EventEmitError> {
         match event {
             StreamEvent::ResponseChunk {
-                content, is_final, ..
+                content, is_final, is_intermediate, ..
             } => {
-                // Both modes: accumulate text into buffer
-                if !content.is_empty() {
-                    self.buffer.lock().await.push_str(&content);
-                }
-
-                // Instant mode: flush on final chunk
-                if !self.config.stream_enabled && is_final {
-                    let mut buffer = self.buffer.lock().await;
-                    if !buffer.is_empty() {
-                        let text = std::mem::take(&mut *buffer);
-                        drop(buffer);
-                        self.send_to_channel(&text).await;
+                if is_intermediate {
+                    // Intermediate message: send immediately as a standalone message
+                    if !content.is_empty() {
+                        self.send_to_channel(&content).await;
                     }
+                    // Do NOT buffer — this is a separate message from the final response
+                } else {
+                    // Existing behavior: accumulate text into buffer
+                    if !content.is_empty() {
+                        self.buffer.lock().await.push_str(&content);
+                    }
+
+                    // Instant mode: flush on final chunk
+                    if !self.config.stream_enabled && is_final {
+                        let mut buffer = self.buffer.lock().await;
+                        if !buffer.is_empty() {
+                            let text = std::mem::take(&mut *buffer);
+                            drop(buffer);
+                            self.send_to_channel(&text).await;
+                        }
+                    }
+                    // Typewriter mode: do nothing here, wait for RunComplete
                 }
-                // Typewriter mode: do nothing here, wait for RunComplete
             }
 
             StreamEvent::RunComplete { summary, .. } => {
