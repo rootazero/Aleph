@@ -453,8 +453,13 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             let embedder = emb.clone();
             let target_dim = embedder.dimensions();
             tokio::spawn(async move {
-                match alephcore::memory::reembed::reembed_all_facts(&db, &embedder, target_dim, 32).await {
-                    Ok(n) if n > 0 => tracing::info!(updated = n, "[reembed] Startup re-embedding done"),
+                let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+                match alephcore::memory::reembed::reembed_all(&db, &embedder, target_dim, 32, None, cancel).await {
+                    Ok(r) if r.facts_updated > 0 || r.memories_updated > 0 => tracing::info!(
+                        facts = r.facts_updated,
+                        memories = r.memories_updated,
+                        "[reembed] Startup re-embedding done"
+                    ),
                     Ok(_) => {}
                     Err(e) => tracing::warn!(error = %e, "[reembed] Startup re-embedding failed"),
                 }
