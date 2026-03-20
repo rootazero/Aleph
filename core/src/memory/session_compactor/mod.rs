@@ -11,6 +11,7 @@
 //!   chunk compressible messages, generate d0 summaries, and trigger hierarchical
 //!   condensation (d0→d1→d2) when fanout thresholds are met.
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
@@ -20,7 +21,10 @@ use crate::gateway::router::SessionKey;
 use crate::memory::context::{MemoryFact, MemoryScope};
 use crate::memory::store::types::SearchFilter;
 use crate::memory::store::{MemoryBackend, MemoryStore};
+use crate::providers::AiProvider;
+use crate::providers::adapter::RequestPayload;
 use crate::providers::message::UnifiedMessage;
+use crate::sync_primitives::Arc;
 
 pub mod context_window;
 pub mod fallback;
@@ -36,7 +40,7 @@ use summary_engine::{chunk_messages, summary_to_fact};
 // ---------------------------------------------------------------------------
 
 /// Configuration for the SessionCompactor subsystem.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SessionCompactorConfig {
     /// Enable or disable the compactor entirely.
     pub enabled: bool,
@@ -87,13 +91,31 @@ impl Default for SessionCompactorConfig {
 /// to keep long conversations within the model's token budget.
 pub struct SessionCompactor {
     database: MemoryBackend,
+    provider: Option<Arc<dyn AiProvider>>,
     config: SessionCompactorConfig,
 }
 
 impl SessionCompactor {
     /// Create a new SessionCompactor with the given storage backend and config.
     pub fn new(database: MemoryBackend, config: SessionCompactorConfig) -> Self {
-        Self { database, config }
+        Self {
+            database,
+            provider: None,
+            config,
+        }
+    }
+
+    /// Attach an AI provider for LLM-based summary generation.
+    ///
+    /// When set, summaries use a three-level fallback strategy:
+    /// 1. Normal LLM summarization
+    /// 2. Aggressive LLM summarization (shorter target)
+    /// 3. Deterministic truncation (no LLM)
+    ///
+    /// When absent, all summaries use deterministic truncation only.
+    pub fn with_provider(mut self, provider: Arc<dyn AiProvider>) -> Self {
+        self.provider = Some(provider);
+        self
     }
 
     /// Return a reference to the compactor configuration.
@@ -294,7 +316,7 @@ impl SessionCompactor {
 
         // Generate d0 summaries for each chunk
         for chunk in &chunks {
-            let summary_text = self.generate_summary(chunk, 0);
+            let summary_text = self.generate_summary(chunk, 0, None).await;
             let source_tokens: usize = chunk
                 .iter()
                 .map(|(_, c)| estimate_tokens(c, ratio))
@@ -365,17 +387,98 @@ impl SessionCompactor {
 
     /// Generate a summary for the given messages at the specified depth.
     ///
-    /// Currently uses the deterministic fallback. Task 11 will wire in the
-    /// LLM provider for higher-quality summarization.
-    fn generate_summary(&self, messages: &[(String, String)], _depth: u32) -> String {
-        // Deterministic fallback: first-sentence extraction with token budget
-        let input_tokens: usize = messages
+    /// Uses a three-level fallback strategy when an AI provider is available:
+    /// 1. **Normal** — LLM summarization at ~35% compression ratio
+    /// 2. **Aggressive** — LLM summarization at ~20% compression ratio
+    /// 3. **Deterministic** — rule-based first-sentence extraction
+    ///
+    /// Falls back to the next level when the LLM call fails or when the
+    /// output is not shorter than the input (which would defeat the purpose
+    /// of compression).
+    async fn generate_summary(
+        &self,
+        messages: &[(String, String)],
+        depth: u32,
+        previous_context: Option<&str>,
+    ) -> String {
+        let ratio = self.config.token_estimate_ratio;
+        let source_token_count: usize = messages
             .iter()
-            .map(|(_, c)| estimate_tokens(c, self.config.token_estimate_ratio))
+            .map(|(_, c)| estimate_tokens(c, ratio))
             .sum();
-        let target = fallback::target_tokens(input_tokens, FallbackLevel::Normal);
-        let max_chars = (target as f64 * self.config.token_estimate_ratio) as usize;
+
+        if let Some(ref provider) = self.provider {
+            // Level 1: Normal LLM summarization
+            let prompt = summary_engine::build_summary_prompt(
+                messages,
+                depth,
+                previous_context,
+                FallbackLevel::Normal,
+            );
+            match self.call_llm(provider.as_ref(), &prompt).await {
+                Ok(text) if !text.is_empty() && estimate_tokens(&text, ratio) < source_token_count => {
+                    return text;
+                }
+                Ok(_) => {
+                    warn!(
+                        depth,
+                        source_tokens = source_token_count,
+                        "LLM summary (normal) was empty or not shorter than input, escalating to aggressive"
+                    );
+                }
+                Err(e) => {
+                    warn!(
+                        error = %e,
+                        depth,
+                        "LLM summary (normal) failed, escalating to aggressive"
+                    );
+                }
+            }
+
+            // Level 2: Aggressive LLM summarization
+            let prompt = summary_engine::build_summary_prompt(
+                messages,
+                depth,
+                previous_context,
+                FallbackLevel::Aggressive,
+            );
+            match self.call_llm(provider.as_ref(), &prompt).await {
+                Ok(text) if !text.is_empty() && estimate_tokens(&text, ratio) < source_token_count => {
+                    return text;
+                }
+                Ok(_) => {
+                    warn!(
+                        depth,
+                        source_tokens = source_token_count,
+                        "LLM summary (aggressive) was empty or not shorter than input, falling back to deterministic"
+                    );
+                }
+                Err(e) => {
+                    warn!(
+                        error = %e,
+                        depth,
+                        "LLM summary (aggressive) failed, falling back to deterministic"
+                    );
+                }
+            }
+
+            // Level 3: Deterministic fallback
+            warn!(depth, "Using deterministic fallback for summary generation");
+        }
+
+        // No provider or all LLM attempts failed — deterministic fallback
+        let target = fallback::target_tokens(source_token_count, FallbackLevel::Normal);
+        let max_chars = (target as f64 * ratio) as usize;
         deterministic_truncate(messages, max_chars)
+    }
+
+    /// Call the LLM provider with a summarization prompt.
+    async fn call_llm(&self, provider: &dyn AiProvider, prompt: &str) -> crate::error::Result<String> {
+        let msgs = [UnifiedMessage::user(prompt)];
+        let system = "You are a precise summarizer. Output only the summary, no preamble or meta-commentary.";
+        let payload = RequestPayload::new(&msgs).with_system(Some(system));
+        let response = provider.process(payload).await?;
+        Ok(response.text_content())
     }
 
     /// Count valid facts at a given depth for a session.
@@ -438,8 +541,10 @@ impl SessionCompactor {
             .map(|f| ("assistant".to_string(), f.content.clone()))
             .collect();
 
-        // Generate condensed summary
-        let summary_text = self.generate_summary(&messages, target_depth);
+        // Generate condensed summary — for condensation (d0→d1, d1→d2) we can
+        // pass the source facts' content as "previous context" since they are
+        // themselves summaries from the previous depth level.
+        let summary_text = self.generate_summary(&messages, target_depth, None).await;
 
         // Determine sequence number for the new target fact
         let existing_target = self
