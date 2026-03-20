@@ -357,6 +357,8 @@ pub(in crate::commands::start) fn register_memory_handlers(
     server: &mut GatewayServer,
     memory_db: &MemoryBackend,
     compression_service: &Option<std::sync::Arc<alephcore::memory::compression::CompressionService>>,
+    embedder: &Option<std::sync::Arc<dyn alephcore::memory::EmbeddingProvider>>,
+    event_bus: &std::sync::Arc<alephcore::gateway::event_bus::GatewayEventBus>,
     daemon: bool,
 ) {
     register_handler!(server, "memory.search", memory_handlers::handle_search, memory_db);
@@ -378,6 +380,54 @@ pub(in crate::commands::start) fn register_memory_handlers(
         });
     }
 
+    // Reembed migration handlers
+    if let Some(emb) = embedder {
+        let reembed_state = std::sync::Arc::new(
+            alephcore::gateway::handlers::memory::ReembedState::new()
+        );
+
+        {
+            let db = ::std::sync::Arc::clone(memory_db);
+            let emb = ::std::sync::Arc::clone(emb);
+            let eb = ::std::sync::Arc::clone(event_bus);
+            let rs = ::std::sync::Arc::clone(&reembed_state);
+            server.handlers_mut().register("memory.reembed", move |req| {
+                let db = ::std::sync::Arc::clone(&db);
+                let emb = ::std::sync::Arc::clone(&emb);
+                let eb = ::std::sync::Arc::clone(&eb);
+                let rs = ::std::sync::Arc::clone(&rs);
+                async move {
+                    memory_handlers::handle_reembed(req, db, emb, eb, rs).await
+                }
+            });
+        }
+
+        {
+            let rs = ::std::sync::Arc::clone(&reembed_state);
+            server.handlers_mut().register("memory.reembed.cancel", move |req| {
+                let rs = ::std::sync::Arc::clone(&rs);
+                async move {
+                    memory_handlers::handle_reembed_cancel(req, rs).await
+                }
+            });
+        }
+    } else {
+        server.handlers_mut().register("memory.reembed", |req| async move {
+            alephcore::gateway::protocol::JsonRpcResponse::error(
+                req.id,
+                alephcore::gateway::protocol::INTERNAL_ERROR,
+                "Reembed not available: missing embedding provider".to_string(),
+            )
+        });
+        server.handlers_mut().register("memory.reembed.cancel", |req| async move {
+            alephcore::gateway::protocol::JsonRpcResponse::error(
+                req.id,
+                alephcore::gateway::protocol::INTERNAL_ERROR,
+                "Reembed not available: missing embedding provider".to_string(),
+            )
+        });
+    }
+
     if !daemon {
         println!("Memory methods:");
         println!("  - memory.search     : Search memories");
@@ -385,6 +435,7 @@ pub(in crate::commands::start) fn register_memory_handlers(
         println!("  - memory.delete     : Delete a memory");
         println!("  - memory.clear      : Clear memories");
         println!("  - memory.compress   : Trigger compression");
+        println!("  - memory.reembed    : Re-embed all memories");
         println!();
     }
 }

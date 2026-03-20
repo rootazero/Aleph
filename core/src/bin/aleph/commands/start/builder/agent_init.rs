@@ -74,7 +74,7 @@ pub(in crate::commands::start) struct AgentHandlersResult {
     pub default_provider: Option<Arc<dyn alephcore::providers::AiProvider>>,
     pub dispatch_registry: Option<Arc<alephcore::dispatcher::ToolRegistry>>,
     pub sub_agent_dispatcher: Option<Arc<tokio::sync::RwLock<alephcore::agents::sub_agents::SubAgentDispatcher>>>,
-    pub _embedder: Option<std::sync::Arc<dyn alephcore::memory::EmbeddingProvider>>,
+    pub embedder: Option<std::sync::Arc<dyn alephcore::memory::EmbeddingProvider>>,
     pub compression_service: Option<std::sync::Arc<alephcore::memory::compression::CompressionService>>,
     /// Swappable provider registry for hot-switching default provider at runtime
     pub swappable_registry: Option<Arc<alephcore::SwappableProviderRegistry>>,
@@ -793,7 +793,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         default_provider: default_prov,
         dispatch_registry: dispatch_reg,
         sub_agent_dispatcher: sub_agent_disp,
-        _embedder: embedder_out,
+        embedder: embedder_out,
         compression_service: compression_out,
         swappable_registry: swappable_reg,
     }

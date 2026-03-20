@@ -491,7 +491,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     register_config_handlers(&mut server, app_config, config_patcher, event_bus.clone(), auth_bundle.device_store.clone(), agent_result.swappable_registry.clone(), auth_bundle.auth_ctx.shared_token_mgr.clone(), acp_manager.clone());
 
     register_session_handlers(&mut server, &session_manager, args.daemon);
-    register_memory_handlers(&mut server, &memory_db, &agent_result.compression_service, args.daemon);
+    register_memory_handlers(&mut server, &memory_db, &agent_result.compression_service, &agent_result.embedder, &event_bus, args.daemon);
     register_daemon_handlers(&mut server, start_time, args.daemon);
 
     // OAuth state: restore from vault if chatgpt provider exists

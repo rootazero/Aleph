@@ -396,6 +396,168 @@ pub async fn handle_app_list(
     }
 }
 
+// ============================================================================
+// Reembed Migration
+// ============================================================================
+
+use std::sync::atomic::{AtomicBool, Ordering};
+use crate::memory::EmbeddingProvider;
+use crate::gateway::event_bus::{GatewayEventBus, TopicEvent};
+
+/// Shared state for the reembed background task.
+pub struct ReembedState {
+    /// True while a reembed task is running.
+    pub running: Arc<AtomicBool>,
+    /// Set to true to cancel the current task.
+    pub cancel: Arc<AtomicBool>,
+}
+
+impl ReembedState {
+    pub fn new() -> Self {
+        Self {
+            running: Arc::new(AtomicBool::new(false)),
+            cancel: Arc::new(AtomicBool::new(false)),
+        }
+    }
+}
+
+/// RAII guard that clears the running flag on drop (even on panic).
+struct RunningGuard(Arc<AtomicBool>);
+
+impl Drop for RunningGuard {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
+
+/// Parameters for memory.reembed
+#[derive(Debug, Default, Deserialize)]
+pub struct ReembedParams {
+    /// Target dimension (optional, defaults to current embedder's dimension)
+    #[serde(default)]
+    pub target_dim: Option<usize>,
+}
+
+/// Start a background reembed migration.
+pub async fn handle_reembed(
+    request: JsonRpcRequest,
+    db: MemoryBackend,
+    embedder: Arc<dyn EmbeddingProvider>,
+    event_bus: Arc<GatewayEventBus>,
+    reembed_state: Arc<ReembedState>,
+) -> JsonRpcResponse {
+    // Re-entrancy guard
+    if reembed_state.running.compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed).is_err() {
+        return JsonRpcResponse::error(
+            request.id,
+            -32001,
+            "Reembed already in progress".to_string(),
+        );
+    }
+
+    let params: ReembedParams = request
+        .params
+        .as_ref()
+        .and_then(|p| serde_json::from_value(p.clone()).ok())
+        .unwrap_or_default();
+
+    let target_dim = params.target_dim.unwrap_or_else(|| embedder.dimensions());
+    let task_id = format!("reembed-{}", chrono::Utc::now().timestamp_millis());
+    let task_id_clone = task_id.clone();
+
+    // Reset cancel flag
+    reembed_state.cancel.store(false, Ordering::Release);
+    let cancel = Arc::clone(&reembed_state.cancel);
+
+    // Create progress channel
+    let (progress_tx, mut progress_rx) = tokio::sync::watch::channel(
+        crate::memory::reembed::ReembedProgress {
+            phase: "facts",
+            total: 0,
+            completed: 0,
+            failed: 0,
+        },
+    );
+
+    // Spawn progress forwarder
+    let eb_progress = Arc::clone(&event_bus);
+    let tid_progress = task_id.clone();
+    tokio::spawn(async move {
+        while progress_rx.changed().await.is_ok() {
+            let p = progress_rx.borrow().clone();
+            let _ = eb_progress.publish_json(&TopicEvent::new(
+                "memory.reembed.progress",
+                serde_json::json!({
+                    "task_id": tid_progress,
+                    "phase": p.phase,
+                    "total": p.total,
+                    "completed": p.completed,
+                    "failed": p.failed,
+                }),
+            ));
+        }
+    });
+
+    // Spawn background reembed task
+    let state_ref = Arc::clone(&reembed_state);
+    tokio::spawn(async move {
+        let _guard = RunningGuard(Arc::clone(&state_ref.running));
+
+        let result = crate::memory::reembed::reembed_all(
+            &db, &embedder, target_dim, 32, Some(progress_tx), cancel,
+        )
+        .await;
+
+        // Publish completion event
+        match result {
+            Ok(r) => {
+                let _ = event_bus.publish_json(&TopicEvent::new(
+                    "memory.reembed.completed",
+                    serde_json::json!({
+                        "task_id": task_id_clone,
+                        "facts_updated": r.facts_updated,
+                        "facts_total": r.facts_total,
+                        "memories_updated": r.memories_updated,
+                        "memories_total": r.memories_total,
+                        "errors": r.errors,
+                    }),
+                ));
+            }
+            Err(e) => {
+                let _ = event_bus.publish_json(&TopicEvent::new(
+                    "memory.reembed.completed",
+                    serde_json::json!({
+                        "task_id": task_id_clone,
+                        "error": format!("{}", e),
+                    }),
+                ));
+            }
+        }
+    });
+
+    JsonRpcResponse::success(
+        request.id,
+        json!({ "status": "started", "task_id": task_id }),
+    )
+}
+
+/// Cancel a running reembed migration.
+pub async fn handle_reembed_cancel(
+    request: JsonRpcRequest,
+    reembed_state: Arc<ReembedState>,
+) -> JsonRpcResponse {
+    if !reembed_state.running.load(Ordering::Acquire) {
+        return JsonRpcResponse::error(
+            request.id,
+            -32001,
+            "No reembed task is running".to_string(),
+        );
+    }
+
+    reembed_state.cancel.store(true, Ordering::Release);
+    JsonRpcResponse::success(request.id, json!({ "status": "cancelled" }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
