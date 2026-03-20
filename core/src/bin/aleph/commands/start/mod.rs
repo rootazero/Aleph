@@ -273,8 +273,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
 
     let session_manager = initialize_session_manager(args.daemon).await;
 
-    // Bootstrap default skills and plugins from GitHub on first run
-    alephcore::discovery::bootstrap_repositories(args.daemon);
+    // Plugins are now installed via marketplace: `aleph plugin marketplace update && aleph plugin install <name>`
 
     initialize_extension_manager(args.daemon).await;
 
