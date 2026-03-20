@@ -33,7 +33,8 @@ fn format_schedule_summary(
                     }
                 }
                 "cron" => {
-                    if let Some(expr) = obj.get("expression").and_then(|v| v.as_str()) {
+                    // Backend serializes as "expr", panel historically used "expression"
+                    if let Some(expr) = obj.get("expr").or_else(|| obj.get("expression")).and_then(|v| v.as_str()) {
                         return expr.to_string();
                     }
                 }
@@ -41,7 +42,8 @@ fn format_schedule_summary(
                     if let Some(dt) = obj.get("datetime").and_then(|v| v.as_str()) {
                         return format!("At {}", dt);
                     }
-                    if let Some(ts) = obj.get("at_ms").and_then(|v| v.as_i64()) {
+                    // Backend serializes as "at", panel historically used "at_ms"
+                    if let Some(ts) = obj.get("at").or_else(|| obj.get("at_ms")).and_then(|v| v.as_i64()) {
                         return format!("At {}", format_timestamp(ts / 1000));
                     }
                 }
@@ -143,6 +145,40 @@ fn parse_optional_i64(s: &str) -> Option<i64> {
     }
 }
 
+/// Extract schedule type and value from the `schedule_kind` JSON object returned by backend.
+///
+/// Backend returns tagged enums like:
+///   `{"kind":"cron","expr":"0 0 11 * * *","tz":null,"stagger_ms":null}`
+///   `{"kind":"every","every_ms":3600000,"anchor_ms":null}`
+///   `{"kind":"at","at":1711944000000,"delete_after_run":true}`
+///
+/// Returns (kind_str, schedule_str, anchor_ms_str, stagger_ms_str).
+fn extract_schedule_from_kind(
+    schedule_kind: &Option<serde_json::Value>,
+) -> (String, String, Option<String>, Option<String>) {
+    let Some(obj) = schedule_kind else {
+        return ("cron".to_string(), String::new(), None, None);
+    };
+    let kind = obj.get("kind").and_then(|v| v.as_str()).unwrap_or("cron");
+    match kind {
+        "cron" => {
+            let expr = obj.get("expr").and_then(|v| v.as_str()).unwrap_or("");
+            let stagger = obj.get("stagger_ms").and_then(|v| v.as_i64()).map(|v| v.to_string());
+            (kind.to_string(), expr.to_string(), None, stagger)
+        }
+        "every" => {
+            let every_ms = obj.get("every_ms").and_then(|v| v.as_i64()).unwrap_or(0);
+            let anchor = obj.get("anchor_ms").and_then(|v| v.as_i64()).map(|v| v.to_string());
+            (kind.to_string(), every_ms.to_string(), anchor, None)
+        }
+        "at" => {
+            let at = obj.get("at").and_then(|v| v.as_i64()).unwrap_or(0);
+            (kind.to_string(), at.to_string(), None, None)
+        }
+        _ => ("cron".to_string(), String::new(), None, None),
+    }
+}
+
 /// Build a `schedule_kind` JSON object from form fields.
 /// Returns the tagged JSON like `{"kind":"every","every_ms":60000}`.
 fn build_schedule_kind_json(
@@ -167,7 +203,7 @@ fn build_schedule_kind_json(
         "cron" => {
             let mut obj = serde_json::json!({
                 "kind": "cron",
-                "expression": schedule,
+                "expr": schedule,
             });
             if let Some(stagger) = parse_optional_i64(stagger_ms_str) {
                 obj["stagger_ms"] = serde_json::json!(stagger);
@@ -464,15 +500,20 @@ fn JobEditor(
                 // Load existing job data
                 if let Some(job) = jobs.get().get(idx) {
                     form_name.set(job.name.clone());
-                    form_schedule_kind.set(job.schedule_kind_str.clone());
-                    form_schedule.set(job.schedule.clone());
+
+                    // Extract schedule type and value from schedule_kind JSON object
+                    // Backend returns: {"kind":"cron","expr":"..."} or {"kind":"every","every_ms":...} etc.
+                    let (sk_type, sk_val, sk_anchor, sk_stagger) = extract_schedule_from_kind(&job.schedule_kind);
+                    form_schedule_kind.set(sk_type);
+                    form_schedule.set(sk_val);
+
                     form_agent_id.set(job.agent_id.clone());
                     form_prompt.set(job.prompt.clone());
                     form_timezone.set(job.timezone.clone().unwrap_or_default());
                     form_tags.set(job.tags.join(", "));
                     form_enabled.set(job.enabled);
-                    form_anchor_ms.set(job.anchor_ms.map(|v| v.to_string()).unwrap_or_default());
-                    form_stagger_ms.set(job.stagger_ms.map(|v| v.to_string()).unwrap_or_default());
+                    form_anchor_ms.set(sk_anchor.or(job.anchor_ms.map(|v| v.to_string())).unwrap_or_default());
+                    form_stagger_ms.set(sk_stagger.or(job.stagger_ms.map(|v| v.to_string())).unwrap_or_default());
                     form_session_target.set(job.session_target.clone().unwrap_or_default());
 
                     // Populate failure alert from JSON
@@ -547,8 +588,6 @@ fn JobEditor(
             &form_anchor_ms.get(), &form_stagger_ms.get(),
         );
 
-        let anchor_ms = parse_optional_i64(&form_anchor_ms.get());
-        let stagger_ms = parse_optional_i64(&form_stagger_ms.get());
         let session_target = {
             let s = form_session_target.get();
             if s.trim().is_empty() { None } else { Some(s) }
@@ -573,15 +612,12 @@ fn JobEditor(
             let create = CreateCronJob {
                 name,
                 schedule,
-                schedule_kind,
+                schedule_kind: schedule_kind_obj,
                 agent_id,
                 prompt,
                 enabled,
                 timezone,
                 tags,
-                schedule_kind_obj,
-                anchor_ms,
-                stagger_ms,
                 session_target,
                 failure_alert,
             };
@@ -606,16 +642,12 @@ fn JobEditor(
                 let patch = UpdateCronJob {
                     job_id: job.id.clone(),
                     name: Some(name),
-                    schedule: Some(schedule),
-                    schedule_kind: Some(schedule_kind),
+                    schedule_kind: schedule_kind_obj,
                     agent_id: Some(agent_id),
                     prompt: Some(prompt),
                     enabled: Some(enabled),
                     timezone,
                     tags: Some(tags),
-                    schedule_kind_obj,
-                    anchor_ms,
-                    stagger_ms,
                     session_target,
                     failure_alert,
                 };

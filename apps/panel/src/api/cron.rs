@@ -57,8 +57,13 @@ pub struct CronJobInfo {
 #[derive(Debug, Clone, Serialize)]
 pub struct CreateCronJob {
     pub name: String,
+    /// Legacy fallback: cron expression string (used if schedule_kind is None)
+    #[serde(skip_serializing_if = "String::is_empty")]
     pub schedule: String,
-    pub schedule_kind: String,
+    /// Structured schedule: tagged JSON matching backend ScheduleKind enum
+    /// e.g. {"kind":"cron","expr":"0 0 11 * * *"} or {"kind":"every","every_ms":60000}
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub schedule_kind: Option<Value>,
     pub agent_id: String,
     pub prompt: String,
     pub enabled: bool,
@@ -66,12 +71,6 @@ pub struct CreateCronJob {
     pub timezone: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub schedule_kind_obj: Option<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub anchor_ms: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub stagger_ms: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_target: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -84,10 +83,9 @@ pub struct UpdateCronJob {
     pub job_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// Structured schedule: tagged JSON matching backend ScheduleKind enum
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub schedule: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub schedule_kind: Option<String>,
+    pub schedule_kind: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -98,12 +96,6 @@ pub struct UpdateCronJob {
     pub timezone: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tags: Option<Vec<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub schedule_kind_obj: Option<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub anchor_ms: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub stagger_ms: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_target: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
