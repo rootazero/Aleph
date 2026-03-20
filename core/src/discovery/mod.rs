@@ -165,12 +165,7 @@ impl DiscoveryManager {
         self.scanner.discover_component("agents")
     }
 
-    /// Discover all plugin directories
-    pub fn discover_plugin_dirs(&self) -> DiscoveryResult<Vec<DiscoveredPath>> {
-        self.scanner.discover_component("plugins")
-    }
-
-    /// Discover all installed plugins (with monorepo support)
+    /// Discover all installed plugins (with manifest validation and monorepo support)
     ///
     /// Scans `~/.aleph/plugins/` for plugin manifests, including
     /// one-level-deep monorepo layouts (e.g., cloned plugin repos).

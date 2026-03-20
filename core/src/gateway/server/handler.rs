@@ -481,7 +481,22 @@ async fn handle_connection(
 
                         if should_forward {
                             debug!("Forwarding event to {}", conn_id);
-                            if let Err(e) = write.send(WsMessage::Text(event_json.into())).await {
+                            // Wrap TopicEvent into JSON-RPC notification format
+                            // so the panel can dispatch it via method == "event"
+                            let wire_json = if let Ok(event_obj) = serde_json::from_str::<serde_json::Value>(&event_json) {
+                                if event_obj.get("topic").is_some() && event_obj.get("method").is_none() {
+                                    // TopicEvent format -> wrap as JSON-RPC notification
+                                    serde_json::json!({
+                                        "method": "event",
+                                        "params": event_obj,
+                                    }).to_string()
+                                } else {
+                                    event_json
+                                }
+                            } else {
+                                event_json
+                            };
+                            if let Err(e) = write.send(WsMessage::Text(wire_json.into())).await {
                                 error!("Failed to send event to {}: {}", conn_id, e);
                                 break;
                             }

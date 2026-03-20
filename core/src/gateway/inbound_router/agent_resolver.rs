@@ -31,13 +31,25 @@ impl InboundMessageRouter {
     }
 
     /// Build InboundContext from message with pre-resolved agent ID
-    pub(super) fn build_context_with_agent(&self, msg: &InboundMessage, agent_id: &str) -> InboundContext {
+    pub(super) async fn build_context_with_agent(&self, msg: &InboundMessage, agent_id: &str) -> InboundContext {
         let reply_route = ReplyRoute::new(
             msg.channel_id.clone(),
             msg.conversation_id.clone(),
         );
 
-        let session_key = self.resolve_session_key_with_agent(msg, agent_id);
+        let base_key = self.resolve_session_key_with_agent(msg, agent_id);
+
+        // Resolve current epoch from session manager so messages route to
+        // the latest session created by /new
+        let session_key = if let Some(ref sm) = self.session_manager {
+            let base_pattern = base_key.base_key_pattern();
+            match sm.get_current_epoch(&base_pattern).await {
+                Ok(epoch) if epoch > 0 => base_key.with_epoch(epoch),
+                _ => base_key,
+            }
+        } else {
+            base_key
+        };
 
         let sender_normalized = if msg.channel_id.as_str() == "imessage" {
             normalize_phone(msg.sender_id.as_str())

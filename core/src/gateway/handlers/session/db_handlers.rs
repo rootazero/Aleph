@@ -306,6 +306,7 @@ pub async fn handle_create_db(
     let session_key = SessionKey::Main {
         agent_id: name.clone().unwrap_or_else(|| "main".to_string()),
         main_key: session_key_str.clone(),
+        epoch: 0,
     };
 
     match manager.get_or_create(&session_key).await {

@@ -181,6 +181,7 @@ mod tests {
         let key = LegacySessionKey::Main {
             agent_id: "main".into(),
             main_key: "default".into(),
+            epoch: 0,
         };
         sm.get_or_create(&key).await.unwrap();
 

@@ -14,7 +14,7 @@ pub fn BehaviorView() -> impl IntoView {
     // State
     let config = RwSignal::new(BehaviorConfig {
         output_mode: "typewriter".to_string(),
-        typing_speed: 200,
+        typing_speed: 100,
     });
     let loading = RwSignal::new(true);
     let error = RwSignal::new(Option::<String>::None);

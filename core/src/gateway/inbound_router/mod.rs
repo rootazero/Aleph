@@ -273,7 +273,7 @@ impl InboundMessageRouter {
         }
 
         // Build context with resolved agent
-        let ctx = self.build_context_with_agent(&msg, &agent_id);
+        let ctx = self.build_context_with_agent(&msg, &agent_id).await;
 
         // Check permissions
         let ctx = match self.check_permission(ctx).await {

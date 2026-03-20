@@ -207,14 +207,26 @@ pub async fn handle_add(
         // Add provider
         cfg.memory.embedding.providers.push(provider_config.clone());
 
+        tracing::info!(
+            provider_id = %provider_config.id,
+            total_providers = cfg.memory.embedding.providers.len(),
+            "Embedding provider added to in-memory config, saving to disk..."
+        );
+
         // Save to file
         if let Err(e) = save_config(&cfg) {
+            error!(error = %e, provider_id = %provider_config.id, "Failed to save embedding provider config");
             return JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,
                 format!("Failed to save config: {}", e),
             );
         }
+
+        tracing::info!(
+            provider_id = %provider_config.id,
+            "Embedding provider saved to config.toml successfully"
+        );
     }
 
     // Broadcast event

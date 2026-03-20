@@ -26,7 +26,7 @@ impl ContentLoader {
                     result.summary.skills_loaded += 1;
                 }
                 Err(e) => {
-                    tracing::warn!("Failed to load skill from {:?}: {}", dir.path, e);
+                    tracing::debug!("Failed to load skill from {:?}: {}", dir.path, e);
                     result.summary.errors.push(format!("{}: {}", dir.path.display(), e));
                 }
             }
@@ -41,7 +41,7 @@ impl ContentLoader {
                     result.summary.commands_loaded += 1;
                 }
                 Err(e) => {
-                    tracing::warn!("Failed to load command from {:?}: {}", dir.path, e);
+                    tracing::debug!("Failed to load command from {:?}: {}", dir.path, e);
                     result.summary.errors.push(format!("{}: {}", dir.path.display(), e));
                 }
             }
@@ -56,14 +56,14 @@ impl ContentLoader {
                     result.summary.agents_loaded += 1;
                 }
                 Err(e) => {
-                    tracing::warn!("Failed to load agent from {:?}: {}", dir.path, e);
+                    tracing::debug!("Failed to load agent from {:?}: {}", dir.path, e);
                     result.summary.errors.push(format!("{}: {}", dir.path.display(), e));
                 }
             }
         }
 
         // 4. Load plugins (including their embedded skills, commands, agents, and hooks)
-        let plugin_dirs = discovery.discover_plugin_dirs()?;
+        let plugin_dirs = discovery.discover_plugins()?;
         for dir in plugin_dirs {
             match self.load_plugin(&dir.path).await {
                 Ok(plugin) => {
@@ -89,7 +89,7 @@ impl ContentLoader {
                     result.summary.plugins_loaded += 1;
                 }
                 Err(e) => {
-                    tracing::warn!("Failed to load plugin from {:?}: {}", dir.path, e);
+                    tracing::debug!("Failed to load plugin from {:?}: {}", dir.path, e);
                     result.summary.errors.push(format!("{}: {}", dir.path.display(), e));
                 }
             }

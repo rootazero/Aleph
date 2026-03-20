@@ -22,12 +22,16 @@ pub enum SessionKey {
         agent_id: String,
         #[serde(default = "default_main_key")]
         main_key: String,
+        #[serde(default)]
+        epoch: u32,
     },
 
     /// Per-peer isolation (different GUI windows, chat conversations)
     PerPeer {
         agent_id: String,
         peer_id: String,
+        #[serde(default)]
+        epoch: u32,
     },
 
     /// Task isolation (cron jobs, webhooks, scheduled tasks)
@@ -54,6 +58,7 @@ impl SessionKey {
         Self::Main {
             agent_id: agent_id.into(),
             main_key: "main".to_string(),
+            epoch: 0,
         }
     }
 
@@ -62,6 +67,32 @@ impl SessionKey {
         Self::PerPeer {
             agent_id: agent_id.into(),
             peer_id: peer_id.into(),
+            epoch: 0,
+        }
+    }
+
+    /// Return a clone with the given epoch
+    pub fn with_epoch(&self, epoch: u32) -> Self {
+        match self {
+            Self::Main { agent_id, main_key, .. } => Self::Main {
+                agent_id: agent_id.clone(),
+                main_key: main_key.clone(),
+                epoch,
+            },
+            Self::PerPeer { agent_id, peer_id, .. } => Self::PerPeer {
+                agent_id: agent_id.clone(),
+                peer_id: peer_id.clone(),
+                epoch,
+            },
+            other => other.clone(),
+        }
+    }
+
+    /// Get the epoch of this session key
+    pub fn epoch(&self) -> u32 {
+        match self {
+            Self::Main { epoch, .. } | Self::PerPeer { epoch, .. } => *epoch,
+            _ => 0,
         }
     }
 
@@ -99,8 +130,14 @@ impl SessionKey {
     /// Convert to a string key for storage/lookup
     pub fn to_key_string(&self) -> String {
         match self {
-            Self::Main { agent_id, main_key } => format!("agent:{}:{}", agent_id, main_key),
-            Self::PerPeer { agent_id, peer_id } => format!("agent:{}:peer:{}", agent_id, peer_id),
+            Self::Main { agent_id, main_key, epoch } => {
+                let base = format!("agent:{}:{}", agent_id, main_key);
+                if *epoch > 0 { format!("{}:s{}", base, epoch) } else { base }
+            }
+            Self::PerPeer { agent_id, peer_id, epoch } => {
+                let base = format!("agent:{}:peer:{}", agent_id, peer_id);
+                if *epoch > 0 { format!("{}:s{}", base, epoch) } else { base }
+            }
             Self::Task {
                 agent_id,
                 task_type,
@@ -110,6 +147,15 @@ impl SessionKey {
                 agent_id,
                 ephemeral_id,
             } => format!("agent:{}:ephemeral:{}", agent_id, ephemeral_id),
+        }
+    }
+
+    /// Return the base key string WITHOUT epoch suffix (for DB LIKE queries)
+    pub fn base_key_pattern(&self) -> String {
+        match self {
+            Self::Main { agent_id, main_key, .. } => format!("agent:{}:{}", agent_id, main_key),
+            Self::PerPeer { agent_id, peer_id, .. } => format!("agent:{}:peer:{}", agent_id, peer_id),
+            _ => self.to_key_string(),
         }
     }
 
@@ -123,27 +169,50 @@ impl SessionKey {
 
         let agent_id = parts[1].to_string();
 
-        match parts.get(2) {
-            Some(&"peer") if parts.len() >= 4 => Some(Self::PerPeer {
+        // Check if the last segment is an epoch suffix (sN where N > 0)
+        let (parts_slice, epoch) = {
+            let last = parts.last()?;
+            if let Some(n_str) = last.strip_prefix('s') {
+                if let Ok(n) = n_str.parse::<u32>() {
+                    if n > 0 {
+                        (&parts[..parts.len() - 1], n)
+                    } else {
+                        (&parts[..], 0)
+                    }
+                } else {
+                    (&parts[..], 0)
+                }
+            } else {
+                (&parts[..], 0)
+            }
+        };
+
+        // Use epoch-stripped parts for type matching (skip "agent" and agent_id)
+        let rest = &parts_slice[2..];
+
+        match rest {
+            ["peer", tail @ ..] if !tail.is_empty() => Some(Self::PerPeer {
                 agent_id,
-                peer_id: parts[3..].join(":"),
+                peer_id: tail.join(":"),
+                epoch,
             }),
-            Some(&"ephemeral") if parts.len() >= 4 => Some(Self::Ephemeral {
+            ["ephemeral", eid] => Some(Self::Ephemeral {
                 agent_id,
-                ephemeral_id: parts[3].to_string(),
+                ephemeral_id: eid.to_string(),
             }),
-            Some(&"cron") | Some(&"webhook") | Some(&"scheduled") if parts.len() >= 4 => {
+            [tt @ ("cron" | "webhook" | "scheduled"), tid] => {
                 Some(Self::Task {
                     agent_id,
-                    task_type: parts[2].to_string(),
-                    task_id: parts[3].to_string(),
+                    task_type: tt.to_string(),
+                    task_id: tid.to_string(),
                 })
             }
-            Some(main_key) => Some(Self::Main {
+            [main_key] => Some(Self::Main {
                 agent_id,
                 main_key: main_key.to_string(),
+                epoch,
             }),
-            None => None,
+            _ => None,
         }
     }
 }
@@ -153,17 +222,17 @@ impl SessionKey {
     /// Convert legacy SessionKey to new routing SessionKey
     pub fn to_new(&self) -> crate::routing::SessionKey {
         match self {
-            Self::Main { agent_id, main_key } => crate::routing::SessionKey::Main {
+            Self::Main { agent_id, main_key, epoch } => crate::routing::SessionKey::Main {
                 agent_id: agent_id.clone(),
                 main_key: main_key.clone(),
-                epoch: 0,
+                epoch: *epoch,
             },
-            Self::PerPeer { agent_id, peer_id } => crate::routing::SessionKey::DirectMessage {
+            Self::PerPeer { agent_id, peer_id, epoch } => crate::routing::SessionKey::DirectMessage {
                 agent_id: agent_id.clone(),
                 channel: String::new(),
                 peer_id: peer_id.clone(),
                 dm_scope: crate::routing::DmScope::PerPeer,
-                epoch: 0,
+                epoch: *epoch,
             },
             Self::Task { agent_id, task_type, task_id } => crate::routing::SessionKey::Task {
                 agent_id: agent_id.clone(),
@@ -180,17 +249,20 @@ impl SessionKey {
     /// Create legacy SessionKey from new routing SessionKey
     pub fn from_new(key: &crate::routing::SessionKey) -> Self {
         match key {
-            crate::routing::SessionKey::Main { agent_id, main_key, .. } => Self::Main {
+            crate::routing::SessionKey::Main { agent_id, main_key, epoch } => Self::Main {
                 agent_id: agent_id.clone(),
                 main_key: main_key.clone(),
+                epoch: *epoch,
             },
-            crate::routing::SessionKey::DirectMessage { agent_id, peer_id, .. } => Self::PerPeer {
+            crate::routing::SessionKey::DirectMessage { agent_id, peer_id, epoch, .. } => Self::PerPeer {
                 agent_id: agent_id.clone(),
                 peer_id: peer_id.clone(),
+                epoch: *epoch,
             },
             crate::routing::SessionKey::Group { agent_id, peer_id, .. } => Self::PerPeer {
                 agent_id: agent_id.clone(),
                 peer_id: peer_id.clone(),
+                epoch: 0,
             },
             crate::routing::SessionKey::Task { agent_id, task_type, task_id } => Self::Task {
                 agent_id: agent_id.clone(),

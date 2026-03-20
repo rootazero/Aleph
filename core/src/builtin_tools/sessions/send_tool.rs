@@ -640,7 +640,7 @@ mod tests {
         let routing_key = RoutingKey::dm("main", "telegram", "user123", DmScope::PerPeer);
         let gateway_key = session_key_to_gateway(&routing_key);
 
-        assert!(matches!(gateway_key, SessionKey::PerPeer { agent_id, peer_id } if agent_id == "main" && peer_id == "user123"));
+        assert!(matches!(gateway_key, SessionKey::PerPeer { agent_id, peer_id, .. } if agent_id == "main" && peer_id == "user123"));
     }
 
     #[test]

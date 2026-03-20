@@ -185,10 +185,33 @@ impl Config {
             return self.save_to_file(&path);
         }
 
-        debug!(
-            sections = ?sections,
-            "Performing incremental config save"
-        );
+        // Log embedding provider count when saving memory section
+        if sections.contains(&"memory") {
+            let embed_count = self.memory.embedding.providers.len();
+            let active_id = &self.memory.embedding.active_provider_id;
+            if embed_count == 0 {
+                // TRAP: log backtrace when saving empty providers
+                error!(
+                    sections = ?sections,
+                    embedding_providers_count = embed_count,
+                    active_embedding_provider = %active_id,
+                    backtrace = %std::backtrace::Backtrace::force_capture(),
+                    "BUG TRAP: save_incremental called with EMPTY embedding providers!"
+                );
+            } else {
+                info!(
+                    sections = ?sections,
+                    embedding_providers_count = embed_count,
+                    active_embedding_provider = %active_id,
+                    "Incremental save: memory section (embedding provider snapshot)"
+                );
+            }
+        } else {
+            debug!(
+                sections = ?sections,
+                "Performing incremental config save"
+            );
+        }
 
         // Read existing file
         let existing_contents = fs::read_to_string(&path).map_err(|e| {

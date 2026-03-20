@@ -809,10 +809,10 @@ fn ReembedMigrationCard() -> impl IntoView {
                             let errors = data.get("errors").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0);
 
                             let msg = format!(
-                                "Facts: {}/{} 已迁移, Memories: {}/{} 已迁移{}",
+                                "Facts: {}/{} migrated, Memories: {}/{} migrated{}",
                                 facts_updated, facts_total,
                                 memories_updated, memories_total,
-                                if errors > 0 { format!(", {} 个错误", errors) } else { String::new() },
+                                if errors > 0 { format!(", {} errors", errors) } else { String::new() },
                             );
                             set_result_message.set(Some(msg));
                         }
@@ -853,10 +853,10 @@ fn ReembedMigrationCard() -> impl IntoView {
     view! {
         <div class="bg-surface-raised border border-border rounded-xl p-4 space-y-3">
             <h3 class="text-xs font-semibold text-text-tertiary uppercase tracking-wider">
-                "向量数据迁移"
+                "VECTOR DATA MIGRATION"
             </h3>
             <p class="text-sm text-text-secondary">
-                "切换 Embedding Provider 后，使用新 Provider 重新生成所有旧数据的向量。"
+                "Re-embed all existing data with the current provider after switching embedding providers."
             </p>
 
             // Progress bar (shown during migration)
@@ -868,16 +868,16 @@ fn ReembedMigrationCard() -> impl IntoView {
                     let phase = progress_phase.get();
                     let pct = if total > 0 { (completed * 100) / total } else { 0 };
                     let phase_label = match phase.as_str() {
-                        "facts" => "正在处理 Facts...",
-                        "memories" => "正在处理 Memories...",
-                        _ => "准备中...",
+                        "facts" => "Processing facts...",
+                        "memories" => "Processing memories...",
+                        _ => "Preparing...",
                     };
 
                     view! {
                         <div class="space-y-2">
                             <div class="flex justify-between text-xs text-text-tertiary">
                                 <span>{phase_label}</span>
-                                <span>{format!("{}/{}", completed, total)}{if failed > 0 { format!(" ({} 失败)", failed) } else { String::new() }}</span>
+                                <span>{format!("{}/{}", completed, total)}{if failed > 0 { format!(" ({} failed)", failed) } else { String::new() }}</span>
                             </div>
                             <div class="w-full h-2 bg-surface-sunken rounded-full overflow-hidden">
                                 <div
@@ -913,7 +913,7 @@ fn ReembedMigrationCard() -> impl IntoView {
                     disabled=move || migrating.get()
                     class="flex-1 px-4 py-2.5 bg-warning text-white rounded-lg hover:bg-warning/90 disabled:opacity-50 transition-colors font-medium text-sm"
                 >
-                    {move || if migrating.get() { "迁移中..." } else { "迁移旧数据到当前 Provider" }}
+                    {move || if migrating.get() { "Migrating..." } else { "Migrate to Current Provider" }}
                 </button>
                 {move || {
                     if migrating.get() {
@@ -922,7 +922,7 @@ fn ReembedMigrationCard() -> impl IntoView {
                                 on:click=handle_cancel
                                 class="px-4 py-2.5 bg-danger-subtle border border-danger/20 text-danger rounded-lg hover:bg-danger-subtle/80 transition-colors font-medium text-sm"
                             >
-                                "取消"
+                                "Cancel"
                             </button>
                         }.into_any()
                     } else {

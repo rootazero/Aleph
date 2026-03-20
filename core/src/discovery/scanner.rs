@@ -316,11 +316,14 @@ fn component_marker_file(component_name: &str) -> Option<&'static str> {
 
 /// Check if a directory contains a valid plugin manifest.
 ///
-/// Supports: `aleph.plugin.toml`, `aleph.plugin.json`, `.claude-plugin/plugin.json`
+/// Supports: `.claude-plugin/plugin.toml` (preferred), `.claude-plugin/plugin.json`,
+/// `aleph.plugin.toml` (deprecated), `aleph.plugin.json` (deprecated)
 fn has_plugin_manifest(path: &Path) -> bool {
-    path.join("aleph.plugin.toml").exists()
+    let cc_dir = path.join(PLUGIN_MANIFEST_DIR);
+    cc_dir.join("plugin.toml").exists()
+        || cc_dir.join(PLUGIN_MANIFEST_FILE).exists()
+        || path.join("aleph.plugin.toml").exists()
         || path.join("aleph.plugin.json").exists()
-        || path.join(PLUGIN_MANIFEST_DIR).join(PLUGIN_MANIFEST_FILE).exists()
 }
 
 #[cfg(test)]

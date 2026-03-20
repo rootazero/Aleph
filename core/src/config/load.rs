@@ -160,6 +160,8 @@ impl Config {
             providers_count = config.providers.len(),
             rules_count = config.rules.len(),
             memory_enabled = config.memory.enabled,
+            embedding_providers_count = config.memory.embedding.providers.len(),
+            active_embedding_provider = %config.memory.embedding.active_provider_id,
             "Config loaded and validated successfully"
         );
 
