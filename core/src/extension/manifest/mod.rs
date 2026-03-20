@@ -27,6 +27,7 @@
 
 mod aleph_plugin;
 mod aleph_plugin_toml;
+mod auto_discover;
 pub mod cc_plugin_json;
 pub mod cc_plugin_toml;
 pub mod legacy_adapter;
@@ -43,6 +44,7 @@ pub use aleph_plugin_toml::{
     PluginAuthorToml, PluginSection, PromptSection, ProviderSection, ServiceSection, ToolSection,
     ALEPH_PLUGIN_TOML,
 };
+pub use auto_discover::auto_discover_manifest;
 pub use cc_plugin_json::{
     parse_cc_plugin_json, parse_cc_plugin_json_content, parse_cc_plugin_json_sync, CC_PLUGIN_JSON,
 };
@@ -218,84 +220,114 @@ pub const CLAUDE_PLUGIN_MANIFEST: &str = ".claude-plugin/plugin.json";
 /// assert_eq!(manifest.root_dir, PathBuf::from("/plugins/my-plugin"));
 /// ```
 pub async fn parse_manifest_from_dir(dir: &Path) -> ExtensionResult<PluginManifest> {
-    // 1. Check for aleph.plugin.toml (V2 preferred)
-    let toml_path = dir.join(ALEPH_PLUGIN_TOML);
-    if toml_path.exists() {
+    // 1. .claude-plugin/plugin.toml (CC-compat, preferred)
+    let cc_toml_path = dir.join(CC_PLUGIN_TOML);
+    if cc_toml_path.exists() {
+        return parse_cc_plugin_toml(dir).await;
+    }
+
+    // 2. .claude-plugin/plugin.json (CC-compat, read-only)
+    let cc_json_path = dir.join(CC_PLUGIN_JSON);
+    if cc_json_path.exists() {
+        return parse_cc_plugin_json(dir).await;
+    }
+
+    // 3. aleph.plugin.toml (deprecated — warn)
+    let aleph_toml_path = dir.join(ALEPH_PLUGIN_TOML);
+    if aleph_toml_path.exists() {
+        tracing::warn!(
+            "Plugin at {:?} uses deprecated aleph.plugin.toml format. Migrate to .claude-plugin/plugin.toml",
+            dir
+        );
         return parse_aleph_plugin_toml(dir).await;
     }
 
-    // 2. Check for aleph.plugin.json (V1)
-    let aleph_manifest_path = dir.join(ALEPH_PLUGIN_MANIFEST);
-    if aleph_manifest_path.exists() {
-        let mut manifest = parse_aleph_plugin(&aleph_manifest_path).await?;
+    // 4. aleph.plugin.json (deprecated — warn)
+    let aleph_json_path = dir.join(ALEPH_PLUGIN_MANIFEST);
+    if aleph_json_path.exists() {
+        tracing::warn!(
+            "Plugin at {:?} uses deprecated aleph.plugin.json format. Migrate to .claude-plugin/plugin.toml",
+            dir
+        );
+        let mut manifest = parse_aleph_plugin(&aleph_json_path).await?;
         manifest.root_dir = dir.to_path_buf();
         return Ok(manifest);
     }
 
-    // 3. Check for package.json with aleph field
+    // 5. package.json with "aleph" field (deprecated — warn)
     let package_json_path = dir.join(PACKAGE_JSON);
     if package_json_path.exists() {
-        // Try to parse - will fail if no "aleph" field
         match parse_package_json(&package_json_path).await {
             Ok(mut manifest) => {
+                tracing::warn!(
+                    "Plugin at {:?} uses deprecated package.json format. Migrate to .claude-plugin/plugin.toml",
+                    dir
+                );
                 manifest.root_dir = dir.to_path_buf();
                 return Ok(manifest);
             }
             Err(ExtensionError::InvalidManifest { message, .. })
                 if message.contains("Missing 'aleph' field") =>
             {
-                // package.json exists but is not an Aleph plugin - continue checking
+                // package.json exists but is not an Aleph plugin — continue
             }
             Err(e) => return Err(e),
         }
     }
 
-    // 4. Check for legacy .claude-plugin/plugin.json (via LegacyAdapter)
-    let claude_manifest_path = dir.join(CLAUDE_PLUGIN_MANIFEST);
-    if claude_manifest_path.exists() {
-        let content = tokio::fs::read_to_string(&claude_manifest_path).await?;
-        let legacy: LegacyPluginManifest = serde_json::from_str(&content)
-            .map_err(|e| ExtensionError::invalid_manifest(&claude_manifest_path, format!("JSON parse error: {}", e)))?;
-        let manifest = legacy_adapter::adapt_legacy_manifest(&legacy, dir)
-            .map_err(|e| ExtensionError::invalid_manifest(&claude_manifest_path, e))?;
-        return Ok(manifest);
-    }
-
-    // No valid manifest found
-    Err(ExtensionError::invalid_manifest(
-        dir,
-        format!(
-            "No plugin manifest found. Expected {}, {}, or {} with 'aleph' field",
-            ALEPH_PLUGIN_TOML, ALEPH_PLUGIN_MANIFEST, PACKAGE_JSON
-        ),
-    ))
+    // 6. Auto-discover (no manifest file at all)
+    auto_discover_manifest(dir)
 }
 
 /// Synchronous version of parse_manifest_from_dir
 ///
 /// Useful for tests and non-async contexts.
 pub fn parse_manifest_from_dir_sync(dir: &Path) -> ExtensionResult<PluginManifest> {
-    // 1. Check for aleph.plugin.toml (V2 preferred)
-    let toml_path = dir.join(ALEPH_PLUGIN_TOML);
-    if toml_path.exists() {
+    // 1. .claude-plugin/plugin.toml (CC-compat, preferred)
+    let cc_toml_path = dir.join(CC_PLUGIN_TOML);
+    if cc_toml_path.exists() {
+        return parse_cc_plugin_toml_sync(dir);
+    }
+
+    // 2. .claude-plugin/plugin.json (CC-compat, read-only)
+    let cc_json_path = dir.join(CC_PLUGIN_JSON);
+    if cc_json_path.exists() {
+        return parse_cc_plugin_json_sync(dir);
+    }
+
+    // 3. aleph.plugin.toml (deprecated — warn)
+    let aleph_toml_path = dir.join(ALEPH_PLUGIN_TOML);
+    if aleph_toml_path.exists() {
+        tracing::warn!(
+            "Plugin at {:?} uses deprecated aleph.plugin.toml format. Migrate to .claude-plugin/plugin.toml",
+            dir
+        );
         return parse_aleph_plugin_toml_sync(dir);
     }
 
-    // 2. Check for aleph.plugin.json (V1)
-    let aleph_manifest_path = dir.join(ALEPH_PLUGIN_MANIFEST);
-    if aleph_manifest_path.exists() {
-        let content = std::fs::read_to_string(&aleph_manifest_path)?;
-        let mut manifest = parse_aleph_plugin_content(&content, &aleph_manifest_path)?;
+    // 4. aleph.plugin.json (deprecated — warn)
+    let aleph_json_path = dir.join(ALEPH_PLUGIN_MANIFEST);
+    if aleph_json_path.exists() {
+        tracing::warn!(
+            "Plugin at {:?} uses deprecated aleph.plugin.json format. Migrate to .claude-plugin/plugin.toml",
+            dir
+        );
+        let content = std::fs::read_to_string(&aleph_json_path)?;
+        let mut manifest = parse_aleph_plugin_content(&content, &aleph_json_path)?;
         manifest.root_dir = dir.to_path_buf();
         return Ok(manifest);
     }
 
-    // 3. Check for package.json
+    // 5. package.json with "aleph" field (deprecated — warn)
     let package_json_path = dir.join(PACKAGE_JSON);
     if package_json_path.exists() {
         let content = std::fs::read_to_string(&package_json_path)?;
         match parse_package_json_content(&content, &package_json_path) {
             Ok(mut manifest) => {
+                tracing::warn!(
+                    "Plugin at {:?} uses deprecated package.json format. Migrate to .claude-plugin/plugin.toml",
+                    dir
+                );
                 manifest.root_dir = dir.to_path_buf();
                 return Ok(manifest);
             }
@@ -308,24 +340,8 @@ pub fn parse_manifest_from_dir_sync(dir: &Path) -> ExtensionResult<PluginManifes
         }
     }
 
-    // 4. Check for legacy .claude-plugin/plugin.json (via LegacyAdapter)
-    let claude_manifest_path = dir.join(CLAUDE_PLUGIN_MANIFEST);
-    if claude_manifest_path.exists() {
-        let content = std::fs::read_to_string(&claude_manifest_path)?;
-        let legacy: LegacyPluginManifest = serde_json::from_str(&content)
-            .map_err(|e| ExtensionError::invalid_manifest(&claude_manifest_path, format!("JSON parse error: {}", e)))?;
-        let manifest = legacy_adapter::adapt_legacy_manifest(&legacy, dir)
-            .map_err(|e| ExtensionError::invalid_manifest(&claude_manifest_path, e))?;
-        return Ok(manifest);
-    }
-
-    Err(ExtensionError::invalid_manifest(
-        dir,
-        format!(
-            "No plugin manifest found. Expected {}, {}, or {} with 'aleph' field",
-            ALEPH_PLUGIN_TOML, ALEPH_PLUGIN_MANIFEST, PACKAGE_JSON
-        ),
-    ))
+    // 6. Auto-discover (no manifest file at all)
+    auto_discover_manifest(dir)
 }
 
 // Legacy Claude plugin format is handled by legacy_adapter module.
