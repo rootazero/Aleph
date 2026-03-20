@@ -101,6 +101,9 @@ pub struct LoopRunResult {
 /// Callback for streaming events during the loop.
 pub trait LoopCallback: Send {
     fn on_text(&mut self, _text: &str) {}
+    /// Called when the LLM produces text alongside tool calls (intermediate progress).
+    /// This text should be delivered to the user immediately, not buffered.
+    fn on_intermediate_text(&mut self, _text: &str) {}
     fn on_tool_start(&mut self, _name: &str, _input: &Value) {}
     fn on_tool_done(&mut self, _name: &str, _result: &ToolResult) {}
     fn on_safety_block(&mut self, _error: &SafetyError) {}
@@ -239,7 +242,13 @@ impl<P: LoopProvider> AgentLoop<P> {
 
             // Process text output
             if let Some(text) = &response.text {
-                callback.on_text(text);
+                if response.has_tool_calls() {
+                    // Intermediate: LLM said something AND requested tools → still working
+                    callback.on_intermediate_text(text);
+                } else {
+                    // Final: LLM said something with no tool calls → done
+                    callback.on_text(text);
+                }
                 final_text = Some(text.clone());
             }
 
@@ -578,6 +587,7 @@ mod tests {
     #[derive(Default)]
     struct TrackingCallback {
         texts: Vec<String>,
+        intermediate_texts: Vec<String>,
         tool_starts: Vec<String>,
         tool_dones: Vec<String>,
         safety_blocks: Vec<String>,
@@ -586,6 +596,9 @@ mod tests {
     impl LoopCallback for TrackingCallback {
         fn on_text(&mut self, text: &str) {
             self.texts.push(text.to_string());
+        }
+        fn on_intermediate_text(&mut self, text: &str) {
+            self.intermediate_texts.push(text.to_string());
         }
         fn on_tool_start(&mut self, name: &str, _input: &Value) {
             self.tool_starts.push(name.to_string());
@@ -1690,5 +1703,47 @@ mod tests {
             });
             assert!(!has_nudge, "No nudge should fire on clean completion");
         }
+    }
+
+    // =========================================================================
+    // L14: Intermediate text callback for tool-accompanied responses
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_intermediate_text_with_tool_calls() {
+        let provider = MockProvider::new(vec![
+            // Turn 1: text + tool call → should be intermediate
+            ProviderResponse {
+                text: Some("Let me search for that...".to_string()),
+                tool_calls: vec![NativeToolCall {
+                    id: "call_1".to_string(),
+                    name: "echo".to_string(),
+                    arguments: json!({ "message": "search" }),
+                }],
+                thinking: None,
+                stop_reason: StopReason::ToolUse,
+                usage: None,
+            },
+            // Turn 2: text only → should be final
+            ProviderResponse {
+                text: Some("Here are the results.".to_string()),
+                tool_calls: vec![],
+                thinking: None,
+                stop_reason: StopReason::EndTurn,
+                usage: None,
+            },
+        ]);
+
+        let agent = make_loop(provider);
+        let mut cb = TrackingCallback::default();
+        let result = agent.run("find something", &mut cb).await.unwrap();
+
+        assert_eq!(result.iterations, 2);
+        // Intermediate text goes to intermediate_texts, not texts
+        assert_eq!(cb.intermediate_texts, vec!["Let me search for that..."]);
+        // Final text goes to texts
+        assert_eq!(cb.texts, vec!["Here are the results."]);
+        // final_text should be the last text produced
+        assert_eq!(result.final_text.as_deref(), Some("Here are the results."));
     }
 }
