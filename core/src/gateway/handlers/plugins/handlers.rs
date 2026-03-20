@@ -63,6 +63,247 @@ pub fn is_extension_manager_initialized() -> bool {
 }
 
 // ============================================================================
+// Internal helper — build MarketplaceManager from config
+// ============================================================================
+
+fn build_marketplace_manager() -> Result<crate::extension::marketplace::MarketplaceManager, String> {
+    use crate::extension::marketplace::types::{MarketplaceConfig, MarketplaceSourceType};
+    use std::collections::HashMap;
+
+    let config = crate::config::Config::load()
+        .map_err(|e| format!("Config error: {e}"))?;
+
+    let marketplace_configs: HashMap<String, MarketplaceConfig> = config
+        .plugin_marketplaces
+        .iter()
+        .map(|(name, entry)| {
+            let source_type = match entry.source_type.as_str() {
+                "local" => MarketplaceSourceType::Local,
+                _ => MarketplaceSourceType::Github,
+            };
+            (
+                name.clone(),
+                MarketplaceConfig {
+                    source: entry.source.clone(),
+                    source_type,
+                },
+            )
+        })
+        .collect();
+
+    Ok(crate::extension::marketplace::MarketplaceManager::new(
+        marketplace_configs,
+        None,
+    ))
+}
+
+// ============================================================================
+// Marketplace handlers
+// ============================================================================
+
+/// List all registered marketplaces (including built-in)
+pub async fn handle_marketplace_list(request: JsonRpcRequest) -> JsonRpcResponse {
+    let manager = match build_marketplace_manager() {
+        Ok(m) => m,
+        Err(e) => return JsonRpcResponse::error(request.id, -32000, e),
+    };
+
+    let marketplaces = manager.list();
+    let result: Vec<serde_json::Value> = marketplaces
+        .iter()
+        .map(|(name, config)| {
+            let type_str = match config.source_type {
+                crate::extension::marketplace::types::MarketplaceSourceType::Local => "local",
+                crate::extension::marketplace::types::MarketplaceSourceType::Github => "github",
+            };
+            json!({
+                "name": name,
+                "source": config.source,
+                "type": type_str,
+            })
+        })
+        .collect();
+
+    JsonRpcResponse::success(request.id, json!({ "marketplaces": result }))
+}
+
+/// Add a marketplace source
+pub async fn handle_marketplace_add(request: JsonRpcRequest) -> JsonRpcResponse {
+    use crate::config::PluginMarketplaceEntry;
+
+    let params: super::types::MarketplaceAddParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
+    };
+
+    // Derive name from source if not provided
+    let name = params.name.unwrap_or_else(|| {
+        // GitHub: "owner/repo" → "repo" (lowercased)
+        // Local:  "/path/to/dir" → "dir" (last component)
+        params
+            .source
+            .split('/')
+            .next_back()
+            .unwrap_or(&params.source)
+            .to_lowercase()
+    });
+
+    // Determine source type: if source contains '/' but no path separator at start → github
+    let source_type = if params.source.starts_with('/') || params.source.starts_with('.') {
+        "local".to_string()
+    } else {
+        "github".to_string()
+    };
+
+    let mut config = match crate::config::Config::load() {
+        Ok(c) => c,
+        Err(e) => {
+            return JsonRpcResponse::error(request.id, -32000, format!("Config error: {e}"))
+        }
+    };
+
+    config.plugin_marketplaces.insert(
+        name.clone(),
+        PluginMarketplaceEntry {
+            source: params.source.clone(),
+            source_type,
+        },
+    );
+
+    if let Err(e) = config.save() {
+        return JsonRpcResponse::error(request.id, -32000, format!("Failed to save config: {e}"));
+    }
+
+    JsonRpcResponse::success(
+        request.id,
+        json!({ "ok": true, "name": name, "source": params.source }),
+    )
+}
+
+/// Remove a marketplace source
+pub async fn handle_marketplace_remove(request: JsonRpcRequest) -> JsonRpcResponse {
+    let params: super::types::MarketplaceRemoveParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
+    };
+
+    let mut config = match crate::config::Config::load() {
+        Ok(c) => c,
+        Err(e) => {
+            return JsonRpcResponse::error(request.id, -32000, format!("Config error: {e}"))
+        }
+    };
+
+    // Build a temporary manager just to perform the remove (handles cache cleanup + builtin guard)
+    let mut manager = match build_marketplace_manager() {
+        Ok(m) => m,
+        Err(e) => return JsonRpcResponse::error(request.id, -32000, e),
+    };
+
+    if let Err(e) = manager.remove(&params.name) {
+        return JsonRpcResponse::error(request.id, -32000, e);
+    }
+
+    config.plugin_marketplaces.remove(&params.name);
+
+    if let Err(e) = config.save() {
+        return JsonRpcResponse::error(request.id, -32000, format!("Failed to save config: {e}"));
+    }
+
+    JsonRpcResponse::success(request.id, json!({ "ok": true, "name": params.name }))
+}
+
+/// Update marketplace index (sync cache)
+pub async fn handle_marketplace_update(request: JsonRpcRequest) -> JsonRpcResponse {
+    // Params are optional — empty object is fine
+    let params: super::types::MarketplaceUpdateParams =
+        serde_json::from_value(request.params.clone().unwrap_or(json!({})))
+            .unwrap_or(super::types::MarketplaceUpdateParams { name: None });
+
+    let manager = match build_marketplace_manager() {
+        Ok(m) => m,
+        Err(e) => return JsonRpcResponse::error(request.id, -32000, e),
+    };
+
+    let result = if let Some(name) = &params.name {
+        manager.update(name).map(|_| ()).map_err(|e| e)
+    } else {
+        manager.update_all()
+    };
+
+    match result {
+        Ok(()) => JsonRpcResponse::success(request.id, json!({ "ok": true })),
+        Err(e) => JsonRpcResponse::error(request.id, -32000, e),
+    }
+}
+
+/// Install a plugin from a marketplace by name
+pub async fn handle_marketplace_install(request: JsonRpcRequest) -> JsonRpcResponse {
+    use crate::extension::marketplace::{installer::install_plugin_from_cache, types::default_install_dir};
+
+    let params: super::types::MarketplaceInstallParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
+    };
+
+    let manager = match build_marketplace_manager() {
+        Ok(m) => m,
+        Err(e) => return JsonRpcResponse::error(request.id, -32000, e),
+    };
+
+    // Search for the plugin
+    let mut results = manager.search_plugin(&params.name);
+
+    // If a specific marketplace was requested, filter to it
+    if let Some(ref marketplace_name) = params.marketplace {
+        results.retain(|r| &r.marketplace_name == marketplace_name);
+    }
+
+    match results.len() {
+        0 => JsonRpcResponse::error(
+            request.id,
+            -32000,
+            format!(
+                "Plugin '{}' not found. Try running 'plugin marketplace update' first.",
+                params.name
+            ),
+        ),
+        1 => {
+            let result = &results[0];
+            let install_dir = default_install_dir();
+            match install_plugin_from_cache(&result.plugin_path, &install_dir, &params.name) {
+                Ok(dest) => JsonRpcResponse::success(
+                    request.id,
+                    json!({
+                        "ok": true,
+                        "name": params.name,
+                        "installed_at": dest.to_string_lossy(),
+                        "from_marketplace": result.marketplace_name,
+                    }),
+                ),
+                Err(e) => JsonRpcResponse::error(request.id, -32000, e),
+            }
+        }
+        _ => {
+            let marketplaces: Vec<&str> = results
+                .iter()
+                .map(|r| r.marketplace_name.as_str())
+                .collect();
+            JsonRpcResponse::error(
+                request.id,
+                -32000,
+                format!(
+                    "Plugin '{}' is available in multiple marketplaces: {}. \
+                     Specify --marketplace to disambiguate.",
+                    params.name,
+                    marketplaces.join(", ")
+                ),
+            )
+        }
+    }
+}
+
+// ============================================================================
 // List
 // ============================================================================
 

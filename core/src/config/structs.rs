@@ -9,6 +9,27 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 // =============================================================================
+// PluginMarketplaceEntry
+// =============================================================================
+
+/// Plugin marketplace entry for config.toml.
+///
+/// Defined locally to avoid a circular dependency between the config and
+/// extension modules.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct PluginMarketplaceEntry {
+    /// Source: "owner/repo" for GitHub, "/path/to/dir" for local
+    pub source: String,
+    /// Source type: "github" or "local"
+    #[serde(rename = "type", default = "default_marketplace_type")]
+    pub source_type: String,
+}
+
+fn default_marketplace_type() -> String {
+    "github".to_string()
+}
+
+// =============================================================================
 // Config
 // =============================================================================
 
@@ -133,6 +154,9 @@ pub struct Config {
     /// Maps channel/peer patterns to specific agents using RouteBinding
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub bindings: Vec<crate::routing::config::RouteBinding>,
+    /// Plugin marketplace registrations
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub plugin_marketplaces: HashMap<String, PluginMarketplaceEntry>,
     /// Presets override loaded from ~/.aleph/presets.toml
     /// Not serialized to config.toml — lives in its own file
     #[serde(skip)]
@@ -304,6 +328,7 @@ impl Default for Config {
             acp: AcpConfig::default(),
             agents: AgentsConfig::default(),
             bindings: Vec::new(),
+            plugin_marketplaces: HashMap::new(),
             presets_override: crate::config::presets_override::PresetsOverride::default(),
             prompts_override: crate::config::prompts_override::PromptsOverride::default(),
             defaults_override: crate::config::defaults_override::DefaultsOverride::default(),

@@ -197,6 +197,13 @@ impl HandlerRegistry {
         registry.register("plugin.callTool", plugins::handle_call_tool);
         registry.register("plugin.executeCommand", plugins::handle_execute_command);
 
+        // Plugin marketplace handlers
+        registry.register("plugin.marketplace.list", plugins::handle_marketplace_list);
+        registry.register("plugin.marketplace.add", plugins::handle_marketplace_add);
+        registry.register("plugin.marketplace.update", plugins::handle_marketplace_update);
+        registry.register("plugin.marketplace.remove", plugins::handle_marketplace_remove);
+        registry.register("plugin.marketplace.install", plugins::handle_marketplace_install);
+
         // Service handlers
         registry.register("services.start", services::handle_start);
         registry.register("services.stop", services::handle_stop);

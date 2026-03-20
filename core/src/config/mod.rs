@@ -31,7 +31,7 @@ pub mod agent_resolver;
 pub mod guides;
 
 // Re-export main types
-pub use structs::{Config, FullConfig, ChannelInstanceConfig};
+pub use structs::{Config, FullConfig, ChannelInstanceConfig, PluginMarketplaceEntry};
 
 // Re-export patcher types
 pub use patcher::ConfigPatcher;

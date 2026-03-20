@@ -917,7 +917,28 @@ async fn main() -> CliResult<()> {
                     commands::plugins_cmd::list(&server_url, cli.json).await?;
                 }
                 PluginAction::Install { source, .. } => {
-                    commands::plugins_cmd::install(&server_url, &source, cli.json).await?;
+                    // If source looks like a plain plugin name (no '/', '.', or ':'),
+                    // route to marketplace install instead.
+                    let is_marketplace_name = !source.contains('/')
+                        && !source.contains('.')
+                        && !source.contains(':');
+                    if is_marketplace_name {
+                        let (client, _events) = crate::client::AlephClient::connect(&server_url).await?;
+                        let result: serde_json::Value = client
+                            .call(
+                                "plugin.marketplace.install",
+                                Some(serde_json::json!({ "name": source })),
+                            )
+                            .await?;
+                        if cli.json {
+                            crate::output::print_json(&result);
+                        } else {
+                            println!("{}", result);
+                        }
+                        client.close().await?;
+                    } else {
+                        commands::plugins_cmd::install(&server_url, &source, cli.json).await?;
+                    }
                 }
                 PluginAction::Uninstall { name, .. } => {
                     commands::plugins_cmd::uninstall(&server_url, &name, cli.json).await?;
@@ -967,9 +988,56 @@ async fn main() -> CliResult<()> {
                 PluginAction::Doctor => {
                     plugin_cmd::doctor(cli.json)?;
                 }
-                // Marketplace (placeholder)
-                PluginAction::Marketplace { .. } => {
-                    eprintln!("Marketplace support coming in a future release.");
+                // Marketplace
+                PluginAction::Marketplace { action } => {
+                    let (client, _events) = crate::client::AlephClient::connect(&server_url).await?;
+                    match action {
+                        MarketplaceAction::Add { source } => {
+                            let result: serde_json::Value = client
+                                .call("plugin.marketplace.add", Some(serde_json::json!({ "source": source })))
+                                .await?;
+                            if cli.json {
+                                crate::output::print_json(&result);
+                            } else {
+                                println!("{}", result);
+                            }
+                        }
+                        MarketplaceAction::List => {
+                            let result: serde_json::Value = client
+                                .call("plugin.marketplace.list", Some(serde_json::json!({})))
+                                .await?;
+                            if cli.json {
+                                crate::output::print_json(&result);
+                            } else {
+                                println!("{}", serde_json::to_string_pretty(&result)?);
+                            }
+                        }
+                        MarketplaceAction::Update { name } => {
+                            let params = match name {
+                                Some(n) => serde_json::json!({ "name": n }),
+                                None => serde_json::json!({}),
+                            };
+                            let result: serde_json::Value = client
+                                .call("plugin.marketplace.update", Some(params))
+                                .await?;
+                            if cli.json {
+                                crate::output::print_json(&result);
+                            } else {
+                                println!("{}", result);
+                            }
+                        }
+                        MarketplaceAction::Remove { name } => {
+                            let result: serde_json::Value = client
+                                .call("plugin.marketplace.remove", Some(serde_json::json!({ "name": name })))
+                                .await?;
+                            if cli.json {
+                                crate::output::print_json(&result);
+                            } else {
+                                println!("{}", result);
+                            }
+                        }
+                    }
+                    client.close().await?;
                 }
             }
         },

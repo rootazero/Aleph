@@ -114,6 +114,44 @@ pub struct UnloadPluginParams {
 }
 
 // ============================================================================
+// Marketplace Parameters
+// ============================================================================
+
+/// Parameters for plugin.marketplace.add
+#[derive(Debug, Deserialize)]
+pub struct MarketplaceAddParams {
+    /// Source: "owner/repo" for GitHub, path for local
+    pub source: String,
+    /// Optional explicit name (derived from source if omitted)
+    #[serde(default)]
+    pub name: Option<String>,
+}
+
+/// Parameters for plugin.marketplace.remove
+#[derive(Debug, Deserialize)]
+pub struct MarketplaceRemoveParams {
+    pub name: String,
+}
+
+/// Parameters for plugin.marketplace.update
+#[derive(Debug, Deserialize)]
+pub struct MarketplaceUpdateParams {
+    /// Marketplace name (update all if omitted)
+    #[serde(default)]
+    pub name: Option<String>,
+}
+
+/// Parameters for plugin.marketplace.install
+#[derive(Debug, Deserialize)]
+pub struct MarketplaceInstallParams {
+    /// Plugin name to install
+    pub name: String,
+    /// Specific marketplace (if ambiguous)
+    #[serde(default)]
+    pub marketplace: Option<String>,
+}
+
+// ============================================================================
 // Execute Command Parameters
 // ============================================================================
 
