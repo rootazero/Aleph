@@ -13,7 +13,7 @@ use std::path::PathBuf;
 // V2 field types from aleph_plugin_toml module
 use super::aleph_plugin_toml::{
     CapabilitiesSection, ChannelSection, CommandSection, HookSection, HttpRouteSection,
-    PromptSection, ProviderSection, ServiceSection, ToolSection,
+    PermissionsSection, PromptSection, ProviderSection, ServiceSection, ToolSection,
 };
 use crate::extension::runtime::wasm::WasmCapabilities;
 use crate::extension::runtime::wasm::WasmResourceLimits;
@@ -282,6 +282,10 @@ pub struct PluginManifest {
     /// V2: HTTP route definitions for REST API endpoints
     #[serde(skip)]
     pub http_routes_v2: Option<Vec<HttpRouteSection>>,
+
+    /// Aleph-only extensions from [aleph] section in CC-format manifest
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aleph_extensions: Option<AlephExtensions>,
 }
 
 impl PluginManifest {
@@ -317,6 +321,8 @@ impl PluginManifest {
             channels_v2: None,
             providers_v2: None,
             http_routes_v2: None,
+            // CC-compat extensions
+            aleph_extensions: None,
         }
     }
 
@@ -372,6 +378,49 @@ impl PluginManifest {
     pub fn requires_permissions(&self) -> bool {
         !self.permissions.is_empty()
     }
+}
+
+// =============================================================================
+// Aleph Extensions (CC-compat superset)
+// =============================================================================
+
+/// Runtime type for Aleph plugins
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AlephRuntime {
+    /// MCP Server protocol (default for Node.js, Python, etc.)
+    #[default]
+    Mcp,
+    /// WASM via Extism (sandbox)
+    Wasm,
+    /// Static (Markdown only, no runtime)
+    Static,
+}
+
+/// Aleph-only extension fields in plugin.toml [aleph] section.
+/// Claude Code ignores these fields.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AlephExtensions {
+    /// Runtime type
+    pub runtime: AlephRuntime,
+    /// WASM entry point (only for runtime = "wasm")
+    pub entry: Option<String>,
+    /// Messaging channel integrations
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub channels: Vec<ChannelSection>,
+    /// Custom LLM provider backends
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub providers: Vec<ProviderSection>,
+    /// Background services
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub services: Vec<ServiceSection>,
+    /// Permission grants
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permissions: Option<PermissionsSection>,
+    /// WASM-specific capabilities
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capabilities: Option<CapabilitiesSection>,
 }
 
 #[cfg(test)]

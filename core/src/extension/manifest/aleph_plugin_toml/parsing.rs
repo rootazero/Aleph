@@ -146,6 +146,7 @@ pub fn parse_aleph_plugin_toml_content(
         } else {
             Some(toml.http_routes)
         },
+        aleph_extensions: None,
     };
 
     Ok(manifest)

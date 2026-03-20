@@ -236,6 +236,8 @@ pub fn parse_package_json_content(content: &str, path: &Path) -> ExtensionResult
         channels_v2: None,
         providers_v2: None,
         http_routes_v2: None,
+        // CC-compat extensions
+        aleph_extensions: None,
     };
 
     Ok(manifest)
