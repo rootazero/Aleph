@@ -30,7 +30,6 @@ mod aleph_plugin_toml;
 mod auto_discover;
 pub mod cc_plugin_json;
 pub mod cc_plugin_toml;
-pub mod legacy_adapter;
 mod package_json;
 mod types;
 
@@ -343,8 +342,6 @@ pub fn parse_manifest_from_dir_sync(dir: &Path) -> ExtensionResult<PluginManifes
     // 6. Auto-discover (no manifest file at all)
     auto_discover_manifest(dir)
 }
-
-// Legacy Claude plugin format is handled by legacy_adapter module.
 
 // =============================================================================
 // Re-export frontmatter parsing

@@ -960,7 +960,7 @@ async fn main() -> CliResult<()> {
                     .await?;
                 }
                 PluginAction::Search { query } => {
-                    commands::plugins_cmd::search(&query, cli.json).await?;
+                    commands::plugins_cmd::search(&server_url, &query, cli.json).await?;
                 }
                 PluginAction::Update => {
                     commands::plugins_cmd::update(&server_url, cli.json).await?;
@@ -1070,7 +1070,7 @@ async fn main() -> CliResult<()> {
                     .await?;
                 }
                 PluginsAction::Search { query } => {
-                    commands::plugins_cmd::search(&query, cli.json).await?;
+                    commands::plugins_cmd::search(&server_url, &query, cli.json).await?;
                 }
                 PluginsAction::Update => {
                     commands::plugins_cmd::update(&server_url, cli.json).await?;
