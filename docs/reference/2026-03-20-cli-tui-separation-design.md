@@ -13,6 +13,8 @@
 - `apps/tui/` — 独立 TUI crate，与上一条功能重叠
 - TUI 的 `SlashCommand` enum（17 个硬编码命令）与 Gateway 的 `CommandParser`/`ToolRegistry` 完全脱节
 
+此外，`core/src/cli/` 中存在一个隐藏的客户端层（`GatewayClient`、`OutputFormat`、config/cron/channels 等命令 handler），被 `core/src/bin/aleph/` 的命令直接调用。这意味着**服务端 crate 内部包含了客户端库**，是最严重的架构问题。
+
 目标：严格区分 CLI 和 TUI，消除命名混淆和职责重叠。
 
 ## 核心原则
@@ -27,8 +29,9 @@
 ### 1. 物理结构
 
 ```
-core/src/bin/aleph/
-└── main.rs              # 极简：解析启动参数 → 启动 Gateway server（无 cli.rs）
+core/src/bin/aleph-server/
+└── main.rs              # 极简：解析启动参数 → 启动 Gateway server
+                         # 二进制名: aleph-server（不对用户暴露，由 CLI 的 daemon 命令管理）
 
 apps/
 ├── client/              # aleph-client crate — 共享客户端库
@@ -45,7 +48,7 @@ apps/
 │       └── commands/       # 各子命令实现
 │           ├── chat.rs     # `aleph chat` → 调用 aleph_tui::run()
 │           ├── daemon.rs   # `aleph daemon start/stop/status`（Local）
-│           ├── config.rs   # `aleph config get/set`（Local）
+│           ├── config.rs   # `aleph config get/set/reload`（RPC）+ `config edit`（Local）
 │           ├── plugins.rs  # `aleph plugins list/install/...`（RPC）
 │           ├── session.rs  # `aleph session new/list/...`（RPC）
 │           ├── model.rs    # `aleph model list/set`（RPC）
@@ -67,27 +70,34 @@ apps/
 
 ```
 apps/cli  ──→  apps/tui     (仅 chat 子命令调用 aleph_tui::run())
-apps/cli  ──→  apps/client  ──→  shared/protocol
-apps/tui  ──→  apps/client  ──→  shared/protocol
+apps/cli  ──→  apps/client  ──→  aleph-protocol
+apps/tui  ──→  apps/client  ──→  aleph-protocol
 ```
 
-- `apps/client` 不依赖 core — 纯协议客户端
+- `apps/client` 不依赖 core — 纯协议客户端，基于 `aleph-protocol` crate
 - `apps/tui` 不依赖 `apps/cli`
+- `core/src/cli/`（现有的隐藏客户端层）在 Phase 1 中合并到 `apps/client/`，然后删除
 
 ### 3. 二进制入口
 
-单一二进制名 `aleph`：
+两个二进制，用户只接触 `aleph`：
 
-- `aleph chat [--agent <name>]` — 启动 TUI（默认绑定 main agent）
-- `aleph <command> [args]` — 执行 CLI 命令
-- 无子命令时显示 help
+- **`aleph`**（来自 `apps/cli/`）— 用户唯一入口
+  - `aleph chat [--agent <name>]` — 启动 TUI
+  - `aleph <command> [args]` — 执行 CLI 命令
+  - 无子命令时显示 help
+- **`aleph-server`**（来自 `core/src/bin/aleph-server/`）— Gateway 服务进程
+  - 用户不直接运行，由 `aleph daemon start` 作为子进程或 daemon 启动
+  - 仅接受启动参数（端口、数据目录等），无子命令
 
 ### 4. 命令分类
 
 | 类型 | 特征 | 示例 | 注册位置 |
 |------|------|------|----------|
-| **Local** | 不需要 Gateway 在线 | `daemon start/stop`, `config get/set`, `plugin init/validate/pack`, `completion` | 仅 CLI |
-| **RPC** | 需要 Gateway 在线 | `plugins list`, `session new`, `model set`, `memory search`, `health` | CLI + TUI/Bot/WebChat |
+| **Local** | 不需要 Gateway 在线 | `daemon start/stop/status`, `plugin init/validate/pack`, `completion` | 仅 CLI |
+| **RPC** | 需要 Gateway 在线 | `plugins list`, `session new`, `model set`, `memory search`, `health`, `config get/set/reload` | CLI + TUI/Bot/WebChat |
+
+> **注意**：`config get/set` 归类为 RPC 而非 Local。虽然配置文件在本地磁盘，但 config 操作需要运行时校验、热重载通知，走 RPC 保证一致性。`config edit`（打开编辑器）除外，属于 Local。
 
 ### 5. 统一命令命名
 
@@ -140,8 +150,37 @@ TUI 启动
 
 ### 7. Gateway 侧新增 RPC 方法
 
-- **`commands.list`** — 查询可用命令列表，接受 `interface` 参数，从 `ToolRegistry` 聚合所有 builtin、MCP、skill、plugin 命令，按 interface 能力过滤
-- **`command.execute`** — 执行斜杠命令，复用现有 `CommandParser.parse_async()` + 快速路径
+**`commands.list`** — 查询可用命令列表
+
+请求：`{ "interface": "tui" }`
+
+响应：
+```json
+[
+  {
+    "name": "session new",
+    "hint": "Create a new session",
+    "source_type": "builtin",
+    "arguments_schema": { "type": "object", "properties": { "topic": { "type": "string" } } }
+  },
+  {
+    "name": "plugins list",
+    "hint": "List installed plugins",
+    "source_type": "builtin",
+    "arguments_schema": null
+  }
+]
+```
+
+从 `ToolRegistry` 聚合所有 builtin、MCP、skill、plugin 命令，按 interface 能力过滤。
+
+**`command.execute`** — 执行斜杠命令
+
+请求：`{ "input": "session new my-topic", "session_id": "..." }`
+
+复用现有 `CommandParser.parse_async()` + 快速路径。这是 TUI/Bot 的**唯一命令入口** — 客户端发送原始文本，Gateway 负责解析和路由。客户端不需要知道底层 RPC 方法名（如 `session.create`），只需要 `command.execute`。
+
+CLI 不使用 `command.execute`，而是直接调用具体的 RPC 方法（因为 clap 已经完成了参数解析）。
 
 ### 8. Interface 能力声明
 
@@ -179,6 +218,7 @@ Agent 1:1 绑定：
 - 不允许运行时切换 agent（与 Bot 行为一致）
 - 使用其他 agent → 启动新 TUI 实例：`aleph chat --agent research`
 - Session 操作只能看到当前绑定 agent 的 session
+- `/session new [topic]` 在 TUI 内：创建新 session（同 agent 下），TUI 切换到新 session，清空对话区
 
 ### 10. CLI 子命令完整结构
 
@@ -187,35 +227,65 @@ aleph
 ├── chat [--agent <name>]          # → 启动 TUI
 ├── ask <message> [--agent <name>] # → 单条消息，stdout 输出
 │
-├── daemon start [--port N]        # Local
-├── daemon stop                    # Local
-├── daemon status                  # Local
+│ # ── Daemon 管理 (Local) ──
+├── daemon start [--port N]        # Local: 启动 aleph-server 进程
+├── daemon stop                    # Local: 停止 daemon
+├── daemon status                  # Local: 查看 daemon 状态
 │
+│ # ── Session (RPC) ──
 ├── session new [topic]            # RPC
 ├── session list                   # RPC
+├── session switch <id>            # RPC
 ├── session delete <id>            # RPC
 │
+│ # ── Model (RPC) ──
 ├── model list                     # RPC
 ├── model set <name>               # RPC
 │
+│ # ── Provider (RPC) ──
+├── provider list                  # RPC
+├── provider add <type>            # RPC
+├── provider remove <id>           # RPC
+│
+│ # ── Plugins (RPC) ──
 ├── plugins list                   # RPC
 ├── plugins install <name>         # RPC
 ├── plugins uninstall <name>       # RPC
 │
-├── plugin init                    # Local (dev tools)
-├── plugin validate                # Local (dev tools)
-├── plugin pack                    # Local (dev tools)
+│ # ── Plugin Dev (Local) ──
+├── plugin init                    # Local
+├── plugin validate                # Local
+├── plugin pack                    # Local
 │
+│ # ── Skill (RPC) ──
+├── skill list                     # RPC
+├── skill install <name>           # RPC
+│
+│ # ── Memory (RPC) ──
 ├── memory search <query>          # RPC
 ├── memory clear                   # RPC
 │
-├── config get <key>               # Local
-├── config set <key> <value>       # Local
+│ # ── Config (RPC + Local) ──
+├── config get <key>               # RPC
+├── config set <key> <value>       # RPC
+├── config reload                  # RPC
+├── config edit                    # Local: 打开编辑器
 │
+│ # ── 系统管理 (RPC) ──
 ├── health                         # RPC
 ├── info                           # RPC
-├── completion <shell>             # Local
-└── gateway call <method> [params] # RPC (escape hatch)
+├── tools [filter]                 # RPC: 列出可用工具
+├── vault get/set/delete           # RPC: 密钥管理
+├── identity show/set              # RPC: 身份管理
+├── workspace list/switch          # RPC: 工作区管理
+├── logs [--level]                 # RPC: 日志管理
+├── channels                       # RPC: 频道状态
+├── cron list/add/remove           # RPC: 定时任务
+├── devices list/remove            # RPC: 设备管理
+│
+│ # ── 工具 (Local) ──
+├── completion <shell>             # Local: shell 补全
+└── gateway call <method> [params] # RPC: 万能 escape hatch
 ```
 
 统一 `--format` flag 支持 `table`（默认）、`json`、`plain`，方便脚本化使用。
@@ -266,21 +336,25 @@ pub async fn handle(client: &AlephClient, args: &SessionArgs) -> CliResult {
 ### Phase 1: 提取 `apps/client/` crate
 
 - 从 `apps/cli/src/` 中提取 `client.rs`、`config.rs`、`error.rs` 到 `apps/client/`
+- 将 `core/src/cli/` 中的 `GatewayClient`、`OutputFormat` 等通用客户端代码合并到 `apps/client/`
+- 删除 `core/src/cli/`（服务端 crate 不应包含客户端库）
 - `apps/cli/` 和 `apps/tui/` 改为依赖 `apps/client/`
 - 验证：现有功能不受影响
 
 ### Phase 2: Gateway 瘦身 + CLI 命令迁移
 
-- `core/src/bin/aleph/cli.rs` 中的命令迁移到 `apps/cli/commands/`
-- `core/src/bin/aleph/main.rs` 精简为纯启动逻辑
+- Gateway 二进制从 `core/src/bin/aleph/` 重命名为 `core/src/bin/aleph-server/`
+- `cli.rs` 中的命令迁移到 `apps/cli/commands/`
+- `aleph-server/main.rs` 精简为纯启动逻辑（仅接受启动参数）
+- `apps/cli/` 的 `daemon start` 命令负责启动 `aleph-server` 子进程
+- Gateway 新增 `commands.list` 和 `command.execute` RPC 方法（为 Phase 3 做准备）
 - 命令命名统一
-- 验证：`aleph start` 能启动，所有管理命令从 `apps/cli/` 可用
+- 验证：`aleph daemon start` 能启动服务器，所有管理命令从 `apps/cli/` 可用
 
 ### Phase 3: TUI 重构
 
 - 删除 `apps/cli/src/tui/` 内嵌代码
 - `apps/tui/` 接入 Gateway 命令系统（删除本地 `SlashCommand` enum）
-- Gateway 新增 `commands.list` 和 `command.execute` RPC 方法
 - `apps/cli/` 的 `chat` 子命令调用 `aleph_tui::run()`
 - 验证：`aleph chat` 启动 TUI，斜杠命令走 Gateway
 
@@ -305,6 +379,8 @@ pub async fn handle(client: &AlephClient, args: &SessionArgs) -> CliResult {
 | `core/src/bin/aleph/cli.rs` 有些命令直接操作内部数据结构，迁移到 RPC 需要新增 RPC 方法 | Phase 2 逐个评估，缺什么 RPC 补什么 |
 | `apps/cli/` 现有 27+ 命令可能与迁入的命令冲突 | 命名统一时合并重复，不保留两套 |
 | TUI 接入 Gateway 命令后延迟增加（本地 → RPC） | 命令执行本身是轻量 RPC，延迟可忽略；`/clear` 等纯 UI 操作保持本地 |
+| `secret`、`devices`、`plugins enable/disable` 直接操作本地状态，无对应 RPC | Phase 2 逐个补充 RPC 方法：`vault.*`、`devices.*`、`plugins.enable/disable` |
+| TUI 版本与 Gateway 版本不匹配（`commands.list` 不存在） | TUI 启动时检测，若 `commands.list` 失败则降级为硬编码命令列表 + 提示升级 |
 
 ## 最终架构总览
 
