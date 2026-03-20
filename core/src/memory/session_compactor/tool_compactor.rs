@@ -164,6 +164,9 @@ pub fn compact_if_needed(
         return;
     }
 
+    let limit = target;
+    tracing::info!(target: "session_compactor", total_tokens = total, threshold = limit, "tool_compact");
+
     let partition = partition_fresh_tail(messages, fresh_tail_count);
 
     // Collect indices of consumed tool results in the compressible zone.
@@ -191,6 +194,9 @@ pub fn compact_if_needed(
             messages[idx].replace_tool_result_content(compressed);
         }
     }
+
+    let current_total = estimate_total_tokens(messages, ratio);
+    tracing::info!(target: "session_compactor", saved = total.saturating_sub(current_total), "tool_compact_done");
 }
 
 // ---------------------------------------------------------------------------

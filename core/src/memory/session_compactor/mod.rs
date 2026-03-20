@@ -11,6 +11,8 @@
 //!   chunk compressible messages, generate d0 summaries, and trigger hierarchical
 //!   condensation (d0→d1→d2) when fanout thresholds are met.
 
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
@@ -34,6 +36,30 @@ pub mod tool_compactor;
 use context_window::{estimate_tokens, partition_fresh_tail_pairs};
 use fallback::{deterministic_truncate, FallbackLevel};
 use summary_engine::{chunk_messages, summary_to_fact};
+
+// ---------------------------------------------------------------------------
+// CompactorMetrics
+// ---------------------------------------------------------------------------
+
+/// Atomic counters for observing session compactor activity.
+///
+/// All fields use `Relaxed` ordering — these are best-effort counters with no
+/// cross-thread ordering requirements.
+#[derive(Debug, Default)]
+pub struct CompactorMetrics {
+    /// Number of d0 (leaf) summaries created.
+    pub tool_compactions: AtomicU64,
+    /// Number of d0 facts stored successfully.
+    pub d0_summaries_created: AtomicU64,
+    /// Number of d0→d1 condensations performed.
+    pub d1_condensations: AtomicU64,
+    /// Number of d1→d2 condensations performed.
+    pub d2_condensations: AtomicU64,
+    /// Number of times deterministic fallback was used for summary generation.
+    pub fallback_count: AtomicU64,
+    /// Number of `prepare_history` calls.
+    pub prepare_history_calls: AtomicU64,
+}
 
 // ---------------------------------------------------------------------------
 // SessionCompactorConfig
@@ -93,6 +119,7 @@ pub struct SessionCompactor {
     database: MemoryBackend,
     provider: Option<Arc<dyn AiProvider>>,
     config: SessionCompactorConfig,
+    metrics: Arc<CompactorMetrics>,
 }
 
 impl SessionCompactor {
@@ -102,7 +129,13 @@ impl SessionCompactor {
             database,
             provider: None,
             config,
+            metrics: Arc::new(CompactorMetrics::default()),
         }
+    }
+
+    /// Return a reference to the compactor metrics.
+    pub fn metrics(&self) -> &Arc<CompactorMetrics> {
+        &self.metrics
     }
 
     /// Attach an AI provider for LLM-based summary generation.
@@ -141,6 +174,9 @@ impl SessionCompactor {
         _current_input: &str,
         token_budget: u64,
     ) -> Vec<UnifiedMessage> {
+        self.metrics.prepare_history_calls.fetch_add(1, Ordering::Relaxed);
+        tracing::info!(target: "session_compactor", "prepare");
+
         if !self.config.enabled {
             // Disabled: return raw history from the agent (last N messages).
             let raw = agent.get_history(session_key, None).await;
@@ -274,6 +310,7 @@ impl SessionCompactor {
         }
 
         let session_id = session_key.to_key_string();
+        tracing::info!(target: "session_compactor", session = %session_id, "compress_start");
         let agent_id = agent.id().to_string();
         let ratio = self.config.token_estimate_ratio;
 
@@ -341,6 +378,7 @@ impl SessionCompactor {
                 );
             } else {
                 d0_created += 1;
+                self.metrics.d0_summaries_created.fetch_add(1, Ordering::Relaxed);
             }
 
             next_seq += 1;
@@ -361,6 +399,9 @@ impl SessionCompactor {
             d1_created = self
                 .try_condense(&session_id, &agent_id, 0, 1, self.config.d1_min_fanout)
                 .await?;
+            if d1_created > 0 {
+                self.metrics.d1_condensations.fetch_add(d1_created as u64, Ordering::Relaxed);
+            }
         }
 
         // Check condensation: d1 → d2
@@ -371,6 +412,9 @@ impl SessionCompactor {
                 d2_created = self
                     .try_condense(&session_id, &agent_id, 1, 2, self.config.d2_min_fanout)
                     .await?;
+                if d2_created > 0 {
+                    self.metrics.d2_condensations.fetch_add(d2_created as u64, Ordering::Relaxed);
+                }
             }
         }
 
@@ -467,6 +511,8 @@ impl SessionCompactor {
         }
 
         // No provider or all LLM attempts failed — deterministic fallback
+        self.metrics.fallback_count.fetch_add(1, Ordering::Relaxed);
+        tracing::warn!(target: "session_compactor", depth, "fallback");
         let target = fallback::target_tokens(source_token_count, FallbackLevel::Normal);
         let max_chars = (target as f64 * ratio) as usize;
         deterministic_truncate(messages, max_chars)
@@ -527,6 +573,8 @@ impl SessionCompactor {
         target_depth: u32,
         _min_fanout: usize,
     ) -> Result<u32, AlephError> {
+        tracing::info!(target: "session_compactor", source_depth, target_depth, "condense");
+
         let source_facts = self
             .fetch_valid_facts_at_depth(session_id, source_depth)
             .await?;
