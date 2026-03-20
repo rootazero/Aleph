@@ -121,7 +121,7 @@ pub use crate::error::{AlephError, AlephException, Result};
 
 // Configuration (main entry points and commonly used types)
 pub use crate::config::{
-    Config, FullConfig, ChannelInstanceConfig, ProviderConfig, RoutingRuleConfig,
+    Config, FullConfig, ChannelInstanceConfig, PluginMarketplaceEntry, ProviderConfig, RoutingRuleConfig,
     MemoryConfig, BehaviorConfig, GeneralConfig, SmartFlowConfig,
     EmbeddingProviderConfig, GenerationProviderConfig,
     backup::ConfigBackup,

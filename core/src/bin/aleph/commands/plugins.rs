@@ -188,18 +188,41 @@ pub fn handle_plugins_disable(name: &str) -> Result<(), Box<dyn std::error::Erro
 
 /// Install plugin from marketplace (by name) or URL (legacy path)
 pub async fn handle_plugin_install(source: &str, scope: &str) -> Result<(), Box<dyn std::error::Error>> {
-    use alephcore::cli::{GatewayClient, print_json};
+    use alephcore::extension::marketplace::MarketplaceManager;
+    use alephcore::extension::marketplace::types::{MarketplaceConfig, MarketplaceSourceType};
+    use alephcore::extension::scope::parse_scope;
+    use alephcore::Config;
 
-    // If source looks like a plugin name (no /, ., or :), use marketplace install via RPC
+    // If source looks like a plugin name (no /, ., or :), use marketplace install locally
     let is_plugin_name = !source.contains('/') && !source.contains('.') && !source.contains(':');
 
     if is_plugin_name {
-        let client = GatewayClient::new();
-        let result = client.call_raw(
-            "plugin.marketplace.install",
-            Some(serde_json::json!({ "name": source, "scope": scope })),
-        ).await?;
-        print_json(&result)?;
+        let config = Config::load()?;
+        let marketplace_configs: std::collections::HashMap<String, MarketplaceConfig> = config
+            .plugin_marketplaces
+            .iter()
+            .map(|(name, entry): (&String, &alephcore::PluginMarketplaceEntry)| {
+                let source_type = match entry.source_type.as_str() {
+                    "local" => MarketplaceSourceType::Local,
+                    _ => MarketplaceSourceType::Github,
+                };
+                (name.clone(), MarketplaceConfig { source: entry.source.clone(), source_type })
+            })
+            .collect();
+
+        let manager = MarketplaceManager::new(marketplace_configs, None);
+        let plugin_scope = parse_scope(scope).map_err(|e| e)?;
+
+        println!("Searching for plugin '{}'...", source);
+        match manager.install_to_scope(source, None, plugin_scope, None) {
+            Ok(path) => {
+                println!("Plugin '{}' installed to {:?}", source, path);
+            }
+            Err(e) => {
+                eprintln!("Error: {}", e);
+                std::process::exit(1);
+            }
+        }
     } else {
         // Direct URL install (legacy path)
         handle_plugins_install(source).await?;
@@ -209,39 +232,108 @@ pub async fn handle_plugin_install(source: &str, scope: &str) -> Result<(), Box<
 
 /// Handle marketplace subcommands
 pub async fn handle_marketplace_command(action: MarketplaceAction) -> Result<(), Box<dyn std::error::Error>> {
-    use alephcore::cli::{GatewayClient, print_json};
+    use alephcore::extension::marketplace::MarketplaceManager;
+    use alephcore::extension::marketplace::types::{MarketplaceConfig, MarketplaceSourceType};
+    use alephcore::{Config, PluginMarketplaceEntry};
 
-    let client = GatewayClient::new();
+    // Load marketplace config from config.toml
+    let config = Config::load()?;
+    let marketplace_configs: std::collections::HashMap<String, MarketplaceConfig> = config
+        .plugin_marketplaces
+        .iter()
+        .map(|(name, entry): (&String, &PluginMarketplaceEntry)| {
+            let source_type = match entry.source_type.as_str() {
+                "local" => MarketplaceSourceType::Local,
+                _ => MarketplaceSourceType::Github,
+            };
+            (name.clone(), MarketplaceConfig { source: entry.source.clone(), source_type })
+        })
+        .collect();
+
+    let mut manager = MarketplaceManager::new(marketplace_configs, None);
 
     match action {
-        MarketplaceAction::Add { source } => {
-            let result = client.call_raw(
-                "plugin.marketplace.add",
-                Some(serde_json::json!({ "source": source })),
-            ).await?;
-            print_json(&result)?;
-        }
         MarketplaceAction::List => {
-            let result = client.call_raw(
-                "plugin.marketplace.list",
-                Some(serde_json::json!({})),
-            ).await?;
-            print_json(&result)?;
+            let marketplaces = manager.list();
+            println!("Registered marketplaces:");
+            println!("{:<25} {:<15} {}", "NAME", "TYPE", "SOURCE");
+            println!("{}", "-".repeat(70));
+            for (name, cfg) in &marketplaces {
+                let type_str = match cfg.source_type {
+                    MarketplaceSourceType::Github => "github",
+                    MarketplaceSourceType::Local => "local",
+                };
+                println!("{:<25} {:<15} {}", name, type_str, cfg.source);
+            }
+        }
+        MarketplaceAction::Add { source } => {
+            // Derive name and type from source
+            let (name, source_type) = if source.contains('/') && !source.starts_with('/') {
+                // GitHub: "owner/repo" -> name from repo part
+                let repo = source.split('/').next_back().unwrap_or(&source).to_lowercase();
+                (repo, MarketplaceSourceType::Github)
+            } else {
+                // Local path
+                let name = std::path::Path::new(&source)
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("local")
+                    .to_string();
+                (name, MarketplaceSourceType::Local)
+            };
+
+            manager.add(name.clone(), MarketplaceConfig {
+                source: source.clone(),
+                source_type: source_type.clone(),
+            });
+
+            // Save to config
+            let mut config = Config::load()?;
+            config.plugin_marketplaces.insert(name.clone(), PluginMarketplaceEntry {
+                source: source.clone(),
+                source_type: match source_type {
+                    MarketplaceSourceType::Github => "github".to_string(),
+                    MarketplaceSourceType::Local => "local".to_string(),
+                },
+            });
+            config.save()?;
+
+            println!("Added marketplace '{}' ({})", name, source);
+
+            // Sync cache
+            print!("Syncing cache...");
+            match manager.update(&name) {
+                Ok(_) => println!(" done."),
+                Err(e) => println!(" failed: {}", e),
+            }
         }
         MarketplaceAction::Update { name } => {
-            let params = match name {
-                Some(n) => serde_json::json!({ "name": n }),
-                None => serde_json::json!({}),
-            };
-            let result = client.call_raw("plugin.marketplace.update", Some(params)).await?;
-            print_json(&result)?;
+            match name {
+                Some(n) => {
+                    println!("Updating marketplace '{}'...", n);
+                    match manager.update(&n) {
+                        Ok(path) => println!("Updated: {:?}", path),
+                        Err(e) => eprintln!("Error: {}", e),
+                    }
+                }
+                None => {
+                    println!("Updating all marketplaces...");
+                    match manager.update_all() {
+                        Ok(()) => println!("All marketplaces updated."),
+                        Err(e) => eprintln!("Some updates failed: {}", e),
+                    }
+                }
+            }
         }
         MarketplaceAction::Remove { name } => {
-            let result = client.call_raw(
-                "plugin.marketplace.remove",
-                Some(serde_json::json!({ "name": name })),
-            ).await?;
-            print_json(&result)?;
+            manager.remove(&name).map_err(|e| e)?;
+
+            // Save to config
+            let mut config = Config::load()?;
+            config.plugin_marketplaces.remove(&name);
+            config.save()?;
+
+            println!("Removed marketplace '{}'", name);
         }
     }
     Ok(())
