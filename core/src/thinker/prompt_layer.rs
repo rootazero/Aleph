@@ -59,27 +59,33 @@ pub struct LayerInput<'a> {
     pub workspace: Option<&'a IdentityFiles>,
     /// Pre-fetched memory context from LanceDB (facts + memory summaries).
     pub memory_context: Option<&'a super::memory_context::MemoryContext>,
+    /// Whether the conversation history contains compressed session summaries.
+    ///
+    /// Set to `true` when session compaction has produced at least one
+    /// `<session_context>` block in the message history.  The
+    /// `SessionContextGuideLayer` uses this flag to inject usage guidance.
+    pub has_session_summaries: bool,
 }
 
 impl<'a> LayerInput<'a> {
     /// Input for the `Basic` path — config + tool list.
     pub fn basic(config: &'a PromptConfig, tools: &'a [ToolInfo]) -> Self {
-        Self { config, tools: Some(tools), hydration: None, soul: None, context: None, profile: None, mode: PromptMode::Full, inbound: None, workspace: None, memory_context: None }
+        Self { config, tools: Some(tools), hydration: None, soul: None, context: None, profile: None, mode: PromptMode::Full, inbound: None, workspace: None, memory_context: None, has_session_summaries: false }
     }
 
     /// Input for the `Hydration` path — config + hydration result.
     pub fn hydration(config: &'a PromptConfig, hydration: &'a HydrationResult) -> Self {
-        Self { config, tools: None, hydration: Some(hydration), soul: None, context: None, profile: None, mode: PromptMode::Full, inbound: None, workspace: None, memory_context: None }
+        Self { config, tools: None, hydration: Some(hydration), soul: None, context: None, profile: None, mode: PromptMode::Full, inbound: None, workspace: None, memory_context: None, has_session_summaries: false }
     }
 
     /// Input for the `Soul` path — config + tools + soul manifest.
     pub fn soul(config: &'a PromptConfig, tools: &'a [ToolInfo], soul: &'a SoulManifest) -> Self {
-        Self { config, tools: Some(tools), hydration: None, soul: Some(soul), context: None, profile: None, mode: PromptMode::Full, inbound: None, workspace: None, memory_context: None }
+        Self { config, tools: Some(tools), hydration: None, soul: Some(soul), context: None, profile: None, mode: PromptMode::Full, inbound: None, workspace: None, memory_context: None, has_session_summaries: false }
     }
 
     /// Input for the `Context` path — config + resolved context.
     pub fn context(config: &'a PromptConfig, ctx: &'a ResolvedContext) -> Self {
-        Self { config, tools: None, hydration: None, soul: None, context: Some(ctx), profile: None, mode: PromptMode::Full, inbound: None, workspace: None, memory_context: None }
+        Self { config, tools: None, hydration: None, soul: None, context: Some(ctx), profile: None, mode: PromptMode::Full, inbound: None, workspace: None, memory_context: None, has_session_summaries: false }
     }
 
     /// Attach workspace profile to this input.
@@ -127,6 +133,12 @@ impl<'a> LayerInput<'a> {
     /// Attach optional pre-fetched memory context.
     pub fn with_memory_context_opt(mut self, ctx: Option<&'a super::memory_context::MemoryContext>) -> Self {
         self.memory_context = ctx;
+        self
+    }
+
+    /// Signal that the conversation contains compressed session summaries.
+    pub fn with_session_summaries(mut self, has: bool) -> Self {
+        self.has_session_summaries = has;
         self
     }
 

@@ -42,6 +42,9 @@ mod identity_files;
 // --- Memory augmentation layer ---
 mod memory_augmentation;
 
+// --- Session context guide layer ---
+mod session_context_guide;
+
 // --- Bootstrap layer ---
 pub mod bootstrap;
 
@@ -76,4 +79,5 @@ pub use heartbeat::HeartbeatLayer;
 pub use operational_guidelines::OperationalGuidelinesLayer;
 pub use identity_files::IdentityFilesLayer;
 pub use memory_augmentation::MemoryAugmentationLayer;
+pub use session_context_guide::SessionContextGuideLayer;
 pub use bootstrap::BootstrapLayer;

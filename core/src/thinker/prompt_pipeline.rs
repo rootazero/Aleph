@@ -209,6 +209,7 @@ impl PromptPipeline {
     /// 1710  RuntimeContextLayer
     /// 1730  IdentityFilesLayer
     /// 1740  MemoryAugmentationLayer
+    /// 1750  SessionContextGuideLayer
     pub fn default_layers() -> Self {
         Self::new(vec![
             Box::new(SoulLayer),
@@ -235,6 +236,7 @@ impl PromptPipeline {
             Box::new(CustomInstructionsLayer),
             Box::new(IdentityFilesLayer),
             Box::new(MemoryAugmentationLayer),
+            Box::new(SessionContextGuideLayer),
             Box::new(LanguageLayer),
         ])
     }
