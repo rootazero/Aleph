@@ -273,6 +273,7 @@ impl<E: EventEmitter + Send + Sync + 'static> crate::agent_loop::LoopCallback
             content: text.to_string(),
             chunk_index,
             is_final: false,
+            is_intermediate: false,
         };
 
         // Fire-and-forget emit (LoopCallback is sync, emitter is async)

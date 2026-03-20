@@ -103,6 +103,7 @@ pub trait EventEmitter: Send + Sync {
                 content: content.to_string(),
                 chunk_index,
                 is_final,
+                is_intermediate: false,
             })
             .await;
     }

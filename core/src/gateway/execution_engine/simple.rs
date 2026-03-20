@@ -222,6 +222,7 @@ impl SimpleExecutionEngine {
                     content: chunk_str,
                     chunk_index: get_chunk().await,
                     is_final: false,
+                    is_intermediate: false,
                 })
                 .await;
             tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
@@ -234,6 +235,7 @@ impl SimpleExecutionEngine {
                 content: String::new(),
                 chunk_index: get_chunk().await,
                 is_final: true,
+                is_intermediate: false,
             })
             .await;
 

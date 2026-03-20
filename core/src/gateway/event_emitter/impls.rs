@@ -132,11 +132,15 @@ impl EventEmitter for GatewayEventEmitter {
             if let StreamEvent::ResponseChunk {
                 ref content,
                 is_final,
+                is_intermediate,
                 ref run_id,
                 ..
             } = event
             {
-                if !is_final {
+                // Intermediate chunks bypass buffering — emit immediately
+                if is_intermediate {
+                    // Fall through to default broadcast below
+                } else if !is_final {
                     // Buffer the chunk content, don't emit yet
                     self.instant_buffer.lock().await.push_str(content);
                     return Ok(());
@@ -158,6 +162,7 @@ impl EventEmitter for GatewayEventEmitter {
                     content: full_content,
                     chunk_index: 0,
                     is_final: true,
+                    is_intermediate: false,
                 };
                 let event_value = serde_json::to_value(&final_event)?;
                 let notification =

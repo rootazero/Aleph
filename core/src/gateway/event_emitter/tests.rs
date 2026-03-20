@@ -248,6 +248,7 @@ async fn test_instant_mode_buffers_non_final_chunks() {
             content: "Hello ".to_string(),
             chunk_index: 0,
             is_final: false,
+            is_intermediate: false,
         })
         .await;
 
@@ -258,6 +259,7 @@ async fn test_instant_mode_buffers_non_final_chunks() {
             content: "World".to_string(),
             chunk_index: 1,
             is_final: false,
+            is_intermediate: false,
         })
         .await;
 
@@ -274,6 +276,7 @@ async fn test_instant_mode_buffers_non_final_chunks() {
             content: "!".to_string(),
             chunk_index: 2,
             is_final: true,
+            is_intermediate: false,
         })
         .await;
 

@@ -96,6 +96,10 @@ pub enum StreamEvent {
         content: String,
         chunk_index: u32,
         is_final: bool,
+        /// When true, send to user immediately as standalone message (intermediate progress).
+        /// When false, buffer per existing behavior.
+        #[serde(default)]
+        is_intermediate: bool,
     },
 
     /// Agent run completed successfully

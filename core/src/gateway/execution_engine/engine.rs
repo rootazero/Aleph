@@ -572,6 +572,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 content: error_response.clone(),
                 chunk_index: 0,
                 is_final: true,
+                is_intermediate: false,
             })
             .await;
         let _ = emitter
