@@ -135,15 +135,35 @@ StreamEvent::ResponseChunk { content, is_final, is_intermediate, .. } => {
 - **send_tool** — Cross-session communication uses the same ExecutionEngine path, automatically gains intermediate message delivery.
 - **Typewriter mode** — Still applies to the final message. Intermediate messages are sent instantly as standalone messages (short text, no need for progressive editing).
 
-## Prerequisite: Prompt Guidance
+## Prompt Guidance (In Scope)
 
-This design opens the pipe for intermediate messages, but the LLM must actually produce text during intermediate iterations for anything to flow through. Without prompt guidance, most LLMs return only tool calls (no text) during intermediate iterations.
+The code changes open the pipe for intermediate messages, but the LLM must actually produce text during intermediate iterations for anything to flow through. Without prompt guidance, most LLMs return only tool calls (no text) during intermediate iterations. This is addressed at two levels:
 
-The system prompt / soul template should include guidance such as:
+### Level 1: BASE_BEHAVIOR (prompt_builder.rs)
 
-> "When you need to execute multiple tool calls, briefly explain to the user in natural language what you plan to do before each step. Do NOT expose raw tool names or parameters — describe your actions conversationally."
+Add a behavioral rule to `BASE_BEHAVIOR` in `core/src/agent_loop/prompt_builder.rs`. This is hard-coded and loaded for ALL agents unconditionally:
 
-This is out of scope for the code changes but essential for the feature to be effective.
+```
+- **KEEP THE USER INFORMED.** When you need to execute multiple steps, briefly tell the user
+  what you're about to do before each tool call. Use natural, conversational language — do NOT
+  expose raw tool names, parameters, or JSON. For example: "Let me check your calendar..." or
+  "I'll search for that file now." This helps the user understand your progress and know you're
+  still working.
+```
+
+### Level 2: SOUL.md Template and Existing Agents
+
+Add a "Communication" section to the SOUL.md template (`default_soul()` in `core/src/config/agent_resolver.rs`) so new agents inherit this guidance from their identity:
+
+```markdown
+## Communication
+
+**Show your work.** When tackling multi-step tasks, narrate your progress naturally — what you're
+doing, what you found, what's next. Don't go silent for long stretches. The user should feel like
+they're working _with_ you, not waiting _for_ you.
+```
+
+Update all existing agent SOUL.md files (`~/.aleph/agents/{main,codev,coding,cowork,agent-73f36847}/SOUL.md`) with the same section.
 
 ## Edge Cases
 
@@ -200,3 +220,6 @@ AgentLoop iteration 3 (final):
 | `core/src/gateway/event_emitter/types.rs` | Add `is_intermediate` field to `ResponseChunk` |
 | `core/src/gateway/execution_engine/run_loop.rs` | Implement `on_intermediate_text` in `StreamCallback` |
 | `core/src/gateway/reply_emitter.rs` | Handle `is_intermediate` in `emit()` |
+| `core/src/agent_loop/prompt_builder.rs` | Add intermediate message guidance to `BASE_BEHAVIOR` |
+| `core/src/config/agent_resolver.rs` | Add "Communication" section to `default_soul()` template |
+| `~/.aleph/agents/*/SOUL.md` (5 files) | Add "Communication" section to existing agents |
