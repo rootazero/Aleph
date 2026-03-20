@@ -27,6 +27,8 @@
 
 mod aleph_plugin;
 mod aleph_plugin_toml;
+pub mod cc_plugin_json;
+pub mod cc_plugin_toml;
 pub mod legacy_adapter;
 mod package_json;
 mod types;
@@ -41,8 +43,14 @@ pub use aleph_plugin_toml::{
     PluginAuthorToml, PluginSection, PromptSection, ProviderSection, ServiceSection, ToolSection,
     ALEPH_PLUGIN_TOML,
 };
+pub use cc_plugin_json::{
+    parse_cc_plugin_json, parse_cc_plugin_json_content, parse_cc_plugin_json_sync, CC_PLUGIN_JSON,
+};
+pub use cc_plugin_toml::{
+    parse_cc_plugin_toml, parse_cc_plugin_toml_content, parse_cc_plugin_toml_sync, CC_PLUGIN_TOML,
+};
 pub use package_json::{parse_package_json, parse_package_json_content};
-pub use types::{AuthorInfo, ConfigUiHint, PluginManifest, PluginPermission};
+pub use types::{AlephExtensions, AlephRuntime, AuthorInfo, ConfigUiHint, PluginManifest, PluginPermission};
 
 // Re-export legacy types for backward compatibility with loader
 pub use self::legacy::{

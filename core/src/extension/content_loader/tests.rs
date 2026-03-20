@@ -103,6 +103,8 @@ You are a helpful assistant."#,
         channels_v2: None,
         providers_v2: None,
         http_routes_v2: None,
+        // CC-compat extensions
+        aleph_extensions: None,
     };
 
     let loader = ContentLoader::new();
@@ -158,6 +160,8 @@ async fn test_load_v2_prompt_disabled() {
         channels_v2: None,
         providers_v2: None,
         http_routes_v2: None,
+        // CC-compat extensions
+        aleph_extensions: None,
     };
 
     let loader = ContentLoader::new();
@@ -214,6 +218,8 @@ async fn test_load_v2_prompt_no_frontmatter() {
         channels_v2: None,
         providers_v2: None,
         http_routes_v2: None,
+        // CC-compat extensions
+        aleph_extensions: None,
     };
 
     let loader = ContentLoader::new();
@@ -301,6 +307,8 @@ async fn test_load_v2_tool_prompts() {
         channels_v2: None,
         providers_v2: None,
         http_routes_v2: None,
+        // CC-compat extensions
+        aleph_extensions: None,
     };
 
     let loader = ContentLoader::new();
@@ -368,6 +376,8 @@ async fn test_load_v2_tool_prompts_missing_file() {
         channels_v2: None,
         providers_v2: None,
         http_routes_v2: None,
+        // CC-compat extensions
+        aleph_extensions: None,
     };
 
     let loader = ContentLoader::new();

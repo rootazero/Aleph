@@ -1,0 +1,516 @@
+//! CC-format TOML manifest parser (.claude-plugin/plugin.toml)
+//!
+//! This module parses the NEW preferred format `.claude-plugin/plugin.toml`.
+//! It has flat top-level fields (name, version, description) plus an optional
+//! `[aleph]` section for Aleph-specific extensions.
+
+use std::path::Path;
+
+use serde::Deserialize;
+
+use crate::extension::error::{ExtensionError, ExtensionResult};
+use crate::extension::manifest::aleph_plugin::{sanitize_plugin_id, validate_plugin_id};
+use crate::extension::manifest::aleph_plugin_toml::{
+    CapabilitiesSection, ChannelSection, PermissionsSection, ProviderSection, ServiceSection,
+    convert_permissions,
+};
+use crate::extension::manifest::types::{AlephExtensions, AlephRuntime, AuthorInfo, PluginManifest};
+use crate::extension::types::PluginKind;
+
+/// Filename for CC-format TOML manifest
+pub const CC_PLUGIN_TOML: &str = ".claude-plugin/plugin.toml";
+
+// =============================================================================
+// CC plugin.toml Types
+// =============================================================================
+
+/// Root structure for .claude-plugin/plugin.toml
+///
+/// Flat top-level fields follow Claude Code conventions. The optional `[aleph]`
+/// section holds Aleph-specific extensions that CC ignores.
+#[derive(Debug, Deserialize)]
+#[serde(default)]
+pub struct CcPluginToml {
+    /// Plugin name (required — used as plugin ID source)
+    pub name: Option<String>,
+
+    /// Plugin version (semver)
+    pub version: Option<String>,
+
+    /// Plugin description
+    pub description: Option<String>,
+
+    /// License identifier (SPDX)
+    pub license: Option<String>,
+
+    /// Keywords for search
+    pub keywords: Option<Vec<String>>,
+
+    /// Homepage URL
+    pub homepage: Option<String>,
+
+    /// Repository URL
+    pub repository: Option<String>,
+
+    /// Author section
+    #[serde(rename = "author")]
+    pub author: Option<CcPluginAuthorToml>,
+
+    // Flat component paths (CC-native)
+
+    /// Path to skills directory
+    pub skills: Option<String>,
+
+    /// Path to agents directory
+    pub agents: Option<String>,
+
+    /// Path to hooks file/directory
+    pub hooks: Option<String>,
+
+    /// Path to MCP servers configuration
+    #[serde(rename = "mcp-servers")]
+    pub mcp_servers: Option<String>,
+
+    /// Aleph-specific extensions (optional, ignored by Claude Code)
+    pub aleph: Option<AlephExtensionsToml>,
+}
+
+impl Default for CcPluginToml {
+    fn default() -> Self {
+        Self {
+            name: None,
+            version: None,
+            description: None,
+            license: None,
+            keywords: None,
+            homepage: None,
+            repository: None,
+            author: None,
+            skills: None,
+            agents: None,
+            hooks: None,
+            mcp_servers: None,
+            aleph: None,
+        }
+    }
+}
+
+/// Author section in CC plugin.toml
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub enum CcPluginAuthorToml {
+    /// Simple string format: "Name <email>"
+    String(String),
+    /// Object format with optional fields
+    Object {
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        email: Option<String>,
+        #[serde(default)]
+        url: Option<String>,
+    },
+}
+
+impl From<CcPluginAuthorToml> for AuthorInfo {
+    fn from(author: CcPluginAuthorToml) -> Self {
+        match author {
+            CcPluginAuthorToml::String(s) => AuthorInfo::from(s.as_str()),
+            CcPluginAuthorToml::Object { name, email, url } => AuthorInfo { name, email, url },
+        }
+    }
+}
+
+/// Aleph-specific extensions inside [aleph] section
+#[derive(Debug, Deserialize)]
+#[serde(default)]
+pub struct AlephExtensionsToml {
+    /// Runtime type: "wasm", "mcp", "static"
+    pub runtime: Option<String>,
+
+    /// Entry point override
+    pub entry: Option<String>,
+
+    /// Permission grants
+    #[serde(default)]
+    pub permissions: PermissionsSection,
+
+    /// WASM capabilities
+    #[serde(default)]
+    pub capabilities: CapabilitiesSection,
+
+    /// Messaging channel integrations
+    #[serde(default)]
+    pub channels: Vec<ChannelSection>,
+
+    /// Custom LLM provider backends
+    #[serde(default)]
+    pub providers: Vec<ProviderSection>,
+
+    /// Background services
+    #[serde(default)]
+    pub services: Vec<ServiceSection>,
+}
+
+impl Default for AlephExtensionsToml {
+    fn default() -> Self {
+        Self {
+            runtime: None,
+            entry: None,
+            permissions: PermissionsSection::default(),
+            capabilities: CapabilitiesSection::default(),
+            channels: Vec::new(),
+            providers: Vec::new(),
+            services: Vec::new(),
+        }
+    }
+}
+
+// =============================================================================
+// Runtime → PluginKind mapping
+// =============================================================================
+
+fn runtime_to_kind(runtime: &str) -> PluginKind {
+    match runtime {
+        "wasm" => PluginKind::Wasm,
+        "mcp" => PluginKind::NodeJs,
+        "static" => PluginKind::Static,
+        _ => PluginKind::Static,
+    }
+}
+
+fn runtime_to_aleph_runtime(runtime: &str) -> AlephRuntime {
+    match runtime {
+        "wasm" => AlephRuntime::Wasm,
+        "mcp" => AlephRuntime::Mcp,
+        _ => AlephRuntime::Static,
+    }
+}
+
+fn default_entry_for_kind(kind: PluginKind) -> String {
+    match kind {
+        PluginKind::Wasm => "plugin.wasm".to_string(),
+        PluginKind::NodeJs => "index.js".to_string(),
+        PluginKind::Static => ".".to_string(),
+    }
+}
+
+// =============================================================================
+// Parser
+// =============================================================================
+
+/// Parse .claude-plugin/plugin.toml content into a PluginManifest
+///
+/// # Arguments
+/// * `content` - TOML content string
+/// * `plugin_dir` - Path to the plugin root directory
+pub fn parse_cc_plugin_toml_content(
+    content: &str,
+    plugin_dir: &Path,
+) -> ExtensionResult<PluginManifest> {
+    let manifest_path = plugin_dir.join(CC_PLUGIN_TOML);
+
+    let toml: CcPluginToml = toml::from_str(content).map_err(|e| {
+        ExtensionError::invalid_manifest(&manifest_path, format!("TOML parse error: {}", e))
+    })?;
+
+    // `name` is required
+    let raw_name = toml.name.ok_or_else(|| {
+        ExtensionError::missing_field(&manifest_path, "name")
+    })?;
+    if raw_name.is_empty() {
+        return Err(ExtensionError::missing_field(&manifest_path, "name"));
+    }
+
+    // Derive plugin ID from name
+    let plugin_id = sanitize_plugin_id(&raw_name);
+    validate_plugin_id(&plugin_id)
+        .map_err(|reason| ExtensionError::invalid_plugin_name(&raw_name, reason))?;
+
+    // Determine kind and entry from [aleph] section
+    let (kind, entry, aleph_extensions) = if let Some(aleph) = toml.aleph {
+        let runtime_str = aleph.runtime.as_deref().unwrap_or("static");
+        let kind = runtime_to_kind(runtime_str);
+        let entry = aleph
+            .entry
+            .unwrap_or_else(|| default_entry_for_kind(kind));
+        let permissions = convert_permissions(&aleph.permissions);
+
+        let aleph_ext = AlephExtensions {
+            runtime: runtime_to_aleph_runtime(runtime_str),
+            entry: Some(entry.clone()),
+            channels: aleph.channels,
+            providers: aleph.providers,
+            services: aleph.services,
+            permissions: if aleph.permissions.network
+                || aleph.permissions.env
+                || aleph.permissions.shell
+                || aleph.permissions.filesystem != Default::default()
+            {
+                Some(aleph.permissions)
+            } else {
+                None
+            },
+            capabilities: if aleph.capabilities.dynamic_tools
+                || aleph.capabilities.dynamic_hooks
+                || aleph.capabilities.workspace.is_some()
+                || aleph.capabilities.http.is_some()
+                || aleph.capabilities.tool_invoke.is_some()
+                || aleph.capabilities.secrets.is_some()
+            {
+                Some(aleph.capabilities)
+            } else {
+                None
+            },
+        };
+
+        (kind, entry, Some((aleph_ext, permissions)))
+    } else {
+        (PluginKind::Static, ".".to_string(), None)
+    };
+
+    let (aleph_ext, permissions) = aleph_extensions
+        .map(|(ext, perms)| (Some(ext), perms))
+        .unwrap_or((None, Vec::new()));
+
+    let manifest = PluginManifest {
+        id: plugin_id,
+        name: raw_name,
+        version: toml.version,
+        description: toml.description,
+        kind,
+        entry: entry.into(),
+        root_dir: plugin_dir.to_path_buf(),
+        config_schema: None,
+        config_ui_hints: Default::default(),
+        permissions,
+        author: toml.author.map(AuthorInfo::from),
+        homepage: toml.homepage,
+        repository: toml.repository,
+        license: toml.license,
+        keywords: toml.keywords.unwrap_or_default(),
+        extensions: Vec::new(),
+        // V2 fields not available in CC TOML format
+        tools_v2: None,
+        hooks_v2: None,
+        commands_v2: None,
+        services_v2: None,
+        prompt_v2: None,
+        capabilities_v2: None,
+        wasm_capabilities: None,
+        wasm_resource_limits: None,
+        // P2 fields not available in CC TOML format
+        channels_v2: None,
+        providers_v2: None,
+        http_routes_v2: None,
+        // CC-compat extensions
+        aleph_extensions: aleph_ext,
+    };
+
+    Ok(manifest)
+}
+
+/// Parse .claude-plugin/plugin.toml from a plugin directory (sync)
+///
+/// # Arguments
+/// * `dir` - Path to the plugin root directory
+pub fn parse_cc_plugin_toml_sync(dir: &Path) -> ExtensionResult<PluginManifest> {
+    let toml_path = dir.join(CC_PLUGIN_TOML);
+    let content = std::fs::read_to_string(&toml_path)?;
+    parse_cc_plugin_toml_content(&content, dir)
+}
+
+/// Parse .claude-plugin/plugin.toml from a plugin directory (async)
+///
+/// # Arguments
+/// * `dir` - Path to the plugin root directory
+pub async fn parse_cc_plugin_toml(dir: &Path) -> ExtensionResult<PluginManifest> {
+    let toml_path = dir.join(CC_PLUGIN_TOML);
+    let content = tokio::fs::read_to_string(&toml_path).await?;
+    parse_cc_plugin_toml_content(&content, dir)
+}
+
+// =============================================================================
+// Tests
+// =============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn test_dir() -> PathBuf {
+        PathBuf::from("/test/my-plugin")
+    }
+
+    #[test]
+    fn test_parse_minimal_cc_toml() {
+        let content = r#"
+name = "My Plugin"
+version = "1.0.0"
+"#;
+        let manifest = parse_cc_plugin_toml_content(content, &test_dir()).unwrap();
+
+        assert_eq!(manifest.id, "my-plugin");
+        assert_eq!(manifest.name, "My Plugin");
+        assert_eq!(manifest.version, Some("1.0.0".to_string()));
+        assert_eq!(manifest.kind, PluginKind::Static);
+        assert_eq!(manifest.entry, PathBuf::from("."));
+        assert!(manifest.aleph_extensions.is_none());
+    }
+
+    #[test]
+    fn test_parse_cc_toml_with_aleph_extensions() {
+        let content = r#"
+name = "wasm-plugin"
+version = "2.0.0"
+description = "A WASM plugin"
+
+[aleph]
+runtime = "wasm"
+entry = "dist/plugin.wasm"
+
+[aleph.permissions]
+network = true
+env = true
+"#;
+        let manifest = parse_cc_plugin_toml_content(content, &test_dir()).unwrap();
+
+        assert_eq!(manifest.id, "wasm-plugin");
+        assert_eq!(manifest.kind, PluginKind::Wasm);
+        assert_eq!(manifest.entry, PathBuf::from("dist/plugin.wasm"));
+        assert!(manifest.aleph_extensions.is_some());
+
+        let ext = manifest.aleph_extensions.unwrap();
+        assert_eq!(ext.runtime, AlephRuntime::Wasm);
+        assert_eq!(ext.entry, Some("dist/plugin.wasm".to_string()));
+
+        // permissions were set, so they should be in the manifest
+        assert!(manifest.permissions.contains(&crate::extension::manifest::types::PluginPermission::Network));
+        assert!(manifest.permissions.contains(&crate::extension::manifest::types::PluginPermission::Env));
+    }
+
+    #[test]
+    fn test_parse_cc_toml_with_channels() {
+        let content = r#"
+name = "channel-plugin"
+
+[aleph]
+runtime = "mcp"
+
+[[aleph.channels]]
+id = "slack"
+label = "Slack Integration"
+handler = "handle_slack"
+
+[[aleph.providers]]
+id = "custom-llm"
+name = "Custom LLM"
+models = ["gpt-4", "claude-3"]
+"#;
+        let manifest = parse_cc_plugin_toml_content(content, &test_dir()).unwrap();
+
+        assert_eq!(manifest.id, "channel-plugin");
+        assert_eq!(manifest.kind, PluginKind::NodeJs);
+
+        let ext = manifest.aleph_extensions.unwrap();
+        assert_eq!(ext.channels.len(), 1);
+        assert_eq!(ext.channels[0].id, "slack");
+        assert_eq!(ext.channels[0].label, "Slack Integration");
+
+        assert_eq!(ext.providers.len(), 1);
+        assert_eq!(ext.providers[0].id, "custom-llm");
+        assert_eq!(ext.providers[0].models, vec!["gpt-4", "claude-3"]);
+    }
+
+    #[test]
+    fn test_cc_toml_name_required() {
+        let content = r#"
+version = "1.0.0"
+description = "No name here"
+"#;
+        let result = parse_cc_plugin_toml_content(content, &test_dir());
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("name") || err.contains("missing"), "Expected missing name error, got: {}", err);
+    }
+
+    #[test]
+    fn test_cc_toml_runtime_determines_kind() {
+        // wasm → Wasm
+        let content = r#"
+name = "wasm-test"
+[aleph]
+runtime = "wasm"
+"#;
+        let manifest = parse_cc_plugin_toml_content(content, &test_dir()).unwrap();
+        assert_eq!(manifest.kind, PluginKind::Wasm);
+
+        // mcp → NodeJs
+        let content = r#"
+name = "mcp-test"
+[aleph]
+runtime = "mcp"
+"#;
+        let manifest = parse_cc_plugin_toml_content(content, &test_dir()).unwrap();
+        assert_eq!(manifest.kind, PluginKind::NodeJs);
+
+        // static → Static
+        let content = r#"
+name = "static-test"
+[aleph]
+runtime = "static"
+"#;
+        let manifest = parse_cc_plugin_toml_content(content, &test_dir()).unwrap();
+        assert_eq!(manifest.kind, PluginKind::Static);
+
+        // no aleph section → Static
+        let content = r#"
+name = "no-aleph"
+"#;
+        let manifest = parse_cc_plugin_toml_content(content, &test_dir()).unwrap();
+        assert_eq!(manifest.kind, PluginKind::Static);
+    }
+
+    #[test]
+    fn test_parse_cc_toml_author_string() {
+        let content = r#"
+name = "author-test"
+author = "Alice <alice@example.com>"
+"#;
+        let manifest = parse_cc_plugin_toml_content(content, &test_dir()).unwrap();
+        let author = manifest.author.unwrap();
+        assert_eq!(author.name, Some("Alice".to_string()));
+        assert_eq!(author.email, Some("alice@example.com".to_string()));
+    }
+
+    #[test]
+    fn test_parse_cc_toml_mcp_default_entry() {
+        let content = r#"
+name = "mcp-defaults"
+[aleph]
+runtime = "mcp"
+"#;
+        let manifest = parse_cc_plugin_toml_content(content, &test_dir()).unwrap();
+        assert_eq!(manifest.entry, PathBuf::from("index.js"));
+    }
+
+    #[test]
+    fn test_parse_cc_toml_wasm_default_entry() {
+        let content = r#"
+name = "wasm-defaults"
+[aleph]
+runtime = "wasm"
+"#;
+        let manifest = parse_cc_plugin_toml_content(content, &test_dir()).unwrap();
+        assert_eq!(manifest.entry, PathBuf::from("plugin.wasm"));
+    }
+
+    #[test]
+    fn test_parse_cc_toml_root_dir_set() {
+        let content = r#"name = "root-dir-test""#;
+        let dir = PathBuf::from("/some/plugin/dir");
+        let manifest = parse_cc_plugin_toml_content(content, &dir).unwrap();
+        assert_eq!(manifest.root_dir, dir);
+    }
+}
