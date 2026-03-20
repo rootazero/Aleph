@@ -674,6 +674,37 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                     }
                 }
 
+                // Register plugin commands (from CC-format plugins' commands/ directories)
+                {
+                    let commands = ext_manager.get_all_commands().await;
+                    let command_skill_infos: Vec<alephcore::skills::SkillInfo> = commands
+                        .iter()
+                        .filter(|cmd| cmd.plugin_name.is_some())
+                        .map(|cmd| {
+                            let id = if let Some(ref plugin) = cmd.plugin_name {
+                                format!("{}:{}", plugin, cmd.name)
+                            } else {
+                                cmd.name.clone()
+                            };
+                            alephcore::skills::SkillInfo {
+                                id,
+                                name: cmd.name.clone(),
+                                description: cmd.description.clone(),
+                                triggers: Vec::new(),
+                                allowed_tools: Vec::new(),
+                                ecosystem: "plugin".to_string(),
+                            }
+                        })
+                        .collect();
+
+                    if !command_skill_infos.is_empty() {
+                        dispatch_registry.register_skills(&command_skill_infos).await;
+                        if !daemon {
+                            println!("  Dispatch registry: {} plugin commands registered", command_skill_infos.len());
+                        }
+                    }
+                }
+
                 // Register plugin tools from discovered manifests
                 {
                     let registry = ext_manager.get_plugin_registry().await;
