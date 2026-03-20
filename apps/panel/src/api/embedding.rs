@@ -139,4 +139,18 @@ impl EmbeddingProvidersApi {
         let result = state.rpc_call("embedding_providers.presets", Value::Null).await?;
         serde_json::from_value(result).map_err(|e| e.to_string())
     }
+
+    /// Start a reembed migration
+    pub async fn reembed(state: &DashboardState, target_dim: Option<u32>) -> Result<Value, String> {
+        let params = match target_dim {
+            Some(dim) => serde_json::json!({ "target_dim": dim }),
+            None => Value::Null,
+        };
+        state.rpc_call("memory.reembed", params).await
+    }
+
+    /// Cancel a running reembed migration
+    pub async fn reembed_cancel(state: &DashboardState) -> Result<Value, String> {
+        state.rpc_call("memory.reembed.cancel", Value::Null).await
+    }
 }
