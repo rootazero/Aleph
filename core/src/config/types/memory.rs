@@ -462,7 +462,7 @@ pub fn default_vector_db() -> String {
 }
 
 pub fn default_similarity_threshold() -> f32 {
-    0.7 // Minimum similarity score for real embedding models
+    0.3 // L2 distance in high-dim (1536) produces lower similarity via 1/(1+d)
 }
 
 pub fn default_ai_retrieval_enabled() -> bool {

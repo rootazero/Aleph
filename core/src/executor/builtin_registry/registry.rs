@@ -60,8 +60,10 @@ pub struct BuiltinToolRegistry {
     pub(crate) generation_registry: Option<Arc<std::sync::RwLock<GenerationProviderRegistry>>>,
     /// Dispatcher tool registry for meta tools (smart tool discovery)
     pub(crate) dispatcher_registry: Option<Arc<RwLock<DispatcherToolRegistry>>>,
-    /// Gateway context for sessions tools (sessions_list, sessions_send)
-    pub(crate) gateway_context: Option<Arc<GatewayContext>>,
+    /// Gateway context for sessions tools (sessions_list, sessions_send).
+    /// Uses OnceCell for deferred injection: BuiltinToolRegistry is created before
+    /// ExecutionAdapter exists, but GatewayContext needs ExecutionAdapter.
+    pub(crate) gateway_context: Arc<tokio::sync::OnceCell<Arc<GatewayContext>>>,
     /// Session new tool (optional - requires SessionManager)
     pub(crate) session_new_tool: Option<crate::builtin_tools::sessions::SessionNewTool>,
     /// Session set-topic tool (optional - requires SessionManager)
@@ -118,6 +120,27 @@ impl BuiltinToolRegistry {
     /// Register an additional tool (e.g., plugin tools discovered at runtime)
     pub fn register_tool(&mut self, tool: UnifiedTool) {
         self.tools.insert(tool.name.clone(), tool);
+    }
+
+    /// Inject GatewayContext after construction (breaks circular dependency).
+    ///
+    /// BuiltinToolRegistry is created before ExecutionAdapter exists, but
+    /// GatewayContext needs ExecutionAdapter. This method allows deferred
+    /// injection once all components are ready, enabling sessions_list and
+    /// sessions_send tools.
+    ///
+    /// Takes `&self` (not `&mut self`) so it works through `Arc`.
+    pub fn set_gateway_context(&self, context: Arc<GatewayContext>) {
+        if self.gateway_context.set(context).is_ok() {
+            info!("GatewayContext injected — sessions_list and sessions_send now available");
+        }
+    }
+
+    /// Get a handle to the GatewayContext OnceCell for deferred injection.
+    ///
+    /// Used by agent_init to inject GatewayContext after ExecutionEngine creation.
+    pub fn gateway_context_cell(&self) -> Arc<tokio::sync::OnceCell<Arc<GatewayContext>>> {
+        Arc::clone(&self.gateway_context)
     }
 
     /// Get the parameter schema for a tool by name.
@@ -272,20 +295,16 @@ impl ToolRegistry for BuiltinToolRegistry {
 
             // Sessions tools for cross-session communication
             "sessions_list" => Box::pin(async move {
-                let context = self.gateway_context.as_ref().ok_or_else(|| {
-                    AlephError::tool("sessions_list not available: no gateway context configured")
+                let context = self.gateway_context.get().ok_or_else(|| {
+                    AlephError::tool("sessions_list not available: GatewayContext not yet injected")
                 })?;
-                // Use "main" as default caller_agent_id; in practice, this would come from
-                // the agent executing the tool via higher-level context
                 let tool = SessionsListTool::new(Arc::clone(context), "main");
                 tool.call_json(arguments).await
             }),
             "sessions_send" => Box::pin(async move {
-                let context = self.gateway_context.as_ref().ok_or_else(|| {
-                    AlephError::tool("sessions_send not available: no gateway context configured")
+                let context = self.gateway_context.get().ok_or_else(|| {
+                    AlephError::tool("sessions_send not available: GatewayContext not yet injected")
                 })?;
-                // Note: GatewayContext doesn't implement Clone, so we dereference and clone
-                // the inner context for SessionsSendTool which expects GatewayContext by value
                 let tool = SessionsSendTool::with_context((**context).clone(), "main");
                 tool.call_json(arguments).await
             }),

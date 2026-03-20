@@ -192,12 +192,20 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn test_sessions_tools_not_registered_without_context() {
-            // Without gateway_context, sessions tools should not be registered
+        async fn test_sessions_tools_always_registered_metadata() {
+            // Sessions tool metadata is always registered (so LLM sees them),
+            // but execution fails without GatewayContext injection.
             let registry = BuiltinToolRegistry::new().await;
 
-            assert!(registry.get_tool("sessions_list").is_none());
-            assert!(registry.get_tool("sessions_send").is_none());
+            // Metadata present
+            assert!(registry.get_tool("sessions_list").is_some());
+            assert!(registry.get_tool("sessions_send").is_some());
+
+            // Execution fails without GatewayContext
+            let result = registry
+                .execute_tool("sessions_list", serde_json::json!({}))
+                .await;
+            assert!(result.is_err());
         }
 
         #[tokio::test]
@@ -237,7 +245,7 @@ mod tests {
 
             assert!(result.is_err());
             let err = result.unwrap_err();
-            assert!(err.to_string().contains("sessions_list not available"));
+            assert!(err.to_string().contains("not available") || err.to_string().contains("not yet injected"));
         }
 
         #[tokio::test]

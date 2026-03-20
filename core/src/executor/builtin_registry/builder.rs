@@ -94,16 +94,18 @@ impl BuiltinToolRegistry {
         // Create memory tools if backend and embedder are provided
         let (memory_search_tool, memory_browse_tool, memory_workspace_handle, memory_session_key_handle) =
             if let (Some(ref db), Some(ref embedder)) = (&config.memory_db, &config.embedder) {
-                let search_tool = MemorySearchTool::new_with_embedder(db.clone(), Arc::clone(embedder));
+                let search_tool = MemorySearchTool::new_with_config(
+                    db.clone(),
+                    Arc::clone(embedder),
+                    config.memory_similarity_threshold,
+                );
                 let ws_handle = search_tool.default_workspace_handle();
                 let sk_handle = search_tool.default_session_key_handle();
                 let mut browse_tool = MemoryBrowseTool::new(db.clone());
-                // Share the same workspace handle between search and browse tools
                 browse_tool.set_workspace_handle(Arc::clone(&ws_handle));
                 info!("Created memory_search and memory_browse tools");
                 (Some(search_tool), Some(browse_tool), Some(ws_handle), Some(sk_handle))
             } else if let Some(ref db) = config.memory_db {
-                // No embedder — can still create browse tool (no embedding needed)
                 let browse_tool = MemoryBrowseTool::new(db.clone());
                 let ws_handle = browse_tool.default_workspace_handle();
                 info!("Created memory_browse tool (no embedder for memory_search)");
@@ -299,7 +301,13 @@ impl BuiltinToolRegistry {
             memory_session_key_handle,
             generation_registry: config.generation_registry.clone(),
             dispatcher_registry: config.dispatcher_registry.clone(),
-            gateway_context: config.gateway_context.clone(),
+            gateway_context: {
+                let cell = Arc::new(tokio::sync::OnceCell::new());
+                if let Some(ref ctx) = config.gateway_context {
+                    let _ = cell.set(ctx.clone());
+                }
+                cell
+            },
             session_new_tool: config.gateway_context.as_ref()
                 .map(|ctx| Arc::clone(ctx.session_manager()))
                 .or_else(|| config.session_manager.clone())
@@ -510,13 +518,13 @@ impl BuiltinToolRegistry {
             info!("Registered session_set_topic tool in BuiltinToolRegistry");
         }
 
-        // Sessions tools
-        if config.gateway_context.is_some() {
-            reg(tools, "sessions_list", SessionsListTool::DESCRIPTION,
-                serde_json::to_value(schema_for!(crate::builtin_tools::sessions::SessionsListArgs)).unwrap_or_default());
-            reg(tools, "sessions_send", SessionsSendTool::DESCRIPTION,
-                serde_json::to_value(schema_for!(crate::builtin_tools::sessions::SessionsSendArgs)).unwrap_or_default());
-            info!("Registered sessions tools (sessions_list, sessions_send) in BuiltinToolRegistry");
-        }
+        // Sessions tools — always register metadata so LLM sees them.
+        // GatewayContext may be injected later via set_gateway_context().
+        // Execution checks OnceCell at call time.
+        reg(tools, "sessions_list", SessionsListTool::DESCRIPTION,
+            serde_json::to_value(schema_for!(crate::builtin_tools::sessions::SessionsListArgs)).unwrap_or_default());
+        reg(tools, "sessions_send", SessionsSendTool::DESCRIPTION,
+            serde_json::to_value(schema_for!(crate::builtin_tools::sessions::SessionsSendArgs)).unwrap_or_default());
+        info!("Registered sessions_list + sessions_send in BuiltinToolRegistry");
     }
 }

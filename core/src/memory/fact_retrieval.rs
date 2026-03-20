@@ -29,7 +29,7 @@ impl Default for FactRetrievalConfig {
         Self {
             max_facts: 5,
             max_raw_fallback: 3,
-            similarity_threshold: 0.5,
+            similarity_threshold: 0.3,
         }
     }
 }

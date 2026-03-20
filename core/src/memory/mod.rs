@@ -32,6 +32,7 @@ pub mod graph;
 pub mod hybrid_retrieval;
 pub mod ingestion;
 pub mod namespace;
+pub mod reembed;
 pub mod noise_filter;
 pub mod rerank;
 pub mod reranker;

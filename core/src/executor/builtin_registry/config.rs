@@ -58,4 +58,6 @@ pub struct BuiltinToolConfig {
     pub tool_context: Option<crate::tools::ToolContextHandle>,
     /// Shared token manager for vault_store tool
     pub shared_token_manager: Option<Arc<crate::gateway::security::SharedTokenManager>>,
+    /// Memory similarity threshold from config (overrides hardcoded default)
+    pub memory_similarity_threshold: Option<f32>,
 }

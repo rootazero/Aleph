@@ -282,6 +282,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             tool_context: Some(alephcore::tools::new_tool_context_handle()),
             session_manager: Some(session_manager.clone()),
             shared_token_manager: Some(shared_token_mgr.clone()),
+            memory_similarity_threshold: Some(app_config.memory.similarity_threshold),
             ..Default::default()
         };
         let mut tool_registry = BuiltinToolRegistry::with_config(tool_config).await;
@@ -348,6 +349,10 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 "LLM tool list assembled"
             );
         }
+
+        // Grab a handle to the GatewayContext OnceCell before wrapping in Arc.
+        // We'll inject GatewayContext after ExecutionAdapter is created (breaks circular dep).
+        let gateway_context_cell = tool_registry.gateway_context_cell();
 
         let tool_registry = Arc::new(tool_registry);
 
@@ -441,6 +446,20 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             engine = engine.with_compression_service(cs.clone());
         }
         compression_out = compression_svc;
+
+        // One-shot re-embed: fix facts written with wrong embedding dimension
+        if let Some(ref emb) = embedder_out {
+            let db = memory_db.clone();
+            let embedder = emb.clone();
+            let target_dim = embedder.dimensions();
+            tokio::spawn(async move {
+                match alephcore::memory::reembed::reembed_all_facts(&db, &embedder, target_dim, 32).await {
+                    Ok(n) if n > 0 => tracing::info!(updated = n, "[reembed] Startup re-embedding done"),
+                    Ok(_) => {}
+                    Err(e) => tracing::warn!(error = %e, "[reembed] Startup re-embedding failed"),
+                }
+            });
+        }
 
         // Create session compactor for intra-session context compression
         {
@@ -574,8 +593,25 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         });
 
         // Capture for inbound router
-        exec_adapter = Some(engine as Arc<dyn alephcore::gateway::ExecutionAdapter>);
-        agent_reg = Some(agent_registry);
+        let engine_arc: Arc<dyn alephcore::gateway::ExecutionAdapter> = engine;
+        exec_adapter = Some(engine_arc.clone());
+        agent_reg = Some(agent_registry.clone());
+
+        // Deferred injection: now that ExecutionAdapter exists, build GatewayContext
+        // and inject it into BuiltinToolRegistry (via shared OnceCell).
+        {
+            use alephcore::gateway::context::GatewayContext;
+            use alephcore::gateway::inter_agent_policy::AgentToAgentPolicy;
+
+            let a2a_policy = Arc::new(AgentToAgentPolicy::default());
+            let gateway_ctx = Arc::new(GatewayContext::new(
+                session_manager.clone(),
+                agent_registry,
+                engine_arc,
+                a2a_policy,
+            ));
+            let _ = gateway_context_cell.set(gateway_ctx);
+        }
     } else {
         if !daemon {
             println!("  Mode: Simulated (set ANTHROPIC_API_KEY or OPENAI_API_KEY for real execution)");

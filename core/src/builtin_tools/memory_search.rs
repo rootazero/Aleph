@@ -165,12 +165,34 @@ impl MemorySearchTool {
         'current_session' (only this session's compressed summaries), \
         or 'both' (long-term memory plus current session summaries).";
 
-    /// Create a new MemorySearchTool instance
-    pub fn new_with_embedder(database: MemoryBackend, embedder: Arc<dyn EmbeddingProvider>) -> Self {
+    /// Default similarity threshold when not specified by config.
+    ///
+    /// L2 distance in high-dimensional space (1536-dim) produces lower similarity
+    /// scores than one might expect. 0.3 is a pragmatic floor that balances
+    /// recall (not missing relevant memories) with precision (not returning noise).
+    const DEFAULT_SIMILARITY_THRESHOLD: f32 = 0.3;
+
+    /// Create a new MemorySearchTool instance.
+    ///
+    /// `similarity_threshold`: if `Some`, overrides the default (from config.toml).
+    pub fn new_with_embedder(
+        database: MemoryBackend,
+        embedder: Arc<dyn EmbeddingProvider>,
+    ) -> Self {
+        Self::new_with_config(database, embedder, None)
+    }
+
+    /// Create a new MemorySearchTool with explicit similarity threshold from config.
+    pub fn new_with_config(
+        database: MemoryBackend,
+        embedder: Arc<dyn EmbeddingProvider>,
+        similarity_threshold: Option<f32>,
+    ) -> Self {
+        let threshold = similarity_threshold.unwrap_or(Self::DEFAULT_SIMILARITY_THRESHOLD);
         let fact_config = FactRetrievalConfig {
             max_facts: 10,
             max_raw_fallback: 10,
-            similarity_threshold: 0.5,
+            similarity_threshold: threshold,
         };
         let fact_retrieval = Arc::new(FactRetrieval::new(
             database.clone(),
