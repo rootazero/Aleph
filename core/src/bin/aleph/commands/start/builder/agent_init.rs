@@ -447,25 +447,6 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         }
         compression_out = compression_svc;
 
-        // One-shot re-embed: fix facts written with wrong embedding dimension
-        if let Some(ref emb) = embedder_out {
-            let db = memory_db.clone();
-            let embedder = emb.clone();
-            let target_dim = embedder.dimensions();
-            tokio::spawn(async move {
-                let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-                match alephcore::memory::reembed::reembed_all(&db, &embedder, target_dim, 32, None, cancel).await {
-                    Ok(r) if r.facts_updated > 0 || r.memories_updated > 0 => tracing::info!(
-                        facts = r.facts_updated,
-                        memories = r.memories_updated,
-                        "[reembed] Startup re-embedding done"
-                    ),
-                    Ok(_) => {}
-                    Err(e) => tracing::warn!(error = %e, "[reembed] Startup re-embedding failed"),
-                }
-            });
-        }
-
         // Create session compactor for intra-session context compression
         {
             let sc_config = app_config.policies.memory.session_compactor.clone();
