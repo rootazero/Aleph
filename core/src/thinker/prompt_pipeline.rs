@@ -343,7 +343,7 @@ mod tests {
     #[test]
     fn test_default_layers_count() {
         let pipeline = PromptPipeline::default_layers();
-        assert_eq!(pipeline.layer_count(), 25);
+        assert_eq!(pipeline.layer_count(), 26);
     }
 
     #[test]
@@ -595,7 +595,8 @@ mod stability_tests {
         assert!(dynamic_names.contains(&"runtime_context"));
         assert!(dynamic_names.contains(&"identity_files"));
         assert!(dynamic_names.contains(&"memory_augmentation"));
-        assert_eq!(dynamic_names.len(), 4, "Exactly 4 dynamic layers expected");
+        assert!(dynamic_names.contains(&"session_context_guide"));
+        assert_eq!(dynamic_names.len(), 5, "Exactly 5 dynamic layers expected");
     }
 
     #[test]
