@@ -421,6 +421,14 @@ pub trait SessionStore: Send + Sync {
         since_timestamp: i64,
         limit: usize,
     ) -> Result<Vec<MemoryEntry>, AlephError>;
+
+    /// Retrieve all memory entries, optionally filtered by workspace.
+    ///
+    /// Used by the reembed migration to scan all memories for dimension mismatches.
+    async fn get_all_memories(
+        &self,
+        workspace: Option<&str>,
+    ) -> Result<Vec<MemoryEntry>, AlephError>;
 }
 
 // ---------------------------------------------------------------------------

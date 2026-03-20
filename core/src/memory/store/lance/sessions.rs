@@ -290,6 +290,15 @@ impl SessionStore for LanceMemoryBackend {
         entries.truncate(limit);
         Ok(entries)
     }
+
+    async fn get_all_memories(
+        &self,
+        workspace: Option<&str>,
+    ) -> Result<Vec<MemoryEntry>, AlephError> {
+        use crate::memory::store::types::escape_sql_string;
+        let filter = workspace.map(|ws| format!("agent = '{}'", escape_sql_string(ws)));
+        scan_memories(&self.memories_table, filter.as_deref(), None).await
+    }
 }
 
 // ============================================================================
