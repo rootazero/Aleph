@@ -39,6 +39,27 @@ pub trait LoopProvider: Send + Sync {
 }
 
 // =============================================================================
+// ToolCompactorConfig
+// =============================================================================
+
+/// Configuration for in-loop tool result compression.
+///
+/// When set on an `AgentLoop`, the compactor runs synchronously before each
+/// LLM call and collapses verbose tool-use/tool-result pairs into compact
+/// summaries when the estimated context exceeds `context_threshold * token_budget`.
+#[derive(Debug, Clone)]
+pub struct ToolCompactorConfig {
+    /// Total token budget for the model context window.
+    pub token_budget: u64,
+    /// Fraction of `token_budget` at which compaction triggers (e.g. 0.80).
+    pub context_threshold: f64,
+    /// Characters-per-token ratio used for token estimation.
+    pub token_estimate_ratio: f64,
+    /// Number of most-recent messages to leave untouched during compaction.
+    pub fresh_tail_count: usize,
+}
+
+// =============================================================================
 // LoopConfig
 // =============================================================================
 
@@ -100,6 +121,8 @@ pub struct AgentLoop<P: LoopProvider> {
     prompt_builder: PromptBuilder,
     safety_guard: SafetyGuard,
     config: LoopConfig,
+    /// Optional in-loop tool result compactor configuration.
+    tool_compactor_config: Option<ToolCompactorConfig>,
 }
 
 impl<P: LoopProvider> AgentLoop<P> {
@@ -117,7 +140,14 @@ impl<P: LoopProvider> AgentLoop<P> {
             prompt_builder,
             safety_guard,
             config,
+            tool_compactor_config: None,
         }
+    }
+
+    /// Attach an optional `ToolCompactorConfig` to enable in-loop context compression.
+    pub fn with_tool_compactor_config(mut self, cfg: Option<ToolCompactorConfig>) -> Self {
+        self.tool_compactor_config = cfg;
+        self
     }
 
     /// Get tool definitions from the registry (for inspection/testing).
@@ -182,6 +212,17 @@ impl<P: LoopProvider> AgentLoop<P> {
             }
 
             iterations += 1;
+
+            // Compact tool results if context exceeds threshold
+            if let Some(ref tc_config) = self.tool_compactor_config {
+                crate::memory::session_compactor::tool_compactor::compact_if_needed(
+                    &mut messages,
+                    tc_config.token_budget,
+                    tc_config.context_threshold,
+                    tc_config.token_estimate_ratio,
+                    tc_config.fresh_tail_count,
+                );
+            }
 
             // Think: call the provider
             let response = self
