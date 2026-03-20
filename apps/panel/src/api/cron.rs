@@ -150,8 +150,13 @@ impl CronApi {
 
         let result = state.rpc_call("cron.create", params).await?;
 
-        serde_json::from_value(result)
-            .map_err(|e| format!("Failed to parse created cron job: {}", e))
+        result
+            .get("job")
+            .ok_or_else(|| "Invalid response: missing job".to_string())
+            .and_then(|job| {
+                serde_json::from_value(job.clone())
+                    .map_err(|e| format!("Failed to parse created cron job: {}", e))
+            })
     }
 
     /// Update an existing cron job
@@ -164,8 +169,13 @@ impl CronApi {
 
         let result = state.rpc_call("cron.update", params).await?;
 
-        serde_json::from_value(result)
-            .map_err(|e| format!("Failed to parse updated cron job: {}", e))
+        result
+            .get("job")
+            .ok_or_else(|| "Invalid response: missing job".to_string())
+            .and_then(|job| {
+                serde_json::from_value(job.clone())
+                    .map_err(|e| format!("Failed to parse updated cron job: {}", e))
+            })
     }
 
     /// Delete a cron job by ID
