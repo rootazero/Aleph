@@ -17,7 +17,7 @@ use super::{ActiveRun, ExecutionEngineConfig, ExecutionError, RunRequest, RunSta
 use crate::gateway::agent_instance::{AgentInstance, AgentState, MessageRole};
 use crate::gateway::event_emitter::{EventEmitter, RunSummary, StreamEvent};
 use crate::gateway::inbound_router::SLASH_COMMAND_MODE_KEY;
-use crate::gateway::workspace::WorkspaceManager;
+use crate::gateway::agent_env::AgentEnvStore;
 
 use crate::dispatcher::UnifiedTool;
 use crate::executor::ToolRegistry;
@@ -36,7 +36,7 @@ pub struct ExecutionEngine<P: ThinkerProviderRegistry + 'static, R: ToolRegistry
     /// Available tools for all agents
     pub(super) tools: Arc<Vec<UnifiedTool>>,
     /// Workspace manager for workspace-scoped profile resolution
-    pub(super) workspace_manager: Option<Arc<WorkspaceManager>>,
+    pub(super) workspace_manager: Option<Arc<AgentEnvStore>>,
     /// Memory backend for auto-memorization of conversations
     pub(super) memory_backend: Option<crate::memory::store::MemoryBackend>,
     /// Optional task router for pre-classification and escalation handling
@@ -47,6 +47,8 @@ pub struct ExecutionEngine<P: ThinkerProviderRegistry + 'static, R: ToolRegistry
     pub(super) memory_context_provider: Option<Arc<crate::thinker::MemoryContextProvider>>,
     /// Global tool permission policy
     pub(super) global_tool_permissions: crate::config::types::policies::ToolPermissionsConfig,
+    /// Session compactor for hierarchical session summarization
+    pub(super) session_compactor: Option<Arc<crate::memory::session_compactor::SessionCompactor>>,
 }
 
 impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionEngine<P, R> {
@@ -70,6 +72,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             compression_service: None,
             memory_context_provider: None,
             global_tool_permissions: Default::default(),
+            session_compactor: None,
         }
     }
 
@@ -97,6 +100,15 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         self
     }
 
+    /// Set a session compactor for hierarchical session summarization.
+    pub fn with_session_compactor(
+        mut self,
+        compactor: Arc<crate::memory::session_compactor::SessionCompactor>,
+    ) -> Self {
+        self.session_compactor = Some(compactor);
+        self
+    }
+
     /// Set global tool permission policy.
     pub fn with_global_tool_permissions(
         mut self,
@@ -111,7 +123,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
     /// When set, the engine resolves the user's active workspace at the start
     /// of each run and injects the workspace profile into the prompt builder
     /// and the workspace_id into the request context metadata.
-    pub fn with_workspace_manager(mut self, manager: Arc<WorkspaceManager>) -> Self {
+    pub fn with_workspace_manager(mut self, manager: Arc<AgentEnvStore>) -> Self {
         self.workspace_manager = Some(manager);
         self
     }
@@ -381,6 +393,18 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 // Record conversation turn for compression scheduling
                 if let Some(ref cs) = self.compression_service {
                     cs.record_turn_and_check();
+                }
+
+                // Async session compaction (hierarchical summarization)
+                if let Some(ref sc) = self.session_compactor {
+                    let sc = sc.clone();
+                    let agent_clone = agent.clone();
+                    let session_key_clone = request.session_key.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = sc.post_turn_compress(&agent_clone, &session_key_clone).await {
+                            warn!(error = %e, "Session compaction failed");
+                        }
+                    });
                 }
                 Ok(())
             }

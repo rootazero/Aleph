@@ -18,6 +18,7 @@ mod integration_probe;
 pub use factory::LoopFactory;
 pub use loop_core::{
     AgentLoop, LoopCallback, LoopConfig, LoopProvider, LoopRunResult, NoopCallback,
+    ToolCompactorConfig,
 };
 pub use prompt_builder::{PromptBuilder, ToolInfo};
 pub use provider_bridge::AiProviderBridge;

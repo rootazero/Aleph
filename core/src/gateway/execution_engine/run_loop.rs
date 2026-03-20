@@ -129,11 +129,22 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         let timeout_secs = request
             .timeout_secs
             .unwrap_or(self.config.default_timeout_secs);
+        let token_budget = agent.config().max_tokens.unwrap_or(200_000);
         let loop_config = LoopConfig {
             max_iterations: max_loops,
-            token_budget: agent.config().max_tokens.unwrap_or(200_000),
+            token_budget,
             timeout_secs,
         };
+
+        // Build optional ToolCompactorConfig from session compactor settings
+        let tool_compactor_config = self.session_compactor.as_ref().map(|sc| {
+            crate::agent_loop::ToolCompactorConfig {
+                token_budget: token_budget as u64,
+                context_threshold: sc.config().context_threshold,
+                token_estimate_ratio: sc.config().token_estimate_ratio,
+                fresh_tail_count: sc.config().fresh_tail_count,
+            }
+        });
 
         // Create and run the agent loop
         let agent_loop = AgentLoop::new(
@@ -142,10 +153,21 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             prompt_builder,
             safety,
             loop_config,
-        );
+        )
+        .with_tool_compactor_config(tool_compactor_config);
 
         // Load conversation history from session (for multi-turn context)
-        let history = build_loop_history(&agent, &request.session_key, &request.input).await;
+        let history = if let Some(ref sc) = self.session_compactor {
+            sc.prepare_history(
+                &agent,
+                &request.session_key,
+                &request.input,
+                token_budget as u64,
+            )
+            .await
+        } else {
+            build_loop_history(&agent, &request.session_key, &request.input).await
+        };
 
         // Create a streaming callback that emits events
         let mut callback = StreamCallback::new(emitter.clone(), run_id.to_string());

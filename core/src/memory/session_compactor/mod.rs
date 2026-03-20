@@ -96,6 +96,11 @@ impl SessionCompactor {
         Self { database, config }
     }
 
+    /// Return a reference to the compactor configuration.
+    pub fn config(&self) -> &SessionCompactorConfig {
+        &self.config
+    }
+
     // -----------------------------------------------------------------------
     // prepare_history — assemble compressed context for the agent loop
     // -----------------------------------------------------------------------
