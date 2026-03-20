@@ -27,6 +27,7 @@ pub mod component_id;
 pub mod config;
 pub mod discovery;
 pub mod hooks;
+pub mod marketplace;
 mod plugin_loader;
 pub mod runtime;
 pub mod sync_api;
