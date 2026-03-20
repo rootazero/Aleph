@@ -30,6 +30,7 @@ pub mod hooks;
 pub mod marketplace;
 mod plugin_loader;
 pub mod runtime;
+pub mod scope;
 pub mod sync_api;
 pub mod validation;
 

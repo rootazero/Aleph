@@ -73,6 +73,24 @@ impl DiscoveryConfig {
         self.home_dir = Some(path.into());
         self
     }
+
+    /// Prepend scope-based plugin directories (from [`crate::extension::scope::scope_dirs_by_priority`])
+    /// to `extra_paths` so they are scanned at the highest priority level.
+    ///
+    /// Call this before passing the config to [`discover_all`] when you want
+    /// scoped installs (user/project/local/agent) to participate in discovery.
+    pub fn add_scope_dirs(
+        &mut self,
+        project_dir: Option<&std::path::Path>,
+        agent_id: Option<&str>,
+    ) {
+        let scope_dirs =
+            crate::extension::scope::scope_dirs_by_priority(project_dir, agent_id);
+        // Prepend so scope dirs take priority over any existing extra_paths.
+        let mut new_extra = scope_dirs.into_iter().map(|(_, p)| p).collect::<Vec<_>>();
+        new_extra.extend(self.extra_paths.drain(..));
+        self.extra_paths = new_extra;
+    }
 }
 
 /// Discover all plugins from all configured sources

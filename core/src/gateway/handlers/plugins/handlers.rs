@@ -239,11 +239,16 @@ pub async fn handle_marketplace_update(request: JsonRpcRequest) -> JsonRpcRespon
 
 /// Install a plugin from a marketplace by name
 pub async fn handle_marketplace_install(request: JsonRpcRequest) -> JsonRpcResponse {
-    use crate::extension::marketplace::{installer::install_plugin_from_cache, types::default_install_dir};
-
     let params: super::types::MarketplaceInstallParams = match parse_params(&request) {
         Ok(p) => p,
         Err(e) => return e,
+    };
+
+    // Parse scope (default: user)
+    let scope_str = params.scope.as_deref().unwrap_or("user");
+    let scope = match crate::extension::scope::parse_scope(scope_str) {
+        Ok(s) => s,
+        Err(e) => return JsonRpcResponse::error(request.id, -32000, e),
     };
 
     let manager = match build_marketplace_manager() {
@@ -251,55 +256,23 @@ pub async fn handle_marketplace_install(request: JsonRpcRequest) -> JsonRpcRespo
         Err(e) => return JsonRpcResponse::error(request.id, -32000, e),
     };
 
-    // Search for the plugin
-    let mut results = manager.search_plugin(&params.name);
-
-    // If a specific marketplace was requested, filter to it
-    if let Some(ref marketplace_name) = params.marketplace {
-        results.retain(|r| &r.marketplace_name == marketplace_name);
-    }
-
-    match results.len() {
-        0 => JsonRpcResponse::error(
+    // project_dir is None for now; project/local scope support requires workspace detection
+    match manager.install_to_scope(
+        &params.name,
+        params.marketplace.as_deref(),
+        scope,
+        None,
+    ) {
+        Ok(dest) => JsonRpcResponse::success(
             request.id,
-            -32000,
-            format!(
-                "Plugin '{}' not found. Try running 'plugin marketplace update' first.",
-                params.name
-            ),
+            json!({
+                "ok": true,
+                "name": params.name,
+                "scope": scope_str,
+                "installed_at": dest.to_string_lossy(),
+            }),
         ),
-        1 => {
-            let result = &results[0];
-            let install_dir = default_install_dir();
-            match install_plugin_from_cache(&result.plugin_path, &install_dir, &params.name) {
-                Ok(dest) => JsonRpcResponse::success(
-                    request.id,
-                    json!({
-                        "ok": true,
-                        "name": params.name,
-                        "installed_at": dest.to_string_lossy(),
-                        "from_marketplace": result.marketplace_name,
-                    }),
-                ),
-                Err(e) => JsonRpcResponse::error(request.id, -32000, e),
-            }
-        }
-        _ => {
-            let marketplaces: Vec<&str> = results
-                .iter()
-                .map(|r| r.marketplace_name.as_str())
-                .collect();
-            JsonRpcResponse::error(
-                request.id,
-                -32000,
-                format!(
-                    "Plugin '{}' is available in multiple marketplaces: {}. \
-                     Specify --marketplace to disambiguate.",
-                    params.name,
-                    marketplaces.join(", ")
-                ),
-            )
-        }
+        Err(e) => JsonRpcResponse::error(request.id, -32000, e),
     }
 }
 

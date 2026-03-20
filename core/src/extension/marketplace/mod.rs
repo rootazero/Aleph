@@ -181,6 +181,50 @@ impl MarketplaceManager {
     }
 
     // -------------------------------------------------------------------------
+    // Install to scope
+    // -------------------------------------------------------------------------
+
+    /// Install a plugin from the marketplace cache into a specific scope directory.
+    ///
+    /// Searches all marketplaces for `plugin_name`, optionally filtering to
+    /// `marketplace_name`, then copies it into the directory resolved by
+    /// [`crate::extension::scope::scope_install_dir`].
+    pub fn install_to_scope(
+        &self,
+        plugin_name: &str,
+        marketplace_name: Option<&str>,
+        scope: crate::extension::types::PluginScope,
+        project_dir: Option<&std::path::Path>,
+    ) -> Result<std::path::PathBuf, String> {
+        let mut results = self.search_plugin(plugin_name);
+
+        if let Some(mkt) = marketplace_name {
+            results.retain(|r| r.marketplace_name == mkt);
+        }
+
+        match results.len() {
+            0 => Err(format!(
+                "Plugin '{}' not found. Try 'aleph plugin marketplace update' first.",
+                plugin_name
+            )),
+            1 => {
+                let result = &results[0];
+                let install_dir = crate::extension::scope::scope_install_dir(scope, project_dir)?;
+                installer::install_plugin_from_cache(&result.plugin_path, &install_dir, plugin_name)
+            }
+            _ => {
+                let names: Vec<_> = results.iter()
+                    .map(|r| format!("{}@{}", plugin_name, r.marketplace_name))
+                    .collect();
+                Err(format!(
+                    "Plugin '{}' found in multiple marketplaces: {}. Specify with @marketplace.",
+                    plugin_name, names.join(", ")
+                ))
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------------
     // Internal helpers
     // -------------------------------------------------------------------------
 

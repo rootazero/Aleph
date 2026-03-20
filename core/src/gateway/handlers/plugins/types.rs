@@ -149,6 +149,9 @@ pub struct MarketplaceInstallParams {
     /// Specific marketplace (if ambiguous)
     #[serde(default)]
     pub marketplace: Option<String>,
+    /// Installation scope: "user" (default), "project", or "local"
+    #[serde(default)]
+    pub scope: Option<String>,
 }
 
 // ============================================================================
