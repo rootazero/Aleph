@@ -144,16 +144,17 @@ enum Commands {
         action: MemoryAction,
     },
 
-    /// Plugin lifecycle management (server-connected)
+    /// Plugin management — lifecycle, dev tools, and marketplace
+    Plugin {
+        #[command(subcommand)]
+        action: PluginAction,
+    },
+
+    /// Plugin lifecycle management (server-connected) [deprecated: use 'plugin']
+    #[command(hide = true)]
     Plugins {
         #[command(subcommand)]
         action: PluginsAction,
-    },
-
-    /// Plugin developer tools (local, no server needed)
-    Plugin {
-        #[command(subcommand)]
-        action: PluginDevAction,
     },
 
     /// Background service management
@@ -402,6 +403,105 @@ enum PluginDevAction {
     },
     /// Run plugin diagnostics
     Doctor,
+}
+
+/// Unified plugin subcommands: lifecycle, dev tools, and marketplace
+#[derive(Subcommand)]
+enum PluginAction {
+    // === Lifecycle (server-connected) ===
+    /// List installed plugins
+    List,
+    /// Install a plugin from source (URL, path, or zip)
+    Install {
+        source: String,
+        /// Installation scope: user or system
+        #[arg(long, default_value = "user")]
+        scope: String,
+    },
+    /// Uninstall a plugin
+    Uninstall {
+        name: String,
+        /// Scope override
+        #[arg(long)]
+        scope: Option<String>,
+        /// Keep plugin data directory
+        #[arg(long)]
+        keep_data: bool,
+    },
+    /// Enable a disabled plugin
+    Enable { name: String },
+    /// Disable a plugin
+    Disable { name: String },
+    /// Check for plugin updates
+    Update,
+    /// Reload all plugins (hot reload)
+    Reload,
+    /// Show detailed info about a specific plugin
+    Info {
+        /// Plugin name or ID
+        name: String,
+    },
+    /// Search for plugins in the registry
+    Search {
+        /// Search query
+        query: String,
+    },
+    /// Call a plugin tool
+    Call {
+        /// Plugin name
+        plugin: String,
+        /// Tool name
+        tool: String,
+        /// JSON params (optional)
+        params: Option<String>,
+    },
+    // === Dev tools (local, no server needed) ===
+    /// Scaffold a new plugin project
+    Init {
+        /// Plugin name
+        name: String,
+        /// Plugin type: nodejs, wasm, or static
+        #[arg(short = 't', long = "type", default_value = "static")]
+        template: String,
+        /// Target directory (defaults to ./<name>)
+        #[arg(short, long)]
+        dir: Option<String>,
+    },
+    /// Validate a plugin directory
+    Validate {
+        /// Plugin directory (defaults to current directory)
+        #[arg(default_value = ".")]
+        path: String,
+    },
+    /// Package a plugin for distribution
+    Pack {
+        /// Plugin directory (defaults to current directory)
+        #[arg(default_value = ".")]
+        path: String,
+        /// Output file path
+        #[arg(short, long)]
+        output: Option<String>,
+    },
+    /// Run plugin diagnostics
+    Doctor,
+    // === Marketplace (P2 placeholder) ===
+    /// Plugin marketplace management
+    Marketplace {
+        #[command(subcommand)]
+        action: MarketplaceAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum MarketplaceAction {
+    /// Add a marketplace source
+    Add { source: String },
+    /// List configured marketplace sources
+    List,
+    /// Update marketplace index (all sources or a specific one)
+    Update { name: Option<String> },
+    /// Remove a marketplace source
+    Remove { name: String },
 }
 
 #[derive(Subcommand)]
@@ -809,67 +909,109 @@ async fn main() -> CliResult<()> {
                 commands::memory_cmd::delete(&server_url, &id, cli.json).await?
             }
         },
-        Some(Commands::Plugins { action }) => match action {
-            PluginsAction::List => {
-                commands::plugins_cmd::list(&server_url, cli.json).await?;
-            }
-            PluginsAction::Install { source } => {
-                commands::plugins_cmd::install(&server_url, &source, cli.json).await?;
-            }
-            PluginsAction::Uninstall { name } => {
-                commands::plugins_cmd::uninstall(&server_url, &name, cli.json).await?;
-            }
-            PluginsAction::Enable { name } => {
-                commands::plugins_cmd::enable(&server_url, &name, cli.json).await?;
-            }
-            PluginsAction::Disable { name } => {
-                commands::plugins_cmd::disable(&server_url, &name, cli.json).await?;
-            }
-            PluginsAction::Call {
-                plugin,
-                tool,
-                params,
-            } => {
-                commands::plugins_cmd::call(
-                    &server_url,
-                    &plugin,
-                    &tool,
-                    params.as_deref(),
-                    cli.json,
-                )
-                .await?;
-            }
-            PluginsAction::Search { query } => {
-                commands::plugins_cmd::search(&query, cli.json).await?;
-            }
-            PluginsAction::Update => {
-                commands::plugins_cmd::update(&server_url, cli.json).await?;
-            }
-            PluginsAction::Reload => {
-                commands::plugins_cmd::reload(&server_url, cli.json).await?;
-            }
-            PluginsAction::Info { name } => {
-                commands::plugins_cmd::info(&server_url, &name, cli.json).await?;
-            }
-        },
         Some(Commands::Plugin { action }) => {
             use commands::plugin_cmd;
             match action {
-                PluginDevAction::Init { name, template, dir } => {
+                // Lifecycle commands
+                PluginAction::List => {
+                    commands::plugins_cmd::list(&server_url, cli.json).await?;
+                }
+                PluginAction::Install { source, .. } => {
+                    commands::plugins_cmd::install(&server_url, &source, cli.json).await?;
+                }
+                PluginAction::Uninstall { name, .. } => {
+                    commands::plugins_cmd::uninstall(&server_url, &name, cli.json).await?;
+                }
+                PluginAction::Enable { name } => {
+                    commands::plugins_cmd::enable(&server_url, &name, cli.json).await?;
+                }
+                PluginAction::Disable { name } => {
+                    commands::plugins_cmd::disable(&server_url, &name, cli.json).await?;
+                }
+                PluginAction::Call { plugin, tool, params } => {
+                    commands::plugins_cmd::call(
+                        &server_url,
+                        &plugin,
+                        &tool,
+                        params.as_deref(),
+                        cli.json,
+                    )
+                    .await?;
+                }
+                PluginAction::Search { query } => {
+                    commands::plugins_cmd::search(&query, cli.json).await?;
+                }
+                PluginAction::Update => {
+                    commands::plugins_cmd::update(&server_url, cli.json).await?;
+                }
+                PluginAction::Reload => {
+                    commands::plugins_cmd::reload(&server_url, cli.json).await?;
+                }
+                PluginAction::Info { name } => {
+                    commands::plugins_cmd::info(&server_url, &name, cli.json).await?;
+                }
+                // Dev tool commands
+                PluginAction::Init { name, template, dir } => {
                     let tmpl: plugin_cmd::PluginTemplate = template.parse()
                         .map_err(|e: String| error::CliError::Other(e))?;
                     let dir_path = dir.map(std::path::PathBuf::from);
                     plugin_cmd::init(&name, tmpl, dir_path.as_deref())?;
                 }
-                PluginDevAction::Validate { path } => {
+                PluginAction::Validate { path } => {
                     plugin_cmd::validate(std::path::Path::new(&path), cli.json)?;
                 }
-                PluginDevAction::Pack { path, output } => {
+                PluginAction::Pack { path, output } => {
                     let out = output.map(std::path::PathBuf::from);
                     plugin_cmd::pack(std::path::Path::new(&path), out.as_deref())?;
                 }
-                PluginDevAction::Doctor => {
+                PluginAction::Doctor => {
                     plugin_cmd::doctor(cli.json)?;
+                }
+                // Marketplace (placeholder)
+                PluginAction::Marketplace { .. } => {
+                    eprintln!("Marketplace support coming in a future release.");
+                }
+            }
+        },
+        Some(Commands::Plugins { action }) => {
+            eprintln!("Warning: 'aleph plugins' is deprecated. Use 'aleph plugin' instead.");
+            match action {
+                PluginsAction::List => {
+                    commands::plugins_cmd::list(&server_url, cli.json).await?;
+                }
+                PluginsAction::Install { source } => {
+                    commands::plugins_cmd::install(&server_url, &source, cli.json).await?;
+                }
+                PluginsAction::Uninstall { name } => {
+                    commands::plugins_cmd::uninstall(&server_url, &name, cli.json).await?;
+                }
+                PluginsAction::Enable { name } => {
+                    commands::plugins_cmd::enable(&server_url, &name, cli.json).await?;
+                }
+                PluginsAction::Disable { name } => {
+                    commands::plugins_cmd::disable(&server_url, &name, cli.json).await?;
+                }
+                PluginsAction::Call { plugin, tool, params } => {
+                    commands::plugins_cmd::call(
+                        &server_url,
+                        &plugin,
+                        &tool,
+                        params.as_deref(),
+                        cli.json,
+                    )
+                    .await?;
+                }
+                PluginsAction::Search { query } => {
+                    commands::plugins_cmd::search(&query, cli.json).await?;
+                }
+                PluginsAction::Update => {
+                    commands::plugins_cmd::update(&server_url, cli.json).await?;
+                }
+                PluginsAction::Reload => {
+                    commands::plugins_cmd::reload(&server_url, cli.json).await?;
+                }
+                PluginsAction::Info { name } => {
+                    commands::plugins_cmd::info(&server_url, &name, cli.json).await?;
                 }
             }
         },
