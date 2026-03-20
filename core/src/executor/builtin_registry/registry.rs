@@ -68,7 +68,7 @@ pub struct BuiltinToolRegistry {
     pub(crate) session_set_topic_tool: Option<crate::builtin_tools::sessions::SessionSetTopicTool>,
     /// Cron management tool (optional - requires SharedCronService)
     pub(crate) cron_manage_tool: Option<crate::builtin_tools::cron_manage::CronManageTool>,
-    /// Agent management tools (optional - requires AgentRegistry + WorkspaceManager)
+    /// Agent management tools (optional - requires AgentRegistry + AgentEnvStore)
     pub(crate) agent_create_tool: Option<crate::builtin_tools::agent_manage::AgentCreateTool>,
 
     pub(crate) agent_list_tool: Option<crate::builtin_tools::agent_manage::AgentListTool>,
@@ -85,6 +85,8 @@ pub struct BuiltinToolRegistry {
     pub(crate) browser_evaluate_tool: crate::builtin_tools::browser_tools::BrowserEvaluateTool,
     pub(crate) browser_fill_form_tool: crate::builtin_tools::browser_tools::BrowserFillFormTool,
     pub(crate) browser_profile_tool: crate::builtin_tools::browser_tools::BrowserProfileTool,
+    /// Shared session key handle for memory_search scope=current_session
+    pub(super) memory_session_key_handle: Option<Arc<RwLock<String>>>,
     /// Session context handle for agent management tools
     pub(super) session_context_handle: Option<crate::builtin_tools::agent_manage::SessionContextHandle>,
     /// Tool policy handle for per-agent tool access control
@@ -170,6 +172,10 @@ impl ToolRegistry for BuiltinToolRegistry {
 
     fn tool_context_handle(&self) -> Option<crate::tools::ToolContextHandle> {
         self.tool_context_handle.clone()
+    }
+
+    fn session_key_handle(&self) -> Option<Arc<RwLock<String>>> {
+        self.memory_session_key_handle.clone()
     }
 
     fn execute_tool(
@@ -357,7 +363,6 @@ impl ToolRegistry for BuiltinToolRegistry {
                         if let Ok(ctx) = h.try_read() {
                             if let Some(obj) = args.as_object_mut() {
                                 obj.insert("__channel".into(), serde_json::Value::String(ctx.channel.clone()));
-                                obj.insert("__peer_id".into(), serde_json::Value::String(ctx.peer_id.clone()));
                             }
                         }
                     }
@@ -367,19 +372,19 @@ impl ToolRegistry for BuiltinToolRegistry {
                 match tool_name {
                     "agent_create" => Box::pin(async move {
                         let tool = self.agent_create_tool.as_ref().ok_or_else(|| {
-                            AlephError::tool("agent_create not available: no AgentRegistry/WorkspaceManager configured")
+                            AlephError::tool("agent_create not available: no AgentRegistry/AgentEnvStore configured")
                         })?;
                         tool.call_json(arguments).await
                     }),
                     "agent_list" => Box::pin(async move {
                         let tool = self.agent_list_tool.as_ref().ok_or_else(|| {
-                            AlephError::tool("agent_list not available: no AgentRegistry/WorkspaceManager configured")
+                            AlephError::tool("agent_list not available: no AgentRegistry/AgentEnvStore configured")
                         })?;
                         tool.call_json(arguments).await
                     }),
                     "agent_delete" => Box::pin(async move {
                         let tool = self.agent_delete_tool.as_ref().ok_or_else(|| {
-                            AlephError::tool("agent_delete not available: no AgentRegistry/WorkspaceManager configured")
+                            AlephError::tool("agent_delete not available: no AgentRegistry/AgentEnvStore configured")
                         })?;
                         tool.call_json(arguments).await
                     }),

@@ -138,6 +138,14 @@ pub trait ToolRegistry: Send + Sync {
     fn tool_context_handle(&self) -> Option<crate::tools::ToolContextHandle> {
         None
     }
+
+    /// Get the shared session key handle for memory_search scope=current_session.
+    ///
+    /// The execution engine writes the active session's key string here after
+    /// session resolution so memory_search can filter facts by session scope.
+    fn session_key_handle(&self) -> Option<std::sync::Arc<tokio::sync::RwLock<String>>> {
+        None
+    }
 }
 
 /// Single-step executor for Agent Loop

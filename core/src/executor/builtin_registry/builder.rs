@@ -92,23 +92,24 @@ impl BuiltinToolRegistry {
         let browser_profile_tool = BrowserProfileTool::new(browser_profile_manager);
 
         // Create memory tools if backend and embedder are provided
-        let (memory_search_tool, memory_browse_tool, memory_workspace_handle) =
+        let (memory_search_tool, memory_browse_tool, memory_workspace_handle, memory_session_key_handle) =
             if let (Some(ref db), Some(ref embedder)) = (&config.memory_db, &config.embedder) {
                 let search_tool = MemorySearchTool::new_with_embedder(db.clone(), Arc::clone(embedder));
                 let ws_handle = search_tool.default_workspace_handle();
+                let sk_handle = search_tool.default_session_key_handle();
                 let mut browse_tool = MemoryBrowseTool::new(db.clone());
                 // Share the same workspace handle between search and browse tools
                 browse_tool.set_workspace_handle(Arc::clone(&ws_handle));
                 info!("Created memory_search and memory_browse tools");
-                (Some(search_tool), Some(browse_tool), Some(ws_handle))
+                (Some(search_tool), Some(browse_tool), Some(ws_handle), Some(sk_handle))
             } else if let Some(ref db) = config.memory_db {
                 // No embedder — can still create browse tool (no embedding needed)
                 let browse_tool = MemoryBrowseTool::new(db.clone());
                 let ws_handle = browse_tool.default_workspace_handle();
                 info!("Created memory_browse tool (no embedder for memory_search)");
-                (None, Some(browse_tool), Some(ws_handle))
+                (None, Some(browse_tool), Some(ws_handle), None)
             } else {
-                (None, None, None)
+                (None, None, None, None)
             };
 
         // Create image generation tool if generation registry is provided
@@ -164,7 +165,7 @@ impl BuiltinToolRegistry {
             &config,
         );
 
-        // Add agent management tools (if AgentRegistry + WorkspaceManager are available)
+        // Add agent management tools (if AgentRegistry + AgentEnvStore are available)
         let (agent_create_tool, agent_list_tool, agent_delete_tool, session_context_handle) =
             if let (Some(ref ar), Some(ref wm)) = (&config.agent_registry, &config.workspace_manager) {
                 use crate::builtin_tools::agent_manage;
@@ -295,6 +296,7 @@ impl BuiltinToolRegistry {
             memory_search_tool,
             memory_browse_tool,
             memory_workspace_handle,
+            memory_session_key_handle,
             generation_registry: config.generation_registry.clone(),
             dispatcher_registry: config.dispatcher_registry.clone(),
             gateway_context: config.gateway_context.clone(),

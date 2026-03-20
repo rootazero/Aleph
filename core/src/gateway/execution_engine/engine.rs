@@ -249,6 +249,11 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             sc.session_key_str = request.session_key.to_key_string();
         }
 
+        // Propagate session key to memory_search so scope=current_session works
+        if let Some(sk_handle) = self.tool_registry.session_key_handle() {
+            *sk_handle.write().await = request.session_key.to_key_string();
+        }
+
         // ================================================================
         // Slash command fast path (L0): bypass full agent loop
         // ================================================================

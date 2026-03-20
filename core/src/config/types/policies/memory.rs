@@ -15,6 +15,10 @@ pub struct MemoryPolicies {
     /// AI-based retrieval policy
     #[serde(default)]
     pub ai_retrieval: AiRetrievalPolicy,
+
+    /// Session compactor policy (intra-session context compression)
+    #[serde(default)]
+    pub session_compactor: crate::memory::session_compactor::SessionCompactorConfig,
 }
 
 /// Policy for compression scheduling

@@ -94,7 +94,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
     app_config: &alephcore::Config,
     app_config_arc: Arc<tokio::sync::RwLock<alephcore::Config>>,
     memory_db: &alephcore::memory::store::MemoryBackend,
-    workspace_manager: Option<Arc<alephcore::gateway::WorkspaceManager>>,
+    workspace_manager: Option<Arc<alephcore::gateway::AgentEnvStore>>,
     agent_manager: Arc<alephcore::AgentManager>,
     acp_manager: Option<Arc<alephcore::acp::manager::AcpHarnessManager>>,
     cron_service: Option<alephcore::cron::SharedCronService>,
@@ -441,6 +441,24 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             engine = engine.with_compression_service(cs.clone());
         }
         compression_out = compression_svc;
+
+        // Create session compactor for intra-session context compression
+        {
+            let sc_config = app_config.policies.memory.session_compactor.clone();
+            if sc_config.enabled {
+                let compactor = alephcore::memory::session_compactor::SessionCompactor::new(
+                    memory_db.clone(),
+                    sc_config,
+                );
+                let compactor = std::sync::Arc::new(compactor);
+                engine = engine.with_session_compactor(compactor);
+                if !daemon {
+                    println!("  Session compactor enabled (hierarchical summarization)");
+                }
+            } else if !daemon {
+                println!("  Session compactor: disabled");
+            }
+        }
 
         // Wire memory context provider for LanceDB-backed prompt augmentation
         if let Some(ref emb) = embedder_out {
