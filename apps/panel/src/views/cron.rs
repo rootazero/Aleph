@@ -211,9 +211,12 @@ fn build_schedule_kind_json(
             Some(obj)
         }
         "at" => {
+            // Backend expects "at" as i64 (ms since epoch)
+            let at_ms = schedule.trim().parse::<i64>().ok()?;
             Some(serde_json::json!({
                 "kind": "at",
-                "datetime": schedule,
+                "at": at_ms,
+                "delete_after_run": true,
             }))
         }
         _ => None,
@@ -587,6 +590,19 @@ fn JobEditor(
             &schedule_kind, &schedule,
             &form_anchor_ms.get(), &form_stagger_ms.get(),
         );
+
+        if schedule_kind_obj.is_none() {
+            let hint = match schedule_kind.as_str() {
+                "every" => "e.g. 5m, 2h, 30s, or 60000 (ms)",
+                "at" => "timestamp in ms since epoch",
+                _ => "cron expression, e.g. 0 0 9 * * *",
+            };
+            error.set(Some(format!(
+                "Invalid schedule value for type '{}'. Expected: {}", schedule_kind, hint
+            )));
+            saving.set(false);
+            return;
+        }
 
         let session_target = {
             let s = form_session_target.get();
