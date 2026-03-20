@@ -145,6 +145,28 @@ The system prompt / soul template should include guidance such as:
 
 This is out of scope for the code changes but essential for the feature to be effective.
 
+## Edge Cases
+
+### SuccessAndStopLoop
+
+When a tool returns `SuccessAndStopLoop`, the loop breaks immediately after the tool call. The text from that iteration's LLM response was already dispatched as `on_intermediate_text()` (because `has_tool_calls()` was true). Since no further LLM call happens, this "intermediate" text is effectively the last user-facing text. This works correctly — the text is delivered immediately via `send_to_channel()`, and the subsequent `RunComplete` with `final_response` handles persistence. No special handling needed.
+
+### Persistence Nudge
+
+When the persistence nudge fires (LLM returns text + EndTurn after errors), `on_text()` is called (final path) but the loop `continue`s. The pre-nudge text gets buffered, and post-nudge text also gets buffered/delivered. This is pre-existing behavior, not introduced by this design.
+
+### Empty Text with Tool Calls
+
+When LLM returns `text = Some("")` with tool calls, `on_intermediate_text("")` fires but the `if !content.is_empty()` guard in `ReplyEmitter` prevents sending an empty message. Handled correctly.
+
+### Text is None with Tool Calls
+
+The most common case — LLM returns only tool calls with no text. The `if let Some(text)` block doesn't execute, so no intermediate message is sent. This is expected. Prompt guidance is required to make LLMs produce text alongside tool calls.
+
+### Typewriter Mode
+
+Intermediate messages are always sent instantly via `send_to_channel()`, bypassing the typewriter progressive-edit path. Only the final message uses typewriter mode (if enabled). This is intentional — intermediate messages are typically short progress updates that don't benefit from progressive editing.
+
 ## Message Flow (After)
 
 ```
