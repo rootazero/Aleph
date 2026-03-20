@@ -116,6 +116,8 @@ pub enum PluginKind {
     Wasm,
     /// Node.js plugin (package.json)
     NodeJs,
+    /// MCP server plugin (.mcp.json) — uses Aleph's MCP client system
+    Mcp,
     /// Static content plugin (markdown files)
     Static,
 }
@@ -132,6 +134,7 @@ impl PluginKind {
         match (filename, ext) {
             (_, Some("wasm")) => Some(PluginKind::Wasm),
             ("package.json", _) => Some(PluginKind::NodeJs),
+            (".mcp.json", _) => Some(PluginKind::Mcp),
             ("aleph.plugin.json", _) => Some(PluginKind::Wasm),
             ("SKILL.md" | "COMMAND.md" | "AGENT.md", _) => Some(PluginKind::Static),
             (_, Some("md")) => Some(PluginKind::Static),

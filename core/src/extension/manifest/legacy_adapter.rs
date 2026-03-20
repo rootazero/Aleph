@@ -23,6 +23,7 @@ pub fn detect_entry_point(_dir: &Path, kind: &PluginKind) -> String {
     match kind {
         PluginKind::NodeJs => "index.js".to_string(),
         PluginKind::Wasm => "plugin.wasm".to_string(),
+        PluginKind::Mcp => ".mcp.json".to_string(),
         PluginKind::Static => ".".to_string(),
     }
 }

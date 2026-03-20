@@ -38,6 +38,7 @@ mod channel_manager;
 mod error;
 mod http_handler;
 mod content_loader;
+pub mod mcp_config;
 pub mod manifest;
 mod plugin_ops;
 mod provider_adapter;

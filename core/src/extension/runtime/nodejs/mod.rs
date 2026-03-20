@@ -1,10 +1,15 @@
-//! Node.js Plugin Runtime
+//! Node.js Plugin Runtime (DEPRECATED)
 //!
 //! Manages Node.js subprocess for executing TypeScript/JavaScript plugins
 //! via JSON-RPC 2.0 over stdio.
 //!
-//! This module provides a synchronous blocking I/O approach for simpler
-//! use cases, complementing the async `PluginRuntime` in the parent module.
+//! **DEPRECATED**: This custom IPC runtime is superseded by MCP-type plugins
+//! which use Aleph's MCP client system (`McpManager`). New plugins should
+//! use `PluginKind::Mcp` with a `.mcp.json` manifest instead of
+//! `PluginKind::NodeJs` with custom IPC.
+//!
+//! This module will be removed in P5 (Runtime Removal phase).
+//! See `PluginLoader::load_mcp_plugin()` for the replacement path.
 
 pub mod ipc;
 pub mod process;
@@ -21,6 +26,9 @@ use crate::extension::registry::{HookRegistration, ToolRegistration};
 use crate::extension::types::HookEvent;
 
 /// Node.js runtime manager
+///
+/// DEPRECATED: Use MCP-type plugins (`PluginKind::Mcp`) instead.
+/// This will be removed in P5.
 pub struct NodeJsRuntime {
     /// Running plugin processes
     processes: HashMap<String, NodeProcess>,

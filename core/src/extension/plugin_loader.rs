@@ -1,4 +1,4 @@
-//! Plugin Loader - Manages runtime loading of Node.js and WASM plugins
+//! Plugin Loader - Manages runtime loading of Node.js, WASM, and MCP plugins
 //!
 //! Provides a unified interface to load plugins into their appropriate runtimes
 //! based on PluginKind, and invoke tools/hooks on loaded plugins.
@@ -7,10 +7,21 @@
 //!
 //! ```text
 //! PluginLoader
-//! ├── nodejs_runtime: Option<NodeJsRuntime>  (lazy initialized)
+//! ├── nodejs_runtime: Option<NodeJsRuntime>  (lazy initialized, DEPRECATED)
 //! ├── wasm_runtime: Option<WasmRuntime>      (lazy initialized)
+//! ├── mcp_configs: HashMap<String, HashMap<String, McpManagerConfig>>
 //! └── loaded_plugins: HashMap<String, PluginKind>
 //! ```
+//!
+//! # MCP Plugin Flow
+//!
+//! MCP-type plugins delegate to Aleph's MCP client system (McpManager).
+//! The PluginLoader reads `.mcp.json`, stores the configs, and exposes them
+//! via `get_mcp_configs()`. The caller (ExtensionManager or Gateway) is
+//! responsible for registering these configs with `McpManagerHandle::add_server()`.
+//!
+//! Tool calls for MCP plugins are routed through the MCP system automatically —
+//! MCP tools appear in the unified tool registry when the MCP server starts.
 //!
 //! # Usage
 //!
@@ -23,11 +34,15 @@
 //! // Load a plugin
 //! loader.load_plugin(&manifest, &mut registry)?;
 //!
-//! // Call a tool
-//! let result = loader.call_tool("plugin-id", "handler", json!({"key": "value"}))?;
+//! // For MCP plugins, retrieve configs for McpManager registration
+//! if let Some(configs) = loader.get_mcp_configs("plugin-id") {
+//!     for (server_id, config) in configs {
+//!         mcp_handle.add_server(config.clone()).await?;
+//!     }
+//! }
 //!
-//! // Execute a hook
-//! let result = loader.execute_hook("plugin-id", "onEvent", json!({"event": "data"}))?;
+//! // Call a tool (Node.js/WASM only — MCP tools go through MCP system)
+//! let result = loader.call_tool("plugin-id", "handler", json!({"key": "value"}))?;
 //!
 //! // Shutdown all runtimes
 //! loader.shutdown();
@@ -38,47 +53,54 @@ use tracing::{info, warn};
 
 use crate::extension::error::{ExtensionError, ExtensionResult};
 use crate::extension::manifest::PluginManifest;
+use crate::extension::mcp_config;
 use crate::extension::registry::PluginRegistry;
 use crate::extension::runtime::nodejs::{hook_def_to_registration, tool_def_to_registration};
 use crate::extension::runtime::NodeJsRuntime;
 use crate::extension::runtime::WasmRuntime;
 use crate::extension::types::{DirectCommandResult, PluginKind};
+use crate::mcp::McpManagerConfig;
 
 /// Manages loading plugins into appropriate runtimes.
 ///
 /// The PluginLoader provides:
 /// - Lazy initialization of runtimes (Node.js, WASM)
+/// - MCP config reading and storage for MCP-type plugins
 /// - Unified interface for loading plugins based on their kind
 /// - Tool and hook execution across different runtimes
 /// - Graceful shutdown of all running plugins
 ///
 /// # Plugin Kinds
 ///
-/// - `NodeJs`: JavaScript/TypeScript plugins using Node.js subprocess
+/// - `NodeJs`: JavaScript/TypeScript plugins using Node.js subprocess (DEPRECATED — use MCP)
 /// - `Wasm`: WebAssembly plugins using Extism
+/// - `Mcp`: MCP server plugins — tools registered via Aleph's MCP client system
 /// - `Static`: Static content plugins (handled by ContentLoader, not this loader)
 ///
 /// # Thread Safety and Write Lock Requirement
 ///
 /// Methods like [`call_tool`] and [`execute_hook`] require mutable access (`&mut self`)
 /// because Node.js IPC communication requires writing to stdin/stdout streams.
-/// These operations are inherently sequential - interleaving writes from multiple
-/// concurrent callers would corrupt the message framing and cause protocol errors.
-///
-/// When wrapping PluginLoader in an RwLock (as done in ExtensionManager), tool and
-/// hook calls must acquire a **write lock** to ensure sequential access to the IPC streams.
-///
-/// This is a fundamental constraint of the Node.js subprocess communication model,
-/// not a limitation of this implementation.
+/// MCP-type plugins do NOT need mutable access (tool calls go through McpManager),
+/// but this method signature is kept for interface uniformity.
 ///
 /// [`call_tool`]: #method.call_tool
 /// [`execute_hook`]: #method.execute_hook
 pub struct PluginLoader {
     /// Node.js runtime (lazy initialized)
+    ///
+    /// DEPRECATED: New plugins should use `PluginKind::Mcp` instead.
+    /// Node.js IPC will be removed in a future version (P5).
     nodejs_runtime: Option<NodeJsRuntime>,
 
     /// WASM runtime (lazy initialized)
     wasm_runtime: Option<WasmRuntime>,
+
+    /// MCP server configs per plugin: plugin_id → (server_id → McpManagerConfig)
+    ///
+    /// These configs are read from `.mcp.json` during `load_plugin()` and
+    /// should be registered with McpManagerHandle by the caller.
+    mcp_configs: HashMap<String, HashMap<String, McpManagerConfig>>,
 
     /// Map of plugin_id -> runtime kind for fast lookup
     loaded_plugins: HashMap<String, PluginKind>,
@@ -93,16 +115,19 @@ impl PluginLoader {
         Self {
             nodejs_runtime: None,
             wasm_runtime: None,
+            mcp_configs: HashMap::new(),
             loaded_plugins: HashMap::new(),
         }
     }
 
     /// Check if any runtime is currently active.
     ///
-    /// Returns `true` if Node.js or WASM runtime has been initialized.
+    /// Returns `true` if Node.js or WASM runtime has been initialized,
+    /// or if any MCP plugins are loaded.
     pub fn is_any_runtime_active(&self) -> bool {
-        let nodejs_active = self.nodejs_runtime.is_some();
-        nodejs_active || self.wasm_runtime.is_some()
+        self.nodejs_runtime.is_some()
+            || self.wasm_runtime.is_some()
+            || !self.mcp_configs.is_empty()
     }
 
     /// Check if a specific plugin is loaded.
@@ -125,6 +150,31 @@ impl PluginLoader {
         self.loaded_plugins.len()
     }
 
+    // ===== MCP Config Access =====
+
+    /// Get MCP server configs for a specific plugin.
+    ///
+    /// Returns `None` if the plugin is not an MCP plugin or has no servers.
+    /// The caller is responsible for registering these with `McpManagerHandle::add_server()`.
+    pub fn get_mcp_configs(&self, plugin_id: &str) -> Option<&HashMap<String, McpManagerConfig>> {
+        self.mcp_configs.get(plugin_id)
+    }
+
+    /// Get all MCP server configs as a flat HashMap (server_id → config).
+    ///
+    /// Useful for bulk registration with McpManager.
+    pub fn all_mcp_configs_map(&self) -> HashMap<String, McpManagerConfig> {
+        let mut result = HashMap::new();
+        for servers in self.mcp_configs.values() {
+            for (id, config) in servers {
+                result.insert(id.clone(), config.clone());
+            }
+        }
+        result
+    }
+
+    // ===== Loading =====
+
     /// Load a plugin based on its kind.
     ///
     /// This method:
@@ -133,21 +183,13 @@ impl PluginLoader {
     /// 3. Loads the plugin into the runtime
     /// 4. Registers discovered tools and hooks with the registry
     ///
+    /// For MCP-type plugins, this reads `.mcp.json` and stores the configs.
+    /// The caller must subsequently register them with `McpManagerHandle`.
+    ///
     /// # Arguments
     ///
     /// * `manifest` - The plugin manifest containing metadata and entry point
     /// * `registry` - The plugin registry to register tools/hooks with
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(())` if the plugin was loaded successfully
-    /// * `Err(ExtensionError)` if loading failed
-    ///
-    /// # Static Plugins
-    ///
-    /// Static plugins (PluginKind::Static) are handled by the ContentLoader,
-    /// not this runtime loader. Calling this method with a static plugin
-    /// returns `Ok(())` without any action.
     pub fn load_plugin(
         &mut self,
         manifest: &PluginManifest,
@@ -162,6 +204,7 @@ impl PluginLoader {
         match manifest.kind {
             PluginKind::NodeJs => self.load_nodejs_plugin(manifest, registry),
             PluginKind::Wasm => self.load_wasm_plugin(manifest, registry),
+            PluginKind::Mcp => self.load_mcp_plugin(manifest),
             PluginKind::Static => {
                 // Static plugins are handled by ContentLoader, not runtime
                 info!(
@@ -174,6 +217,9 @@ impl PluginLoader {
     }
 
     /// Load a Node.js plugin.
+    ///
+    /// DEPRECATED: New plugins should use `PluginKind::Mcp` with `.mcp.json`.
+    /// Node.js IPC runtime will be removed in P5.
     fn load_nodejs_plugin(
         &mut self,
         manifest: &PluginManifest,
@@ -266,16 +312,50 @@ impl PluginLoader {
         Ok(())
     }
 
+    /// Load an MCP-type plugin.
+    ///
+    /// Reads `.mcp.json` from the plugin directory, substitutes environment
+    /// variables, and stores the resulting `McpManagerConfig`s. The configs
+    /// are NOT automatically registered with the MCP system — the caller
+    /// must do so via `McpManagerHandle::add_server()`.
+    ///
+    /// MCP tools are automatically available in the unified tool registry
+    /// once the MCP server is started by the McpManager.
+    fn load_mcp_plugin(&mut self, manifest: &PluginManifest) -> ExtensionResult<()> {
+        let configs = mcp_config::read_mcp_json(&manifest.root_dir, &manifest.id)?;
+
+        if configs.is_empty() {
+            warn!(
+                "MCP plugin '{}' has no servers defined in .mcp.json",
+                manifest.id
+            );
+        }
+
+        let server_count = configs.len();
+        let server_names: Vec<String> = configs.keys().cloned().collect();
+
+        // Store configs for later retrieval by caller
+        self.mcp_configs.insert(manifest.id.clone(), configs);
+
+        // Track the loaded plugin
+        self.loaded_plugins
+            .insert(manifest.id.clone(), PluginKind::Mcp);
+
+        info!(
+            "Loaded MCP plugin '{}' with {} server(s): {:?}",
+            manifest.id, server_count, server_names
+        );
+
+        Ok(())
+    }
+
+    // ===== Unloading =====
+
     /// Unload a plugin from its runtime.
     ///
-    /// # Arguments
-    ///
-    /// * `plugin_id` - The ID of the plugin to unload
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(())` if the plugin was unloaded successfully
-    /// * `Err(ExtensionError::PluginNotFound)` if the plugin is not loaded
+    /// For MCP plugins, this removes the stored configs. The caller is
+    /// responsible for calling `McpManagerHandle::remove_server()` for
+    /// each server that was registered.
     pub fn unload_plugin(&mut self, plugin_id: &str) -> ExtensionResult<()> {
         let kind = self.loaded_plugins.remove(plugin_id);
 
@@ -297,6 +377,15 @@ impl PluginLoader {
                     info!("Unloaded WASM plugin '{}'", plugin_id);
                 }
             }
+            Some(PluginKind::Mcp) => {
+                let removed = self.mcp_configs.remove(plugin_id);
+                let server_count = removed.as_ref().map_or(0, |m| m.len());
+                info!(
+                    "Unloaded MCP plugin '{}' ({} server configs removed). \
+                     Caller must remove servers from McpManager.",
+                    plugin_id, server_count
+                );
+            }
             Some(PluginKind::Static) => {
                 // Static plugins don't need runtime unloading
                 info!("Static plugin '{}' removed from tracking", plugin_id);
@@ -309,18 +398,12 @@ impl PluginLoader {
         Ok(())
     }
 
+    // ===== Tool / Hook / Command Execution =====
+
     /// Call a tool handler on a loaded plugin.
     ///
-    /// # Arguments
-    ///
-    /// * `plugin_id` - The ID of the plugin containing the tool
-    /// * `handler` - The handler function name to call
-    /// * `args` - The arguments to pass to the handler
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(serde_json::Value)` - The result from the tool handler
-    /// * `Err(ExtensionError)` - If the call failed
+    /// For MCP plugins, tool calls should go through the MCP system (McpManager),
+    /// not this method. This method returns an error for MCP plugins.
     pub fn call_tool(
         &mut self,
         plugin_id: &str,
@@ -356,6 +439,9 @@ impl PluginLoader {
                     ))
                 }
             }
+            PluginKind::Mcp => Err(ExtensionError::Runtime(
+                "MCP plugin tool calls must go through McpManager, not PluginLoader".to_string(),
+            )),
             PluginKind::Static => Err(ExtensionError::Runtime(format!(
                 "Plugin kind {:?} does not support tool calls",
                 kind
@@ -364,17 +450,6 @@ impl PluginLoader {
     }
 
     /// Execute a hook handler on a loaded plugin.
-    ///
-    /// # Arguments
-    ///
-    /// * `plugin_id` - The ID of the plugin containing the hook
-    /// * `handler` - The handler function name to call
-    /// * `event_data` - The event data to pass to the handler
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(serde_json::Value)` - The result from the hook handler
-    /// * `Err(ExtensionError)` - If the execution failed
     pub fn execute_hook(
         &mut self,
         plugin_id: &str,
@@ -399,6 +474,9 @@ impl PluginLoader {
                     "WASM hooks not yet implemented".to_string(),
                 ))
             }
+            PluginKind::Mcp => Err(ExtensionError::Runtime(
+                "MCP plugins do not support hooks via PluginLoader".to_string(),
+            )),
             PluginKind::Static => Err(ExtensionError::Runtime(format!(
                 "Plugin kind {:?} does not support hooks",
                 kind
@@ -407,27 +485,6 @@ impl PluginLoader {
     }
 
     /// Execute a direct command handler on a loaded plugin.
-    ///
-    /// Direct commands are user-triggered commands that execute immediately
-    /// without LLM involvement (e.g., `/status`, `/clear`, `/version`).
-    ///
-    /// # Arguments
-    ///
-    /// * `plugin_id` - The ID of the plugin containing the command handler
-    /// * `handler` - The handler function name to call
-    /// * `args` - The arguments to pass to the handler
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(DirectCommandResult)` - The result from the command handler
-    /// * `Err(ExtensionError)` - If the execution failed
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// let result = loader.execute_command("my-plugin", "statusHandler", json!({}))?;
-    /// println!("Output: {}", result.content);
-    /// ```
     pub fn execute_command(
         &mut self,
         plugin_id: &str,
@@ -474,6 +531,9 @@ impl PluginLoader {
                     ))
                 }
             }
+            PluginKind::Mcp => Err(ExtensionError::Runtime(
+                "MCP plugins do not support direct commands via PluginLoader".to_string(),
+            )),
             PluginKind::Static => Err(ExtensionError::Runtime(
                 "Static plugins cannot have direct commands".to_string(),
             )),
@@ -484,6 +544,9 @@ impl PluginLoader {
     ///
     /// This method should be called when the application is shutting down
     /// to ensure all plugin processes are properly terminated.
+    ///
+    /// Note: MCP servers are managed by McpManager and must be shut down
+    /// separately via `McpManagerHandle::shutdown()`.
     pub fn shutdown(&mut self) {
         info!("Shutting down PluginLoader with {} plugins", self.loaded_plugins.len());
 
@@ -496,6 +559,9 @@ impl PluginLoader {
         // automatically when the runtime is dropped. No explicit shutdown needed.
         // The runtime will be dropped when PluginLoader is dropped.
 
+        // Clear MCP configs (servers are managed by McpManager)
+        self.mcp_configs.clear();
+
         // Clear loaded plugins
         self.loaded_plugins.clear();
 
@@ -503,6 +569,8 @@ impl PluginLoader {
     }
 
     /// Check if Node.js runtime is initialized.
+    ///
+    /// DEPRECATED: Node.js IPC runtime will be removed in P5.
     pub fn is_nodejs_runtime_active(&self) -> bool {
         self.nodejs_runtime.is_some()
     }
@@ -510,6 +578,16 @@ impl PluginLoader {
     /// Check if WASM runtime is initialized.
     pub fn is_wasm_runtime_active(&self) -> bool {
         self.wasm_runtime.is_some()
+    }
+
+    /// Check if any MCP plugins are loaded.
+    pub fn has_mcp_plugins(&self) -> bool {
+        !self.mcp_configs.is_empty()
+    }
+
+    /// Get the number of MCP servers across all loaded MCP plugins.
+    pub fn mcp_server_count(&self) -> usize {
+        self.mcp_configs.values().map(|m| m.len()).sum()
     }
 }
 
@@ -539,6 +617,8 @@ mod tests {
         assert!(!loader.is_any_runtime_active());
         assert!(loader.loaded_plugin_ids().is_empty());
         assert_eq!(loader.loaded_count(), 0);
+        assert!(!loader.has_mcp_plugins());
+        assert_eq!(loader.mcp_server_count(), 0);
     }
 
     #[test]
@@ -553,6 +633,7 @@ mod tests {
         assert!(!loader.is_any_runtime_active());
         assert!(!loader.is_nodejs_runtime_active());
         assert!(!loader.is_wasm_runtime_active());
+        assert!(!loader.has_mcp_plugins());
     }
 
     #[test]
@@ -618,5 +699,80 @@ mod tests {
         let loader = PluginLoader::new();
         let ids = loader.loaded_plugin_ids();
         assert!(ids.is_empty());
+    }
+
+    #[test]
+    fn test_plugin_loader_mcp_configs_empty() {
+        let loader = PluginLoader::new();
+        assert!(loader.get_mcp_configs("nonexistent").is_none());
+        assert!(loader.all_mcp_configs_map().is_empty());
+    }
+
+    #[test]
+    fn test_plugin_loader_mcp_tool_call_rejected() {
+        let mut loader = PluginLoader::new();
+        // Manually insert an MCP plugin to test routing
+        loader
+            .loaded_plugins
+            .insert("mcp-test".to_string(), PluginKind::Mcp);
+
+        let result = loader.call_tool("mcp-test", "handler", serde_json::json!({}));
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("McpManager")
+        );
+    }
+
+    #[test]
+    fn test_plugin_loader_mcp_hook_rejected() {
+        let mut loader = PluginLoader::new();
+        loader
+            .loaded_plugins
+            .insert("mcp-test".to_string(), PluginKind::Mcp);
+
+        let result = loader.execute_hook("mcp-test", "hook", serde_json::json!({}));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_plugin_loader_mcp_command_rejected() {
+        let mut loader = PluginLoader::new();
+        loader
+            .loaded_plugins
+            .insert("mcp-test".to_string(), PluginKind::Mcp);
+
+        let result = loader.execute_command("mcp-test", "cmd", serde_json::json!({}));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_plugin_loader_unload_mcp_plugin() {
+        let mut loader = PluginLoader::new();
+        loader
+            .loaded_plugins
+            .insert("mcp-test".to_string(), PluginKind::Mcp);
+        loader.mcp_configs.insert(
+            "mcp-test".to_string(),
+            {
+                let mut m = HashMap::new();
+                m.insert(
+                    "plugin:mcp-test/srv".to_string(),
+                    McpManagerConfig::stdio("plugin:mcp-test/srv", "srv", "echo"),
+                );
+                m
+            },
+        );
+
+        assert!(loader.has_mcp_plugins());
+        assert_eq!(loader.mcp_server_count(), 1);
+
+        loader.unload_plugin("mcp-test").unwrap();
+
+        assert!(!loader.is_loaded("mcp-test"));
+        assert!(loader.get_mcp_configs("mcp-test").is_none());
+        assert!(!loader.has_mcp_plugins());
     }
 }

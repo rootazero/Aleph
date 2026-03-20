@@ -162,6 +162,7 @@ fn default_entry_for_kind(kind: PluginKind) -> String {
     match kind {
         PluginKind::Wasm => "plugin.wasm".to_string(),
         PluginKind::NodeJs => "index.js".to_string(),
+        PluginKind::Mcp => ".mcp.json".to_string(),
         PluginKind::Static => ".".to_string(),
     }
 }
