@@ -15,7 +15,7 @@ use crate::error::Result;
 use crate::memory::store::MemoryBackend;
 use crate::memory::{
     ComptrollerConfig, ContextComptroller, CrossWorkspaceFact, EmbeddingProvider, FactRetrieval,
-    FactRetrievalConfig, TokenBudget, TranscriptIndexer, DEFAULT_WORKSPACE,
+    FactRetrievalConfig, TokenBudget, TranscriptIndexer, DEFAULT_AGENT,
 };
 use crate::tools::AlephTool;
 
@@ -37,6 +37,11 @@ pub struct MemorySearchArgs {
     /// If true, search across ALL workspaces. Takes highest priority.
     #[serde(default)]
     pub cross_workspace: Option<bool>,
+    /// Search scope: "all" (default) searches long-term memory only,
+    /// "current_session" searches only the current session's compressed summaries,
+    /// "both" searches long-term memory and the current session summaries together.
+    #[serde(default)]
+    pub scope: Option<String>,
 }
 
 fn default_max_results() -> usize {
@@ -87,6 +92,22 @@ pub struct PathCluster {
     pub top_score: f32,
 }
 
+/// Extract the summary depth (d0, d1, d2) from a session fact path.
+///
+/// Paths follow the pattern `aleph://session/{id}/dN/...` where N is 0, 1, or 2.
+/// Returns 0 if the depth segment cannot be parsed.
+fn extract_depth_from_path(path: &str) -> u32 {
+    // Look for a segment matching "dN" after the path prefix
+    for segment in path.split('/') {
+        if segment.starts_with('d') {
+            if let Ok(n) = segment[1..].parse::<u32>() {
+                return n;
+            }
+        }
+    }
+    0
+}
+
 /// Group facts by path, returning clusters where count >= threshold
 fn cluster_facts_by_path(facts: &[FactResult], threshold: usize) -> Vec<PathCluster> {
     use std::collections::HashMap;
@@ -121,8 +142,11 @@ pub struct MemorySearchTool {
     comptroller: Arc<ContextComptroller>,
     _indexer: Arc<TranscriptIndexer>,
     /// Shared default workspace ID, set by the execution engine based on active workspace.
-    /// Falls back to DEFAULT_WORKSPACE ("default") when not set.
+    /// Falls back to DEFAULT_AGENT ("default") when not set.
     default_workspace: Arc<RwLock<String>>,
+    /// Shared session key for the current session, set by the execution engine.
+    /// Used to scope "current_session" searches to the active session's summaries.
+    default_session_key: Arc<RwLock<String>>,
     /// Smart recall config from the active workspace profile.
     /// Updated by the execution engine when workspace is resolved.
     smart_recall_config: Arc<RwLock<Option<SmartRecallConfig>>>,
@@ -136,7 +160,10 @@ impl MemorySearchTool {
     pub const DESCRIPTION: &'static str = "Search personal memory for relevant facts and conversation history. \
         Returns both compressed facts and raw transcripts with redundancy elimination. \
         By default searches the active workspace. Use 'workspaces' to search specific workspaces, \
-        or 'cross_workspace: true' to search all workspaces.";
+        or 'cross_workspace: true' to search all workspaces. \
+        Use 'scope' to control what is searched: 'all' (default, long-term memory only), \
+        'current_session' (only this session's compressed summaries), \
+        or 'both' (long-term memory plus current session summaries).";
 
     /// Create a new MemorySearchTool instance
     pub fn new_with_embedder(database: MemoryBackend, embedder: Arc<dyn EmbeddingProvider>) -> Self {
@@ -164,7 +191,8 @@ impl MemorySearchTool {
             fact_retrieval,
             comptroller,
             _indexer: indexer,
-            default_workspace: Arc::new(RwLock::new(DEFAULT_WORKSPACE.to_string())),
+            default_workspace: Arc::new(RwLock::new(DEFAULT_AGENT.to_string())),
+            default_session_key: Arc::new(RwLock::new(String::new())),
             smart_recall_config: Arc::new(RwLock::new(None)),
         }
     }
@@ -175,6 +203,15 @@ impl MemorySearchTool {
     /// so that tool calls without an explicit `workspace` arg use the correct workspace.
     pub fn default_workspace_handle(&self) -> Arc<RwLock<String>> {
         Arc::clone(&self.default_workspace)
+    }
+
+    /// Get a shared handle to the current session key.
+    ///
+    /// The execution engine writes the active session's key string here after
+    /// session resolution. Used by scope="current_session" to filter LanceDB
+    /// facts under `aleph://session/{session_key}/`.
+    pub fn default_session_key_handle(&self) -> Arc<RwLock<String>> {
+        Arc::clone(&self.default_session_key)
     }
 
     /// Get a shared handle to the smart recall config.
@@ -192,7 +229,10 @@ impl MemorySearchTool {
     ) -> std::result::Result<MemorySearchOutput, ToolError> {
         use super::{notify_tool_result, notify_tool_start};
 
-        use crate::gateway::workspace::WorkspaceFilter;
+        use crate::gateway::agent_env::AgentEnvFilter;
+
+        // Resolve search scope: "all" (default), "current_session", or "both"
+        let scope = args.scope.as_deref().unwrap_or("all");
 
         // Resolve workspace filter with priority:
         // cross_workspace: true → All
@@ -201,113 +241,176 @@ impl MemorySearchTool {
         // default → Single (active workspace)
         let default_ws = self.default_workspace.read().await;
         let workspace_filter = if args.cross_workspace.unwrap_or(false) {
-            WorkspaceFilter::All
+            AgentEnvFilter::All
         } else if let Some(ref wss) = args.workspaces {
-            WorkspaceFilter::Multiple(wss.clone())
+            AgentEnvFilter::Multiple(wss.clone())
         } else {
             let ws = args.workspace.as_deref().unwrap_or(&default_ws);
-            WorkspaceFilter::Single(ws.to_string())
+            AgentEnvFilter::Single(ws.to_string())
         };
 
         // For logging and path lookups, extract a primary workspace name
         let workspace_label = match &workspace_filter {
-            WorkspaceFilter::Single(ws) => ws.clone(),
-            WorkspaceFilter::Multiple(wss) => format!("[{}]", wss.join(", ")),
-            WorkspaceFilter::All => "ALL".to_string(),
+            AgentEnvFilter::Single(ws) => ws.clone(),
+            AgentEnvFilter::Multiple(wss) => format!("[{}]", wss.join(", ")),
+            AgentEnvFilter::All => "ALL".to_string(),
         };
 
         // Notify tool start
         let args_summary = format!("记忆搜索: {}", &args.query);
         notify_tool_start(Self::NAME, &args_summary);
 
-        info!(query = %args.query, max_results = args.max_results, workspace = %workspace_label, "Executing memory search");
+        info!(query = %args.query, max_results = args.max_results, workspace = %workspace_label, scope = %scope, "Executing memory search");
 
-        // Determine if Smart Recall should be used:
-        // Only for single-workspace queries where user didn't explicitly request cross-workspace
-        let smart_recall_cfg = self.smart_recall_config.read().await;
-        let use_smart_recall = matches!(&workspace_filter, WorkspaceFilter::Single(_))
-            && args.cross_workspace.is_none()
-            && args.workspaces.is_none()
-            && smart_recall_cfg.as_ref().is_some_and(|c| c.enabled);
+        // Step 1: Session-local search (when scope is "current_session" or "both")
+        let session_facts: Vec<FactResult> = if scope == "current_session" || scope == "both" {
+            use crate::memory::store::types::SearchFilter;
+            use crate::memory::context::MemoryScope;
+            use crate::memory::store::MemoryStore;
 
-        // Step 1: Fact-first retrieval (with optional Smart Recall Phase 2)
-        let (retrieval_result, cross_workspace_results, recall_triggered) = if use_smart_recall {
-            let primary_ws = match &workspace_filter {
-                WorkspaceFilter::Single(ws) => ws.as_str(),
-                _ => unreachable!(),
-            };
-            let config = smart_recall_cfg.as_ref().unwrap();
-            debug!(workspace = %workspace_label, "Performing Smart Recall retrieval");
-            let smart_result = self
-                .fact_retrieval
-                .retrieve_with_smart_recall(&args.query, primary_ws, config)
+            let session_key = self.default_session_key.read().await.clone();
+            if session_key.is_empty() {
+                debug!("No active session key; skipping session-local search");
+                Vec::new()
+            } else {
+                let path_prefix = format!("aleph://session/{}/", session_key);
+                // Include both valid (active) and condensed (is_valid=false) summaries
+                let filter = SearchFilter::new()
+                    .with_scope(MemoryScope::SessionLocal)
+                    .with_path_prefix(&path_prefix);
+
+                debug!(session = %session_key, "Searching session-local summaries");
+                match MemoryStore::get_facts_by_path_prefix(
+                    &*self.database,
+                    &path_prefix,
+                    &filter,
+                    args.max_results * 2,
+                )
                 .await
-                .map_err(|e| ToolError::Execution(format!("Smart recall failed: {}", e)))?;
-
-            if smart_result.recall_triggered {
-                info!(
-                    cross_count = smart_result.cross_workspace.len(),
-                    reason = ?smart_result.trigger_reason,
-                    "Smart Recall Phase 2 returned cross-workspace results"
-                );
+                {
+                    Ok(raw_facts) => {
+                        debug!(count = raw_facts.len(), "Session-local facts retrieved");
+                        raw_facts
+                            .into_iter()
+                            .map(|f| {
+                                let depth = extract_depth_from_path(&f.path);
+                                let status = if f.is_valid { "active" } else { "condensed" };
+                                FactResult {
+                                    content: f.content,
+                                    fact_type: format!("SessionSummary(d{},{})", depth, status),
+                                    confidence: f.confidence,
+                                    similarity_score: 1.0, // path-matched, no vector score
+                                    path: f.path,
+                                }
+                            })
+                            .collect()
+                    }
+                    Err(e) => {
+                        debug!(error = %e, "Failed to fetch session-local facts, skipping");
+                        Vec::new()
+                    }
+                }
             }
-
-            (smart_result.primary, smart_result.cross_workspace, smart_result.recall_triggered)
         } else {
-            debug!(workspace = %workspace_label, "Performing fact-first retrieval with workspace filter");
-            let result = self
-                .fact_retrieval
-                .retrieve_with_filter(&args.query, workspace_filter)
-                .await
-                .map_err(|e| ToolError::Execution(format!("Fact retrieval failed: {}", e)))?;
-            (result, Vec::new(), false)
+            Vec::new()
         };
-        // Drop the read lock before further async work
-        drop(smart_recall_cfg);
 
-        debug!(
-            facts_count = retrieval_result.facts.len(),
-            transcripts_count = retrieval_result.raw_memories.len(),
-            "Retrieval completed"
-        );
+        // Step 2: Long-term memory retrieval (when scope is "all" or "both")
+        let (long_term_facts, long_term_transcripts, cross_workspace_results, recall_triggered, tokens_saved) =
+            if scope == "all" || scope == "both" {
+                // Determine if Smart Recall should be used:
+                // Only for single-workspace queries where user didn't explicitly request cross-workspace
+                let smart_recall_cfg = self.smart_recall_config.read().await;
+                let use_smart_recall = matches!(&workspace_filter, AgentEnvFilter::Single(_))
+                    && args.cross_workspace.is_none()
+                    && args.workspaces.is_none()
+                    && smart_recall_cfg.as_ref().is_some_and(|c| c.enabled);
 
-        // Step 2: Post-retrieval arbitration
-        debug!("Performing post-retrieval arbitration");
-        let budget = TokenBudget::new(100000); // Large budget for MVP
-        let arbitrated = self.comptroller.arbitrate(retrieval_result, budget);
+                let (retrieval_result, cross_ws, triggered) = if use_smart_recall {
+                    let primary_ws = match &workspace_filter {
+                        AgentEnvFilter::Single(ws) => ws.as_str(),
+                        _ => unreachable!(),
+                    };
+                    let config = smart_recall_cfg.as_ref().unwrap();
+                    debug!(workspace = %workspace_label, "Performing Smart Recall retrieval");
+                    let smart_result = self
+                        .fact_retrieval
+                        .retrieve_with_smart_recall(&args.query, primary_ws, config)
+                        .await
+                        .map_err(|e| ToolError::Execution(format!("Smart recall failed: {}", e)))?;
 
-        info!(
-            facts = arbitrated.facts.len(),
-            transcripts = arbitrated.raw_memories.len(),
-            tokens_saved = arbitrated.tokens_saved,
-            "Arbitration completed"
-        );
+                    if smart_result.recall_triggered {
+                        info!(
+                            cross_count = smart_result.cross_workspace.len(),
+                            reason = ?smart_result.trigger_reason,
+                            "Smart Recall Phase 2 returned cross-workspace results"
+                        );
+                    }
+                    (smart_result.primary, smart_result.cross_workspace, smart_result.recall_triggered)
+                } else {
+                    debug!(workspace = %workspace_label, "Performing fact-first retrieval with workspace filter");
+                    let result = self
+                        .fact_retrieval
+                        .retrieve_with_filter(&args.query, workspace_filter)
+                        .await
+                        .map_err(|e| ToolError::Execution(format!("Fact retrieval failed: {}", e)))?;
+                    (result, Vec::new(), false)
+                };
+                drop(smart_recall_cfg);
 
-        // Step 3: Convert to output format
-        let facts: Vec<FactResult> = arbitrated
-            .facts
-            .into_iter()
-            .map(|f| FactResult {
-                content: f.content,
-                fact_type: format!("{:?}", f.fact_type),
-                confidence: f.confidence,
-                similarity_score: f.similarity_score.unwrap_or(0.0),
-                path: f.path.clone(),
-            })
-            .collect();
+                debug!(
+                    facts_count = retrieval_result.facts.len(),
+                    transcripts_count = retrieval_result.raw_memories.len(),
+                    "Long-term retrieval completed"
+                );
 
-        let transcripts: Vec<TranscriptResult> = arbitrated
-            .raw_memories
-            .into_iter()
-            .map(|t| TranscriptResult {
-                user_input: t.user_input,
-                ai_output: t.ai_output,
-                context: t.context.window_title.clone(),
-                similarity_score: t.similarity_score.unwrap_or(0.0),
-            })
-            .collect();
+                // Post-retrieval arbitration
+                debug!("Performing post-retrieval arbitration");
+                let budget = TokenBudget::new(100000); // Large budget for MVP
+                let arbitrated = self.comptroller.arbitrate(retrieval_result, budget);
 
-        // Step 3b: Compute path clusters
+                info!(
+                    facts = arbitrated.facts.len(),
+                    transcripts = arbitrated.raw_memories.len(),
+                    tokens_saved = arbitrated.tokens_saved,
+                    "Arbitration completed"
+                );
+
+                let facts: Vec<FactResult> = arbitrated
+                    .facts
+                    .into_iter()
+                    .map(|f| FactResult {
+                        content: f.content,
+                        fact_type: format!("{:?}", f.fact_type),
+                        confidence: f.confidence,
+                        similarity_score: f.similarity_score.unwrap_or(0.0),
+                        path: f.path.clone(),
+                    })
+                    .collect();
+
+                let transcripts: Vec<TranscriptResult> = arbitrated
+                    .raw_memories
+                    .into_iter()
+                    .map(|t| TranscriptResult {
+                        user_input: t.user_input,
+                        ai_output: t.ai_output,
+                        context: t.context.window_title.clone(),
+                        similarity_score: t.similarity_score.unwrap_or(0.0),
+                    })
+                    .collect();
+
+                (facts, transcripts, cross_ws, triggered, arbitrated.tokens_saved)
+            } else {
+                // scope == "current_session" — skip long-term retrieval entirely
+                (Vec::new(), Vec::new(), Vec::new(), false, 0)
+            };
+
+        // Merge session facts with long-term facts
+        let mut facts = session_facts;
+        facts.extend(long_term_facts);
+        let transcripts = long_term_transcripts;
+
+        // Step 3: Compute path clusters
         let mut path_clusters = cluster_facts_by_path(&facts, 3);
         for cluster in &mut path_clusters {
             // Try to load L1 overview from store via get_by_path
@@ -334,7 +437,7 @@ impl MemorySearchTool {
             facts.len(),
             transcripts.len(),
             cross_suffix,
-            arbitrated.tokens_saved
+            tokens_saved
         );
         notify_tool_result(Self::NAME, &result_summary, true);
 
@@ -342,7 +445,7 @@ impl MemorySearchTool {
             facts,
             transcripts,
             query: args.query,
-            tokens_saved: arbitrated.tokens_saved,
+            tokens_saved,
             path_clusters,
             cross_workspace: cross_workspace_results,
             smart_recall_triggered: recall_triggered,
@@ -358,6 +461,7 @@ impl Clone for MemorySearchTool {
             comptroller: self.comptroller.clone(),
             _indexer: self._indexer.clone(),
             default_workspace: self.default_workspace.clone(),
+            default_session_key: self.default_session_key.clone(),
             smart_recall_config: self.smart_recall_config.clone(),
         }
     }
@@ -370,7 +474,10 @@ impl AlephTool for MemorySearchTool {
     const DESCRIPTION: &'static str = "Search personal memory for relevant facts and conversation history. \
         Returns both compressed facts and raw transcripts with redundancy elimination. \
         By default searches the active workspace. Use 'workspaces' to search specific workspaces, \
-        or 'cross_workspace: true' to search all workspaces.";
+        or 'cross_workspace: true' to search all workspaces. \
+        Use 'scope' to control what is searched: 'all' (default, long-term memory only), \
+        'current_session' (only this session's compressed summaries), \
+        or 'both' (long-term memory plus current session summaries).";
 
     type Args = MemorySearchArgs;
     type Output = MemorySearchOutput;
@@ -380,6 +487,8 @@ impl AlephTool for MemorySearchTool {
             "memory_search(query='What are my coding preferences?', max_results=10)".to_string(),
             "memory_search(query='Previous discussions about Rust')".to_string(),
             "memory_search(query='My travel plans', max_results=5)".to_string(),
+            "memory_search(query='What did we discuss earlier?', scope='current_session')".to_string(),
+            "memory_search(query='Rust async patterns', scope='both')".to_string(),
         ])
     }
 
@@ -401,6 +510,7 @@ mod tests {
             workspace: None,
             workspaces: None,
             cross_workspace: None,
+            scope: None,
         };
 
         let json = serde_json::to_string(&args).unwrap();
