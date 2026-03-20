@@ -10,6 +10,8 @@ Redesign Aleph's plugin system to achieve **single-direction compatibility with 
 
 **Core principle: Write TOML, Read TOML+JSON.**
 
+**TOML key convention**: kebab-case (`mcp-servers`, `plugin-root`) — idiomatic TOML. Rust structs use `#[serde(rename = "mcp-servers")]` where needed. JSON keys use camelCase (`mcpServers`) per Claude Code convention.
+
 ## Decision Log
 
 | Decision | Choice | Rationale |
@@ -51,13 +53,12 @@ license = "MIT"
 keywords = ["keyword1", "keyword2"]
 
 # Component paths (supplement defaults, don't replace)
-commands = ["./commands/"]
+# All path fields accept string or array of strings
+commands = "./commands/"               # path to directory of *.md command files
 agents = "./agents/"
 skills = "./skills/"
 hooks = "./hooks/hooks.json"
 mcp-servers = "./.mcp.json"
-lsp-servers = "./.lsp.json"
-output-styles = "./styles/"
 
 [author]
 name = "Author Name"
@@ -129,12 +130,100 @@ Available in skill/agent content, hook commands, MCP/LSP configs:
 - `${CLAUDE_PLUGIN_ROOT}` — absolute path to plugin installation directory
 - `${CLAUDE_PLUGIN_DATA}` — persistent data directory (`~/.aleph/plugins/data/{id}/`)
 
+### AlephExtensions Struct Definition
+
+```rust
+/// Aleph-only extensions in plugin.toml [aleph] section.
+/// Claude Code ignores these fields.
+pub struct AlephExtensions {
+    /// Runtime type: "mcp" (default), "wasm", "static"
+    pub runtime: AlephRuntime,
+    /// WASM entry point (only for runtime = "wasm")
+    pub entry: Option<PathBuf>,
+    /// Messaging channel integrations
+    pub channels: Vec<ChannelDef>,
+    /// Custom LLM provider backends
+    pub providers: Vec<ProviderDef>,
+    /// Background services
+    pub services: Vec<ServiceDef>,
+    /// Permission grants (network, filesystem, shell, env)
+    pub permissions: PluginPermissions,
+    /// WASM-specific capabilities (HTTP, secrets, tool invocation, workspace)
+    /// Preserved from current [capabilities] section for WASM plugins
+    pub capabilities: Option<WasmCapabilities>,
+}
+```
+
+### PluginManifest Unified Mapping
+
+The new `.claude-plugin/plugin.toml` maps to the existing `PluginManifest` as follows:
+
+| plugin.toml field | PluginManifest field | Notes |
+|-------------------|---------------------|-------|
+| `name` | `id` | Plugin unique identifier |
+| `version` | `version` | Semver string |
+| `description` | `description` | Human-readable |
+| `skills` | (path scanning) | Directory scanned for `*/SKILL.md` → registered as skills |
+| `agents` | (path scanning) | Directory scanned for `*.md` → registered as agents |
+| `commands` | (path scanning) | Directory path string, scanned for `*.md` → legacy commands |
+| `hooks` | (file parsing) | Path to hooks JSON file → parsed into hook registrations |
+| `mcp-servers` | (file parsing) | Path to `.mcp.json` → MCP server definitions |
+| `[aleph]` | `aleph_extensions` | `Option<AlephExtensions>` — all Aleph-specific fields |
+| `[aleph] runtime` | via `aleph_extensions.runtime` | Determines loading strategy |
+| `[aleph] channels/providers/services` | via `aleph_extensions` | Aleph-only component types |
+| `[aleph] permissions` | via `aleph_extensions.permissions` | Sandbox grants |
+| `[aleph] capabilities` | via `aleph_extensions.capabilities` | WASM-specific grants (preserved from current format) |
+
+**Key change**: The CC-style manifest uses **path references** (`skills = "./skills/"`) rather than **inline definitions** (`[[tools]] name = "..."` in current format). Tools are no longer declared in the manifest — they live in MCP servers or WASM modules. Skills, agents, commands are discovered by scanning directories.
+
+### Old Format Migration Mapping
+
+For deprecated `aleph.plugin.toml` (current format with `[plugin]` wrapper):
+
+| Old `aleph.plugin.toml` | New `.claude-plugin/plugin.toml` |
+|--------------------------|----------------------------------|
+| `[plugin] id` | `name` (top-level) |
+| `[plugin] name` | `description` (top-level) |
+| `[plugin] version` | `version` (top-level) |
+| `[plugin] kind = "nodejs"` | `[aleph] runtime = "mcp"` |
+| `[plugin] kind = "wasm"` | `[aleph] runtime = "wasm"` |
+| `[plugin] kind = "static"` | `[aleph] runtime = "static"` |
+| `[plugin] entry = "src/index.js"` | `.mcp.json` server command |
+| `[plugin] entry = "...wasm"` | `[aleph] entry = "...wasm"` |
+| `[[tools]]` | Removed — tools in MCP server or WASM |
+| `[[hooks]]` | `hooks/hooks.json` (CC format) |
+| `[[commands]]` | `commands/*.md` (CC format) |
+| `[[channels]]` | `[[aleph.channels]]` |
+| `[[providers]]` | `[[aleph.providers]]` |
+| `[[services]]` | `[[aleph.services]]` |
+| `[capabilities]` | `[aleph.capabilities]` |
+| `[permissions]` | `[aleph.permissions]` |
+| `[prompt] file / scope` | `skills/*/SKILL.md` with frontmatter |
+
+### Environment Variables
+
+Available in skill/agent content, hook commands, MCP configs:
+
+- `${CLAUDE_PLUGIN_ROOT}` — absolute path to plugin installation directory (CC-compatible)
+- `${ALEPH_PLUGIN_ROOT}` — same value as above (Aleph-native alias)
+- `${CLAUDE_PLUGIN_DATA}` — persistent data directory (`~/.aleph/plugins/data/{id}/`)
+- `${ALEPH_PLUGIN_DATA}` — same value as above (Aleph-native alias)
+
+Both prefixes are always set. CC plugins use `CLAUDE_*`, Aleph-native plugins can use either.
+
+### Out of Scope (deferred)
+
+- **LSP servers** (`.lsp.json`): Aleph has no LSP management today. Deferred to a future spec.
+- **Output styles**: Undefined in CC docs and Aleph. Deferred.
+
+These fields are accepted in `plugin.toml` parsing (for CC compat) but ignored at runtime until implemented.
+
 ### Code Changes
 
 - New: `manifest/claude_plugin_toml.rs` — parse `.claude-plugin/plugin.toml`
 - New: `manifest/claude_plugin_json.rs` — parse `.claude-plugin/plugin.json`
 - Modify: `discovery/scanner.rs` — new scan order + auto-discover mode
-- Modify: `manifest/types.rs` — add `aleph_extensions: Option<AlephExtensions>` to `PluginManifest`
+- Modify: `manifest/types.rs` — add `AlephExtensions` struct and `aleph_extensions: Option<AlephExtensions>` to `PluginManifest`
 - Deprecate: `manifest/aleph_plugin_toml/`, `manifest/package_json.rs`
 
 ---
@@ -318,6 +407,30 @@ aleph plugin marketplace update aleph-official
 - GitHub source: `git clone --depth 1` or `git pull` into `~/.aleph/plugins/cache/<name>/`
 - Local source: read directly, no cache
 
+### Error Handling
+
+| Failure | Behavior |
+|---------|----------|
+| `git clone` fails (network/auth) | Return error with stderr output, suggest checking URL and network |
+| `marketplace.toml` malformed | Return parse error with line/column, skip this marketplace |
+| Plugin version in marketplace differs from plugin's own manifest | Warn, trust the plugin's own `plugin.toml` as source of truth |
+| `install` during concurrent `marketplace update` | Marketplace cache uses atomic directory swap (clone to temp, rename) |
+| Plugin directory missing from marketplace cache | Return "plugin not found, try `marketplace update` first" |
+
+### Tool Registration (R9 alignment)
+
+All marketplace and plugin management operations are exposed as LLM-callable tools, per R9 (Everything is a Tool):
+
+- `plugin_install` / `plugin_uninstall` / `plugin_enable` / `plugin_disable`
+- `plugin_marketplace_add` / `plugin_marketplace_remove` / `plugin_marketplace_update`
+- `plugin_list` / `plugin_marketplace_list`
+
+The LLM can invoke these via natural language (e.g., "install the diagnostics plugin").
+
+### Placement Note (R3 alignment)
+
+Marketplace git operations (`clone`, `pull`) are I/O operations, not business logic — they belong in `core/src/extension/marketplace/` as infrastructure, not in a separate crate. The marketplace module is a thin wrapper around `git2` or `Command::new("git")`, not a "heavy third-party library" that R3 prohibits.
+
 ### Code Changes
 
 - New: `core/src/extension/marketplace/` module
@@ -327,6 +440,7 @@ aleph plugin marketplace update aleph-official
   - `local_source.rs` — local path reader
 - Modify: `discovery/mod.rs` — discover plugins from marketplace cache
 - New: Gateway RPC `plugin.marketplace.add/list/update/remove`
+- New: Built-in tools for all plugin/marketplace operations (registered in ToolRegistry)
 - Remove: `plugins-index.json` loading logic
 
 ---
@@ -361,13 +475,15 @@ enabled = false
 
 ### Priority (high → low)
 
-`local` > `project` > `user` > `agent-level` (Aleph-only) > `bundled`
+`agent-level` (Aleph-only) > `local` > `project` > `user` > `bundled`
+
+Agent-level is highest because it is the most specific scope — a plugin installed for a particular agent should always override broader scopes.
 
 Same-name plugin in multiple scopes: higher scope wins, lower is shadowed (no error).
 
 ### Agent-Level Scope (Aleph-only, preserved)
 
-`~/.aleph/agents/<id>/plugins/` — plugins scoped to a specific agent, only active in that agent's sessions. This supports Aleph's multi-agent architecture and has no Claude Code equivalent.
+`~/.aleph/agents/<id>/plugins/` — plugins scoped to a specific agent, only active in that agent's sessions. This supports Aleph's multi-agent architecture and has no Claude Code equivalent. When a session is running under a specific agent, agent-level plugins take highest priority.
 
 ### Code Changes
 
