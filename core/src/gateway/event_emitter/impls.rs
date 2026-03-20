@@ -137,9 +137,13 @@ impl EventEmitter for GatewayEventEmitter {
                 ..
             } = event
             {
-                // Intermediate chunks bypass buffering — emit immediately
                 if is_intermediate {
-                    // Fall through to default broadcast below
+                    // Emit immediately as standalone message, bypassing the buffer
+                    let event_value = serde_json::to_value(&event)?;
+                    let notification = JsonRpcRequest::notification(event_method(&event), Some(event_value));
+                    let json = serde_json::to_string(&notification)?;
+                    self.event_bus.publish(json);
+                    return Ok(());
                 } else if !is_final {
                     // Buffer the chunk content, don't emit yet
                     self.instant_buffer.lock().await.push_str(content);

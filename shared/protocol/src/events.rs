@@ -59,6 +59,8 @@ pub enum StreamEvent {
         content: String,
         chunk_index: u32,
         is_final: bool,
+        #[serde(default)]
+        is_intermediate: bool,
     },
 
     /// Agent run completed successfully

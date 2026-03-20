@@ -909,6 +909,7 @@ mod tests {
             content: "Hello".into(),
             chunk_index: 0,
             is_final: false,
+            is_intermediate: false,
         };
         state.handle_gateway_event(chunk1);
 
@@ -918,6 +919,7 @@ mod tests {
             content: " World".into(),
             chunk_index: 1,
             is_final: false,
+            is_intermediate: false,
         };
         state.handle_gateway_event(chunk2);
 
