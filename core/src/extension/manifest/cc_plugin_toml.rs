@@ -513,4 +513,110 @@ runtime = "wasm"
         let manifest = parse_cc_plugin_toml_content(content, &dir).unwrap();
         assert_eq!(manifest.root_dir, dir);
     }
+
+    // Integration tests: end-to-end discovery via parse_manifest_from_dir_sync
+
+    #[test]
+    fn test_full_cc_plugin_discovery() {
+        use std::fs;
+        use tempfile::tempdir;
+
+        let dir = tempdir().unwrap();
+        let plugin_dir = dir.path().join("my-cc-plugin");
+        let cc_dir = plugin_dir.join(".claude-plugin");
+        let skills_dir = plugin_dir.join("skills/hello");
+
+        fs::create_dir_all(&cc_dir).unwrap();
+        fs::create_dir_all(&skills_dir).unwrap();
+
+        // Write CC-format plugin.toml
+        fs::write(
+            cc_dir.join("plugin.toml"),
+            r#"
+name = "my-cc-plugin"
+version = "0.1.0"
+description = "Test CC plugin"
+skills = "./skills/"
+"#,
+        )
+        .unwrap();
+
+        fs::write(
+            skills_dir.join("SKILL.md"),
+            "---\nname: hello\n---\nHello world",
+        )
+        .unwrap();
+
+        // Parse via the main discovery function
+        let manifest =
+            crate::extension::manifest::parse_manifest_from_dir_sync(&plugin_dir).unwrap();
+        assert_eq!(manifest.id, "my-cc-plugin");
+        assert_eq!(manifest.version, Some("0.1.0".to_string()));
+    }
+
+    #[test]
+    fn test_old_format_still_loads() {
+        use std::fs;
+        use tempfile::tempdir;
+
+        let dir = tempdir().unwrap();
+        let plugin_dir = dir.path().join("old-plugin");
+        fs::create_dir_all(&plugin_dir).unwrap();
+
+        fs::write(
+            plugin_dir.join("aleph.plugin.toml"),
+            r#"
+[plugin]
+id = "old-plugin"
+name = "Old Plugin"
+version = "0.1.0"
+kind = "static"
+entry = "."
+"#,
+        )
+        .unwrap();
+
+        let manifest =
+            crate::extension::manifest::parse_manifest_from_dir_sync(&plugin_dir).unwrap();
+        assert_eq!(manifest.id, "old-plugin");
+    }
+
+    #[test]
+    fn test_cc_format_takes_priority_over_old() {
+        use std::fs;
+        use tempfile::tempdir;
+
+        let dir = tempdir().unwrap();
+        let plugin_dir = dir.path().join("dual-plugin");
+        let cc_dir = plugin_dir.join(".claude-plugin");
+        fs::create_dir_all(&cc_dir).unwrap();
+
+        // Write both old and new format
+        fs::write(
+            plugin_dir.join("aleph.plugin.toml"),
+            r#"
+[plugin]
+id = "old-id"
+name = "Old Name"
+kind = "static"
+entry = "."
+"#,
+        )
+        .unwrap();
+
+        fs::write(
+            cc_dir.join("plugin.toml"),
+            r#"
+name = "new-id"
+version = "2.0.0"
+"#,
+        )
+        .unwrap();
+
+        // CC format should win
+        let manifest =
+            crate::extension::manifest::parse_manifest_from_dir_sync(&plugin_dir).unwrap();
+        assert_eq!(manifest.id, "new-id");
+        assert_eq!(manifest.version, Some("2.0.0".to_string()));
+    }
 }

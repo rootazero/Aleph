@@ -177,6 +177,19 @@ impl DirectoryScanner {
                                 }
                             }
 
+                            // Skip directories without a marker file for the component type.
+                            // e.g. ~/.aleph/agents/{id}/ without agent.md is Aleph's identity
+                            // system, not an extension agent.
+                            if let Some(marker) = component_marker_file(component_name) {
+                                if !path.join(marker).exists() {
+                                    trace!(
+                                        "Skipping {:?}: missing marker file '{}'",
+                                        path, marker
+                                    );
+                                    continue;
+                                }
+                            }
+
                             discovered.push(DiscoveredPath::new(
                                 path,
                                 scan_dir.source,
@@ -288,6 +301,19 @@ impl DirectoryScanner {
     }
 }
 
+/// Return the expected marker file for a component type directory.
+///
+/// If the directory lacks this file, it's not a valid extension component and
+/// should be skipped during discovery (e.g. Aleph identity agent dirs).
+fn component_marker_file(component_name: &str) -> Option<&'static str> {
+    match component_name {
+        "agents" => Some(AGENT_FILE),
+        "skills" => Some(SKILL_FILE),
+        // plugins use has_plugin_manifest() via discover_plugins()
+        _ => None,
+    }
+}
+
 /// Check if a directory contains a valid plugin manifest.
 ///
 /// Supports: `aleph.plugin.toml`, `aleph.plugin.json`, `.claude-plugin/plugin.json`
@@ -311,11 +337,15 @@ mod tests {
         // Create Aleph-like structure
         let aleph_dir = root.join(".aleph");
         std::fs::create_dir_all(aleph_dir.join("skills/my-skill")).unwrap();
+        // Add required SKILL.md marker so discover_component recognizes this dir
+        std::fs::write(aleph_dir.join("skills/my-skill/SKILL.md"), "---\nname: my-skill\n---\n").unwrap();
         std::fs::create_dir_all(aleph_dir.join("commands/my-cmd")).unwrap();
         std::fs::create_dir_all(aleph_dir.join("plugins")).unwrap();
 
         // Create project-level .claude
         std::fs::create_dir_all(root.join("project/.claude/skills/project-skill")).unwrap();
+        // Add required SKILL.md marker for project-level skill
+        std::fs::write(root.join("project/.claude/skills/project-skill/SKILL.md"), "---\nname: project-skill\n---\n").unwrap();
 
         root.to_path_buf()
     }
