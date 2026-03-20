@@ -105,7 +105,12 @@ pub fn compute_next_cron(
             .next()
             .map(|t| t.with_timezone(&Utc).timestamp_millis()))
     } else {
-        Ok(schedule.upcoming(Utc).next().map(|t| t.timestamp_millis()))
+        // Default to system local timezone, not UTC — users think in local time
+        let local_now = from.with_timezone(&chrono::Local);
+        Ok(schedule
+            .after(&local_now)
+            .next()
+            .map(|t| t.with_timezone(&Utc).timestamp_millis()))
     }
 }
 
