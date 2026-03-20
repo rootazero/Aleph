@@ -122,6 +122,11 @@ pub enum Command {
         #[command(subcommand)]
         action: SecretAction,
     },
+    /// Plugin management (CC-compatible)
+    Plugin {
+        #[command(subcommand)]
+        action: PluginAction,
+    },
 }
 
 /// Pairing subcommands
@@ -368,6 +373,63 @@ pub enum SecretAction {
     },
     /// List configured secret providers and their status
     Providers,
+}
+
+/// Plugin subcommands (unified, CC-compatible)
+#[derive(Subcommand, Debug)]
+pub enum PluginAction {
+    /// List installed plugins
+    List,
+    /// Install a plugin from marketplace or URL
+    Install {
+        /// Plugin name or source URL
+        source: String,
+        /// Installation scope (user, project, local)
+        #[arg(long, default_value = "user")]
+        scope: String,
+    },
+    /// Uninstall a plugin
+    Uninstall {
+        /// Plugin name
+        name: String,
+    },
+    /// Enable a plugin
+    Enable {
+        /// Plugin name
+        name: String,
+    },
+    /// Disable a plugin
+    Disable {
+        /// Plugin name
+        name: String,
+    },
+    /// Marketplace management
+    Marketplace {
+        #[command(subcommand)]
+        action: MarketplaceAction,
+    },
+}
+
+/// Marketplace subcommands
+#[derive(Subcommand, Debug)]
+pub enum MarketplaceAction {
+    /// Add a marketplace source (GitHub owner/repo or local path)
+    Add {
+        /// Source: "owner/repo" for GitHub, path for local
+        source: String,
+    },
+    /// List registered marketplaces
+    List,
+    /// Update marketplace cache
+    Update {
+        /// Marketplace name (update all if omitted)
+        name: Option<String>,
+    },
+    /// Remove a marketplace
+    Remove {
+        /// Marketplace name
+        name: String,
+    },
 }
 
 #[cfg(test)]

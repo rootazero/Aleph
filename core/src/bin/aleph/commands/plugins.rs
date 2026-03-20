@@ -1,5 +1,7 @@
 //! Plugin management command handlers
 
+use crate::cli::MarketplaceAction;
+
 /// Handle plugins list command
 pub async fn handle_plugins_list() -> Result<(), Box<dyn std::error::Error>> {
     use alephcore::extension::ExtensionManager;
@@ -181,5 +183,66 @@ pub fn handle_plugins_disable(name: &str) -> Result<(), Box<dyn std::error::Erro
         println!("Plugin is already disabled: {}", name);
     }
 
+    Ok(())
+}
+
+/// Install plugin from marketplace (by name) or URL (legacy path)
+pub async fn handle_plugin_install(source: &str, scope: &str) -> Result<(), Box<dyn std::error::Error>> {
+    use alephcore::cli::{GatewayClient, print_json};
+
+    // If source looks like a plugin name (no /, ., or :), use marketplace install via RPC
+    let is_plugin_name = !source.contains('/') && !source.contains('.') && !source.contains(':');
+
+    if is_plugin_name {
+        let client = GatewayClient::new();
+        let result = client.call_raw(
+            "plugin.marketplace.install",
+            Some(serde_json::json!({ "name": source, "scope": scope })),
+        ).await?;
+        print_json(&result)?;
+    } else {
+        // Direct URL install (legacy path)
+        handle_plugins_install(source).await?;
+    }
+    Ok(())
+}
+
+/// Handle marketplace subcommands
+pub async fn handle_marketplace_command(action: MarketplaceAction) -> Result<(), Box<dyn std::error::Error>> {
+    use alephcore::cli::{GatewayClient, print_json};
+
+    let client = GatewayClient::new();
+
+    match action {
+        MarketplaceAction::Add { source } => {
+            let result = client.call_raw(
+                "plugin.marketplace.add",
+                Some(serde_json::json!({ "source": source })),
+            ).await?;
+            print_json(&result)?;
+        }
+        MarketplaceAction::List => {
+            let result = client.call_raw(
+                "plugin.marketplace.list",
+                Some(serde_json::json!({})),
+            ).await?;
+            print_json(&result)?;
+        }
+        MarketplaceAction::Update { name } => {
+            let params = match name {
+                Some(n) => serde_json::json!({ "name": n }),
+                None => serde_json::json!({}),
+            };
+            let result = client.call_raw("plugin.marketplace.update", Some(params)).await?;
+            print_json(&result)?;
+        }
+        MarketplaceAction::Remove { name } => {
+            let result = client.call_raw(
+                "plugin.marketplace.remove",
+                Some(serde_json::json!({ "name": name })),
+            ).await?;
+            print_json(&result)?;
+        }
+    }
     Ok(())
 }

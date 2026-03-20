@@ -56,7 +56,7 @@ mod commands;
 mod server_init;
 
 use clap::Parser;
-use cli::{Args, AuditAction, Command, DevicesAction, PairingAction, PluginsAction};
+use cli::{Args, AuditAction, Command, DevicesAction, PairingAction, PluginAction, PluginsAction};
 
 /// Entry point: parse args and daemonize BEFORE starting the tokio runtime.
 ///
@@ -132,6 +132,20 @@ async fn async_main(args: Args) -> Result<(), Box<dyn std::error::Error>> {
                 AuditAction::Tools => commands::handle_audit_tools().await,
                 AuditAction::Tool { name, limit } => commands::handle_audit_tool(&name, limit).await,
                 AuditAction::Escalations { limit } => commands::handle_audit_escalations(limit).await,
+            };
+        }
+        Some(Command::Plugin { action }) => {
+            return match action {
+                PluginAction::List => commands::handle_plugins_list().await,
+                PluginAction::Install { source, scope } => {
+                    commands::handle_plugin_install(&source, &scope).await
+                }
+                PluginAction::Uninstall { name } => commands::handle_plugins_uninstall(&name),
+                PluginAction::Enable { name } => commands::handle_plugins_enable(&name),
+                PluginAction::Disable { name } => commands::handle_plugins_disable(&name),
+                PluginAction::Marketplace { action: mkt_action } => {
+                    commands::handle_marketplace_command(mkt_action).await
+                }
             };
         }
         Some(Command::Start) | None => {
