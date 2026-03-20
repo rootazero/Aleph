@@ -151,19 +151,28 @@ impl PluginRegistry {
 
     /// Register a tool.
     ///
-    /// The tool is stored by name, and the owning plugin's record is updated.
+    /// The tool is stored under both its namespaced key (`plugin_id:name`) and its
+    /// short name (`name`) for backward compatibility. If two plugins register a tool
+    /// with the same short name, first-come wins for the short key; both are always
+    /// accessible via their namespaced keys.
     pub fn register_tool(&mut self, tool: ToolRegistration) {
         let plugin_id = tool.plugin_id.clone();
-        let tool_name = tool.name.clone();
+        let namespaced_key = format!("{}:{}", tool.plugin_id, tool.name);
+        let short_key = tool.name.clone();
 
-        self.tools.insert(tool_name.clone(), tool);
-
-        // Update plugin record
+        // Update plugin record (track by namespaced key)
         if let Some(plugin) = self.plugins.get_mut(&plugin_id) {
-            if !plugin.tool_names.contains(&tool_name) {
-                plugin.tool_names.push(tool_name);
+            if !plugin.tool_names.contains(&namespaced_key) {
+                plugin.tool_names.push(namespaced_key.clone());
             }
         }
+
+        // Register under short name for backward compat (first-come wins)
+        if !self.tools.contains_key(&short_key) {
+            self.tools.insert(short_key, tool.clone());
+        }
+        // Always register under namespaced key
+        self.tools.insert(namespaced_key, tool);
     }
 
     /// Get a tool by name.
@@ -396,8 +405,19 @@ impl PluginRegistry {
     // =========================================================================
 
     /// Register an in-chat command (e.g., /mycommand).
+    ///
+    /// The command is stored under both its namespaced key (`plugin_id:name`) and its
+    /// short name (`name`) for backward compatibility. First-come wins for the short key.
     pub fn register_command(&mut self, command: CommandRegistration) {
-        self.commands.insert(command.name.clone(), command);
+        let namespaced_key = format!("{}:{}", command.plugin_id, command.name);
+        let short_key = command.name.clone();
+
+        // Register under short name for backward compat (first-come wins)
+        if !self.commands.contains_key(&short_key) {
+            self.commands.insert(short_key, command.clone());
+        }
+        // Always register under namespaced key
+        self.commands.insert(namespaced_key, command);
     }
 
     /// Get an in-chat command by name.
