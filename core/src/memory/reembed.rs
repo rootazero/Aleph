@@ -101,7 +101,7 @@ async fn reembed_facts(
         })
         .collect();
 
-    result.facts_total = needs_reembed.len();
+    result.facts_total = all_facts.len();
 
     if needs_reembed.is_empty() {
         info!("[reembed] All facts already have correct embeddings");
@@ -170,6 +170,7 @@ async fn reembed_memories(
     result: &mut ReembedResult,
 ) -> Result<(), AlephError> {
     let all_memories = database.get_all_memories(None).await?;
+    result.memories_total = all_memories.len();
 
     let needs_reembed: Vec<_> = all_memories
         .into_iter()
@@ -180,8 +181,6 @@ async fn reembed_memories(
                 .unwrap_or(true)
         })
         .collect();
-
-    result.memories_total = needs_reembed.len();
 
     if needs_reembed.is_empty() {
         info!("[reembed] All memories already have correct embeddings");
