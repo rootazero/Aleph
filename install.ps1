@@ -3,7 +3,7 @@
 $ErrorActionPreference = "Stop"
 
 $Repo = "rootazero/Aleph"
-$BinaryName = "aleph"
+$BinaryName = "aleph-server"
 $Version = if ($env:ALEPH_VERSION) { $env:ALEPH_VERSION } else { "latest" }
 
 # ── Detect architecture ─────────────────────────────────────────
@@ -15,7 +15,7 @@ switch ($Arch) {
     default { Write-Error "Unsupported architecture: $Arch"; exit 1 }
 }
 
-$AssetName = "$BinaryName-windows-$ArchName"
+$AssetName = "aleph-windows-$ArchName"
 Write-Host "Detected platform: windows/$ArchName"
 
 # ── Install directory ────────────────────────────────────────────
@@ -102,10 +102,10 @@ try {
 
 Write-Host ""
 Write-Host "Aleph installed successfully! ($InstalledVersion)"
-Write-Host "  Binary:  $InstalledPath"
+Write-Host "  Server:  $InstalledPath"
 Write-Host "  Config:  $ConfigDir"
 Write-Host ""
-Write-Host "Run:  aleph"
+Write-Host "Run:  aleph-server start"
 
 # ── Auto-start (Windows Task Scheduler) ──────────────────────────
 

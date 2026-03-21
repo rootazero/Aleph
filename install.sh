@@ -5,7 +5,7 @@ set -euo pipefail
 
 REPO="rootazero/Aleph"
 INSTALL_DIR="/usr/local/bin"
-BINARY_NAME="aleph"
+BINARY_NAME="aleph-server"
 VERSION="${1:-latest}"
 
 # Cleanup on exit
@@ -33,7 +33,7 @@ case "$ARCH" in
     *)             echo "Error: unsupported architecture: $ARCH"; exit 1 ;;
 esac
 
-ASSET_NAME="${BINARY_NAME}-${PLATFORM}-${ARCH}"
+ASSET_NAME="aleph-${PLATFORM}-${ARCH}"
 echo "Detected platform: $PLATFORM/$ARCH"
 
 # ── Fetch release info ───────────────────────────────────────────
@@ -105,6 +105,17 @@ else
     sudo mv "$BIN_PATH" "$INSTALL_DIR/$BINARY_NAME"
 fi
 
+# Install aleph-bridge on macOS (bundled in the same archive)
+if [ "$PLATFORM" = "darwin" ]; then
+    BRIDGE_PATH=$(find "$TMP_DIR" -name "aleph-bridge" -type f | head -1)
+    if [ -n "$BRIDGE_PATH" ]; then
+        chmod +x "$BRIDGE_PATH"
+        mkdir -p "$HOME/.aleph/bin"
+        mv "$BRIDGE_PATH" "$HOME/.aleph/bin/aleph-bridge"
+        echo "Swift bridge installed to ~/.aleph/bin/aleph-bridge"
+    fi
+fi
+
 # Create config directory
 mkdir -p "$HOME/.aleph"
 
@@ -112,10 +123,13 @@ mkdir -p "$HOME/.aleph"
 INSTALLED_VERSION=$("$INSTALL_DIR/$BINARY_NAME" --version 2>/dev/null || echo "unknown")
 echo ""
 echo "Aleph installed successfully! ($INSTALLED_VERSION)"
-echo "  Binary:  $INSTALL_DIR/$BINARY_NAME"
+echo "  Server:  $INSTALL_DIR/$BINARY_NAME"
+if [ "$PLATFORM" = "darwin" ] && [ -f "$HOME/.aleph/bin/aleph-bridge" ]; then
+    echo "  Bridge:  ~/.aleph/bin/aleph-bridge"
+fi
 echo "  Config:  ~/.aleph/"
 echo ""
-echo "Run:  aleph"
+echo "Run:  aleph-server start"
 
 # ── System service (auto-start on boot) ──────────────────────────
 
