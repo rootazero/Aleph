@@ -241,13 +241,15 @@ New event types in `swarm/events.rs`:
 
 ```rust
 pub enum ImportantEvent {
-    // ... existing variants
-    TaskCompleted { task_id: TaskId, agent_id: AgentId },
-    TaskUnblocked { task_id: TaskId, unblocked_by: TaskId },
-    TaskFailed { task_id: TaskId, reason: String },
-    AllTasksCompleted { team_id: TeamId },
+    // ... existing variants (all include timestamp: u64)
+    TaskCompleted { task_id: String, agent_id: String, timestamp: u64 },
+    TaskUnblocked { task_id: String, unblocked_by: String, timestamp: u64 },
+    TaskFailed { task_id: String, reason: String, timestamp: u64 },
+    AllTasksCompleted { team_id: String, timestamp: u64 },
 }
 ```
+
+Note: Uses `String` for identifiers and includes `timestamp: u64` to match existing `ImportantEvent` variant conventions.
 
 Existing Rules Engine and Context Injector process these without modification — they already dispatch by event tier.
 
