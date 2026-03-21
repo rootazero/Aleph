@@ -298,11 +298,31 @@ enum DaemonAction {
     /// Show Gateway server status
     Status,
     /// Start Gateway server
-    Start,
+    Start {
+        /// Port number for the server
+        #[arg(short, long)]
+        port: Option<u16>,
+        /// Run as a background daemon
+        #[arg(short, long)]
+        daemon: bool,
+        /// Path to configuration file
+        #[arg(short, long)]
+        config: Option<String>,
+    },
     /// Stop Gateway server
     Stop,
     /// Restart Gateway server
-    Restart,
+    Restart {
+        /// Port number for the server
+        #[arg(short, long)]
+        port: Option<u16>,
+        /// Run as a background daemon
+        #[arg(short, long)]
+        daemon: bool,
+        /// Path to configuration file
+        #[arg(short, long)]
+        config: Option<String>,
+    },
     /// View Gateway logs
     Logs {
         /// Number of lines to show
@@ -903,19 +923,19 @@ async fn main() -> CliResult<()> {
         },
         Some(Commands::Daemon { action }) => match action {
             DaemonAction::Status => {
-                commands::daemon::status(&server_url, cli.json).await?;
+                commands::daemon::status(cli.json)?;
             }
-            DaemonAction::Start => {
-                commands::daemon::start()?;
+            DaemonAction::Start { port, daemon, config } => {
+                commands::daemon::start(port, daemon, config.as_deref(), cli.json)?;
             }
             DaemonAction::Stop => {
-                commands::daemon::stop(&server_url, cli.json).await?;
+                commands::daemon::stop(cli.json)?;
             }
-            DaemonAction::Restart => {
-                commands::daemon::restart(&server_url, cli.json).await?;
+            DaemonAction::Restart { port, daemon, config } => {
+                commands::daemon::restart(port, daemon, config.as_deref(), cli.json)?;
             }
             DaemonAction::Logs { lines, level } => {
-                commands::daemon::logs(&server_url, lines, level.as_deref(), cli.json).await?;
+                commands::daemon::logs(lines, level.as_deref(), cli.json)?;
             }
         },
         Some(Commands::Providers { action }) => match action {

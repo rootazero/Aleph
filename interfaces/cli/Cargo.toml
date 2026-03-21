@@ -64,6 +64,10 @@ uuid = { version = "1.7", features = ["v4"] }
 chrono = "0.4"
 dirs = "5.0"
 
+# Unix process management (signals)
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 # Plugin packaging
 zip = { version = "2", default-features = false, features = ["deflate"] }
 
