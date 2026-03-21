@@ -1,13 +1,15 @@
 //! Commands RPC Handlers
 //!
-//! Handlers for command listing and discovery.
+//! Handlers for command listing, discovery, and execution.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use super::super::protocol::{JsonRpcRequest, JsonRpcResponse};
-use crate::command::{CommandNode, CommandType};
+use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
+use super::parse_params;
+use crate::command::{CommandContext, CommandNode, CommandParser, CommandType};
 use crate::dispatcher::{ToolRegistry, ToolSourceType, UnifiedTool};
+use crate::sync_primitives::Arc;
 
 /// Command info for JSON serialization
 #[derive(Debug, Clone, Serialize)]
@@ -136,6 +138,156 @@ fn get_builtin_commands() -> Vec<CommandNode> {
     ]
 }
 
+// ============================================================================
+// command.execute — Parse and resolve a slash command via CommandParser
+// ============================================================================
+
+/// Parameters for command.execute request
+#[derive(Debug, Clone, Deserialize)]
+pub struct ExecuteParams {
+    /// Slash command input (e.g. "/search weather", "/new")
+    pub input: String,
+    /// Optional session key for session-scoped commands
+    #[serde(default)]
+    pub session_id: Option<String>,
+}
+
+/// Resolved command info returned by command.execute
+#[derive(Debug, Clone, Serialize)]
+pub struct ResolvedCommandInfo {
+    /// Command name (without leading /)
+    pub name: String,
+    /// Arguments after the command name
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub args: Option<String>,
+    /// Source type: "builtin", "mcp", "skill", "custom", "plugin"
+    pub source_type: String,
+    /// Full original input
+    pub input: String,
+    /// Context-specific details
+    pub context: ResolvedCommandContext,
+}
+
+/// Command context details for the client
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "type")]
+pub enum ResolvedCommandContext {
+    /// Builtin tool
+    #[serde(rename = "builtin")]
+    Builtin { tool_name: String },
+    /// MCP server tool
+    #[serde(rename = "mcp")]
+    Mcp {
+        server_name: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        tool_name: Option<String>,
+    },
+    /// Skill
+    #[serde(rename = "skill")]
+    Skill {
+        skill_id: String,
+        display_name: String,
+    },
+    /// Custom routing rule
+    #[serde(rename = "custom")]
+    Custom { pattern: String },
+    /// Unknown / no context
+    #[serde(rename = "none")]
+    None,
+}
+
+impl From<CommandContext> for ResolvedCommandContext {
+    fn from(ctx: CommandContext) -> Self {
+        match ctx {
+            CommandContext::Builtin { tool_name } => ResolvedCommandContext::Builtin { tool_name },
+            CommandContext::Mcp {
+                server_name,
+                tool_name,
+            } => ResolvedCommandContext::Mcp {
+                server_name,
+                tool_name,
+            },
+            CommandContext::Skill {
+                skill_id,
+                display_name,
+                ..
+            } => ResolvedCommandContext::Skill {
+                skill_id,
+                display_name,
+            },
+            CommandContext::Custom { pattern, .. } => ResolvedCommandContext::Custom { pattern },
+            CommandContext::None => ResolvedCommandContext::None,
+        }
+    }
+}
+
+/// Handle command.execute RPC request
+///
+/// Parses a slash command input and returns the resolved command info.
+/// Clients can use this for command validation and then execute via
+/// `chat.send` with the slash command as the message for full execution.
+///
+/// # Example Request
+///
+/// ```json
+/// {"jsonrpc":"2.0","method":"command.execute","params":{"input":"/search weather"},"id":1}
+/// ```
+///
+/// # Example Response
+///
+/// ```json
+/// {"jsonrpc":"2.0","result":{"resolved":true,"command":{"name":"search","args":"weather","source_type":"builtin","input":"/search weather","context":{"type":"builtin","tool_name":"search"}}},"id":1}
+/// ```
+pub async fn handle_execute(
+    request: JsonRpcRequest,
+    command_parser: Arc<CommandParser>,
+) -> JsonRpcResponse {
+    let params: ExecuteParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
+    };
+
+    let input = params.input.trim();
+    if input.is_empty() {
+        return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Input cannot be empty");
+    }
+
+    // Ensure input starts with /
+    let slash_input = if input.starts_with('/') {
+        input.to_string()
+    } else {
+        format!("/{}", input)
+    };
+
+    // Parse via CommandParser (async, queries ToolRegistry)
+    match command_parser.parse_async(&slash_input).await {
+        Some(parsed) => {
+            let info = ResolvedCommandInfo {
+                name: parsed.command_name,
+                args: parsed.arguments,
+                source_type: source_type_to_string(parsed.source_type),
+                input: parsed.full_input,
+                context: ResolvedCommandContext::from(parsed.context),
+            };
+
+            JsonRpcResponse::success(
+                request.id,
+                json!({
+                    "resolved": true,
+                    "command": info,
+                }),
+            )
+        }
+        None => JsonRpcResponse::success(
+            request.id,
+            json!({
+                "resolved": false,
+                "error": format!("Unknown command: {}", slash_input),
+            }),
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -199,5 +351,94 @@ mod tests {
         assert_eq!(info.hint, Some("Test hint".to_string()));
         assert_eq!(info.command_type, "action");
         assert_eq!(info.source_type, "builtin");
+    }
+
+    #[tokio::test]
+    async fn test_execute_resolved() {
+        use crate::config::RoutingRuleConfig;
+
+        let registry = Arc::new(ToolRegistry::new());
+        let rules = vec![RoutingRuleConfig {
+            regex: "^/search".to_string(),
+            provider: Some("openai".to_string()),
+            system_prompt: Some("Search the web".to_string()),
+            ..Default::default()
+        }];
+        registry.register_custom_commands(&rules).await;
+
+        let parser = Arc::new(CommandParser::new(registry));
+        let request = JsonRpcRequest::with_id(
+            "command.execute",
+            Some(json!({"input": "/search weather"})),
+            json!(1),
+        );
+        let response = handle_execute(request, parser).await;
+
+        assert!(response.is_success());
+        let result = response.result.unwrap();
+        assert_eq!(result["resolved"], true);
+        assert_eq!(result["command"]["name"], "search");
+        assert_eq!(result["command"]["args"], "weather");
+        assert_eq!(result["command"]["source_type"], "custom");
+    }
+
+    #[tokio::test]
+    async fn test_execute_unknown_command() {
+        let registry = Arc::new(ToolRegistry::new());
+        let parser = Arc::new(CommandParser::new(registry));
+        let request = JsonRpcRequest::with_id(
+            "command.execute",
+            Some(json!({"input": "/nonexistent"})),
+            json!(1),
+        );
+        let response = handle_execute(request, parser).await;
+
+        assert!(response.is_success());
+        let result = response.result.unwrap();
+        assert_eq!(result["resolved"], false);
+        assert!(result["error"].as_str().unwrap().contains("Unknown command"));
+    }
+
+    #[tokio::test]
+    async fn test_execute_empty_input() {
+        let registry = Arc::new(ToolRegistry::new());
+        let parser = Arc::new(CommandParser::new(registry));
+        let request = JsonRpcRequest::with_id(
+            "command.execute",
+            Some(json!({"input": ""})),
+            json!(1),
+        );
+        let response = handle_execute(request, parser).await;
+
+        assert!(response.is_error());
+    }
+
+    #[tokio::test]
+    async fn test_execute_params_deserialization() {
+        let json = json!({
+            "input": "/search hello",
+            "session_id": "agent:main:main:1"
+        });
+        let params: ExecuteParams = serde_json::from_value(json).unwrap();
+        assert_eq!(params.input, "/search hello");
+        assert_eq!(params.session_id, Some("agent:main:main:1".to_string()));
+    }
+
+    #[test]
+    fn test_resolved_command_context_serialization() {
+        let ctx = ResolvedCommandContext::Builtin {
+            tool_name: "search".to_string(),
+        };
+        let json = serde_json::to_value(&ctx).unwrap();
+        assert_eq!(json["type"], "builtin");
+        assert_eq!(json["tool_name"], "search");
+
+        let ctx = ResolvedCommandContext::Mcp {
+            server_name: "github".to_string(),
+            tool_name: Some("list_repos".to_string()),
+        };
+        let json = serde_json::to_value(&ctx).unwrap();
+        assert_eq!(json["type"], "mcp");
+        assert_eq!(json["server_name"], "github");
     }
 }

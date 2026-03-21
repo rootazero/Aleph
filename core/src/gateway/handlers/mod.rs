@@ -172,6 +172,13 @@ impl HandlerRegistry {
 
         // Commands handlers
         registry.register("commands.list", commands::handle_list);
+        registry.register("command.execute", |req| async move {
+            JsonRpcResponse::error(
+                req.id,
+                INTERNAL_ERROR,
+                "command.execute requires ToolRegistry — wire in Gateway startup".to_string(),
+            )
+        });
 
         // Plugin handlers (plural — legacy namespace, kept for backward compatibility)
         registry.register("plugins.list", plugins::handle_list);

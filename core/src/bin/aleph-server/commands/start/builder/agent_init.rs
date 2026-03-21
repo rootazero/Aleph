@@ -754,6 +754,20 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             }
         }
 
+        // Wire command.execute to resolve slash commands via CommandParser
+        {
+            let parser = Arc::new(alephcore::command::CommandParser::new(dispatch_registry.clone()));
+            server.handlers_mut().register("command.execute", move |req| {
+                let p = parser.clone();
+                async move {
+                    alephcore::gateway::handlers::commands::handle_execute(req, p).await
+                }
+            });
+            if !daemon {
+                println!("  command.execute: wired to unified command parser");
+            }
+        }
+
         dispatch_reg = Some(dispatch_registry);
     }
 
