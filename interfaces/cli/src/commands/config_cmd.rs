@@ -104,6 +104,72 @@ pub async fn validate(server_url: &str, config: &CliConfig, json: bool) -> CliRe
     Ok(())
 }
 
+/// Reload configuration on the server
+pub async fn reload(server_url: &str, config: &CliConfig, json: bool) -> CliResult<()> {
+    let (client, _events) = AlephClient::connect(server_url).await?;
+    client.authenticate(config).await?;
+
+    let result: Value = client.call("config.reload", None::<()>).await?;
+
+    if json {
+        output::print_json(&result);
+    } else {
+        println!("Configuration reloaded.");
+    }
+
+    client.close().await?;
+    Ok(())
+}
+
+/// Export configuration schema
+pub async fn schema(
+    server_url: &str,
+    output_path: Option<&str>,
+    config: &CliConfig,
+    json: bool,
+) -> CliResult<()> {
+    let (client, _events) = AlephClient::connect(server_url).await?;
+    client.authenticate(config).await?;
+
+    let result: Value = client.call("config.schema", None::<()>).await?;
+    let schema = result.get("schema").cloned().unwrap_or(result);
+
+    if let Some(path) = output_path {
+        let content = serde_json::to_string_pretty(&schema)?;
+        std::fs::write(path, content)?;
+        println!("Schema written to {}", path);
+    } else if json {
+        output::print_json(&schema);
+    } else {
+        println!("{}", serde_json::to_string_pretty(&schema)?);
+    }
+
+    client.close().await?;
+    Ok(())
+}
+
+/// Open config file in $EDITOR (local, no RPC)
+pub fn edit() -> CliResult<()> {
+    let config_path = dirs::home_dir()
+        .map(|h| h.join(".aleph").join("config.toml"))
+        .ok_or_else(|| {
+            aleph_client::CliError::Other("Cannot find home directory".to_string())
+        })?;
+
+    let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
+
+    let status = std::process::Command::new(&editor)
+        .arg(&config_path)
+        .status()
+        .map_err(|e| aleph_client::CliError::Other(format!("Failed to launch editor: {}", e)))?;
+
+    if status.success() {
+        println!("Config file saved.");
+    }
+
+    Ok(())
+}
+
 /// Build a nested JSON object from a dot-separated path
 fn build_patch_from_path(path: &str, value: Value) -> Value {
     let parts: Vec<&str> = path.split('.').collect();
@@ -141,6 +207,15 @@ mod tests {
         assert_eq!(
             patch,
             serde_json::json!({ "channels": { "telegram": { "enabled": true } } })
+        );
+    }
+
+    #[test]
+    fn test_build_patch_string_value() {
+        let patch = build_patch_from_path("general.language", serde_json::json!("zh-Hans"));
+        assert_eq!(
+            patch,
+            serde_json::json!({ "general": { "language": "zh-Hans" } })
         );
     }
 }

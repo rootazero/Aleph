@@ -110,6 +110,18 @@ enum Commands {
         action: ConfigAction,
     },
 
+    /// Manage cron jobs
+    Cron {
+        #[command(subcommand)]
+        action: CronAction,
+    },
+
+    /// Manage channels
+    Channels {
+        #[command(subcommand)]
+        action: ChannelsAction,
+    },
+
     /// Manage Gateway daemon
     Daemon {
         #[command(subcommand)]
@@ -234,6 +246,40 @@ enum ConfigAction {
     },
     /// Validate current configuration
     Validate,
+    /// Reload configuration on the server
+    Reload,
+    /// Export configuration schema
+    Schema {
+        /// Output file path (prints to stdout if not specified)
+        #[arg(short, long)]
+        output: Option<String>,
+    },
+    /// Open config file in $EDITOR
+    Edit,
+}
+
+#[derive(Subcommand)]
+enum CronAction {
+    /// List all cron jobs
+    List,
+    /// Show cron scheduler status
+    Status,
+    /// Trigger a cron job manually
+    Run {
+        /// Job ID to trigger
+        job_id: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum ChannelsAction {
+    /// List all channels
+    List,
+    /// Show channel status
+    Status {
+        /// Channel name (shows all if not specified)
+        name: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -825,6 +871,34 @@ async fn main() -> CliResult<()> {
             }
             ConfigAction::Validate => {
                 commands::config_cmd::validate(&server_url, &config, cli.json).await?;
+            }
+            ConfigAction::Reload => {
+                commands::config_cmd::reload(&server_url, &config, cli.json).await?;
+            }
+            ConfigAction::Schema { output } => {
+                commands::config_cmd::schema(&server_url, output.as_deref(), &config, cli.json).await?;
+            }
+            ConfigAction::Edit => {
+                commands::config_cmd::edit()?;
+            }
+        },
+        Some(Commands::Cron { action }) => match action {
+            CronAction::List => {
+                commands::cron_cmd::list(&server_url, &config, cli.json).await?;
+            }
+            CronAction::Status => {
+                commands::cron_cmd::status(&server_url, &config, cli.json).await?;
+            }
+            CronAction::Run { job_id } => {
+                commands::cron_cmd::run(&server_url, &job_id, &config, cli.json).await?;
+            }
+        },
+        Some(Commands::Channels { action }) => match action {
+            ChannelsAction::List => {
+                commands::channels_cmd::list(&server_url, &config, cli.json).await?;
+            }
+            ChannelsAction::Status { name } => {
+                commands::channels_cmd::status(&server_url, name.as_deref(), &config, cli.json).await?;
             }
         },
         Some(Commands::Daemon { action }) => match action {

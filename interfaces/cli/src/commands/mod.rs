@@ -1,11 +1,13 @@
 //! Command handlers
 
 pub mod ask;
+pub mod channels_cmd;
 pub mod chat;
 pub mod chat_cmd;
 pub mod completion;
 pub mod config_cmd;
 pub mod connect;
+pub mod cron_cmd;
 pub mod gateway_cmd;
 pub mod daemon;
 pub mod guests;
