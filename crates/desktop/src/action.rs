@@ -286,7 +286,7 @@ pub fn window_list() -> Result<Vec<WindowInfo>> {
 
     #[cfg(target_os = "windows")]
     {
-        // TODO: Port EnumWindows implementation from Tauri bridge
+        // TODO: Port EnumWindows implementation from desktop bridge
         Err(DesktopError::NotImplemented(
             "window_list not yet implemented for Windows in aleph-desktop crate".into(),
         ))
@@ -317,7 +317,7 @@ pub fn focus_window(window_id: u64) -> Result<()> {
 
     #[cfg(target_os = "windows")]
     {
-        // TODO: Port SetForegroundWindow implementation from Tauri bridge
+        // TODO: Port SetForegroundWindow implementation from desktop bridge
         let _ = window_id;
         Err(DesktopError::NotImplemented(
             "focus_window not yet implemented for Windows in aleph-desktop crate".into(),

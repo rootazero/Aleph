@@ -270,9 +270,8 @@ Examples:
                 success: false,
                 data: None,
                 message: Some(
-                    "Desktop bridge not connected. The bridge provides screenshot, OCR, \
-                     keyboard, and UI automation capabilities. It starts automatically \
-                     with aleph, or can be run standalone via aleph-tauri."
+                    "Desktop bridge not connected. Some advanced features (canvas overlays, \
+                     UI snapshots) require the desktop bridge."
                         .to_string(),
                 ),
             });

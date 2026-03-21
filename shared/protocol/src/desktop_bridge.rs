@@ -2,7 +2,7 @@
 //!
 //! Shared type definitions for the Desktop Bridge JSON-RPC 2.0 protocol.
 //! Used by:
-//! - Tauri Bridge (UDS server, direct Rust import)
+//! - Desktop Bridge (UDS server, direct Rust import)
 //! - Core (UDS client, direct Rust import)
 //! - Swift Bridge (manual alignment)
 

@@ -14,8 +14,8 @@
 //! // Server
 //! init_component_logging("server", 7, "info").unwrap();
 //!
-//! // Tauri Desktop Bridge
-//! init_component_logging("tauri", 7, "aleph_tauri=debug,tauri=info").unwrap();
+//! // Desktop Bridge
+//! init_component_logging("desktop", 7, "aleph_desktop=debug").unwrap();
 //!
 //! // CLI
 //! init_component_logging("cli", 7, "info").unwrap();

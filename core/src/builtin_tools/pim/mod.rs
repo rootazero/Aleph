@@ -404,9 +404,9 @@ Contacts:
                 success: false,
                 data: None,
                 message: Some(
-                    "Desktop bridge not connected. PIM operations require the Aleph Desktop \
-                     Bridge for Calendar, Reminders, Notes, and Contacts access. It starts \
-                     automatically with aleph, or can be run standalone via aleph-tauri."
+                    "Desktop bridge not connected. PIM operations require the desktop bridge \
+                     for Calendar, Reminders, Notes, and Contacts access. Ensure the desktop \
+                     platform capability is available."
                         .to_string(),
                 ),
             });

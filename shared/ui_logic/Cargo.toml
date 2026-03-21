@@ -31,7 +31,7 @@ web-sys = { version = "0.3", optional = true, features = [
     "console"
 ] }
 
-# Native (for CLI/Tauri)
+# Native (for CLI/TUI)
 tokio = { version = "1.35", optional = true, features = ["full"] }
 tokio-tungstenite = { version = "0.21", optional = true, features = ["native-tls"] }
 

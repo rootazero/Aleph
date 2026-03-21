@@ -11,7 +11,7 @@
 //!
 //! Aleph follows a server-centric architecture:
 //! - **Server** (this binary): Self-contained AI engine — all execution happens here
-//! - **Interfaces**: macOS App, Tauri Desktop, CLI, Telegram, Discord (pure I/O)
+//! - **Interfaces**: macOS App, TUI, CLI, Telegram, Discord (pure I/O)
 //!
 //! # Usage
 //!

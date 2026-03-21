@@ -23,7 +23,7 @@ static GUARD: OnceLock<tracing_appender::non_blocking::WorkerGuard> = OnceLock::
 ///
 /// # Arguments
 ///
-/// * `component` - Component name (e.g., "server", "tauri", "cli")
+/// * `component` - Component name (e.g., "server", "desktop", "cli")
 /// * `retention_days` - Number of days to keep log files (1-30)
 /// * `default_filter` - Default log filter when `RUST_LOG` is not set
 ///

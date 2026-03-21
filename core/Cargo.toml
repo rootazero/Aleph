@@ -226,7 +226,6 @@ cucumber = { version = "0.21", features = ["macros"] }
 tempfile = "3.8"
 filetime = "0.2"
 serial_test = "3.0"
-aleph-sdk = { path = "../apps/shared" }
 aleph-protocol = { path = "../shared/protocol" }
 proptest = "1.4"
 http-body-util = "0.1"

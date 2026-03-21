@@ -1,6 +1,6 @@
 //! Desktop Bridge Manager.
 //!
-//! Manages the lifecycle of the desktop bridge (Tauri) subprocess.
+//! Manages the lifecycle of the desktop bridge subprocess.
 //! Uses [`BridgeSupervisor`] to spawn, monitor, and restart the bridge
 //! process, and exposes a high-level API for the server to interact
 //! with the desktop UI layer.
@@ -36,8 +36,7 @@ use crate::gateway::transport::{Transport, TransportError};
 const DESKTOP_LINK_ID: &str = "desktop-bridge";
 
 /// Name of the desktop bridge binary to search for.
-/// Matches the Cargo.toml `name` field of the Tauri crate.
-const BRIDGE_BINARY_NAME: &str = "aleph-tauri";
+const BRIDGE_BINARY_NAME: &str = "aleph-desktop";
 
 /// Maximum number of automatic restarts before giving up.
 const DEFAULT_MAX_RESTARTS: u32 = 5;
@@ -52,7 +51,7 @@ const DEFAULT_HEALTH_CHECK_INTERVAL_SECS: u64 = 30;
 // DesktopBridgeManager
 // ---------------------------------------------------------------------------
 
-/// Manages the lifecycle of the desktop bridge (Tauri) subprocess.
+/// Manages the lifecycle of the desktop bridge subprocess.
 ///
 /// Wraps [`BridgeSupervisor`] to provide a focused API for the server's
 /// desktop UI bridge. The manager handles:

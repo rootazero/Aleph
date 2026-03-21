@@ -125,13 +125,13 @@ mod tests {
         let log_dir = temp_dir.path();
 
         create_test_log_file(log_dir, "aleph-server.log.2025-01-01", 10).unwrap();
-        create_test_log_file(log_dir, "aleph-tauri.log.2025-01-01", 10).unwrap();
+        create_test_log_file(log_dir, "aleph-desktop.log.2025-01-01", 10).unwrap();
         create_test_log_file(log_dir, "aleph-cli.log.2025-01-01", 10).unwrap();
 
         let deleted = cleanup_old_logs(log_dir, 7, Some("aleph-server")).unwrap();
         assert_eq!(deleted, 1);
 
-        assert!(log_dir.join("aleph-tauri.log.2025-01-01").exists());
+        assert!(log_dir.join("aleph-desktop.log.2025-01-01").exists());
         assert!(log_dir.join("aleph-cli.log.2025-01-01").exists());
     }
 
