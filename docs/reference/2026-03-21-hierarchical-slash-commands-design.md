@@ -112,21 +112,48 @@
 
 ### 2. UnifiedTool 扩展
 
+#### 与现有字段的关系
+
+当前 `UnifiedTool` 已有 `subtools: Vec<String>` 和 `has_subtools: bool`，用于 MCP/Skill 的动态子工具发现（UI 展示用，不参与解析）。新字段的关系：
+
+- `has_subtools` → 废弃，由 `is_namespace` 替代
+- `subtools` → 废弃，由 `children` 替代
+- 迁移时统一替换，不保留旧字段
+
+#### Namespace 节点策略
+
+Namespace 节点（如 `/session` 本身）**不作为 UnifiedTool 存入 ToolRegistry**。层级结构在查询时从工具名的点分隔推导：
+
+- 注册工具 `session.new`、`session.list`、`session.delete` → 自动推导出 `session` namespace
+- `commands.list` RPC 在返回时聚合为树形结构
+- `command.execute` 解析时从已注册工具名前缀匹配 namespace
+
+这样避免了 namespace 节点污染 LLM 的工具列表（LLM 只看到可执行的工具，不看到 namespace 占位符）。
+
+#### 字段变更
+
 ```rust
 pub struct UnifiedTool {
     // 现有字段保留
     pub id: String,             // "builtin:session.new"
-    pub name: String,           // "new"（子命令名）或 "search"（独立命令名）
+    pub name: String,           // "session.new"（点分隔全名）或 "search"（独立命令）
     pub description: String,
     pub source: ToolSource,
 
     // 新增字段
-    pub namespace: Option<String>,  // "session"、"plugin.marketplace"、None（独立命令）
-    pub is_namespace: bool,         // true = namespace 节点（/session 本身）
-    pub children: Vec<String>,      // namespace 的子命令名列表
     pub param_hint: Option<String>, // 参数提示，如 "[topic]"、"<name>"
+
+    // 废弃字段（由层级推导替代）
+    // pub subtools: Vec<String>,   // 移除
+    // pub has_subtools: bool,      // 移除
 }
 ```
+
+`namespace`、`is_namespace`、`children` 不是 `UnifiedTool` 字段，而是在 `commands.list` 响应中**按需计算**的视图层数据。
+
+#### 参数传递
+
+命令解析后，`args` 作为原始字符串传递给工具执行层。工具内部负责解析参数结构（现有行为不变）。对于 LLM 发起的工具调用，仍走 JSON 结构化参数（`parameters_schema`），不受斜杠命令改造影响。
 
 ### 3. 命令解析
 
@@ -173,6 +200,37 @@ pub struct UnifiedTool {
   4. "my-plugin" → 参数
   5. 返回: { namespace: "plugin.marketplace", action: "install", args: "my-plugin" }
 ```
+
+#### 二级 namespace 引导
+
+```
+输入: "/plugin marketplace"
+  1. "plugin" → namespace
+  2. "marketplace" → plugin 的子命令 → 也是 namespace，无后续词
+  3. 返回: { needs_interaction: true, namespace: "plugin.marketplace", children: [...] }
+```
+
+#### 错误处理
+
+所有解析失败统一返回 `resolved: false` + `error` 消息：
+
+```
+输入: "/sesion new"  （namespace 拼写错误）
+  1. "sesion" → 不匹配任何 namespace 或独立命令
+  2. 返回: { resolved: false, error: "Unknown command: /sesion new" }
+
+输入: "/session nw"  （子命令拼写错误）
+  1. "session" → namespace
+  2. "nw" → 不匹配 session 的任何子命令
+  3. 返回: { resolved: false, error: "Unknown subcommand: nw",
+             needs_interaction: true, namespace: "session", children: [...] }
+     → 客户端显示错误 + 子命令列表（帮用户找到正确的）
+
+输入: "/nonexistent"  （完全无法识别）
+  返回: { resolved: false, error: "Unknown command: /nonexistent" }
+```
+
+不做模糊匹配/拼写建议 — 引导模式本身就是发现机制（YAGNI）。
 
 ### 4. RPC 接口变化
 
@@ -339,6 +397,29 @@ Bot 收到 "/session"
 - 不做重交互参数表单（轻交互：选完子命令后同行输入参数）
 - 不做命令权限过滤（所有端看到相同命令树）
 - MCP/Skill/Plugin 动态命令暂不层级化（它们已有自己的 namespace 机制如 `/mcp_server:tool`）
+
+## 向后兼容
+
+### 下划线别名（永久保留）
+
+解析器同时支持下划线和空格分隔，作为永久别名而非过渡期：
+- `/session_new` 和 `/session new` 解析为同一工具 `session.new`
+- 实现方式：解析时将下划线替换为点号尝试匹配（`session_new` → `session.new`）
+- 零额外存储成本，仅在解析器中增加一条 fallback 路径
+
+### LLM 工具调用
+
+LLM 发起的工具调用使用结构化 JSON（`tool_use` / `function_call`），不走斜杠命令解析。工具注册名从 `session_new` 改为 `session.new` 后：
+- System prompt 中的工具列表同步更新（自动生成，无手动维护）
+- LLM 输出 `session.new` 作为 tool name → 执行层直接匹配
+- 旧格式 `session_new` 在执行层做 fallback 映射（下划线 → 点号）
+
+### Telegram BotCommand
+
+Telegram 的 `setMyCommands` 只接受 `[a-z0-9_]` 格式。注册时将层级命令转为下划线格式：
+- `session.new` → 注册为 `/session_new` 到 Telegram
+- 但只注册顶级 namespace（`/session`、`/agent`）到原生菜单
+- 用户点击后通过 inline keyboard 选子命令
 
 ## 风险
 
