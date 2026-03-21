@@ -27,6 +27,7 @@ pub struct DesktopTool {
     pub(super) client: DesktopBridgeClient,
     pub(super) approval_policy: Option<Arc<dyn ApprovalPolicy>>,
     pub(super) native: Option<Arc<dyn aleph_desktop::DesktopCapability>>,
+    pub(super) platform: Option<Arc<dyn aleph_desktop::DesktopPlatform>>,
 }
 
 impl DesktopTool {
@@ -35,6 +36,7 @@ impl DesktopTool {
             client: DesktopBridgeClient::new(),
             approval_policy: None,
             native: None,
+            platform: None,
         }
     }
 
@@ -47,6 +49,16 @@ impl DesktopTool {
     /// to the IPC bridge automatically.
     pub fn with_native(mut self, native: Arc<dyn aleph_desktop::DesktopCapability>) -> Self {
         self.native = Some(native);
+        self
+    }
+
+    /// Attach a desktop platform for in-process execution via capability traits.
+    ///
+    /// When set, supported screen actions are dispatched through
+    /// `platform.screen()` (the `ScreenCapability` trait) before falling back
+    /// to the legacy `DesktopCapability` path or the IPC bridge.
+    pub fn with_platform(mut self, platform: Arc<dyn aleph_desktop::DesktopPlatform>) -> Self {
+        self.platform = Some(platform);
         self
     }
 
@@ -235,8 +247,16 @@ Examples:
             }
         }
 
-        // When a native desktop capability is available, try the in-process path
-        // first. If the action is not supported natively (call_native returns
+        // Prefer DesktopPlatform.screen() for screen operations (new path).
+        // If the action is not handled (returns Ok(None)), fall through.
+        if let Some(ref platform) = self.platform {
+            if let Some(output) = self.call_via_platform(platform, &args).await? {
+                return Ok(output);
+            }
+        }
+
+        // Legacy fallback: try the DesktopCapability in-process path.
+        // If the action is not supported natively (call_native returns
         // Ok(None)), fall through to the IPC bridge below.
         if let Some(ref native) = self.native {
             if let Some(output) = self.call_native(native, &args).await? {
