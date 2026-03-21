@@ -266,6 +266,18 @@ impl ContextInjector {
                     goal, arena_id, completed_steps, total_steps, agents_str, artifacts_str
                 )
             }
+            ImportantEvent::TaskCompleted { task_id, agent_id, .. } => {
+                format!("Task '{}' completed by agent '{}'", task_id, agent_id)
+            }
+            ImportantEvent::TaskUnblocked { task_id, unblocked_by, .. } => {
+                format!("Task '{}' unblocked by '{}'", task_id, unblocked_by)
+            }
+            ImportantEvent::TaskFailed { task_id, reason, .. } => {
+                format!("Task '{}' failed: {}", task_id, reason)
+            }
+            ImportantEvent::AllTasksCompleted { team_id, .. } => {
+                format!("All tasks completed for team '{}'", team_id)
+            }
         }
     }
 

@@ -175,6 +175,37 @@ pub enum ImportantEvent {
         #[serde(default = "current_timestamp")]
         timestamp: u64,
     },
+
+    /// Task completed by an agent
+    TaskCompleted {
+        task_id: String,
+        agent_id: String,
+        #[serde(default = "current_timestamp")]
+        timestamp: u64,
+    },
+
+    /// Task unblocked by another task or agent
+    TaskUnblocked {
+        task_id: String,
+        unblocked_by: String,
+        #[serde(default = "current_timestamp")]
+        timestamp: u64,
+    },
+
+    /// Task failed with a reason
+    TaskFailed {
+        task_id: String,
+        reason: String,
+        #[serde(default = "current_timestamp")]
+        timestamp: u64,
+    },
+
+    /// All tasks in a team completed
+    AllTasksCompleted {
+        team_id: String,
+        #[serde(default = "current_timestamp")]
+        timestamp: u64,
+    },
 }
 
 impl ImportantEvent {
@@ -187,6 +218,10 @@ impl ImportantEvent {
             Self::ToolExecuted { timestamp, .. } => *timestamp,
             Self::DecisionBroadcast { timestamp, .. } => *timestamp,
             Self::ArenaStateUpdate { timestamp, .. } => *timestamp,
+            Self::TaskCompleted { timestamp, .. } => *timestamp,
+            Self::TaskUnblocked { timestamp, .. } => *timestamp,
+            Self::TaskFailed { timestamp, .. } => *timestamp,
+            Self::AllTasksCompleted { timestamp, .. } => *timestamp,
         }
     }
 }
