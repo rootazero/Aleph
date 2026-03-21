@@ -777,3 +777,194 @@ async fn test_high_risk_tool_channel_restriction() {
     let panel = registry.list_for_channel(ChannelType::Panel).await;
     assert!(panel.iter().any(|t| t.name == "delete_all"));
 }
+
+// =========================================================================
+// Hierarchical Command Resolution Tests (Task 3 - Rewrite)
+// =========================================================================
+
+/// Helper: register a tool with a dotted name directly
+async fn register_tool(registry: &ToolRegistry, id: &str, name: &str) {
+    let tool = UnifiedTool::new(
+        id,
+        name,
+        &format!("Tool {}", name),
+        ToolSource::Builtin,
+    );
+    registry.register_with_conflict_resolution(tool).await;
+}
+
+#[tokio::test]
+async fn test_resolve_command_hierarchical_two_level() {
+    let registry = ToolRegistry::new();
+    register_tool(&registry, "builtin:session.new", "session.new").await;
+
+    // "/session new my-topic" → session.new, args = "my-topic"
+    let resolved = registry.resolve_command("/session new my-topic").await;
+    assert!(resolved.is_some());
+    let r = resolved.unwrap();
+    assert_eq!(r.tool.name, "session.new");
+    assert_eq!(r.arguments, Some("my-topic".to_string()));
+}
+
+#[tokio::test]
+async fn test_resolve_command_hierarchical_no_args() {
+    let registry = ToolRegistry::new();
+    register_tool(&registry, "builtin:session.new", "session.new").await;
+
+    // "/session new" → session.new, no args
+    let resolved = registry.resolve_command("/session new").await;
+    assert!(resolved.is_some());
+    let r = resolved.unwrap();
+    assert_eq!(r.tool.name, "session.new");
+    assert!(r.arguments.is_none());
+}
+
+#[tokio::test]
+async fn test_resolve_command_flat_with_args() {
+    let registry = ToolRegistry::new();
+    register_tool(&registry, "custom:search", "search").await;
+
+    // "/search weather" → search, args = "weather"
+    let resolved = registry.resolve_command("/search weather").await;
+    assert!(resolved.is_some());
+    let r = resolved.unwrap();
+    assert_eq!(r.tool.name, "search");
+    assert_eq!(r.arguments, Some("weather".to_string()));
+}
+
+#[tokio::test]
+async fn test_resolve_command_underscore_fallback() {
+    let registry = ToolRegistry::new();
+    register_tool(&registry, "builtin:session.new", "session.new").await;
+
+    // "/session_new" → underscore fallback → session.new
+    let resolved = registry.resolve_command("/session_new").await;
+    assert!(resolved.is_some());
+    assert_eq!(resolved.unwrap().tool.name, "session.new");
+}
+
+#[tokio::test]
+async fn test_resolve_command_underscore_fallback_with_args() {
+    let registry = ToolRegistry::new();
+    register_tool(&registry, "builtin:session.new", "session.new").await;
+
+    // "/session_new topic" → underscore fallback → session.new, args = "topic"
+    let resolved = registry.resolve_command("/session_new topic").await;
+    assert!(resolved.is_some());
+    let r = resolved.unwrap();
+    assert_eq!(r.tool.name, "session.new");
+    assert_eq!(r.arguments, Some("topic".to_string()));
+}
+
+#[tokio::test]
+async fn test_resolve_command_three_level() {
+    let registry = ToolRegistry::new();
+    register_tool(&registry, "builtin:plugin.marketplace.install", "plugin.marketplace.install").await;
+
+    // "/plugin marketplace install x" → plugin.marketplace.install, args = "x"
+    let resolved = registry.resolve_command("/plugin marketplace install x").await;
+    assert!(resolved.is_some());
+    let r = resolved.unwrap();
+    assert_eq!(r.tool.name, "plugin.marketplace.install");
+    assert_eq!(r.arguments, Some("x".to_string()));
+}
+
+#[tokio::test]
+async fn test_resolve_command_nonexistent() {
+    let registry = ToolRegistry::new();
+    register_tool(&registry, "builtin:session.new", "session.new").await;
+
+    let resolved = registry.resolve_command("/nonexistent").await;
+    assert!(resolved.is_none());
+}
+
+#[tokio::test]
+async fn test_resolve_command_greedy_longest_match() {
+    let registry = ToolRegistry::new();
+    // Register both a namespace parent and a child
+    register_tool(&registry, "builtin:session", "session").await;
+    register_tool(&registry, "builtin:session.new", "session.new").await;
+
+    // "/session new topic" should match session.new (longer), not session with args "new topic"
+    let resolved = registry.resolve_command("/session new topic").await;
+    assert!(resolved.is_some());
+    let r = resolved.unwrap();
+    assert_eq!(r.tool.name, "session.new");
+    assert_eq!(r.arguments, Some("topic".to_string()));
+
+    // "/session unknown" should fall back to session with args "unknown"
+    let resolved = registry.resolve_command("/session unknown").await;
+    assert!(resolved.is_some());
+    let r = resolved.unwrap();
+    assert_eq!(r.tool.name, "session");
+    assert_eq!(r.arguments, Some("unknown".to_string()));
+}
+
+#[tokio::test]
+async fn test_resolve_command_bot_mention_hierarchical() {
+    let registry = ToolRegistry::new();
+    register_tool(&registry, "builtin:session.new", "session.new").await;
+
+    // Telegram: "/session@mybot new topic"
+    let resolved = registry.resolve_command("/session@mybot new topic").await;
+    assert!(resolved.is_some());
+    let r = resolved.unwrap();
+    assert_eq!(r.tool.name, "session.new");
+    assert_eq!(r.arguments, Some("topic".to_string()));
+}
+
+// =========================================================================
+// Namespace Query Tests
+// =========================================================================
+
+#[tokio::test]
+async fn test_is_namespace_true() {
+    let registry = ToolRegistry::new();
+    register_tool(&registry, "builtin:session.new", "session.new").await;
+    register_tool(&registry, "builtin:session.list", "session.list").await;
+
+    assert!(registry.is_namespace("session").await);
+}
+
+#[tokio::test]
+async fn test_is_namespace_false() {
+    let registry = ToolRegistry::new();
+    register_tool(&registry, "custom:search", "search").await;
+
+    assert!(!registry.is_namespace("search").await);
+}
+
+#[tokio::test]
+async fn test_is_namespace_case_insensitive() {
+    let registry = ToolRegistry::new();
+    register_tool(&registry, "builtin:session.new", "session.new").await;
+
+    assert!(registry.is_namespace("Session").await);
+    assert!(registry.is_namespace("SESSION").await);
+}
+
+#[tokio::test]
+async fn test_list_namespace_children() {
+    let registry = ToolRegistry::new();
+    register_tool(&registry, "builtin:session.new", "session.new").await;
+    register_tool(&registry, "builtin:session.list", "session.list").await;
+    register_tool(&registry, "builtin:session.topic.set", "session.topic.set").await; // deeper, should be excluded
+    register_tool(&registry, "custom:search", "search").await; // unrelated
+
+    let children = registry.list_namespace_children("session").await;
+    assert_eq!(children.len(), 2);
+
+    let names: Vec<&str> = children.iter().map(|t| t.name.as_str()).collect();
+    assert!(names.contains(&"session.new"));
+    assert!(names.contains(&"session.list"));
+    assert!(!names.contains(&"session.topic.set"));
+}
+
+#[tokio::test]
+async fn test_list_namespace_children_empty() {
+    let registry = ToolRegistry::new();
+    register_tool(&registry, "custom:search", "search").await;
+
+    let children = registry.list_namespace_children("search").await;
+    assert!(children.is_empty());
+}

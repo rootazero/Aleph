@@ -273,6 +273,16 @@ impl ToolRegistry {
         self.query.resolve_command(input).await
     }
 
+    /// Check if a name is a namespace (has active tools with that prefix)
+    pub async fn is_namespace(&self, name: &str) -> bool {
+        self.query.is_namespace(name).await
+    }
+
+    /// List direct children of a namespace
+    pub async fn list_namespace_children(&self, namespace: &str) -> Vec<UnifiedTool> {
+        self.query.list_namespace_children(namespace).await
+    }
+
     /// List root-level commands for UI (Flat Namespace Mode)
     pub async fn list_root_commands(&self) -> Vec<UnifiedTool> {
         self.query.list_root_commands().await

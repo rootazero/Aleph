@@ -140,8 +140,18 @@ impl ToolQuery {
 
     /// Resolve a slash command input to a registered tool
     ///
-    /// Parses `/command_name args` and looks up the command in the registry.
-    /// Returns None if input doesn't start with `/` or command is not found.
+    /// Supports hierarchical command resolution:
+    /// - `/session new my-topic` → tool `session.new`, args `"my-topic"`
+    /// - `/search weather` → tool `search`, args `"weather"`
+    /// - `/session_new` → underscore fallback → tool `session.new`
+    /// - `/plugin marketplace install x` → tool `plugin.marketplace.install`, args `"x"`
+    ///
+    /// Algorithm:
+    /// 1. Strip `/` prefix, split into words
+    /// 2. Strip `@botname` from first word (Telegram group commands)
+    /// 3. Greedy longest-match: join words with `.`, try progressively shorter prefixes
+    /// 4. If no match, try underscore-to-dot fallback on the first word
+    /// 5. Max depth: 3 levels
     pub async fn resolve_command(&self, input: &str) -> Option<super::types::ResolvedCommand> {
         let trimmed = input.trim();
         if !trimmed.starts_with('/') {
@@ -153,38 +163,126 @@ impl ToolQuery {
             return None;
         }
 
-        let (raw_cmd_name, arguments) = match without_slash.split_once(char::is_whitespace) {
-            Some((name, rest)) => {
-                let args = rest.trim();
-                (
-                    name.to_lowercase(),
-                    if args.is_empty() { None } else { Some(args.to_string()) },
-                )
-            }
-            None => (without_slash.to_lowercase(), None),
+        // Split into words
+        let all_words: Vec<&str> = without_slash.split_whitespace().collect();
+        if all_words.is_empty() {
+            return None;
+        }
+
+        // Strip @botname suffix from first word (Telegram: "/gen@mybot" → "gen")
+        let first_word = match all_words[0].split_once('@') {
+            Some((name, _)) => name.to_lowercase(),
+            None => all_words[0].to_lowercase(),
         };
 
-        // Strip @botname suffix for Telegram group commands (e.g. "gen@mybot" → "gen")
-        let cmd_name = match raw_cmd_name.split_once('@') {
-            Some((name, _)) => name.to_string(),
-            None => raw_cmd_name,
-        };
+        // Build candidate words: first_word (with @botname stripped) + rest
+        let mut words: Vec<String> = vec![first_word];
+        for w in &all_words[1..] {
+            words.push(w.to_lowercase());
+        }
 
         let tools = self.tools.read().await;
-        let tool = tools
+
+        // Max depth 3: try at most 3 words as the command path
+        let max_depth = words.len().min(3);
+
+        // Greedy longest-match: try joining progressively fewer words with "."
+        for n in (1..=max_depth).rev() {
+            let candidate = words[..n].join(".");
+            if let Some(tool) = Self::find_best_match(&tools, &candidate) {
+                let remaining: Vec<&str> = all_words[n..].iter().map(|s| s.as_ref()).collect();
+                let arguments = if remaining.is_empty() {
+                    None
+                } else {
+                    Some(remaining.join(" "))
+                };
+                return Some(super::types::ResolvedCommand {
+                    tool,
+                    arguments,
+                    raw_input: input.to_string(),
+                });
+            }
+        }
+
+        // Underscore fallback: replace "_" with "." in the entire first-word token
+        // e.g. "session_new" → "session.new", "plugin_marketplace_install" → "plugin.marketplace.install"
+        let first_token_lower = all_words[0].to_lowercase();
+        let first_token_clean = match first_token_lower.split_once('@') {
+            Some((name, _)) => name.to_string(),
+            None => first_token_lower,
+        };
+        if first_token_clean.contains('_') {
+            let dotted = first_token_clean.replace('_', ".");
+            if let Some(tool) = Self::find_best_match(&tools, &dotted) {
+                let remaining: Vec<&str> = all_words[1..].iter().map(|s| s.as_ref()).collect();
+                let arguments = if remaining.is_empty() {
+                    None
+                } else {
+                    Some(remaining.join(" "))
+                };
+                return Some(super::types::ResolvedCommand {
+                    tool,
+                    arguments,
+                    raw_input: input.to_string(),
+                });
+            }
+        }
+
+        None
+    }
+
+    /// Find the best matching active tool by name (case-insensitive).
+    /// When multiple tools share the same name, picks highest source priority.
+    fn find_best_match(
+        tools: &std::collections::HashMap<String, UnifiedTool>,
+        name: &str,
+    ) -> Option<UnifiedTool> {
+        tools
             .values()
-            .filter(|t| t.is_active && t.name.to_lowercase() == cmd_name)
+            .filter(|t| t.is_active && t.name.to_lowercase() == name)
             .max_by(|a, b| {
-                a.source.priority().cmp(&b.source.priority())
+                a.source
+                    .priority()
+                    .cmp(&b.source.priority())
                     .then_with(|| b.id.cmp(&a.id))
             })
-            .cloned()?;
+            .cloned()
+    }
 
-        Some(super::types::ResolvedCommand {
-            tool,
-            arguments,
-            raw_input: input.to_string(),
-        })
+    /// Check if a name is a namespace (has active tools with that prefix)
+    ///
+    /// e.g. `is_namespace("session")` returns true if tools like `session.new` exist.
+    pub async fn is_namespace(&self, name: &str) -> bool {
+        let prefix = format!("{}.", name.to_lowercase());
+        let tools = self.tools.read().await;
+        tools
+            .values()
+            .any(|t| t.is_active && t.name.to_lowercase().starts_with(&prefix))
+    }
+
+    /// List direct children of a namespace
+    ///
+    /// e.g. `list_namespace_children("session")` returns tools named `session.new`,
+    /// `session.list`, etc., but NOT `session.sub.deep`.
+    pub async fn list_namespace_children(&self, namespace: &str) -> Vec<UnifiedTool> {
+        let prefix = format!("{}.", namespace.to_lowercase());
+        let tools = self.tools.read().await;
+        tools
+            .values()
+            .filter(|t| {
+                if !t.is_active {
+                    return false;
+                }
+                let name_lower = t.name.to_lowercase();
+                if !name_lower.starts_with(&prefix) {
+                    return false;
+                }
+                // Only direct children: no further dots after prefix
+                let suffix = &name_lower[prefix.len()..];
+                !suffix.contains('.')
+            })
+            .cloned()
+            .collect()
     }
 
     /// List root-level commands for UI (Flat Namespace Mode)
