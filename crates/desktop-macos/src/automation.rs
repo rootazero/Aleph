@@ -1,0 +1,163 @@
+//! macOS automation capability using `osascript` and `shortcuts` CLI.
+
+use async_trait::async_trait;
+use tokio::process::Command;
+
+use aleph_desktop::automation_types::{ScriptLanguage, ShortcutInfo};
+use aleph_desktop::traits::AutomationCapability;
+use aleph_desktop::{DesktopError, Result};
+
+/// macOS automation via `osascript` (AppleScript/JXA) and `shortcuts` CLI.
+pub struct MacOSAutomation {
+    _private: (),
+}
+
+impl MacOSAutomation {
+    /// Create a new `MacOSAutomation` instance.
+    pub fn new() -> Self {
+        Self { _private: () }
+    }
+}
+
+impl Default for MacOSAutomation {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl AutomationCapability for MacOSAutomation {
+    async fn run_script(&self, language: ScriptLanguage, source: &str) -> Result<String> {
+        let output = match language {
+            ScriptLanguage::AppleScript => {
+                Command::new("osascript")
+                    .arg("-e")
+                    .arg(source)
+                    .output()
+                    .await
+            }
+            ScriptLanguage::Jxa => {
+                Command::new("osascript")
+                    .arg("-l")
+                    .arg("JavaScript")
+                    .arg("-e")
+                    .arg(source)
+                    .output()
+                    .await
+            }
+            ScriptLanguage::Shell => {
+                Command::new("bash").arg("-c").arg(source).output().await
+            }
+            ScriptLanguage::PowerShell => {
+                return Err(DesktopError::NotImplemented(
+                    "PowerShell is not available on macOS".into(),
+                ));
+            }
+        };
+
+        let output = output.map_err(|e| {
+            DesktopError::InputFailed(format!("failed to spawn process: {e}"))
+        })?;
+
+        if output.status.success() {
+            Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+        } else {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            Err(DesktopError::InputFailed(stderr))
+        }
+    }
+
+    async fn list_shortcuts(&self) -> Result<Vec<ShortcutInfo>> {
+        let output = Command::new("shortcuts")
+            .arg("list")
+            .output()
+            .await
+            .map_err(|e| {
+                DesktopError::InputFailed(format!("failed to run `shortcuts list`: {e}"))
+            })?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            return Err(DesktopError::InputFailed(format!(
+                "shortcuts list failed: {stderr}"
+            )));
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let shortcuts = stdout
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| ShortcutInfo {
+                name: line.trim().to_string(),
+                id: None,
+                description: None,
+            })
+            .collect();
+
+        Ok(shortcuts)
+    }
+
+    async fn run_shortcut(&self, name: &str, input: Option<&str>) -> Result<String> {
+        let mut cmd = Command::new("shortcuts");
+        cmd.arg("run").arg(name);
+
+        if let Some(data) = input {
+            cmd.arg("--input-type").arg("text").arg("--input").arg(data);
+        }
+
+        let output = cmd.output().await.map_err(|e| {
+            DesktopError::InputFailed(format!("failed to run shortcut `{name}`: {e}"))
+        })?;
+
+        if output.status.success() {
+            Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+        } else {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            Err(DesktopError::InputFailed(format!(
+                "shortcut `{name}` failed: {stderr}"
+            )))
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_run_applescript() {
+        let auto = MacOSAutomation::new();
+        let result = auto
+            .run_script(ScriptLanguage::AppleScript, "return 2 + 2")
+            .await;
+        assert_eq!(result.unwrap(), "4");
+    }
+
+    #[tokio::test]
+    async fn test_run_shell() {
+        let auto = MacOSAutomation::new();
+        let result = auto
+            .run_script(ScriptLanguage::Shell, "echo hello")
+            .await;
+        assert_eq!(result.unwrap(), "hello");
+    }
+
+    #[tokio::test]
+    async fn test_list_shortcuts() {
+        let auto = MacOSAutomation::new();
+        let result = auto.list_shortcuts().await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_powershell_not_available() {
+        let auto = MacOSAutomation::new();
+        let result = auto
+            .run_script(ScriptLanguage::PowerShell, "Write-Host hello")
+            .await;
+        assert!(matches!(
+            result,
+            Err(aleph_desktop::DesktopError::NotImplemented(_))
+        ));
+    }
+}
