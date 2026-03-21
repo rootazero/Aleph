@@ -1,0 +1,11 @@
+[package]
+name = "aleph-desktop-linux"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+aleph-desktop = { path = "../desktop" }
+async-trait = "0.1"

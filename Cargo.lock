@@ -170,6 +170,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "aleph-desktop-linux"
+version = "0.1.0"
+dependencies = [
+ "aleph-desktop",
+ "async-trait",
+]
+
+[[package]]
+name = "aleph-desktop-macos"
+version = "0.1.0"
+dependencies = [
+ "aleph-desktop",
+ "async-trait",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "aleph-desktop-windows"
+version = "0.1.0"
+dependencies = [
+ "aleph-desktop",
+ "async-trait",
+]
+
+[[package]]
 name = "aleph-logging"
 version = "0.1.0"
 dependencies = [
@@ -292,6 +320,9 @@ dependencies = [
  "aho-corasick",
  "aleph-client",
  "aleph-desktop",
+ "aleph-desktop-linux",
+ "aleph-desktop-macos",
+ "aleph-desktop-windows",
  "aleph-logging",
  "aleph-protocol",
  "aleph-sdk",

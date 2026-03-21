@@ -204,6 +204,15 @@ aleph-desktop = { path = "../crates/desktop" }
 aleph-client = { path = "../shared/client" }
 open = "5.3.3"
 
+[target.'cfg(target_os = "macos")'.dependencies]
+aleph-desktop-macos = { path = "../crates/desktop-macos" }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+aleph-desktop-linux = { path = "../crates/desktop-linux" }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+aleph-desktop-windows = { path = "../crates/desktop-windows" }
+
 [build-dependencies]
 # No build dependencies - using Gateway WebSocket architecture
 

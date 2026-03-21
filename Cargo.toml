@@ -6,6 +6,9 @@ resolver = "2"
 members = [
     "core",
     "crates/desktop",
+    "crates/desktop-macos",
+    "crates/desktop-linux",
+    "crates/desktop-windows",
     "crates/logging",
     "shared/protocol",
     "shared/ui_logic",
