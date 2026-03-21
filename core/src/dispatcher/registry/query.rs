@@ -143,15 +143,13 @@ impl ToolQuery {
     /// Supports hierarchical command resolution:
     /// - `/session new my-topic` → tool `session.new`, args `"my-topic"`
     /// - `/search weather` → tool `search`, args `"weather"`
-    /// - `/session_new` → underscore fallback → tool `session.new`
     /// - `/plugin marketplace install x` → tool `plugin.marketplace.install`, args `"x"`
     ///
     /// Algorithm:
     /// 1. Strip `/` prefix, split into words
     /// 2. Strip `@botname` from first word (Telegram group commands)
     /// 3. Greedy longest-match: join words with `.`, try progressively shorter prefixes
-    /// 4. If no match, try underscore-to-dot fallback on the first word
-    /// 5. Max depth: 3 levels
+    /// 4. Max depth: 3 levels
     pub async fn resolve_command(&self, input: &str) -> Option<super::types::ResolvedCommand> {
         let trimmed = input.trim();
         if !trimmed.starts_with('/') {
@@ -191,30 +189,6 @@ impl ToolQuery {
             let candidate = words[..n].join(".");
             if let Some(tool) = Self::find_best_match(&tools, &candidate) {
                 let remaining: Vec<&str> = all_words[n..].iter().map(|s| s.as_ref()).collect();
-                let arguments = if remaining.is_empty() {
-                    None
-                } else {
-                    Some(remaining.join(" "))
-                };
-                return Some(super::types::ResolvedCommand {
-                    tool,
-                    arguments,
-                    raw_input: input.to_string(),
-                });
-            }
-        }
-
-        // Underscore fallback: replace "_" with "." in the entire first-word token
-        // e.g. "session_new" → "session.new", "plugin_marketplace_install" → "plugin.marketplace.install"
-        let first_token_lower = all_words[0].to_lowercase();
-        let first_token_clean = match first_token_lower.split_once('@') {
-            Some((name, _)) => name.to_string(),
-            None => first_token_lower,
-        };
-        if first_token_clean.contains('_') {
-            let dotted = first_token_clean.replace('_', ".");
-            if let Some(tool) = Self::find_best_match(&tools, &dotted) {
-                let remaining: Vec<&str> = all_words[1..].iter().map(|s| s.as_ref()).collect();
                 let arguments = if remaining.is_empty() {
                     None
                 } else {

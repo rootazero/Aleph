@@ -177,6 +177,21 @@ impl ToolRegistrar {
             .register_with_conflict_resolution(new_cmd)
             .await;
 
+        // /new shortcut — alias for /session new (most common command in bot)
+        let new_alias = UnifiedTool::new(
+            "builtin:new",
+            "new",
+            "Start a new conversation session (shortcut for /session new)",
+            ToolSource::Builtin,
+        )
+        .with_usage("/new")
+        .with_param_hint("[topic]")
+        .with_sort_order(82);
+
+        conflict_resolver
+            .register_with_conflict_resolution(new_alias)
+            .await;
+
         // Cron management command
         let cron_cmd = UnifiedTool::new(
             "builtin:cron.manage",

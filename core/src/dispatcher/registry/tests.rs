@@ -833,27 +833,14 @@ async fn test_resolve_command_flat_with_args() {
 }
 
 #[tokio::test]
-async fn test_resolve_command_underscore_fallback() {
+async fn test_resolve_command_new_alias() {
     let registry = ToolRegistry::new();
-    register_tool(&registry, "builtin:session.new", "session.new").await;
+    register_tool(&registry, "builtin:new", "new").await;
 
-    // "/session_new" → underscore fallback → session.new
-    let resolved = registry.resolve_command("/session_new").await;
+    // "/new" → resolves to the "new" alias tool
+    let resolved = registry.resolve_command("/new").await;
     assert!(resolved.is_some());
-    assert_eq!(resolved.unwrap().tool.name, "session.new");
-}
-
-#[tokio::test]
-async fn test_resolve_command_underscore_fallback_with_args() {
-    let registry = ToolRegistry::new();
-    register_tool(&registry, "builtin:session.new", "session.new").await;
-
-    // "/session_new topic" → underscore fallback → session.new, args = "topic"
-    let resolved = registry.resolve_command("/session_new topic").await;
-    assert!(resolved.is_some());
-    let r = resolved.unwrap();
-    assert_eq!(r.tool.name, "session.new");
-    assert_eq!(r.arguments, Some("topic".to_string()));
+    assert_eq!(resolved.unwrap().tool.name, "new");
 }
 
 #[tokio::test]
