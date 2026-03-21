@@ -28,23 +28,30 @@
 
 ### 1. 物理结构
 
+CLI/TUI/WebChat 是 Aleph 的**核心通信通道**（用户与 AI 对话的 interface），不是"应用"。`apps/` 保留给平台特定的桌面扩展能力。
+
 ```
 core/src/bin/aleph-server/
 └── main.rs              # 极简：解析启动参数 → 启动 Gateway server
                          # 二进制名: aleph-server（不对用户暴露，由 CLI 的 daemon 命令管理）
 
-apps/
-├── client/              # aleph-client crate — 共享客户端库
+shared/
+├── protocol/            # aleph-protocol — JSON-RPC 协议类型
+├── client/              # aleph-client — 共享客户端库
 │   └── src/
 │       ├── lib.rs
-│       ├── connection.rs   # WebSocket JSON-RPC 2.0 连接管理
-│       ├── config.rs       # ~/.aleph/config 加载
-│       └── error.rs        # 客户端错误类型
-│
+│       ├── connection.rs      # AlephClient — 持久 WebSocket 连接（TUI/交互模式）
+│       ├── gateway_client.rs  # GatewayClient — 无状态一次性 RPC（CLI 管理命令）
+│       ├── config.rs          # ~/.aleph/config 加载
+│       ├── error.rs           # 客户端错误类型
+│       └── output.rs          # 输出格式化（table/json/plain）
+└── ui_logic/            # 共享 UI 逻辑
+
+interfaces/
 ├── cli/                 # aleph-cli crate — 纯 CLI，bin: aleph
 │   └── src/
 │       ├── main.rs         # clap 解析 → 子命令分发
-│       ├── output.rs       # stdout 格式化（table/json/plain）
+│       ├── output.rs       # stdout 格式化
 │       └── commands/       # 各子命令实现
 │           ├── chat.rs     # `aleph chat` → 调用 aleph_tui::run()
 │           ├── daemon.rs   # `aleph daemon start/stop/status`（Local）
@@ -55,28 +62,37 @@ apps/
 │           ├── ...
 │           └── completion.rs  # shell 补全生成（Local）
 │
-└── tui/                 # aleph-tui crate — 纯交互终端
-    └── src/
-        ├── lib.rs          # pub fn run(agent: &str, ...) 入口
-        ├── app.rs          # AppState
-        ├── event.rs        # 键盘/终端事件
-        ├── render.rs       # ratatui 布局渲染
-        ├── theme.rs        # 颜色/样式
-        ├── markdown.rs     # Markdown 终端渲染
-        └── widgets/        # chat_area, input_area, status_bar...
+├── tui/                 # aleph-tui crate — 纯交互终端
+│   └── src/
+│       ├── lib.rs          # pub fn run(agent: &str, ...) 入口
+│       ├── app.rs          # AppState
+│       ├── event.rs        # 键盘/终端事件
+│       ├── render.rs       # ratatui 布局渲染
+│       ├── theme.rs        # 颜色/样式
+│       ├── markdown.rs     # Markdown 终端渲染
+│       └── widgets/        # chat_area, input_area, status_bar...
+│
+└── webchat/             # Leptos WASM 面板（从 apps/panel/ 迁入）
+
+apps/                    # 平台桌面扩展能力（手脚）
+├── macos/               # macOS 原生扩展（Swift/AppKit）
+├── tauri/               # Linux/Windows 桌面壳（Tauri，将被逐步替代）
+├── linux/               # 未来：Rust + D-Bus/Wayland
+└── windows/             # 未来：Rust + windows-rs
 ```
 
 ### 2. 依赖关系
 
 ```
-apps/cli  ──→  apps/tui     (仅 chat 子命令调用 aleph_tui::run())
-apps/cli  ──→  apps/client  ──→  aleph-protocol
-apps/tui  ──→  apps/client  ──→  aleph-protocol
+interfaces/cli  ──→  interfaces/tui     (仅 chat 子命令调用 aleph_tui::run())
+interfaces/cli  ──→  shared/client      ──→  shared/protocol
+interfaces/tui  ──→  shared/client      ──→  shared/protocol
+interfaces/webchat ──→ shared/client    ──→  shared/protocol
 ```
 
-- `apps/client` 不依赖 core — 纯协议客户端，基于 `aleph-protocol` crate
-- `apps/tui` 不依赖 `apps/cli`
-- `core/src/cli/`（现有的隐藏客户端层）在 Phase 1 中合并到 `apps/client/`，然后删除
+- `shared/client` 不依赖 core — 纯协议客户端，基于 `aleph-protocol` crate
+- `interfaces/tui` 不依赖 `interfaces/cli`
+- `core/src/cli/`（现有的隐藏客户端层）已合并到 `shared/client/`，待删除
 
 ### 3. 二进制入口
 
@@ -386,7 +402,7 @@ pub async fn handle(client: &AlephClient, args: &SessionArgs) -> CliResult {
 
 ```
                     ┌─────────────────────────────────┐
-                    │       Aleph Gateway Server       │
+                    │    Aleph Gateway (aleph-server)   │
                     │  ┌───────────┐ ┌──────────────┐ │
                     │  │ToolRegistry│ │CommandParser │ │
                     │  │(all tools) │ │(slash→intent)│ │
@@ -399,7 +415,7 @@ pub async fn handle(client: &AlephClient, args: &SessionArgs) -> CliResult {
               ┌──────────┬──────────┬─────────────┘
               ↓          ↓          ↓
          ┌────────┐ ┌────────┐ ┌────────┐
-         │  TUI   │ │  Bot   │ │WebChat │   ← 等价 interface
+         │  TUI   │ │  Bot   │ │WebChat │   ← interfaces/ (核心通信通道)
          │(ratatui│ │(Telegram│ │(Leptos │      全部走 Gateway RPC
          │ 终端)  │ │ Slack) │ │ WASM)  │
          └────┬───┘ └────────┘ └────────┘
@@ -407,11 +423,17 @@ pub async fn handle(client: &AlephClient, args: &SessionArgs) -> CliResult {
     aleph chat ← CLI 子命令入口
               │
     ┌─────────┴────────────────────────┐
-    │           aleph (CLI)             │
+    │     aleph (CLI) ← interfaces/cli  │
     │  daemon start/stop  ← Local      │
-    │  config get/set     ← Local      │
+    │  config get/set     ← RPC        │
     │  plugin init/pack   ← Local      │
     │  session/model/...  ← RPC        │
     │  aleph chat         ← 启动 TUI   │
     └──────────────────────────────────┘
+
+    apps/ = 平台桌面扩展（手脚）
+    ┌──────────┬──────────┬──────────┐
+    │  macos/  │  linux/  │ windows/ │
+    │ (Swift)  │ (future) │ (future) │
+    └──────────┴──────────┴──────────┘
 ```
