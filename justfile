@@ -11,7 +11,7 @@ panel_dist      := "interfaces/webchat/dist"
 macos_dir       := "apps/macos"
 macos_resources := "apps/macos/Aleph/Resources"
 macos_app       := "apps/macos/build/Build/Products/Release/Aleph.app"
-server_bin      := "aleph"
+server_bin      := "aleph-server"
 
 # ─── Default ───
 

@@ -73,7 +73,7 @@ pub fn start() -> CliResult<()> {
     println!("Starting Aleph Gateway...");
 
     // Try to start via the aleph binary
-    match Command::new("aleph").arg("serve").spawn() {
+    match Command::new("aleph-server").arg("serve").spawn() {
         Ok(child) => {
             // Write PID file
             let pid_file = pid_file_path();

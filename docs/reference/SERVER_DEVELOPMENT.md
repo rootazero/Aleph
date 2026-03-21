@@ -50,13 +50,13 @@ mkdir -p ~/.aleph
 
 ```bash
 # 1. 启动 Server（所有功能始终编译）
-cargo run --bin aleph
+cargo run --bin aleph-server
 
 # 2. 后台运行
-cargo run --bin aleph -- --daemon
+cargo run --bin aleph-server -- --daemon
 
 # 3. 指定端口
-cargo run --bin aleph -- --port 8080
+cargo run --bin aleph-server -- --port 8080
 ```
 
 ### 完整开发流程
@@ -69,7 +69,7 @@ vim core/src/gateway/...
 cargo test
 
 # 3. 构建并运行
-cargo run --bin aleph
+cargo run --bin aleph-server
 
 # 4. 查看日志
 tail -f ~/.aleph/aleph.log  # 如果使用 --daemon
@@ -103,7 +103,7 @@ npm run build:css  # 编译 styles/tailwind.css -> dist/tailwind.css
 
 # 5. 构建 Server（会自动嵌入 dist/ 中的资源）
 cd ../../..
-cargo build --bin aleph
+cargo build --bin aleph-server
 ```
 
 ### UI 快速重建
@@ -116,7 +116,7 @@ wasm-bindgen --target web --out-dir dist --out-name aleph-panel \
   /Volumes/TBU4/Workspace/Aleph/target/wasm32-unknown-unknown/release/aleph_panel.wasm && \
 npm run build:css && \
 cd ../../.. && \
-cargo build --bin aleph
+cargo build --bin aleph-server
 ```
 
 ### 资源嵌入机制
@@ -202,7 +202,7 @@ cd apps/macos-native && xcodebuild -scheme Aleph -configuration Debug test -dest
 curl -fsSL https://raw.githubusercontent.com/user/aleph/main/scripts/install.sh | bash
 
 # Or build from source
-cargo build --bin aleph --release
+cargo build --bin aleph-server --release
 ```
 
 ## 发布流程
@@ -222,23 +222,23 @@ ls apps/panel/dist/
 
 ```bash
 # 构建 Release（所有功能始终编译）
-cargo build --bin aleph --release
+cargo build --bin aleph-server --release
 
 # 查看二进制大小
-ls -lh target/release/aleph
+ls -lh target/release/aleph-server
 ```
 
 ### 3. 验证构建
 
 ```bash
 # 验证二进制可执行
-./target/release/aleph --version
+./target/release/aleph-server --version
 
 # 验证嵌入的资源
-strings target/release/aleph | grep "index.html"
+strings target/release/aleph-server | grep "index.html"
 
 # 测试运行
-./target/release/aleph --help
+./target/release/aleph-server --help
 ```
 
 ### 4. 分发方式
@@ -246,16 +246,16 @@ strings target/release/aleph | grep "index.html"
 **方式 1: 直接分发二进制**
 ```bash
 # 复制到系统路径
-sudo cp target/release/aleph /usr/local/bin/
+sudo cp target/release/aleph-server /usr/local/bin/
 
 # 或创建符号链接
-sudo ln -s $(pwd)/target/release/aleph /usr/local/bin/aleph
+sudo ln -s $(pwd)/target/release/aleph-server /usr/local/bin/aleph-server
 ```
 
 **方式 2: 使用 cargo install**
 ```bash
 # 从本地路径安装
-cargo install --path core --bin aleph
+cargo install --path core --bin aleph-server
 
 # 安装后位置：~/.cargo/bin/aleph
 ```
@@ -271,7 +271,7 @@ cargo publish --dry-run  # 预检查
 cargo publish            # 正式发布
 
 # 3. 用户安装
-cargo install alephcore --bin aleph
+cargo install alephcore --bin aleph-server
 ```
 
 **方式 4: 创建安装包**
@@ -318,7 +318,7 @@ aleph --daemon --log-file ~/.aleph/server.log
     <string>com.aleph.server</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/usr/local/bin/aleph</string>
+        <string>/usr/local/bin/aleph-server</string>
         <string>--daemon</string>
     </array>
     <key>RunAtLoad</key>
@@ -350,7 +350,7 @@ After=network.target
 [Service]
 Type=simple
 User=aleph
-ExecStart=/usr/local/bin/aleph
+ExecStart=/usr/local/bin/aleph-server
 Restart=on-failure
 Environment="ANTHROPIC_API_KEY=your-api-key"
 

@@ -101,11 +101,11 @@ enabled = true
         let workspace_root = std::path::Path::new(manifest_dir)
             .parent()
             .expect("Cannot find workspace root");
-        let binary_path = workspace_root.join("target/debug/aleph");
+        let binary_path = workspace_root.join("target/debug/aleph-server");
 
         assert!(
             binary_path.exists(),
-            "Aleph binary not found at {:?}. Run `cargo build -p alephcore --bin aleph` first.",
+            "Aleph binary not found at {:?}. Run `cargo build -p alephcore --bin aleph-server` first.",
             binary_path
         );
 

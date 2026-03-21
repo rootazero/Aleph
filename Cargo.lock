@@ -292,6 +292,7 @@ version = "0.2.5"
 dependencies = [
  "aes-gcm",
  "aho-corasick",
+ "aleph-client",
  "aleph-desktop",
  "aleph-logging",
  "aleph-protocol",

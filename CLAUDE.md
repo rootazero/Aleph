@@ -150,7 +150,7 @@ Keep this managed block so 'openspec update' can refresh the instructions.
 
 | Command | Description |
 |---------|-------------|
-| `cargo run --bin aleph` | Start server (debug) |
+| `cargo run --bin aleph-server` | Start server (debug) |
 | `cargo check -p alephcore` | Quick compile check |
 | `cargo test -p alephcore --lib` | Run core tests |
 | `just dev` | Dev server (rebuilds WASM first) |
@@ -186,14 +186,14 @@ English commit messages. Format: `<scope>: <description>` — Example: `gateway:
 
 ```bash
 # 重启前：杀掉所有 aleph 进程（debug + release）
-pkill -f "target/release/aleph" 2>/dev/null
-pkill -f "target/debug/aleph" 2>/dev/null
+pkill -f "target/release/aleph-server" 2>/dev/null
+pkill -f "target/debug/aleph-server" 2>/dev/null
 sleep 2
 # 确认全部清除
-ps aux | grep "[a]leph" | grep -v zsh | grep -v cp | grep -v tail
+ps aux | grep "[a]leph-server" | grep -v zsh | grep -v cp | grep -v tail
 
 # 然后再启动
-target/release/aleph start
+target/release/aleph-server start
 ```
 
 **绝对禁止**：
