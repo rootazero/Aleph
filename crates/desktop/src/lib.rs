@@ -2,23 +2,20 @@
 //!
 //! Cross-platform desktop capabilities for the Aleph AI assistant.
 //!
-//! This crate provides the [`DesktopCapability`] trait — the contract between
-//! Aleph's core brain and the physical desktop it controls. Implementations
-//! use `xcap` for screen capture, `enigo` for input automation, and
-//! platform-specific APIs for OCR and window management.
+//! ## Architecture (Two Layers)
 //!
-//! ## Architecture
+//! **New (recommended):** [`DesktopPlatform`] aggregator with four capability traits:
+//! - [`ScreenCapability`] — screenshot, OCR, mouse/keyboard, window management
+//! - [`PimCapability`] — Notes, Calendar, Reminders, Contacts
+//! - [`SystemCapability`] — app management, notifications, clipboard, system info
+//! - [`AutomationCapability`] — AppleScript/JXA, Shortcuts
 //!
-//! ```text
-//! Core (trait contract)  →  aleph-desktop (this crate)  →  OS APIs
-//!                              ├── perception.rs  (screenshot, OCR)
-//!                              └── action.rs      (click, type, scroll)
-//! ```
+//! Each platform crate (`desktop-macos`, `desktop-linux`, `desktop-windows`)
+//! implements [`DesktopPlatform`], returning `Some` for supported capabilities
+//! and `None` for unsupported ones.
 //!
-//! The [`NativeDesktop`] struct implements [`DesktopCapability`] using real
-//! OS APIs. Perception (screenshot, OCR) and action (click, type, scroll,
-//! key combo, app launch, window management) are implemented; only
-//! `capabilities()` remains a stub.
+//! **Legacy:** [`DesktopCapability`] trait + [`NativeDesktop`] implementation.
+//! Kept for backward compatibility during Phase 2 migration, then removed.
 
 pub mod action;
 pub mod automation_types;
