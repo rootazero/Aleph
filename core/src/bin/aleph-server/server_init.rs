@@ -225,6 +225,7 @@ pub async fn handle_chat_send_with_engine<P, R>(
     workspace_manager: Option<Arc<alephcore::gateway::AgentEnvStore>>,
     provider_registry: Arc<P>,
     session_manager: Arc<alephcore::gateway::SessionManager>,
+    command_parser: Option<Arc<alephcore::command::CommandParser>>,
 ) -> alephcore::gateway::JsonRpcResponse
 where
     P: alephcore::thinker::ProviderRegistry + 'static,
@@ -321,6 +322,58 @@ where
     let mut metadata = std::collections::HashMap::new();
     metadata.insert("channel_id".to_string(), channel_id.to_string());
     metadata.insert("sender_id".to_string(), peer_id.to_string());
+
+    // Slash command detection: if message starts with "/", try to resolve via CommandParser
+    // and inject SLASH_COMMAND_MODE_KEY for fast-path execution in ExecutionEngine.
+    if params.message.trim().starts_with('/') {
+        if let Some(ref parser) = command_parser {
+            let slash_text = params.message.trim();
+            if let Some(parsed) = parser.parse_async(slash_text).await {
+                // Convert parsed command to IntentResult and serialize
+                use alephcore::intent::DirectToolSource;
+                let (tool_id, source) = match parsed.context {
+                    alephcore::command::CommandContext::Builtin { tool_name } => {
+                        (tool_name, DirectToolSource::SlashCommand)
+                    }
+                    alephcore::command::CommandContext::Skill { skill_id, .. } => {
+                        (skill_id, DirectToolSource::Skill)
+                    }
+                    alephcore::command::CommandContext::Mcp { server_name, tool_name, .. } => {
+                        (tool_name.unwrap_or(server_name), DirectToolSource::Mcp)
+                    }
+                    alephcore::command::CommandContext::Custom { .. } => {
+                        (parsed.command_name.clone(), DirectToolSource::Custom)
+                    }
+                    alephcore::command::CommandContext::None => {
+                        (parsed.command_name.clone(), DirectToolSource::SlashCommand)
+                    }
+                };
+
+                let source_str = match source {
+                    DirectToolSource::SlashCommand => "slash_command",
+                    DirectToolSource::Skill => "skill",
+                    DirectToolSource::Mcp => "mcp",
+                    DirectToolSource::Custom => "custom",
+                };
+
+                if let Ok(mode_json) = serde_json::to_string(&serde_json::json!({
+                    "type": "direct_tool",
+                    "tool_id": tool_id,
+                    "args": parsed.arguments.as_deref().unwrap_or(""),
+                    "source": source_str,
+                })) {
+                    tracing::info!(
+                        "[chat.send] Slash command resolved: tool_id={}, args={:?}",
+                        tool_id, parsed.arguments
+                    );
+                    metadata.insert(
+                        alephcore::gateway::inbound_router::SLASH_COMMAND_MODE_KEY.to_string(),
+                        mode_json,
+                    );
+                }
+            }
+        }
+    }
 
     let run_request = RunRequest {
         run_id: run_id.clone(),

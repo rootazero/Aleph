@@ -304,13 +304,73 @@ fn build_tool_arguments(tool_id: &str, args_str: &str, raw_input: &str) -> serde
                 serde_json::json!({ "input": args_str })
             }
         }
-        _ => serde_json::json!({
-            "input": args_str,
-            "query": args_str,
-            "args": args_str,
-            "input_text": raw_input,
-        }),
+        _ => {
+            // Generic --key value parser: if args contain "--", parse as named parameters.
+            // This handles tools with structured schemas (team_create, task_create, etc.)
+            if args_str.contains("--") {
+                parse_cli_args(args_str)
+            } else {
+                serde_json::json!({
+                    "input": args_str,
+                    "query": args_str,
+                    "args": args_str,
+                    "input_text": raw_input,
+                })
+            }
+        }
     }
+}
+
+/// Parse CLI-style `--key value` arguments into a JSON object.
+///
+/// Handles: `--name foo --leader main --blocked_by id1,id2`
+/// Special: values containing `{` are parsed as JSON (for --variables, --metadata)
+/// Arrays: comma-separated values for known array fields (blocked_by)
+fn parse_cli_args(args_str: &str) -> serde_json::Value {
+    let mut map = serde_json::Map::new();
+    let mut current_key: Option<String> = None;
+    let mut current_vals: Vec<String> = Vec::new();
+
+    let flush = |map: &mut serde_json::Map<String, serde_json::Value>,
+                 key: &Option<String>,
+                 vals: &[String]| {
+        if let Some(ref k) = key {
+            let combined = vals.join(" ");
+            if combined.is_empty() {
+                // Boolean flag
+                map.insert(k.clone(), serde_json::Value::Bool(true));
+            } else if combined.starts_with('{') || combined.starts_with('[') {
+                // Try JSON parse
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&combined) {
+                    map.insert(k.clone(), v);
+                } else {
+                    map.insert(k.clone(), serde_json::Value::String(combined));
+                }
+            } else if k == "blocked_by" && combined.contains(',') {
+                // Comma-separated array
+                let arr: Vec<serde_json::Value> = combined
+                    .split(',')
+                    .map(|s| serde_json::Value::String(s.trim().to_string()))
+                    .collect();
+                map.insert(k.clone(), serde_json::Value::Array(arr));
+            } else {
+                map.insert(k.clone(), serde_json::Value::String(combined));
+            }
+        }
+    };
+
+    for token in args_str.split_whitespace() {
+        if let Some(key) = token.strip_prefix("--") {
+            flush(&mut map, &current_key, &current_vals);
+            current_key = Some(key.to_string());
+            current_vals.clear();
+        } else {
+            current_vals.push(token.to_string());
+        }
+    }
+    flush(&mut map, &current_key, &current_vals);
+
+    serde_json::Value::Object(map)
 }
 
 /// Extract a human-readable response from a tool result.

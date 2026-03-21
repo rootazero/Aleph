@@ -287,6 +287,12 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         registry
     });
 
+    // Shared cell for deferred CommandParser injection into chat.send handler.
+    // Created here (outer scope) so both the if-branch (chat.send registration)
+    // and the dispatch_registry block (parser creation) can access it.
+    let command_parser_cell: Arc<tokio::sync::RwLock<Option<Arc<alephcore::command::CommandParser>>>> =
+        Arc::new(tokio::sync::RwLock::new(None));
+
     if let Some(provider_registry) = provider_registry {
         // Create embedding provider from app config for memory tools
         let embedder: Option<std::sync::Arc<dyn alephcore::memory::EmbeddingProvider>> = {
@@ -630,6 +636,8 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         });
 
         // chat.send also uses real ExecutionEngine
+        let command_parser_for_chat = command_parser_cell.clone();
+
         let engine_chat = engine.clone();
         let event_bus_chat = event_bus.clone();
         let router_chat = router.clone();
@@ -647,8 +655,10 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             let wm = wm_chat.clone();
             let pr = pr_chat.clone();
             let sm = sm_chat.clone();
+            let cp = command_parser_for_chat.clone();
             async move {
-                handle_chat_send_with_engine(req, engine, event_bus, router, agent_registry, cfg, wm, pr, sm).await
+                let parser = cp.read().await.clone();
+                handle_chat_send_with_engine(req, engine, event_bus, router, agent_registry, cfg, wm, pr, sm, parser).await
             }
         });
 
@@ -831,6 +841,13 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         // Wire command.execute to resolve slash commands via CommandParser + ToolRegistry
         {
             let parser = Arc::new(alephcore::command::CommandParser::new(dispatch_registry.clone()));
+
+            // Inject parser into chat.send handler (created earlier, uses deferred cell)
+            {
+                let mut cell = command_parser_cell.blocking_write();
+                *cell = Some(parser.clone());
+            }
+
             let reg = dispatch_registry.clone();
             server.handlers_mut().register("command.execute", move |req| {
                 let p = parser.clone();
