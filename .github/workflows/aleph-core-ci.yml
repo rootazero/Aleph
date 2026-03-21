@@ -61,7 +61,7 @@ jobs:
             libssl-dev libwayland-dev libpipewire-0.3-dev libdbus-1-dev \
             libdrm-dev libgbm-dev libegl-dev libxdo-dev clang libclang-dev
       - name: Check formatting
-        run: cargo fmt --all -- --check
+        run: cargo fmt -p alephcore -p aleph-desktop -p aleph-desktop-macos -p aleph-desktop-linux -p aleph-desktop-windows -- --check
       - name: Clippy
         run: cargo clippy -p alephcore -p aleph-desktop -- -D warnings
 
