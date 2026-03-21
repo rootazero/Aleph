@@ -30,8 +30,13 @@ dev: wasm
 # Full build: WASM → Server → macOS App (release)
 all: build macos
 
+# Build Swift bridge (macOS only)
+swift-bridge:
+    cd apps/macos-bridge && swift build -c release
+    @echo "✓ Swift bridge: apps/macos-bridge/.build/release/AlephBridge"
+
 # Build server (release)
-build: wasm
+build: wasm swift-bridge
     cargo build -p alephcore --bin {{server_bin}} --release
     @echo "✓ Server: {{release_dir}}/{{server_bin}}"
 
