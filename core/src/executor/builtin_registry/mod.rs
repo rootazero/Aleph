@@ -34,7 +34,7 @@ pub use definitions::{
     create_tool_boxed, get_builtin_tool_names, is_builtin_tool, BuiltinToolDefinition,
     BUILTIN_TOOL_DEFINITIONS,
 };
-pub use groups::TOOL_GROUPS;
+pub use groups::TOOL_CATEGORIES;
 pub use registry::BuiltinToolRegistry;
 
 // Re-import ToolRegistry from single_step for internal use
@@ -198,12 +198,12 @@ mod tests {
             let registry = BuiltinToolRegistry::new().await;
 
             // Metadata present
-            assert!(registry.get_tool("session.list").is_some());
-            assert!(registry.get_tool("session.send").is_some());
+            assert!(registry.get_tool("session_list").is_some());
+            assert!(registry.get_tool("session_send").is_some());
 
             // Execution fails without GatewayContext
             let result = registry
-                .execute_tool("session.list", serde_json::json!({}))
+                .execute_tool("session_list", serde_json::json!({}))
                 .await;
             assert!(result.is_err());
         }
@@ -218,17 +218,17 @@ mod tests {
             };
             let registry = BuiltinToolRegistry::with_config(config).await;
 
-            assert!(registry.get_tool("session.list").is_some());
-            assert!(registry.get_tool("session.send").is_some());
+            assert!(registry.get_tool("session_list").is_some());
+            assert!(registry.get_tool("session_send").is_some());
 
             // Check tool metadata
-            let sessions_list = registry.get_tool("session.list").unwrap();
-            assert_eq!(sessions_list.name, "session.list");
-            assert_eq!(sessions_list.id, "builtin:session.list");
+            let sessions_list = registry.get_tool("session_list").unwrap();
+            assert_eq!(sessions_list.name, "session_list");
+            assert_eq!(sessions_list.id, "builtin:session_list");
 
-            let sessions_send = registry.get_tool("session.send").unwrap();
-            assert_eq!(sessions_send.name, "session.send");
-            assert_eq!(sessions_send.id, "builtin:session.send");
+            let sessions_send = registry.get_tool("session_send").unwrap();
+            assert_eq!(sessions_send.name, "session_send");
+            assert_eq!(sessions_send.id, "builtin:session_send");
         }
 
         #[tokio::test]
@@ -238,7 +238,7 @@ mod tests {
 
             let result = registry
                 .execute_tool(
-                    "session.list",
+                    "session_list",
                     serde_json::json!({}),
                 )
                 .await;
@@ -260,7 +260,7 @@ mod tests {
 
             let result = registry
                 .execute_tool(
-                    "session.list",
+                    "session_list",
                     serde_json::json!({}),
                 )
                 .await;

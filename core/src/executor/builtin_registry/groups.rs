@@ -1,13 +1,13 @@
-//! Tool group definitions for Panel UI display.
+//! Tool category definitions for Panel UI display.
 //!
-//! Groups are display-only metadata — they don't affect tool filtering.
-//! TOML config uses individual tool names/globs, not group IDs.
+//! Categories are display-only metadata — they don't affect tool filtering.
+//! TOML config uses individual tool names/globs, not category IDs.
 
 use serde::Serialize;
 
 /// A logical group of tools for UI display
 #[derive(Debug, Clone, Serialize)]
-pub struct ToolGroup {
+pub struct ToolCategory {
     /// Group identifier (e.g., "search_web")
     pub id: &'static str,
     /// Human-readable group name
@@ -16,34 +16,34 @@ pub struct ToolGroup {
     pub tools: &'static [&'static str],
 }
 
-/// All tool groups (ordered for UI display)
-pub static TOOL_GROUPS: &[ToolGroup] = &[
-    ToolGroup {
+/// All tool categorys (ordered for UI display)
+pub static TOOL_CATEGORIES: &[ToolCategory] = &[
+    ToolCategory {
         id: "search_web",
         name: "搜索与网络",
         tools: &["search", "web_fetch"],
     },
-    ToolGroup {
+    ToolCategory {
         id: "file_code",
         name: "文件与代码",
         tools: &["file_ops", "bash", "code_exec", "pdf_generate"],
     },
-    ToolGroup {
+    ToolCategory {
         id: "memory_knowledge",
         name: "记忆与知识",
         tools: &["memory_search", "memory_browse", "skill_list"],
     },
-    ToolGroup {
+    ToolCategory {
         id: "content_gen",
         name: "内容生成",
         tools: &["image_generate"],
     },
-    ToolGroup {
+    ToolCategory {
         id: "system_config",
         name: "系统与配置",
         tools: &["desktop", "read_config_guide", "vault_store"],
     },
-    ToolGroup {
+    ToolCategory {
         id: "browser",
         name: "浏览器",
         tools: &[
@@ -60,23 +60,23 @@ pub static TOOL_GROUPS: &[ToolGroup] = &[
             "browser_profile",
         ],
     },
-    ToolGroup {
+    ToolCategory {
         id: "media",
         name: "媒体理解",
         tools: &["media_understand", "audio_transcribe", "document_extract"],
     },
     // -- Multi-agent collaboration modes --
-    ToolGroup {
+    ToolCategory {
         id: "spawn",
         name: "子 Agent 派发",
         tools: &["subagent_spawn", "subagent_steer", "subagent_kill", "escalate_task"],
     },
-    ToolGroup {
+    ToolCategory {
         id: "delegate",
         name: "Agent 间通信",
         tools: &["session_send", "session_list"],
     },
-    ToolGroup {
+    ToolCategory {
         id: "team",
         name: "团队协调",
         tools: &[
@@ -85,17 +85,17 @@ pub static TOOL_GROUPS: &[ToolGroup] = &[
         ],
     },
     // -- Infrastructure --
-    ToolGroup {
+    ToolCategory {
         id: "agent_mgmt",
         name: "Agent 管理",
         tools: &["agent_create", "agent_list", "agent_delete"],
     },
-    ToolGroup {
+    ToolCategory {
         id: "session_mgmt",
         name: "会话管理",
         tools: &["session_new", "session_rename"],
     },
-    ToolGroup {
+    ToolCategory {
         id: "automation",
         name: "自动化",
         tools: &["cron_manage", "clawhub"],
@@ -109,7 +109,7 @@ mod tests {
 
     #[test]
     fn test_all_builtin_tools_have_a_group() {
-        let grouped: Vec<&str> = TOOL_GROUPS
+        let grouped: Vec<&str> = TOOL_CATEGORIES
             .iter()
             .flat_map(|g| g.tools.iter().copied())
             .collect();
@@ -126,7 +126,7 @@ mod tests {
     #[test]
     fn test_no_duplicate_tools_across_groups() {
         let mut seen = std::collections::HashSet::new();
-        for group in TOOL_GROUPS {
+        for group in TOOL_CATEGORIES {
             for tool in group.tools {
                 assert!(
                     seen.insert(tool),

@@ -410,14 +410,14 @@ pub async fn handle_files_delete(
     }
 }
 
-/// Handle agents.tools_schema — return tool group metadata for Panel UI
+/// Handle agents.tools_schema — return tool category metadata for Panel UI
 pub async fn handle_tools_schema(request: JsonRpcRequest) -> JsonRpcResponse {
-    use crate::executor::{BUILTIN_TOOL_DEFINITIONS, TOOL_GROUPS};
+    use crate::executor::{BUILTIN_TOOL_DEFINITIONS, TOOL_CATEGORIES};
 
-    let groups: Vec<serde_json::Value> = TOOL_GROUPS
+    let categories: Vec<serde_json::Value> = TOOL_CATEGORIES
         .iter()
-        .map(|group| {
-            let tools: Vec<serde_json::Value> = group
+        .map(|cat| {
+            let tools: Vec<serde_json::Value> = cat
                 .tools
                 .iter()
                 .map(|tool_name| {
@@ -433,12 +433,13 @@ pub async fn handle_tools_schema(request: JsonRpcRequest) -> JsonRpcResponse {
                 })
                 .collect();
             json!({
-                "id": group.id,
-                "name": group.name,
+                "id": cat.id,
+                "name": cat.name,
                 "tools": tools,
             })
         })
         .collect();
 
-    JsonRpcResponse::success(request.id, json!({ "groups": groups }))
+    // Keep "groups" key in JSON response for webchat compatibility
+    JsonRpcResponse::success(request.id, json!({ "groups": categories }))
 }
