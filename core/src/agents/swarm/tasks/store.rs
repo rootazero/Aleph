@@ -11,7 +11,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use tokio::sync::Mutex;
 
 use super::{
-    AgentId, CoordTask, CoordTaskFilter, CoordTaskId, CoordTaskStatus, CoordTaskStore,
+    CoordTask, CoordTaskFilter, CoordTaskId, CoordTaskStatus, CoordTaskStore,
     CoordTaskUpdate, NewCoordTask, NewTeam, Priority, Team, TeamFilter, TeamMember, TeamStatus,
     TeamUpdate,
 };

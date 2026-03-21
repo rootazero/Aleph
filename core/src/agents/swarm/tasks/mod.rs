@@ -24,19 +24,14 @@ pub type AgentId = String;
 // Priority
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Priority {
     Low,
+    #[default]
     Normal,
     High,
     Critical,
-}
-
-impl Default for Priority {
-    fn default() -> Self {
-        Self::Normal
-    }
 }
 
 impl Priority {
@@ -68,21 +63,16 @@ impl Priority {
 ///
 /// `Blocked` is **derived dynamically** at query time when a task has
 /// unresolved dependencies — it is never stored in the database.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CoordTaskStatus {
+    #[default]
     Pending,
     Blocked,
     InProgress,
     Completed,
     Failed,
     Cancelled,
-}
-
-impl Default for CoordTaskStatus {
-    fn default() -> Self {
-        Self::Pending
-    }
 }
 
 impl CoordTaskStatus {
@@ -120,18 +110,13 @@ impl std::fmt::Display for CoordTaskStatus {
 // TeamStatus
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TeamStatus {
+    #[default]
     Active,
     Completed,
     Disbanded,
-}
-
-impl Default for TeamStatus {
-    fn default() -> Self {
-        Self::Active
-    }
 }
 
 impl TeamStatus {
