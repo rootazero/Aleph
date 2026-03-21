@@ -15,6 +15,7 @@ pub mod collective_memory;
 pub mod coordinator;
 pub mod tools;
 pub mod context_provider;
+pub mod tasks;
 
 pub use events::{AgentEvent, CriticalEvent, ImportantEvent, InfoEvent, EventTier, FileOperation};
 pub use bus::AgentMessageBus;
