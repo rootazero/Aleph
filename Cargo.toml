@@ -14,7 +14,7 @@ members = [
     "apps/cli",
     "apps/tui",
     "apps/shared",
-    "apps/desktop/src-tauri",
+    "apps/tauri/src-tauri",
     "apps/panel",
 ]
 
