@@ -9,7 +9,7 @@ use crate::sync_primitives::Arc;
 
 use tracing::info;
 
-use crate::builtin_tools::{BashExecTool, CodeExecTool, DesktopTool, FileOpsTool, ImageGenerateTool, MemoryBrowseTool, MemorySearchTool, PdfGenerateTool, PimTool, ReadConfigGuideTool, ScratchpadTool, SearchTool, VaultStoreTool, WebFetchTool};
+use crate::builtin_tools::{AutomationTool, BashExecTool, CodeExecTool, DesktopTool, FileOpsTool, ImageGenerateTool, MemoryBrowseTool, MemorySearchTool, PdfGenerateTool, PimTool, ReadConfigGuideTool, ScratchpadTool, SearchTool, SystemTool, VaultStoreTool, WebFetchTool};
 use crate::builtin_tools::browser_tools::{
     BrowserOpenTool, BrowserClickTool, BrowserTypeTool, BrowserScreenshotTool,
     BrowserSnapshotTool, BrowserNavigateTool, BrowserTabsTool, BrowserSelectTool,
@@ -67,6 +67,21 @@ impl BuiltinToolRegistry {
             let native = std::sync::Arc::new(aleph_desktop::NativeDesktop::new());
             DesktopTool::new().with_native(native)
         };
+
+        // Build platform-specific DesktopPlatform
+        let desktop_platform: Arc<dyn aleph_desktop::DesktopPlatform> = {
+            #[cfg(target_os = "macos")]
+            { Arc::new(aleph_desktop_macos::MacOSPlatform::new()) }
+
+            #[cfg(target_os = "linux")]
+            { Arc::new(aleph_desktop_linux::LinuxPlatform::new()) }
+
+            #[cfg(target_os = "windows")]
+            { Arc::new(aleph_desktop_windows::WindowsPlatform::new()) }
+        };
+
+        let system_tool = SystemTool::new(Arc::clone(&desktop_platform));
+        let automation_tool = AutomationTool::new(Arc::clone(&desktop_platform));
 
         // PIM tool (Calendar, Reminders, Notes, Contacts via Desktop Bridge)
         let pim_tool = PimTool::new();
@@ -294,6 +309,9 @@ impl BuiltinToolRegistry {
             vault_store_tool,
             desktop_tool,
             pim_tool,
+            system_tool,
+            automation_tool,
+            desktop_platform,
             scratchpad_tool,
             memory_search_tool,
             memory_browse_tool,
@@ -388,6 +406,10 @@ impl BuiltinToolRegistry {
             serde_json::to_value(schema_for!(crate::builtin_tools::desktop::DesktopArgs)).unwrap_or_default());
         reg(tools, "pim", PimTool::DESCRIPTION,
             serde_json::to_value(schema_for!(crate::builtin_tools::pim::PimArgs)).unwrap_or_default());
+        reg(tools, "system", SystemTool::DESCRIPTION,
+            serde_json::to_value(schema_for!(crate::builtin_tools::system_tool::SystemArgs)).unwrap_or_default());
+        reg(tools, "automation", AutomationTool::DESCRIPTION,
+            serde_json::to_value(schema_for!(crate::builtin_tools::automation_tool::AutomationArgs)).unwrap_or_default());
         reg(tools, "scratchpad", ScratchpadTool::DESCRIPTION,
             serde_json::to_value(schema_for!(crate::builtin_tools::scratchpad::ScratchpadArgs)).unwrap_or_default());
         reg(tools, "clawhub", crate::builtin_tools::clawhub::ClawHubTool::DESCRIPTION,

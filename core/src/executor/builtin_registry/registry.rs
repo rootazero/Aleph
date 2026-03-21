@@ -48,6 +48,13 @@ pub struct BuiltinToolRegistry {
     pub(crate) desktop_tool: crate::builtin_tools::DesktopTool,
     /// PIM (Personal Information Management) tool instance
     pub(crate) pim_tool: crate::builtin_tools::PimTool,
+    /// System tool instance (app management, notifications, clipboard, system info)
+    pub(crate) system_tool: crate::builtin_tools::SystemTool,
+    /// Automation tool instance (scripts, Shortcuts)
+    pub(crate) automation_tool: crate::builtin_tools::AutomationTool,
+    /// Desktop platform reference (shared with new tools; held for future use)
+    #[allow(dead_code)]
+    pub(crate) desktop_platform: crate::sync_primitives::Arc<dyn aleph_desktop::DesktopPlatform>,
     /// Scratchpad tool instance (project working memory)
     pub(crate) scratchpad_tool: crate::builtin_tools::ScratchpadTool,
     /// Memory search tool instance (optional - requires memory_db + embedder)
@@ -277,6 +284,8 @@ impl ToolRegistry for BuiltinToolRegistry {
             }),
             "desktop" => Box::pin(async move { self.desktop_tool.call_json(arguments).await }),
             "pim" => Box::pin(async move { self.pim_tool.call_json(arguments).await }),
+            "system" => Box::pin(async move { self.system_tool.call_json(arguments).await }),
+            "automation" => Box::pin(async move { self.automation_tool.call_json(arguments).await }),
             "scratchpad" => Box::pin(async move { self.scratchpad_tool.call_json(arguments).await }),
 
             // Memory tools - search and browse personal memory
