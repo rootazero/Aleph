@@ -60,4 +60,8 @@ pub struct BuiltinToolConfig {
     pub shared_token_manager: Option<Arc<crate::gateway::security::SharedTokenManager>>,
     /// Memory similarity threshold from config (overrides hardcoded default)
     pub memory_similarity_threshold: Option<f32>,
+    /// Coordination task store for task/team management tools
+    pub coord_task_store: Option<Arc<dyn crate::agents::swarm::tasks::CoordTaskStore>>,
+    /// Agent message bus for task update/wait event notifications
+    pub agent_message_bus: Option<Arc<crate::agents::swarm::AgentMessageBus>>,
 }

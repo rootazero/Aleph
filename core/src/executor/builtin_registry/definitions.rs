@@ -82,12 +82,12 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         requires_config: false,
     },
     BuiltinToolDefinition {
-        name: "image.generate",
+        name: "image_generate",
         description: "Generate images from text prompts",
         requires_config: true, // Requires generation registry
     },
     BuiltinToolDefinition {
-        name: "skill.list",
+        name: "skill_list",
         description: "List all installed skills",
         requires_config: false,
     },
@@ -102,7 +102,7 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         requires_config: false,
     },
     BuiltinToolDefinition {
-        name: "vault.store",
+        name: "vault_store",
         description: "Manage encrypted secret vault (store/delete/list API keys)",
         requires_config: true, // Requires SharedTokenManager
     },
@@ -112,17 +112,17 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         requires_config: true, // Requires memory_db + embedder
     },
     BuiltinToolDefinition {
-        name: "memory.browse",
+        name: "memory_browse",
         description: "Browse personal memory via hierarchical VFS navigation (ls, read, glob on aleph:// paths)",
         requires_config: true, // Requires memory_db
     },
     BuiltinToolDefinition {
-        name: "session.list",
+        name: "session_list",
         description: "List sessions accessible to this agent for cross-session communication",
         requires_config: true, // Requires gateway_context
     },
     BuiltinToolDefinition {
-        name: "session.send",
+        name: "session_send",
         description: "Send messages to other sessions (same or different agent)",
         requires_config: true, // Requires gateway_context
     },
@@ -132,33 +132,33 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         requires_config: false,
     },
     BuiltinToolDefinition {
-        name: "session.new",
+        name: "session_new",
         description: "Start a new conversation session, closing the current one",
         requires_config: true, // Requires SessionManager (via gateway_context)
     },
     BuiltinToolDefinition {
-        name: "session.rename",
+        name: "session_rename",
         description: "Rename the current session's topic/title",
         requires_config: true, // Requires SessionManager (via gateway_context)
     },
     BuiltinToolDefinition {
-        name: "cron.manage",
+        name: "cron_manage",
         description: "Manage scheduled tasks — create, list, delete, enable/disable cron jobs",
         requires_config: true, // Requires SharedCronService
     },
     BuiltinToolDefinition {
-        name: "agent.create",
+        name: "agent_create",
         description: "Create a new agent with an isolated workspace and register it for use",
         requires_config: true, // Requires agent_registry + workspace_manager
     },
 
     BuiltinToolDefinition {
-        name: "agent.list",
+        name: "agent_list",
         description: "List all registered agents and show which is active for the current session",
         requires_config: true, // Requires agent_registry
     },
     BuiltinToolDefinition {
-        name: "agent.delete",
+        name: "agent_delete",
         description: "Delete an agent and archive its workspace (cannot delete 'main')",
         requires_config: true, // Requires agent_registry + workspace_manager
     },
@@ -239,6 +239,48 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         description: "Search, browse, install, and update skills from ClawHub registry",
         requires_config: false,
     },
+    // Task coordination tools — require CoordTaskStore
+    BuiltinToolDefinition {
+        name: "task_create",
+        description: "Create a coordination task with optional dependencies and team assignment",
+        requires_config: true,
+    },
+    BuiltinToolDefinition {
+        name: "task_update",
+        description: "Update a coordination task's status, owner, result, or metadata",
+        requires_config: true,
+    },
+    BuiltinToolDefinition {
+        name: "task_list",
+        description: "List coordination tasks with optional filtering by team, status, or owner",
+        requires_config: true,
+    },
+    BuiltinToolDefinition {
+        name: "task_wait",
+        description: "Wait for specific tasks or all team tasks to complete",
+        requires_config: true,
+    },
+    // Team coordination tools — require CoordTaskStore
+    BuiltinToolDefinition {
+        name: "team_create",
+        description: "Create a coordination team with a leader",
+        requires_config: true,
+    },
+    BuiltinToolDefinition {
+        name: "team_launch",
+        description: "Launch a team from a template with agents and tasks",
+        requires_config: true,
+    },
+    BuiltinToolDefinition {
+        name: "team_list",
+        description: "List all coordination teams and their status",
+        requires_config: true,
+    },
+    BuiltinToolDefinition {
+        name: "team_disband",
+        description: "Disband a team, cancelling remaining tasks",
+        requires_config: true,
+    },
 ];
 
 /// Create a boxed tool instance by name
@@ -271,7 +313,7 @@ pub fn create_tool_boxed(
         "bash" => Some(Box::new(BashExecTool::new())),
         "code_exec" => Some(Box::new(CodeExecTool::new())),
         "pdf_generate" => Some(Box::new(PdfGenerateTool::new())),
-        "image.generate" => {
+        "image_generate" => {
             if let Some(cfg) = config {
                 if let Some(ref registry) = cfg.generation_registry {
                     return Some(Box::new(ImageGenerateTool::new(Arc::clone(registry))));
@@ -279,10 +321,10 @@ pub fn create_tool_boxed(
             }
             None // Requires generation registry
         }
-        "skill.list" => Some(Box::new(SkillListTool::default())),
+        "skill_list" => Some(Box::new(SkillListTool::default())),
         "read_config_guide" => Some(Box::new(ReadConfigGuideTool::default())),
         "desktop" => Some(Box::new(DesktopTool::new())),
-        "vault.store" => {
+        "vault_store" => {
             config.and_then(|c| c.shared_token_manager.as_ref()).map(|mgr| {
                 Box::new(VaultStoreTool::new(Arc::clone(mgr))) as Box<dyn AlephToolDyn>
             })
@@ -290,16 +332,16 @@ pub fn create_tool_boxed(
         // Sessions tools require gateway_context and caller_agent_id at runtime,
         // so they cannot be created via create_tool_boxed. They are created
         // dynamically in BuiltinToolRegistry::execute_tool().
-        "session.list" | "session.send" => None,
+        "session_list" | "session_send" => None,
         // Session new tool requires SessionManager (from gateway_context) at runtime
-        "session.new" => None,
+        "session_new" => None,
         // Session set-topic tool requires SessionManager (from gateway_context) at runtime
-        "session.rename" => None,
+        "session_rename" => None,
         // Cron management tool requires SharedCronService at runtime
-        "cron.manage" => None,
+        "cron_manage" => None,
         // Agent management tools require agent_registry + workspace_manager + session_context,
         // created dynamically in BuiltinToolRegistry::with_config().
-        "agent.create" | "agent.list" | "agent.delete" => None,
+        "agent_create" | "agent_list" | "agent_delete" => None,
         "escalate_task" => Some(Box::new(EscalateTaskTool)),
         // Media tools — require MediaPipeline
         "media_understand" => {
@@ -318,6 +360,10 @@ pub fn create_tool_boxed(
             })
         }
         "clawhub" => Some(Box::new(crate::builtin_tools::clawhub::ClawHubTool::new())),
+        // Task/team coordination tools require CoordTaskStore + AgentMessageBus at runtime,
+        // created dynamically in BuiltinToolRegistry::with_config().
+        "task_create" | "task_update" | "task_list" | "task_wait"
+        | "team_create" | "team_launch" | "team_list" | "team_disband" => None,
         // Browser tools — create ProfileManager from config or use default
         "browser_open" | "browser_click" | "browser_type" | "browser_screenshot"
         | "browser_snapshot" | "browser_navigate" | "browser_tabs" | "browser_select"
@@ -378,10 +424,10 @@ mod tests {
         assert!(names.contains(&"bash".to_string()));
         assert!(names.contains(&"code_exec".to_string()));
         assert!(names.contains(&"pdf_generate".to_string()));
-        assert!(names.contains(&"image.generate".to_string()));
-        assert!(names.contains(&"skill.list".to_string()));
+        assert!(names.contains(&"image_generate".to_string()));
+        assert!(names.contains(&"skill_list".to_string()));
         assert!(names.contains(&"read_config_guide".to_string()));
-        assert!(names.contains(&"vault.store".to_string()));
+        assert!(names.contains(&"vault_store".to_string()));
 
         // Verify browser tools
         assert!(names.contains(&"browser_open".to_string()));
@@ -402,15 +448,15 @@ mod tests {
         let names = get_builtin_tool_names();
 
         // Verify sessions tools are defined when gateway feature is enabled
-        assert!(names.contains(&"session.list".to_string()));
-        assert!(names.contains(&"session.send".to_string()));
+        assert!(names.contains(&"session_list".to_string()));
+        assert!(names.contains(&"session_send".to_string()));
     }
 
     #[test]
     fn test_sessions_tools_require_config() {
         // Sessions tools require gateway_context (dynamic creation)
-        assert!(create_tool_boxed("session.list", None).is_none());
-        assert!(create_tool_boxed("session.send", None).is_none());
+        assert!(create_tool_boxed("session_list", None).is_none());
+        assert!(create_tool_boxed("session_send", None).is_none());
     }
 
     #[test]
@@ -424,8 +470,8 @@ mod tests {
 
     #[test]
     fn test_is_builtin_tool_sessions() {
-        assert!(is_builtin_tool("session.list"));
-        assert!(is_builtin_tool("session.send"));
+        assert!(is_builtin_tool("session_list"));
+        assert!(is_builtin_tool("session_send"));
     }
 
     #[test]
@@ -439,7 +485,7 @@ mod tests {
         assert!(create_tool_boxed("unknown", None).is_none());
 
         // Test tool requiring config (should return None without config)
-        assert!(create_tool_boxed("image.generate", None).is_none());
+        assert!(create_tool_boxed("image_generate", None).is_none());
 
         // Test browser tools (always available, no config required)
         assert!(create_tool_boxed("browser_open", None).is_some());

@@ -290,6 +290,69 @@ impl BuiltinToolRegistry {
                 (None, None, None, None)
             };
 
+        // Add task/team coordination tools (if CoordTaskStore is available)
+        let (task_create_tool, task_update_tool, task_list_tool, task_wait_tool,
+             team_create_tool, team_launch_tool, team_list_tool, team_disband_tool) =
+            if let Some(ref store) = config.coord_task_store {
+                use crate::builtin_tools::task_manage::{TaskCreateTool, TaskUpdateTool, TaskListTool, TaskWaitTool};
+                use crate::builtin_tools::team_manage::{TeamCreateTool, TeamLaunchTool, TeamListTool, TeamDisbandTool};
+
+                let create = TaskCreateTool::new(Arc::clone(store));
+                let list = TaskListTool::new(Arc::clone(store));
+
+                // TaskUpdateTool and TaskWaitTool need the event bus
+                let (update, wait) = if let Some(ref bus) = config.agent_message_bus {
+                    (
+                        Some(TaskUpdateTool::new(Arc::clone(store), Arc::clone(bus))),
+                        Some(TaskWaitTool::new(Arc::clone(store), Arc::clone(bus))),
+                    )
+                } else {
+                    (None, None)
+                };
+
+                let team_create = TeamCreateTool::new(Arc::clone(store));
+                let team_launch = TeamLaunchTool::new(Arc::clone(store));
+                let team_list = TeamListTool::new(Arc::clone(store));
+                let team_disband = TeamDisbandTool::new(Arc::clone(store));
+
+                // Register parameter schemas for all task/team tools
+                {
+                    use crate::tools::AlephTool;
+                    let mut defs: Vec<crate::dispatcher::ToolDefinition> = vec![
+                        create.definition(),
+                        list.definition(),
+                        team_create.definition(),
+                        team_launch.definition(),
+                        team_list.definition(),
+                        team_disband.definition(),
+                    ];
+                    if let Some(ref u) = update {
+                        defs.push(u.definition());
+                    }
+                    if let Some(ref w) = wait {
+                        defs.push(w.definition());
+                    }
+                    for td in &defs {
+                        let mut ut = UnifiedTool::new(
+                            format!("builtin:{}", td.name),
+                            &td.name,
+                            &td.description,
+                            ToolSource::Builtin,
+                        );
+                        ut = ut.with_parameters_schema(td.parameters.clone());
+                        tools.insert(td.name.clone(), ut);
+                    }
+                }
+
+                info!("Registered task/team coordination tools");
+                (
+                    Some(create), update, Some(list), wait,
+                    Some(team_create), Some(team_launch), Some(team_list), Some(team_disband),
+                )
+            } else {
+                (None, None, None, None, None, None, None, None)
+            };
+
         // Initialize tool policy handle (use provided or create a default one)
         let tool_policy_handle = config.tool_policy.clone()
             .or_else(|| Some(crate::builtin_tools::agent_manage::new_tool_policy_handle()));
@@ -359,6 +422,14 @@ impl BuiltinToolRegistry {
             gemini_cli_tool,
             acp_switch_tool,
             clawhub_tool: crate::builtin_tools::clawhub::ClawHubTool::new(),
+            task_create_tool,
+            task_update_tool,
+            task_list_tool,
+            task_wait_tool,
+            team_create_tool,
+            team_launch_tool,
+            team_list_tool,
+            team_disband_tool,
             tools,
         }
     }
@@ -396,7 +467,7 @@ impl BuiltinToolRegistry {
             serde_json::to_value(schema_for!(crate::builtin_tools::code_exec::CodeExecArgs)).unwrap_or_default());
         reg(tools, "pdf_generate", PdfGenerateTool::DESCRIPTION,
             serde_json::to_value(schema_for!(crate::builtin_tools::pdf_generate::PdfGenerateArgs)).unwrap_or_default());
-        reg(tools, "skill.list", SkillListTool::DESCRIPTION,
+        reg(tools, "skill_list", SkillListTool::DESCRIPTION,
             serde_json::json!({"type": "object", "properties": {}, "required": []}));
         reg(tools, "read_config_guide", ReadConfigGuideTool::DESCRIPTION,
             serde_json::to_value(schema_for!(crate::builtin_tools::config_guide::ReadConfigGuideArgs)).unwrap_or_default());
@@ -449,14 +520,14 @@ impl BuiltinToolRegistry {
             info!("Registered memory_search tool in BuiltinToolRegistry");
         }
         if memory_browse_tool.is_some() {
-            reg(tools, "memory.browse", MemoryBrowseTool::DESCRIPTION,
+            reg(tools, "memory_browse", MemoryBrowseTool::DESCRIPTION,
                 serde_json::to_value(schema_for!(crate::builtin_tools::memory_browse::MemoryBrowseArgs)).unwrap_or_default());
             info!("Registered memory.browse tool in BuiltinToolRegistry");
         }
 
         // Vault store tool
         if vault_store_tool.is_some() {
-            reg(tools, "vault.store", VaultStoreTool::DESCRIPTION,
+            reg(tools, "vault_store", VaultStoreTool::DESCRIPTION,
                 serde_json::to_value(schema_for!(crate::builtin_tools::vault_store::VaultStoreArgs)).unwrap_or_default());
             info!("Registered vault.store tool in BuiltinToolRegistry");
         }
@@ -465,7 +536,7 @@ impl BuiltinToolRegistry {
         let generation_registry = config.generation_registry.clone();
         if let Some(ref registry) = generation_registry {
             if image_generate_tool.is_some() {
-                reg(tools, "image.generate", ImageGenerateTool::DESCRIPTION,
+                reg(tools, "image_generate", ImageGenerateTool::DESCRIPTION,
                     serde_json::to_value(schema_for!(crate::builtin_tools::ImageGenerateArgs)).unwrap_or_default());
                 info!("Registered image.generate tool in BuiltinToolRegistry");
             }
@@ -515,7 +586,7 @@ impl BuiltinToolRegistry {
             use crate::builtin_tools::cron_manage::CronManageTool;
             let tmp_tool = CronManageTool::new(Arc::clone(cron_svc));
             let def = AlephTool::definition(&tmp_tool);
-            reg(tools, "cron.manage", CronManageTool::DESCRIPTION, def.parameters.clone());
+            reg(tools, "cron_manage", CronManageTool::DESCRIPTION, def.parameters.clone());
             info!("Registered cron.manage tool in BuiltinToolRegistry");
         }
 
@@ -529,21 +600,21 @@ impl BuiltinToolRegistry {
 
             let tmp_new = SessionNewTool::new(Arc::clone(sm));
             let def = AlephTool::definition(&tmp_new);
-            reg(tools, "session.new", SessionNewTool::DESCRIPTION, def.parameters.clone());
+            reg(tools, "session_new", SessionNewTool::DESCRIPTION, def.parameters.clone());
             info!("Registered session.new tool in BuiltinToolRegistry");
 
             let tmp_topic = SessionSetTopicTool::new(Arc::clone(sm));
             let def = AlephTool::definition(&tmp_topic);
-            reg(tools, "session.rename", SessionSetTopicTool::DESCRIPTION, def.parameters.clone());
+            reg(tools, "session_rename", SessionSetTopicTool::DESCRIPTION, def.parameters.clone());
             info!("Registered session.rename tool in BuiltinToolRegistry");
         }
 
         // Sessions tools — always register metadata so LLM sees them.
         // GatewayContext may be injected later via set_gateway_context().
         // Execution checks OnceCell at call time.
-        reg(tools, "session.list", SessionsListTool::DESCRIPTION,
+        reg(tools, "session_list", SessionsListTool::DESCRIPTION,
             serde_json::to_value(schema_for!(crate::builtin_tools::sessions::SessionsListArgs)).unwrap_or_default());
-        reg(tools, "session.send", SessionsSendTool::DESCRIPTION,
+        reg(tools, "session_send", SessionsSendTool::DESCRIPTION,
             serde_json::to_value(schema_for!(crate::builtin_tools::sessions::SessionsSendArgs)).unwrap_or_default());
         info!("Registered session.list + session.send in BuiltinToolRegistry");
     }

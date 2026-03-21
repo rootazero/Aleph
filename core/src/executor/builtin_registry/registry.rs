@@ -114,6 +114,16 @@ pub struct BuiltinToolRegistry {
     pub(crate) acp_switch_tool: Option<crate::builtin_tools::acp_tools::AcpSwitchTool>,
     /// ClawHub tool instance
     pub(crate) clawhub_tool: crate::builtin_tools::clawhub::ClawHubTool,
+    /// Task coordination tools (optional — require CoordTaskStore)
+    pub(crate) task_create_tool: Option<crate::builtin_tools::task_manage::TaskCreateTool>,
+    pub(crate) task_update_tool: Option<crate::builtin_tools::task_manage::TaskUpdateTool>,
+    pub(crate) task_list_tool: Option<crate::builtin_tools::task_manage::TaskListTool>,
+    pub(crate) task_wait_tool: Option<crate::builtin_tools::task_manage::TaskWaitTool>,
+    /// Team coordination tools (optional — require CoordTaskStore)
+    pub(crate) team_create_tool: Option<crate::builtin_tools::team_manage::TeamCreateTool>,
+    pub(crate) team_launch_tool: Option<crate::builtin_tools::team_manage::TeamLaunchTool>,
+    pub(crate) team_list_tool: Option<crate::builtin_tools::team_manage::TeamListTool>,
+    pub(crate) team_disband_tool: Option<crate::builtin_tools::team_manage::TeamDisbandTool>,
     /// Tool metadata for lookup
     pub(super) tools: HashMap<String, UnifiedTool>,
 }
@@ -248,7 +258,7 @@ impl ToolRegistry for BuiltinToolRegistry {
             "pdf_generate" => Box::pin(async move { self.pdf_generate_tool.call_json(arguments).await }),
 
             // Generation tools - image uses AlephTool, video/audio use legacy execute_* methods
-            "image.generate" => Box::pin(async move {
+            "image_generate" => Box::pin(async move {
                 let tool = self.image_generate_tool.as_ref().ok_or_else(|| {
                     AlephError::tool("Image generation not available: no generation registry configured")
                 })?;
@@ -274,11 +284,11 @@ impl ToolRegistry for BuiltinToolRegistry {
             }),
 
             // Self-management tools
-            "skill.list" => Box::pin(async move { self.list_skills_tool.call_json(arguments).await }),
+            "skill_list" => Box::pin(async move { self.list_skills_tool.call_json(arguments).await }),
             "read_config_guide" => Box::pin(async move { self.config_guide_tool.call_json(arguments).await }),
-            "vault.store" => Box::pin(async move {
+            "vault_store" => Box::pin(async move {
                 let tool = self.vault_store_tool.as_ref().ok_or_else(|| {
-                    AlephError::tool("vault.store not available: no SharedTokenManager configured")
+                    AlephError::tool("vault_store not available: no SharedTokenManager configured")
                 })?;
                 tool.call_json(arguments).await
             }),
@@ -295,24 +305,24 @@ impl ToolRegistry for BuiltinToolRegistry {
                 })?;
                 tool.call_json(arguments).await
             }),
-            "memory.browse" => Box::pin(async move {
+            "memory_browse" => Box::pin(async move {
                 let tool = self.memory_browse_tool.as_ref().ok_or_else(|| {
-                    AlephError::tool("memory.browse not available: no memory backend configured")
+                    AlephError::tool("memory_browse not available: no memory backend configured")
                 })?;
                 tool.call_json(arguments).await
             }),
 
             // Sessions tools for cross-session communication
-            "session.list" => Box::pin(async move {
+            "session_list" => Box::pin(async move {
                 let context = self.gateway_context.get().ok_or_else(|| {
-                    AlephError::tool("session.list not available: GatewayContext not yet injected")
+                    AlephError::tool("session_list not available: GatewayContext not yet injected")
                 })?;
                 let tool = SessionsListTool::new(Arc::clone(context), "main");
                 tool.call_json(arguments).await
             }),
-            "session.send" => Box::pin(async move {
+            "session_send" => Box::pin(async move {
                 let context = self.gateway_context.get().ok_or_else(|| {
-                    AlephError::tool("session.send not available: GatewayContext not yet injected")
+                    AlephError::tool("session_send not available: GatewayContext not yet injected")
                 })?;
                 let tool = SessionsSendTool::with_context((**context).clone(), "main");
                 tool.call_json(arguments).await
@@ -332,7 +342,7 @@ impl ToolRegistry for BuiltinToolRegistry {
             "browser_profile" => Box::pin(async move { self.browser_profile_tool.call_json(arguments).await }),
 
             // Session new tool — inject session key from session context
-            "session.new" => {
+            "session_new" => {
                 let arguments = {
                     let mut args = arguments;
                     if let Some(ref h) = self.session_context_handle {
@@ -346,14 +356,14 @@ impl ToolRegistry for BuiltinToolRegistry {
                 };
                 Box::pin(async move {
                     let tool = self.session_new_tool.as_ref().ok_or_else(|| {
-                        AlephError::tool("session.new not available: no SessionManager configured")
+                        AlephError::tool("session_new not available: no SessionManager configured")
                     })?;
                     tool.call_json(arguments).await
                 })
             }
 
             // Session set-topic tool — inject session key from session context
-            "session.rename" => {
+            "session_rename" => {
                 let arguments = {
                     let mut args = arguments;
                     if let Some(ref h) = self.session_context_handle {
@@ -367,23 +377,37 @@ impl ToolRegistry for BuiltinToolRegistry {
                 };
                 Box::pin(async move {
                     let tool = self.session_set_topic_tool.as_ref().ok_or_else(|| {
-                        AlephError::tool("session.rename not available: no SessionManager configured")
+                        AlephError::tool("session_rename not available: no SessionManager configured")
                     })?;
                     tool.call_json(arguments).await
                 })
             }
 
-            // Cron management tool
-            "cron.manage" => Box::pin(async move {
-                let tool = self.cron_manage_tool.as_ref().ok_or_else(|| {
-                    AlephError::tool("cron.manage not available: cron service not configured")
-                })?;
-                tool.call_json(arguments).await
-            }),
+            // Cron management tool — inject session channel context so
+            // created jobs know where to deliver results.
+            "cron_manage" => {
+                let arguments = {
+                    let mut args = arguments;
+                    if let Some(ref h) = self.session_context_handle {
+                        if let Ok(ctx) = h.try_read() {
+                            if let Some(obj) = args.as_object_mut() {
+                                obj.insert("__channel".into(), serde_json::Value::String(ctx.channel.clone()));
+                            }
+                        }
+                    }
+                    args
+                };
+                Box::pin(async move {
+                    let tool = self.cron_manage_tool.as_ref().ok_or_else(|| {
+                        AlephError::tool("cron_manage not available: cron service not configured")
+                    })?;
+                    tool.call_json(arguments).await
+                })
+            },
 
             // Agent management tools — snapshot session context into arguments
             // to avoid race conditions from concurrent reads of the shared handle.
-            "agent.create" | "agent.list" | "agent.delete" => {
+            "agent_create" | "agent_list" | "agent_delete" => {
                 // Snapshot session context into tool arguments before async execution
                 let arguments = {
                     let mut args = arguments;
@@ -398,27 +422,63 @@ impl ToolRegistry for BuiltinToolRegistry {
                 };
 
                 match tool_name {
-                    "agent.create" => Box::pin(async move {
+                    "agent_create" => Box::pin(async move {
                         let tool = self.agent_create_tool.as_ref().ok_or_else(|| {
-                            AlephError::tool("agent.create not available: no AgentRegistry/AgentEnvStore configured")
+                            AlephError::tool("agent_create not available: no AgentRegistry/AgentEnvStore configured")
                         })?;
                         tool.call_json(arguments).await
                     }),
-                    "agent.list" => Box::pin(async move {
+                    "agent_list" => Box::pin(async move {
                         let tool = self.agent_list_tool.as_ref().ok_or_else(|| {
-                            AlephError::tool("agent.list not available: no AgentRegistry/AgentEnvStore configured")
+                            AlephError::tool("agent_list not available: no AgentRegistry/AgentEnvStore configured")
                         })?;
                         tool.call_json(arguments).await
                     }),
-                    "agent.delete" => Box::pin(async move {
+                    "agent_delete" => Box::pin(async move {
                         let tool = self.agent_delete_tool.as_ref().ok_or_else(|| {
-                            AlephError::tool("agent.delete not available: no AgentRegistry/AgentEnvStore configured")
+                            AlephError::tool("agent_delete not available: no AgentRegistry/AgentEnvStore configured")
                         })?;
                         tool.call_json(arguments).await
                     }),
                     _ => unreachable!(),
                 }
             }
+
+            // Task coordination tools
+            "task_create" => Box::pin(async move {
+                let tool = self.task_create_tool.as_ref().ok_or_else(|| AlephError::tool("task_create not available: no CoordTaskStore configured"))?;
+                tool.call_json(arguments).await
+            }),
+            "task_update" => Box::pin(async move {
+                let tool = self.task_update_tool.as_ref().ok_or_else(|| AlephError::tool("task_update not available: no CoordTaskStore or AgentMessageBus configured"))?;
+                tool.call_json(arguments).await
+            }),
+            "task_list" => Box::pin(async move {
+                let tool = self.task_list_tool.as_ref().ok_or_else(|| AlephError::tool("task_list not available: no CoordTaskStore configured"))?;
+                tool.call_json(arguments).await
+            }),
+            "task_wait" => Box::pin(async move {
+                let tool = self.task_wait_tool.as_ref().ok_or_else(|| AlephError::tool("task_wait not available: no CoordTaskStore or AgentMessageBus configured"))?;
+                tool.call_json(arguments).await
+            }),
+
+            // Team coordination tools
+            "team_create" => Box::pin(async move {
+                let tool = self.team_create_tool.as_ref().ok_or_else(|| AlephError::tool("team_create not available: no CoordTaskStore configured"))?;
+                tool.call_json(arguments).await
+            }),
+            "team_launch" => Box::pin(async move {
+                let tool = self.team_launch_tool.as_ref().ok_or_else(|| AlephError::tool("team_launch not available: no CoordTaskStore configured"))?;
+                tool.call_json(arguments).await
+            }),
+            "team_list" => Box::pin(async move {
+                let tool = self.team_list_tool.as_ref().ok_or_else(|| AlephError::tool("team_list not available: no CoordTaskStore configured"))?;
+                tool.call_json(arguments).await
+            }),
+            "team_disband" => Box::pin(async move {
+                let tool = self.team_disband_tool.as_ref().ok_or_else(|| AlephError::tool("team_disband not available: no CoordTaskStore configured"))?;
+                tool.call_json(arguments).await
+            }),
 
             // ClawHub tool
             "clawhub" => Box::pin(async move { self.clawhub_tool.call_json(arguments).await }),
