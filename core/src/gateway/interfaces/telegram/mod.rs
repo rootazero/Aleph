@@ -395,10 +395,13 @@ impl Channel for TelegramChannel {
 
         // Start message polling
         let inbound_tx = self.channel_state.sender();
+        let inbound_tx_for_cb = self.channel_state.sender();
         let callback_tx = self.callback_tx.clone();
         let config = self.config.clone();
+        let config_for_cb = self.config.clone();
         let status = self.channel_state.status_handle();
         let channel_id = self.info.id.clone();
+        let channel_id_for_cb = self.info.id.clone();
 
         tokio::spawn(async move {
             tracing::info!("Starting Telegram long-polling...");
@@ -421,33 +424,61 @@ impl Channel for TelegramChannel {
                 },
             );
 
-            // Callback query handler
+            // Callback query handler — also re-injects callback data as an
+            // InboundMessage so the inbound router can process namespace
+            // sub-command selections through the normal message pipeline.
             let callback_handler = Update::filter_callback_query().endpoint(
                 move |bot: Bot, q: TgCallbackQuery| {
                     let tx = callback_tx.clone();
+                    let inbound_tx = inbound_tx_for_cb.clone();
+                    let config = config_for_cb.clone();
+                    let channel_id = channel_id_for_cb.clone();
                     async move {
-                        if let Some(data) = q.data.clone() {
-                            let chat_id = q
-                                .message
-                                .as_ref()
-                                .map(|m| m.chat().id.to_string())
-                                .unwrap_or_default();
-                            let msg_id = q
-                                .message
-                                .as_ref()
-                                .map(|m| m.id().to_string())
-                                .unwrap_or_default();
+                        let chat_id_str = q
+                            .message
+                            .as_ref()
+                            .map(|m| m.chat().id.to_string())
+                            .unwrap_or_default();
+                        let msg_id_str = q
+                            .message
+                            .as_ref()
+                            .map(|m| m.id().to_string())
+                            .unwrap_or_default();
 
+                        if let Some(data) = q.data.clone() {
+                            let user_id_val = q.from.id.0 as i64;
+
+                            // Send to callback channel (for existing consumers)
                             let query = CallbackQuery {
                                 id: q.id.clone(),
                                 user_id: UserId::new(q.from.id.to_string()),
-                                chat_id: ConversationId::new(chat_id),
-                                message_id: MessageId::new(msg_id),
-                                data,
+                                chat_id: ConversationId::new(chat_id_str.clone()),
+                                message_id: MessageId::new(msg_id_str),
+                                data: data.clone(),
                             };
-
                             if let Err(e) = tx.send(query).await {
                                 tracing::error!("Failed to send callback query: {}", e);
+                            }
+
+                            // Re-inject as InboundMessage if user is allowed
+                            // (so the inbound router processes it as a slash command)
+                            if config.is_user_allowed(user_id_val) {
+                                let inbound = InboundMessage {
+                                    id: MessageId::new(format!("cb_{}", q.id)),
+                                    channel_id: channel_id.clone(),
+                                    conversation_id: ConversationId::new(chat_id_str),
+                                    sender_id: UserId::new(q.from.id.to_string()),
+                                    sender_name: q.from.username.clone().or_else(|| Some(q.from.first_name.clone())),
+                                    text: data,
+                                    attachments: Vec::new(),
+                                    timestamp: Utc::now(),
+                                    reply_to: None,
+                                    is_group: false,
+                                    raw: None,
+                                };
+                                if let Err(e) = inbound_tx.send(inbound).await {
+                                    tracing::error!("Failed to re-inject callback as inbound message: {}", e);
+                                }
                             }
                         }
 

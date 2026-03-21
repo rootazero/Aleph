@@ -310,6 +310,44 @@ impl InboundMessageRouter {
                         self.execute_for_context_with_metadata(&ctx, mode_json).await?;
                         return Ok(());
                     }
+                } else {
+                    // Command not resolved — check if it's a namespace-only command.
+                    // e.g. "/session" when tools like "session.new", "session.list" exist.
+                    // Reply with an inline keyboard showing available sub-commands.
+                    let namespace = slash_text
+                        .trim_start_matches('/')
+                        .split_whitespace()
+                        .next()
+                        .unwrap_or("")
+                        .split('@')  // Strip @botname suffix
+                        .next()
+                        .unwrap_or("");
+                    if !namespace.is_empty() {
+                        let registry = parser.tool_registry();
+                        if registry.is_namespace(namespace).await {
+                            let children = registry.list_namespace_children(namespace).await;
+                            if !children.is_empty() {
+                                info!(
+                                    "[Router] Namespace command /{} — sending inline keyboard with {} children",
+                                    namespace,
+                                    children.len()
+                                );
+                                let keyboard = self.build_namespace_keyboard(namespace, &children);
+                                let reply = OutboundMessage {
+                                    conversation_id: msg.conversation_id.clone(),
+                                    text: format!("/{} — choose a sub-command:", namespace),
+                                    attachments: Vec::new(),
+                                    reply_to: Some(msg.id.clone()),
+                                    inline_keyboard: Some(keyboard),
+                                    metadata: Default::default(),
+                                };
+                                if let Err(e) = self.channel_registry.send(&msg.channel_id, reply).await {
+                                    error!("[Router] Failed to send namespace keyboard: {}", e);
+                                }
+                                return Ok(());
+                            }
+                        }
+                    }
                 }
             }
 
@@ -347,4 +385,43 @@ impl InboundMessageRouter {
 
         Ok(())
     }
+
+    /// Build an inline keyboard for namespace sub-commands.
+    ///
+    /// Each child tool becomes a button. The callback data is the full
+    /// slash command (e.g. "/session new") so that callback handling can
+    /// route it through the normal message pipeline.
+    fn build_namespace_keyboard(
+        &self,
+        namespace: &str,
+        children: &[crate::dispatcher::UnifiedTool],
+    ) -> super::channel::InlineKeyboard {
+        use super::channel::{InlineButton, InlineKeyboard};
+
+        let prefix = format!("{}.", namespace);
+        // Build buttons: 2 per row for compact layout
+        let buttons: Vec<InlineButton> = children
+            .iter()
+            .map(|tool| {
+                let sub_name = tool
+                    .name
+                    .strip_prefix(&prefix)
+                    .unwrap_or(&tool.name);
+                let display = sub_name.to_string();
+                // Callback data: "/namespace sub" format for re-injection
+                let callback = format!("/{} {}", namespace, sub_name);
+                InlineButton {
+                    text: display,
+                    callback_data: callback,
+                }
+            })
+            .collect();
+
+        let mut keyboard = InlineKeyboard::new();
+        for chunk in buttons.chunks(2) {
+            keyboard.rows.push(chunk.to_vec());
+        }
+        keyboard
+    }
+
 }

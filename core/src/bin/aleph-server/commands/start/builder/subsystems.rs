@@ -177,12 +177,38 @@ pub(in crate::commands::start) async fn initialize_channels(
     // Resolve all channel instances from app config
     let instances = app_config.resolved_channels();
 
-    // Build slash commands once for all telegram instances (builtin tools only)
+    // Build slash commands once for all telegram instances (builtin tools only).
+    // For namespace tools (name contains '.'), register only the top-level prefix
+    // (e.g. "session.new" → "session") and deduplicate. Independent tools register directly.
     let slash_commands = if let Some(reg) = dispatch_registry {
         let tools = reg.list_builtin_tools().await;
-        tools.iter()
-            .map(|t| (t.name.clone(), t.description.clone()))
-            .collect::<Vec<_>>()
+        let mut seen = std::collections::HashSet::new();
+        let mut commands = Vec::new();
+        for t in &tools {
+            if let Some(dot_pos) = t.name.find('.') {
+                // Namespace tool: extract prefix
+                let prefix = &t.name[..dot_pos];
+                if seen.insert(prefix.to_string()) {
+                    // Collect child names for the description
+                    let children = reg.list_namespace_children(prefix).await;
+                    let child_names: Vec<String> = children.iter()
+                        .filter_map(|c| c.name.strip_prefix(&format!("{}.", prefix)).map(String::from))
+                        .collect();
+                    let desc = if child_names.is_empty() {
+                        t.description.clone()
+                    } else {
+                        format!("[{}] {}", child_names.join(", "), t.description.split('.').next().unwrap_or(&t.description))
+                    };
+                    commands.push((prefix.to_string(), desc));
+                }
+            } else {
+                // Independent tool: register directly
+                if seen.insert(t.name.clone()) {
+                    commands.push((t.name.clone(), t.description.clone()));
+                }
+            }
+        }
+        commands
     } else {
         Vec::new()
     };
