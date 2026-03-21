@@ -147,7 +147,7 @@ impl MemoryBrowseTool {
             BrowseAction::Glob => "glob",
         };
 
-        notify_tool_start("memory_browse", &format!("{} {}", action_name, args.path));
+        notify_tool_start("memory.browse", &format!("{} {}", action_name, args.path));
 
         let output = match args.action {
             BrowseAction::Ls => self.handle_ls(&args.path, workspace).await?,
@@ -158,7 +158,7 @@ impl MemoryBrowseTool {
             }
         };
 
-        notify_tool_result("memory_browse", &output.summary, true);
+        notify_tool_result("memory.browse", &output.summary, true);
         Ok(output)
     }
 
@@ -374,7 +374,7 @@ impl Clone for MemoryBrowseTool {
 
 #[async_trait]
 impl AlephTool for MemoryBrowseTool {
-    const NAME: &'static str = "memory_browse";
+    const NAME: &'static str = "memory.browse";
     const DESCRIPTION: &'static str = "Browse hierarchical memory using aleph:// paths. \
         Supports ls (list directory), read (get content), and glob (pattern search). \
         Use after memory_search discovers relevant paths.";
@@ -384,9 +384,9 @@ impl AlephTool for MemoryBrowseTool {
 
     fn examples(&self) -> Option<Vec<String>> {
         Some(vec![
-            "memory_browse(action='ls', path='aleph://user/preferences/')".to_string(),
-            "memory_browse(action='read', path='aleph://user/preferences/coding/')".to_string(),
-            "memory_browse(action='glob', path='aleph://knowledge/', pattern='*rust*')".to_string(),
+            "memory.browse(action='ls', path='aleph://user/preferences/')".to_string(),
+            "memory.browse(action='read', path='aleph://user/preferences/coding/')".to_string(),
+            "memory.browse(action='glob', path='aleph://knowledge/', pattern='*rust*')".to_string(),
         ])
     }
 

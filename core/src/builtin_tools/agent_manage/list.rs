@@ -93,7 +93,7 @@ impl AgentListTool {
 
 #[async_trait]
 impl AlephTool for AgentListTool {
-    const NAME: &'static str = "agent_list";
+    const NAME: &'static str = "agent.list";
     const DESCRIPTION: &'static str =
         "List all available agents and show which one is currently active \
          for this conversation.";
@@ -177,7 +177,7 @@ mod tests {
         let tool = AgentListTool::new(registry, workspace_mgr);
         let def = AlephTool::definition(&tool);
 
-        assert_eq!(def.name, "agent_list");
+        assert_eq!(def.name, "agent.list");
         assert!(!def.requires_confirmation);
         assert!(def.llm_context.is_some());
     }

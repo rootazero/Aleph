@@ -174,7 +174,7 @@ pub struct SessionsSendTool {
 
 impl SessionsSendTool {
     /// Tool identifier
-    pub const NAME: &'static str = "sessions_send";
+    pub const NAME: &'static str = "session.send";
 
     /// Tool description for AI prompt
     pub const DESCRIPTION: &'static str =
@@ -455,7 +455,7 @@ fn session_key_to_gateway(key: &crate::routing::session_key::SessionKey) -> Sess
 /// Implementation of AlephTool trait for SessionsSendTool
 #[async_trait]
 impl AlephTool for SessionsSendTool {
-    const NAME: &'static str = "sessions_send";
+    const NAME: &'static str = "session.send";
     const DESCRIPTION: &'static str =
         "Send a message to another session (same or different agent). \
         Supports fire-and-forget (timeout_seconds=0) or wait-for-reply modes. \
@@ -600,7 +600,7 @@ mod tests {
 
     #[test]
     fn test_tool_name_and_description() {
-        assert_eq!(SessionsSendTool::NAME, "sessions_send");
+        assert_eq!(SessionsSendTool::NAME, "session.send");
         assert!(!SessionsSendTool::DESCRIPTION.is_empty());
     }
 

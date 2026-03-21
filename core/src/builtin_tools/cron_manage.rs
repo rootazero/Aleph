@@ -177,7 +177,7 @@ impl CronManageTool {
 
 #[async_trait]
 impl AlephTool for CronManageTool {
-    const NAME: &'static str = "cron_manage";
+    const NAME: &'static str = "cron.manage";
     const DESCRIPTION: &'static str =
         "Manage scheduled tasks (cron jobs). Create, list, delete, enable, or disable \
          recurring or one-shot tasks. Use this when the user wants to schedule something \
@@ -189,10 +189,10 @@ impl AlephTool for CronManageTool {
 
     fn examples(&self) -> Option<Vec<String>> {
         Some(vec![
-            r#"cron_manage(action="create", name="晨间汇报", prompt="生成今日待办清单", schedule={"type":"cron","expr":"0 0 9 * * *","timezone":"Asia/Shanghai"})"#.to_string(),
-            r#"cron_manage(action="create", name="发送合同邮件", prompt="给王总发合同回复邮件", schedule={"type":"at","at_ms":1711944000000})"#.to_string(),
-            r#"cron_manage(action="list")"#.to_string(),
-            r#"cron_manage(action="delete", job_id="abc-123")"#.to_string(),
+            r#"cron.manage(action="create", name="晨间汇报", prompt="生成今日待办清单", schedule={"type":"cron","expr":"0 0 9 * * *","timezone":"Asia/Shanghai"})"#.to_string(),
+            r#"cron.manage(action="create", name="发送合同邮件", prompt="给王总发合同回复邮件", schedule={"type":"at","at_ms":1711944000000})"#.to_string(),
+            r#"cron.manage(action="list")"#.to_string(),
+            r#"cron.manage(action="delete", job_id="abc-123")"#.to_string(),
         ])
     }
 

@@ -53,7 +53,7 @@ impl VaultStoreTool {
 
 #[async_trait]
 impl AlephTool for VaultStoreTool {
-    const NAME: &'static str = "vault_store";
+    const NAME: &'static str = "vault.store";
     const DESCRIPTION: &'static str = "Manage encrypted secret vault. API keys and sensitive credentials must be stored via this tool, never written directly to config files. Use 'store' to save, 'delete' to remove, 'list' to see key names (values are never returned).";
 
     type Args = VaultStoreArgs;
@@ -63,9 +63,9 @@ impl AlephTool for VaultStoreTool {
 
     fn examples(&self) -> Option<Vec<String>> {
         Some(vec![
-            r#"vault_store(action="store", key="provider:openai", secret="sk-...")"#.into(),
-            r#"vault_store(action="delete", key="provider:openai")"#.into(),
-            r#"vault_store(action="list")"#.into(),
+            r#"vault.store(action="store", key="provider:openai", secret="sk-...")"#.into(),
+            r#"vault.store(action="delete", key="provider:openai")"#.into(),
+            r#"vault.store(action="list")"#.into(),
         ])
     }
 

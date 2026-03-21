@@ -198,12 +198,12 @@ mod tests {
             let registry = BuiltinToolRegistry::new().await;
 
             // Metadata present
-            assert!(registry.get_tool("sessions_list").is_some());
-            assert!(registry.get_tool("sessions_send").is_some());
+            assert!(registry.get_tool("session.list").is_some());
+            assert!(registry.get_tool("session.send").is_some());
 
             // Execution fails without GatewayContext
             let result = registry
-                .execute_tool("sessions_list", serde_json::json!({}))
+                .execute_tool("session.list", serde_json::json!({}))
                 .await;
             assert!(result.is_err());
         }
@@ -218,27 +218,27 @@ mod tests {
             };
             let registry = BuiltinToolRegistry::with_config(config).await;
 
-            assert!(registry.get_tool("sessions_list").is_some());
-            assert!(registry.get_tool("sessions_send").is_some());
+            assert!(registry.get_tool("session.list").is_some());
+            assert!(registry.get_tool("session.send").is_some());
 
             // Check tool metadata
-            let sessions_list = registry.get_tool("sessions_list").unwrap();
-            assert_eq!(sessions_list.name, "sessions_list");
-            assert_eq!(sessions_list.id, "builtin:sessions_list");
+            let sessions_list = registry.get_tool("session.list").unwrap();
+            assert_eq!(sessions_list.name, "session.list");
+            assert_eq!(sessions_list.id, "builtin:session.list");
 
-            let sessions_send = registry.get_tool("sessions_send").unwrap();
-            assert_eq!(sessions_send.name, "sessions_send");
-            assert_eq!(sessions_send.id, "builtin:sessions_send");
+            let sessions_send = registry.get_tool("session.send").unwrap();
+            assert_eq!(sessions_send.name, "session.send");
+            assert_eq!(sessions_send.id, "builtin:session.send");
         }
 
         #[tokio::test]
         async fn test_sessions_list_execution_without_context() {
-            // Without gateway_context, sessions_list should fail with error
+            // Without gateway_context, session.list should fail with error
             let registry = BuiltinToolRegistry::new().await;
 
             let result = registry
                 .execute_tool(
-                    "sessions_list",
+                    "session.list",
                     serde_json::json!({}),
                 )
                 .await;
@@ -250,7 +250,7 @@ mod tests {
 
         #[tokio::test]
         async fn test_sessions_list_execution_with_context() {
-            // With gateway_context, sessions_list should execute successfully
+            // With gateway_context, session.list should execute successfully
             let gateway_context = create_test_gateway_context();
             let config = BuiltinToolConfig {
                 gateway_context: Some(gateway_context),
@@ -260,7 +260,7 @@ mod tests {
 
             let result = registry
                 .execute_tool(
-                    "sessions_list",
+                    "session.list",
                     serde_json::json!({}),
                 )
                 .await;

@@ -168,7 +168,7 @@ impl BuiltinToolRegistry {
         }
         info!("Registered browser tools (11 tools) in BuiltinToolRegistry");
 
-        info!("Registered list_skills and read_config_guide tools in BuiltinToolRegistry");
+        info!("Registered skill.list and read_config_guide tools in BuiltinToolRegistry");
 
         // Register optional tool metadata
         Self::register_optional_tools(
@@ -223,7 +223,7 @@ impl BuiltinToolRegistry {
                     }
                 }
 
-                info!("Registered agent management tools (agent_create, agent_list, agent_delete)");
+                info!("Registered agent management tools (agent.create, agent.list, agent.delete)");
                 (Some(create), Some(list), Some(delete), Some(ctx))
             } else {
                 (None, None, None, None)
@@ -396,7 +396,7 @@ impl BuiltinToolRegistry {
             serde_json::to_value(schema_for!(crate::builtin_tools::code_exec::CodeExecArgs)).unwrap_or_default());
         reg(tools, "pdf_generate", PdfGenerateTool::DESCRIPTION,
             serde_json::to_value(schema_for!(crate::builtin_tools::pdf_generate::PdfGenerateArgs)).unwrap_or_default());
-        reg(tools, "list_skills", SkillListTool::DESCRIPTION,
+        reg(tools, "skill.list", SkillListTool::DESCRIPTION,
             serde_json::json!({"type": "object", "properties": {}, "required": []}));
         reg(tools, "read_config_guide", ReadConfigGuideTool::DESCRIPTION,
             serde_json::to_value(schema_for!(crate::builtin_tools::config_guide::ReadConfigGuideArgs)).unwrap_or_default());
@@ -449,25 +449,25 @@ impl BuiltinToolRegistry {
             info!("Registered memory_search tool in BuiltinToolRegistry");
         }
         if memory_browse_tool.is_some() {
-            reg(tools, "memory_browse", MemoryBrowseTool::DESCRIPTION,
+            reg(tools, "memory.browse", MemoryBrowseTool::DESCRIPTION,
                 serde_json::to_value(schema_for!(crate::builtin_tools::memory_browse::MemoryBrowseArgs)).unwrap_or_default());
-            info!("Registered memory_browse tool in BuiltinToolRegistry");
+            info!("Registered memory.browse tool in BuiltinToolRegistry");
         }
 
         // Vault store tool
         if vault_store_tool.is_some() {
-            reg(tools, "vault_store", VaultStoreTool::DESCRIPTION,
+            reg(tools, "vault.store", VaultStoreTool::DESCRIPTION,
                 serde_json::to_value(schema_for!(crate::builtin_tools::vault_store::VaultStoreArgs)).unwrap_or_default());
-            info!("Registered vault_store tool in BuiltinToolRegistry");
+            info!("Registered vault.store tool in BuiltinToolRegistry");
         }
 
         // Generation tools
         let generation_registry = config.generation_registry.clone();
         if let Some(ref registry) = generation_registry {
             if image_generate_tool.is_some() {
-                reg(tools, "generate_image", ImageGenerateTool::DESCRIPTION,
+                reg(tools, "image.generate", ImageGenerateTool::DESCRIPTION,
                     serde_json::to_value(schema_for!(crate::builtin_tools::ImageGenerateArgs)).unwrap_or_default());
-                info!("Registered generate_image tool in BuiltinToolRegistry");
+                info!("Registered image.generate tool in BuiltinToolRegistry");
             }
 
             if let Ok(reg_inner) = registry.read() {
@@ -515,8 +515,8 @@ impl BuiltinToolRegistry {
             use crate::builtin_tools::cron_manage::CronManageTool;
             let tmp_tool = CronManageTool::new(Arc::clone(cron_svc));
             let def = AlephTool::definition(&tmp_tool);
-            reg(tools, "cron_manage", CronManageTool::DESCRIPTION, def.parameters.clone());
-            info!("Registered cron_manage tool in BuiltinToolRegistry");
+            reg(tools, "cron.manage", CronManageTool::DESCRIPTION, def.parameters.clone());
+            info!("Registered cron.manage tool in BuiltinToolRegistry");
         }
 
         // Session tools (require SessionManager — from gateway_context or direct session_manager)
@@ -529,22 +529,22 @@ impl BuiltinToolRegistry {
 
             let tmp_new = SessionNewTool::new(Arc::clone(sm));
             let def = AlephTool::definition(&tmp_new);
-            reg(tools, "session_new", SessionNewTool::DESCRIPTION, def.parameters.clone());
-            info!("Registered session_new tool in BuiltinToolRegistry");
+            reg(tools, "session.new", SessionNewTool::DESCRIPTION, def.parameters.clone());
+            info!("Registered session.new tool in BuiltinToolRegistry");
 
             let tmp_topic = SessionSetTopicTool::new(Arc::clone(sm));
             let def = AlephTool::definition(&tmp_topic);
-            reg(tools, "session_set_topic", SessionSetTopicTool::DESCRIPTION, def.parameters.clone());
-            info!("Registered session_set_topic tool in BuiltinToolRegistry");
+            reg(tools, "session.rename", SessionSetTopicTool::DESCRIPTION, def.parameters.clone());
+            info!("Registered session.rename tool in BuiltinToolRegistry");
         }
 
         // Sessions tools — always register metadata so LLM sees them.
         // GatewayContext may be injected later via set_gateway_context().
         // Execution checks OnceCell at call time.
-        reg(tools, "sessions_list", SessionsListTool::DESCRIPTION,
+        reg(tools, "session.list", SessionsListTool::DESCRIPTION,
             serde_json::to_value(schema_for!(crate::builtin_tools::sessions::SessionsListArgs)).unwrap_or_default());
-        reg(tools, "sessions_send", SessionsSendTool::DESCRIPTION,
+        reg(tools, "session.send", SessionsSendTool::DESCRIPTION,
             serde_json::to_value(schema_for!(crate::builtin_tools::sessions::SessionsSendArgs)).unwrap_or_default());
-        info!("Registered sessions_list + sessions_send in BuiltinToolRegistry");
+        info!("Registered session.list + session.send in BuiltinToolRegistry");
     }
 }
