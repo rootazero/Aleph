@@ -1,4 +1,3 @@
-// apps/panel/src/components/chat_sidebar.rs
 //
 // Chat mode sidebar — agent dropdown + session list.
 // Top dropdown selects agent, list shows that agent's sessions.

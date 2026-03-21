@@ -1,4 +1,3 @@
-// apps/panel/src/views/chat/state.rs
 //! Chat reactive state — signals for chat messages, streaming, and UI mode.
 
 use leptos::prelude::*;

@@ -1,4 +1,3 @@
-// apps/panel/src/components/agents_sidebar.rs
 //
 // Agents mode sidebar — agent list with create, select, and default agent controls.
 //

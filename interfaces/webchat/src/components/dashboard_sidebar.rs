@@ -1,4 +1,3 @@
-// apps/panel/src/components/dashboard_sidebar.rs
 //
 // Dashboard mode sidebar — sub-navigation for dashboard views.
 //

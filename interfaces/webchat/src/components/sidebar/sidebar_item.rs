@@ -1,4 +1,3 @@
-// apps/panel/src/components/sidebar/sidebar_item.rs
 //
 // SidebarItem component with real-time alert display.
 // Always renders in wide mode (icon + label).

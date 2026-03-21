@@ -1,4 +1,3 @@
-// apps/panel/src/views/agents/mod.rs
 //
 // Agent Management — 6-tab detail view with per-agent routing.
 

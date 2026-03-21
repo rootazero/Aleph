@@ -1,4 +1,3 @@
-// apps/panel/src/components/ui/tooltip.rs
 use leptos::prelude::*;
 use crate::components::sidebar::SystemAlert;
 

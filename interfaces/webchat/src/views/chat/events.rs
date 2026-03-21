@@ -1,4 +1,3 @@
-// apps/panel/src/views/chat/events.rs
 //! Maps Gateway streaming events (run.*) to ChatState mutations.
 
 use leptos::prelude::*;

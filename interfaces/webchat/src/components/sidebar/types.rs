@@ -1,4 +1,3 @@
-// apps/panel/src/components/sidebar/types.rs
 
 /// Alert level
 #[derive(Clone, Copy, PartialEq, Debug)]

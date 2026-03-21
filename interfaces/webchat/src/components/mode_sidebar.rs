@@ -1,4 +1,3 @@
-// apps/panel/src/components/mode_sidebar.rs
 //
 // Context-aware sidebar that switches content based on current panel mode.
 //

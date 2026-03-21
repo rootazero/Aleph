@@ -1,4 +1,3 @@
-// apps/panel/src/components/top_bar.rs
 //
 // Top bar — logo, theme toggle. Agent selection is handled by the chat sidebar.
 //

@@ -1,4 +1,3 @@
-// apps/panel/src/views/chat/view.rs
 //! Main Chat view — message list + input area.
 
 use leptos::prelude::*;
