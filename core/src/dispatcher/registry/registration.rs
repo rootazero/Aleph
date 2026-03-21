@@ -157,14 +157,14 @@ impl ToolRegistrar {
             .register_with_conflict_resolution(groupchat_cmd)
             .await;
 
-        // New session command
+        // New session command (aligned with CLI: `aleph session new`)
         let new_cmd = UnifiedTool::new(
-            "builtin:new",
-            "new",
+            "builtin:session_new",
+            "session_new",
             "Start a new conversation session",
             ToolSource::Builtin,
         )
-        .with_usage("/new")
+        .with_usage("/session_new")
         .with_sort_order(82);
 
         conflict_resolver

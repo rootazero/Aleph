@@ -298,7 +298,7 @@ impl InboundMessageRouter {
                     if parsed.command_name == "groupchat" {
                         return self.handle_groupchat_command(&msg).await;
                     }
-                    if parsed.command_name == "new" {
+                    if parsed.command_name == "session_new" || parsed.command_name == "new" {
                         return self.handle_new_session(&msg, &ctx).await;
                     }
                     let result = self.parsed_command_to_intent_result(parsed);
@@ -318,8 +318,9 @@ impl InboundMessageRouter {
                 return self.handle_groupchat_command(&msg).await;
             }
 
-            // Fallback: /new without unified registry
-            if slash_text.trim() == "/new" {
+            // Fallback: /session_new or /new without unified registry
+            let trimmed = slash_text.trim();
+            if trimmed == "/session_new" || trimmed == "/new" {
                 return self.handle_new_session(&msg, &ctx).await;
             }
         }
