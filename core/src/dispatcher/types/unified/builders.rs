@@ -72,6 +72,12 @@ impl UnifiedTool {
         self
     }
 
+    /// Builder method: set parameter hint for UI display
+    pub fn with_param_hint(mut self, hint: &str) -> Self {
+        self.param_hint = Some(hint.to_string());
+        self
+    }
+
     /// Builder method: set localization key
     pub fn with_localization_key(mut self, key: impl Into<String>) -> Self {
         self.localization_key = Some(key.into());

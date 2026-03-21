@@ -99,6 +99,11 @@ pub struct UnifiedTool {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub usage: Option<String>,
 
+    /// Parameter hint for UI display (e.g., "[topic]", "<name>")
+    /// Shown inline next to command name in completion dropdowns.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub param_hint: Option<String>,
+
     /// IDs of nested subtools (for namespace commands like /mcp, /skill)
     /// Empty for leaf commands.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -221,6 +226,7 @@ impl UnifiedTool {
             // UI metadata defaults
             icon: None,
             usage: None,
+            param_hint: None,
             subtools: Vec::new(),
             localization_key: None,
             is_builtin,

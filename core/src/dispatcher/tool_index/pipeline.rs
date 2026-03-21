@@ -34,7 +34,7 @@ impl Default for HydrationPipelineConfig {
             core_tools: vec![
                 "file_ops".to_string(),
                 "bash".to_string(),
-                "read_skill".to_string(),
+                "skill.read".to_string(),
             ],
         }
     }

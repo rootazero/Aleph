@@ -53,14 +53,15 @@ impl ToolRegistrar {
 
         // Image generation tool
         let image_generate = UnifiedTool::new(
-            "builtin:generate_image",
-            "generate_image",
+            "builtin:generate.image",
+            "generate.image",
             "Generate images from text descriptions using AI models like DALL-E 3",
             ToolSource::Builtin,
         )
         .with_icon("photo.badge.plus")
-        .with_usage("/generate_image A beautiful sunset over mountains")
-        .with_localization_key("tool.generate_image")
+        .with_usage("/generate image A beautiful sunset over mountains")
+        .with_param_hint("<prompt>")
+        .with_localization_key("tool.generate.image")
         .with_sort_order(60);
 
         conflict_resolver
@@ -69,14 +70,15 @@ impl ToolRegistrar {
 
         // Speech generation tool
         let speech_generate = UnifiedTool::new(
-            "builtin:generate_speech",
-            "generate_speech",
+            "builtin:generate.speech",
+            "generate.speech",
             "Convert text to speech using AI voices",
             ToolSource::Builtin,
         )
         .with_icon("speaker.wave.3")
-        .with_usage("/generate_speech Hello, how are you?")
-        .with_localization_key("tool.generate_speech")
+        .with_usage("/generate speech Hello, how are you?")
+        .with_param_hint("<text>")
+        .with_localization_key("tool.generate.speech")
         .with_sort_order(61);
 
         conflict_resolver
@@ -85,14 +87,15 @@ impl ToolRegistrar {
 
         // Skill reading tools (for Progressive Disclosure pattern)
         let read_skill = UnifiedTool::new(
-            "builtin:read_skill",
-            "read_skill",
+            "builtin:skill.read",
+            "skill.read",
             "Read the instructions of an installed skill. Use this to load skill-specific guidance before executing tasks that match a skill's purpose.",
             ToolSource::Builtin,
         )
         .with_icon("doc.text.magnifyingglass")
-        .with_usage("/read_skill refine-text")
-        .with_localization_key("tool.read_skill")
+        .with_usage("/skill read refine-text")
+        .with_param_hint("<skill-id>")
+        .with_localization_key("tool.skill.read")
         .with_sort_order(70);
 
         conflict_resolver
@@ -100,14 +103,14 @@ impl ToolRegistrar {
             .await;
 
         let list_skills = UnifiedTool::new(
-            "builtin:list_skills",
-            "list_skills",
+            "builtin:skill.list",
+            "skill.list",
             "List all available skills installed on the system. Use this to discover what skills are available.",
             ToolSource::Builtin,
         )
         .with_icon("list.bullet.rectangle")
-        .with_usage("/list_skills")
-        .with_localization_key("tool.list_skills")
+        .with_usage("/skill list")
+        .with_localization_key("tool.skill.list")
         .with_sort_order(71);
 
         conflict_resolver
@@ -115,14 +118,14 @@ impl ToolRegistrar {
             .await;
 
         let snapshot_capture = UnifiedTool::new(
-            "builtin:snapshot_capture",
-            "snapshot_capture",
+            "builtin:snapshot.capture",
+            "snapshot.capture",
             "Capture a system snapshot with AX tree and optional vision OCR",
             ToolSource::Builtin,
         )
         .with_icon("camera")
-        .with_usage("/snapshot_capture {\"include_ax\": true, \"include_vision\": false}")
-        .with_localization_key("tool.snapshot_capture")
+        .with_usage("/snapshot capture")
+        .with_localization_key("tool.snapshot.capture")
         .with_sort_order(72);
 
         conflict_resolver
@@ -136,7 +139,8 @@ impl ToolRegistrar {
             "Switch to a different AI agent",
             ToolSource::Builtin,
         )
-        .with_usage("/switch <agent_id>")
+        .with_usage("/switch <agent>")
+        .with_param_hint("<agent>")
         .with_sort_order(80);
 
         conflict_resolver
@@ -151,6 +155,7 @@ impl ToolRegistrar {
             ToolSource::Builtin,
         )
         .with_usage("/groupchat start <personas> [topic]")
+        .with_param_hint("[personas]")
         .with_sort_order(81);
 
         conflict_resolver
@@ -159,12 +164,13 @@ impl ToolRegistrar {
 
         // New session command (aligned with CLI: `aleph session new`)
         let new_cmd = UnifiedTool::new(
-            "builtin:session_new",
-            "session_new",
+            "builtin:session.new",
+            "session.new",
             "Start a new conversation session",
             ToolSource::Builtin,
         )
-        .with_usage("/session_new")
+        .with_usage("/session new")
+        .with_param_hint("[topic]")
         .with_sort_order(82);
 
         conflict_resolver
@@ -173,19 +179,19 @@ impl ToolRegistrar {
 
         // Cron management command
         let cron_cmd = UnifiedTool::new(
-            "builtin:cron",
-            "cron",
+            "builtin:cron.manage",
+            "cron.manage",
             "Manage scheduled tasks",
             ToolSource::Builtin,
         )
-        .with_usage("/cron list | /cron create <task>")
+        .with_usage("/cron manage list | /cron manage create <task>")
         .with_sort_order(83);
 
         conflict_resolver
             .register_with_conflict_resolution(cron_cmd)
             .await;
 
-        info!("Registered 9 builtin tools (2 generation + 2 skill reading + snapshot + switch + groupchat + new + cron)");
+        info!("Registered 9 builtin tools (2 generate.* + 2 skill.* + snapshot.capture + switch + groupchat + session.new + cron.manage)");
     }
 
     /// Register MCP tools from tool info list (Flat Namespace Mode)

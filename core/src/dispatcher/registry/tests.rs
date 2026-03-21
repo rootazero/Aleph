@@ -22,11 +22,11 @@ async fn test_register_builtin_tools() {
 
     // Verify tool names
     let names: Vec<_> = builtins.iter().map(|t| t.name.as_str()).collect();
-    assert!(names.contains(&"generate_image"));
-    assert!(names.contains(&"generate_speech"));
-    assert!(names.contains(&"read_skill"));
-    assert!(names.contains(&"list_skills"));
-    assert!(names.contains(&"snapshot_capture"));
+    assert!(names.contains(&"generate.image"));
+    assert!(names.contains(&"generate.speech"));
+    assert!(names.contains(&"skill.read"));
+    assert!(names.contains(&"skill.list"));
+    assert!(names.contains(&"snapshot.capture"));
 }
 
 #[tokio::test]
@@ -47,8 +47,8 @@ async fn test_list_root_commands() {
     assert_eq!(roots.len(), 10);
 
     // First should be builtins (sorted by priority)
-    assert!(roots.iter().any(|t| t.name == "generate_image"));
-    assert!(roots.iter().any(|t| t.name == "generate_speech"));
+    assert!(roots.iter().any(|t| t.name == "generate.image"));
+    assert!(roots.iter().any(|t| t.name == "generate.speech"));
     assert!(roots.iter().any(|t| t.name == "en"));
 }
 
