@@ -68,6 +68,7 @@ pub mod cron_manage;
 pub mod clawhub;
 pub mod config_guide;
 pub mod task_manage;
+pub mod team_manage;
 pub mod vault_store;
 
 pub use agent_manage::{
@@ -123,6 +124,7 @@ pub use cron_manage::{CronAction, CronManageArgs, CronManageOutput, CronManageTo
 pub use clawhub::{ClawHubAction, ClawHubArgs, ClawHubOutput, ClawHubTool};
 pub use config_guide::{GuideTopic, ReadConfigGuideArgs, ReadConfigGuideOutput, ReadConfigGuideTool};
 pub use task_manage::{TaskCreateTool, TaskListTool, TaskUpdateTool, TaskWaitTool};
+pub use team_manage::{TeamCreateTool, TeamDisbandTool, TeamLaunchTool, TeamListTool};
 pub use vault_store::{VaultAction, VaultStoreArgs, VaultStoreOutput, VaultStoreTool};
 
 
