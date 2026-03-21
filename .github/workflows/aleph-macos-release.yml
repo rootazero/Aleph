@@ -1,0 +1,74 @@
+name: Aleph macOS Release
+
+# Manual trigger — builds macOS release bundle (server + Swift bridge)
+on:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build macOS (aarch64)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Read version
+        id: version
+        run: echo "value=v$(cat VERSION | tr -d '[:space:]')" >> $GITHUB_OUTPUT
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build Swift bridge
+        run: |
+          cd crates/desktop-macos/bridge && swift build -c release
+
+      - name: Build server
+        run: cargo build --bin aleph-server --release --target aarch64-apple-darwin
+
+      - name: Package
+        run: |
+          cp target/aarch64-apple-darwin/release/aleph-server aleph-server
+          cp crates/desktop-macos/bridge/.build/release/AlephBridge aleph-bridge
+          tar -czf aleph-macos-aarch64.tar.gz aleph-server aleph-bridge
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: aleph-macos-aarch64
+          path: aleph-macos-aarch64.tar.gz
+
+    outputs:
+      version: ${{ steps.version.outputs.value }}
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Read version
+        id: version
+        run: echo "value=v$(cat VERSION | tr -d '[:space:]')" >> $GITHUB_OUTPUT
+
+      - uses: actions/download-artifact@v5
+        with:
+          path: artifacts
+
+      - name: Tag release
+        run: |
+          git tag "${{ steps.version.outputs.value }}-macos" || true
+          git push origin "${{ steps.version.outputs.value }}-macos" || true
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.value }}
+          name: Aleph macOS ${{ steps.version.outputs.value }}
+          files: artifacts/**/*.tar.gz

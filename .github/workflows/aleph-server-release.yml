@@ -1,4 +1,4 @@
-name: Server Release
+name: Aleph Server Release
 
 # Manual trigger only — build from a tested, stable commit.
 # Version is read from the VERSION file in the repo root.
@@ -73,21 +73,29 @@ jobs:
 
       # Panel WASM dist is pre-built and committed to git — no WASM build needed.
       - name: Build server
-        run: cargo build --bin aleph --release --target ${{ matrix.target }}
+        run: cargo build --bin aleph-server --release --target ${{ matrix.target }}
 
-      - name: Package (Unix)
-        if: "!startsWith(matrix.os, 'windows')"
+      - name: Package (macOS — includes Swift bridge)
+        if: startsWith(matrix.os, 'macos')
         shell: bash
         run: |
-          cp "target/${{ matrix.target }}/release/aleph" aleph
-          tar -czf "${{ matrix.asset }}.tar.gz" aleph
+          cp "target/${{ matrix.target }}/release/aleph-server" aleph-server
+          cp "crates/desktop-macos/bridge/.build/release/AlephBridge" aleph-bridge
+          tar -czf "${{ matrix.asset }}.tar.gz" aleph-server aleph-bridge
+
+      - name: Package (Linux)
+        if: startsWith(matrix.os, 'ubuntu')
+        shell: bash
+        run: |
+          cp "target/${{ matrix.target }}/release/aleph-server" aleph-server
+          tar -czf "${{ matrix.asset }}.tar.gz" aleph-server
 
       - name: Package (Windows)
         if: startsWith(matrix.os, 'windows')
         shell: pwsh
         run: |
-          Copy-Item "target/${{ matrix.target }}/release/aleph.exe" aleph.exe
-          Compress-Archive -Path aleph.exe -DestinationPath "${{ matrix.asset }}.zip"
+          Copy-Item "target/${{ matrix.target }}/release/aleph-server.exe" aleph-server.exe
+          Compress-Archive -Path aleph-server.exe -DestinationPath "${{ matrix.asset }}.zip"
 
       - uses: actions/upload-artifact@v5
         with:

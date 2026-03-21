@@ -1,0 +1,83 @@
+name: Aleph Linux Release
+
+# Manual trigger — builds Linux release binaries
+on:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build Linux (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            arch: x86_64
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            arch: aarch64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Read version
+        id: version
+        run: echo "value=v$(cat VERSION | tr -d '[:space:]')" >> $GITHUB_OUTPUT
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install system libraries
+        run: |
+          sudo apt-get update && sudo apt-get install -y \
+            libxcb1-dev libxcb-randr0-dev libxcb-shm0-dev libxcb-xfixes0-dev \
+            libxcb-shape0-dev libxcb-xtest0-dev libxkbcommon-dev libxss-dev \
+            libx11-dev libxrandr-dev libxi-dev libxtst-dev \
+            libssl-dev libwayland-dev libpipewire-0.3-dev libdbus-1-dev \
+            libdrm-dev libgbm-dev libegl-dev libxdo-dev clang libclang-dev
+
+      - name: Build server
+        run: cargo build --bin aleph-server --release --target ${{ matrix.target }}
+
+      - name: Package
+        run: |
+          cp "target/${{ matrix.target }}/release/aleph-server" aleph-server
+          tar -czf "aleph-linux-${{ matrix.arch }}.tar.gz" aleph-server
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: aleph-linux-${{ matrix.arch }}
+          path: aleph-linux-${{ matrix.arch }}.tar.gz
+
+    outputs:
+      version: ${{ steps.version.outputs.value }}
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Read version
+        id: version
+        run: echo "value=v$(cat VERSION | tr -d '[:space:]')" >> $GITHUB_OUTPUT
+
+      - uses: actions/download-artifact@v5
+        with:
+          path: artifacts
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.value }}
+          name: Aleph Linux ${{ steps.version.outputs.value }}
+          files: artifacts/**/*.tar.gz

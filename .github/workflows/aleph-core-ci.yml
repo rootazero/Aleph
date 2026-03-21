@@ -6,7 +6,7 @@ on:
       - 'core/**'
       - 'crates/**'
       - 'Cargo.toml'
-      - '.github/workflows/rust-core.yml'
+      - '.github/workflows/aleph-core-ci.yml'
   pull_request:
     paths:
       - 'core/**'
