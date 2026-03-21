@@ -6,11 +6,11 @@ set shell := ["bash", "-euo", "pipefail", "-c"]
 # ─── Variables ───
 release_dir     := "target/release"
 debug_dir       := "target/debug"
-panel_dir       := "apps/panel"
-panel_dist      := "apps/panel/dist"
-macos_dir       := "apps/macos-native"
-macos_resources := "apps/macos-native/Aleph/Resources"
-macos_app       := "apps/macos-native/build/Build/Products/Release/Aleph.app"
+panel_dir       := "interfaces/webchat"
+panel_dist      := "interfaces/webchat/dist"
+macos_dir       := "apps/macos"
+macos_resources := "apps/macos/Aleph/Resources"
+macos_app       := "apps/macos/build/Build/Products/Release/Aleph.app"
 server_bin      := "aleph"
 
 # ─── Default ───

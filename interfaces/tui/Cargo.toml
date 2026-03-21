@@ -1,28 +1,24 @@
 [package]
-name = "aleph-cli"
+name = "aleph-tui"
 version = "0.1.0"
 edition = "2021"
-description = "Aleph CLI - Reference implementation of Aleph Protocol client"
+description = "Aleph TUI - Interactive terminal interface for Aleph"
 license = "AGPL-3.0-or-later"
-readme = "README.md"
 
 # IMPORTANT: This crate MUST NOT depend on alephcore
-# It serves as a reference implementation showing how to build
-# a client using only the protocol types.
+# It communicates with Aleph Gateway via WebSocket using aleph-protocol types.
 
 [[bin]]
-name = "aleph"
+name = "aleph-tui"
 path = "src/main.rs"
 
 [dependencies]
 # Aleph dependencies
-aleph-client = { path = "../client" }
+aleph-client = { path = "../../shared/client" }
 aleph-protocol = { path = "../../shared/protocol" }
-# TODO: Integrate aleph-sdk for discovery when CLI uses it
-# aleph-sdk = { path = "../shared" }
 
 # Async runtime
-tokio = { version = "1.35", features = ["rt-multi-thread", "sync", "time", "macros", "io-util", "signal", "net", "process"] }
+tokio = { version = "1.35", features = ["rt-multi-thread", "sync", "time", "macros", "io-util", "signal", "net"] }
 
 # WebSocket client
 tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
@@ -33,12 +29,8 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 toml = "0.8"
 
-# Async traits (for ConfigStore)
-async-trait = "0.1"
-
 # CLI interface
 clap = { version = "4.4", features = ["derive"] }
-clap_complete = "4"
 
 # Terminal UI
 crossterm = "0.28"
@@ -56,20 +48,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 aleph-logging = { path = "../../crates/logging" }
 
-# Secure password input
-rpassword = "7"
-
 # Utilities
 uuid = { version = "1.7", features = ["v4"] }
 chrono = "0.4"
 dirs = "5.0"
-
-# Plugin packaging
-zip = { version = "2", default-features = false, features = ["deflate"] }
-
-[dev-dependencies]
-tempfile = "3.8"
-
-[lints.rust]
-# Ensure we don't accidentally depend on alephcore
-unexpected_cfgs = "warn"

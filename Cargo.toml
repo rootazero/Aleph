@@ -10,12 +10,14 @@ members = [
     "shared/protocol",
     "shared/ui_logic",
 
-    "apps/client",
-    "apps/cli",
-    "apps/tui",
+    "shared/client",
+
+    "interfaces/cli",
+    "interfaces/tui",
+    "interfaces/webchat",
+
     "apps/shared",
     "apps/tauri/src-tauri",
-    "apps/panel",
 ]
 
 [workspace.package]
