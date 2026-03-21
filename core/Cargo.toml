@@ -200,6 +200,8 @@ aleph-logging = { path = "../crates/logging" }
 
 # Native desktop capabilities (in-process alternative to IPC bridge)
 aleph-desktop = { path = "../crates/desktop" }
+# Gateway client (shared RPC client for CLI and other interfaces)
+aleph-client = { path = "../shared/client" }
 open = "5.3.3"
 
 [build-dependencies]
