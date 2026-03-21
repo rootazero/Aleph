@@ -9,6 +9,7 @@ use aleph_protocol::{RunSummary, StreamEvent};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 
+use super::command_tree::{CommandEntry, DisplayEntry};
 use super::slash::LocalCommand;
 
 // ---------------------------------------------------------------------------
@@ -150,8 +151,10 @@ pub struct DialogState {
 #[derive(Debug, Clone)]
 pub struct PaletteState {
     pub input: String,
-    pub filtered: Vec<(String, String)>,
+    pub filtered: Vec<DisplayEntry>,
     pub selected: usize,
+    /// Stack of namespace names we have browsed into (e.g. ["session"])
+    pub namespace_stack: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -184,8 +187,8 @@ pub struct AppState {
     // -- Settings --
     pub verbose: bool,
 
-    // -- Gateway commands (fetched at startup) --
-    pub gateway_commands: Vec<(String, String)>,
+    // -- Gateway commands (fetched at startup, tree-structured) --
+    pub gateway_commands: Vec<CommandEntry>,
 
     // -- UI state --
     pub focus: Focus,
@@ -317,37 +320,124 @@ impl AppState {
 
     // -- Overlays -------------------------------------------------------
 
-    /// Return a combined list of local + gateway commands for the palette.
-    pub fn all_commands(&self) -> Vec<(String, String)> {
-        let mut cmds: Vec<(String, String)> = super::slash::local_commands()
-            .into_iter()
-            .map(|(n, d)| (n.to_string(), d.to_string()))
-            .collect();
-        cmds.extend(self.gateway_commands.iter().cloned());
-        cmds
+    /// Return display entries for the current palette browse level.
+    /// At root: local commands + gateway root entries.
+    /// Inside a namespace: that namespace's children.
+    pub fn palette_display_entries(&self, namespace_stack: &[String]) -> Vec<DisplayEntry> {
+        if namespace_stack.is_empty() {
+            // Root level: local commands + gateway root entries
+            let mut entries: Vec<DisplayEntry> = super::slash::local_commands()
+                .into_iter()
+                .map(|(n, d)| DisplayEntry {
+                    label: n.to_string(),
+                    hint: d.to_string(),
+                    is_namespace: false,
+                    full_command: format!("{} ", n),
+                })
+                .collect();
+            entries.extend(CommandEntry::root_display_entries(&self.gateway_commands));
+            entries
+        } else {
+            // Inside a namespace: drill down through the stack
+            let mut current_entries = &self.gateway_commands;
+            let mut found_ns: Option<&CommandEntry> = None;
+
+            for ns_name in namespace_stack {
+                found_ns = current_entries
+                    .iter()
+                    .find(|e| e.is_namespace && e.name.eq_ignore_ascii_case(ns_name));
+                if let Some(ns) = found_ns {
+                    current_entries = &ns.children;
+                } else {
+                    return Vec::new();
+                }
+            }
+
+            if let Some(ns) = found_ns {
+                let path = namespace_stack.join(" ");
+                CommandEntry::namespace_display_entries(ns, &path)
+            } else {
+                Vec::new()
+            }
+        }
     }
 
-    /// Filter combined commands by prefix.
-    pub fn filter_commands(&self, prefix: &str) -> Vec<(String, String)> {
-        if prefix.is_empty() {
-            return self.all_commands();
+    /// Filter display entries by a prefix string (the palette input text).
+    pub fn filter_display_entries(
+        &self,
+        namespace_stack: &[String],
+        filter: &str,
+    ) -> Vec<DisplayEntry> {
+        let all = self.palette_display_entries(namespace_stack);
+        if filter.is_empty() {
+            return all;
         }
-        let prefix_lower = prefix.to_lowercase();
-        self.all_commands()
-            .into_iter()
-            .filter(|(name, _)| name.to_lowercase().starts_with(&prefix_lower))
+        let filter_lower = filter.to_lowercase();
+        all.into_iter()
+            .filter(|e| {
+                e.label.to_lowercase().contains(&filter_lower)
+                    || e.hint.to_lowercase().contains(&filter_lower)
+            })
             .collect()
     }
 
-    /// Open the command palette, pre-populated with all commands.
+    /// Open the command palette, pre-populated with root-level commands.
     pub fn open_command_palette(&mut self) {
-        let all = self.all_commands();
+        let all = self.palette_display_entries(&[]);
         self.palette = Some(PaletteState {
             input: String::new(),
             filtered: all,
             selected: 0,
+            namespace_stack: Vec::new(),
         });
         self.focus = Focus::CommandPalette;
+    }
+
+    /// Enter a namespace in the palette, showing its children.
+    pub fn palette_enter_namespace(&mut self, ns_name: &str) {
+        // Build the new stack, then compute entries without holding a mutable borrow
+        let new_stack = {
+            let palette = match &self.palette {
+                Some(p) => p,
+                None => return,
+            };
+            let mut stack = palette.namespace_stack.clone();
+            stack.push(ns_name.to_string());
+            stack
+        };
+        let entries = self.palette_display_entries(&new_stack);
+        if let Some(palette) = &mut self.palette {
+            palette.namespace_stack = new_stack;
+            palette.input.clear();
+            palette.selected = 0;
+            palette.filtered = entries;
+        }
+    }
+
+    /// Go back one level in the palette namespace stack.
+    /// Returns true if we went back, false if already at root.
+    pub fn palette_go_back(&mut self) -> bool {
+        // Build the new stack, then compute entries without holding a mutable borrow
+        let new_stack = {
+            let palette = match &self.palette {
+                Some(p) => p,
+                None => return false,
+            };
+            if palette.namespace_stack.is_empty() {
+                return false;
+            }
+            let mut stack = palette.namespace_stack.clone();
+            stack.pop();
+            stack
+        };
+        let entries = self.palette_display_entries(&new_stack);
+        if let Some(palette) = &mut self.palette {
+            palette.namespace_stack = new_stack;
+            palette.input.clear();
+            palette.selected = 0;
+            palette.filtered = entries;
+        }
+        true
     }
 
     /// Close any open overlay (palette or dialog) and return focus to input.

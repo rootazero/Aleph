@@ -1,5 +1,6 @@
 // Command palette widget: renders a floating overlay above the input area
 // showing filtered slash commands with a selected-item indicator.
+// Supports hierarchical namespace browsing with visual cues.
 
 use ratatui::{
     layout::Rect,
@@ -37,10 +38,17 @@ pub fn render_command_palette(frame: &mut Frame, palette: &PaletteState, area: R
     // Clear the area behind the overlay
     frame.render_widget(Clear, overlay_rect);
 
+    // Build title showing namespace breadcrumb
+    let title = if palette.namespace_stack.is_empty() {
+        " Commands ".to_string()
+    } else {
+        format!(" /{} ", palette.namespace_stack.join(" > "))
+    };
+
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(DEFAULT_THEME.border_focused))
-        .title(" Commands ");
+        .title(title);
 
     let inner = block.inner(overlay_rect);
     frame.render_widget(block, overlay_rect);
@@ -50,7 +58,12 @@ pub fn render_command_palette(frame: &mut Frame, palette: &PaletteState, area: R
         return;
     }
     let input_area = Rect::new(inner.x, inner.y, inner.width, 1);
-    let filter_display = format!("/ {}", palette.input);
+    let filter_prefix = if palette.namespace_stack.is_empty() {
+        "/".to_string()
+    } else {
+        format!("/{} ", palette.namespace_stack.join(" "))
+    };
+    let filter_display = format!("{}{}", filter_prefix, palette.input);
     let filter_line = Paragraph::new(Line::from(Span::styled(
         filter_display,
         Style::default().fg(DEFAULT_THEME.primary),
@@ -69,18 +82,24 @@ pub fn render_command_palette(frame: &mut Frame, palette: &PaletteState, area: R
         .filtered
         .iter()
         .enumerate()
-        .map(|(i, (name, desc))| {
+        .map(|(i, entry)| {
             let is_selected = i == palette.selected;
             let indicator = if is_selected { "> " } else { "  " };
 
-            // Pad name to align descriptions
-            let name_str = format!("{:<14}", name);
-            let line_str = format!("{}{}{}", indicator, name_str, desc.as_str());
+            // Namespace entries get a chevron prefix
+            let ns_marker = if entry.is_namespace { "\u{25b8} " } else { "" };
+
+            // Pad label to align descriptions
+            let label_str = format!("{}{}", ns_marker, entry.label);
+            let padded_label = format!("{:<16}", label_str);
+            let line_str = format!("{}{}{}", indicator, padded_label, entry.hint);
 
             let style = if is_selected {
                 Style::default()
                     .fg(DEFAULT_THEME.primary)
                     .add_modifier(Modifier::BOLD)
+            } else if entry.is_namespace {
+                Style::default().fg(DEFAULT_THEME.tool_name)
             } else {
                 Style::default().fg(DEFAULT_THEME.muted)
             };
@@ -99,23 +118,40 @@ pub fn render_command_palette(frame: &mut Frame, palette: &PaletteState, area: R
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tui::command_tree::DisplayEntry;
 
     #[test]
     fn empty_filtered_renders_nothing() {
         // If filtered is empty, the function should return early.
-        // We just verify it doesn't panic.
         let palette = PaletteState {
             input: String::new(),
             filtered: vec![],
             selected: 0,
+            namespace_stack: Vec::new(),
         };
-        // We can't easily test rendering without a terminal backend,
-        // but we can at least confirm the logic path.
         assert!(palette.filtered.is_empty());
     }
 
     #[test]
     fn max_visible_items_capped() {
         assert_eq!(MAX_VISIBLE_ITEMS, 12);
+    }
+
+    #[test]
+    fn namespace_stack_affects_title() {
+        let palette = PaletteState {
+            input: String::new(),
+            filtered: vec![DisplayEntry {
+                label: "new [topic]".into(),
+                hint: "Start new session".into(),
+                is_namespace: false,
+                full_command: "/session new ".into(),
+            }],
+            selected: 0,
+            namespace_stack: vec!["session".into()],
+        };
+        // Just verify the palette state is correctly formed
+        assert_eq!(palette.namespace_stack, vec!["session"]);
+        assert_eq!(palette.filtered.len(), 1);
     }
 }

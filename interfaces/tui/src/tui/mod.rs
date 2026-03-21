@@ -6,6 +6,7 @@
 // into chat area, input area, status bar, and overlays.
 
 mod app;
+mod command_tree;
 mod event;
 mod markdown;
 mod render;
@@ -274,8 +275,8 @@ async fn main_loop(
             }
             Action::PaletteConfirm => {
                 if let Some(palette) = state.palette.take() {
-                    if let Some((name, _)) = palette.filtered.get(palette.selected) {
-                        let cmd_str = name.clone();
+                    if let Some(entry) = palette.filtered.get(palette.selected) {
+                        let cmd_str = entry.full_command.trim().to_string();
                         state.close_overlay();
                         // Parse through our unified parser
                         match slash::parse_input(&cmd_str) {
@@ -598,7 +599,28 @@ fn handle_palette_key(state: &mut AppState, key: KeyEvent) -> Action {
     match key.code {
         KeyCode::Up => Action::PaletteUp,
         KeyCode::Down => Action::PaletteDown,
-        KeyCode::Tab | KeyCode::Enter => Action::PaletteConfirm,
+        KeyCode::Tab | KeyCode::Enter => {
+            // Check if the selected item is a namespace — if so, enter it
+            let selected_entry = state
+                .palette
+                .as_ref()
+                .and_then(|p| p.filtered.get(p.selected).cloned());
+
+            if let Some(entry) = selected_entry {
+                if entry.is_namespace {
+                    // Extract the namespace name from the full_command (e.g. "/session" -> "session")
+                    let ns_name = entry
+                        .full_command
+                        .trim_start_matches('/')
+                        .trim()
+                        .to_string();
+                    state.palette_enter_namespace(&ns_name);
+                    return Action::None;
+                }
+            }
+            // Not a namespace — confirm selection
+            Action::PaletteConfirm
+        }
         KeyCode::Backspace => {
             let is_empty = state
                 .palette
@@ -606,43 +628,64 @@ fn handle_palette_key(state: &mut AppState, key: KeyEvent) -> Action {
                 .map(|p| p.input.is_empty())
                 .unwrap_or(true);
             if is_empty {
+                // If inside a namespace, go back one level
+                if state.palette_go_back() {
+                    return Action::None;
+                }
+                // At root with empty input — close palette
                 Action::CloseOverlay
             } else {
                 if let Some(palette) = &mut state.palette {
                     palette.input.pop();
                 }
                 // Recompute filtered list
-                let prefix = state
-                    .palette
-                    .as_ref()
-                    .map(|p| format!("/{}", p.input))
-                    .unwrap_or_default();
-                let filtered = state.filter_commands(&prefix);
-                if let Some(palette) = &mut state.palette {
-                    palette.filtered = filtered;
-                    palette.selected = 0;
-                }
+                recompute_palette_filter(state);
                 Action::None
             }
+        }
+        KeyCode::Char(' ') => {
+            // Space after a namespace name at root level enters it
+            if let Some(palette) = &state.palette {
+                if palette.namespace_stack.is_empty() {
+                    let input = palette.input.clone();
+                    if let Some(ns) = command_tree::CommandEntry::find_namespace(
+                        &state.gateway_commands,
+                        &input,
+                    ) {
+                        let ns_name = ns.name.clone();
+                        state.palette_enter_namespace(&ns_name);
+                        return Action::None;
+                    }
+                }
+            }
+            // Normal space character in filter
+            if let Some(palette) = &mut state.palette {
+                palette.input.push(' ');
+            }
+            recompute_palette_filter(state);
+            Action::None
         }
         KeyCode::Char(c) => {
             if let Some(palette) = &mut state.palette {
                 palette.input.push(c);
             }
-            // Recompute filtered list
-            let prefix = state
-                .palette
-                .as_ref()
-                .map(|p| format!("/{}", p.input))
-                .unwrap_or_default();
-            let filtered = state.filter_commands(&prefix);
-            if let Some(palette) = &mut state.palette {
-                palette.filtered = filtered;
-                palette.selected = 0;
-            }
+            recompute_palette_filter(state);
             Action::None
         }
         _ => Action::None,
+    }
+}
+
+/// Recompute the filtered display entries based on current palette input and namespace stack.
+fn recompute_palette_filter(state: &mut AppState) {
+    let (stack, filter) = match &state.palette {
+        Some(p) => (p.namespace_stack.clone(), p.input.clone()),
+        None => return,
+    };
+    let filtered = state.filter_display_entries(&stack, &filter);
+    if let Some(palette) = &mut state.palette {
+        palette.filtered = filtered;
+        palette.selected = 0;
     }
 }
 
@@ -736,8 +779,41 @@ fn build_help_text(state: &AppState) -> String {
     if !state.gateway_commands.is_empty() {
         lines.push(String::new());
         lines.push("Gateway commands (handled by server):".to_string());
-        for (name, desc) in &state.gateway_commands {
-            lines.push(format!("  {:<14} {}", name, desc));
+        for entry in &state.gateway_commands {
+            if entry.is_namespace {
+                let param = entry
+                    .param_hint
+                    .as_deref()
+                    .map(|p| format!(" {}", p))
+                    .unwrap_or_default();
+                lines.push(format!(
+                    "  /{:<13} {} (namespace)",
+                    format!("{}{}", entry.name, param),
+                    entry.hint,
+                ));
+                for child in &entry.children {
+                    let child_param = child
+                        .param_hint
+                        .as_deref()
+                        .map(|p| format!(" {}", p))
+                        .unwrap_or_default();
+                    lines.push(format!(
+                        "    /{} {}{:<6} {}",
+                        entry.name, child.name, child_param, child.hint,
+                    ));
+                }
+            } else {
+                let param = entry
+                    .param_hint
+                    .as_deref()
+                    .map(|p| format!(" {}", p))
+                    .unwrap_or_default();
+                lines.push(format!(
+                    "  /{:<13} {}",
+                    format!("{}{}", entry.name, param),
+                    entry.hint,
+                ));
+            }
         }
     }
 
@@ -758,31 +834,13 @@ fn build_help_text(state: &AppState) -> String {
 
 /// Fetch available commands from the Gateway for command palette display.
 /// Gracefully degrades to empty list if the Gateway doesn't support commands.list.
-async fn fetch_gateway_commands(client: &AlephClient) -> Vec<(String, String)> {
+/// Parses tree-structured command responses with namespace support.
+async fn fetch_gateway_commands(client: &AlephClient) -> Vec<command_tree::CommandEntry> {
     match client
         .call::<_, Value>("commands.list", Some(json!({"interface": "tui"})))
         .await
     {
-        Ok(result) => {
-            // Parse the commands array from the response
-            let commands = result
-                .get("commands")
-                .and_then(|v| v.as_array())
-                .cloned()
-                .unwrap_or_default();
-
-            commands
-                .iter()
-                .filter_map(|cmd| {
-                    let key = cmd.get("key").and_then(|v| v.as_str())?;
-                    let desc = cmd
-                        .get("description")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("");
-                    Some((format!("/{}", key), desc.to_string()))
-                })
-                .collect()
-        }
+        Ok(result) => command_tree::CommandEntry::parse_from_json(&result),
         Err(_) => {
             // Old Gateway or connection issue — graceful degradation
             Vec::new()
