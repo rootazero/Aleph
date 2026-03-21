@@ -1,17 +1,20 @@
 //! Commands RPC Handlers
 //!
 //! Handlers for command listing, discovery, and execution.
+//! Returns hierarchical tree structure for namespaced commands.
+
+use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
+use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INVALID_PARAMS};
 use super::parse_params;
 use crate::command::{CommandContext, CommandNode, CommandParser, CommandType};
 use crate::dispatcher::{ToolRegistry, ToolSourceType, UnifiedTool};
 use crate::sync_primitives::Arc;
 
-/// Command info for JSON serialization
+/// Command info for JSON serialization (backward compat for flat lists)
 #[derive(Debug, Clone, Serialize)]
 pub struct CommandInfo {
     /// Command key (e.g., "search", "webfetch")
@@ -75,45 +78,176 @@ impl From<UnifiedTool> for CommandInfo {
     }
 }
 
-/// List all registered commands from ToolRegistry
+// ============================================================================
+// Tree node types for hierarchical command listing
+// ============================================================================
+
+/// A child command within a namespace
+#[derive(Debug, Clone, Serialize)]
+struct ChildCommandNode {
+    /// Subcommand name (e.g., "new", "list")
+    name: String,
+    /// Human-readable description
+    hint: String,
+    /// Parameter hint (e.g., "[topic]", "<query>")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    param_hint: Option<String>,
+    /// Source type
+    source_type: String,
+    /// Tool internal ID
+    internal_id: String,
+}
+
+/// A top-level entry in the command tree
+#[derive(Debug, Clone, Serialize)]
+struct CommandTreeNode {
+    /// Command or namespace name
+    name: String,
+    /// Whether this is a namespace (has children)
+    is_namespace: bool,
+    /// Human-readable hint/description
+    hint: String,
+    /// Parameter hint (for standalone commands)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    param_hint: Option<String>,
+    /// Source type (for standalone commands)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source_type: Option<String>,
+    /// Tool internal ID (for standalone commands)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    internal_id: Option<String>,
+    /// Children (for namespaces)
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    children: Vec<ChildCommandNode>,
+}
+
+/// Build a hierarchical tree from a flat list of tools.
+///
+/// Tools with dots in their name (e.g., "session.new") are grouped under
+/// their namespace prefix. Tools without dots are standalone commands.
+fn build_command_tree(tools: Vec<UnifiedTool>) -> Vec<CommandTreeNode> {
+    // Group: namespace -> Vec<UnifiedTool>
+    let mut namespaces: BTreeMap<String, Vec<UnifiedTool>> = BTreeMap::new();
+    let mut standalone: Vec<UnifiedTool> = Vec::new();
+
+    for tool in tools {
+        if let Some((ns, _)) = tool.name.split_once('.') {
+            namespaces
+                .entry(ns.to_string())
+                .or_default()
+                .push(tool);
+        } else {
+            standalone.push(tool);
+        }
+    }
+
+    let mut result: Vec<CommandTreeNode> = Vec::new();
+
+    // Add namespace entries
+    for (ns_name, children_tools) in namespaces {
+        // Build a combined hint from the namespace name
+        let hint = format!("{} commands", capitalize(&ns_name));
+
+        let children: Vec<ChildCommandNode> = children_tools
+            .into_iter()
+            .map(|t| {
+                // Extract subcommand name: "session.new" -> "new"
+                let sub_name = t
+                    .name
+                    .strip_prefix(&format!("{}.", ns_name))
+                    .unwrap_or(&t.name)
+                    .to_string();
+                ChildCommandNode {
+                    name: sub_name,
+                    hint: t.description,
+                    param_hint: t.param_hint,
+                    source_type: t.source.label().to_lowercase(),
+                    internal_id: t.id,
+                }
+            })
+            .collect();
+
+        result.push(CommandTreeNode {
+            name: ns_name,
+            is_namespace: true,
+            hint,
+            param_hint: None,
+            source_type: None,
+            internal_id: None,
+            children,
+        });
+    }
+
+    // Add standalone commands
+    for tool in standalone {
+        result.push(CommandTreeNode {
+            name: tool.name.clone(),
+            is_namespace: false,
+            hint: tool.description,
+            param_hint: tool.param_hint,
+            source_type: Some(tool.source.label().to_lowercase()),
+            internal_id: Some(tool.id),
+            children: Vec::new(),
+        });
+    }
+
+    result
+}
+
+/// Capitalize first letter of a string
+fn capitalize(s: &str) -> String {
+    let mut chars = s.chars();
+    match chars.next() {
+        None => String::new(),
+        Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
+    }
+}
+
+/// List all registered commands from ToolRegistry (tree structure)
+///
+/// Returns a hierarchical command tree where dotted tool names
+/// are grouped under their namespace prefix.
+///
+/// # Example Response
+///
+/// ```json
+/// {
+///   "commands": [
+///     {
+///       "name": "session",
+///       "is_namespace": true,
+///       "hint": "Session commands",
+///       "children": [
+///         { "name": "new", "hint": "Start a new session", "param_hint": "[topic]" }
+///       ]
+///     },
+///     {
+///       "name": "search",
+///       "is_namespace": false,
+///       "hint": "Web search",
+///       "param_hint": "<query>"
+///     }
+///   ]
+/// }
+/// ```
 pub async fn handle_list_from_registry(
     request: JsonRpcRequest,
     tool_registry: &ToolRegistry,
 ) -> JsonRpcResponse {
     let tools: Vec<UnifiedTool> = tool_registry.list_root_commands().await;
-    let command_infos: Vec<CommandInfo> = tools.into_iter().map(CommandInfo::from).collect();
+    let tree = build_command_tree(tools);
 
     JsonRpcResponse::success(
         request.id,
         json!({
-            "commands": command_infos
+            "commands": tree
         }),
     )
 }
 
-/// List all registered commands
-///
-/// Returns the list of available commands for command completion.
-/// In the full implementation, this should be called with access to
-/// the GatewayServer state to include MCP servers and skills.
-///
-/// # Example Request
-///
-/// ```json
-/// {"jsonrpc":"2.0","method":"commands.list","id":1}
-/// ```
-///
-/// # Example Response
-///
-/// ```json
-/// {"jsonrpc":"2.0","result":{"commands":[{"key":"search","description":"Web search","icon":"magnifyingglass","command_type":"action","has_children":false,"source_type":"builtin"}]},"id":1}
-/// ```
+/// List all registered commands (legacy builtin-only handler)
 pub async fn handle_list(request: JsonRpcRequest) -> JsonRpcResponse {
-    // Return builtin commands
-    // TODO: In full implementation, access GatewayServer state to include
-    // MCP servers, skills, and custom routing rules
     let commands = get_builtin_commands();
-
     let command_infos: Vec<CommandInfo> = commands.into_iter().map(CommandInfo::from).collect();
 
     JsonRpcResponse::success(
@@ -155,17 +289,19 @@ pub struct ExecuteParams {
 /// Resolved command info returned by command.execute
 #[derive(Debug, Clone, Serialize)]
 pub struct ResolvedCommandInfo {
-    /// Command name (without leading /)
-    pub name: String,
+    /// Namespace prefix (e.g., "session" for "session.new")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub namespace: Option<String>,
+    /// Action/subcommand (e.g., "new")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub action: Option<String>,
     /// Arguments after the command name
     #[serde(skip_serializing_if = "Option::is_none")]
     pub args: Option<String>,
+    /// Internal tool ID
+    pub internal_id: String,
     /// Source type: "builtin", "mcp", "skill", "custom", "plugin"
     pub source_type: String,
-    /// Full original input
-    pub input: String,
-    /// Context-specific details
-    pub context: ResolvedCommandContext,
 }
 
 /// Command context details for the client
@@ -221,26 +357,57 @@ impl From<CommandContext> for ResolvedCommandContext {
     }
 }
 
+/// Build children list for namespace interaction responses
+async fn build_namespace_children(
+    tool_registry: &ToolRegistry,
+    namespace: &str,
+) -> Vec<ChildCommandNode> {
+    let children_tools = tool_registry.list_namespace_children(namespace).await;
+    children_tools
+        .into_iter()
+        .map(|t| {
+            let sub_name = t
+                .name
+                .strip_prefix(&format!("{}.", namespace))
+                .unwrap_or(&t.name)
+                .to_string();
+            ChildCommandNode {
+                name: sub_name,
+                hint: t.description,
+                param_hint: t.param_hint,
+                source_type: t.source.label().to_lowercase(),
+                internal_id: t.id,
+            }
+        })
+        .collect()
+}
+
 /// Handle command.execute RPC request
 ///
 /// Parses a slash command input and returns the resolved command info.
-/// Clients can use this for command validation and then execute via
-/// `chat.send` with the slash command as the message for full execution.
 ///
-/// # Example Request
+/// When the input is a namespace (e.g., "/session"), returns needs_interaction
+/// with available children. When the subcommand is wrong, returns an error
+/// with available children for correction.
 ///
+/// # Example: Resolved command
 /// ```json
-/// {"jsonrpc":"2.0","method":"command.execute","params":{"input":"/search weather"},"id":1}
+/// {"resolved":true,"command":{"namespace":"session","action":"new","args":"my topic","internal_id":"builtin:session.new","source_type":"builtin"}}
 /// ```
 ///
-/// # Example Response
-///
+/// # Example: Namespace only
 /// ```json
-/// {"jsonrpc":"2.0","result":{"resolved":true,"command":{"name":"search","args":"weather","source_type":"builtin","input":"/search weather","context":{"type":"builtin","tool_name":"search"}}},"id":1}
+/// {"resolved":false,"needs_interaction":true,"namespace":"session","children":[...]}
+/// ```
+///
+/// # Example: Unknown subcommand
+/// ```json
+/// {"resolved":false,"error":"Unknown subcommand: nw","needs_interaction":true,"namespace":"session","children":[...]}
 /// ```
 pub async fn handle_execute(
     request: JsonRpcRequest,
     command_parser: Arc<CommandParser>,
+    tool_registry: Arc<ToolRegistry>,
 ) -> JsonRpcResponse {
     let params: ExecuteParams = match parse_params(&request) {
         Ok(p) => p,
@@ -262,12 +429,23 @@ pub async fn handle_execute(
     // Parse via CommandParser (async, queries ToolRegistry)
     match command_parser.parse_async(&slash_input).await {
         Some(parsed) => {
+            // Successfully resolved — decompose the name into namespace + action
+            let (namespace, action) = if let Some((ns, act)) = parsed.command_name.split_once('.') {
+                (Some(ns.to_string()), Some(act.to_string()))
+            } else {
+                (None, None)
+            };
+
             let info = ResolvedCommandInfo {
-                name: parsed.command_name,
+                namespace,
+                action,
                 args: parsed.arguments,
+                internal_id: format!(
+                    "{}:{}",
+                    source_type_to_string(parsed.source_type),
+                    parsed.command_name
+                ),
                 source_type: source_type_to_string(parsed.source_type),
-                input: parsed.full_input,
-                context: ResolvedCommandContext::from(parsed.context),
             };
 
             JsonRpcResponse::success(
@@ -278,13 +456,53 @@ pub async fn handle_execute(
                 }),
             )
         }
-        None => JsonRpcResponse::success(
-            request.id,
-            json!({
-                "resolved": false,
-                "error": format!("Unknown command: {}", slash_input),
-            }),
-        ),
+        None => {
+            // Not resolved — check if the first word is a namespace
+            let without_slash = slash_input.trim_start_matches('/');
+            let words: Vec<&str> = without_slash.split_whitespace().collect();
+            let first_word = words.first().map(|w| w.to_lowercase()).unwrap_or_default();
+
+            if tool_registry.is_namespace(&first_word).await {
+                // It's a known namespace
+                let children =
+                    build_namespace_children(&tool_registry, &first_word).await;
+
+                if words.len() > 1 {
+                    // Had a subcommand that didn't resolve — typo
+                    let bad_sub = words[1..].join(" ");
+                    JsonRpcResponse::success(
+                        request.id,
+                        json!({
+                            "resolved": false,
+                            "error": format!("Unknown subcommand: {}", bad_sub),
+                            "needs_interaction": true,
+                            "namespace": first_word,
+                            "children": children,
+                        }),
+                    )
+                } else {
+                    // Just the namespace, no subcommand
+                    JsonRpcResponse::success(
+                        request.id,
+                        json!({
+                            "resolved": false,
+                            "needs_interaction": true,
+                            "namespace": first_word,
+                            "children": children,
+                        }),
+                    )
+                }
+            } else {
+                // Completely unknown command
+                JsonRpcResponse::success(
+                    request.id,
+                    json!({
+                        "resolved": false,
+                        "error": format!("Unknown command: {}", slash_input),
+                    }),
+                )
+            }
+        }
     }
 }
 
@@ -313,7 +531,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_list_from_registry() {
+    async fn test_list_from_registry_flat_commands() {
         use crate::config::RoutingRuleConfig;
 
         let registry = ToolRegistry::new();
@@ -332,7 +550,61 @@ mod tests {
         let result = response.result.unwrap();
         let commands = result["commands"].as_array().unwrap();
         assert_eq!(commands.len(), 1);
-        assert_eq!(commands[0]["key"], "search");
+        // Standalone command (no dot)
+        assert_eq!(commands[0]["name"], "search");
+        assert_eq!(commands[0]["is_namespace"], false);
+    }
+
+    #[tokio::test]
+    async fn test_list_from_registry_tree_structure() {
+        use crate::dispatcher::ToolSource;
+
+        let registry = ToolRegistry::new();
+
+        // Register namespaced tools directly
+        for (id, name, desc) in [
+            ("builtin:session.new", "session.new", "Start new session"),
+            ("builtin:session.list", "session.list", "List sessions"),
+            ("custom:search", "search", "Web search"),
+        ] {
+            let source = if id.starts_with("builtin:") {
+                ToolSource::Builtin
+            } else {
+                ToolSource::Custom {
+                    rule_index: 0,
+                }
+            };
+            registry
+                .register_with_conflict_resolution(UnifiedTool::new(id, name, desc, source))
+                .await;
+        }
+
+        let request = JsonRpcRequest::with_id("commands.list", None, json!(1));
+        let response = handle_list_from_registry(request, &registry).await;
+
+        assert!(response.is_success());
+        let result = response.result.unwrap();
+        let commands = result["commands"].as_array().unwrap();
+
+        // Should have 2 entries: "session" namespace + "search" standalone
+        assert_eq!(commands.len(), 2);
+
+        // Find the namespace entry
+        let session = commands.iter().find(|c| c["name"] == "session").unwrap();
+        assert_eq!(session["is_namespace"], true);
+        let children = session["children"].as_array().unwrap();
+        assert_eq!(children.len(), 2);
+
+        let child_names: Vec<&str> = children
+            .iter()
+            .map(|c| c["name"].as_str().unwrap())
+            .collect();
+        assert!(child_names.contains(&"new"));
+        assert!(child_names.contains(&"list"));
+
+        // Find the standalone entry
+        let search = commands.iter().find(|c| c["name"] == "search").unwrap();
+        assert_eq!(search["is_namespace"], false);
     }
 
     #[test]
@@ -366,49 +638,132 @@ mod tests {
         }];
         registry.register_custom_commands(&rules).await;
 
-        let parser = Arc::new(CommandParser::new(registry));
+        let parser = Arc::new(CommandParser::new(registry.clone()));
         let request = JsonRpcRequest::with_id(
             "command.execute",
             Some(json!({"input": "/search weather"})),
             json!(1),
         );
-        let response = handle_execute(request, parser).await;
+        let response = handle_execute(request, parser, registry).await;
 
         assert!(response.is_success());
         let result = response.result.unwrap();
         assert_eq!(result["resolved"], true);
-        assert_eq!(result["command"]["name"], "search");
-        assert_eq!(result["command"]["args"], "weather");
         assert_eq!(result["command"]["source_type"], "custom");
+        assert!(result["command"]["args"].as_str().unwrap().contains("weather"));
+    }
+
+    #[tokio::test]
+    async fn test_execute_namespace_only() {
+        use crate::dispatcher::ToolSource;
+
+        let registry = Arc::new(ToolRegistry::new());
+
+        // Register namespaced tools
+        for (id, name, desc) in [
+            ("builtin:session.new", "session.new", "Start new session"),
+            ("builtin:session.list", "session.list", "List sessions"),
+        ] {
+            registry
+                .register_with_conflict_resolution(UnifiedTool::new(
+                    id,
+                    name,
+                    desc,
+                    ToolSource::Builtin,
+                ))
+                .await;
+        }
+
+        let parser = Arc::new(CommandParser::new(registry.clone()));
+        let request = JsonRpcRequest::with_id(
+            "command.execute",
+            Some(json!({"input": "/session"})),
+            json!(1),
+        );
+        let response = handle_execute(request, parser, registry).await;
+
+        assert!(response.is_success());
+        let result = response.result.unwrap();
+        assert_eq!(result["resolved"], false);
+        assert_eq!(result["needs_interaction"], true);
+        assert_eq!(result["namespace"], "session");
+        assert!(result["children"].is_array());
+        let children = result["children"].as_array().unwrap();
+        assert_eq!(children.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_execute_bad_subcommand() {
+        use crate::dispatcher::ToolSource;
+
+        let registry = Arc::new(ToolRegistry::new());
+
+        for (id, name, desc) in [
+            ("builtin:session.new", "session.new", "Start new session"),
+            ("builtin:session.list", "session.list", "List sessions"),
+        ] {
+            registry
+                .register_with_conflict_resolution(UnifiedTool::new(
+                    id,
+                    name,
+                    desc,
+                    ToolSource::Builtin,
+                ))
+                .await;
+        }
+
+        let parser = Arc::new(CommandParser::new(registry.clone()));
+        let request = JsonRpcRequest::with_id(
+            "command.execute",
+            Some(json!({"input": "/session nw"})),
+            json!(1),
+        );
+        let response = handle_execute(request, parser, registry).await;
+
+        assert!(response.is_success());
+        let result = response.result.unwrap();
+        assert_eq!(result["resolved"], false);
+        assert_eq!(result["needs_interaction"], true);
+        assert_eq!(result["namespace"], "session");
+        assert!(result["error"]
+            .as_str()
+            .unwrap()
+            .contains("Unknown subcommand"));
+        assert!(result["children"].is_array());
     }
 
     #[tokio::test]
     async fn test_execute_unknown_command() {
         let registry = Arc::new(ToolRegistry::new());
-        let parser = Arc::new(CommandParser::new(registry));
+        let parser = Arc::new(CommandParser::new(registry.clone()));
         let request = JsonRpcRequest::with_id(
             "command.execute",
             Some(json!({"input": "/nonexistent"})),
             json!(1),
         );
-        let response = handle_execute(request, parser).await;
+        let response = handle_execute(request, parser, registry).await;
 
         assert!(response.is_success());
         let result = response.result.unwrap();
         assert_eq!(result["resolved"], false);
-        assert!(result["error"].as_str().unwrap().contains("Unknown command"));
+        assert!(result["error"]
+            .as_str()
+            .unwrap()
+            .contains("Unknown command"));
+        // No needs_interaction for completely unknown
+        assert!(result.get("needs_interaction").is_none());
     }
 
     #[tokio::test]
     async fn test_execute_empty_input() {
         let registry = Arc::new(ToolRegistry::new());
-        let parser = Arc::new(CommandParser::new(registry));
+        let parser = Arc::new(CommandParser::new(registry.clone()));
         let request = JsonRpcRequest::with_id(
             "command.execute",
             Some(json!({"input": ""})),
             json!(1),
         );
-        let response = handle_execute(request, parser).await;
+        let response = handle_execute(request, parser, registry).await;
 
         assert!(response.is_error());
     }
@@ -440,5 +795,43 @@ mod tests {
         let json = serde_json::to_value(&ctx).unwrap();
         assert_eq!(json["type"], "mcp");
         assert_eq!(json["server_name"], "github");
+    }
+
+    #[test]
+    fn test_build_command_tree_mixed() {
+        use crate::dispatcher::ToolSource;
+
+        let tools = vec![
+            UnifiedTool::new("builtin:session.new", "session.new", "New session", ToolSource::Builtin),
+            UnifiedTool::new("builtin:session.list", "session.list", "List sessions", ToolSource::Builtin),
+            UnifiedTool::new("custom:search", "search", "Web search", ToolSource::Custom { rule_index: 0 }),
+            UnifiedTool::new("builtin:plugin.marketplace.install", "plugin.marketplace.install", "Install plugin", ToolSource::Builtin),
+            UnifiedTool::new("builtin:plugin.list", "plugin.list", "List plugins", ToolSource::Builtin),
+        ];
+
+        let tree = build_command_tree(tools);
+
+        // Should have 3 entries: namespaces first (BTreeMap order), then standalone
+        assert_eq!(tree.len(), 3);
+
+        // Namespaces come first (BTreeMap alphabetical order)
+        assert_eq!(tree[0].name, "plugin");
+        assert!(tree[0].is_namespace);
+        assert_eq!(tree[0].children.len(), 2);
+
+        assert_eq!(tree[1].name, "session");
+        assert!(tree[1].is_namespace);
+        assert_eq!(tree[1].children.len(), 2);
+
+        // Standalone commands come after namespaces
+        assert_eq!(tree[2].name, "search");
+        assert!(!tree[2].is_namespace);
+    }
+
+    #[test]
+    fn test_capitalize() {
+        assert_eq!(capitalize("session"), "Session");
+        assert_eq!(capitalize(""), "");
+        assert_eq!(capitalize("a"), "A");
     }
 }
