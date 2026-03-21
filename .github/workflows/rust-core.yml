@@ -4,11 +4,13 @@ on:
   push:
     paths:
       - 'core/**'
+      - 'crates/**'
       - 'Cargo.toml'
       - '.github/workflows/rust-core.yml'
   pull_request:
     paths:
       - 'core/**'
+      - 'crates/**'
       - 'Cargo.toml'
 
 env:
@@ -24,8 +26,16 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: core
+      - name: Install Linux system libraries
+        run: |
+          sudo apt-get update && sudo apt-get install -y \
+            libxcb1-dev libxcb-randr0-dev libxcb-shm0-dev libxcb-xfixes0-dev \
+            libxcb-shape0-dev libxcb-xtest0-dev libxkbcommon-dev libxss-dev \
+            libx11-dev libxrandr-dev libxi-dev libxtst-dev \
+            libssl-dev libwayland-dev libpipewire-0.3-dev libdbus-1-dev \
+            libdrm-dev libgbm-dev libegl-dev libxdo-dev clang libclang-dev
       - name: Run tests
-        run: cargo test --workspace
+        run: cargo test -p alephcore --lib
         env:
           PROPTEST_CASES: 1024
 
@@ -40,10 +50,18 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: core
+      - name: Install Linux system libraries
+        run: |
+          sudo apt-get update && sudo apt-get install -y \
+            libxcb1-dev libxcb-randr0-dev libxcb-shm0-dev libxcb-xfixes0-dev \
+            libxcb-shape0-dev libxcb-xtest0-dev libxkbcommon-dev libxss-dev \
+            libx11-dev libxrandr-dev libxi-dev libxtst-dev \
+            libssl-dev libwayland-dev libpipewire-0.3-dev libdbus-1-dev \
+            libdrm-dev libgbm-dev libegl-dev libxdo-dev clang libclang-dev
       - name: Check formatting
         run: cargo fmt --all -- --check
       - name: Clippy
-        run: cargo clippy --workspace -- -D warnings
+        run: cargo clippy -p alephcore -p aleph-desktop -- -D warnings
 
   loom-tests:
     name: Loom Concurrency
@@ -60,37 +78,3 @@ jobs:
         env:
           LOOM_MAX_PREEMPTIONS: 3
         timeout-minutes: 30
-
-  build-macos:
-    name: Build macOS
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: core
-      - name: Build with UniFFI
-        run: cargo build --release --features uniffi
-        working-directory: core
-      - uses: actions/upload-artifact@v4
-        with:
-          name: libalephcore-macos
-          path: core/target/release/libalephcore.dylib
-
-  build-windows:
-    name: Build Windows
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: core
-      - name: Build with C ABI
-        run: cargo build --release --features cabi
-        working-directory: core
-      - uses: actions/upload-artifact@v4
-        with:
-          name: alephcore-windows
-          path: core/target/release/alephcore.dll

@@ -8,9 +8,6 @@ release_dir     := "target/release"
 debug_dir       := "target/debug"
 panel_dir       := "interfaces/webchat"
 panel_dist      := "interfaces/webchat/dist"
-macos_dir       := "apps/macos"
-macos_resources := "apps/macos/Aleph/Resources"
-macos_app       := "apps/macos/build/Build/Products/Release/Aleph.app"
 server_bin      := "aleph-server"
 
 # ─── Default ───
@@ -27,8 +24,8 @@ dev: wasm
 
 # ─── Full Builds ───
 
-# Full build: WASM → Server → macOS App (release)
-all: build macos
+# Full build: WASM → Swift Bridge → Server (release)
+all: build
 
 # Build Swift bridge (macOS only)
 swift-bridge:
@@ -44,19 +41,6 @@ build: wasm swift-bridge
 build-debug: wasm
     cargo build -p alephcore --bin {{server_bin}}
     @echo "✓ Server (debug): {{debug_dir}}/{{server_bin}}"
-
-# Build macOS native app (release)
-macos: _ensure-server
-    mkdir -p {{macos_resources}}
-    cp {{release_dir}}/{{server_bin}} {{macos_resources}}/{{server_bin}}
-    cd {{macos_dir}} && xcodegen generate
-    cd {{macos_dir}} && xcodebuild \
-        -project Aleph.xcodeproj \
-        -scheme Aleph \
-        -configuration Release \
-        -derivedDataPath build \
-        build
-    @echo "✓ macOS App: {{macos_app}}"
 
 # ─── Single Stage ───
 
@@ -94,16 +78,6 @@ wasm:
     HTMLEOF
     echo "✓ WASM: {{panel_dist}}/"
 
-# Run Xcode build only (assumes server binary exists in Resources)
-xcode:
-    cd {{macos_dir}} && xcodebuild \
-        -project Aleph.xcodeproj \
-        -scheme Aleph \
-        -configuration Release \
-        -derivedDataPath build \
-        build
-    @echo "✓ Xcode: {{macos_app}}"
-
 # ─── Testing ───
 
 # Quick check: core compiles
@@ -122,12 +96,16 @@ test:
 test-desktop:
     cargo test -p aleph-desktop --lib
 
+# Run desktop-macos crate tests
+test-desktop-macos:
+    cargo test -p aleph-desktop-macos --lib
+
 # Run desktop integration tests
 test-desktop-integration:
     cargo test -p alephcore --lib builtin_tools::desktop
 
 # Run all desktop-related tests
-test-desktop-all: test-desktop test-desktop-integration
+test-desktop-all: test-desktop test-desktop-macos test-desktop-integration
 
 # Run proptest with high coverage (1024 cases per test)
 test-proptest:
@@ -153,8 +131,12 @@ clippy:
 clippy-desktop:
     cargo clippy -p aleph-desktop -- -D warnings
 
+# Clippy on desktop-macos crate
+clippy-desktop-macos:
+    cargo clippy -p aleph-desktop-macos -- -D warnings
+
 # Clippy everything
-clippy-all: clippy clippy-desktop
+clippy-all: clippy clippy-desktop clippy-desktop-macos
 
 # ─── Utilities ───
 
@@ -162,15 +144,13 @@ clippy-all: clippy clippy-desktop
 clean:
     cargo clean
     rm -rf {{panel_dist}}
-    rm -rf {{macos_dir}}/build
-    rm -rf {{macos_resources}}/{{server_bin}}
     @echo "✓ Cleaned"
 
 # Verify build dependencies are installed
 deps:
     #!/usr/bin/env bash
     ok=true
-    for cmd in cargo wasm-bindgen npm xcodegen xcodebuild; do
+    for cmd in cargo wasm-bindgen npm swift; do
         if command -v "$cmd" &>/dev/null; then
             printf "  ✓ %-16s %s\n" "$cmd" "$(which $cmd)"
         else
@@ -189,15 +169,3 @@ test-probes:
 # Playwright E2E tests (Layer 3) — requires `just wasm` for UI tests
 test-e2e:
     npx playwright test --project=chromium
-
-# ─── Internal ───
-
-[private]
-_ensure-server:
-    #!/usr/bin/env bash
-    if [ ! -f {{release_dir}}/{{server_bin}} ]; then
-        echo "Server binary not found, building..."
-        just build
-    else
-        echo "✓ Server binary exists: {{release_dir}}/{{server_bin}}"
-    fi

@@ -46,6 +46,13 @@ jobs:
         if: startsWith(matrix.os, 'macos')
         run: brew install protobuf
 
+      - name: Build Swift bridge (macOS)
+        if: startsWith(matrix.os, 'macos')
+        run: |
+          cd crates/desktop-macos/bridge && swift build -c release
+          mkdir -p $HOME/.aleph/bin
+          cp .build/release/AlephBridge $HOME/.aleph/bin/aleph-bridge
+
       - name: Install protoc (Linux)
         if: startsWith(matrix.os, 'ubuntu')
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
