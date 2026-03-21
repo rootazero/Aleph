@@ -43,7 +43,6 @@ pub mod builtin_tools;
 pub mod capability;
 pub mod clarification;
 mod clipboard;
-pub mod cli;
 pub mod command;
 pub mod components;
 pub mod compressor;

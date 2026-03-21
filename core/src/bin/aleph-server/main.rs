@@ -118,15 +118,6 @@ async fn async_main(args: Args) -> Result<(), Box<dyn std::error::Error>> {
         Some(Command::Gateway { action }) => {
             return commands::handle_gateway_command(action).await;
         }
-        Some(Command::Config { action }) => {
-            return commands::handle_config_command(action).await;
-        }
-        Some(Command::Channels { action }) => {
-            return commands::handle_channels_command(action).await;
-        }
-        Some(Command::Cron { action }) => {
-            return commands::handle_cron_command(action).await;
-        }
         Some(Command::Audit { action }) => {
             return match action {
                 AuditAction::Tools => commands::handle_audit_tools().await,

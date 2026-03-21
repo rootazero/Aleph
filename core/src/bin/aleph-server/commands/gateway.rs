@@ -4,7 +4,7 @@ use crate::cli::GatewayAction;
 
 /// Handle gateway subcommands
 pub async fn handle_gateway_command(action: GatewayAction) -> Result<(), Box<dyn std::error::Error>> {
-    use alephcore::cli::{GatewayClient, print_json};
+    use aleph_client::{GatewayClient, print_json};
 
     match action {
         GatewayAction::Call { method, params, url, timeout } => {
