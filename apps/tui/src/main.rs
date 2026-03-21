@@ -10,18 +10,13 @@
 //! aleph-tui [OPTIONS]
 //! ```
 
-mod client;
-mod config;
-mod error;
 mod tui;
 
 use clap::Parser;
 use tracing::info;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
-use crate::client::AlephClient;
-use crate::config::CliConfig;
-use crate::error::CliResult;
+use aleph_client::{AlephClient, CliConfig, CliResult};
 
 /// Aleph TUI - Interactive Terminal Chat
 #[derive(Parser)]

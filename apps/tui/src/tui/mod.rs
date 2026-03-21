@@ -28,9 +28,7 @@ use tui_textarea::{Input, TextArea};
 
 use aleph_protocol::StreamEvent;
 
-use crate::client::AlephClient;
-use crate::config::CliConfig;
-use crate::error::CliResult;
+use aleph_client::{AlephClient, CliConfig, CliResult};
 
 use app::{Action, AppState, Focus};
 use slash::SlashCommand;
