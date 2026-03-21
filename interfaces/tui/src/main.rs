@@ -1,22 +1,12 @@
-//! Aleph TUI - Interactive Terminal Interface
+//! Aleph TUI - Standalone Binary
 //!
-//! A full-screen terminal UI for chatting with Aleph Gateway.
-//! Communicates via WebSocket using JSON-RPC 2.0 protocol types
-//! from `aleph-protocol`.
-//!
-//! ## Usage
-//!
-//! ```text
-//! aleph-tui [OPTIONS]
-//! ```
-
-mod tui;
+//! Thin wrapper that parses CLI arguments and delegates to `aleph_tui::run()`.
 
 use clap::Parser;
 use tracing::info;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
-use aleph_client::{AlephClient, CliConfig, CliResult};
+use aleph_tui::{CliConfig, CliResult};
 
 /// Aleph TUI - Interactive Terminal Chat
 #[derive(Parser)]
@@ -59,32 +49,16 @@ async fn main() -> CliResult<()> {
             .init();
     }
 
-    // Load configuration
     let config = CliConfig::load(args.config.as_deref())?;
 
     info!("Aleph TUI v{}", env!("CARGO_PKG_VERSION"));
 
-    // Connect to gateway
-    let (client, events) = AlephClient::connect(&args.server).await?;
-
-    // Authenticate
-    client.authenticate(&config).await?;
-
-    // Determine session key
-    let session_key = args
-        .session
-        .or_else(|| config.default_session.clone())
-        .unwrap_or_else(|| {
-            format!(
-                "chat-{}",
-                uuid::Uuid::new_v4()
-                    .to_string()
-                    .split('-')
-                    .next()
-                    .unwrap_or("0000")
-            )
-        });
-
-    // Launch TUI
-    tui::run(client, events, &config, session_key).await
+    aleph_tui::run(
+        &args.server,
+        None,
+        args.session.as_deref(),
+        &config,
+        args.verbose,
+    )
+    .await
 }

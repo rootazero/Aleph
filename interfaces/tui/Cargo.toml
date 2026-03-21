@@ -8,6 +8,10 @@ license = "AGPL-3.0-or-later"
 # IMPORTANT: This crate MUST NOT depend on alephcore
 # It communicates with Aleph Gateway via WebSocket using aleph-protocol types.
 
+[lib]
+name = "aleph_tui"
+path = "src/lib.rs"
+
 [[bin]]
 name = "aleph-tui"
 path = "src/main.rs"
