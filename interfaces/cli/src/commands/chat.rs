@@ -1,34 +1,14 @@
 //! Interactive chat command — launches the TUI
 
-use aleph_client::{AlephClient, CliConfig, CliResult};
+use aleph_client::{CliConfig, CliResult};
 
 /// Run interactive chat via TUI
 pub async fn run(
     server_url: &str,
+    agent: Option<&str>,
     session: Option<&str>,
     config: &CliConfig,
+    verbose: bool,
 ) -> CliResult<()> {
-    // Connect to gateway
-    let (client, events) = AlephClient::connect(server_url).await?;
-
-    // Authenticate
-    client.authenticate(config).await?;
-
-    // Determine session key
-    let session_key = session
-        .map(|s| s.to_string())
-        .or_else(|| config.default_session.clone())
-        .unwrap_or_else(|| {
-            format!(
-                "chat-{}",
-                uuid::Uuid::new_v4()
-                    .to_string()
-                    .split('-')
-                    .next()
-                    .unwrap_or("0000")
-            )
-        });
-
-    // Launch TUI
-    crate::tui::run(client, events, config, session_key).await
+    aleph_tui::run(server_url, agent, session, config, verbose).await
 }

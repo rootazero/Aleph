@@ -9,8 +9,8 @@
 //! ┌─────────────────────────────────────────────────────────────┐
 //! │                        aleph-cli                             │
 //! │  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────────────┐ │
-//! │  │  CLI    │  │ Client  │  │Commands │  │   Terminal UI   │ │
-//! │  │ (clap)  │→ │(WS+RPC) │→ │ Handler │→ │   (ratatui)     │ │
+//! │  │  CLI    │  │ Client  │  │Commands │  │   aleph-tui     │ │
+//! │  │ (clap)  │→ │(WS+RPC) │→ │ Handler │→ │   (library)     │ │
 //! │  └─────────┘  └─────────┘  └─────────┘  └─────────────────┘ │
 //! └───────────────────────────────┬─────────────────────────────┘
 //!                                 │ WebSocket (JSON-RPC 2.0)
@@ -20,7 +20,6 @@
 
 mod commands;
 pub(crate) mod output;
-mod tui;
 
 use clap::{Parser, Subcommand};
 use tracing::info;
@@ -60,6 +59,10 @@ enum Commands {
         /// Session key (creates new if not specified)
         #[arg(short, long)]
         session: Option<String>,
+
+        /// Agent name to bind this session to
+        #[arg(short, long)]
+        agent: Option<String>,
     },
 
     /// Send a single message and get response
@@ -856,8 +859,8 @@ async fn main() -> CliResult<()> {
         Some(Commands::Ask { message, session }) => {
             commands::ask::run(&server_url, &message, session.as_deref(), &config).await?;
         }
-        Some(Commands::Chat { session }) => {
-            commands::chat::run(&server_url, session.as_deref(), &config).await?;
+        Some(Commands::Chat { session, agent }) => {
+            commands::chat::run(&server_url, agent.as_deref(), session.as_deref(), &config, cli.verbose).await?;
         }
         Some(Commands::Session { action }) => match action {
             SessionAction::List => {
@@ -1378,7 +1381,7 @@ async fn main() -> CliResult<()> {
         }
         None => {
             // Default: start interactive chat
-            commands::chat::run(&server_url, None, &config).await?;
+            commands::chat::run(&server_url, None, None, &config, cli.verbose).await?;
         }
     }
 

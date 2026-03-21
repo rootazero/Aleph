@@ -18,6 +18,7 @@ path = "src/main.rs"
 # Aleph dependencies
 aleph-client = { path = "../../shared/client" }
 aleph-protocol = { path = "../../shared/protocol" }
+aleph-tui = { path = "../tui" }
 # TODO: Integrate aleph-sdk for discovery when CLI uses it
 # aleph-sdk = { path = "../shared" }
 
@@ -40,12 +41,6 @@ async-trait = "0.1"
 clap = { version = "4.4", features = ["derive"] }
 clap_complete = "4"
 
-# Terminal UI
-crossterm = "0.28"
-ratatui = "0.29"
-tui-textarea = "0.7"
-unicode-width = "0.2"
-textwrap = "0.16"
 
 # Error handling
 thiserror = "2.0"
