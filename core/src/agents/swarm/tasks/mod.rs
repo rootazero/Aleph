@@ -1,7 +1,7 @@
 //! Task coordination data models and store trait
 //!
 //! Provides the foundational types for the swarm task coordination system:
-//! - `CoordTask`: A unit of work assigned to one or more agents
+//! - `CoordTask`: A unit of work assigned to an agent
 //! - `Team`: A named group of agents that collaborate on tasks
 //! - `CoordTaskStore`: Async persistence trait for tasks and teams
 
@@ -16,22 +16,16 @@ pub mod template;
 // Type aliases
 // ---------------------------------------------------------------------------
 
-/// Unique identifier for a coordination task
 pub type CoordTaskId = String;
-
-/// Unique identifier for a team
 pub type TeamId = String;
-
-/// Unique identifier for an agent
 pub type AgentId = String;
 
 // ---------------------------------------------------------------------------
 // Priority
 // ---------------------------------------------------------------------------
 
-/// Task execution priority
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
 pub enum Priority {
     Low,
     Normal,
@@ -45,29 +39,44 @@ impl Default for Priority {
     }
 }
 
+impl Priority {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Low => "low",
+            Self::Normal => "normal",
+            Self::High => "high",
+            Self::Critical => "critical",
+        }
+    }
+
+    pub fn from_stored(s: &str) -> Option<Self> {
+        match s {
+            "low" => Some(Self::Low),
+            "normal" => Some(Self::Normal),
+            "high" => Some(Self::High),
+            "critical" => Some(Self::Critical),
+            _ => None,
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // CoordTaskStatus
 // ---------------------------------------------------------------------------
 
 /// Lifecycle status of a coordination task.
 ///
-/// Note: `Blocked` is **not stored** — it is derived dynamically at query
-/// time when a task has unresolved (incomplete) dependencies.
+/// `Blocked` is **derived dynamically** at query time when a task has
+/// unresolved dependencies — it is never stored in the database.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CoordTaskStatus {
-    /// Waiting to be picked up by an agent
     Pending,
-    /// Currently being executed by an agent
-    InProgress,
-    /// Successfully completed
-    Completed,
-    /// Execution failed
-    Failed,
-    /// Explicitly cancelled
-    Cancelled,
-    /// Derived: has unresolved dependencies (never persisted)
     Blocked,
+    InProgress,
+    Completed,
+    Failed,
+    Cancelled,
 }
 
 impl Default for CoordTaskStatus {
@@ -76,16 +85,34 @@ impl Default for CoordTaskStatus {
     }
 }
 
+impl CoordTaskStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Blocked => "blocked",
+            Self::InProgress => "in_progress",
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+            Self::Cancelled => "cancelled",
+        }
+    }
+
+    pub fn from_stored(s: &str) -> Option<Self> {
+        match s {
+            "pending" => Some(Self::Pending),
+            "blocked" => Some(Self::Blocked),
+            "in_progress" => Some(Self::InProgress),
+            "completed" => Some(Self::Completed),
+            "failed" => Some(Self::Failed),
+            "cancelled" => Some(Self::Cancelled),
+            _ => None,
+        }
+    }
+}
+
 impl std::fmt::Display for CoordTaskStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Pending => write!(f, "pending"),
-            Self::InProgress => write!(f, "in_progress"),
-            Self::Completed => write!(f, "completed"),
-            Self::Failed => write!(f, "failed"),
-            Self::Cancelled => write!(f, "cancelled"),
-            Self::Blocked => write!(f, "blocked"),
-        }
+        f.write_str(self.as_str())
     }
 }
 
@@ -93,15 +120,11 @@ impl std::fmt::Display for CoordTaskStatus {
 // TeamStatus
 // ---------------------------------------------------------------------------
 
-/// Lifecycle status of a team
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
 pub enum TeamStatus {
-    /// Team is active and accepting tasks
     Active,
-    /// Team is paused
-    Paused,
-    /// Team is disbanded
+    Completed,
     Disbanded,
 }
 
@@ -111,17 +134,23 @@ impl Default for TeamStatus {
     }
 }
 
-// ---------------------------------------------------------------------------
-// TeamMember
-// ---------------------------------------------------------------------------
+impl TeamStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Completed => "completed",
+            Self::Disbanded => "disbanded",
+        }
+    }
 
-/// A member of a team with an optional role description
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TeamMember {
-    /// Agent identifier
-    pub agent_id: AgentId,
-    /// Optional human-readable role (e.g. "backend", "reviewer")
-    pub role: Option<String>,
+    pub fn from_stored(s: &str) -> Option<Self> {
+        match s {
+            "active" => Some(Self::Active),
+            "completed" => Some(Self::Completed),
+            "disbanded" => Some(Self::Disbanded),
+            _ => None,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -131,30 +160,20 @@ pub struct TeamMember {
 /// A unit of coordinated work in the swarm
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CoordTask {
-    /// Unique task identifier
     pub id: CoordTaskId,
-    /// Optional team this task belongs to
     pub team_id: Option<TeamId>,
-    /// Agent assigned to execute this task
-    pub assigned_agent: Option<AgentId>,
-    /// Human-readable title
-    pub title: String,
-    /// Detailed task description (what to do and why)
+    pub subject: String,
     pub description: String,
-    /// Execution priority
-    pub priority: Priority,
-    /// Current lifecycle status
     pub status: CoordTaskStatus,
-    /// Original dependency list for display/audit (immutable after creation)
-    pub dependencies: Vec<CoordTaskId>,
-    /// Output summary written by the executing agent upon completion
+    pub owner: Option<AgentId>,
+    pub priority: Priority,
     pub result: Option<String>,
-    /// LLM-extensible free-form metadata
     pub metadata: serde_json::Value,
-    /// Unix timestamp when this task was created
+    /// Original dependency list (immutable after creation, for display/audit)
+    pub dependencies: Vec<CoordTaskId>,
     pub created_at: u64,
-    /// Unix timestamp of the last status update
-    pub updated_at: u64,
+    pub started_at: Option<u64>,
+    pub completed_at: Option<u64>,
 }
 
 // ---------------------------------------------------------------------------
@@ -164,153 +183,99 @@ pub struct CoordTask {
 /// A named group of agents that collaborate on coordinated tasks
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Team {
-    /// Unique team identifier
     pub id: TeamId,
-    /// Human-readable team name
     pub name: String,
-    /// Optional description of the team's purpose
-    pub description: Option<String>,
-    /// Current team status
-    pub status: TeamStatus,
-    /// Members of this team
+    pub description: String,
+    pub leader: AgentId,
     pub members: Vec<TeamMember>,
-    /// LLM-extensible free-form metadata
-    pub metadata: serde_json::Value,
-    /// Unix timestamp when this team was created
+    pub status: TeamStatus,
     pub created_at: u64,
-    /// Unix timestamp of the last update
-    pub updated_at: u64,
+}
+
+/// A member of a team
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TeamMember {
+    pub agent_id: AgentId,
+    pub role: String,
+    pub joined_at: u64,
 }
 
 // ---------------------------------------------------------------------------
 // Input / update / filter types
 // ---------------------------------------------------------------------------
 
-/// Input for creating a new coordination task
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct NewCoordTask {
     pub team_id: Option<TeamId>,
-    pub assigned_agent: Option<AgentId>,
-    pub title: String,
+    pub subject: String,
     pub description: String,
-    #[serde(default)]
+    pub owner: Option<AgentId>,
     pub priority: Priority,
-    #[serde(default)]
-    pub dependencies: Vec<CoordTaskId>,
-    #[serde(default = "serde_json::Value::default")]
+    pub blocked_by: Vec<CoordTaskId>,
     pub metadata: serde_json::Value,
 }
 
-/// Partial update for an existing coordination task
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default)]
 pub struct CoordTaskUpdate {
-    pub assigned_agent: Option<AgentId>,
-    pub title: Option<String>,
-    pub description: Option<String>,
-    pub priority: Option<Priority>,
     pub status: Option<CoordTaskStatus>,
+    pub owner: Option<AgentId>,
     pub result: Option<String>,
     pub metadata: Option<serde_json::Value>,
 }
 
-/// Filter criteria for querying coordination tasks
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default)]
 pub struct CoordTaskFilter {
     pub team_id: Option<TeamId>,
-    pub assigned_agent: Option<AgentId>,
     pub status: Option<CoordTaskStatus>,
-    pub priority: Option<Priority>,
+    pub owner: Option<AgentId>,
 }
 
-/// Input for creating a new team
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct NewTeam {
+    pub id: TeamId,
     pub name: String,
-    pub description: Option<String>,
-    #[serde(default)]
-    pub members: Vec<TeamMember>,
-    #[serde(default = "serde_json::Value::default")]
-    pub metadata: serde_json::Value,
+    pub description: String,
+    pub leader: AgentId,
 }
 
-/// Partial update for an existing team
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default)]
 pub struct TeamUpdate {
-    pub name: Option<String>,
-    pub description: Option<String>,
     pub status: Option<TeamStatus>,
-    pub members: Option<Vec<TeamMember>>,
-    pub metadata: Option<serde_json::Value>,
 }
 
-/// Filter criteria for querying teams
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct TeamFilter {
-    pub status: Option<TeamStatus>,
-    /// Filter teams that contain a specific agent as a member
-    pub member_agent_id: Option<AgentId>,
-}
+#[derive(Debug, Clone, Default)]
+pub struct TeamFilter {}
 
 // ---------------------------------------------------------------------------
 // CoordTaskStore trait
 // ---------------------------------------------------------------------------
 
 /// Async persistence interface for coordination tasks and teams.
-///
-/// Implementors handle the storage layer (SQLite, in-memory, etc.).
-/// The trait is object-safe and Send + Sync to support Arc<dyn CoordTaskStore>.
 #[async_trait]
 pub trait CoordTaskStore: Send + Sync {
-    // --- Task operations ---
+    // --- Task CRUD ---
 
-    /// Create a new task and return the persisted record
     async fn create_task(&self, task: NewCoordTask) -> crate::error::Result<CoordTask>;
-
-    /// Retrieve a task by its identifier
     async fn get_task(&self, id: &str) -> crate::error::Result<Option<CoordTask>>;
+    async fn update_task(&self, id: &str, update: CoordTaskUpdate) -> crate::error::Result<CoordTask>;
+    async fn list_tasks(&self, filter: CoordTaskFilter) -> crate::error::Result<Vec<CoordTask>>;
 
-    /// Update fields on an existing task; returns the updated record
-    async fn update_task(
-        &self,
-        id: &str,
-        update: CoordTaskUpdate,
-    ) -> crate::error::Result<CoordTask>;
+    // --- DAG queries (read-only — dependency edges are immutable after creation) ---
 
-    /// Delete a task by identifier; returns true if a record was removed
-    async fn delete_task(&self, id: &str) -> crate::error::Result<bool>;
+    async fn get_dependencies(&self, id: &str) -> crate::error::Result<Vec<CoordTaskId>>;
+    async fn get_dependents(&self, id: &str) -> crate::error::Result<Vec<CoordTaskId>>;
+    /// Returns tasks whose ALL dependencies are now Completed after completing `completed_id`
+    async fn get_newly_unblocked(&self, completed_id: &str) -> crate::error::Result<Vec<CoordTask>>;
 
-    /// List tasks matching the given filter (empty filter returns all)
-    async fn list_tasks(
-        &self,
-        filter: CoordTaskFilter,
-    ) -> crate::error::Result<Vec<CoordTask>>;
+    // --- Team CRUD ---
 
-    /// Return tasks whose stored status is Pending but whose dependencies
-    /// are all Completed — i.e., tasks that are now ready to execute
-    async fn get_ready_tasks(
-        &self,
-        team_id: Option<&str>,
-    ) -> crate::error::Result<Vec<CoordTask>>;
-
-    // --- Team operations ---
-
-    /// Create a new team and return the persisted record
     async fn create_team(&self, team: NewTeam) -> crate::error::Result<Team>;
-
-    /// Retrieve a team by its identifier
     async fn get_team(&self, id: &str) -> crate::error::Result<Option<Team>>;
-
-    /// Update fields on an existing team; returns the updated record
     async fn update_team(&self, id: &str, update: TeamUpdate) -> crate::error::Result<Team>;
-
-    /// Delete a team by identifier; returns true if a record was removed
-    async fn delete_team(&self, id: &str) -> crate::error::Result<bool>;
-
-    /// List teams matching the given filter (empty filter returns all)
     async fn list_teams(&self, filter: TeamFilter) -> crate::error::Result<Vec<Team>>;
+    async fn add_member(&self, team_id: &str, member: TeamMember) -> crate::error::Result<()>;
+    async fn remove_member(&self, team_id: &str, agent_id: &str) -> crate::error::Result<()>;
 
-    /// Find all teams that a given agent belongs to.
-    ///
-    /// Used by the Context Injector to supply an agent with its team context.
+    /// Find all teams where agent_id is leader or member
     async fn get_agent_teams(&self, agent_id: &str) -> crate::error::Result<Vec<Team>>;
 }
