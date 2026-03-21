@@ -18,9 +18,6 @@ members = [
     "interfaces/cli",
     "interfaces/tui",
     "interfaces/webchat",
-
-    "apps/shared",
-    "apps/tauri/src-tauri",
 ]
 
 [workspace.package]
