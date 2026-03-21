@@ -22,6 +22,9 @@ thiserror = { workspace = true }
 # Logging
 tracing = { workspace = true }
 
+# Home directory resolution (for SwiftBridge default path)
+dirs = { workspace = true }
+
 # Encoding
 base64 = { workspace = true }
 

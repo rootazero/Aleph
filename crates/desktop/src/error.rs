@@ -28,6 +28,10 @@ pub enum DesktopError {
     /// The requested method is not yet implemented.
     #[error("not implemented: {0}")]
     NotImplemented(String),
+
+    /// The aleph-bridge Swift CLI binary failed or produced unexpected output.
+    #[error("bridge failed: {0}")]
+    BridgeFailed(String),
 }
 
 /// Convenience result type for desktop operations.

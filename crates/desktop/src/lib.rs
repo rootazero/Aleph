@@ -19,6 +19,7 @@
 
 pub mod action;
 pub mod automation_types;
+pub mod bridge;
 pub mod error;
 pub mod perception;
 pub mod pim_types;
