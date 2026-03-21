@@ -416,6 +416,9 @@ fn InputArea() -> impl IntoView {
         });
     };
 
+    // Pre-load commands at mount so guided mode (/session Enter) works immediately
+    fetch_commands();
+
     // Update filtered commands based on current input
     let update_palette = move |text: &str| {
         if text.starts_with('/') {
