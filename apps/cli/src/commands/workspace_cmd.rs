@@ -2,8 +2,7 @@
 
 use serde_json::Value;
 
-use crate::client::AlephClient;
-use crate::error::CliResult;
+use aleph_client::{AlephClient, CliResult};
 use crate::output;
 
 /// List all workspaces

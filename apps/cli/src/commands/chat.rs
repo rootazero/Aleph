@@ -1,8 +1,6 @@
 //! Interactive chat command — launches the TUI
 
-use crate::client::AlephClient;
-use crate::config::CliConfig;
-use crate::error::CliResult;
+use aleph_client::{AlephClient, CliConfig, CliResult};
 
 /// Run interactive chat via TUI
 pub async fn run(

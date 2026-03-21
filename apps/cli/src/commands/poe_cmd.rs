@@ -2,8 +2,7 @@
 
 use serde_json::Value;
 
-use crate::client::AlephClient;
-use crate::error::CliResult;
+use aleph_client::{AlephClient, CliError, CliResult};
 use crate::output;
 
 /// Run a POE task
@@ -19,7 +18,7 @@ pub async fn run(
     let mut params = serde_json::json!({ "instruction": instruction });
     if let Some(m) = manifest {
         let manifest_value: Value = serde_json::from_str(m)
-            .map_err(|e| crate::error::CliError::Other(format!("Invalid manifest JSON: {}", e)))?;
+            .map_err(|e| CliError::Other(format!("Invalid manifest JSON: {}", e)))?;
         params["manifest"] = manifest_value;
     }
     if stream {

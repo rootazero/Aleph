@@ -6,9 +6,7 @@ use clap::Subcommand;
 use serde::{Deserialize, Serialize};
 
 use aleph_protocol::{GuestScope, Invitation};
-use crate::client::AlephClient;
-use crate::config::CliConfig;
-use crate::error::{CliError, CliResult};
+use aleph_client::{AlephClient, CliConfig, CliError, CliResult};
 use crate::output::print_json;
 
 #[derive(Subcommand)]

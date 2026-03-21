@@ -2,9 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::client::AlephClient;
-use crate::config::CliConfig;
-use crate::error::CliResult;
+use aleph_client::{AlephClient, CliConfig, CliResult};
 use crate::output;
 
 #[derive(Deserialize)]

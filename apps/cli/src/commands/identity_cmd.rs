@@ -2,8 +2,7 @@
 
 use serde_json::Value;
 
-use crate::client::AlephClient;
-use crate::error::CliResult;
+use aleph_client::{AlephClient, CliError, CliResult};
 use crate::output;
 
 /// Get current identity/soul
@@ -58,7 +57,7 @@ pub async fn set(server_url: &str, manifest_json: &str, json: bool) -> CliResult
     let (client, _events) = AlephClient::connect(server_url).await?;
 
     let soul: Value = serde_json::from_str(manifest_json).map_err(|e| {
-        crate::error::CliError::Other(format!("Invalid soul manifest JSON: {}", e))
+        CliError::Other(format!("Invalid soul manifest JSON: {}", e))
     })?;
     let params = serde_json::json!({ "soul": soul });
     let result: Value = client.call("identity.set", Some(params)).await?;

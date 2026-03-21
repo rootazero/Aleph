@@ -5,7 +5,7 @@
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
-use crate::error::{CliError, CliResult};
+use aleph_client::{CliError, CliResult};
 
 // ---------------------------------------------------------------------------
 // Plugin Template Types

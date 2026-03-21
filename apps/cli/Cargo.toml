@@ -16,6 +16,7 @@ path = "src/main.rs"
 
 [dependencies]
 # Aleph dependencies
+aleph-client = { path = "../client" }
 aleph-protocol = { path = "../../shared/protocol" }
 # TODO: Integrate aleph-sdk for discovery when CLI uses it
 # aleph-sdk = { path = "../shared" }

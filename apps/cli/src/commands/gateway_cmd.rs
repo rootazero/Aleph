@@ -2,8 +2,7 @@
 
 use serde_json::Value;
 
-use crate::client::AlephClient;
-use crate::error::{CliError, CliResult};
+use aleph_client::{AlephClient, CliError, CliResult};
 use crate::output;
 
 /// Call any Gateway RPC method directly

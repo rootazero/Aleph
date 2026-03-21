@@ -2,8 +2,7 @@
 
 use serde_json::Value;
 
-use crate::client::AlephClient;
-use crate::error::CliResult;
+use aleph_client::{AlephClient, CliError, CliResult};
 use crate::output;
 
 /// Show vault status
@@ -41,13 +40,13 @@ pub async fn store(server_url: &str, json: bool) -> CliResult<()> {
         // In JSON mode, read from stdin
         let mut key = String::new();
         std::io::stdin().read_line(&mut key).map_err(|e| {
-            crate::error::CliError::Other(format!("Failed to read from stdin: {}", e))
+            CliError::Other(format!("Failed to read from stdin: {}", e))
         })?;
         key.trim().to_string()
     } else {
         // Interactive: prompt with hidden input
         rpassword::prompt_password("Enter master key: ").map_err(|e| {
-            crate::error::CliError::Other(format!("Failed to read password: {}", e))
+            CliError::Other(format!("Failed to read password: {}", e))
         })?
     };
 

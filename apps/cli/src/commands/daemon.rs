@@ -4,8 +4,7 @@ use serde_json::Value;
 use std::path::PathBuf;
 use std::process::Command;
 
-use crate::client::AlephClient;
-use crate::error::CliResult;
+use aleph_client::{AlephClient, CliResult};
 use crate::output;
 
 /// Path to the PID file used for daemon process tracking

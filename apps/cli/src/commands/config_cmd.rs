@@ -2,9 +2,7 @@
 
 use serde_json::Value;
 
-use crate::client::AlephClient;
-use crate::config::CliConfig;
-use crate::error::CliResult;
+use aleph_client::{AlephClient, CliConfig, CliResult};
 use crate::output;
 
 /// Print the config file path (local, no RPC)

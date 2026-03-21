@@ -1,7 +1,6 @@
 //! Server info command
 
-use crate::client::AlephClient;
-use crate::error::CliResult;
+use aleph_client::{AlephClient, CliResult};
 use crate::output;
 
 /// Format bytes into a human-readable string (e.g., "4.2 GB")

@@ -18,10 +18,7 @@
 //!                         Aleph Gateway Server
 //! ```
 
-mod client;
 mod commands;
-mod config;
-mod error;
 pub(crate) mod output;
 mod tui;
 
@@ -29,8 +26,7 @@ use clap::{Parser, Subcommand};
 use tracing::info;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
-use crate::config::CliConfig;
-use crate::error::CliResult;
+use aleph_client::{AlephClient, CliConfig, CliError, CliResult};
 
 /// Aleph CLI - Personal AI Assistant Client
 #[derive(Parser)]
@@ -923,7 +919,7 @@ async fn main() -> CliResult<()> {
                         && !source.contains('.')
                         && !source.contains(':');
                     if is_marketplace_name {
-                        let (client, _events) = crate::client::AlephClient::connect(&server_url).await?;
+                        let (client, _events) = AlephClient::connect(&server_url).await?;
                         let result: serde_json::Value = client
                             .call(
                                 "plugin.marketplace.install",
@@ -974,7 +970,7 @@ async fn main() -> CliResult<()> {
                 // Dev tool commands
                 PluginAction::Init { name, template, dir } => {
                     let tmpl: plugin_cmd::PluginTemplate = template.parse()
-                        .map_err(|e: String| error::CliError::Other(e))?;
+                        .map_err(|e: String| CliError::Other(e))?;
                     let dir_path = dir.map(std::path::PathBuf::from);
                     plugin_cmd::init(&name, tmpl, dir_path.as_deref())?;
                 }
@@ -990,7 +986,7 @@ async fn main() -> CliResult<()> {
                 }
                 // Marketplace
                 PluginAction::Marketplace { action } => {
-                    let (client, _events) = crate::client::AlephClient::connect(&server_url).await?;
+                    let (client, _events) = AlephClient::connect(&server_url).await?;
                     match action {
                         MarketplaceAction::Add { source } => {
                             let result: serde_json::Value = client

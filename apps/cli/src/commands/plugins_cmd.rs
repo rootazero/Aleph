@@ -5,8 +5,7 @@ use std::process::Command;
 
 use serde_json::Value;
 
-use crate::client::AlephClient;
-use crate::error::{CliError, CliResult};
+use aleph_client::{AlephClient, CliError, CliResult};
 use crate::output;
 
 /// Download a file via curl to a local path

@@ -3,9 +3,7 @@
 use aleph_protocol::StreamEvent;
 use serde::Serialize;
 
-use crate::client::AlephClient;
-use crate::config::CliConfig;
-use crate::error::CliResult;
+use aleph_client::{AlephClient, CliConfig, CliResult};
 
 /// Run ask command
 pub async fn run(
