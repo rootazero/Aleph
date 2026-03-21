@@ -1,0 +1,35 @@
+//! Platform aggregator trait.
+
+use crate::traits::{AutomationCapability, PimCapability, ScreenCapability, SystemCapability};
+
+/// Aggregator that provides access to all desktop capabilities on a given platform.
+///
+/// Each capability returns `Option<&dyn XCapability>` because not every platform
+/// supports every capability (e.g., PIM is only available on macOS currently).
+///
+/// # Example
+///
+/// ```ignore
+/// async fn use_platform(platform: &dyn DesktopPlatform) {
+///     if let Some(screen) = platform.screen() {
+///         let windows = screen.window_list().await.unwrap();
+///         println!("{} windows", windows.len());
+///     }
+/// }
+/// ```
+pub trait DesktopPlatform: Send + Sync {
+    /// Human-readable platform name (e.g., "macOS", "Windows", "Linux").
+    fn platform_name(&self) -> &str;
+
+    /// Screen perception and input automation, if available.
+    fn screen(&self) -> Option<&dyn ScreenCapability>;
+
+    /// Personal information management (Notes, Calendar, Reminders, Contacts), if available.
+    fn pim(&self) -> Option<&dyn PimCapability>;
+
+    /// System-level operations (apps, clipboard, notifications), if available.
+    fn system(&self) -> Option<&dyn SystemCapability>;
+
+    /// Automation scripting and Shortcuts, if available.
+    fn automation(&self) -> Option<&dyn AutomationCapability>;
+}

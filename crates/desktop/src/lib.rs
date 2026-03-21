@@ -21,10 +21,19 @@
 //! `capabilities()` remains a stub.
 
 pub mod action;
+pub mod automation_types;
 pub mod error;
 pub mod perception;
+pub mod pim_types;
+pub mod platform;
+pub mod system_types;
+pub mod traits;
 
 pub use error::{DesktopError, Result};
+
+// Re-export new capability traits.
+pub use platform::DesktopPlatform;
+pub use traits::{AutomationCapability, PimCapability, ScreenCapability, SystemCapability};
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
