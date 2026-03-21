@@ -10,6 +10,7 @@ members = [
     "shared/protocol",
     "shared/ui_logic",
 
+    "apps/client",
     "apps/cli",
     "apps/tui",
     "apps/shared",
