@@ -206,11 +206,52 @@ fn format_size(bytes: u64) -> String {
     }
 }
 
-/// A single command entry from the Gateway.
+/// A single command entry from the Gateway (supports tree structure).
 #[derive(Clone, Debug)]
 struct CommandInfo {
     key: String,
     description: String,
+    is_namespace: bool,
+    param_hint: Option<String>,
+    children: Vec<CommandInfo>,
+}
+
+/// Parse a single command from JSON (recursive for children).
+fn parse_command_info(item: &serde_json::Value) -> Option<CommandInfo> {
+    let name = item.get("name").and_then(|v| v.as_str())
+        // Fallback: legacy flat format uses "key"
+        .or_else(|| item.get("key").and_then(|v| v.as_str()))?;
+    let hint = item.get("hint").and_then(|v| v.as_str())
+        .or_else(|| item.get("description").and_then(|v| v.as_str()))
+        .unwrap_or("");
+    let is_namespace = item.get("is_namespace").and_then(|v| v.as_bool()).unwrap_or(false);
+    let param_hint = item.get("param_hint").and_then(|v| v.as_str()).map(String::from);
+    let children = item.get("children")
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().filter_map(parse_command_info).collect())
+        .unwrap_or_default();
+    Some(CommandInfo {
+        key: name.to_string(),
+        description: hint.to_string(),
+        is_namespace,
+        param_hint,
+        children,
+    })
+}
+
+/// A display entry in the palette (flattened for rendering).
+#[derive(Clone, Debug)]
+struct PaletteEntry {
+    /// Display label (e.g. "session" or "new")
+    label: String,
+    /// Full slash command to insert (e.g. "/session new ")
+    full_command: String,
+    /// Description / hint text
+    description: String,
+    /// True if this is a namespace that can be drilled into
+    is_namespace: bool,
+    /// True if this is the "back" pseudo-entry
+    is_back: bool,
 }
 
 /// Text input area with send button, file attachments, and slash command palette.
@@ -225,9 +266,11 @@ fn InputArea() -> impl IntoView {
     // Slash command palette state
     let all_commands: RwSignal<Vec<CommandInfo>> = RwSignal::new(Vec::new());
     let show_palette = RwSignal::new(false);
-    let filtered_commands: RwSignal<Vec<CommandInfo>> = RwSignal::new(Vec::new());
+    let palette_entries: RwSignal<Vec<PaletteEntry>> = RwSignal::new(Vec::new());
     let selected_index = RwSignal::new(0usize);
     let commands_loaded = RwSignal::new(false);
+    // Current namespace context for hierarchical browsing (None = root level)
+    let current_namespace: RwSignal<Option<String>> = RwSignal::new(None);
 
     // NodeRef for the hidden file input
     let file_input_ref = NodeRef::<leptos::html::Input>::new();
@@ -273,6 +316,72 @@ fn InputArea() -> impl IntoView {
         });
     };
 
+    // Build palette entries from commands based on current namespace and query
+    let build_palette_entries = move |cmds: &[CommandInfo], namespace: &Option<String>, query: &str| -> Vec<PaletteEntry> {
+        let mut entries = Vec::new();
+        if let Some(ns) = namespace {
+            // Inside a namespace — show "back" + children
+            entries.push(PaletteEntry {
+                label: ".. back".to_string(),
+                full_command: "/".to_string(),
+                description: "Return to top level".to_string(),
+                is_namespace: false,
+                is_back: true,
+            });
+            if let Some(parent) = cmds.iter().find(|c| &c.key == ns) {
+                for child in &parent.children {
+                    let full_cmd = format!("/{} {} ", ns, child.key);
+                    let desc = if let Some(ref ph) = child.param_hint {
+                        format!("{} {}", child.description, ph)
+                    } else {
+                        child.description.clone()
+                    };
+                    if query.is_empty() || child.key.to_lowercase().contains(&query.to_lowercase())
+                        || desc.to_lowercase().contains(&query.to_lowercase())
+                    {
+                        entries.push(PaletteEntry {
+                            label: child.key.clone(),
+                            full_command: full_cmd,
+                            description: desc,
+                            is_namespace: false,
+                            is_back: false,
+                        });
+                    }
+                }
+            }
+        } else {
+            // Root level — show namespaces and independent commands
+            let q = query.to_lowercase();
+            for cmd in cmds {
+                let desc = if let Some(ref ph) = cmd.param_hint {
+                    format!("{} {}", cmd.description, ph)
+                } else {
+                    cmd.description.clone()
+                };
+                if !query.is_empty()
+                    && !cmd.key.to_lowercase().contains(&q)
+                    && !desc.to_lowercase().contains(&q)
+                {
+                    continue;
+                }
+                let indicator = if cmd.is_namespace { " \u{25B8}" } else { "" };
+                entries.push(PaletteEntry {
+                    label: cmd.key.clone(),
+                    full_command: if cmd.is_namespace {
+                        // Clicking a namespace drills into it (handled separately)
+                        String::new()
+                    } else {
+                        format!("/{} ", cmd.key)
+                    },
+                    description: format!("{}{}", desc, indicator),
+                    is_namespace: cmd.is_namespace,
+                    is_back: false,
+                });
+            }
+        }
+        entries
+    };
+
     // Fetch commands from Gateway (once), then refresh the palette
     let fetch_commands = move || {
         if commands_loaded.get_untracked() { return; }
@@ -283,14 +392,8 @@ fn InputArea() -> impl IntoView {
                     let mut cmds = Vec::new();
                     if let Some(arr) = result.get("commands").and_then(|v| v.as_array()) {
                         for item in arr {
-                            if let (Some(key), Some(desc)) = (
-                                item.get("key").and_then(|v| v.as_str()),
-                                item.get("description").and_then(|v| v.as_str()),
-                            ) {
-                                cmds.push(CommandInfo {
-                                    key: key.to_string(),
-                                    description: desc.to_string(),
-                                });
+                            if let Some(cmd) = parse_command_info(item) {
+                                cmds.push(cmd);
                             }
                         }
                     }
@@ -299,16 +402,10 @@ fn InputArea() -> impl IntoView {
                     // Refresh palette with newly loaded commands
                     let text = input_text.get_untracked();
                     if text.starts_with('/') {
-                        let query = &text[1..];
-                        let matches: Vec<CommandInfo> = if query.is_empty() {
-                            cmds
-                        } else {
-                            let q = query.to_lowercase();
-                            cmds.into_iter()
-                                .filter(|c| c.key.to_lowercase().contains(&q) || c.description.to_lowercase().contains(&q))
-                                .collect()
-                        };
-                        filtered_commands.set(matches);
+                        let query = &text[1..]; // safe: '/' is single-byte ASCII
+                        let ns = current_namespace.get_untracked();
+                        let entries = build_palette_entries(&cmds, &ns, query);
+                        palette_entries.set(entries);
                         selected_index.set(0);
                     }
                 }
@@ -322,36 +419,90 @@ fn InputArea() -> impl IntoView {
     // Update filtered commands based on current input
     let update_palette = move |text: &str| {
         if text.starts_with('/') {
-            let query = &text[1..]; // safe: '/' is single-byte ASCII
+            let after_slash = &text[1..]; // safe: '/' is single-byte ASCII
             let cmds = all_commands.get_untracked();
-            let matches: Vec<CommandInfo> = if query.is_empty() {
-                cmds
+            let ns = current_namespace.get_untracked();
+
+            // Detect if user typed "/namespace " pattern → auto-enter namespace
+            if ns.is_none() && !after_slash.is_empty() {
+                let parts: Vec<&str> = after_slash.splitn(2, ' ').collect();
+                if parts.len() == 2 {
+                    let maybe_ns = parts[0];
+                    let sub_query = parts[1];
+                    if let Some(parent) = cmds.iter().find(|c| c.key == maybe_ns && c.is_namespace) {
+                        // User typed "/session ..." — auto-enter namespace context
+                        current_namespace.set(Some(parent.key.clone()));
+                        let entries = build_palette_entries(&cmds, &Some(parent.key.clone()), sub_query);
+                        palette_entries.set(entries);
+                        selected_index.set(0);
+                        show_palette.set(true);
+                        return;
+                    }
+                }
+            }
+
+            let query = if let Some(ref ns_key) = ns {
+                // Inside namespace: query is after "/namespace "
+                let prefix = format!("{} ", ns_key);
+                if after_slash.starts_with(&prefix) {
+                    &after_slash[prefix.len()..]
+                } else if after_slash == ns_key.as_str() {
+                    ""
+                } else {
+                    // User changed text away from namespace — exit namespace
+                    current_namespace.set(None);
+                    after_slash
+                }
             } else {
-                let q = query.to_lowercase();
-                cmds.into_iter()
-                    .filter(|c| c.key.to_lowercase().contains(&q) || c.description.to_lowercase().contains(&q))
-                    .collect()
+                after_slash
             };
-            filtered_commands.set(matches);
+
+            let ns = current_namespace.get_untracked();
+            let entries = build_palette_entries(&cmds, &ns, query);
+            palette_entries.set(entries);
             selected_index.set(0);
             show_palette.set(true);
             // Fetch commands on first '/' if not yet loaded
             fetch_commands();
         } else {
             show_palette.set(false);
+            current_namespace.set(None);
         }
     };
 
-    // Insert selected command into input
-    let insert_command = move |cmd: &CommandInfo| {
-        input_text.set(format!("/{} ", cmd.key));
-        show_palette.set(false);
+    // Handle palette entry selection
+    let select_palette_entry = move |entry: &PaletteEntry| {
+        if entry.is_back {
+            // Go back to root level
+            current_namespace.set(None);
+            input_text.set("/".to_string());
+            let cmds = all_commands.get_untracked();
+            let entries = build_palette_entries(&cmds, &None, "");
+            palette_entries.set(entries);
+            selected_index.set(0);
+            // Keep palette open
+        } else if entry.is_namespace {
+            // Drill into namespace
+            current_namespace.set(Some(entry.label.clone()));
+            input_text.set(format!("/{} ", entry.label));
+            let cmds = all_commands.get_untracked();
+            let ns = Some(entry.label.clone());
+            let entries = build_palette_entries(&cmds, &ns, "");
+            palette_entries.set(entries);
+            selected_index.set(0);
+            // Keep palette open to show children
+        } else {
+            // Leaf command — insert and close palette
+            input_text.set(entry.full_command.clone());
+            show_palette.set(false);
+            current_namespace.set(None);
+        }
     };
 
     let on_keydown = move |ev: web_sys::KeyboardEvent| {
         if show_palette.get_untracked() {
-            let cmds = filtered_commands.get_untracked();
-            let count = cmds.len();
+            let entries = palette_entries.get_untracked();
+            let count = entries.len();
             match ev.key().as_str() {
                 "ArrowDown" => {
                     ev.prevent_default();
@@ -370,18 +521,47 @@ fn InputArea() -> impl IntoView {
                     ev.prevent_default();
                     let idx = selected_index.get_untracked();
                     if idx < count {
-                        insert_command(&cmds[idx]);
+                        select_palette_entry(&entries[idx]);
                     }
                 }
                 "Escape" => {
                     ev.prevent_default();
-                    show_palette.set(false);
+                    // If inside namespace, go back instead of closing
+                    if current_namespace.get_untracked().is_some() {
+                        current_namespace.set(None);
+                        input_text.set("/".to_string());
+                        let cmds = all_commands.get_untracked();
+                        let new_entries = build_palette_entries(&cmds, &None, "");
+                        palette_entries.set(new_entries);
+                        selected_index.set(0);
+                    } else {
+                        show_palette.set(false);
+                    }
                 }
                 _ => {}
             }
             return;
         }
+        // Guided mode: if user types "/namespace" (exact match) and presses Enter,
+        // check if it matches a namespace and open its children instead of sending
         if ev.key() == "Enter" && !ev.shift_key() {
+            let text = input_text.get_untracked();
+            let trimmed = text.trim();
+            if trimmed.starts_with('/') && !trimmed.contains(' ') {
+                let maybe_ns = &trimmed[1..];
+                let cmds = all_commands.get_untracked();
+                if let Some(parent) = cmds.iter().find(|c| c.key == maybe_ns && c.is_namespace) {
+                    ev.prevent_default();
+                    current_namespace.set(Some(parent.key.clone()));
+                    input_text.set(format!("/{} ", parent.key));
+                    let ns = Some(parent.key.clone());
+                    let entries = build_palette_entries(&cmds, &ns, "");
+                    palette_entries.set(entries);
+                    selected_index.set(0);
+                    show_palette.set(true);
+                    return;
+                }
+            }
             ev.prevent_default();
             send_message();
         }
@@ -519,18 +699,27 @@ fn InputArea() -> impl IntoView {
             </Show>
 
             // Slash command palette (above the input)
-            <Show when=move || show_palette.get() && !filtered_commands.get().is_empty()>
+            <Show when=move || show_palette.get() && !palette_entries.get().is_empty()>
                 <div class="mb-1 rounded-xl border border-border bg-surface-raised shadow-lg
                             max-h-[200px] overflow-y-auto">
+                    // Namespace breadcrumb header
+                    <Show when=move || current_namespace.get().is_some()>
+                        <div class="px-3 py-1.5 text-xs text-text-tertiary border-b border-border">
+                            "/" {move || current_namespace.get().unwrap_or_default()} " >"
+                        </div>
+                    </Show>
                     <For
                         each=move || {
-                            filtered_commands.get().into_iter().enumerate().collect::<Vec<_>>()
+                            palette_entries.get().into_iter().enumerate().collect::<Vec<_>>()
                         }
-                        key=|(_, cmd)| cmd.key.clone()
-                        children=move |(idx, cmd)| {
-                            let key = cmd.key.clone();
-                            let desc = cmd.description.clone();
-                            let cmd_for_click = cmd.clone();
+                        key=|(_, entry)| format!("{}:{}", entry.label, entry.is_back)
+                        children=move |(idx, entry)| {
+                            let label = entry.label.clone();
+                            let desc = entry.description.clone();
+                            let entry_for_click = entry.clone();
+                            let is_back = entry.is_back;
+                            let is_ns = entry.is_namespace;
+                            let ns_ctx = current_namespace.get_untracked();
                             view! {
                                 <button
                                     class=move || {
@@ -543,11 +732,32 @@ fn InputArea() -> impl IntoView {
                                     }
                                     on:mousedown=move |ev| {
                                         ev.prevent_default(); // keep textarea focus
-                                        insert_command(&cmd_for_click);
+                                        select_palette_entry(&entry_for_click);
                                     }
                                 >
-                                    <span class="font-medium shrink-0">"/" {key}</span>
+                                    {if is_back {
+                                        view! {
+                                            <span class="text-text-tertiary shrink-0">{label.clone()}</span>
+                                        }.into_any()
+                                    } else if ns_ctx.is_some() {
+                                        // Inside namespace: show subcommand without leading /
+                                        view! {
+                                            <span class="font-medium shrink-0">{label.clone()}</span>
+                                        }.into_any()
+                                    } else {
+                                        // Root level: show with leading /
+                                        view! {
+                                            <span class="font-medium shrink-0">"/" {label.clone()}</span>
+                                        }.into_any()
+                                    }}
                                     <span class="text-text-secondary text-xs truncate">{desc}</span>
+                                    {if is_ns {
+                                        Some(view! {
+                                            <span class="ml-auto text-text-tertiary text-xs shrink-0">"\u{25B8}"</span>
+                                        })
+                                    } else {
+                                        None
+                                    }}
                                 </button>
                             }
                         }
