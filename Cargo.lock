@@ -107,6 +107,7 @@ dependencies = [
 name = "aleph-cli"
 version = "0.1.0"
 dependencies = [
+ "aleph-client",
  "aleph-logging",
  "aleph-protocol",
  "anyhow",
@@ -133,6 +134,24 @@ dependencies = [
  "unicode-width 0.2.0",
  "uuid",
  "zip",
+]
+
+[[package]]
+name = "aleph-client"
+version = "0.1.0"
+dependencies = [
+ "aleph-protocol",
+ "anyhow",
+ "dirs 5.0.1",
+ "futures-util",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-tungstenite 0.24.0",
+ "toml 0.8.23",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -243,6 +262,7 @@ dependencies = [
 name = "aleph-tui"
 version = "0.1.0"
 dependencies = [
+ "aleph-client",
  "aleph-logging",
  "aleph-protocol",
  "anyhow",
