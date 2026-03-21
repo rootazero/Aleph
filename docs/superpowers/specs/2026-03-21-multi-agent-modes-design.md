@@ -36,7 +36,7 @@ This design formalizes three user-triggerable collaboration modes + one infrastr
 | | Spawn | Delegate | Team |
 |---|---|---|---|
 | **Trigger** | LLM automatic | LLM automatic | User `/team` command |
-| **Tools** | `subagent` | `session_send` | `team_*` + `task_*` |
+| **Tools** | `subagent_spawn/steer/kill` | `session_send` | `team_*` + `task_*` |
 | **Lifecycle** | Ephemeral (destroyed on completion) | Persistent (agents exist independently) | Persistent (disband to end) |
 | **Relationship** | Vertical (parent → child) | Horizontal (peer ↔ peer) | Hierarchical (Leader → Members) |
 | **Communication** | Return value | Messages (fire-and-forget or wait-for-reply) | Task board + messages |
@@ -44,7 +44,7 @@ This design formalizes three user-triggerable collaboration modes + one infrastr
 
 ### Mode 1: Spawn (Sub-Agent Dispatch)
 
-**Tool**: `subagent`
+**Tools**: `subagent_spawn`, `subagent_steer`, `subagent_kill`
 
 The main agent spawns a temporary, ephemeral AgentLoop to handle a focused sub-task. The sub-agent has its own tool registry (excluding `subagent` to prevent recursion), token budget, and timeout. It returns a result and is destroyed.
 
@@ -123,7 +123,7 @@ ToolGroup {
 ToolGroup {
     id: "spawn",
     name: "子 Agent 派发",
-    tools: &["subagent_spawn", "subagent_steer", "subagent_kill"],
+    tools: &["subagent_spawn", "subagent_steer", "subagent_kill", "escalate_task"],
 },
 
 // Delegate mode
@@ -149,33 +149,60 @@ ToolGroup {
     name: "会话管理",
     tools: &["session_new", "session_rename"],
 },
+
+// Automation (kept from existing agent_mgmt, not a collaboration mode)
+ToolGroup {
+    id: "automation",
+    name: "自动化",
+    tools: &["cron_manage", "clawhub"],
+},
 ```
 
 ### Changes
 
-- Merge `task_coordination` into `team` group — task tools are part of team mode
-- Move `session_send` and `session_list` from session management to `delegate` group
-- Keep `session_new` / `session_rename` in session management — these are user session ops, not A2A
+- Rename `task_coordination` → `team` group, keeping same tools
+- Split monolithic `agent_mgmt` into focused groups:
+  - `agent_mgmt`: only agent CRUD
+  - `spawn`: subagent tools + escalate_task
+  - `delegate`: session_send + session_list (A2A communication)
+  - `session_mgmt`: session_new + session_rename (user session ops)
+  - `automation`: cron_manage + clawhub (not collaboration modes)
+- All tools currently in `agent_mgmt` accounted for — `test_all_builtin_tools_have_a_group` passes
+
+### Namespace registration
+
+Add `"team"` and `"task"` to `TOOL_NAMESPACES` in `commands.rs`. This enables `/team launch`, `/team list`, `/task create`, `/task list` etc. as natural namespace-based command routing.
+
+Note: These modes are **conceptual categories, not runtime states**. There is no mode-switching code. The LLM selects tools based on their descriptions.
 
 ## `/team` Slash Command
 
 ### Command mapping
 
+The existing Gateway namespace system automatically maps `/team <sub>` to `team_<sub>` tool:
+
 ```
-/team                              → team_list (show all teams)
-/team launch <template>            → team_launch (start team from template)
-/team launch <template> --goal "…" → team_launch with variables
-/team disband <team_id>            → team_disband
-/team status <team_id>             → task_list with team_id filter
+/team                  → browse team_* tools (namespace palette)
+/team create           → team_create
+/team launch           → team_launch
+/team list             → team_list
+/team disband          → team_disband
+```
+
+Similarly, `/task` namespace:
+```
+/task                  → browse task_* tools
+/task create           → task_create
+/task update           → task_update
+/task list             → task_list
+/task wait             → task_wait
 ```
 
 ### Implementation
 
-Register `team` as a command namespace in the Gateway command handler (same pattern as existing `/session`, `/agent` namespaces). Sub-commands map to existing tools — no new tool logic.
+Add `"team"` and `"task"` to `TOOL_NAMESPACES` array in `commands.rs`. The existing hierarchical command system handles the rest — no custom routing logic needed.
 
-The Gateway command hierarchy system (implemented in `gateway/handlers/commands.rs`) already supports namespace browsing. Adding `team` follows the established pattern.
-
-Estimated: ~30 lines in commands.rs.
+Estimated: 2 lines in commands.rs (one word each).
 
 ## Reference Document
 
@@ -191,11 +218,11 @@ Update `CLAUDE.md` documentation index table to include the new reference.
 
 | File | Change | Lines |
 |------|--------|-------|
-| `core/src/executor/builtin_registry/groups.rs` | Reorganize groups to reflect three modes | ~20 |
-| `core/src/gateway/handlers/commands.rs` | Add `team` command namespace + sub-command routing | ~30 |
+| `core/src/executor/builtin_registry/groups.rs` | Split `agent_mgmt` into mode-based groups | ~30 |
+| `core/src/gateway/handlers/commands.rs` | Add `"team"` and `"task"` to `TOOL_NAMESPACES` | ~2 |
 | `docs/reference/MULTI_AGENT_SYSTEM.md` | New reference document | ~150 |
 | `CLAUDE.md` | Add doc index entry | ~1 |
-| **Total** | | **~200** |
+| **Total** | | **~183** |
 
 ## YAGNI — Explicitly Not Doing
 
