@@ -121,17 +121,23 @@ struct CommandTreeNode {
     children: Vec<ChildCommandNode>,
 }
 
+/// Known tool namespaces for hierarchical grouping.
+const TOOL_NAMESPACES: &[&str] = &["session", "agent", "cron", "skill", "vault", "memory", "image", "generate", "snapshot", "plugin", "team", "task"];
+
 /// Build a hierarchical tree from a flat list of tools.
 ///
-/// Tools with dots in their name (e.g., "session.new") are grouped under
-/// their namespace prefix. Tools without dots are standalone commands.
+/// Tools with a known namespace prefix (e.g., "session_new") are grouped under
+/// their namespace. Other tools are standalone commands.
 fn build_command_tree(tools: Vec<UnifiedTool>) -> Vec<CommandTreeNode> {
     // Group: namespace -> Vec<UnifiedTool>
     let mut namespaces: BTreeMap<String, Vec<UnifiedTool>> = BTreeMap::new();
     let mut standalone: Vec<UnifiedTool> = Vec::new();
 
     for tool in tools {
-        if let Some((ns, _)) = tool.name.split_once('.') {
+        let ns = TOOL_NAMESPACES.iter().find(|&&ns| {
+            tool.name.starts_with(ns) && tool.name.get(ns.len()..ns.len()+1) == Some("_")
+        });
+        if let Some(&ns) = ns {
             namespaces
                 .entry(ns.to_string())
                 .or_default()
@@ -151,10 +157,10 @@ fn build_command_tree(tools: Vec<UnifiedTool>) -> Vec<CommandTreeNode> {
         let children: Vec<ChildCommandNode> = children_tools
             .into_iter()
             .map(|t| {
-                // Extract subcommand name: "session.new" -> "new"
+                // Extract subcommand name: "session_new" -> "new"
                 let sub_name = t
                     .name
-                    .strip_prefix(&format!("{}.", ns_name))
+                    .strip_prefix(&format!("{}_", ns_name))
                     .unwrap_or(&t.name)
                     .to_string();
                 ChildCommandNode {
@@ -289,7 +295,7 @@ pub struct ExecuteParams {
 /// Resolved command info returned by command.execute
 #[derive(Debug, Clone, Serialize)]
 pub struct ResolvedCommandInfo {
-    /// Namespace prefix (e.g., "session" for "session.new")
+    /// Namespace prefix (e.g., "session" for "session_new")
     #[serde(skip_serializing_if = "Option::is_none")]
     pub namespace: Option<String>,
     /// Action/subcommand (e.g., "new")
@@ -368,7 +374,7 @@ async fn build_namespace_children(
         .map(|t| {
             let sub_name = t
                 .name
-                .strip_prefix(&format!("{}.", namespace))
+                .strip_prefix(&format!("{}_", namespace))
                 .unwrap_or(&t.name)
                 .to_string();
             ChildCommandNode {
@@ -392,7 +398,7 @@ async fn build_namespace_children(
 ///
 /// # Example: Resolved command
 /// ```json
-/// {"resolved":true,"command":{"namespace":"session","action":"new","args":"my topic","internal_id":"builtin:session.new","source_type":"builtin"}}
+/// {"resolved":true,"command":{"namespace":"session","action":"new","args":"my topic","internal_id":"builtin:session_new","source_type":"builtin"}}
 /// ```
 ///
 /// # Example: Namespace only
@@ -563,8 +569,8 @@ mod tests {
 
         // Register namespaced tools directly
         for (id, name, desc) in [
-            ("builtin:session.new", "session.new", "Start new session"),
-            ("builtin:session.list", "session.list", "List sessions"),
+            ("builtin:session_new", "session_new", "Start new session"),
+            ("builtin:session_list", "session_list", "List sessions"),
             ("custom:search", "search", "Web search"),
         ] {
             let source = if id.starts_with("builtin:") {
@@ -661,8 +667,8 @@ mod tests {
 
         // Register namespaced tools
         for (id, name, desc) in [
-            ("builtin:session.new", "session.new", "Start new session"),
-            ("builtin:session.list", "session.list", "List sessions"),
+            ("builtin:session_new", "session_new", "Start new session"),
+            ("builtin:session_list", "session_list", "List sessions"),
         ] {
             registry
                 .register_with_conflict_resolution(UnifiedTool::new(
@@ -699,8 +705,8 @@ mod tests {
         let registry = Arc::new(ToolRegistry::new());
 
         for (id, name, desc) in [
-            ("builtin:session.new", "session.new", "Start new session"),
-            ("builtin:session.list", "session.list", "List sessions"),
+            ("builtin:session_new", "session_new", "Start new session"),
+            ("builtin:session_list", "session_list", "List sessions"),
         ] {
             registry
                 .register_with_conflict_resolution(UnifiedTool::new(
@@ -802,11 +808,11 @@ mod tests {
         use crate::dispatcher::ToolSource;
 
         let tools = vec![
-            UnifiedTool::new("builtin:session.new", "session.new", "New session", ToolSource::Builtin),
-            UnifiedTool::new("builtin:session.list", "session.list", "List sessions", ToolSource::Builtin),
+            UnifiedTool::new("builtin:session_new", "session_new", "New session", ToolSource::Builtin),
+            UnifiedTool::new("builtin:session_list", "session_list", "List sessions", ToolSource::Builtin),
             UnifiedTool::new("custom:search", "search", "Web search", ToolSource::Custom { rule_index: 0 }),
-            UnifiedTool::new("builtin:plugin.marketplace.install", "plugin.marketplace.install", "Install plugin", ToolSource::Builtin),
-            UnifiedTool::new("builtin:plugin.list", "plugin.list", "List plugins", ToolSource::Builtin),
+            UnifiedTool::new("builtin:plugin_install", "plugin_install", "Install plugin", ToolSource::Builtin),
+            UnifiedTool::new("builtin:plugin_list", "plugin_list", "List plugins", ToolSource::Builtin),
         ];
 
         let tree = build_command_tree(tools);

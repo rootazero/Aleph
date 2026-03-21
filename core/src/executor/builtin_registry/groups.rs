@@ -65,32 +65,40 @@ pub static TOOL_GROUPS: &[ToolGroup] = &[
         name: "媒体理解",
         tools: &["media_understand", "audio_transcribe", "document_extract"],
     },
+    // -- Multi-agent collaboration modes --
     ToolGroup {
-        id: "task_coordination",
-        name: "任务协调",
+        id: "spawn",
+        name: "子 Agent 派发",
+        tools: &["subagent_spawn", "subagent_steer", "subagent_kill", "escalate_task"],
+    },
+    ToolGroup {
+        id: "delegate",
+        name: "Agent 间通信",
+        tools: &["session_send", "session_list"],
+    },
+    ToolGroup {
+        id: "team",
+        name: "团队协调",
         tools: &[
-            "task_create", "task_update", "task_list", "task_wait",
             "team_create", "team_launch", "team_list", "team_disband",
+            "task_create", "task_update", "task_list", "task_wait",
         ],
     },
+    // -- Infrastructure --
     ToolGroup {
         id: "agent_mgmt",
         name: "Agent 管理",
-        tools: &[
-            "agent_create",
-            "agent_list",
-            "agent_delete",
-            "session_new",
-            "session_rename",
-            "session_list",
-            "session_send",
-            "subagent_spawn",
-            "subagent_steer",
-            "subagent_kill",
-            "escalate_task",
-            "cron_manage",
-            "clawhub",
-        ],
+        tools: &["agent_create", "agent_list", "agent_delete"],
+    },
+    ToolGroup {
+        id: "session_mgmt",
+        name: "会话管理",
+        tools: &["session_new", "session_rename"],
+    },
+    ToolGroup {
+        id: "automation",
+        name: "自动化",
+        tools: &["cron_manage", "clawhub"],
     },
 ];
 
