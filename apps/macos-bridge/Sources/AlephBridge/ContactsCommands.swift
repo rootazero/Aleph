@@ -106,7 +106,7 @@ extension AlephBridge {
         struct Get: ParsableCommand {
             static let configuration = CommandConfiguration(abstract: "Get a contact by ID")
 
-            @Argument(help: "Contact ID")
+            @Option(name: .long, help: "Contact ID")
             var id: String
 
             func run() {

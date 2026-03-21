@@ -1,6 +1,7 @@
 //! macOS platform implementation for Aleph desktop capabilities.
 
 mod automation;
+mod pim;
 mod system;
 
 use aleph_desktop::traits::{
@@ -10,12 +11,14 @@ use aleph_desktop::NativeScreen;
 use aleph_desktop::DesktopPlatform;
 
 use automation::MacOSAutomation;
+use pim::MacOSPim;
 use system::MacOSSystem;
 
 /// macOS platform with shared `NativeScreen` for screen capabilities.
 pub struct MacOSPlatform {
     screen: NativeScreen,
     automation: MacOSAutomation,
+    pim: MacOSPim,
     system: MacOSSystem,
 }
 
@@ -25,6 +28,7 @@ impl MacOSPlatform {
         Self {
             screen: NativeScreen::new(),
             automation: MacOSAutomation::new(),
+            pim: MacOSPim::new(),
             system: MacOSSystem::new(),
         }
     }
@@ -46,7 +50,7 @@ impl DesktopPlatform for MacOSPlatform {
     }
 
     fn pim(&self) -> Option<&dyn PimCapability> {
-        None
+        Some(&self.pim)
     }
 
     fn system(&self) -> Option<&dyn SystemCapability> {
@@ -72,7 +76,7 @@ mod tests {
     fn screen_is_some() {
         let platform = MacOSPlatform::new();
         assert!(platform.screen().is_some());
-        assert!(platform.pim().is_none());
+        assert!(platform.pim().is_some());
         assert!(platform.system().is_some());
         assert!(platform.automation().is_some());
     }

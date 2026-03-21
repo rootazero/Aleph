@@ -97,7 +97,7 @@ extension AlephBridge {
         struct Get: ParsableCommand {
             static let configuration = CommandConfiguration(abstract: "Get an event by ID")
 
-            @Argument(help: "Event ID")
+            @Option(name: .long, help: "Event ID")
             var id: String
 
             func run() {
@@ -131,8 +131,8 @@ extension AlephBridge {
             @Option(name: .long, help: "Notes / description")
             var notes: String?
 
-            @Flag(name: .long, help: "All-day event")
-            var allDay: Bool = false
+            @Option(name: .long, help: "All-day event (true/false)")
+            var allDay: String?
 
             func run() {
                 requestCalendarAccess()
@@ -148,7 +148,7 @@ extension AlephBridge {
                 event.title = title
                 event.startDate = startDate
                 event.endDate = endDate
-                event.isAllDay = allDay
+                event.isAllDay = allDay == "true"
                 event.location = location
                 event.notes = notes
 
@@ -171,7 +171,7 @@ extension AlephBridge {
         struct Update: ParsableCommand {
             static let configuration = CommandConfiguration(abstract: "Update a calendar event")
 
-            @Argument(help: "Event ID")
+            @Option(name: .long, help: "Event ID")
             var id: String
 
             @Option(name: .long, help: "New title")
@@ -221,7 +221,7 @@ extension AlephBridge {
         struct Delete: ParsableCommand {
             static let configuration = CommandConfiguration(abstract: "Delete a calendar event")
 
-            @Argument(help: "Event ID")
+            @Option(name: .long, help: "Event ID")
             var id: String
 
             func run() {

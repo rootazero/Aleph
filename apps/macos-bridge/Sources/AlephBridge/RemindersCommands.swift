@@ -79,8 +79,8 @@ extension AlephBridge {
             @Option(name: .long, help: "Reminder list ID")
             var listId: String?
 
-            @Flag(name: .long, help: "Include completed reminders")
-            var includeCompleted: Bool = false
+            @Option(name: .long, help: "Include completed reminders (true/false)")
+            var includeCompleted: String?
 
             func run() {
                 requestRemindersAccess()
@@ -95,7 +95,7 @@ extension AlephBridge {
                 }
 
                 let predicate: NSPredicate
-                if includeCompleted {
+                if includeCompleted == "true" {
                     predicate = reminderStore.predicateForReminders(in: calendars)
                 } else {
                     predicate = reminderStore.predicateForIncompleteReminders(
@@ -112,7 +112,7 @@ extension AlephBridge {
         struct Get: ParsableCommand {
             static let configuration = CommandConfiguration(abstract: "Get a reminder by ID")
 
-            @Argument(help: "Reminder ID")
+            @Option(name: .long, help: "Reminder ID")
             var id: String
 
             func run() {
@@ -180,11 +180,11 @@ extension AlephBridge {
         struct Complete: ParsableCommand {
             static let configuration = CommandConfiguration(abstract: "Mark a reminder as completed or not")
 
-            @Argument(help: "Reminder ID")
+            @Option(name: .long, help: "Reminder ID")
             var id: String
 
-            @Flag(name: .long, inversion: .prefixedNo, help: "Mark as completed (default: true)")
-            var completed: Bool = true
+            @Option(name: .long, help: "Mark as completed (true/false, default: true)")
+            var completed: String?
 
             func run() {
                 requestRemindersAccess()
@@ -193,8 +193,9 @@ extension AlephBridge {
                     printError("Reminder not found: \(id)")
                 }
 
-                reminder.isCompleted = completed
-                if completed {
+                let isCompleted = completed != "false" // default true
+                reminder.isCompleted = isCompleted
+                if isCompleted {
                     reminder.completionDate = Date()
                 } else {
                     reminder.completionDate = nil
@@ -213,7 +214,7 @@ extension AlephBridge {
         struct Delete: ParsableCommand {
             static let configuration = CommandConfiguration(abstract: "Delete a reminder")
 
-            @Argument(help: "Reminder ID")
+            @Option(name: .long, help: "Reminder ID")
             var id: String
 
             func run() {

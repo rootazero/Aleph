@@ -94,7 +94,7 @@ extension AlephBridge {
         struct Get: ParsableCommand {
             static let configuration = CommandConfiguration(abstract: "Get a note by ID")
 
-            @Argument(help: "Note ID")
+            @Option(name: .long, help: "Note ID")
             var id: String
 
             func run() {
@@ -186,7 +186,7 @@ extension AlephBridge {
         struct Update: ParsableCommand {
             static let configuration = CommandConfiguration(abstract: "Update an existing note")
 
-            @Argument(help: "Note ID")
+            @Option(name: .long, help: "Note ID")
             var id: String
 
             @Option(name: .long, help: "New title")
@@ -245,7 +245,7 @@ extension AlephBridge {
         struct Delete: ParsableCommand {
             static let configuration = CommandConfiguration(abstract: "Delete a note")
 
-            @Argument(help: "Note ID")
+            @Option(name: .long, help: "Note ID")
             var id: String
 
             func run() {
