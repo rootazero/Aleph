@@ -9,7 +9,7 @@ use aleph_protocol::{RunSummary, StreamEvent};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 
-use super::slash::{SlashCommand, ThinkingLevel};
+use super::slash::LocalCommand;
 
 // ---------------------------------------------------------------------------
 // Action
@@ -30,8 +30,10 @@ pub enum Action {
     // -- Chat --
     /// Send a message to the agent
     SendMessage(String),
-    /// Execute a slash command
-    SlashCommand(SlashCommand),
+    /// Execute a local slash command (handled in TUI)
+    LocalCommand(LocalCommand),
+    /// Send a gateway command (slash command forwarded as chat message)
+    GatewayCommand(String),
     /// Cancel a running agent run
     CancelRun(String),
 
@@ -148,7 +150,7 @@ pub struct DialogState {
 #[derive(Debug, Clone)]
 pub struct PaletteState {
     pub input: String,
-    pub filtered: Vec<(&'static str, &'static str)>,
+    pub filtered: Vec<(String, String)>,
     pub selected: usize,
 }
 
@@ -181,7 +183,9 @@ pub struct AppState {
 
     // -- Settings --
     pub verbose: bool,
-    pub thinking_level: ThinkingLevel,
+
+    // -- Gateway commands (fetched at startup) --
+    pub gateway_commands: Vec<(String, String)>,
 
     // -- UI state --
     pub focus: Focus,
@@ -218,7 +222,7 @@ impl AppState {
             last_run_duration: None,
 
             verbose: false,
-            thinking_level: ThinkingLevel::Medium,
+            gateway_commands: Vec::new(),
 
             focus: Focus::Input,
             dialog: None,
@@ -313,11 +317,34 @@ impl AppState {
 
     // -- Overlays -------------------------------------------------------
 
+    /// Return a combined list of local + gateway commands for the palette.
+    pub fn all_commands(&self) -> Vec<(String, String)> {
+        let mut cmds: Vec<(String, String)> = super::slash::local_commands()
+            .into_iter()
+            .map(|(n, d)| (n.to_string(), d.to_string()))
+            .collect();
+        cmds.extend(self.gateway_commands.iter().cloned());
+        cmds
+    }
+
+    /// Filter combined commands by prefix.
+    pub fn filter_commands(&self, prefix: &str) -> Vec<(String, String)> {
+        if prefix.is_empty() {
+            return self.all_commands();
+        }
+        let prefix_lower = prefix.to_lowercase();
+        self.all_commands()
+            .into_iter()
+            .filter(|(name, _)| name.to_lowercase().starts_with(&prefix_lower))
+            .collect()
+    }
+
     /// Open the command palette, pre-populated with all commands.
     pub fn open_command_palette(&mut self) {
+        let all = self.all_commands();
         self.palette = Some(PaletteState {
             input: String::new(),
-            filtered: SlashCommand::all_commands(),
+            filtered: all,
             selected: 0,
         });
         self.focus = Focus::CommandPalette;
@@ -348,17 +375,14 @@ impl AppState {
         self.verbose = !self.verbose;
     }
 
-    /// Set the thinking level.
-    pub fn set_thinking(&mut self, level: ThinkingLevel) {
-        self.thinking_level = level;
-    }
-
     /// Set the current model name.
+    #[allow(dead_code)]
     pub fn set_model(&mut self, name: String) {
         self.model_name = name;
     }
 
     /// Switch to a different session.
+    #[allow(dead_code)]
     pub fn switch_session(&mut self, key: String) {
         self.session_key = key.clone();
         self.messages.clear();

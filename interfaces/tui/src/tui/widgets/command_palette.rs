@@ -75,7 +75,7 @@ pub fn render_command_palette(frame: &mut Frame, palette: &PaletteState, area: R
 
             // Pad name to align descriptions
             let name_str = format!("{:<14}", name);
-            let line_str = format!("{}{}{}", indicator, name_str, desc);
+            let line_str = format!("{}{}{}", indicator, name_str, desc.as_str());
 
             let style = if is_selected {
                 Style::default()

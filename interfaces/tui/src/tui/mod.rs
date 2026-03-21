@@ -31,7 +31,7 @@ use aleph_protocol::StreamEvent;
 use aleph_client::{AlephClient, CliConfig, CliResult};
 
 use app::{Action, AppState, Focus};
-use slash::SlashCommand;
+use slash::{LocalCommand, ParsedInput};
 
 /// Entry point: run the TUI application.
 ///
@@ -102,7 +102,11 @@ pub async fn run(
         Err(_) => "unknown".to_string(),
     };
 
+    // 3b. Fetch gateway commands for command palette
+    let gateway_commands = fetch_gateway_commands(&client).await;
+
     let mut state = AppState::new(session_key, model_name);
+    state.gateway_commands = gateway_commands;
     let mut textarea = TextArea::default();
     textarea.set_placeholder_text("Type a message... (/ for commands)");
 
@@ -192,8 +196,29 @@ async fn main_loop(
                     }
                 }
             }
-            Action::SlashCommand(cmd) => {
-                execute_slash_command(state, client, textarea, cmd).await;
+            Action::LocalCommand(cmd) => {
+                execute_local_command(state, textarea, cmd);
+            }
+            Action::GatewayCommand(text) => {
+                // Send slash command to Gateway as a regular message
+                state.add_user_message(text.clone());
+                state.ctrl_c_count = 0;
+
+                if !text.is_empty() {
+                    state.send_history.push(text.clone());
+                    state.history_index = None;
+                }
+
+                let params = json!({
+                    "session_key": state.session_key,
+                    "message": text,
+                });
+                match client.call::<_, Value>("agent.run", Some(params)).await {
+                    Ok(_) => {}
+                    Err(e) => {
+                        state.add_system_message(format!("Command error: {}", e));
+                    }
+                }
             }
             Action::CancelRun(run_id) => {
                 let params = json!({ "run_id": run_id });
@@ -250,17 +275,29 @@ async fn main_loop(
             Action::PaletteConfirm => {
                 if let Some(palette) = state.palette.take() {
                     if let Some((name, _)) = palette.filtered.get(palette.selected) {
-                        // Parse the selected command name as a slash command
-                        let cmd_str = name.to_string();
+                        let cmd_str = name.clone();
                         state.close_overlay();
-                        if let Some(parse_result) = SlashCommand::parse(&cmd_str) {
-                            match parse_result {
-                                Ok(cmd) => {
-                                    execute_slash_command(state, client, textarea, cmd).await;
+                        // Parse through our unified parser
+                        match slash::parse_input(&cmd_str) {
+                            ParsedInput::Local(cmd) => {
+                                execute_local_command(state, textarea, cmd);
+                            }
+                            ParsedInput::Gateway(text) => {
+                                // Send gateway command as chat message
+                                state.add_user_message(text.clone());
+                                let params = json!({
+                                    "session_key": state.session_key,
+                                    "message": text,
+                                });
+                                match client.call::<_, Value>("agent.run", Some(params)).await {
+                                    Ok(_) => {}
+                                    Err(e) => {
+                                        state.add_system_message(format!("Command error: {}", e));
+                                    }
                                 }
-                                Err(e) => {
-                                    state.add_system_message(format!("Error: {}", e));
-                                }
+                            }
+                            ParsedInput::NotSlashCommand => {
+                                // Shouldn't happen from palette, but handle gracefully
                             }
                         }
                     } else {
@@ -396,7 +433,7 @@ fn handle_global_key(
 
     // F1: help
     if key.code == KeyCode::F(1) {
-        return Some(Action::SlashCommand(SlashCommand::Help));
+        return Some(Action::LocalCommand(LocalCommand::Help));
     }
 
     None
@@ -425,16 +462,10 @@ fn handle_input_key(state: &mut AppState, textarea: &mut TextArea, key: KeyEvent
                 textarea.delete_char();
 
                 // Check if it's a slash command
-                if let Some(parse_result) = SlashCommand::parse(&text) {
-                    match parse_result {
-                        Ok(cmd) => Action::SlashCommand(cmd),
-                        Err(e) => {
-                            state.add_system_message(format!("Error: {}", e));
-                            Action::None
-                        }
-                    }
-                } else {
-                    Action::SendMessage(text)
+                match slash::parse_input(&text) {
+                    ParsedInput::Local(cmd) => Action::LocalCommand(cmd),
+                    ParsedInput::Gateway(cmd_text) => Action::GatewayCommand(cmd_text),
+                    ParsedInput::NotSlashCommand => Action::SendMessage(text),
                 }
             }
         }
@@ -569,26 +600,44 @@ fn handle_palette_key(state: &mut AppState, key: KeyEvent) -> Action {
         KeyCode::Down => Action::PaletteDown,
         KeyCode::Tab | KeyCode::Enter => Action::PaletteConfirm,
         KeyCode::Backspace => {
-            if let Some(palette) = &mut state.palette {
-                if palette.input.is_empty() {
-                    // Close palette if filter is empty
-                    Action::CloseOverlay
-                } else {
-                    palette.input.pop();
-                    let prefix = format!("/{}", palette.input);
-                    palette.filtered = SlashCommand::filter_commands(&prefix);
-                    palette.selected = 0;
-                    Action::None
-                }
-            } else {
+            let is_empty = state
+                .palette
+                .as_ref()
+                .map(|p| p.input.is_empty())
+                .unwrap_or(true);
+            if is_empty {
                 Action::CloseOverlay
+            } else {
+                if let Some(palette) = &mut state.palette {
+                    palette.input.pop();
+                }
+                // Recompute filtered list
+                let prefix = state
+                    .palette
+                    .as_ref()
+                    .map(|p| format!("/{}", p.input))
+                    .unwrap_or_default();
+                let filtered = state.filter_commands(&prefix);
+                if let Some(palette) = &mut state.palette {
+                    palette.filtered = filtered;
+                    palette.selected = 0;
+                }
+                Action::None
             }
         }
         KeyCode::Char(c) => {
             if let Some(palette) = &mut state.palette {
                 palette.input.push(c);
-                let prefix = format!("/{}", palette.input);
-                palette.filtered = SlashCommand::filter_commands(&prefix);
+            }
+            // Recompute filtered list
+            let prefix = state
+                .palette
+                .as_ref()
+                .map(|p| format!("/{}", p.input))
+                .unwrap_or_default();
+            let filtered = state.filter_commands(&prefix);
+            if let Some(palette) = &mut state.palette {
+                palette.filtered = filtered;
                 palette.selected = 0;
             }
             Action::None
@@ -642,223 +691,30 @@ fn handle_dialog_key(state: &mut AppState, key: KeyEvent) -> Action {
 }
 
 // ---------------------------------------------------------------------------
-// Slash command execution
+// Local command execution
 // ---------------------------------------------------------------------------
 
-/// Execute a slash command, performing local state changes or RPC calls as needed.
-async fn execute_slash_command(
+/// Execute a local slash command (TUI-only, no Gateway RPC needed).
+fn execute_local_command(
     state: &mut AppState,
-    client: &AlephClient,
     textarea: &mut TextArea<'_>,
-    cmd: SlashCommand,
+    cmd: LocalCommand,
 ) {
     match cmd {
-        // -- Local commands --
-        SlashCommand::Clear => {
+        LocalCommand::Clear => {
             state.clear_screen();
         }
-        SlashCommand::Verbose => {
+        LocalCommand::Verbose => {
             state.toggle_verbose();
             let mode = if state.verbose { "on" } else { "off" };
             state.add_system_message(format!("Verbose mode: {}", mode));
         }
-        SlashCommand::Think { level } => {
-            state.set_thinking(level.clone());
-            state.add_system_message(format!("Thinking level: {}", level.as_str()));
-        }
-        SlashCommand::Quit => {
+        LocalCommand::Quit => {
             state.request_quit();
         }
-        SlashCommand::Help => {
-            let help_text = build_help_text();
+        LocalCommand::Help => {
+            let help_text = build_help_text(state);
             state.add_system_message(help_text);
-        }
-
-        // -- Session (local) --
-        SlashCommand::Session { key } => {
-            state.switch_session(key);
-        }
-
-        // -- RPC commands --
-        SlashCommand::New { name } => {
-            let params = match &name {
-                Some(n) => json!({ "name": n }),
-                None => json!({}),
-            };
-            match client
-                .call::<_, Value>("session.create", Some(params))
-                .await
-            {
-                Ok(result) => {
-                    let key = result
-                        .get("session_key")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("new-session")
-                        .to_string();
-                    state.switch_session(key);
-                }
-                Err(e) => {
-                    state.add_system_message(format!("Error creating session: {}", e));
-                }
-            }
-        }
-        SlashCommand::Sessions => {
-            match client.call::<_, Value>("session.list", None::<()>).await {
-                Ok(result) => {
-                    let sessions = format_value_as_list(&result, "Sessions");
-                    state.add_system_message(sessions);
-                }
-                Err(e) => {
-                    state.add_system_message(format!("Error listing sessions: {}", e));
-                }
-            }
-        }
-        SlashCommand::Delete { key } => {
-            let params = json!({ "session_key": key });
-            match client
-                .call::<_, Value>("session.delete", Some(params))
-                .await
-            {
-                Ok(_) => {
-                    state.add_system_message(format!("Session '{}' deleted.", key));
-                }
-                Err(e) => {
-                    state.add_system_message(format!("Error deleting session: {}", e));
-                }
-            }
-        }
-        SlashCommand::Model { name } => {
-            if let Some(model_name) = name {
-                let params = json!({ "model": model_name });
-                match client
-                    .call::<_, Value>("models.set", Some(params))
-                    .await
-                {
-                    Ok(_) => {
-                        state.set_model(model_name.clone());
-                        state.add_system_message(format!("Model set to: {}", model_name));
-                    }
-                    Err(e) => {
-                        state.add_system_message(format!("Error setting model: {}", e));
-                    }
-                }
-            } else {
-                state.add_system_message(format!("Current model: {}", state.model_name));
-            }
-        }
-        SlashCommand::Models => {
-            match client.call::<_, Value>("models.list", None::<()>).await {
-                Ok(result) => {
-                    let models = format_value_as_list(&result, "Available models");
-                    state.add_system_message(models);
-                }
-                Err(e) => {
-                    state.add_system_message(format!("Error listing models: {}", e));
-                }
-            }
-        }
-        SlashCommand::Usage => {
-            let params = json!({ "session_key": state.session_key });
-            match client.call::<_, Value>("session.usage", Some(params)).await {
-                Ok(result) => {
-                    let usage = format!(
-                        "Token usage: {} (session total: {})",
-                        result
-                            .get("tokens")
-                            .and_then(|v| v.as_u64())
-                            .unwrap_or(0),
-                        state.total_tokens,
-                    );
-                    state.add_system_message(usage);
-                }
-                Err(e) => {
-                    state.add_system_message(format!(
-                        "Local token count: {} (RPC error: {})",
-                        state.total_tokens, e
-                    ));
-                }
-            }
-        }
-        SlashCommand::Status => {
-            let connected = if state.is_connected {
-                "connected"
-            } else {
-                "disconnected"
-            };
-            let run_status = match &state.current_run {
-                Some(id) => format!("running ({})", id),
-                None => "idle".to_string(),
-            };
-            let status = format!(
-                "Status: {} | Run: {} | Session: {} | Model: {} | Tokens: {} | Thinking: {}",
-                connected,
-                run_status,
-                state.session_key,
-                state.model_name,
-                state.total_tokens,
-                state.thinking_level.as_str(),
-            );
-            state.add_system_message(status);
-        }
-        SlashCommand::Health => {
-            match client.call::<_, Value>("health", None::<()>).await {
-                Ok(result) => {
-                    let health = format!("Server health: {}", result);
-                    state.add_system_message(health);
-                }
-                Err(e) => {
-                    state.add_system_message(format!("Health check failed: {}", e));
-                    state.is_connected = false;
-                }
-            }
-        }
-        SlashCommand::Tools { filter } => {
-            let params = match &filter {
-                Some(f) => json!({ "filter": f }),
-                None => json!({}),
-            };
-            match client.call::<_, Value>("tools.list", Some(params)).await {
-                Ok(result) => {
-                    let tools = format_value_as_list(&result, "Available tools");
-                    state.add_system_message(tools);
-                }
-                Err(e) => {
-                    state.add_system_message(format!("Error listing tools: {}", e));
-                }
-            }
-        }
-        SlashCommand::Memory { query } => {
-            let params = json!({ "query": query });
-            match client
-                .call::<_, Value>("memory.search", Some(params))
-                .await
-            {
-                Ok(result) => {
-                    let memory = format_value_as_list(&result, "Memory results");
-                    state.add_system_message(memory);
-                }
-                Err(e) => {
-                    state.add_system_message(format!("Memory search error: {}", e));
-                }
-            }
-        }
-        SlashCommand::Compact => {
-            let params = json!({ "session_key": state.session_key });
-            match client
-                .call::<_, Value>("session.compact", Some(params))
-                .await
-            {
-                Ok(result) => {
-                    let msg = result
-                        .get("message")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("Context compacted.");
-                    state.add_system_message(msg.to_string());
-                }
-                Err(e) => {
-                    state.add_system_message(format!("Compact error: {}", e));
-                }
-            }
         }
     }
 
@@ -871,11 +727,22 @@ async fn execute_slash_command(
 // ---------------------------------------------------------------------------
 
 /// Build the help text shown by /help.
-fn build_help_text() -> String {
-    let mut lines = vec!["Available commands:".to_string()];
-    for (name, desc) in SlashCommand::all_commands() {
+fn build_help_text(state: &AppState) -> String {
+    let mut lines = vec!["Local commands:".to_string()];
+    for (name, desc) in slash::local_commands() {
         lines.push(format!("  {:<14} {}", name, desc));
     }
+
+    if !state.gateway_commands.is_empty() {
+        lines.push(String::new());
+        lines.push("Gateway commands (handled by server):".to_string());
+        for (name, desc) in &state.gateway_commands {
+            lines.push(format!("  {:<14} {}", name, desc));
+        }
+    }
+
+    lines.push(String::new());
+    lines.push("Other slash commands are forwarded to the Gateway as chat messages.".to_string());
     lines.push(String::new());
     lines.push("Keyboard shortcuts:".to_string());
     lines.push("  Enter          Send message".to_string());
@@ -889,57 +756,37 @@ fn build_help_text() -> String {
     lines.join("\n")
 }
 
-/// Format a JSON value as a readable list for display in system messages.
-fn format_value_as_list(value: &Value, title: &str) -> String {
-    match value {
-        Value::Array(arr) => {
-            if arr.is_empty() {
-                return format!("{}: (none)", title);
-            }
-            let mut lines = vec![format!("{}:", title)];
-            for item in arr {
-                match item {
-                    Value::String(s) => lines.push(format!("  - {}", s)),
-                    Value::Object(map) => {
-                        // Try to find a "name" or "key" field for display
-                        let display = map
-                            .get("name")
-                            .or_else(|| map.get("key"))
-                            .or_else(|| map.get("id"))
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("(unknown)");
-                        let desc = map
-                            .get("description")
-                            .or_else(|| map.get("desc"))
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("");
-                        if desc.is_empty() {
-                            lines.push(format!("  - {}", display));
-                        } else {
-                            lines.push(format!("  - {}: {}", display, desc));
-                        }
-                    }
-                    other => lines.push(format!("  - {}", other)),
-                }
-            }
-            lines.join("\n")
+/// Fetch available commands from the Gateway for command palette display.
+/// Gracefully degrades to empty list if the Gateway doesn't support commands.list.
+async fn fetch_gateway_commands(client: &AlephClient) -> Vec<(String, String)> {
+    match client
+        .call::<_, Value>("commands.list", Some(json!({"interface": "tui"})))
+        .await
+    {
+        Ok(result) => {
+            // Parse the commands array from the response
+            let commands = result
+                .get("commands")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default();
+
+            commands
+                .iter()
+                .filter_map(|cmd| {
+                    let key = cmd.get("key").and_then(|v| v.as_str())?;
+                    let desc = cmd
+                        .get("description")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    Some((format!("/{}", key), desc.to_string()))
+                })
+                .collect()
         }
-        Value::Object(map) => {
-            if map.is_empty() {
-                return format!("{}: (empty)", title);
-            }
-            let mut lines = vec![format!("{}:", title)];
-            for (k, v) in map {
-                match v {
-                    Value::String(s) => lines.push(format!("  {}: {}", k, s)),
-                    Value::Number(n) => lines.push(format!("  {}: {}", k, n)),
-                    Value::Bool(b) => lines.push(format!("  {}: {}", k, b)),
-                    _ => lines.push(format!("  {}: {}", k, v)),
-                }
-            }
-            lines.join("\n")
+        Err(_) => {
+            // Old Gateway or connection issue — graceful degradation
+            Vec::new()
         }
-        Value::String(s) => format!("{}: {}", title, s),
-        other => format!("{}: {}", title, other),
     }
 }
+

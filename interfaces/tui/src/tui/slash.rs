@@ -1,10 +1,12 @@
-// Slash command parser
+// Local slash command parser
 //
-// Parses user input beginning with "/" into structured SlashCommand variants.
-// Supports 17 commands across 5 categories: session, model, debug, tools, general.
-// Aliases: /reset -> /new, /exit|/q -> /quit, /think med -> /think medium
+// Parses user input beginning with "/" into LocalCommand variants for commands
+// that are handled entirely within the TUI (no Gateway RPC needed).
+// All other slash commands are sent to the Gateway as regular messages.
 
 /// Thinking level for LLM reasoning control.
+/// Currently unused locally (thinking is a Gateway command), but kept for tests.
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ThinkingLevel {
     Off,
@@ -13,6 +15,7 @@ pub enum ThinkingLevel {
     High,
 }
 
+#[allow(dead_code)]
 impl ThinkingLevel {
     /// Parse a thinking level string. Supports "off", "low", "medium"/"med", "high".
     /// Case-insensitive. Returns None for unrecognized values.
@@ -37,167 +40,86 @@ impl ThinkingLevel {
     }
 }
 
-/// All slash commands supported by the CLI.
+/// Local-only slash commands handled entirely within the TUI.
+/// All other slash commands are forwarded to Gateway as chat messages.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SlashCommand {
-    // Session management
-    New { name: Option<String> },
-    Session { key: String },
-    Sessions,
-    Delete { key: String },
-
-    // Model control
-    Model { name: Option<String> },
-    Models,
-    Think { level: ThinkingLevel },
-    Usage,
-
-    // Debug
-    Status,
-    Verbose,
-    Health,
+pub enum LocalCommand {
+    /// Clear the chat screen
     Clear,
-
-    // Tools
-    Tools { filter: Option<String> },
-    Memory { query: String },
-    Compact,
-
-    // General
-    Help,
+    /// Quit the application
     Quit,
+    /// Toggle verbose/debug output
+    Verbose,
+    /// Show help text
+    Help,
 }
 
-/// Full command catalog: (name, description) pairs for all 17 commands.
-const COMMAND_CATALOG: &[(&str, &str)] = &[
-    ("/new", "Start a new session (alias: /reset)"),
-    ("/session", "Switch to an existing session by key"),
-    ("/sessions", "List all sessions"),
-    ("/delete", "Delete a session by key"),
-    ("/model", "Show or switch the current model"),
-    ("/models", "List available models"),
-    ("/think", "Set thinking level (off/low/medium/high)"),
-    ("/usage", "Show token usage for current session"),
-    ("/status", "Show connection and agent status"),
-    ("/verbose", "Toggle verbose/debug output"),
-    ("/health", "Check server health"),
+/// Local command catalog: (name, description) pairs.
+const LOCAL_COMMAND_CATALOG: &[(&str, &str)] = &[
     ("/clear", "Clear the screen"),
-    ("/tools", "List available tools (optional filter)"),
-    ("/memory", "Search memory with a query"),
-    ("/compact", "Compact conversation context"),
+    ("/verbose", "Toggle verbose/debug output"),
     ("/help", "Show available commands"),
     ("/quit", "Exit the application (aliases: /q, /exit)"),
 ];
 
-impl SlashCommand {
-    /// Parse user input into a SlashCommand.
-    ///
-    /// Returns:
-    /// - `None` if the input does not start with "/"
-    /// - `Some(Err(msg))` if the command is unknown or arguments are invalid
-    /// - `Some(Ok(cmd))` on successful parse
-    pub fn parse(input: &str) -> Option<Result<Self, String>> {
-        let trimmed = input.trim();
-        if !trimmed.starts_with('/') {
-            return None;
-        }
+/// Result of parsing a slash command input.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ParsedInput {
+    /// A local-only command to handle in the TUI
+    Local(LocalCommand),
+    /// A gateway command — send as chat message with / prefix
+    Gateway(String),
+    /// Not a slash command (no leading /)
+    NotSlashCommand,
+}
 
-        // Split into command and argument parts
-        let (cmd, arg) = match trimmed.find(char::is_whitespace) {
-            Some(pos) => {
-                let (c, a) = trimmed.split_at(pos);
-                (c, Some(a.trim()))
-            }
-            None => (trimmed, None),
-        };
-
-        // Normalize command to lowercase
-        let cmd_lower = cmd.to_lowercase();
-        let arg_str = arg.filter(|a| !a.is_empty());
-
-        Some(match cmd_lower.as_str() {
-            // Session management
-            "/new" | "/reset" => Ok(SlashCommand::New {
-                name: arg_str.map(String::from),
-            }),
-            "/session" => match arg_str {
-                Some(key) => Ok(SlashCommand::Session {
-                    key: key.to_string(),
-                }),
-                None => Err("/session requires a session key argument".to_string()),
-            },
-            "/sessions" => Ok(SlashCommand::Sessions),
-            "/delete" => match arg_str {
-                Some(key) => Ok(SlashCommand::Delete {
-                    key: key.to_string(),
-                }),
-                None => Err("/delete requires a session key argument".to_string()),
-            },
-
-            // Model control
-            "/model" => Ok(SlashCommand::Model {
-                name: arg_str.map(String::from),
-            }),
-            "/models" => Ok(SlashCommand::Models),
-            "/think" => match arg_str {
-                Some(level_str) => match ThinkingLevel::parse(level_str) {
-                    Some(level) => Ok(SlashCommand::Think { level }),
-                    None => Err(format!(
-                        "Invalid thinking level '{}'. Valid levels: off, low, medium (med), high",
-                        level_str
-                    )),
-                },
-                None => Err(
-                    "/think requires a level argument: off, low, medium (med), high".to_string(),
-                ),
-            },
-            "/usage" => Ok(SlashCommand::Usage),
-
-            // Debug
-            "/status" => Ok(SlashCommand::Status),
-            "/verbose" => Ok(SlashCommand::Verbose),
-            "/health" => Ok(SlashCommand::Health),
-            "/clear" => Ok(SlashCommand::Clear),
-
-            // Tools
-            "/tools" => Ok(SlashCommand::Tools {
-                filter: arg_str.map(String::from),
-            }),
-            "/memory" => match arg_str {
-                Some(query) => Ok(SlashCommand::Memory {
-                    query: query.to_string(),
-                }),
-                None => Err("/memory requires a search query argument".to_string()),
-            },
-            "/compact" => Ok(SlashCommand::Compact),
-
-            // General
-            "/help" => Ok(SlashCommand::Help),
-            "/quit" | "/q" | "/exit" => Ok(SlashCommand::Quit),
-
-            // Unknown
-            _ => Err(format!("Unknown command '{}'. Type /help for available commands", cmd)),
-        })
+/// Parse user input into a ParsedInput.
+///
+/// - If input doesn't start with "/", returns NotSlashCommand.
+/// - If input matches a local command, returns Local(...).
+/// - Otherwise, returns Gateway(text) — the full original input to send as a chat message.
+pub fn parse_input(input: &str) -> ParsedInput {
+    let trimmed = input.trim();
+    if !trimmed.starts_with('/') {
+        return ParsedInput::NotSlashCommand;
     }
 
-    /// Return (name, description) pairs for all 17 commands.
-    pub fn all_commands() -> Vec<(&'static str, &'static str)> {
-        COMMAND_CATALOG.to_vec()
-    }
+    // Split into command and argument parts
+    let cmd = match trimmed.find(char::is_whitespace) {
+        Some(pos) => &trimmed[..pos],
+        None => trimmed,
+    };
 
-    /// Filter commands by prefix. Returns commands whose name starts with the given prefix.
-    /// An empty prefix returns all commands.
-    pub fn filter_commands(prefix: &str) -> Vec<(&'static str, &'static str)> {
-        if prefix.is_empty() {
-            return Self::all_commands();
-        }
-        let prefix_lower = prefix.to_lowercase();
-        COMMAND_CATALOG
-            .iter()
-            .filter(|(name, _)| name.to_lowercase().starts_with(&prefix_lower))
-            .copied()
-            .collect()
+    // Normalize command to lowercase
+    let cmd_lower = cmd.to_lowercase();
+
+    match cmd_lower.as_str() {
+        "/clear" => ParsedInput::Local(LocalCommand::Clear),
+        "/verbose" => ParsedInput::Local(LocalCommand::Verbose),
+        "/help" => ParsedInput::Local(LocalCommand::Help),
+        "/quit" | "/q" | "/exit" => ParsedInput::Local(LocalCommand::Quit),
+        // Everything else goes to Gateway
+        _ => ParsedInput::Gateway(trimmed.to_string()),
     }
+}
+
+/// Return (name, description) pairs for local commands only.
+pub fn local_commands() -> Vec<(&'static str, &'static str)> {
+    LOCAL_COMMAND_CATALOG.to_vec()
+}
+
+/// Filter local commands by prefix.
+#[allow(dead_code)]
+pub fn filter_local_commands(prefix: &str) -> Vec<(&'static str, &'static str)> {
+    if prefix.is_empty() {
+        return local_commands();
+    }
+    let prefix_lower = prefix.to_lowercase();
+    LOCAL_COMMAND_CATALOG
+        .iter()
+        .filter(|(name, _)| name.to_lowercase().starts_with(&prefix_lower))
+        .copied()
+        .collect()
 }
 
 #[cfg(test)]
@@ -205,287 +127,84 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_new_without_name() {
-        let result = SlashCommand::parse("/new");
-        assert_eq!(result, Some(Ok(SlashCommand::New { name: None })));
-    }
-
-    #[test]
-    fn parse_new_with_name() {
-        let result = SlashCommand::parse("/new my-session");
+    fn parse_local_commands() {
         assert_eq!(
-            result,
-            Some(Ok(SlashCommand::New {
-                name: Some("my-session".to_string())
-            }))
+            parse_input("/clear"),
+            ParsedInput::Local(LocalCommand::Clear)
         );
-    }
-
-    #[test]
-    fn parse_reset_alias() {
-        let result = SlashCommand::parse("/reset");
-        assert_eq!(result, Some(Ok(SlashCommand::New { name: None })));
-    }
-
-    #[test]
-    fn parse_reset_alias_with_name() {
-        let result = SlashCommand::parse("/reset my-session");
         assert_eq!(
-            result,
-            Some(Ok(SlashCommand::New {
-                name: Some("my-session".to_string())
-            }))
+            parse_input("/verbose"),
+            ParsedInput::Local(LocalCommand::Verbose)
         );
-    }
-
-    #[test]
-    fn parse_session_missing_arg() {
-        let result = SlashCommand::parse("/session");
-        assert!(matches!(result, Some(Err(_))));
-        let err = result.unwrap().unwrap_err();
-        assert!(
-            err.contains("session"),
-            "Error should mention 'session': {err}"
-        );
-    }
-
-    #[test]
-    fn parse_session_with_key() {
-        let result = SlashCommand::parse("/session abc-123");
         assert_eq!(
-            result,
-            Some(Ok(SlashCommand::Session {
-                key: "abc-123".to_string()
-            }))
+            parse_input("/help"),
+            ParsedInput::Local(LocalCommand::Help)
         );
-    }
-
-    #[test]
-    fn parse_delete_missing_arg() {
-        let result = SlashCommand::parse("/delete");
-        assert!(matches!(result, Some(Err(_))));
-    }
-
-    #[test]
-    fn parse_delete_with_key() {
-        let result = SlashCommand::parse("/delete abc-123");
         assert_eq!(
-            result,
-            Some(Ok(SlashCommand::Delete {
-                key: "abc-123".to_string()
-            }))
+            parse_input("/quit"),
+            ParsedInput::Local(LocalCommand::Quit)
         );
-    }
-
-    #[test]
-    fn parse_model_with_name() {
-        let result = SlashCommand::parse("/model claude-3-opus");
+        assert_eq!(parse_input("/q"), ParsedInput::Local(LocalCommand::Quit));
         assert_eq!(
-            result,
-            Some(Ok(SlashCommand::Model {
-                name: Some("claude-3-opus".to_string())
-            }))
+            parse_input("/exit"),
+            ParsedInput::Local(LocalCommand::Quit)
         );
     }
 
     #[test]
-    fn parse_model_without_name() {
-        let result = SlashCommand::parse("/model");
-        assert_eq!(result, Some(Ok(SlashCommand::Model { name: None })));
-    }
-
-    #[test]
-    fn parse_think_off() {
-        let result = SlashCommand::parse("/think off");
+    fn parse_local_case_insensitive() {
         assert_eq!(
-            result,
-            Some(Ok(SlashCommand::Think {
-                level: ThinkingLevel::Off
-            }))
+            parse_input("/HELP"),
+            ParsedInput::Local(LocalCommand::Help)
         );
-    }
-
-    #[test]
-    fn parse_think_low() {
-        let result = SlashCommand::parse("/think low");
         assert_eq!(
-            result,
-            Some(Ok(SlashCommand::Think {
-                level: ThinkingLevel::Low
-            }))
+            parse_input("/Clear"),
+            ParsedInput::Local(LocalCommand::Clear)
         );
     }
 
     #[test]
-    fn parse_think_medium() {
-        let result = SlashCommand::parse("/think medium");
+    fn parse_gateway_commands() {
         assert_eq!(
-            result,
-            Some(Ok(SlashCommand::Think {
-                level: ThinkingLevel::Medium
-            }))
+            parse_input("/new my-session"),
+            ParsedInput::Gateway("/new my-session".to_string())
         );
-    }
-
-    #[test]
-    fn parse_think_med_alias() {
-        let result = SlashCommand::parse("/think med");
         assert_eq!(
-            result,
-            Some(Ok(SlashCommand::Think {
-                level: ThinkingLevel::Medium
-            }))
+            parse_input("/sessions"),
+            ParsedInput::Gateway("/sessions".to_string())
         );
-    }
-
-    #[test]
-    fn parse_think_high() {
-        let result = SlashCommand::parse("/think high");
         assert_eq!(
-            result,
-            Some(Ok(SlashCommand::Think {
-                level: ThinkingLevel::High
-            }))
+            parse_input("/model claude-3-opus"),
+            ParsedInput::Gateway("/model claude-3-opus".to_string())
         );
-    }
-
-    #[test]
-    fn parse_think_invalid_level() {
-        let result = SlashCommand::parse("/think ultra");
-        assert!(matches!(result, Some(Err(_))));
-        let err = result.unwrap().unwrap_err();
-        assert!(
-            err.contains("off") || err.contains("level"),
-            "Error should hint at valid levels: {err}"
-        );
-    }
-
-    #[test]
-    fn parse_think_missing_level() {
-        let result = SlashCommand::parse("/think");
-        assert!(matches!(result, Some(Err(_))));
-    }
-
-    #[test]
-    fn parse_not_a_slash_command() {
-        assert_eq!(SlashCommand::parse("hello world"), None);
-        assert_eq!(SlashCommand::parse(""), None);
-        assert_eq!(SlashCommand::parse("  no slash"), None);
-    }
-
-    #[test]
-    fn parse_unknown_command() {
-        let result = SlashCommand::parse("/foobar");
-        assert!(matches!(result, Some(Err(_))));
-        let err = result.unwrap().unwrap_err();
-        assert!(
-            err.contains("foobar") || err.contains("unknown"),
-            "Error should mention the unknown command: {err}"
-        );
-    }
-
-    #[test]
-    fn parse_no_arg_commands() {
-        let cases = vec![
-            ("/sessions", SlashCommand::Sessions),
-            ("/models", SlashCommand::Models),
-            ("/usage", SlashCommand::Usage),
-            ("/status", SlashCommand::Status),
-            ("/verbose", SlashCommand::Verbose),
-            ("/health", SlashCommand::Health),
-            ("/clear", SlashCommand::Clear),
-            ("/compact", SlashCommand::Compact),
-            ("/help", SlashCommand::Help),
-            ("/quit", SlashCommand::Quit),
-        ];
-        for (input, expected) in cases {
-            let result = SlashCommand::parse(input);
-            assert_eq!(result, Some(Ok(expected)), "Failed for input: {input}");
-        }
-    }
-
-    #[test]
-    fn parse_quit_aliases() {
-        assert_eq!(SlashCommand::parse("/q"), Some(Ok(SlashCommand::Quit)));
-        assert_eq!(SlashCommand::parse("/exit"), Some(Ok(SlashCommand::Quit)));
-    }
-
-    #[test]
-    fn parse_tools_without_filter() {
-        let result = SlashCommand::parse("/tools");
-        assert_eq!(result, Some(Ok(SlashCommand::Tools { filter: None })));
-    }
-
-    #[test]
-    fn parse_tools_with_filter() {
-        let result = SlashCommand::parse("/tools memory");
         assert_eq!(
-            result,
-            Some(Ok(SlashCommand::Tools {
-                filter: Some("memory".to_string())
-            }))
+            parse_input("/think high"),
+            ParsedInput::Gateway("/think high".to_string())
         );
-    }
-
-    #[test]
-    fn parse_memory_requires_query() {
-        let result = SlashCommand::parse("/memory");
-        assert!(matches!(result, Some(Err(_))));
-    }
-
-    #[test]
-    fn parse_memory_with_query() {
-        let result = SlashCommand::parse("/memory search for facts");
         assert_eq!(
-            result,
-            Some(Ok(SlashCommand::Memory {
-                query: "search for facts".to_string()
-            }))
+            parse_input("/status"),
+            ParsedInput::Gateway("/status".to_string())
+        );
+        assert_eq!(
+            parse_input("/memory search for facts"),
+            ParsedInput::Gateway("/memory search for facts".to_string())
         );
     }
 
     #[test]
-    fn all_commands_returns_complete_list() {
-        let commands = SlashCommand::all_commands();
-        assert!(
-            commands.len() >= 17,
-            "Expected at least 17 commands, got {}",
-            commands.len()
+    fn parse_not_slash_command() {
+        assert_eq!(parse_input("hello world"), ParsedInput::NotSlashCommand);
+        assert_eq!(parse_input(""), ParsedInput::NotSlashCommand);
+        assert_eq!(parse_input("  no slash"), ParsedInput::NotSlashCommand);
+    }
+
+    #[test]
+    fn parse_unknown_commands_go_to_gateway() {
+        // Unknown commands go to Gateway (not rejected locally)
+        assert_eq!(
+            parse_input("/foobar"),
+            ParsedInput::Gateway("/foobar".to_string())
         );
-        // Verify each entry has non-empty name and description
-        for (name, desc) in &commands {
-            assert!(!name.is_empty(), "Command name should not be empty");
-            assert!(!desc.is_empty(), "Command description should not be empty");
-            assert!(
-                name.starts_with('/'),
-                "Command name should start with '/': {name}"
-            );
-        }
-    }
-
-    #[test]
-    fn filter_commands_prefix_match() {
-        let results = SlashCommand::filter_commands("/se");
-        let names: Vec<&str> = results.iter().map(|(n, _)| *n).collect();
-        assert!(names.contains(&"/session"), "Should match /session");
-        assert!(names.contains(&"/sessions"), "Should match /sessions");
-        assert!(
-            !names.contains(&"/help"),
-            "Should not match /help for prefix /se"
-        );
-    }
-
-    #[test]
-    fn filter_commands_empty_prefix_returns_all() {
-        let all = SlashCommand::all_commands();
-        let filtered = SlashCommand::filter_commands("");
-        assert_eq!(all.len(), filtered.len());
-    }
-
-    #[test]
-    fn filter_commands_no_match() {
-        let results = SlashCommand::filter_commands("/zzz");
-        assert!(results.is_empty());
     }
 
     #[test]
@@ -521,20 +240,24 @@ mod tests {
     }
 
     #[test]
-    fn parse_case_insensitive_command() {
-        // Commands should be case-insensitive
-        assert_eq!(SlashCommand::parse("/HELP"), Some(Ok(SlashCommand::Help)));
-        assert_eq!(SlashCommand::parse("/Help"), Some(Ok(SlashCommand::Help)));
+    fn local_commands_returns_catalog() {
+        let cmds = local_commands();
+        assert_eq!(cmds.len(), 4);
+        assert!(cmds.iter().any(|(name, _)| *name == "/clear"));
+        assert!(cmds.iter().any(|(name, _)| *name == "/quit"));
     }
 
     #[test]
-    fn parse_trims_whitespace() {
-        let result = SlashCommand::parse("/new   my-session  ");
-        assert_eq!(
-            result,
-            Some(Ok(SlashCommand::New {
-                name: Some("my-session".to_string())
-            }))
-        );
+    fn filter_local_commands_prefix() {
+        let results = filter_local_commands("/cl");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].0, "/clear");
+    }
+
+    #[test]
+    fn filter_local_commands_empty_returns_all() {
+        let all = local_commands();
+        let filtered = filter_local_commands("");
+        assert_eq!(all.len(), filtered.len());
     }
 }
