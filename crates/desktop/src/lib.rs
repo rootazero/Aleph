@@ -21,6 +21,7 @@ pub mod action;
 pub mod automation_types;
 pub mod bridge;
 pub mod error;
+pub mod native_screen;
 pub mod perception;
 pub mod pim_types;
 pub mod platform;
@@ -28,6 +29,7 @@ pub mod system_types;
 pub mod traits;
 
 pub use error::{DesktopError, Result};
+pub use native_screen::NativeScreen;
 
 // Re-export new capability traits.
 pub use platform::DesktopPlatform;
