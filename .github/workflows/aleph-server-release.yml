@@ -97,7 +97,7 @@ jobs:
           Copy-Item "target/${{ matrix.target }}/release/aleph-server.exe" aleph-server.exe
           Compress-Archive -Path aleph-server.exe -DestinationPath "${{ matrix.asset }}.zip"
 
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.asset }}
           path: |
@@ -120,7 +120,7 @@ jobs:
         id: version
         run: echo "value=v$(cat VERSION | tr -d '[:space:]')" >> $GITHUB_OUTPUT
 
-      - uses: actions/download-artifact@v5
+      - uses: actions/download-artifact@v8
         with:
           path: artifacts
 
