@@ -61,13 +61,6 @@ impl BuiltinToolRegistry {
             VaultStoreTool::new(Arc::clone(mgr))
         });
 
-        // Desktop bridge tool — use native in-process path,
-        // with fallback to IPC bridge for unsupported actions
-        let desktop_tool = {
-            let native = std::sync::Arc::new(aleph_desktop::NativeDesktop::new());
-            DesktopTool::new().with_native(native)
-        };
-
         // Build platform-specific DesktopPlatform
         let desktop_platform: Arc<dyn aleph_desktop::DesktopPlatform> = {
             #[cfg(target_os = "macos")]
@@ -79,6 +72,10 @@ impl BuiltinToolRegistry {
             #[cfg(target_os = "windows")]
             { Arc::new(aleph_desktop_windows::WindowsPlatform::new()) }
         };
+
+        // Desktop tool — screen ops via DesktopPlatform, IPC bridge for canvas/snapshot/ax_tree
+        let desktop_tool = DesktopTool::new()
+            .with_platform(Arc::clone(&desktop_platform));
 
         let system_tool = SystemTool::new(Arc::clone(&desktop_platform));
         let automation_tool = AutomationTool::new(Arc::clone(&desktop_platform));
