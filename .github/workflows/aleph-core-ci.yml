@@ -26,9 +26,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: core
-      - name: Install Linux system libraries
+      - name: Install system dependencies
         run: |
           sudo apt-get update && sudo apt-get install -y \
+            protobuf-compiler \
             libxcb1-dev libxcb-randr0-dev libxcb-shm0-dev libxcb-xfixes0-dev \
             libxcb-shape0-dev libxcb-xtest0-dev libxkbcommon-dev libxss-dev \
             libx11-dev libxrandr-dev libxi-dev libxtst-dev \
@@ -50,9 +51,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: core
-      - name: Install Linux system libraries
+      - name: Install system dependencies
         run: |
           sudo apt-get update && sudo apt-get install -y \
+            protobuf-compiler \
             libxcb1-dev libxcb-randr0-dev libxcb-shm0-dev libxcb-xfixes0-dev \
             libxcb-shape0-dev libxcb-xtest0-dev libxkbcommon-dev libxss-dev \
             libx11-dev libxrandr-dev libxi-dev libxtst-dev \
@@ -73,6 +75,15 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: core
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update && sudo apt-get install -y \
+            protobuf-compiler \
+            libxcb1-dev libxcb-randr0-dev libxcb-shm0-dev libxcb-xfixes0-dev \
+            libxcb-shape0-dev libxcb-xtest0-dev libxkbcommon-dev libxss-dev \
+            libx11-dev libxrandr-dev libxi-dev libxtst-dev \
+            libssl-dev libwayland-dev libpipewire-0.3-dev libdbus-1-dev \
+            libdrm-dev libgbm-dev libegl-dev libxdo-dev clang libclang-dev
       - name: Run loom tests
         run: cargo test --features loom --lib
         env:
