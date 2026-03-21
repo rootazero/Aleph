@@ -239,8 +239,15 @@ impl CoordTaskStore for SqliteCoordTaskStore {
     // --- Task CRUD ---
 
     async fn create_task(&self, input: NewCoordTask) -> crate::error::Result<CoordTask> {
-        let conn = self.conn.lock().await;
+        // Generate the id before cycle-check so we can pass it as the new node.
         let id = uuid::Uuid::new_v4().to_string();
+
+        // Verify that the proposed edges would not introduce a cycle.
+        // This must happen BEFORE acquiring the connection lock to avoid a
+        // deadlock (check_no_cycle calls get_dependencies which also locks).
+        super::dag::check_no_cycle(self, &id, &input.blocked_by).await?;
+
+        let conn = self.conn.lock().await;
         let now = now_epoch();
         let metadata_json = serde_json::to_string(&input.metadata).unwrap_or_else(|_| "{}".into());
 
