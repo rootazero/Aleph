@@ -11,6 +11,7 @@ use super::bus::AgentMessageBus;
 use super::collective_memory::CollectiveMemory;
 use super::context_injector::ContextInjector;
 use super::events::*;
+use super::tasks::CoordTaskStore;
 use crate::error::Result;
 
 /// Events from the agent loop that can be published to the swarm
@@ -86,6 +87,8 @@ pub struct SwarmCoordinator {
     pub injector: Arc<ContextInjector>,
     /// Collective memory
     pub memory: Arc<CollectiveMemory>,
+    /// Optional task coordination store
+    task_store: Option<Arc<dyn CoordTaskStore>>,
 }
 
 impl SwarmCoordinator {
@@ -133,7 +136,21 @@ impl SwarmCoordinator {
             aggregator,
             injector,
             memory,
+            task_store: None,
         })
+    }
+
+    /// Attach a task coordination store
+    ///
+    /// Rebuilds the context injector so it includes task context in prompts.
+    /// Must be called before `start()` (i.e. before the Arc is shared).
+    pub fn with_task_store(mut self, store: Arc<dyn CoordTaskStore>) -> Self {
+        // Safe to unwrap: called during builder phase before Arc is shared
+        let inner = Arc::try_unwrap(self.injector)
+            .unwrap_or_else(|_| panic!("with_task_store must be called before start()"));
+        self.injector = Arc::new(inner.with_task_store(store.clone()));
+        self.task_store = Some(store);
+        self
     }
 
     /// Start all background tasks
