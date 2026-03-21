@@ -81,7 +81,8 @@ impl BuiltinToolRegistry {
         let automation_tool = AutomationTool::new(Arc::clone(&desktop_platform));
 
         // PIM tool (Calendar, Reminders, Notes, Contacts via Desktop Bridge)
-        let pim_tool = PimTool::new();
+        let pim_tool = PimTool::new()
+            .with_platform(Arc::clone(&desktop_platform));
 
         let scratchpad_tool = ScratchpadTool::new();
 

@@ -15,6 +15,7 @@ use crate::sync_primitives::Arc;
 use async_trait::async_trait;
 use serde_json;
 
+use aleph_desktop::pim_types::{NewCalendarEvent, NewReminder};
 use crate::approval::{ActionRequest, ActionType, ApprovalDecision, ApprovalPolicy};
 use crate::desktop::DesktopBridgeClient;
 use crate::error::Result;
@@ -25,6 +26,7 @@ use crate::tools::AlephTool;
 pub struct PimTool {
     client: DesktopBridgeClient,
     approval_policy: Option<Arc<dyn ApprovalPolicy>>,
+    platform: Option<Arc<dyn aleph_desktop::DesktopPlatform>>,
 }
 
 impl PimTool {
@@ -32,7 +34,15 @@ impl PimTool {
         Self {
             client: DesktopBridgeClient::new(),
             approval_policy: None,
+            platform: None,
         }
+    }
+
+    /// Attach a `DesktopPlatform` so PIM operations are dispatched natively
+    /// via `platform.pim()` instead of the legacy IPC bridge.
+    pub fn with_platform(mut self, platform: Arc<dyn aleph_desktop::DesktopPlatform>) -> Self {
+        self.platform = Some(platform);
+        self
     }
 
     /// Attach an approval policy to gate sensitive (write) actions.
@@ -81,6 +91,189 @@ impl PimTool {
             "contacts_delete" => "Delete a contact".to_string(),
             other => format!("PIM action: {other}"),
         }
+    }
+
+    /// Try to dispatch a PIM action via `DesktopPlatform.pim()`.
+    ///
+    /// Returns `Some(PimOutput)` if the action was handled, or `None` to fall
+    /// through to the legacy bridge path.
+    async fn call_via_platform(&self, args: &PimArgs) -> Option<PimOutput> {
+        let platform = self.platform.as_ref()?;
+        let pim = platform.pim()?;
+
+        let result: std::result::Result<serde_json::Value, aleph_desktop::DesktopError> =
+            match args.action.as_str() {
+                // ── Notes ───────────────────────────────────────
+                "notes_list" => pim
+                    .notes_list(args.folder.as_deref())
+                    .await
+                    .map(|v| serde_json::to_value(v).unwrap()),
+                "notes_get" => {
+                    let id = args.id.as_deref()?;
+                    pim.notes_read(id)
+                        .await
+                        .map(|v| serde_json::to_value(v).unwrap())
+                }
+                "notes_create" => {
+                    let title = args.title.as_deref()?;
+                    let folder = args.folder.as_deref().unwrap_or("Notes");
+                    let body = args.body.as_deref().unwrap_or("");
+                    pim.notes_create(folder, title, body)
+                        .await
+                        .map(|id| serde_json::json!({ "id": id }))
+                }
+                "notes_update" => {
+                    let id = args.id.as_deref()?;
+                    pim.notes_update(id, args.title.as_deref(), args.body.as_deref())
+                        .await
+                        .map(|()| serde_json::json!({ "updated": true }))
+                }
+                "notes_delete" => {
+                    let id = args.id.as_deref()?;
+                    pim.notes_delete(id)
+                        .await
+                        .map(|()| serde_json::json!({ "deleted": true }))
+                }
+                "notes_folders" => pim
+                    .notes_folders()
+                    .await
+                    .map(|v| serde_json::to_value(v).unwrap()),
+
+                // ── Calendar ────────────────────────────────────
+                "calendar_list" => {
+                    let from = args.from.as_deref()?;
+                    let to = args.to.as_deref()?;
+                    pim.calendar_list_events(from, to, args.calendar_id.as_deref())
+                        .await
+                        .map(|v| serde_json::to_value(v).unwrap())
+                }
+                "calendar_get" => {
+                    let id = args.id.as_deref()?;
+                    pim.calendar_get_event(id)
+                        .await
+                        .map(|v| serde_json::to_value(v).unwrap())
+                }
+                "calendar_create" => {
+                    let title = args.title.as_deref()?;
+                    let start = args.start.as_deref()?;
+                    let end = args.end.as_deref()?;
+                    let event = NewCalendarEvent {
+                        title: title.to_string(),
+                        calendar_id: args.calendar_id.clone().unwrap_or_default(),
+                        start: start.to_string(),
+                        end: end.to_string(),
+                        all_day: args.all_day.unwrap_or(false),
+                        location: args.location.clone(),
+                        notes: args.notes.clone(),
+                    };
+                    pim.calendar_create_event(event)
+                        .await
+                        .map(|id| serde_json::json!({ "id": id }))
+                }
+                "calendar_update" => {
+                    let id = args.id.as_deref()?;
+                    let event = NewCalendarEvent {
+                        title: args.title.clone().unwrap_or_default(),
+                        calendar_id: args.calendar_id.clone().unwrap_or_default(),
+                        start: args.start.clone().unwrap_or_default(),
+                        end: args.end.clone().unwrap_or_default(),
+                        all_day: args.all_day.unwrap_or(false),
+                        location: args.location.clone(),
+                        notes: args.notes.clone(),
+                    };
+                    pim.calendar_update_event(id, event)
+                        .await
+                        .map(|()| serde_json::json!({ "updated": true }))
+                }
+                "calendar_delete" => {
+                    let id = args.id.as_deref()?;
+                    pim.calendar_delete_event(id)
+                        .await
+                        .map(|()| serde_json::json!({ "deleted": true }))
+                }
+                "calendar_calendars" => pim
+                    .calendar_calendars()
+                    .await
+                    .map(|v| serde_json::to_value(v).unwrap()),
+
+                // ── Reminders ───────────────────────────────────
+                "reminders_list" => {
+                    let include_completed = args.include_completed.unwrap_or(false);
+                    pim.reminders_list(args.list_id.as_deref(), include_completed)
+                        .await
+                        .map(|v| serde_json::to_value(v).unwrap())
+                }
+                "reminders_get" => {
+                    let id = args.id.as_deref()?;
+                    pim.reminders_get(id)
+                        .await
+                        .map(|v| serde_json::to_value(v).unwrap())
+                }
+                "reminders_create" => {
+                    let title = args.title.as_deref()?;
+                    let reminder = NewReminder {
+                        title: title.to_string(),
+                        list_id: args.list_id.clone().unwrap_or_default(),
+                        due_date: args.due_date.clone(),
+                        priority: args.priority.unwrap_or(0) as u8,
+                        notes: args.notes.clone(),
+                    };
+                    pim.reminders_create(reminder)
+                        .await
+                        .map(|id| serde_json::json!({ "id": id }))
+                }
+                "reminders_complete" => {
+                    let id = args.id.as_deref()?;
+                    pim.reminders_complete(id)
+                        .await
+                        .map(|()| serde_json::json!({ "completed": true }))
+                }
+                "reminders_delete" => {
+                    let id = args.id.as_deref()?;
+                    pim.reminders_delete(id)
+                        .await
+                        .map(|()| serde_json::json!({ "deleted": true }))
+                }
+                "reminders_lists" => pim
+                    .reminders_lists()
+                    .await
+                    .map(|v| serde_json::to_value(v).unwrap()),
+
+                // ── Contacts ────────────────────────────────────
+                "contacts_search" => {
+                    let query = args.query.as_deref()?;
+                    pim.contacts_search(query)
+                        .await
+                        .map(|v| serde_json::to_value(v).unwrap())
+                }
+                "contacts_get" => {
+                    let id = args.id.as_deref()?;
+                    pim.contacts_get(id)
+                        .await
+                        .map(|v| serde_json::to_value(v).unwrap())
+                }
+                "contacts_groups" => pim
+                    .contacts_groups()
+                    .await
+                    .map(|v| serde_json::to_value(v).unwrap()),
+
+                // contacts_create, contacts_update, contacts_delete are not in
+                // PimCapability trait — fall through to the legacy bridge.
+                _ => return None,
+            };
+
+        Some(match result {
+            Ok(data) => PimOutput {
+                success: true,
+                data: Some(data),
+                message: None,
+            },
+            Err(e) => PimOutput {
+                success: false,
+                data: None,
+                message: Some(e.to_string()),
+            },
+        })
     }
 
     /// Check the approval policy for a sensitive (write) action.
@@ -198,6 +391,11 @@ Contacts:
         // Check approval for write actions BEFORE touching the bridge.
         if let Some(out) = self.check_approval(&args.action).await {
             return Ok(out);
+        }
+
+        // Prefer DesktopPlatform.pim() over legacy bridge
+        if let Some(output) = self.call_via_platform(&args).await {
+            return Ok(output);
         }
 
         // Gracefully handle the case where the Desktop Bridge is not connected.
