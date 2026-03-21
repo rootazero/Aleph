@@ -111,6 +111,78 @@ pub(in crate::commands::start) async fn register_agent_handlers(
     let mut compression_out: Option<std::sync::Arc<alephcore::memory::compression::CompressionService>> = None;
     let mut swappable_reg: Option<Arc<alephcore::SwappableProviderRegistry>> = None;
 
+    // Create coord task store (SQLite-backed task/team coordination for swarm tools).
+    // Created unconditionally so it is available regardless of AI provider availability.
+    let coord_store: Option<Arc<dyn alephcore::agents::swarm::tasks::CoordTaskStore>> = {
+        use alephcore::agents::swarm::tasks::store::SqliteCoordTaskStore;
+        use alephcore::utils::paths::get_data_dir;
+
+        let db_path = get_data_dir()
+            .unwrap_or_else(|_| std::env::temp_dir().join("aleph_data"))
+            .join("coord.db");
+
+        match rusqlite::Connection::open(&db_path) {
+            Ok(conn) => {
+                let store = Arc::new(SqliteCoordTaskStore::new(conn));
+                // Run schema migration synchronously-ish via block_in_place
+                let store_clone = store.clone();
+                match tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current().block_on(store_clone.migrate())
+                }) {
+                    Ok(()) => {
+                        if !daemon {
+                            println!("  Coord task store initialized (SQLite)");
+                        }
+                        Some(store as Arc<dyn alephcore::agents::swarm::tasks::CoordTaskStore>)
+                    }
+                    Err(e) => {
+                        if !daemon {
+                            eprintln!("Warning: Coord task store migration failed: {}. Task coordination tools disabled.", e);
+                        }
+                        None
+                    }
+                }
+            }
+            Err(e) => {
+                if !daemon {
+                    eprintln!("Warning: Failed to open coord.db: {}. Task coordination tools disabled.", e);
+                }
+                None
+            }
+        }
+    };
+
+    // Initialize SwarmCoordinator and attach the coord task store.
+    let swarm_coordinator: Option<Arc<alephcore::agents::swarm::SwarmCoordinator>> = {
+        use alephcore::agents::swarm::{SwarmCoordinator, SwarmConfig};
+
+        match SwarmCoordinator::with_config(SwarmConfig::default()).await {
+            Ok(coordinator) => {
+                let coordinator = if let Some(ref store) = coord_store {
+                    coordinator.with_task_store(store.clone())
+                } else {
+                    coordinator
+                };
+                let coordinator = Arc::new(coordinator);
+                coordinator.clone().start().await;
+                if !daemon {
+                    println!("  Swarm coordinator started");
+                }
+                Some(coordinator)
+            }
+            Err(e) => {
+                if !daemon {
+                    eprintln!("Warning: Failed to initialize swarm coordinator: {}.", e);
+                }
+                None
+            }
+        }
+    };
+
+    // Extract the AgentMessageBus from the coordinator for tool config wiring.
+    let agent_message_bus: Option<Arc<alephcore::agents::swarm::AgentMessageBus>> =
+        swarm_coordinator.as_ref().map(|c| c.bus.clone());
+
     // Build generation provider registry (independent of chat AI provider)
     let generation_registry = {
         let mut registry = GenerationProviderRegistry::new();
@@ -283,6 +355,8 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             session_manager: Some(session_manager.clone()),
             shared_token_manager: Some(shared_token_mgr.clone()),
             memory_similarity_threshold: Some(app_config.memory.similarity_threshold),
+            coord_task_store: coord_store.clone(),
+            agent_message_bus: agent_message_bus.clone(),
             ..Default::default()
         };
         let mut tool_registry = BuiltinToolRegistry::with_config(tool_config).await;
