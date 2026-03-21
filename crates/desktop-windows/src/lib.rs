@@ -3,20 +3,20 @@
 use aleph_desktop::traits::{
     AutomationCapability, PimCapability, ScreenCapability, SystemCapability,
 };
+use aleph_desktop::NativeScreen;
 use aleph_desktop::DesktopPlatform;
 
-/// Windows platform — stub implementation.
-///
-/// All capability methods currently return `None`. Real implementations
-/// will be added incrementally using Win32/WinRT APIs.
+/// Windows platform with shared `NativeScreen` for screen capabilities.
 pub struct WindowsPlatform {
-    _private: (),
+    screen: NativeScreen,
 }
 
 impl WindowsPlatform {
     /// Create a new `WindowsPlatform` instance.
     pub fn new() -> Self {
-        Self { _private: () }
+        Self {
+            screen: NativeScreen::new(),
+        }
     }
 }
 
@@ -32,7 +32,7 @@ impl DesktopPlatform for WindowsPlatform {
     }
 
     fn screen(&self) -> Option<&dyn ScreenCapability> {
-        None
+        Some(&self.screen)
     }
 
     fn pim(&self) -> Option<&dyn PimCapability> {
@@ -59,9 +59,9 @@ mod tests {
     }
 
     #[test]
-    fn all_capabilities_return_none() {
+    fn screen_is_some() {
         let platform = WindowsPlatform::new();
-        assert!(platform.screen().is_none());
+        assert!(platform.screen().is_some());
         assert!(platform.pim().is_none());
         assert!(platform.system().is_none());
         assert!(platform.automation().is_none());
