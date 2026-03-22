@@ -361,8 +361,6 @@ fn default_risk() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-use crate::providers::message::UnifiedMessage;
-use crate::providers::adapter::RequestPayload;
 
     #[test]
     fn test_is_likely_single_step_short_input() {

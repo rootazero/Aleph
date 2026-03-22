@@ -459,8 +459,6 @@ mod tests {
     use crate::memory::cortex::types::ExperienceBuilder;
     use crate::memory::store::LanceMemoryBackend;
     use crate::providers::MockProvider;
-use crate::providers::message::UnifiedMessage;
-use crate::providers::adapter::RequestPayload;
     use rusqlite::Connection;
     use tempfile::TempDir;
 

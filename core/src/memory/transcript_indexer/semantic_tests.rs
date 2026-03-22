@@ -9,7 +9,7 @@ use crate::memory::embedding_provider::tests::MockEmbeddingProvider;
 #[tokio::test]
 #[ignore = "Requires model download"]
 async fn test_semantic_chunking_basic() {
-    let temp_dir = tempdir().unwrap();
+    let _temp_dir = tempdir().unwrap();
     let embedder = {
         let mock: Arc<dyn EmbeddingProvider> = Arc::new(MockEmbeddingProvider::new(1024, "mock-model"));
         mock
@@ -32,7 +32,7 @@ async fn test_semantic_chunking_basic() {
 #[tokio::test]
 #[ignore = "Requires model download"]
 async fn test_semantic_chunking_single_topic() {
-    let temp_dir = tempdir().unwrap();
+    let _temp_dir = tempdir().unwrap();
     let embedder = {
         let mock: Arc<dyn EmbeddingProvider> = Arc::new(MockEmbeddingProvider::new(1024, "mock-model"));
         mock
@@ -53,7 +53,7 @@ async fn test_semantic_chunking_single_topic() {
 #[tokio::test]
 #[ignore = "Requires model download"]
 async fn test_semantic_chunking_empty() {
-    let temp_dir = tempdir().unwrap();
+    let _temp_dir = tempdir().unwrap();
     let embedder = {
         let mock: Arc<dyn EmbeddingProvider> = Arc::new(MockEmbeddingProvider::new(1024, "mock-model"));
         mock
@@ -69,7 +69,7 @@ async fn test_semantic_chunking_empty() {
 #[tokio::test]
 #[ignore = "Requires model download"]
 async fn test_semantic_chunking_config() {
-    let temp_dir = tempdir().unwrap();
+    let _temp_dir = tempdir().unwrap();
     let embedder = {
         let mock: Arc<dyn EmbeddingProvider> = Arc::new(MockEmbeddingProvider::new(1024, "mock-model"));
         mock

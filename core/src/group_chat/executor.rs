@@ -149,7 +149,7 @@ mod tests {
     use super::*;
     use crate::providers::AiProvider;
     use crate::providers::adapter::{ProviderResponse, RequestPayload};
-    use crate::providers::message::UnifiedMessage;
+    
     use crate::sync_primitives::Arc;
     use std::future::Future;
     use std::pin::Pin;

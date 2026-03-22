@@ -170,7 +170,7 @@ pub async fn handle_marketplace_add(request: JsonRpcRequest) -> JsonRpcResponse 
         },
     );
 
-    if let Err(e) = config.save() {
+    if let Err(e) = config.save_incremental(&["plugin_marketplaces"]) {
         return JsonRpcResponse::error(request.id, -32000, format!("Failed to save config: {e}"));
     }
 
@@ -206,7 +206,7 @@ pub async fn handle_marketplace_remove(request: JsonRpcRequest) -> JsonRpcRespon
 
     config.plugin_marketplaces.remove(&params.name);
 
-    if let Err(e) = config.save() {
+    if let Err(e) = config.save_incremental(&["plugin_marketplaces"]) {
         return JsonRpcResponse::error(request.id, -32000, format!("Failed to save config: {e}"));
     }
 

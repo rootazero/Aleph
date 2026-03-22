@@ -471,7 +471,7 @@ mod budget_tests {
 
     #[test]
     fn assemble_with_budget_trims_when_over() {
-        use crate::thinker::prompt_layer::PromptLayer as _;
+        
 
         let pipeline = PromptPipeline::default_layers();
         let config = PromptConfig::default();

@@ -377,8 +377,6 @@ Past conversations:
 mod tests {
     use super::*;
     use crate::memory::context::ContextAnchor;
-use crate::providers::message::UnifiedMessage;
-use crate::providers::adapter::RequestPayload;
     use std::future::Future;
     use std::pin::Pin;
 

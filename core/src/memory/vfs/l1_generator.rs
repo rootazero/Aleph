@@ -213,8 +213,6 @@ mod tests {
     use crate::memory::MemoryFact;
 
     use super::*;
-use crate::providers::message::UnifiedMessage;
-use crate::providers::adapter::RequestPayload;
 
     #[test]
     fn test_l1_prompt_format() {

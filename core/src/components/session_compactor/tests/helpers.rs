@@ -1,6 +1,5 @@
 //! Shared test helpers for session compactor tests
 
-use crate::components::session_compactor::*;
 use crate::components::types::{
     AiResponsePart, ExecutionSession, SessionPart, ToolCallPart, ToolCallStatus,
     UserInputPart,

@@ -479,8 +479,6 @@ Let me know if you need changes."#;
     #[test]
     fn test_parse_response_plain_text_fallback() {
         use crate::providers::MockProvider;
-use crate::providers::message::UnifiedMessage;
-use crate::providers::adapter::RequestPayload;
         let provider = Arc::new(MockProvider::new(""));
         let planner = LlmTaskPlanner::new(provider);
 

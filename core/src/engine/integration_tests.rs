@@ -9,7 +9,7 @@ mod integration_tests {
     use tempfile::TempDir;
 
     use crate::engine::{AtomicEngine, RoutingLayer};
-    use serde_json::json;
+    
 
     #[tokio::test]
     async fn test_routing_statistics() {

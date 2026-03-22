@@ -6,7 +6,6 @@ use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
 use serde_json::json;
 use crate::gateway::protocol::JsonRpcRequest;
-use crate::gateway::security::SharedTokenManager;
 
 #[test]
 fn test_update_params() {

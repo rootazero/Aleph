@@ -461,7 +461,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_queue_depth_empty() {
-        use crate::gateway::event_emitter::NoOpEventEmitter;
+        
         use crate::gateway::execution_engine::{ExecutionError, RunRequest, RunStatus};
         use crate::gateway::agent_instance::AgentInstance;
 

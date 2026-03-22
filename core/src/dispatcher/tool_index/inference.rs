@@ -270,8 +270,6 @@ impl Default for SemanticPurposeInferrer {
 #[cfg(test)]
 mod tests {
     use super::*;
-use crate::providers::message::UnifiedMessage;
-use crate::providers::adapter::RequestPayload;
 
     #[test]
     fn test_l0_structured_meta() {

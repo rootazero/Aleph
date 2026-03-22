@@ -296,7 +296,7 @@ pub async fn handle_marketplace_command(action: MarketplaceAction) -> Result<(),
                     MarketplaceSourceType::Local => "local".to_string(),
                 },
             });
-            config.save()?;
+            config.save_incremental(&["plugin_marketplaces"])?;
 
             println!("Added marketplace '{}' ({})", name, source);
 
@@ -331,7 +331,7 @@ pub async fn handle_marketplace_command(action: MarketplaceAction) -> Result<(),
             // Save to config
             let mut config = Config::load()?;
             config.plugin_marketplaces.remove(&name);
-            config.save()?;
+            config.save_incremental(&["plugin_marketplaces"])?;
 
             println!("Removed marketplace '{}'", name);
         }

@@ -498,8 +498,6 @@ mod tests {
     use crate::memory::cortex::meta_cognition::schema::initialize_schema;
     use crate::memory::store::LanceMemoryBackend;
     use crate::providers::MockProvider;
-use crate::providers::message::UnifiedMessage;
-use crate::providers::adapter::RequestPayload;
     use rusqlite::Connection;
     use tempfile::TempDir;
 

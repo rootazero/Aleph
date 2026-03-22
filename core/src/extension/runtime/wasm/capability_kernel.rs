@@ -194,7 +194,7 @@ impl WasmCapabilityKernel {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::extension::runtime::wasm::capabilities::*;
+    
 
     fn kernel_with_no_caps() -> WasmCapabilityKernel {
         WasmCapabilityKernel::new(

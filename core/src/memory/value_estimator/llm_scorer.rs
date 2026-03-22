@@ -322,8 +322,6 @@ impl LlmScorer {
 #[cfg(test)]
 mod tests {
     use super::*;
-use crate::providers::message::UnifiedMessage;
-use crate::providers::adapter::RequestPayload;
 
     #[test]
     fn test_parse_score_valid() {

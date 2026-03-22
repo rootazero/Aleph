@@ -286,8 +286,6 @@ mod tests {
     fn create_test_extractor() -> FactExtractor {
         use crate::providers::create_mock_provider;
         use crate::memory::embedding_provider::tests::MockEmbeddingProvider;
-use crate::providers::message::UnifiedMessage;
-use crate::providers::adapter::RequestPayload;
 
         let provider = create_mock_provider();
         let embedder: Arc<dyn EmbeddingProvider> = Arc::new(MockEmbeddingProvider::new(1024, "mock-model"));

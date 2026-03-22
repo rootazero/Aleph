@@ -20,7 +20,7 @@ use alephcore::gateway::{
     AgentEnvStore, AgentEnvStoreConfig,
 };
 use alephcore::gateway::execution_engine::{ExecutionError, RunState};
-use alephcore::gateway::event_emitter::{EventEmitter, StreamEvent};
+use alephcore::gateway::event_emitter::EventEmitter;
 use alephcore::gateway::RunRequest;
 
 use super::mock_channel::{CapturedReply, MockChannel};

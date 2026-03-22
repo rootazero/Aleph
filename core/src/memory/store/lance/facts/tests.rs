@@ -1,6 +1,5 @@
 use std::collections::HashSet;
 
-use super::*;
 use crate::memory::context::{FactType, MemoryFact};
 use crate::memory::namespace::NamespaceScope;
 use crate::memory::store::types::SearchFilter;
