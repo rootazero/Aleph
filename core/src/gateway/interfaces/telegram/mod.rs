@@ -122,7 +122,7 @@ impl TelegramChannel {
     }
 
     /// Convert Telegram message to InboundMessage
-    fn convert_message(msg: &teloxide::types::Message, config: &TelegramConfig, channel_id: &ChannelId) -> Option<InboundMessage> {
+    async fn convert_message(msg: &teloxide::types::Message, bot: &Bot, config: &TelegramConfig, channel_id: &ChannelId) -> Option<InboundMessage> {
         // Get sender info
         let (sender_id, sender_name) = if let Some(from) = &msg.from {
             (
@@ -151,6 +151,9 @@ impl TelegramChannel {
             return None;
         }
 
+        // Extract attachments first (async — resolves file URLs via Bot API)
+        let attachments = Self::extract_attachments(msg, bot).await;
+
         // Extract text content
         let text = match &msg.kind {
             MessageKind::Common(common) => match &common.media_kind {
@@ -160,18 +163,18 @@ impl TelegramChannel {
                 MediaKind::Audio(audio) => audio.caption.clone().unwrap_or_default(),
                 MediaKind::Video(video) => video.caption.clone().unwrap_or_default(),
                 MediaKind::Voice(voice) => voice.caption.clone().unwrap_or_default(),
+                MediaKind::Sticker(s) => {
+                    format!("[Sticker: {}]", s.sticker.emoji.as_deref().unwrap_or("?"))
+                }
                 _ => String::new(),
             },
             _ => return None, // Ignore non-common messages (service messages, etc.)
         };
 
-        // Skip empty messages
-        if text.is_empty() {
+        // Skip messages with no text AND no attachments
+        if text.is_empty() && attachments.is_empty() {
             return None;
         }
-
-        // Extract attachments
-        let attachments = Self::extract_attachments(msg);
 
         // Get reply-to message ID
         let reply_to = msg
@@ -199,95 +202,110 @@ impl TelegramChannel {
         })
     }
 
-    /// Extract attachments from Telegram message
-    fn extract_attachments(msg: &teloxide::types::Message) -> Vec<Attachment> {
-        let mut attachments = Vec::new();
-
-        if let MessageKind::Common(common) = &msg.kind {
-            match &common.media_kind {
-                MediaKind::Photo(photo) => {
-                    // Get the largest photo size
-                    if let Some(largest) = photo.photo.last() {
-                        attachments.push(Attachment {
-                            id: largest.file.id.clone(),
-                            mime_type: "image/jpeg".to_string(),
-                            filename: None,
-                            size: Some(largest.file.size as u64),
-                            url: None, // Will be fetched via getFile API
-                            path: None,
-                            data: None,
-                        });
+    /// Extract attachments from Telegram message, resolving file URLs via Bot API.
+    async fn extract_attachments(msg: &teloxide::types::Message, bot: &Bot) -> Vec<Attachment> {
+        // Collect (file_id, mime_type, filename, size) from each media kind
+        let media_info: Option<(String, String, Option<String>, u64)> =
+            if let MessageKind::Common(common) = &msg.kind {
+                match &common.media_kind {
+                    MediaKind::Photo(photo) => {
+                        photo.photo.last().map(|largest| (
+                            largest.file.id.clone(),
+                            "image/jpeg".to_string(),
+                            None,
+                            largest.file.size as u64,
+                        ))
                     }
-                }
-                MediaKind::Document(doc) => {
-                    attachments.push(Attachment {
-                        id: doc.document.file.id.clone(),
-                        mime_type: doc
-                            .document
+                    MediaKind::Document(doc) => Some((
+                        doc.document.file.id.clone(),
+                        doc.document
                             .mime_type
                             .as_ref()
                             .map(|m| m.to_string())
                             .unwrap_or_else(|| "application/octet-stream".to_string()),
-                        filename: doc.document.file_name.clone(),
-                        size: Some(doc.document.file.size as u64),
-                        url: None,
-                        path: None,
-                        data: None,
-                    });
-                }
-                MediaKind::Audio(audio) => {
-                    attachments.push(Attachment {
-                        id: audio.audio.file.id.clone(),
-                        mime_type: audio
+                        doc.document.file_name.clone(),
+                        doc.document.file.size as u64,
+                    )),
+                    MediaKind::Audio(audio) => Some((
+                        audio.audio.file.id.clone(),
+                        audio
                             .audio
                             .mime_type
                             .as_ref()
                             .map(|m| m.to_string())
                             .unwrap_or_else(|| "audio/mpeg".to_string()),
-                        filename: audio.audio.file_name.clone(),
-                        size: Some(audio.audio.file.size as u64),
-                        url: None,
-                        path: None,
-                        data: None,
-                    });
-                }
-                MediaKind::Video(video) => {
-                    attachments.push(Attachment {
-                        id: video.video.file.id.clone(),
-                        mime_type: video
+                        audio.audio.file_name.clone(),
+                        audio.audio.file.size as u64,
+                    )),
+                    MediaKind::Video(video) => Some((
+                        video.video.file.id.clone(),
+                        video
                             .video
                             .mime_type
                             .as_ref()
                             .map(|m| m.to_string())
                             .unwrap_or_else(|| "video/mp4".to_string()),
-                        filename: video.video.file_name.clone(),
-                        size: Some(video.video.file.size as u64),
-                        url: None,
-                        path: None,
-                        data: None,
-                    });
-                }
-                MediaKind::Voice(voice) => {
-                    attachments.push(Attachment {
-                        id: voice.voice.file.id.clone(),
-                        mime_type: voice
+                        video.video.file_name.clone(),
+                        video.video.file.size as u64,
+                    )),
+                    MediaKind::Voice(voice) => Some((
+                        voice.voice.file.id.clone(),
+                        voice
                             .voice
                             .mime_type
                             .as_ref()
                             .map(|m| m.to_string())
                             .unwrap_or_else(|| "audio/ogg".to_string()),
-                        filename: None,
-                        size: Some(voice.voice.file.size as u64),
-                        url: None,
-                        path: None,
-                        data: None,
-                    });
+                        None,
+                        voice.voice.file.size as u64,
+                    )),
+                    MediaKind::Sticker(s) => {
+                        let mime = if s.sticker.flags.is_animated {
+                            "application/x-tgsticker".to_string()
+                        } else if s.sticker.flags.is_video {
+                            "video/webm".to_string()
+                        } else {
+                            "image/webp".to_string()
+                        };
+                        Some((
+                            s.sticker.file.id.clone(),
+                            mime,
+                            None,
+                            s.sticker.file.size as u64,
+                        ))
+                    }
+                    _ => None,
                 }
-                _ => {}
-            }
-        }
+            } else {
+                None
+            };
 
-        attachments
+        let Some((file_id, mime_type, filename, size)) = media_info else {
+            return Vec::new();
+        };
+
+        // Resolve file URL via Bot API
+        let url = match bot.get_file(&file_id).await {
+            Ok(file) => Some(format!(
+                "https://api.telegram.org/file/bot{}/{}",
+                bot.token(),
+                file.path
+            )),
+            Err(e) => {
+                tracing::warn!("Failed to resolve file URL for {}: {}", file_id, e);
+                None
+            }
+        };
+
+        vec![Attachment {
+            id: file_id,
+            mime_type,
+            filename,
+            size: Some(size),
+            url,
+            path: None,
+            data: None,
+        }]
     }
 
     /// Update internal status
@@ -410,12 +428,12 @@ impl Channel for TelegramChannel {
 
             // Message handler
             let message_handler = Update::filter_message().endpoint(
-                move |_bot: Bot, msg: teloxide::types::Message| {
+                move |bot: Bot, msg: teloxide::types::Message| {
                     let inbound_tx = inbound_tx.clone();
                     let config = config.clone();
                     let channel_id = channel_id.clone();
                     async move {
-                        if let Some(inbound) = TelegramChannel::convert_message(&msg, &config, &channel_id) {
+                        if let Some(inbound) = TelegramChannel::convert_message(&msg, &bot, &config, &channel_id).await {
                             if let Err(e) = inbound_tx.send(inbound).await {
                                 tracing::error!("Failed to send inbound message: {}", e);
                             }
