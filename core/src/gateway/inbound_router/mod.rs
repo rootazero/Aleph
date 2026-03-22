@@ -338,18 +338,56 @@ impl InboundMessageRouter {
             let stripped = strip_bot_mention(&lower);
             if stripped.starts_with("/voice") {
                 let args = stripped.strip_prefix("/voice").unwrap_or("").trim();
+                // Strip leading underscore (Telegram may send /voice_on from button callback)
+                let args = args.trim_start_matches('_');
                 let (enabled, reply) = match args {
                     "on" | "open" | "开" | "开启" => (true, "Voice mode enabled. I'll reply with voice from now on."),
                     "off" | "close" | "关" | "关闭" => (false, "Voice mode disabled. Switching back to text replies."),
-                    "" | "status" | "状态" => {
+                    "" => {
+                        // No args: show inline keyboard with voice sub-commands
+                        use super::channel::{InlineButton, InlineKeyboard};
                         let state = self.channel_registry.get_voice_state("default").await;
                         let ch_state = self.channel_registry.get_voice_state(ctx.reply_route.channel_id.as_str()).await;
                         let is_on = state.is_active() || ch_state.is_active();
-                        let status = if is_on { "ON" } else { "OFF" };
-                        // Send status as text reply
+                        let status = if is_on { "🔊 ON" } else { "🔇 OFF" };
+
+                        let mut keyboard = InlineKeyboard::new();
+                        keyboard.rows.push(vec![
+                            InlineButton { text: "🔊 On".to_string(), callback_data: "/voice on".to_string() },
+                            InlineButton { text: "🔇 Off".to_string(), callback_data: "/voice off".to_string() },
+                            InlineButton { text: "📊 Status".to_string(), callback_data: "/voice status".to_string() },
+                        ]);
+
                         let reply_msg = super::channel::OutboundMessage {
                             conversation_id: ctx.reply_route.conversation_id.clone(),
-                            text: format!("Voice mode: {}", status),
+                            text: format!("🎙 Voice Mode: {}", status),
+                            attachments: vec![],
+                            reply_to: ctx.reply_route.reply_to.clone(),
+                            inline_keyboard: Some(keyboard),
+                            metadata: Default::default(),
+                        };
+                        let _ = self.channel_registry.send(&ctx.reply_route.channel_id, reply_msg).await;
+                        return Ok(());
+                    }
+                    "status" | "状态" => {
+                        // Show current status as text
+                        let state = self.channel_registry.get_voice_state("default").await;
+                        let ch_state = self.channel_registry.get_voice_state(ctx.reply_route.channel_id.as_str()).await;
+                        let is_on = state.is_active() || ch_state.is_active();
+                        let provider = state.provider.as_deref()
+                            .or(ch_state.provider.as_deref())
+                            .unwrap_or("auto");
+                        let voice = state.voice.as_deref()
+                            .or(ch_state.voice.as_deref())
+                            .unwrap_or("default");
+                        let status_text = format!(
+                            "🎙 Voice Mode: {}\nProvider: {}\nVoice: {}\nFailures: {}",
+                            if is_on { "ON" } else { "OFF" },
+                            provider, voice, ch_state.consecutive_failures
+                        );
+                        let reply_msg = super::channel::OutboundMessage {
+                            conversation_id: ctx.reply_route.conversation_id.clone(),
+                            text: status_text,
                             attachments: vec![],
                             reply_to: ctx.reply_route.reply_to.clone(),
                             inline_keyboard: None,
