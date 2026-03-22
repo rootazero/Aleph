@@ -1246,11 +1246,24 @@ fn AddCustomProviderPanel(
     let form_model = RwSignal::new(String::new());
     let timeout = RwSignal::new(60u64);
 
-    // Capability checkboxes
+    // Capability checkboxes — auto-set provider_type when capability changes
     let cap_image = RwSignal::new(true);
     let cap_video = RwSignal::new(false);
     let cap_audio = RwSignal::new(false);
     let cap_speech = RwSignal::new(false);
+
+    // Auto-infer provider_type from selected capabilities
+    let infer_provider_type = move || {
+        if cap_speech.get() {
+            provider_type.set("openai_tts".to_string());
+        } else if cap_image.get() {
+            provider_type.set("openai".to_string());
+        } else if cap_video.get() {
+            provider_type.set("t8star_veo".to_string());
+        } else if cap_audio.get() {
+            provider_type.set("openai".to_string());
+        }
+    };
 
     let (adding, set_adding) = signal(false);
     let (testing, set_testing) = signal(false);
@@ -1275,7 +1288,21 @@ fn AddCustomProviderPanel(
             },
             secret_name: None,
             base_url: {
-                let url = base_url.get();
+                let mut url = base_url.get().trim().to_string();
+                if !url.is_empty() {
+                    // Strip known API paths — providers append these automatically
+                    for suffix in &[
+                        "/v1/audio/speech", "/v1/images/generations", "/v1/images/edits",
+                        "/v1/audio/transcriptions", "/v1/chat/completions",
+                    ] {
+                        if url.ends_with(suffix) {
+                            url = url[..url.len() - suffix.len()].to_string();
+                            break;
+                        }
+                    }
+                    // Strip trailing slash
+                    url = url.trim_end_matches('/').to_string();
+                }
                 if url.is_empty() { None } else { Some(url) }
             },
             edit_url: {
@@ -1382,16 +1409,17 @@ fn AddCustomProviderPanel(
                     <p class="mt-1 text-xs text-text-tertiary">"Unique identifier (lowercase, no spaces)"</p>
                 </div>
 
-                // Provider Type
+                // Provider Type (auto-inferred from capabilities, editable)
                 <div>
                     <label class="block text-sm font-medium text-text-secondary mb-1">"Provider Type"</label>
                     <input
                         type="text"
                         value=move || provider_type.get()
                         on:input=move |ev| provider_type.set(event_target_value(&ev))
-                        placeholder="e.g., openai, replicate, stability"
+                        placeholder="e.g., openai_tts, openai, elevenlabs, replicate"
                         class="w-full px-3 py-2 border border-border rounded bg-surface text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
                     />
+                    <p class="mt-1 text-xs text-text-tertiary">"Auto-set from capabilities. Speech: openai_tts/elevenlabs, Image: openai/stability"</p>
                 </div>
 
                 // API Key
@@ -1418,16 +1446,17 @@ fn AddCustomProviderPanel(
                     <p class="mt-1 text-xs text-text-tertiary">"Enter multiple models, separated by commas"</p>
                 </div>
 
-                // API Endpoint URL
+                // API Base URL
                 <div>
-                    <label class="block text-sm font-medium text-text-secondary mb-1">"API Endpoint URL"</label>
+                    <label class="block text-sm font-medium text-text-secondary mb-1">"API Base URL"</label>
                     <input
                         type="text"
                         value=move || base_url.get()
                         on:input=move |ev| base_url.set(event_target_value(&ev))
-                        placeholder="https://api.example.com/v1/images/generations"
+                        placeholder="https://api.openai.com"
                         class="w-full px-3 py-2 border border-border rounded bg-surface text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
                     />
+                    <p class="mt-1 text-xs text-text-tertiary">"Base URL only — API paths like /v1/audio/speech are appended automatically"</p>
                 </div>
 
                 // Edit Endpoint URL (optional)
@@ -1465,7 +1494,7 @@ fn AddCustomProviderPanel(
                 <label class="flex items-center gap-3 cursor-pointer">
                     <input type="checkbox"
                         checked=move || cap_image.get()
-                        on:change=move |ev| cap_image.set(event_target_checked(&ev))
+                        on:change=move |ev| { cap_image.set(event_target_checked(&ev)); infer_provider_type(); }
                         class="w-4 h-4 rounded"
                     />
                     <span class="text-sm text-text-primary">"🖼️ Image Generation"</span>
@@ -1473,7 +1502,7 @@ fn AddCustomProviderPanel(
                 <label class="flex items-center gap-3 cursor-pointer">
                     <input type="checkbox"
                         checked=move || cap_video.get()
-                        on:change=move |ev| cap_video.set(event_target_checked(&ev))
+                        on:change=move |ev| { cap_video.set(event_target_checked(&ev)); infer_provider_type(); }
                         class="w-4 h-4 rounded"
                     />
                     <span class="text-sm text-text-primary">"🎬 Video Generation"</span>
@@ -1481,7 +1510,7 @@ fn AddCustomProviderPanel(
                 <label class="flex items-center gap-3 cursor-pointer">
                     <input type="checkbox"
                         checked=move || cap_audio.get()
-                        on:change=move |ev| cap_audio.set(event_target_checked(&ev))
+                        on:change=move |ev| { cap_audio.set(event_target_checked(&ev)); infer_provider_type(); }
                         class="w-4 h-4 rounded"
                     />
                     <span class="text-sm text-text-primary">"🎵 Audio Generation"</span>
@@ -1489,7 +1518,7 @@ fn AddCustomProviderPanel(
                 <label class="flex items-center gap-3 cursor-pointer">
                     <input type="checkbox"
                         checked=move || cap_speech.get()
-                        on:change=move |ev| cap_speech.set(event_target_checked(&ev))
+                        on:change=move |ev| { cap_speech.set(event_target_checked(&ev)); infer_provider_type(); }
                         class="w-4 h-4 rounded"
                     />
                     <span class="text-sm text-text-primary">"🗣️ Speech Synthesis"</span>
