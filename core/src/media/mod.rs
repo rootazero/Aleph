@@ -21,6 +21,7 @@ pub mod detect;
 pub mod error;
 pub mod pipeline;
 pub mod policy;
+pub mod processor;
 pub mod processors;
 pub mod provider;
 pub mod transcription;
