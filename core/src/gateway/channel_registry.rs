@@ -30,8 +30,9 @@ use tokio::sync::{mpsc, RwLock};
 use tracing::{error, info, warn};
 
 use super::channel::{
-    Channel, ChannelConfig, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
-    ChannelResult, ChannelStatus, ConversationId, InboundMessage, OutboundMessage, SendResult,
+    Channel, ChannelCapabilities, ChannelConfig, ChannelError, ChannelFactory, ChannelId,
+    ChannelInfo, ChannelResult, ChannelStatus, ConversationId, InboundMessage, OutboundMessage,
+    SendResult,
 };
 use super::voice::VoiceState;
 
@@ -132,6 +133,17 @@ impl ChannelRegistry {
     pub async fn get(&self, channel_id: &ChannelId) -> Option<ChannelHandle> {
         let channels = self.channels.read().await;
         channels.get(channel_id).cloned()
+    }
+
+    /// Get the capabilities for a channel by ID.
+    pub async fn get_capabilities(&self, channel_id: &ChannelId) -> Option<ChannelCapabilities> {
+        let channels = self.channels.read().await;
+        if let Some(handle) = channels.get(channel_id) {
+            let channel = handle.read().await;
+            Some(channel.capabilities().clone())
+        } else {
+            None
+        }
     }
 
     /// List all channels

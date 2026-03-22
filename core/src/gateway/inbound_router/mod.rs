@@ -96,6 +96,12 @@ pub struct InboundMessageRouter {
     pub(super) session_manager: Option<Arc<super::session_manager::SessionManager>>,
     /// App config for reading output_mode at runtime
     pub(super) app_config: Option<Arc<tokio::sync::RwLock<crate::Config>>>,
+    /// Media pipeline for voice STT transcription
+    pub(super) media_pipeline: Option<Arc<crate::media::pipeline::MediaPipeline>>,
+    /// Generation provider registry for TTS
+    pub(super) generation_registry: Option<Arc<crate::generation::GenerationProviderRegistry>>,
+    /// Generation config for TTS
+    pub(super) generation_config: Option<Arc<tokio::sync::RwLock<crate::config::types::generation::GenerationConfig>>>,
 }
 
 impl InboundMessageRouter {
@@ -122,6 +128,9 @@ impl InboundMessageRouter {
             debounce_buffer: None,
             session_manager: None,
             app_config: None,
+            media_pipeline: None,
+            generation_registry: None,
+            generation_config: None,
         }
     }
 
@@ -183,6 +192,23 @@ impl InboundMessageRouter {
     /// Set the app config for reading output_mode at runtime
     pub fn with_app_config(mut self, config: Arc<tokio::sync::RwLock<crate::Config>>) -> Self {
         self.app_config = Some(config);
+        self
+    }
+
+    /// Set the media pipeline for voice STT transcription
+    pub fn with_media_pipeline(mut self, pipeline: Arc<crate::media::pipeline::MediaPipeline>) -> Self {
+        self.media_pipeline = Some(pipeline);
+        self
+    }
+
+    /// Set voice output dependencies (generation provider registry + config)
+    pub fn with_voice_output(
+        mut self,
+        registry: Arc<crate::generation::GenerationProviderRegistry>,
+        config: Arc<tokio::sync::RwLock<crate::config::types::generation::GenerationConfig>>,
+    ) -> Self {
+        self.generation_registry = Some(registry);
+        self.generation_config = Some(config);
         self
     }
 
@@ -276,7 +302,7 @@ impl InboundMessageRouter {
         let ctx = self.build_context_with_agent(&msg, &agent_id).await;
 
         // Check permissions
-        let ctx = match self.check_permission(ctx).await {
+        let mut ctx = match self.check_permission(ctx).await {
             Ok(ctx) => {
                 info!("[Router] Permission granted for {}:{}", channel_id, ctx.sender_normalized);
                 ctx
@@ -286,6 +312,21 @@ impl InboundMessageRouter {
                 return Ok(());
             }
         };
+
+        // Voice STT: transcribe audio attachments before further processing
+        if let Some(ref pipeline) = self.media_pipeline {
+            if super::voice::inbound::has_audio_attachment(&ctx.message) {
+                let result = super::voice::inbound::process_inbound_voice(
+                    ctx.message.clone(),
+                    pipeline,
+                )
+                .await;
+                ctx.message = result.message;
+                if result.transcribed {
+                    ctx.voice_reply_hint = true;
+                }
+            }
+        }
 
         // Unified slash command interception
         if ctx.message.text.trim().starts_with('/') {

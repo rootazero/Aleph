@@ -70,8 +70,15 @@ impl InboundMessageRouter {
         // Generate a unique run ID
         let run_id = Uuid::new_v4().to_string();
 
+        // Determine voice state for this channel
+        let voice_state = self
+            .channel_registry
+            .get_voice_state(ctx.reply_route.channel_id.as_str())
+            .await;
+        let voice_enabled = voice_state.is_active() || ctx.voice_reply_hint;
+
         // Create a ReplyEmitter config based on output_mode
-        let reply_config = match &self.app_config {
+        let mut reply_config = match &self.app_config {
             Some(cfg) => {
                 let cfg = cfg.read().await;
                 let mode = cfg.behavior.as_ref()
@@ -81,6 +88,8 @@ impl InboundMessageRouter {
             }
             None => ReplyEmitterConfig::default(),
         };
+        reply_config.voice_enabled = voice_enabled;
+        reply_config.voice_reply_hint = ctx.voice_reply_hint;
 
         // Detect feishu channel and optionally construct FeishuEventEmitter
         let is_feishu = {
@@ -92,24 +101,44 @@ impl InboundMessageRouter {
             }
         };
 
+        // Helper closure: optionally attach voice deps to a ReplyEmitter
+        let attach_voice = |emitter: ReplyEmitter| -> ReplyEmitter {
+            if voice_enabled {
+                if let (Some(gen_reg), Some(gen_cfg)) =
+                    (self.generation_registry.as_ref(), self.generation_config.as_ref())
+                {
+                    return emitter.with_voice(
+                        voice_state.clone(),
+                        gen_reg.clone(),
+                        gen_cfg.clone(),
+                    );
+                }
+            }
+            emitter
+        };
+
         let emitter: Arc<dyn crate::gateway::event_emitter::EventEmitter + Send + Sync> = if is_feishu {
             // Try to create FeishuEventEmitter with streaming + typing
             match self.try_create_feishu_emitter(ctx, &run_id, reply_config.clone()).await {
                 Some(fe) => Arc::new(fe),
-                None => Arc::new(ReplyEmitter::with_config(
-                    self.channel_registry.clone(),
-                    ctx.reply_route.clone(),
-                    run_id.clone(),
-                    reply_config,
-                )),
+                None => {
+                    let re = ReplyEmitter::with_config(
+                        self.channel_registry.clone(),
+                        ctx.reply_route.clone(),
+                        run_id.clone(),
+                        reply_config,
+                    );
+                    Arc::new(attach_voice(re))
+                }
             }
         } else {
-            Arc::new(ReplyEmitter::with_config(
+            let re = ReplyEmitter::with_config(
                 self.channel_registry.clone(),
                 ctx.reply_route.clone(),
                 run_id.clone(),
                 reply_config,
-            ))
+            );
+            Arc::new(attach_voice(re))
         };
 
         // Build the run request metadata
@@ -125,6 +154,9 @@ impl InboundMessageRouter {
         }
         if ctx.is_mentioned {
             metadata.insert("is_mentioned".to_string(), "true".to_string());
+        }
+        if voice_enabled {
+            metadata.insert("voice_mode_active".to_string(), "true".to_string());
         }
 
         let request = RunRequest {
