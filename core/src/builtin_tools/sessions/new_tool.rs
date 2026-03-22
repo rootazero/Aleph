@@ -58,7 +58,7 @@ impl SessionNewTool {
 
 #[async_trait]
 impl AlephTool for SessionNewTool {
-    const NAME: &'static str = "session.new";
+    const NAME: &'static str = "session_new";
     const DESCRIPTION: &'static str =
         "Start a new conversation session. Closes the current session \
          (optionally with a topic summary) and begins a fresh one. \
@@ -155,7 +155,7 @@ mod tests {
         let tool = SessionNewTool::new(sm);
         let def = AlephTool::definition(&tool);
 
-        assert_eq!(def.name, "session.new");
+        assert_eq!(def.name, "session_new");
         assert!(!def.requires_confirmation);
     }
 

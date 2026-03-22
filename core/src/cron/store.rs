@@ -15,6 +15,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use tracing::{info, warn};
 
 use crate::cron::config::CronJob;
+use crate::cron::history::{self, CronRunRecord};
 
 /// Current schema version
 const CURRENT_VERSION: u32 = 1;
@@ -51,6 +52,7 @@ impl CronStore {
 
         init_schema(&conn)?;
         migrate_schema(&conn)?;
+        history::init_schema(&conn)?;
 
         // Load all jobs into memory
         let jobs = load_all_jobs(&conn)?;
@@ -157,6 +159,28 @@ impl CronStore {
     /// Number of jobs in the store.
     pub fn job_count(&self) -> usize {
         self.jobs.len()
+    }
+
+    // ── History ───────────────────────────────────────────────────────
+
+    /// Insert a cron run record into the history table.
+    pub fn insert_run(&self, record: &CronRunRecord) -> Result<(), String> {
+        history::insert_cron_run(&self.conn, record)
+    }
+
+    /// Get execution history for a specific job.
+    pub fn get_runs(&self, job_id: &str, limit: usize) -> Result<Vec<CronRunRecord>, String> {
+        history::get_cron_runs(&self.conn, job_id, limit)
+    }
+
+    /// Get execution history for all jobs (most recent first).
+    pub fn get_all_runs(&self, limit: usize) -> Result<Vec<CronRunRecord>, String> {
+        history::get_all_cron_runs(&self.conn, limit)
+    }
+
+    /// Cleanup old run records beyond retention period.
+    pub fn cleanup_old_runs(&self, retention_days: u32, now_ms: i64) -> Result<u64, String> {
+        history::cleanup_old_cron_runs(&self.conn, retention_days, now_ms)
     }
 }
 

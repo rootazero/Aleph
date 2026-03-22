@@ -154,7 +154,7 @@ impl SessionsListTool {
 
 #[async_trait]
 impl AlephTool for SessionsListTool {
-    const NAME: &'static str = "session.list";
+    const NAME: &'static str = "session_list";
     const DESCRIPTION: &'static str =
         "List sessions accessible to this agent. Use to discover other sessions for cross-session communication.";
 
@@ -586,7 +586,7 @@ mod tests {
         let tool = SessionsListTool::new(context, "main");
 
         let def = AlephTool::definition(&tool);
-        assert_eq!(def.name, "session.list");
+        assert_eq!(def.name, "session_list");
         assert!(!def.description.is_empty());
     }
 }

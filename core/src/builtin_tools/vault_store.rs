@@ -53,7 +53,7 @@ impl VaultStoreTool {
 
 #[async_trait]
 impl AlephTool for VaultStoreTool {
-    const NAME: &'static str = "vault.store";
+    const NAME: &'static str = "vault_store";
     const DESCRIPTION: &'static str = "Manage encrypted secret vault. API keys and sensitive credentials must be stored via this tool, never written directly to config files. Use 'store' to save, 'delete' to remove, 'list' to see key names (values are never returned).";
 
     type Args = VaultStoreArgs;

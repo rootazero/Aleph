@@ -535,6 +535,15 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 session_key: request.session_key.to_key_string(),
             })
             .await;
+
+        // Remove from active runs after a short delay (same as normal path)
+        let runs_clone = self.active_runs.clone();
+        let run_id_owned = run_id.to_string();
+        tokio::spawn(async move {
+            tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+            runs_clone.write().await.remove(&run_id_owned);
+        });
+
         Ok(())
     }
 
@@ -598,6 +607,15 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             error = %error_msg,
             "Slash command fast path failed, returning error to user"
         );
+
+        // Remove from active runs after a short delay (same as normal path)
+        let runs_clone = self.active_runs.clone();
+        let run_id_owned = run_id.to_string();
+        tokio::spawn(async move {
+            tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+            runs_clone.write().await.remove(&run_id_owned);
+        });
+
         Ok(())
     }
 }

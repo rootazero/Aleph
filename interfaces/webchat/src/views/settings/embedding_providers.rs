@@ -951,7 +951,7 @@ fn AddProviderPanel(
     let api_base = RwSignal::new(String::new());
     let api_key = RwSignal::new(String::new());
     let form_model = RwSignal::new(String::new());
-    let dimensions = RwSignal::new(1024u32);
+    let dimensions = RwSignal::new(1536u32);
 
     let (adding, set_adding) = signal(false);
     let (testing, set_testing) = signal(false);

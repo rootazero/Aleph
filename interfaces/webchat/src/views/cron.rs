@@ -42,9 +42,9 @@ fn format_schedule_summary(
                     if let Some(dt) = obj.get("datetime").and_then(|v| v.as_str()) {
                         return format!("At {}", dt);
                     }
-                    // Backend serializes as "at", panel historically used "at_ms"
-                    if let Some(ts) = obj.get("at").or_else(|| obj.get("at_ms")).and_then(|v| v.as_i64()) {
-                        return format!("At {}", format_timestamp(ts / 1000));
+                    // Backend stores ms; convert to seconds for display
+                    if let Some(ts_ms) = obj.get("at").or_else(|| obj.get("at_ms")).and_then(|v| v.as_i64()) {
+                        return format!("At {}", format_timestamp(ts_ms / 1000));
                     }
                 }
                 _ => {}
@@ -172,8 +172,10 @@ fn extract_schedule_from_kind(
             (kind.to_string(), every_ms.to_string(), anchor, None)
         }
         "at" => {
-            let at = obj.get("at").and_then(|v| v.as_i64()).unwrap_or(0);
-            (kind.to_string(), at.to_string(), None, None)
+            // Backend stores ms; convert to local datetime string for the form
+            let at_ms = obj.get("at").and_then(|v| v.as_i64()).unwrap_or(0);
+            let dt_str = ms_to_datetime_local(at_ms);
+            (kind.to_string(), dt_str, None, None)
         }
         _ => ("cron".to_string(), String::new(), None, None),
     }
@@ -211,8 +213,8 @@ fn build_schedule_kind_json(
             Some(obj)
         }
         "at" => {
-            // Backend expects "at" as i64 (ms since epoch)
-            let at_ms = schedule.trim().parse::<i64>().ok()?;
+            // User enters local datetime (YYYY-MM-DDTHH:MM); convert to epoch ms
+            let at_ms = datetime_local_to_ms(schedule.trim())?;
             Some(serde_json::json!({
                 "kind": "at",
                 "at": at_ms,
@@ -220,6 +222,31 @@ fn build_schedule_kind_json(
             }))
         }
         _ => None,
+    }
+}
+
+/// Convert epoch milliseconds to a `YYYY-MM-DDTHH:MM` string in local timezone.
+/// This format is used by `<input type="datetime-local">`.
+fn ms_to_datetime_local(ms: i64) -> String {
+    let date = js_sys::Date::new_0();
+    date.set_time(ms as f64);
+    let y = date.get_full_year();
+    let m = date.get_month() + 1;
+    let d = date.get_date();
+    let hh = date.get_hours();
+    let mm = date.get_minutes();
+    format!("{:04}-{:02}-{:02}T{:02}:{:02}", y, m, d, hh, mm)
+}
+
+/// Convert a `YYYY-MM-DDTHH:MM` local datetime string to epoch milliseconds.
+fn datetime_local_to_ms(s: &str) -> Option<i64> {
+    // <input type="datetime-local"> produces "YYYY-MM-DDTHH:MM"
+    let date = js_sys::Date::new(&wasm_bindgen::JsValue::from_str(s));
+    let ms = date.get_time();
+    if ms.is_nan() {
+        None
+    } else {
+        Some(ms as i64)
     }
 }
 
@@ -594,7 +621,7 @@ fn JobEditor(
         if schedule_kind_obj.is_none() {
             let hint = match schedule_kind.as_str() {
                 "every" => "e.g. 5m, 2h, 30s, or 60000 (ms)",
-                "at" => "timestamp in ms since epoch",
+                "at" => "a valid date and time",
                 _ => "cron expression, e.g. 0 0 9 * * *",
             };
             error.set(Some(format!(
@@ -687,8 +714,24 @@ fn JobEditor(
         }
     };
 
-    // Handle delete
+    // Two-step delete confirmation
+    let confirm_delete = RwSignal::new(false);
+
+    // Reset confirmation when selection changes
+    Effect::new(move || {
+        let _ = selected.get();
+        confirm_delete.set(false);
+    });
+
     let on_delete = move |_| {
+        if !confirm_delete.get() {
+            // First click: show confirmation
+            confirm_delete.set(true);
+            return;
+        }
+
+        // Second click: actually delete
+        confirm_delete.set(false);
         if let Some(idx) = selected.get() {
             if idx == usize::MAX {
                 return;
@@ -748,7 +791,7 @@ fn JobEditor(
     let schedule_placeholder = move || {
         match form_schedule_kind.get().as_str() {
             "every" => "5m, 2h, 30s",
-            "at" => "09:00, 14:30",
+            "at" => "1711944000",
             _ => "*/5 * * * *",
         }
     };
@@ -829,13 +872,38 @@ fn JobEditor(
                                         <label class="block text-sm font-medium text-text-secondary mb-2">
                                             "Schedule"
                                         </label>
-                                        <input
-                                            type="text"
-                                            prop:value=move || form_schedule.get()
-                                            on:input=move |ev| form_schedule.set(event_target_value(&ev))
-                                            class="w-full px-4 py-2 bg-surface-sunken border border-border rounded-lg text-text-primary font-mono focus:outline-none focus:border-primary"
-                                            placeholder=schedule_placeholder
-                                        />
+                                        {move || {
+                                            if form_schedule_kind.get() == "at" {
+                                                view! {
+                                                    <input
+                                                        type="datetime-local"
+                                                        prop:value=move || form_schedule.get()
+                                                        on:input=move |ev| form_schedule.set(event_target_value(&ev))
+                                                        class="w-full px-4 py-2 bg-surface-sunken border border-border rounded-lg text-text-primary focus:outline-none focus:border-primary"
+                                                    />
+                                                    <p class="mt-1.5 text-xs text-text-tertiary">
+                                                        "One-shot: runs once at the specified date and time, then auto-deletes"
+                                                    </p>
+                                                }.into_any()
+                                            } else {
+                                                view! {
+                                                    <input
+                                                        type="text"
+                                                        prop:value=move || form_schedule.get()
+                                                        on:input=move |ev| form_schedule.set(event_target_value(&ev))
+                                                        class="w-full px-4 py-2 bg-surface-sunken border border-border rounded-lg text-text-primary font-mono focus:outline-none focus:border-primary"
+                                                        placeholder=schedule_placeholder
+                                                    />
+                                                    <p class="mt-1.5 text-xs text-text-tertiary">
+                                                        {move || match form_schedule_kind.get().as_str() {
+                                                            "cron" => "6-field cron: sec min hour day month weekday. e.g. \"0 30 9 * * *\" = daily 9:30",
+                                                            "every" => "Interval: 30s, 5m, 2h, 1d, or milliseconds. e.g. \"5m\" = every 5 minutes",
+                                                            _ => "",
+                                                        }}
+                                                    </p>
+                                                }.into_any()
+                                            }
+                                        }}
                                     </div>
                                 </div>
 
@@ -1071,9 +1139,15 @@ fn JobEditor(
                                             <button
                                                 on:click=on_delete
                                                 prop:disabled=move || saving.get()
-                                                class="px-6 py-2 bg-danger hover:bg-danger disabled:bg-danger/50 text-white rounded-lg transition-colors disabled:cursor-not-allowed"
+                                                class=move || {
+                                                    if confirm_delete.get() {
+                                                        "px-6 py-2 bg-danger hover:bg-danger/80 disabled:bg-danger/50 text-white rounded-lg transition-colors disabled:cursor-not-allowed ring-2 ring-danger/50 ring-offset-1 ring-offset-surface animate-pulse"
+                                                    } else {
+                                                        "px-6 py-2 bg-danger/80 hover:bg-danger disabled:bg-danger/50 text-white rounded-lg transition-colors disabled:cursor-not-allowed"
+                                                    }
+                                                }
                                             >
-                                                "Delete"
+                                                {move || if confirm_delete.get() { "Confirm Delete?" } else { "Delete" }}
                                             </button>
                                         }.into_any()
                                     } else {

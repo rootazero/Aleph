@@ -13,20 +13,20 @@ async fn test_register_builtin_tools() {
     let registry = ToolRegistry::new();
     registry.register_builtin_tools().await;
 
-    // Should register 9 builtin tools (2 generation + 2 skill reading + snapshot + switch + groupchat + new + cron)
-    assert_eq!(registry.count().await, 9);
+    // Should register 10 builtin tools (2 generation + 2 skill + snapshot + switch + groupchat + session_new + new + cron)
+    assert_eq!(registry.count().await, 10);
 
     // Builtins should include generation tools
     let builtins = registry.list_builtin_tools().await;
-    assert_eq!(builtins.len(), 9);
+    assert_eq!(builtins.len(), 10);
 
     // Verify tool names
     let names: Vec<_> = builtins.iter().map(|t| t.name.as_str()).collect();
-    assert!(names.contains(&"generate.image"));
-    assert!(names.contains(&"generate.speech"));
-    assert!(names.contains(&"skill.read"));
-    assert!(names.contains(&"skill.list"));
-    assert!(names.contains(&"snapshot.capture"));
+    assert!(names.contains(&"generate_image"));
+    assert!(names.contains(&"generate_speech"));
+    assert!(names.contains(&"skill_read"));
+    assert!(names.contains(&"skill_list"));
+    assert!(names.contains(&"snapshot_capture"));
 }
 
 #[tokio::test]
@@ -43,12 +43,12 @@ async fn test_list_root_commands() {
     registry.register_custom_commands(&rules).await;
 
     let roots = registry.list_root_commands().await;
-    // 9 builtin tools + 1 custom = 10
-    assert_eq!(roots.len(), 10);
+    // 10 builtin tools + 1 custom = 11
+    assert_eq!(roots.len(), 11);
 
     // First should be builtins (sorted by priority)
-    assert!(roots.iter().any(|t| t.name == "generate.image"));
-    assert!(roots.iter().any(|t| t.name == "generate.speech"));
+    assert!(roots.iter().any(|t| t.name == "generate_image"));
+    assert!(roots.iter().any(|t| t.name == "generate_speech"));
     assert!(roots.iter().any(|t| t.name == "en"));
 }
 
@@ -138,7 +138,7 @@ async fn test_list_by_source_type() {
     registry.register_skills(&skills).await;
 
     let builtin = registry.list_by_source_type("Builtin").await;
-    assert_eq!(builtin.len(), 9); // 9 builtin tools (2 generation + 2 skill reading + snapshot + switch + groupchat + new + cron)
+    assert_eq!(builtin.len(), 10); // 10 builtin tools (2 generation + 2 skill + snapshot + switch + groupchat + session_new + new + cron)
 
     let skill = registry.list_by_source_type("Skill").await;
     assert_eq!(skill.len(), 1);
@@ -796,26 +796,26 @@ async fn register_tool(registry: &ToolRegistry, id: &str, name: &str) {
 #[tokio::test]
 async fn test_resolve_command_hierarchical_two_level() {
     let registry = ToolRegistry::new();
-    register_tool(&registry, "builtin:session.new", "session.new").await;
+    register_tool(&registry, "builtin:session_new", "session_new").await;
 
     // "/session new my-topic" → session.new, args = "my-topic"
     let resolved = registry.resolve_command("/session new my-topic").await;
     assert!(resolved.is_some());
     let r = resolved.unwrap();
-    assert_eq!(r.tool.name, "session.new");
+    assert_eq!(r.tool.name, "session_new");
     assert_eq!(r.arguments, Some("my-topic".to_string()));
 }
 
 #[tokio::test]
 async fn test_resolve_command_hierarchical_no_args() {
     let registry = ToolRegistry::new();
-    register_tool(&registry, "builtin:session.new", "session.new").await;
+    register_tool(&registry, "builtin:session_new", "session_new").await;
 
     // "/session new" → session.new, no args
     let resolved = registry.resolve_command("/session new").await;
     assert!(resolved.is_some());
     let r = resolved.unwrap();
-    assert_eq!(r.tool.name, "session.new");
+    assert_eq!(r.tool.name, "session_new");
     assert!(r.arguments.is_none());
 }
 
@@ -846,20 +846,20 @@ async fn test_resolve_command_new_alias() {
 #[tokio::test]
 async fn test_resolve_command_three_level() {
     let registry = ToolRegistry::new();
-    register_tool(&registry, "builtin:plugin.marketplace.install", "plugin.marketplace.install").await;
+    register_tool(&registry, "builtin:plugin_marketplace_install", "plugin_marketplace_install").await;
 
-    // "/plugin marketplace install x" → plugin.marketplace.install, args = "x"
+    // "/plugin marketplace install x" → plugin_marketplace_install, args = "x"
     let resolved = registry.resolve_command("/plugin marketplace install x").await;
     assert!(resolved.is_some());
     let r = resolved.unwrap();
-    assert_eq!(r.tool.name, "plugin.marketplace.install");
+    assert_eq!(r.tool.name, "plugin_marketplace_install");
     assert_eq!(r.arguments, Some("x".to_string()));
 }
 
 #[tokio::test]
 async fn test_resolve_command_nonexistent() {
     let registry = ToolRegistry::new();
-    register_tool(&registry, "builtin:session.new", "session.new").await;
+    register_tool(&registry, "builtin:session_new", "session_new").await;
 
     let resolved = registry.resolve_command("/nonexistent").await;
     assert!(resolved.is_none());
@@ -870,13 +870,13 @@ async fn test_resolve_command_greedy_longest_match() {
     let registry = ToolRegistry::new();
     // Register both a namespace parent and a child
     register_tool(&registry, "builtin:session", "session").await;
-    register_tool(&registry, "builtin:session.new", "session.new").await;
+    register_tool(&registry, "builtin:session_new", "session_new").await;
 
     // "/session new topic" should match session.new (longer), not session with args "new topic"
     let resolved = registry.resolve_command("/session new topic").await;
     assert!(resolved.is_some());
     let r = resolved.unwrap();
-    assert_eq!(r.tool.name, "session.new");
+    assert_eq!(r.tool.name, "session_new");
     assert_eq!(r.arguments, Some("topic".to_string()));
 
     // "/session unknown" should fall back to session with args "unknown"
@@ -890,13 +890,13 @@ async fn test_resolve_command_greedy_longest_match() {
 #[tokio::test]
 async fn test_resolve_command_bot_mention_hierarchical() {
     let registry = ToolRegistry::new();
-    register_tool(&registry, "builtin:session.new", "session.new").await;
+    register_tool(&registry, "builtin:session_new", "session_new").await;
 
     // Telegram: "/session@mybot new topic"
     let resolved = registry.resolve_command("/session@mybot new topic").await;
     assert!(resolved.is_some());
     let r = resolved.unwrap();
-    assert_eq!(r.tool.name, "session.new");
+    assert_eq!(r.tool.name, "session_new");
     assert_eq!(r.arguments, Some("topic".to_string()));
 }
 
@@ -907,8 +907,8 @@ async fn test_resolve_command_bot_mention_hierarchical() {
 #[tokio::test]
 async fn test_is_namespace_true() {
     let registry = ToolRegistry::new();
-    register_tool(&registry, "builtin:session.new", "session.new").await;
-    register_tool(&registry, "builtin:session.list", "session.list").await;
+    register_tool(&registry, "builtin:session_new", "session_new").await;
+    register_tool(&registry, "builtin:session_list", "session_list").await;
 
     assert!(registry.is_namespace("session").await);
 }
@@ -924,7 +924,7 @@ async fn test_is_namespace_false() {
 #[tokio::test]
 async fn test_is_namespace_case_insensitive() {
     let registry = ToolRegistry::new();
-    register_tool(&registry, "builtin:session.new", "session.new").await;
+    register_tool(&registry, "builtin:session_new", "session_new").await;
 
     assert!(registry.is_namespace("Session").await);
     assert!(registry.is_namespace("SESSION").await);
@@ -933,8 +933,8 @@ async fn test_is_namespace_case_insensitive() {
 #[tokio::test]
 async fn test_list_namespace_children() {
     let registry = ToolRegistry::new();
-    register_tool(&registry, "builtin:session.new", "session.new").await;
-    register_tool(&registry, "builtin:session.list", "session.list").await;
+    register_tool(&registry, "builtin:session_new", "session_new").await;
+    register_tool(&registry, "builtin:session_list", "session_list").await;
     register_tool(&registry, "builtin:session.topic.set", "session.topic.set").await; // deeper, should be excluded
     register_tool(&registry, "custom:search", "search").await; // unrelated
 
@@ -942,8 +942,8 @@ async fn test_list_namespace_children() {
     assert_eq!(children.len(), 2);
 
     let names: Vec<&str> = children.iter().map(|t| t.name.as_str()).collect();
-    assert!(names.contains(&"session.new"));
-    assert!(names.contains(&"session.list"));
+    assert!(names.contains(&"session_new"));
+    assert!(names.contains(&"session_list"));
     assert!(!names.contains(&"session.topic.set"));
 }
 

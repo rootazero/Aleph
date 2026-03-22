@@ -21,6 +21,35 @@ use reqwest::Client;
 use serde_json::json;
 use tracing::{debug, error};
 
+// ── Tool-name sanitization ──────────────────────────────────────────────
+//
+// OpenAI API requires tool names to match `^[a-zA-Z0-9_-]+$`.
+// Aleph tool names now use underscores (e.g. "cron_manage"), but this
+// sanitizer is kept as a safety net for any external/plugin tool names.
+
+/// Replace characters not in `[a-zA-Z0-9_-]` with underscores.
+fn sanitize_tool_name(name: &str) -> String { sanitize_tool_name_pub(name) }
+
+/// Public version for cross-protocol use (Codex, etc.).
+pub fn sanitize_tool_name_pub(name: &str) -> String {
+    name.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+/// Identity function — tool names now use underscores natively,
+/// so no reverse mapping is needed after sanitization.
+fn desanitize_tool_name(name: &str) -> String { name.to_string() }
+
+/// Public version for cross-protocol use.
+pub fn desanitize_tool_name_pub(name: &str) -> String { name.to_string() }
+
 /// OpenAI protocol adapter
 pub struct OpenAiProtocol {
     client: Client,
@@ -114,7 +143,7 @@ impl OpenAiProtocol {
                                     id: id.clone(),
                                     call_type: Some("function".to_string()),
                                     function: OpenAiFunctionCall {
-                                        name: name.clone(),
+                                        name: sanitize_tool_name(name),
                                         arguments: serde_json::to_string(arguments)
                                             .unwrap_or_default(),
                                     },
@@ -256,7 +285,10 @@ impl ProtocolAdapter for OpenAiProtocol {
                     OpenAiTool {
                         tool_type: "function".into(),
                         function: OpenAiFunction {
-                            name: td.name.clone(),
+                            // OpenAI API requires tool names to match ^[a-zA-Z0-9_-]+$
+                            // Aleph tool names now use underscores natively; sanitize
+                            // is kept as a safety net for external/plugin tool names.
+                            name: sanitize_tool_name(&td.name),
                             description: td.description.clone(),
                             parameters: params,
                             strict: if td.strict { Some(true) } else { None },
@@ -336,7 +368,8 @@ impl ProtocolAdapter for OpenAiProtocol {
                     });
                 provider_response.tool_calls.push(NativeToolCall {
                     id: tc.id.clone(),
-                    name: tc.function.name.clone(),
+                    // Pass through tool name (identity — underscore names are native now).
+                    name: desanitize_tool_name(&tc.function.name),
                     arguments,
                 });
             }

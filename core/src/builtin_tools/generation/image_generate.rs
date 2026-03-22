@@ -79,7 +79,7 @@ pub struct ImageGenerateTool {
 
 impl ImageGenerateTool {
     /// Tool identifier
-    pub const NAME: &'static str = "image.generate";
+    pub const NAME: &'static str = "image_generate";
 
     /// Tool description for AI prompt
     pub const DESCRIPTION: &'static str = "Generate an image from a text description. Use this when you need to create visual content based on a prompt.";
@@ -236,7 +236,7 @@ impl Clone for ImageGenerateTool {
 /// Implementation of AlephTool trait for ImageGenerateTool
 #[async_trait]
 impl AlephTool for ImageGenerateTool {
-    const NAME: &'static str = "image.generate";
+    const NAME: &'static str = "image_generate";
     const DESCRIPTION: &'static str = r#"Generate images from text prompts using AI image generation providers."#;
 
     type Args = ImageGenerateArgs;
@@ -295,7 +295,7 @@ mod tests {
 
     #[test]
     fn test_tool_definition() {
-        assert_eq!(ImageGenerateTool::NAME, "image.generate");
+        assert_eq!(ImageGenerateTool::NAME, "image_generate");
         assert!(!ImageGenerateTool::DESCRIPTION.is_empty());
     }
 

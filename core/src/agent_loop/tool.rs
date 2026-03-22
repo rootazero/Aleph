@@ -95,13 +95,34 @@ impl LoopToolRegistry {
     }
 
     /// Execute a tool by name.
+    ///
+    /// If exact match fails, tries swapping dots/underscores as a fallback,
+    /// since LLMs sometimes confuse `file_ops` with `file.ops` (or vice versa).
     pub async fn execute(&self, name: &str, input: Value) -> ToolResult {
-        match self.get(name) {
-            Some(tool) => tool.execute(input).await,
-            None => ToolResult::Error {
+        if let Some(tool) = self.get(name) {
+            return tool.execute(input).await;
+        }
+
+        // Fallback: try swapping dots ↔ underscores
+        let alt = if name.contains('.') {
+            name.replace('.', "_")
+        } else if name.contains('_') {
+            name.replace('_', ".")
+        } else {
+            return ToolResult::Error {
                 error: format!("unknown tool: {}", name),
                 retryable: false,
-            },
+            };
+        };
+
+        if let Some(tool) = self.get(&alt) {
+            tracing::debug!(original = name, resolved = %alt, "Tool name normalized");
+            return tool.execute(input).await;
+        }
+
+        ToolResult::Error {
+            error: format!("unknown tool: {}", name),
+            retryable: false,
         }
     }
 

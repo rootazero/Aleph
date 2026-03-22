@@ -124,6 +124,14 @@ pub struct CronManageArgs {
     /// Job ID (required for get/delete/enable/disable/toggle)
     #[serde(default)]
     pub job_id: Option<String>,
+
+    // ── Internal (injected by dispatcher, not LLM-visible) ────────
+    /// Source channel ID — injected by the tool dispatcher from session context.
+    /// Used to set source_channel_id on created jobs so results are delivered
+    /// back to the originating channel.
+    #[serde(default, rename = "__channel")]
+    #[schemars(skip)]
+    pub __channel: Option<String>,
 }
 
 // =============================================================================
@@ -177,7 +185,7 @@ impl CronManageTool {
 
 #[async_trait]
 impl AlephTool for CronManageTool {
-    const NAME: &'static str = "cron.manage";
+    const NAME: &'static str = "cron_manage";
     const DESCRIPTION: &'static str =
         "Manage scheduled tasks (cron jobs). Create, list, delete, enable, or disable \
          recurring or one-shot tasks. Use this when the user wants to schedule something \
@@ -215,7 +223,9 @@ impl AlephTool for CronManageTool {
                 let schedule_kind: ScheduleKind = schedule.into();
 
                 let mut job = CronJob::new(&name, &agent_id, &prompt, schedule_kind);
-                job.source_channel_id = self.source_channel_id.clone();
+                // Prefer runtime channel from dispatcher (injected via __channel),
+                // fall back to static channel set at construction time.
+                job.source_channel_id = args.__channel.or_else(|| self.source_channel_id.clone());
                 let id = service.add_job(job).await.map_err(|e| {
                     crate::error::AlephError::tool(format!("Failed to create cron job: {}", e))
                 })?;

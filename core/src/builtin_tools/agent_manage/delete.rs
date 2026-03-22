@@ -68,7 +68,7 @@ impl AgentDeleteTool {
 
 #[async_trait]
 impl AlephTool for AgentDeleteTool {
-    const NAME: &'static str = "agent.delete";
+    const NAME: &'static str = "agent_delete";
     const DESCRIPTION: &'static str =
         "Delete an agent and archive its workspace. The 'main' agent cannot be deleted. \
          If the deleted agent is bound to a channel, the binding is cleared.";
@@ -185,7 +185,7 @@ mod tests {
         let tool = AgentDeleteTool::new(registry, workspace_mgr, None);
         let def = AlephTool::definition(&tool);
 
-        assert_eq!(def.name, "agent.delete");
+        assert_eq!(def.name, "agent_delete");
         assert!(def.requires_confirmation);
         assert!(def.llm_context.is_some());
     }

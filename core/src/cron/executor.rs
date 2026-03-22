@@ -72,6 +72,9 @@ async fn execute_cron_job(
     );
     if let Some(ref ch) = snapshot.source_channel_id {
         metadata.insert("source_channel_id".to_string(), ch.clone());
+        // Also set channel_id so ExecutionEngine populates SessionContext.channel,
+        // which downstream tools (message, agent management) rely on.
+        metadata.insert("channel_id".to_string(), ch.clone());
     }
 
     let timeout_secs = snapshot

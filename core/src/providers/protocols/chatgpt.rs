@@ -99,7 +99,7 @@ impl ChatGptProtocol {
                         if let ContentBlock::ToolCall { id, name, arguments } = block {
                             items.push(InputItem::FunctionCall {
                                 call_id: id.clone(),
-                                name: name.clone(),
+                                name: crate::providers::protocols::openai::sanitize_tool_name_pub(name),
                                 arguments: serde_json::to_string(arguments).unwrap_or_default(),
                             });
                         }
@@ -160,7 +160,8 @@ impl ChatGptProtocol {
                     let desc = td.description.trim();
                     FunctionToolDef {
                         tool_type: "function".to_string(),
-                        name: td.name.clone(),
+                        // Codex API requires names matching ^[a-zA-Z0-9_-]+$
+                        name: crate::providers::protocols::openai::sanitize_tool_name_pub(&td.name),
                         description: if desc.is_empty() { None } else { Some(desc.to_string()) },
                         parameters: params,
                         strict: None, // No strict mode — let Codex handle schema naturally
@@ -222,7 +223,7 @@ impl ChatGptProtocol {
                     .unwrap_or_else(|_| serde_json::Value::String(arguments.clone()));
                 calls.push(NativeToolCall {
                     id: call_id.clone(),
-                    name: name.clone(),
+                    name: crate::providers::protocols::openai::desanitize_tool_name_pub(name),
                     arguments: args,
                 });
             }
@@ -389,7 +390,7 @@ impl ProtocolAdapter for ChatGptProtocol {
                                 debug!("Codex function_call: name={} call_id={} arguments={}", name, call_id, args);
                                 tool_calls.push(NativeToolCall {
                                     id: call_id.clone(),
-                                    name: name.clone(),
+                                    name: crate::providers::protocols::openai::desanitize_tool_name_pub(name),
                                     arguments: args,
                                 });
                             }

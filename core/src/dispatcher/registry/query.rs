@@ -186,7 +186,7 @@ impl ToolQuery {
 
         // Greedy longest-match: try joining progressively fewer words with "."
         for n in (1..=max_depth).rev() {
-            let candidate = words[..n].join(".");
+            let candidate = words[..n].join("_");
             if let Some(tool) = Self::find_best_match(&tools, &candidate) {
                 let remaining: Vec<&str> = all_words[n..].iter().map(|s| s.as_ref()).collect();
                 let arguments = if remaining.is_empty() {
@@ -225,9 +225,9 @@ impl ToolQuery {
 
     /// Check if a name is a namespace (has active tools with that prefix)
     ///
-    /// e.g. `is_namespace("session")` returns true if tools like `session.new` exist.
+    /// e.g. `is_namespace("session")` returns true if tools like `session_new` exist.
     pub async fn is_namespace(&self, name: &str) -> bool {
-        let prefix = format!("{}.", name.to_lowercase());
+        let prefix = format!("{}_", name.to_lowercase());
         let tools = self.tools.read().await;
         tools
             .values()
@@ -236,10 +236,10 @@ impl ToolQuery {
 
     /// List direct children of a namespace
     ///
-    /// e.g. `list_namespace_children("session")` returns tools named `session.new`,
-    /// `session.list`, etc., but NOT `session.sub.deep`.
+    /// e.g. `list_namespace_children("session")` returns tools named `session_new`,
+    /// `session_list`, etc.
     pub async fn list_namespace_children(&self, namespace: &str) -> Vec<UnifiedTool> {
-        let prefix = format!("{}.", namespace.to_lowercase());
+        let prefix = format!("{}_", namespace.to_lowercase());
         let tools = self.tools.read().await;
         tools
             .values()
@@ -251,9 +251,9 @@ impl ToolQuery {
                 if !name_lower.starts_with(&prefix) {
                     return false;
                 }
-                // Only direct children: no further dots after prefix
+                // Only direct children: no further underscores after prefix
                 let suffix = &name_lower[prefix.len()..];
-                !suffix.contains('.')
+                !suffix.contains('_')
             })
             .cloned()
             .collect()

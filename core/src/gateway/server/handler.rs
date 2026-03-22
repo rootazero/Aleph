@@ -256,12 +256,17 @@ async fn handle_connection(
                                     // No auth required OR already authenticated
 
                                     // --- Rate limit check ---
-                                    let peer_addr_str = peer_addr.to_string();
+                                    // Loopback exemption is based on network origin
+                                    // (peer address), not identity (device_id). For
+                                    // authenticated connections the rl_identity is the
+                                    // device_id which never looks like a loopback IP.
+                                    if !peer_addr.ip().is_loopback() {
+                                    let peer_ip_str = peer_addr.ip().to_string();
                                     let rl_identity = {
                                         let conns = ctx.connections.read().await;
                                         conns.get(&conn_id)
                                             .and_then(|s| s.device_id.clone())
-                                            .unwrap_or_else(|| peer_addr_str.clone())
+                                            .unwrap_or_else(|| peer_ip_str.clone())
                                     };
                                     let rl_scope = scope_for_method(&req.method);
                                     let rl_key = RateLimitKey::new(&rl_identity, rl_scope);
@@ -291,6 +296,7 @@ async fn handle_connection(
                                         }
                                         continue;
                                     }
+                                    } // end loopback exemption
 
                                     // Handle events.* methods specially (they need conn_id)
                                     if req.method == "events.subscribe" {

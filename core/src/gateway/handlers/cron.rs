@@ -352,9 +352,8 @@ pub async fn handle_run(request: JsonRpcRequest, cron: SharedCronService) -> Jso
 
 /// Handle cron.runs RPC request (real)
 ///
-/// Returns the execution history — placeholder since run history
-/// is not yet persisted in the JSON store.
-pub async fn handle_runs(request: JsonRpcRequest, _cron: SharedCronService) -> JsonRpcResponse {
+/// Returns the execution history from SQLite.
+pub async fn handle_runs(request: JsonRpcRequest, cron: SharedCronService) -> JsonRpcResponse {
     let job_id = match extract_str(&request, "job_id") {
         Some(id) => id,
         None => {
@@ -362,16 +361,39 @@ pub async fn handle_runs(request: JsonRpcRequest, _cron: SharedCronService) -> J
         }
     };
 
-    // Run history is not yet persisted in the JSON store.
-    // This will be implemented in the SQLite history migration (Task 21).
-    JsonRpcResponse::success(
-        request.id,
-        json!({
-            "job_id": job_id,
-            "runs": [],
-            "note": "Run history not yet available in JSON store. Coming in Task 21."
-        }),
-    )
+    let limit = match &request.params {
+        Some(Value::Object(map)) => map.get("limit").and_then(|v| v.as_u64()).unwrap_or(20) as usize,
+        _ => 20,
+    };
+
+    let service = cron.lock().await;
+    let store = service.state().store.lock().await;
+    match store.get_runs(&job_id, limit) {
+        Ok(runs) => {
+            let runs_json: Vec<Value> = runs.iter().map(|r| json!({
+                "id": r.id,
+                "job_id": r.job_id,
+                "trigger_source": r.trigger_source,
+                "status": r.status,
+                "started_at": r.started_at,
+                "ended_at": r.ended_at,
+                "duration_ms": r.duration_ms,
+                "error": r.error,
+                "error_reason": r.error_reason,
+                "delivery_status": r.delivery_status,
+                "created_at": r.created_at,
+            })).collect();
+            JsonRpcResponse::success(
+                request.id,
+                json!({ "job_id": job_id, "runs": runs_json }),
+            )
+        }
+        Err(e) => JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!("Failed to get runs: {}", e),
+        ),
+    }
 }
 
 /// Handle cron.toggle RPC request (real)

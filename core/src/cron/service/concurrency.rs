@@ -13,6 +13,7 @@ use tracing::warn;
 
 use crate::cron::clock::Clock;
 use crate::cron::config::{ExecutionResult, JobSnapshot, RunStatus, TriggerSource};
+use crate::cron::history::CronRunRecord;
 use crate::cron::store::CronStore;
 
 use super::ops::recompute_next_run_maintenance;
@@ -166,6 +167,27 @@ pub async fn phase3_writeback<C: Clock>(
 
         // Clear next_run_at_ms so maintenance recompute fills it
         job.state.next_run_at_ms = None;
+    }
+
+    // Record execution history
+    for (job_id, result) in results {
+        let record = CronRunRecord {
+            id: uuid::Uuid::new_v4().to_string(),
+            job_id: job_id.clone(),
+            trigger_source: "schedule".to_string(),
+            status: format!("{:?}", result.status).to_lowercase(),
+            started_at: result.started_at,
+            ended_at: Some(result.ended_at),
+            duration_ms: Some(result.duration_ms),
+            error: result.error.clone(),
+            error_reason: result.error_reason.as_ref().map(|r| format!("{r:?}")),
+            output_summary: None,
+            delivery_status: result.delivery_status.map(|s| format!("{s:?}").to_lowercase()),
+            created_at: clock.now_ms(),
+        };
+        if let Err(e) = guard.insert_run(&record) {
+            warn!(job_id, error = %e, "failed to record cron run history");
+        }
     }
 
     // Maintenance recompute ALL jobs

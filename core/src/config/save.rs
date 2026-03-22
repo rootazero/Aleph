@@ -33,10 +33,37 @@ impl Config {
     pub fn save_to_file<P: AsRef<Path>>(&self, path: P) -> Result<()> {
         let path = path.as_ref();
 
+        // Guard: detect embedding provider loss before writing.
+        // If the file already exists with providers but we're about to write empty,
+        // refuse the save and log a backtrace to catch the culprit.
+        if path.exists() {
+            let embed_count = self.memory.embedding.providers.len();
+            if embed_count == 0 {
+                // Check if the on-disk version has providers
+                if let Ok(existing) = fs::read_to_string(path) {
+                    if existing.contains("[[memory.embedding.providers]]") {
+                        error!(
+                            path = %path.display(),
+                            backtrace = %std::backtrace::Backtrace::force_capture(),
+                            "GUARD: save_to_file would ERASE embedding providers! \
+                             On-disk config has providers but in-memory has 0. \
+                             Aborting save to prevent data loss."
+                        );
+                        return Err(AlephError::invalid_config(
+                            "Refusing to save: would erase existing embedding providers. \
+                             This is likely a bug — please report."
+                                .to_string(),
+                        ));
+                    }
+                }
+            }
+        }
+
         debug!(
             path = %path.display(),
             providers_count = self.providers.len(),
             rules_count = self.rules.len(),
+            embedding_providers_count = self.memory.embedding.providers.len(),
             "Attempting to save config"
         );
 
@@ -185,18 +212,34 @@ impl Config {
             return self.save_to_file(&path);
         }
 
-        // Log embedding provider count when saving memory section
+        // Guard: refuse to overwrite existing embedding providers with empty
         if sections.contains(&"memory") {
             let embed_count = self.memory.embedding.providers.len();
             let active_id = &self.memory.embedding.active_provider_id;
             if embed_count == 0 {
-                // TRAP: log backtrace when saving empty providers
-                error!(
+                // Check if on-disk config has providers
+                if let Ok(existing) = fs::read_to_string(&path) {
+                    if existing.contains("[[memory.embedding.providers]]") {
+                        error!(
+                            sections = ?sections,
+                            embedding_providers_count = embed_count,
+                            active_embedding_provider = %active_id,
+                            backtrace = %std::backtrace::Backtrace::force_capture(),
+                            "GUARD: save_incremental would ERASE embedding providers! \
+                             On-disk has providers, in-memory has 0. Aborting save."
+                        );
+                        return Err(AlephError::invalid_config(
+                            "Refusing to save memory section: would erase existing \
+                             embedding providers. This is likely a bug."
+                                .to_string(),
+                        ));
+                    }
+                }
+                // No providers on disk either — just log
+                info!(
                     sections = ?sections,
-                    embedding_providers_count = embed_count,
-                    active_embedding_provider = %active_id,
-                    backtrace = %std::backtrace::Backtrace::force_capture(),
-                    "BUG TRAP: save_incremental called with EMPTY embedding providers!"
+                    embedding_providers_count = 0,
+                    "Incremental save: memory section (no embedding providers)"
                 );
             } else {
                 info!(

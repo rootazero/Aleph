@@ -53,8 +53,8 @@ impl ToolRegistrar {
 
         // Image generation tool
         let image_generate = UnifiedTool::new(
-            "builtin:generate.image",
-            "generate.image",
+            "builtin:generate_image",
+            "generate_image",
             "Generate images from text descriptions using AI models like DALL-E 3",
             ToolSource::Builtin,
         )
@@ -70,8 +70,8 @@ impl ToolRegistrar {
 
         // Speech generation tool
         let speech_generate = UnifiedTool::new(
-            "builtin:generate.speech",
-            "generate.speech",
+            "builtin:generate_speech",
+            "generate_speech",
             "Convert text to speech using AI voices",
             ToolSource::Builtin,
         )
@@ -87,8 +87,8 @@ impl ToolRegistrar {
 
         // Skill reading tools (for Progressive Disclosure pattern)
         let read_skill = UnifiedTool::new(
-            "builtin:skill.read",
-            "skill.read",
+            "builtin:skill_read",
+            "skill_read",
             "Read the instructions of an installed skill. Use this to load skill-specific guidance before executing tasks that match a skill's purpose.",
             ToolSource::Builtin,
         )
@@ -103,8 +103,8 @@ impl ToolRegistrar {
             .await;
 
         let list_skills = UnifiedTool::new(
-            "builtin:skill.list",
-            "skill.list",
+            "builtin:skill_list",
+            "skill_list",
             "List all available skills installed on the system. Use this to discover what skills are available.",
             ToolSource::Builtin,
         )
@@ -118,8 +118,8 @@ impl ToolRegistrar {
             .await;
 
         let snapshot_capture = UnifiedTool::new(
-            "builtin:snapshot.capture",
-            "snapshot.capture",
+            "builtin:snapshot_capture",
+            "snapshot_capture",
             "Capture a system snapshot with AX tree and optional vision OCR",
             ToolSource::Builtin,
         )
@@ -164,8 +164,8 @@ impl ToolRegistrar {
 
         // New session command (aligned with CLI: `aleph session new`)
         let new_cmd = UnifiedTool::new(
-            "builtin:session.new",
-            "session.new",
+            "builtin:session_new",
+            "session_new",
             "Start a new conversation session",
             ToolSource::Builtin,
         )
@@ -194,8 +194,8 @@ impl ToolRegistrar {
 
         // Cron management command
         let cron_cmd = UnifiedTool::new(
-            "builtin:cron.manage",
-            "cron.manage",
+            "builtin:cron_manage",
+            "cron_manage",
             "Manage scheduled tasks",
             ToolSource::Builtin,
         )
@@ -206,7 +206,7 @@ impl ToolRegistrar {
             .register_with_conflict_resolution(cron_cmd)
             .await;
 
-        info!("Registered 9 builtin tools (2 generate.* + 2 skill.* + snapshot.capture + switch + groupchat + session.new + cron.manage)");
+        info!("Registered 10 builtin tools (2 generate_* + 2 skill_* + snapshot_capture + switch + groupchat + session_new + new + cron_manage)");
     }
 
     /// Register MCP tools from tool info list (Flat Namespace Mode)

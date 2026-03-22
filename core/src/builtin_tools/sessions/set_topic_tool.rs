@@ -48,7 +48,7 @@ impl SessionSetTopicTool {
 
 #[async_trait]
 impl AlephTool for SessionSetTopicTool {
-    const NAME: &'static str = "session.rename";
+    const NAME: &'static str = "session_rename";
     const DESCRIPTION: &'static str =
         "Rename the current session's topic/title. Use when the user \
          asks to change, rename, or set the conversation title or topic.";
@@ -139,7 +139,7 @@ mod tests {
         let tool = SessionSetTopicTool::new(sm);
         let def = AlephTool::definition(&tool);
 
-        assert_eq!(def.name, "session.rename");
+        assert_eq!(def.name, "session_rename");
         assert!(!def.requires_confirmation);
     }
 

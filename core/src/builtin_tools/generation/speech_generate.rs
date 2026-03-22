@@ -75,7 +75,7 @@ pub struct SpeechGenerateTool {
 
 impl SpeechGenerateTool {
     /// Tool identifier
-    pub const NAME: &'static str = "speech.generate";
+    pub const NAME: &'static str = "speech_generate";
 
     /// Tool description for AI prompt
     pub const DESCRIPTION: &'static str = "Convert text to speech audio. Use this when you need to generate spoken audio from text content.";
@@ -240,7 +240,7 @@ impl Clone for SpeechGenerateTool {
 /// Implementation of AlephTool trait for SpeechGenerateTool
 #[async_trait]
 impl AlephTool for SpeechGenerateTool {
-    const NAME: &'static str = "speech.generate";
+    const NAME: &'static str = "speech_generate";
     const DESCRIPTION: &'static str = "Convert text to speech audio. Use this when you need to generate spoken audio from text content.";
 
     type Args = SpeechGenerateArgs;
@@ -371,7 +371,7 @@ mod tests {
 
     #[test]
     fn test_tool_definition() {
-        assert_eq!(SpeechGenerateTool::NAME, "speech.generate");
+        assert_eq!(SpeechGenerateTool::NAME, "speech_generate");
         assert!(!SpeechGenerateTool::DESCRIPTION.is_empty());
     }
 
@@ -496,7 +496,7 @@ mod tests {
 
         // Test definition via AlephTool trait
         let definition = AlephTool::definition(&tool);
-        assert_eq!(definition.name, "speech.generate");
+        assert_eq!(definition.name, "speech_generate");
         assert!(!definition.description.is_empty());
 
         // Test call via AlephTool trait

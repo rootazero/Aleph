@@ -339,3 +339,175 @@ fn test_atomic_write_overwrites_existing_file() {
     let loaded = Config::load_from_file(path).unwrap();
     assert_eq!(loaded.default_hotkey, "Command+B");
 }
+
+#[test]
+fn test_embedding_providers_survive_toml_roundtrip() {
+    use crate::config::types::memory::{EmbeddingProviderConfig, EmbeddingPreset};
+    use tempfile::NamedTempFile;
+
+    let mut config = Config::default();
+
+    // Add embedding providers like the user would
+    config.memory.embedding.providers = vec![
+        EmbeddingProviderConfig {
+            id: "siliconflow".to_string(),
+            name: "SiliconFlow".to_string(),
+            preset: EmbeddingPreset::SiliconFlow,
+            api_base: "https://api.siliconflow.cn/v1".to_string(),
+            api_key: None,
+            models: vec!["BAAI/bge-m3".to_string()],
+            dimensions: 1024,
+            batch_size: 32,
+            timeout_ms: 10000,
+            verified: true,
+            enabled: true,
+        },
+        EmbeddingProviderConfig {
+            id: "openai".to_string(),
+            name: "OpenAI".to_string(),
+            preset: EmbeddingPreset::OpenAi,
+            api_base: "https://api.openai.com/v1".to_string(),
+            api_key: None,
+            models: vec!["text-embedding-3-small".to_string()],
+            dimensions: 1536,
+            batch_size: 32,
+            timeout_ms: 10000,
+            verified: false,
+            enabled: true,
+        },
+    ];
+    config.memory.embedding.active_provider_id = "siliconflow".to_string();
+
+    // Save to temp file
+    let temp_file = NamedTempFile::new().unwrap();
+    let path = temp_file.path();
+    config.save_to_file(path).unwrap();
+
+    // Read the TOML to inspect
+    let toml_str = std::fs::read_to_string(path).unwrap();
+    assert!(
+        toml_str.contains("[[memory.embedding.providers]]"),
+        "TOML should contain embedding providers. Got:\n{}",
+        &toml_str[..toml_str.len().min(2000)]
+    );
+
+    // Load back
+    let loaded = Config::load_from_file(path).unwrap();
+    assert_eq!(
+        loaded.memory.embedding.providers.len(),
+        2,
+        "Should have 2 providers after TOML roundtrip"
+    );
+    assert_eq!(loaded.memory.embedding.active_provider_id, "siliconflow");
+    assert_eq!(loaded.memory.embedding.providers[0].id, "siliconflow");
+    assert_eq!(loaded.memory.embedding.providers[1].id, "openai");
+}
+
+#[test]
+fn test_embedding_survives_json_then_toml_roundtrip() {
+    // Simulates the config patcher path: Config → JSON → Config → TOML → Config
+    use crate::config::types::memory::EmbeddingProviderConfig;
+    use tempfile::NamedTempFile;
+
+    let mut config = Config::default();
+    config.memory.embedding.providers = vec![EmbeddingProviderConfig::siliconflow()];
+    config.memory.embedding.active_provider_id = "siliconflow".to_string();
+
+    // Config → JSON (like patcher step 1)
+    let json = serde_json::to_value(&config).unwrap();
+    assert!(json["memory"]["embedding"]["providers"].is_array());
+    assert_eq!(json["memory"]["embedding"]["providers"].as_array().unwrap().len(), 1);
+
+    // JSON → Config (like patcher step 6)
+    let loaded: Config = serde_json::from_value(json).unwrap();
+    assert_eq!(loaded.memory.embedding.providers.len(), 1);
+
+    // Config → TOML file (like patcher step 13: save_to_file)
+    let temp_file = NamedTempFile::new().unwrap();
+    loaded.save_to_file(temp_file.path()).unwrap();
+
+    // TOML → Config (simulates next startup load)
+    let final_config = Config::load_from_file(temp_file.path()).unwrap();
+    assert_eq!(
+        final_config.memory.embedding.providers.len(),
+        1,
+        "Embedding providers should survive Config→JSON→Config→TOML→Config roundtrip"
+    );
+    assert_eq!(final_config.memory.embedding.active_provider_id, "siliconflow");
+}
+
+#[test]
+fn test_embedding_survives_save_incremental() {
+    // Simulates: config has embedding, save_incremental(&["memory"]) is called
+    use crate::config::types::memory::EmbeddingProviderConfig;
+    use tempfile::NamedTempFile;
+
+    // Create initial config with embedding providers and save to file
+    let mut config = Config::default();
+    config.memory.embedding.providers = vec![EmbeddingProviderConfig::siliconflow()];
+    config.memory.embedding.active_provider_id = "siliconflow".to_string();
+    config.memory.enabled = true;
+
+    let temp_file = NamedTempFile::new().unwrap();
+    let path = temp_file.path();
+    config.save_to_file(path).unwrap();
+
+    // Verify file has providers
+    let content = std::fs::read_to_string(path).unwrap();
+    assert!(content.contains("[[memory.embedding.providers]]"),
+        "Initial file should have providers");
+
+    // Now modify memory config (like memory_config.update would) but keep embedding
+    config.memory.max_context_items = 20;
+
+    // Simulate save_incremental: serialize to toml::Value and extract memory section
+    let current: toml::Value = toml::Value::try_from(&config).unwrap();
+    let memory_val = current.as_table().unwrap().get("memory").unwrap();
+
+    // Verify memory section in toml::Value has embedding
+    let memory_table = memory_val.as_table().unwrap();
+    assert!(memory_table.contains_key("embedding"),
+        "Memory toml::Value should contain 'embedding' key. Keys: {:?}",
+        memory_table.keys().collect::<Vec<_>>());
+
+    let embed_table = memory_table.get("embedding").unwrap().as_table().unwrap();
+    assert!(embed_table.contains_key("providers"),
+        "Embedding should have 'providers'. Keys: {:?}",
+        embed_table.keys().collect::<Vec<_>>());
+
+    let providers = embed_table.get("providers").unwrap().as_array().unwrap();
+    assert_eq!(providers.len(), 1,
+        "Should have 1 provider in toml::Value representation");
+}
+
+#[test]
+fn test_save_to_file_guards_against_embedding_erasure() {
+    use crate::config::types::memory::EmbeddingProviderConfig;
+    use tempfile::NamedTempFile;
+
+    // Create config with embedding providers and save
+    let mut config = Config::default();
+    config.memory.embedding.providers = vec![EmbeddingProviderConfig::siliconflow()];
+    config.memory.embedding.active_provider_id = "siliconflow".to_string();
+
+    let temp_file = NamedTempFile::new().unwrap();
+    let path = temp_file.path();
+    config.save_to_file(path).unwrap();
+
+    // Verify file has providers
+    let content = std::fs::read_to_string(path).unwrap();
+    assert!(content.contains("[[memory.embedding.providers]]"));
+
+    // Now try to save a config with EMPTY providers — should be refused
+    let mut empty_config = Config::default();
+    empty_config.memory.embedding.providers = vec![];
+    empty_config.memory.embedding.active_provider_id = String::new();
+
+    let result = empty_config.save_to_file(path);
+    assert!(result.is_err(), "save_to_file should refuse to erase embedding providers");
+
+    // Verify the file was NOT overwritten
+    let content_after = std::fs::read_to_string(path).unwrap();
+    assert!(content_after.contains("[[memory.embedding.providers]]"),
+        "File should still have embedding providers after refused save");
+}

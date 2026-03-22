@@ -172,7 +172,7 @@ impl AgentCreateTool {
 
 #[async_trait]
 impl AlephTool for AgentCreateTool {
-    const NAME: &'static str = "agent.create";
+    const NAME: &'static str = "agent_create";
     const DESCRIPTION: &'static str =
         "Create a new agent with its own workspace and memory. Use this when the \
          user wants a specialized assistant (e.g., trading, coding, health). \
@@ -455,7 +455,7 @@ mod tests {
         let tool = AgentCreateTool::new(registry, workspace_mgr);
         let def = AlephTool::definition(&tool);
 
-        assert_eq!(def.name, "agent.create");
+        assert_eq!(def.name, "agent_create");
         assert!(!def.requires_confirmation);
         assert!(def.llm_context.is_some());
     }

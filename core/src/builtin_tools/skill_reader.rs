@@ -86,7 +86,7 @@ pub struct ReadSkillTool {
 
 impl ReadSkillTool {
     /// Tool identifier
-    pub const NAME: &'static str = "skill.read";
+    pub const NAME: &'static str = "skill_read";
 
     /// Tool description for AI prompt
     pub const DESCRIPTION: &'static str = r#"Read the instructions of an installed skill.
@@ -332,7 +332,7 @@ impl Clone for ReadSkillTool {
 /// Implementation of AlephTool trait for ReadSkillTool
 #[async_trait]
 impl AlephTool for ReadSkillTool {
-    const NAME: &'static str = "skill.read";
+    const NAME: &'static str = "skill_read";
     const DESCRIPTION: &'static str = r#"Read the instructions of an installed skill.
 
 Use this tool when you need to execute a task that matches a skill's purpose.
@@ -416,7 +416,7 @@ pub struct ListSkillsTool {
 
 impl ListSkillsTool {
     /// Tool identifier
-    pub const NAME: &'static str = "skill.list";
+    pub const NAME: &'static str = "skill_list";
 
     /// Tool description for AI prompt
     pub const DESCRIPTION: &'static str = r#"List all available skills installed on the system.
@@ -633,7 +633,7 @@ impl Clone for ListSkillsTool {
 /// Implementation of AlephTool trait for ListSkillsTool
 #[async_trait]
 impl AlephTool for ListSkillsTool {
-    const NAME: &'static str = "skill.list";
+    const NAME: &'static str = "skill_list";
     const DESCRIPTION: &'static str = r#"List all available skills installed on the system.
 
 Use this tool to discover what skills are available before using skill.read.
