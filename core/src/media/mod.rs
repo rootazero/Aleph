@@ -23,7 +23,9 @@ pub mod pipeline;
 pub mod policy;
 pub mod processors;
 pub mod provider;
+pub mod transcription;
 pub mod types;
+pub mod whisper;
 
 pub use detect::{detect_by_extension, detect_by_magic, detect_from_path};
 pub use error::MediaError;
