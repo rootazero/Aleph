@@ -331,6 +331,78 @@ impl InboundMessageRouter {
             }
         }
 
+        // Built-in /voice command — direct handler, no LLM needed
+        {
+            let trimmed = ctx.message.text.trim();
+            let lower = trimmed.to_lowercase();
+            let stripped = strip_bot_mention(&lower);
+            if stripped.starts_with("/voice") {
+                let args = stripped.strip_prefix("/voice").unwrap_or("").trim();
+                let (enabled, reply) = match args {
+                    "on" | "open" | "开" | "开启" => (true, "Voice mode enabled. I'll reply with voice from now on."),
+                    "off" | "close" | "关" | "关闭" => (false, "Voice mode disabled. Switching back to text replies."),
+                    "" | "status" | "状态" => {
+                        let state = self.channel_registry.get_voice_state("default").await;
+                        let ch_state = self.channel_registry.get_voice_state(ctx.reply_route.channel_id.as_str()).await;
+                        let is_on = state.is_active() || ch_state.is_active();
+                        let status = if is_on { "ON" } else { "OFF" };
+                        // Send status as text reply
+                        let reply_msg = super::channel::OutboundMessage {
+                            conversation_id: ctx.reply_route.conversation_id.clone(),
+                            text: format!("Voice mode: {}", status),
+                            attachments: vec![],
+                            reply_to: ctx.reply_route.reply_to.clone(),
+                            inline_keyboard: None,
+                            metadata: Default::default(),
+                        };
+                        let _ = self.channel_registry.send(&ctx.reply_route.channel_id, reply_msg).await;
+                        return Ok(());
+                    }
+                    _ => (true, "Voice mode enabled."),
+                };
+                self.channel_registry.update_voice_state("default", |s| {
+                    s.enabled = enabled;
+                    s.consecutive_failures = 0;
+                }).await;
+                // Also set for the specific channel
+                self.channel_registry.update_voice_state(ctx.reply_route.channel_id.as_str(), |s| {
+                    s.enabled = enabled;
+                    s.consecutive_failures = 0;
+                }).await;
+                // Send confirmation — as voice if enabling, as text if disabling
+                if enabled {
+                    // Try voice reply for confirmation
+                    if let (Some(ref gen_reg), Some(ref gen_cfg)) = (&self.generation_registry, &self.generation_config) {
+                        let voice_state = self.channel_registry.get_voice_state("default").await;
+                        let cfg = gen_cfg.read().await.clone();
+                        if let Some(attachment) = super::voice::outbound::generate_tts(reply, &voice_state, gen_reg, &cfg).await {
+                            let voice_msg = super::channel::OutboundMessage {
+                                conversation_id: ctx.reply_route.conversation_id.clone(),
+                                text: String::new(),
+                                attachments: vec![attachment],
+                                reply_to: ctx.reply_route.reply_to.clone(),
+                                inline_keyboard: None,
+                                metadata: Default::default(),
+                            };
+                            let _ = self.channel_registry.send(&ctx.reply_route.channel_id, voice_msg).await;
+                            return Ok(());
+                        }
+                    }
+                }
+                // Fallback: text reply
+                let reply_msg = super::channel::OutboundMessage {
+                    conversation_id: ctx.reply_route.conversation_id.clone(),
+                    text: reply.to_string(),
+                    attachments: vec![],
+                    reply_to: ctx.reply_route.reply_to.clone(),
+                    inline_keyboard: None,
+                    metadata: Default::default(),
+                };
+                let _ = self.channel_registry.send(&ctx.reply_route.channel_id, reply_msg).await;
+                return Ok(());
+            }
+        }
+
         // Unified slash command interception
         if ctx.message.text.trim().starts_with('/') {
             let slash_text = strip_bot_mention(ctx.message.text.trim());
