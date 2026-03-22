@@ -298,6 +298,7 @@ pub fn create_channel_from_config(id: &str, channel_type: &str, config: Value) -
     use crate::gateway::interfaces::webhook::{WebhookChannel, WebhookChannelConfig as WebhookConfig};
     use crate::gateway::interfaces::xmpp::{XmppChannel, XmppConfig};
     use crate::gateway::interfaces::nostr::{NostrChannel, NostrConfig};
+    use crate::gateway::interfaces::feishu::{FeishuChannel, FeishuConfig};
 
     match channel_type {
         "telegram" => serde_json::from_value::<TelegramConfig>(config).ok()
@@ -324,6 +325,8 @@ pub fn create_channel_from_config(id: &str, channel_type: &str, config: Value) -
             .map(|cfg| Box::new(XmppChannel::new(id, cfg)) as _),
         "nostr" => serde_json::from_value::<NostrConfig>(config).ok()
             .map(|cfg| Box::new(NostrChannel::new(id, cfg)) as _),
+        "feishu" => serde_json::from_value::<FeishuConfig>(config).ok()
+            .map(|cfg| Box::new(FeishuChannel::new(id, cfg)) as _),
         _ => None,
     }
 }
