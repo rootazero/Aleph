@@ -562,6 +562,60 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         // Wire session manager + event bus for auto-topic generation on first message
         engine = engine.with_session_topic_support(session_manager.clone(), event_bus.clone());
 
+        // Wire MediaProcessor for multimodal attachment handling (images, audio)
+        {
+            use alephcore::media::processor::MediaProcessor;
+            use alephcore::media::whisper::WhisperTranscription;
+            use alephcore::media::transcription::TranscriptionService;
+
+            // Try to get an OpenAI-compatible API key for Whisper transcription.
+            // Look for "openai" provider first, then any provider with openai protocol.
+            let transcription: Option<Box<dyn TranscriptionService>> = {
+                let openai_cfg = app_config.providers.get("openai")
+                    .or_else(|| {
+                        app_config.providers.values().find(|cfg| {
+                            cfg.enabled
+                                && cfg.protocol.as_deref() == Some("openai")
+                                && cfg.api_key.as_ref().map(|k| !k.is_empty()).unwrap_or(false)
+                        })
+                    });
+
+                if let Some(cfg) = openai_cfg {
+                    if let Some(ref key) = cfg.api_key {
+                        if !key.is_empty() {
+                            let whisper = WhisperTranscription::new(
+                                key.clone(),
+                                cfg.base_url.clone(),
+                                None, // use default whisper model
+                            );
+                            if !daemon {
+                                println!("  MediaProcessor: Whisper transcription enabled");
+                            }
+                            Some(Box::new(whisper))
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            };
+
+            // VisionPipeline is not currently created at startup — pass None for now.
+            let vision: Option<Arc<alephcore::vision::VisionPipeline>> = None;
+
+            let media_processor = Arc::new(MediaProcessor::new(transcription, vision));
+            // Clean up stale cache entries from previous runs
+            media_processor.cleanup_stale();
+
+            if !daemon {
+                println!("  MediaProcessor initialized");
+            }
+            engine = engine.with_media_processor(media_processor);
+        }
+
         let engine = Arc::new(engine);
 
         if !app_config.agents.list.is_empty() {
