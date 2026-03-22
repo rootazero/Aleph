@@ -35,6 +35,7 @@ use crate::gateway::channel::{
     ChannelId, ChannelInfo, ChannelResult, ChannelState, ChannelStatus, ConversationId,
     InboundMessage, InlineKeyboard, MessageId, OutboundMessage, SendResult, UserId,
 };
+use crate::gateway::formatter::{MessageFormatter, MarkupFormat};
 use async_trait::async_trait;
 use chrono::{TimeZone, Utc};
 use tokio::sync::{mpsc, oneshot};
@@ -108,7 +109,7 @@ impl TelegramChannel {
             images: true,
             audio: true,
             video: true,
-            reactions: false, // Telegram reactions are limited
+            reactions: true,
             replies: true,
             editing: true,
             deletion: true,
@@ -551,9 +552,14 @@ impl Channel for TelegramChannel {
             let _ = bot.send_chat_action(chat_id, teloxide::types::ChatAction::Typing).await;
         }
 
+        // Convert standard Markdown to Telegram HTML for reliable rendering.
+        // HTML mode handles **bold**, *italic*, `code`, ```blocks```, [links](url)
+        // without the fragile escaping issues of Telegram's legacy Markdown or MarkdownV2.
+        let html_text = MessageFormatter::format(&message.text, MarkupFormat::TelegramHtml);
+
         // Helper to build a SendMessage request with optional reply-to and inline keyboard
-        let build_request = |parse_mode: Option<ParseMode>| {
-            let mut req = bot.send_message(chat_id, &message.text);
+        let build_request = |parse_mode: Option<ParseMode>, text: &str| {
+            let mut req = bot.send_message(chat_id, text);
             if let Some(mode) = parse_mode {
                 req = req.parse_mode(mode);
             }
@@ -577,18 +583,15 @@ impl Channel for TelegramChannel {
             req
         };
 
-        // Try Markdown (legacy) first — supports ```code blocks```, *bold*, _italic_.
-        // MarkdownV2 requires escaping too many chars and almost always fails with LLM output.
-        // Fall back to plain text only if Markdown also fails.
-        #[allow(deprecated)]
-        let sent = match build_request(Some(ParseMode::Markdown)).await {
+        // Try HTML first, fall back to plain text if it fails.
+        let sent = match build_request(Some(ParseMode::Html), &html_text).await {
             Ok(msg) => msg,
-            Err(md_err) => {
+            Err(html_err) => {
                 tracing::warn!(
-                    "Markdown send failed, retrying as plain text: {}",
-                    md_err
+                    "HTML send failed, retrying as plain text: {}",
+                    html_err
                 );
-                build_request(None)
+                build_request(None, &message.text)
                     .await
                     .map_err(|e| ChannelError::SendFailed(format!("Telegram send error: {}", e)))?
             }
@@ -623,6 +626,47 @@ impl Channel for TelegramChannel {
             .map_err(|e| ChannelError::Internal(format!("Failed to send typing: {}", e)))?;
 
         Ok(())
+    }
+
+    async fn react(&self, conversation_id: &ConversationId, message_id: &MessageId, reaction: &str) -> ChannelResult<()> {
+        let bot = self
+            .bot
+            .as_ref()
+            .ok_or_else(|| ChannelError::NotConnected("Bot not initialized".to_string()))?;
+
+        let chat_id = ChatId(
+            conversation_id
+                .as_str()
+                .parse::<i64>()
+                .map_err(|e| ChannelError::Internal(format!("Invalid chat ID: {}", e)))?,
+        );
+
+        let msg_id = teloxide::types::MessageId(
+            message_id
+                .as_str()
+                .parse::<i32>()
+                .map_err(|e| ChannelError::Internal(format!("Invalid message ID: {}", e)))?,
+        );
+
+        let reactions = if reaction.is_empty() {
+            vec![] // Remove reactions
+        } else {
+            vec![teloxide::types::ReactionType::Emoji {
+                emoji: reaction.to_string(),
+            }]
+        };
+
+        // Reactions are non-critical UX — swallow errors silently
+        match bot.set_message_reaction(chat_id, msg_id).reaction(reactions).await {
+            Ok(_) => {
+                tracing::debug!("Reaction '{}' set on message {}", reaction, message_id.as_str());
+                Ok(())
+            }
+            Err(e) => {
+                tracing::debug!("Failed to set reaction (non-critical): {}", e);
+                Ok(()) // Swallow — reactions are best-effort
+            }
+        }
     }
 
     async fn edit(&self, conversation_id: &ConversationId, message_id: &MessageId, new_text: &str) -> ChannelResult<()> {
@@ -716,8 +760,12 @@ impl TelegramChannel {
         })?);
 
         if let Some(text) = new_text {
+            // Convert Markdown to Telegram HTML for consistent rendering
+            let html_text = MessageFormatter::format(text, MarkupFormat::TelegramHtml);
+
             // Edit text (and optionally keyboard)
-            let mut request = bot.edit_message_text(chat, msg_id, text);
+            let mut request = bot.edit_message_text(chat, msg_id, &html_text)
+                .parse_mode(ParseMode::Html);
 
             // Set keyboard or remove it
             if let Some(kb) = keyboard {
