@@ -101,18 +101,17 @@ impl InboundMessageRouter {
             }
         };
 
-        // Helper closure: optionally attach voice deps to a ReplyEmitter
+        // Always attach voice deps so that mid-request voice_mode_set
+        // tool calls can take effect immediately (dynamic should_voice check)
         let attach_voice = |emitter: ReplyEmitter| -> ReplyEmitter {
-            if voice_enabled {
-                if let (Some(gen_reg), Some(gen_cfg)) =
-                    (self.generation_registry.as_ref(), self.generation_config.as_ref())
-                {
-                    return emitter.with_voice(
-                        voice_state.clone(),
-                        gen_reg.clone(),
-                        gen_cfg.clone(),
-                    );
-                }
+            if let (Some(gen_reg), Some(gen_cfg)) =
+                (self.generation_registry.as_ref(), self.generation_config.as_ref())
+            {
+                return emitter.with_voice(
+                    voice_state.clone(),
+                    gen_reg.clone(),
+                    gen_cfg.clone(),
+                );
             }
             emitter
         };
