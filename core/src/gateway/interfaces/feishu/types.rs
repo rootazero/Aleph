@@ -4,6 +4,7 @@ use serde::Deserialize;
 
 fn default_domain() -> String { "feishu".to_string() }
 fn default_true() -> bool { true }
+fn default_render_mode() -> String { "auto".to_string() }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct FeishuConfig {
@@ -18,6 +19,12 @@ pub struct FeishuConfig {
     pub groups_allowed: bool,
     #[serde(default = "default_true")]
     pub require_mention: bool,
+    #[serde(default = "default_true")]
+    pub streaming: bool,
+    #[serde(default = "default_render_mode")]
+    pub render_mode: String,
+    #[serde(default = "default_true")]
+    pub typing_indicator: bool,
 }
 
 impl FeishuConfig {
@@ -211,6 +218,42 @@ pub struct TextContent {
     pub text: Option<String>,
 }
 
+// ── Reaction API Response ──
+
+#[derive(Debug, Deserialize)]
+pub struct ReactionResponse {
+    pub code: i32,
+    pub msg: String,
+    pub data: Option<ReactionData>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ReactionData {
+    pub reaction_id: Option<String>,
+}
+
+// ── Card Kit API Response ──
+
+#[derive(Debug, Deserialize)]
+pub struct CardCreateResponse {
+    pub code: i32,
+    pub msg: String,
+    pub data: Option<CardCreateData>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CardCreateData {
+    pub card_id: Option<String>,
+}
+
+// ── Typing State ──
+
+#[derive(Debug, Clone)]
+pub struct TypingState {
+    pub message_id: String,
+    pub reaction_id: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -225,6 +268,9 @@ mod tests {
             dm_allowed: true,
             groups_allowed: false,
             require_mention: true,
+            streaming: true,
+            render_mode: "auto".into(),
+            typing_indicator: true,
         };
         assert_eq!(config.base_url(), "https://open.feishu.cn");
     }
@@ -239,6 +285,9 @@ mod tests {
             dm_allowed: true,
             groups_allowed: false,
             require_mention: true,
+            streaming: true,
+            render_mode: "auto".into(),
+            typing_indicator: true,
         };
         assert_eq!(config.base_url(), "https://open.larksuite.com");
     }
@@ -253,6 +302,9 @@ mod tests {
             dm_allowed: true,
             groups_allowed: false,
             require_mention: true,
+            streaming: true,
+            render_mode: "auto".into(),
+            typing_indicator: true,
         };
         assert_eq!(config.base_url(), "https://my.feishu.internal");
     }
@@ -288,5 +340,32 @@ mod tests {
         assert!(config.groups_allowed);
         assert!(!config.require_mention);
         assert_eq!(config.bot_name.as_deref(), Some("MyBot"));
+    }
+
+    #[test]
+    fn test_config_streaming_defaults() {
+        let json = serde_json::json!({
+            "app_id": "cli_xxx",
+            "app_secret": "secret"
+        });
+        let config: FeishuConfig = serde_json::from_value(json).unwrap();
+        assert!(config.streaming);
+        assert_eq!(config.render_mode, "auto");
+        assert!(config.typing_indicator);
+    }
+
+    #[test]
+    fn test_config_streaming_overrides() {
+        let json = serde_json::json!({
+            "app_id": "cli_xxx",
+            "app_secret": "secret",
+            "streaming": false,
+            "render_mode": "card",
+            "typing_indicator": false
+        });
+        let config: FeishuConfig = serde_json::from_value(json).unwrap();
+        assert!(!config.streaming);
+        assert_eq!(config.render_mode, "card");
+        assert!(!config.typing_indicator);
     }
 }
