@@ -60,6 +60,8 @@ pub struct RunRequest {
     pub timeout_secs: Option<u64>,
     /// Additional metadata
     pub metadata: HashMap<String, String>,
+    /// Attachments from inbound message (images, audio, documents)
+    pub attachments: Vec<crate::gateway::channel::Attachment>,
 }
 
 /// Run state

@@ -177,6 +177,49 @@ impl EventEmitter for GatewayEventEmitter {
             }
         }
 
+        // In instant mode, flush any buffered content on RunComplete
+        if self.output_mode == OutputMode::Instant {
+            if let StreamEvent::RunComplete { ref run_id, ref summary, .. } = event {
+                let mut buffer = self.instant_buffer.lock().await;
+                if !buffer.is_empty() {
+                    let buffered = std::mem::take(&mut *buffer);
+                    drop(buffer);
+                    let flush_event = StreamEvent::ResponseChunk {
+                        run_id: run_id.clone(),
+                        seq: self.next_seq(),
+                        content: buffered,
+                        chunk_index: 0,
+                        is_final: true,
+                        is_intermediate: false,
+                    };
+                    let flush_value = serde_json::to_value(&flush_event)?;
+                    let flush_notification =
+                        JsonRpcRequest::notification(event_method(&flush_event), Some(flush_value));
+                    let flush_json = serde_json::to_string(&flush_notification)?;
+                    self.event_bus.publish(flush_json);
+                } else if let Some(ref final_response) = summary.final_response {
+                    // Fallback: buffer was empty (race with fire-and-forget emit),
+                    // use final_response from summary
+                    if !final_response.is_empty() {
+                        drop(buffer);
+                        let fallback_event = StreamEvent::ResponseChunk {
+                            run_id: run_id.clone(),
+                            seq: self.next_seq(),
+                            content: final_response.clone(),
+                            chunk_index: 0,
+                            is_final: true,
+                            is_intermediate: false,
+                        };
+                        let fb_value = serde_json::to_value(&fallback_event)?;
+                        let fb_notification =
+                            JsonRpcRequest::notification(event_method(&fallback_event), Some(fb_value));
+                        let fb_json = serde_json::to_string(&fb_notification)?;
+                        self.event_bus.publish(fb_json);
+                    }
+                }
+            }
+        }
+
         // Default: broadcast immediately (typewriter mode or non-ResponseChunk events)
         let event_value = serde_json::to_value(&event)?;
         let notification = JsonRpcRequest::notification(event_method(&event), Some(event_value));

@@ -150,14 +150,6 @@ fn runtime_to_kind(runtime: &str) -> PluginKind {
     }
 }
 
-fn runtime_to_aleph_runtime(runtime: &str) -> AlephRuntime {
-    match runtime {
-        "wasm" => AlephRuntime::Wasm,
-        "mcp" => AlephRuntime::Mcp,
-        _ => AlephRuntime::Static,
-    }
-}
-
 fn default_entry_for_kind(kind: PluginKind) -> String {
     match kind {
         PluginKind::Wasm => "plugin.wasm".to_string(),

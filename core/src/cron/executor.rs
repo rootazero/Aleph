@@ -87,6 +87,7 @@ async fn execute_cron_job(
         session_key,
         timeout_secs,
         metadata,
+        attachments: Vec::new(),
     };
 
     let emitter: Arc<dyn crate::gateway::event_emitter::EventEmitter + Send + Sync> =

@@ -398,7 +398,7 @@ impl InboundMessageRouter {
     ) -> super::channel::InlineKeyboard {
         use super::channel::{InlineButton, InlineKeyboard};
 
-        let prefix = format!("{}.", namespace);
+        let prefix = format!("{}_", namespace);
         // Build buttons: 2 per row for compact layout
         let buttons: Vec<InlineButton> = children
             .iter()

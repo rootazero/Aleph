@@ -21,10 +21,6 @@ impl MacOSPim {
         }
     }
 
-    /// Create with a custom bridge instance.
-    pub fn with_bridge(bridge: SwiftBridge) -> Self {
-        Self { bridge }
-    }
 }
 
 #[async_trait]

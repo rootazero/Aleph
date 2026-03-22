@@ -56,6 +56,7 @@ impl AgentLoopBridge {
             session_key: SessionKey::task("main", "a2a", task_id),
             timeout_secs: None,
             metadata: HashMap::new(),
+            attachments: Vec::new(),
         }
     }
 

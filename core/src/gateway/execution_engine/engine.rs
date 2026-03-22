@@ -11,7 +11,7 @@ use crate::sync_primitives::{AtomicU32, AtomicU64};
 use crate::sync_primitives::Arc;
 
 use tokio::sync::{mpsc, RwLock};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use super::{ActiveRun, ExecutionEngineConfig, ExecutionError, RunRequest, RunState, RunStatus};
 use crate::gateway::agent_instance::{AgentInstance, AgentState, MessageRole};
@@ -49,6 +49,10 @@ pub struct ExecutionEngine<P: ThinkerProviderRegistry + 'static, R: ToolRegistry
     pub(super) global_tool_permissions: crate::config::types::policies::ToolPermissionsConfig,
     /// Session compactor for hierarchical session summarization
     pub(super) session_compactor: Option<Arc<crate::memory::session_compactor::SessionCompactor>>,
+    /// Session manager for auto-topic generation
+    pub(super) session_manager: Option<Arc<crate::gateway::SessionManager>>,
+    /// Event bus for broadcasting session updates
+    pub(super) event_bus: Option<Arc<crate::gateway::event_bus::GatewayEventBus>>,
 }
 
 impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionEngine<P, R> {
@@ -73,6 +77,8 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             memory_context_provider: None,
             global_tool_permissions: Default::default(),
             session_compactor: None,
+            session_manager: None,
+            event_bus: None,
         }
     }
 
@@ -115,6 +121,17 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         permissions: crate::config::types::policies::ToolPermissionsConfig,
     ) -> Self {
         self.global_tool_permissions = permissions;
+        self
+    }
+
+    /// Set session manager and event bus for auto-topic generation.
+    pub fn with_session_topic_support(
+        mut self,
+        session_manager: Arc<crate::gateway::SessionManager>,
+        event_bus: Arc<crate::gateway::event_bus::GatewayEventBus>,
+    ) -> Self {
+        self.session_manager = Some(session_manager);
+        self.event_bus = Some(event_bus);
         self
     }
 
@@ -217,6 +234,15 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
 
         // Ensure session exists in memory + SQLite before adding messages
         agent.ensure_session(&request.session_key).await;
+
+        // Check if this is the first real user message (for auto-topic generation).
+        // Slash commands routed via fast-path don't count — they bypass
+        // add_message entirely, so history stays empty for the next real message.
+        let is_first_message = agent
+            .get_history(&request.session_key, Some(1))
+            .await
+            .is_empty()
+            && !request.metadata.contains_key(SLASH_COMMAND_MODE_KEY);
 
         // Store user message in session
         agent
@@ -383,6 +409,64 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                         session_key: request.session_key.to_key_string(),
                     })
                     .await;
+
+                // Auto-generate session topic on first real message
+                if is_first_message {
+                    if let (Some(sm), Some(eb)) = (self.session_manager.clone(), self.event_bus.clone()) {
+                        let topic_provider = self.provider_registry
+                            .get("haiku")
+                            .unwrap_or_else(|| self.provider_registry.default_provider());
+                        let topic_session_key = request.session_key.clone();
+                        let topic_message = request.input.clone();
+                        tokio::spawn(async move {
+                            use crate::providers::adapter::RequestPayload;
+                            use crate::providers::message::UnifiedMessage;
+
+                            let prompt = format!(
+                                "Generate a concise topic title (5-10 characters, same language as the message) \
+                                 for a conversation that starts with: {}",
+                                topic_message
+                            );
+                            let messages = vec![UnifiedMessage::user(&prompt)];
+                            let payload = RequestPayload {
+                                messages: &messages,
+                                system_prompt: Some("You are a title generator. Output ONLY the title, nothing else."),
+                                tools: None,
+                                think_level: None,
+                                temperature: Some(0.3),
+                                max_tokens: Some(30),
+                            };
+
+                            match topic_provider.process(payload).await {
+                                Ok(resp) => {
+                                    let topic_text = resp.text_content().trim().to_string();
+                                    if !topic_text.is_empty() {
+                                        if let Err(e) = sm.set_topic(&topic_session_key, &topic_text).await {
+                                            warn!(error = %e, "Failed to set session topic");
+                                        } else {
+                                            let event_json = serde_json::json!({
+                                                "method": "stream.session_updated",
+                                                "params": {
+                                                    "session_key": topic_session_key.to_key_string(),
+                                                    "topic": topic_text,
+                                                }
+                                            });
+                                            eb.publish(event_json.to_string());
+                                            debug!(
+                                                session_key = %topic_session_key.to_key_string(),
+                                                topic = %topic_text,
+                                                "Auto-generated session topic"
+                                            );
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    warn!(error = %e, "Topic generation failed");
+                                }
+                            }
+                        });
+                    }
+                }
 
                 // Async write to memory system (Layer 1)
                 if let Some(ref mb) = self.memory_backend {

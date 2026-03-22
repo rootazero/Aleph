@@ -303,6 +303,7 @@ impl SessionsSendTool {
                 Some(300) // Default 5 min for fire-and-forget
             },
             metadata: HashMap::new(),
+            attachments: Vec::new(),
         };
 
         // Get execution adapter

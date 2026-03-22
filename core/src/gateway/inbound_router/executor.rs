@@ -133,6 +133,7 @@ impl InboundMessageRouter {
             session_key: ctx.session_key.clone(),
             timeout_secs: None,
             metadata,
+            attachments: ctx.message.attachments.clone(),
         };
 
         let label = if is_slash { "slash command for agent" } else { "agent" };

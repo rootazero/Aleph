@@ -172,6 +172,7 @@ mod tests {
             session_key: SessionKey::main("test"),
             timeout_secs: None,
             metadata: HashMap::new(),
+            attachments: Vec::new(),
         };
 
         let result = adapter.execute(request, agent, emitter).await;

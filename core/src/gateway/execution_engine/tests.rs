@@ -65,6 +65,7 @@ async fn test_simple_execution_engine_basic() {
         session_key: SessionKey::main("test"),
         timeout_secs: None,
         metadata: HashMap::new(),
+        attachments: Vec::new(),
     };
 
     let result = engine.execute(request, agent, emitter.clone()).await;
@@ -104,6 +105,7 @@ async fn test_simple_execution_engine_run() {
         session_key: SessionKey::main("test-simple"),
         timeout_secs: Some(5),
         metadata: HashMap::new(),
+        attachments: Vec::new(),
     };
 
     // This should succeed and complete quickly

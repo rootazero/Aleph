@@ -205,11 +205,23 @@ impl Config {
     /// 3. Only copy specified sections from current to existing
     /// 4. Write back with atomic operation
     pub fn save_incremental(&self, sections: &[&str]) -> Result<()> {
-        let path = Self::default_path();
+        self.save_incremental_to_file(Self::default_path(), sections)
+    }
+
+    /// Save only specific sections to a specific config file path (incremental update)
+    ///
+    /// Same as `save_incremental` but allows specifying a custom file path.
+    /// Used by ConfigPatcher which may operate on a non-default config path.
+    pub fn save_incremental_to_file<P: AsRef<Path>>(
+        &self,
+        path: P,
+        sections: &[&str],
+    ) -> Result<()> {
+        let path = path.as_ref();
 
         // If file doesn't exist, do a full save
         if !path.exists() {
-            return self.save_to_file(&path);
+            return self.save_to_file(path);
         }
 
         // Guard: refuse to overwrite existing embedding providers with empty
@@ -218,7 +230,7 @@ impl Config {
             let active_id = &self.memory.embedding.active_provider_id;
             if embed_count == 0 {
                 // Check if on-disk config has providers
-                if let Ok(existing) = fs::read_to_string(&path) {
+                if let Ok(existing) = fs::read_to_string(path) {
                     if existing.contains("[[memory.embedding.providers]]") {
                         error!(
                             sections = ?sections,
@@ -257,7 +269,7 @@ impl Config {
         }
 
         // Read existing file
-        let existing_contents = fs::read_to_string(&path).map_err(|e| {
+        let existing_contents = fs::read_to_string(path).map_err(|e| {
             AlephError::invalid_config(format!(
                 "Failed to read config for incremental save: {}",
                 e
@@ -358,7 +370,7 @@ impl Config {
         }
 
         // Atomic rename
-        fs::rename(&temp_path, &path).map_err(|e| {
+        fs::rename(&temp_path, path).map_err(|e| {
             let _ = fs::remove_file(&temp_path);
             AlephError::invalid_config(format!("Failed to rename temp config: {}", e))
         })?;
@@ -367,10 +379,10 @@ impl Config {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            if let Ok(metadata) = fs::metadata(&path) {
+            if let Ok(metadata) = fs::metadata(path) {
                 let mut perms = metadata.permissions();
                 perms.set_mode(0o600);
-                let _ = fs::set_permissions(&path, perms);
+                let _ = fs::set_permissions(path, perms);
             }
         }
 

@@ -1,7 +1,7 @@
 //! AgentEnv CRUD, channel active agent, and maintenance operations
 
 use chrono::{DateTime, Utc};
-use rusqlite::{params, OptionalExtension};
+use rusqlite::params;
 use std::collections::HashMap;
 use tracing::{debug, info};
 

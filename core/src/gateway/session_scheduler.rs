@@ -211,6 +211,7 @@ impl SessionScheduler {
             session_key: enriched.merged.primary_context.session_key.clone(),
             timeout_secs: None,
             metadata,
+            attachments: ctx.message.attachments.clone(),
         };
 
         info!(
@@ -426,6 +427,7 @@ async fn execute_next(
         session_key: enriched.merged.primary_context.session_key.clone(),
         timeout_secs: None,
         metadata,
+        attachments: ctx.message.attachments.clone(),
     };
 
     info!(

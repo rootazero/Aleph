@@ -241,11 +241,32 @@ impl ConfigPatcher {
             }
         }
 
-        // 13. Write lock -> replace config -> save to the patcher's config path
+        // 13. Write lock -> re-apply patch on latest config -> save incrementally
+        //
+        // Re-read the config under write lock to avoid TOCTOU: between step 2
+        // (read snapshot) and now, another handler may have modified unrelated
+        // sections (e.g. embedding providers). By re-applying the patch on the
+        // latest config, we only mutate the targeted section and preserve
+        // concurrent changes to other sections.
         {
             let mut config = self.config.write().await;
-            *config = new_config;
-            config.save_to_file(&self.config_path)?;
+            let latest_json = serde_json::to_value(&*config).map_err(|e| {
+                AlephError::invalid_config(format!(
+                    "Failed to serialize latest config to JSON: {}",
+                    e
+                ))
+            })?;
+            let mut re_patched = latest_json;
+            set_nested_value(&mut re_patched, &request.path, &request.patch)?;
+            let final_config: Config =
+                serde_json::from_value(re_patched).map_err(|e| {
+                    AlephError::invalid_config(format!(
+                        "Re-patched config failed deserialization: {}",
+                        e
+                    ))
+                })?;
+            *config = final_config;
+            config.save_incremental_to_file(&self.config_path, &[&top_section])?;
         }
 
         // 14. Update mtime
