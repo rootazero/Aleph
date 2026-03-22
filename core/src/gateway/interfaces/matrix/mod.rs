@@ -240,7 +240,7 @@ impl Channel for MatrixChannel {
         ))
     }
 
-    async fn react(&self, message_id: &MessageId, reaction: &str) -> ChannelResult<()> {
+    async fn react(&self, _conversation_id: &ConversationId, message_id: &MessageId, reaction: &str) -> ChannelResult<()> {
         // Matrix supports reactions via m.reaction relation, but we need the room_id.
         let _ = (message_id, reaction);
         Err(ChannelError::UnsupportedFeature(

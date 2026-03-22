@@ -35,7 +35,7 @@ pub use message_ops::{NostrEvent, NostrMessageOps};
 
 use crate::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
-    ChannelResult, ChannelState, ChannelStatus, MessageId, OutboundMessage,
+    ChannelResult, ChannelState, ChannelStatus, ConversationId, MessageId, OutboundMessage,
     SendResult,
 };
 use async_trait::async_trait;
@@ -216,7 +216,7 @@ impl Channel for NostrChannel {
 
     }
 
-    async fn react(&self, message_id: &MessageId, reaction: &str) -> ChannelResult<()> {
+    async fn react(&self, _conversation_id: &ConversationId, message_id: &MessageId, reaction: &str) -> ChannelResult<()> {
         let write_tx = self
             .write_tx
             .as_ref()

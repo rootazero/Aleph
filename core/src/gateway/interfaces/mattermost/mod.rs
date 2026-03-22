@@ -285,7 +285,7 @@ impl Channel for MattermostChannel {
 
     }
 
-    async fn react(&self, message_id: &MessageId, reaction: &str) -> ChannelResult<()> {
+    async fn react(&self, _conversation_id: &ConversationId, message_id: &MessageId, reaction: &str) -> ChannelResult<()> {
         // Mattermost reaction: POST /api/v4/reactions
         let server = self.config.server_url_trimmed().to_string();
         let url = format!("{server}/api/v4/reactions");

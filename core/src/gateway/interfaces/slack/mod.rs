@@ -220,7 +220,7 @@ impl Channel for SlackChannel {
 
     }
 
-    async fn react(&self, message_id: &MessageId, reaction: &str) -> ChannelResult<()> {
+    async fn react(&self, _conversation_id: &ConversationId, message_id: &MessageId, reaction: &str) -> ChannelResult<()> {
         // Note: Reacting requires channel ID + timestamp
         let _ = (message_id, reaction);
         Err(ChannelError::UnsupportedFeature(

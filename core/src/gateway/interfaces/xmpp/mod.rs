@@ -396,8 +396,9 @@ mod tests {
         let config = XmppConfig::default();
         let channel = XmppChannel::new("xmpp", config);
 
+        let conv_id = ConversationId::new("test-conv");
         let msg_id = MessageId::new("test-msg");
-        let result = channel.react(&msg_id, "thumbsup").await;
+        let result = channel.react(&conv_id, &msg_id, "thumbsup").await;
         assert!(matches!(result, Err(ChannelError::UnsupportedFeature(_))));
     }
 

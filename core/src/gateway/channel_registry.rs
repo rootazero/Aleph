@@ -261,6 +261,23 @@ impl ChannelRegistry {
         channel.edit(conversation_id, message_id, new_text).await
     }
 
+    /// React to a message through a specific channel
+    pub async fn react(
+        &self,
+        channel_id: &ChannelId,
+        conversation_id: &ConversationId,
+        message_id: &super::channel::MessageId,
+        reaction: &str,
+    ) -> ChannelResult<()> {
+        let channel_arc = self
+            .get(channel_id)
+            .await
+            .ok_or_else(|| ChannelError::NotConnected(format!("Channel not found: {}", channel_id)))?;
+
+        let channel = channel_arc.read().await;
+        channel.react(conversation_id, message_id, reaction).await
+    }
+
     /// Broadcast a message to all channels
     pub async fn broadcast(&self, message: OutboundMessage) -> Vec<(ChannelId, ChannelResult<SendResult>)> {
         let channels = self.channels.read().await;

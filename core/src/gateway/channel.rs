@@ -487,12 +487,12 @@ pub trait Channel: Send + Sync {
     }
 
     /// React to a message
-    async fn react(&self, message_id: &MessageId, reaction: &str) -> ChannelResult<()> {
+    async fn react(&self, conversation_id: &ConversationId, message_id: &MessageId, reaction: &str) -> ChannelResult<()> {
         if !self.capabilities().reactions {
             return Err(ChannelError::UnsupportedFeature("reactions".to_string()));
         }
         // Default implementation does nothing
-        let _ = (message_id, reaction);
+        let _ = (conversation_id, message_id, reaction);
         Ok(())
     }
 

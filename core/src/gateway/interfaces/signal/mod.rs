@@ -187,7 +187,7 @@ impl Channel for SignalChannel {
         ))
     }
 
-    async fn react(&self, message_id: &MessageId, reaction: &str) -> ChannelResult<()> {
+    async fn react(&self, _conversation_id: &ConversationId, message_id: &MessageId, reaction: &str) -> ChannelResult<()> {
         // Signal supports reactions but signal-cli REST API support varies.
         let _ = (message_id, reaction);
         Err(ChannelError::UnsupportedFeature(
