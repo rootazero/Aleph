@@ -64,6 +64,9 @@ pub struct InboundContext {
 
     /// Sender's normalized identifier
     pub sender_normalized: String,
+
+    /// Hint that the reply should be delivered as voice (audio) output
+    pub voice_reply_hint: bool,
 }
 
 impl InboundContext {
@@ -81,6 +84,7 @@ impl InboundContext {
             is_authorized: false,
             is_mentioned: false,
             sender_normalized,
+            voice_reply_hint: false,
         }
     }
 
@@ -99,6 +103,12 @@ impl InboundContext {
     /// Set normalized sender ID
     pub fn with_sender_normalized(mut self, normalized: String) -> Self {
         self.sender_normalized = normalized;
+        self
+    }
+
+    /// Set voice reply hint
+    pub fn with_voice_reply_hint(mut self, hint: bool) -> Self {
+        self.voice_reply_hint = hint;
         self
     }
 }
@@ -174,5 +184,33 @@ mod tests {
         let ctx = InboundContext::new(msg, route, session_key).authorize();
 
         assert!(ctx.is_authorized);
+    }
+
+    #[test]
+    fn test_voice_reply_hint_default_false() {
+        let msg = make_test_message();
+        let route = ReplyRoute::new(
+            ChannelId::new("imessage"),
+            ConversationId::new("+15551234567"),
+        );
+        let session_key = SessionKey::main("main");
+
+        let ctx = InboundContext::new(msg, route, session_key);
+
+        assert!(!ctx.voice_reply_hint);
+    }
+
+    #[test]
+    fn test_with_voice_reply_hint() {
+        let msg = make_test_message();
+        let route = ReplyRoute::new(
+            ChannelId::new("imessage"),
+            ConversationId::new("+15551234567"),
+        );
+        let session_key = SessionKey::main("main");
+
+        let ctx = InboundContext::new(msg, route, session_key).with_voice_reply_hint(true);
+
+        assert!(ctx.voice_reply_hint);
     }
 }
