@@ -37,6 +37,14 @@ pub struct ReplyEmitterConfig {
     /// Whether to stream responses to the channel (typewriter mode)
     /// Default: false
     pub stream_enabled: bool,
+
+    /// Whether voice output is enabled for this emitter
+    /// Default: false
+    pub voice_enabled: bool,
+
+    /// Whether the inbound message requested a voice reply
+    /// Default: false
+    pub voice_reply_hint: bool,
 }
 
 impl Default for ReplyEmitterConfig {
@@ -44,6 +52,8 @@ impl Default for ReplyEmitterConfig {
         Self {
             buffer_threshold: 500,
             stream_enabled: false,
+            voice_enabled: false,
+            voice_reply_hint: false,
         }
     }
 }
@@ -54,6 +64,8 @@ impl ReplyEmitterConfig {
         Self {
             buffer_threshold: 500,
             stream_enabled: mode == "typewriter",
+            voice_enabled: false,
+            voice_reply_hint: false,
         }
     }
 }
@@ -80,6 +92,13 @@ pub struct ReplyEmitter {
 
     /// Cancellation token to stop the persistent typing indicator task
     typing_cancel: CancellationToken,
+
+    /// Generation provider registry for TTS (voice mode)
+    generation_registry: Option<Arc<crate::generation::GenerationProviderRegistry>>,
+    /// Generation config for TTS (voice mode)
+    generation_config: Option<Arc<tokio::sync::RwLock<crate::config::types::generation::GenerationConfig>>>,
+    /// Per-channel voice state
+    voice_state: Mutex<super::voice::VoiceState>,
 }
 
 /// Number of characters to reveal per edit step.
@@ -101,6 +120,9 @@ impl ReplyEmitter {
             has_sent: AtomicBool::new(false),
             run_id,
             typing_cancel: CancellationToken::new(),
+            generation_registry: None,
+            generation_config: None,
+            voice_state: Mutex::new(Default::default()),
         }
     }
 
@@ -120,6 +142,9 @@ impl ReplyEmitter {
             has_sent: AtomicBool::new(false),
             run_id,
             typing_cancel: CancellationToken::new(),
+            generation_registry: None,
+            generation_config: None,
+            voice_state: Mutex::new(Default::default()),
         }
     }
 
@@ -129,6 +154,97 @@ impl ReplyEmitter {
 
     pub fn route(&self) -> &ReplyRoute {
         &self.route
+    }
+
+    /// Attach voice mode dependencies, enabling TTS output.
+    pub fn with_voice(
+        mut self,
+        voice_state: super::voice::VoiceState,
+        generation_registry: Arc<crate::generation::GenerationProviderRegistry>,
+        generation_config: Arc<tokio::sync::RwLock<crate::config::types::generation::GenerationConfig>>,
+    ) -> Self {
+        self.voice_state = Mutex::new(voice_state);
+        self.generation_registry = Some(generation_registry);
+        self.generation_config = Some(generation_config);
+        self
+    }
+
+    /// Returns true when voice output should be attempted.
+    fn should_voice(&self) -> bool {
+        self.config.voice_enabled || self.config.voice_reply_hint
+    }
+
+    /// Try to generate TTS audio and send as a voice message.
+    ///
+    /// On success the message includes both text and an audio attachment.
+    /// On failure it records the failure on `voice_state` and falls back to
+    /// plain text via `send_to_channel`.
+    async fn send_as_voice(&self, text: &str) {
+        if let Some(ref registry) = self.generation_registry {
+            let voice_state = self.voice_state.lock().await.clone();
+            let gen_config = match self.generation_config {
+                Some(ref cfg) => cfg.read().await.clone(),
+                None => {
+                    self.send_to_channel(text).await;
+                    return;
+                }
+            };
+
+            if let Some(attachment) = super::voice::outbound::generate_tts(
+                text,
+                &voice_state,
+                registry,
+                &gen_config,
+            )
+            .await
+            {
+                // Success — reset failure counter
+                self.voice_state.lock().await.record_success();
+
+                let message = OutboundMessage {
+                    conversation_id: self.route.conversation_id.clone(),
+                    text: text.to_string(),
+                    attachments: vec![attachment],
+                    reply_to: self.route.reply_to.clone(),
+                    inline_keyboard: None,
+                    metadata: Default::default(),
+                };
+
+                match self
+                    .channel_registry
+                    .send(&self.route.channel_id, message)
+                    .await
+                {
+                    Ok(result) => {
+                        debug!(
+                            "Sent voice reply to channel {} (message_id: {})",
+                            self.route.channel_id,
+                            result.message_id.as_str(),
+                        );
+                        self.has_sent.store(true, Ordering::SeqCst);
+                    }
+                    Err(e) => {
+                        error!("Failed to send voice reply: {}", e);
+                        // Fall back to text
+                        self.send_to_channel(text).await;
+                    }
+                }
+            } else {
+                // TTS generation failed — record and maybe auto-disable
+                let auto_disabled = self.voice_state.lock().await.record_failure();
+                if auto_disabled {
+                    warn!(
+                        "Voice auto-disabled for channel {} after 3 consecutive TTS failures",
+                        self.route.channel_id
+                    );
+                }
+                // Fallback to plain text
+                self.send_to_channel(text).await;
+            }
+        } else {
+            // No generation registry — fall back to text
+            self.send_to_channel(text).await;
+        }
     }
 
     fn format_content(&self, content: &str, _is_first: bool) -> String {
@@ -476,7 +592,9 @@ impl EventEmitter for ReplyEmitter {
                 if is_intermediate {
                     // Intermediate message: send immediately as a standalone message
                     if !content.is_empty() {
-                        if self.config.stream_enabled && content.chars().count() > TYPEWRITER_CHARS_PER_STEP * 2 {
+                        if self.should_voice() {
+                            self.send_as_voice(&content).await;
+                        } else if self.config.stream_enabled && content.chars().count() > TYPEWRITER_CHARS_PER_STEP * 2 {
                             self.send_typewriter(&content).await;
                         } else {
                             self.send_to_channel(&content).await;
@@ -501,7 +619,11 @@ impl EventEmitter for ReplyEmitter {
                         if !buffer.is_empty() {
                             let text = std::mem::take(&mut *buffer);
                             drop(buffer);
-                            self.send_to_channel(&text).await;
+                            if self.should_voice() {
+                                self.send_as_voice(&text).await;
+                            } else {
+                                self.send_to_channel(&text).await;
+                            }
                         }
                     }
                     // Typewriter mode: do nothing here, wait for RunComplete
@@ -520,7 +642,9 @@ impl EventEmitter for ReplyEmitter {
                 };
 
                 if !text.is_empty() {
-                    if self.config.stream_enabled {
+                    if self.should_voice() {
+                        self.send_as_voice(&text).await;
+                    } else if self.config.stream_enabled {
                         self.send_typewriter(&text).await;
                     } else {
                         self.send_to_channel(&text).await;
@@ -537,7 +661,9 @@ impl EventEmitter for ReplyEmitter {
                                 self.run_id,
                                 final_response.len()
                             );
-                            if self.config.stream_enabled {
+                            if self.should_voice() {
+                                self.send_as_voice(final_response).await;
+                            } else if self.config.stream_enabled {
                                 self.send_typewriter(final_response).await;
                             } else {
                                 self.send_to_channel(final_response).await;
@@ -560,7 +686,11 @@ impl EventEmitter for ReplyEmitter {
                     std::mem::take(&mut *buffer)
                 };
                 if !text.is_empty() {
-                    self.send_to_channel(&text).await;
+                    if self.should_voice() {
+                        self.send_as_voice(&text).await;
+                    } else {
+                        self.send_to_channel(&text).await;
+                    }
                 }
 
                 warn!("Run {} failed: {}", self.run_id, error);
@@ -577,10 +707,18 @@ impl EventEmitter for ReplyEmitter {
                     std::mem::take(&mut *buffer)
                 };
                 if !text.is_empty() {
-                    self.send_to_channel(&text).await;
+                    if self.should_voice() {
+                        self.send_as_voice(&text).await;
+                    } else {
+                        self.send_to_channel(&text).await;
+                    }
                 }
 
-                self.send_to_channel(&question).await;
+                if self.should_voice() {
+                    self.send_as_voice(&question).await;
+                } else {
+                    self.send_to_channel(&question).await;
+                }
             }
 
             // Other events are not routed to channels
@@ -650,6 +788,8 @@ mod tests {
         let config = ReplyEmitterConfig {
             buffer_threshold: 1000,
             stream_enabled: true,
+            voice_enabled: false,
+            voice_reply_hint: false,
         };
 
         let registry = Arc::new(ChannelRegistry::new());
