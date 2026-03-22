@@ -278,6 +278,18 @@ impl ChannelRegistry {
         channel.react(conversation_id, message_id, reaction).await
     }
 
+    /// Send typing indicator through a specific channel
+    pub async fn send_typing(
+        &self,
+        channel_id: &ChannelId,
+        conversation_id: &ConversationId,
+    ) -> ChannelResult<()> {
+        let channel_arc = self.get(channel_id).await
+            .ok_or_else(|| ChannelError::NotConnected(format!("Channel not found: {}", channel_id)))?;
+        let channel = channel_arc.read().await;
+        channel.send_typing(conversation_id).await
+    }
+
     /// Broadcast a message to all channels
     pub async fn broadcast(&self, message: OutboundMessage) -> Vec<(ChannelId, ChannelResult<SendResult>)> {
         let channels = self.channels.read().await;

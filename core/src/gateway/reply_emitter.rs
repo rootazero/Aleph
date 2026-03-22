@@ -19,6 +19,7 @@ use async_trait::async_trait;
 use crate::sync_primitives::{AtomicBool, AtomicU64, Ordering};
 use crate::sync_primitives::Arc;
 use tokio::sync::Mutex;
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, warn};
 
 use super::channel::OutboundMessage;
@@ -76,10 +77,10 @@ pub struct ReplyEmitter {
     seq_counter: AtomicU64,
     has_sent: AtomicBool,
     run_id: String,
-}
 
-/// Interval between progressive edits in typewriter mode.
-const TYPEWRITER_EDIT_INTERVAL: Duration = Duration::from_millis(300);
+    /// Cancellation token to stop the persistent typing indicator task
+    typing_cancel: CancellationToken,
+}
 
 /// Number of characters to reveal per edit step.
 const TYPEWRITER_CHARS_PER_STEP: usize = 80;
@@ -99,6 +100,7 @@ impl ReplyEmitter {
             seq_counter: AtomicU64::new(0),
             has_sent: AtomicBool::new(false),
             run_id,
+            typing_cancel: CancellationToken::new(),
         }
     }
 
@@ -117,6 +119,7 @@ impl ReplyEmitter {
             seq_counter: AtomicU64::new(0),
             has_sent: AtomicBool::new(false),
             run_id,
+            typing_cancel: CancellationToken::new(),
         }
     }
 
@@ -199,7 +202,15 @@ impl ReplyEmitter {
         let mut revealed_chars = first_end;
 
         while revealed_chars < total_chars {
-            tokio::time::sleep(TYPEWRITER_EDIT_INTERVAL).await;
+            // Adaptive interval: accelerate in the second half of the message
+            let progress = revealed_chars as f64 / total_chars as f64;
+            let interval_ms = if progress > 0.5 {
+                let extra = ((progress - 0.5) * 2.0 * 200.0) as u64;
+                300 + extra.min(200)
+            } else {
+                300
+            };
+            tokio::time::sleep(Duration::from_millis(interval_ms)).await;
 
             revealed_chars = (revealed_chars + TYPEWRITER_CHARS_PER_STEP).min(total_chars);
             let byte_end = if revealed_chars < total_chars {
@@ -401,6 +412,30 @@ impl ReplyEmitter {
         self.send_to_channel(&error_message).await;
     }
 
+    /// Spawn a background task that sends typing indicators every 4 seconds
+    /// until the cancellation token is triggered.
+    fn start_typing_indicator(&self) {
+        let registry = self.channel_registry.clone();
+        let channel_id = self.route.channel_id.clone();
+        let conversation_id = self.route.conversation_id.clone();
+        let cancel = self.typing_cancel.clone();
+
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(4));
+            interval.tick().await; // Skip first immediate tick
+            loop {
+                tokio::select! {
+                    _ = interval.tick() => {
+                        let _ = registry.send_typing(&channel_id, &conversation_id).await;
+                    }
+                    _ = cancel.cancelled() => {
+                        break;
+                    }
+                }
+            }
+        });
+    }
+
     /// React on the original inbound message (best-effort, non-blocking)
     async fn react_on_inbound(&self, emoji: &str) {
         if let Some(ref msg_id) = self.route.inbound_message_id {
@@ -417,6 +452,12 @@ impl ReplyEmitter {
     }
 }
 
+impl Drop for ReplyEmitter {
+    fn drop(&mut self) {
+        self.typing_cancel.cancel();
+    }
+}
+
 #[async_trait]
 impl EventEmitter for ReplyEmitter {
     async fn emit(&self, event: StreamEvent) -> Result<(), EventEmitError> {
@@ -427,13 +468,18 @@ impl EventEmitter for ReplyEmitter {
                 if is_intermediate {
                     // Intermediate message: send immediately as a standalone message
                     if !content.is_empty() {
-                        self.send_to_channel(&content).await;
+                        if self.config.stream_enabled && content.chars().count() > TYPEWRITER_CHARS_PER_STEP * 2 {
+                            self.send_typewriter(&content).await;
+                        } else {
+                            self.send_to_channel(&content).await;
+                        }
                     }
                     // Do NOT buffer — this is a separate message from the final response
                 } else {
-                    // React with 👀 on first non-intermediate chunk (processing started)
+                    // React with 👀 on first non-intermediate chunk and start typing indicator
                     if !self.has_sent.load(Ordering::SeqCst) && !content.is_empty() {
                         self.react_on_inbound("👀").await;
+                        self.start_typing_indicator();
                     }
 
                     // Existing behavior: accumulate text into buffer
@@ -455,6 +501,9 @@ impl EventEmitter for ReplyEmitter {
             }
 
             StreamEvent::RunComplete { summary, .. } => {
+                // Stop the persistent typing indicator
+                self.typing_cancel.cancel();
+
                 // Flush accumulated buffer (always flush — intermediate messages
                 // may have set has_sent, but the buffer holds the final response)
                 let text = {
@@ -494,6 +543,9 @@ impl EventEmitter for ReplyEmitter {
             }
 
             StreamEvent::RunError { error, .. } => {
+                // Stop the persistent typing indicator
+                self.typing_cancel.cancel();
+
                 // Flush any partial response
                 let text = {
                     let mut buffer = self.buffer.lock().await;
