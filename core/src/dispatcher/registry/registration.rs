@@ -206,7 +206,23 @@ impl ToolRegistrar {
             .register_with_conflict_resolution(cron_cmd)
             .await;
 
-        info!("Registered 10 builtin tools (2 generate_* + 2 skill_* + snapshot_capture + switch + groupchat + session_new + new + cron_manage)");
+        // Voice mode command (direct handler in router, like /new)
+        let voice_cmd = UnifiedTool::new(
+            "builtin:voice",
+            "voice",
+            "Toggle voice mode on/off for the current channel",
+            ToolSource::Builtin,
+        )
+        .with_icon("speaker.wave.3")
+        .with_usage("/voice on | /voice off | /voice status")
+        .with_param_hint("[on|off|status]")
+        .with_sort_order(84);
+
+        conflict_resolver
+            .register_with_conflict_resolution(voice_cmd)
+            .await;
+
+        info!("Registered 11 builtin tools (2 generate_* + 2 skill_* + snapshot_capture + switch + groupchat + session_new + new + cron_manage + voice)");
     }
 
     /// Register MCP tools from tool info list (Flat Namespace Mode)

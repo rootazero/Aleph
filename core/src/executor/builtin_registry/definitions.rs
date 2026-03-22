@@ -287,12 +287,9 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         description: "Manage channel pairing codes — generate new codes or list active ones for Telegram/other channels",
         requires_config: true, // Requires ChannelRegistry (deferred injection)
     },
-    // Voice mode tool — require ChannelRegistry
-    BuiltinToolDefinition {
-        name: "voice_mode_set",
-        description: "Enable or disable voice mode for a channel. When enabled, replies are converted to speech audio.",
-        requires_config: true,
-    },
+    // voice_mode_set is a LLM tool only — NOT a slash command.
+    // Use /voice on|off instead. Excluded from BUILTIN_TOOL_DEFINITIONS
+    // to avoid appearing in command lists.
 ];
 
 /// Create a boxed tool instance by name
