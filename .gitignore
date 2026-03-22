@@ -75,7 +75,6 @@ playwright-report/
 e2e/dist/
 /tests/
 SystemPrompt.md
-CHANGELOG.md
 
 # Build pipeline artifacts
 apps/macos-native/Aleph/Resources/aleph

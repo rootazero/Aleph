@@ -221,7 +221,7 @@ release version:
     echo "$VERSION" > VERSION
 
     # Stage, commit, push
-    git add VERSION CHANGELOG.md
+    git add -f VERSION CHANGELOG.md
     git commit -m "release: v${VERSION}"
     git push origin main
 
