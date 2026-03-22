@@ -174,7 +174,7 @@ pub fn GenerationProvidersView() -> impl IntoView {
                                                             let cp_name = cp.name.clone();
                                                             let cp_name_click = cp_name.clone();
                                                             let cp_name_check = cp_name.clone();
-                                                            let cp_model = cp.config.model.clone().unwrap_or_default();
+                                                            let cp_model = cp.config.models.first().cloned().unwrap_or_default();
                                                             let cp_color = cp.config.color.clone();
                                                             let is_default = !cp.is_default_for.is_empty();
                                                             let verified = cp.config.verified;
@@ -485,7 +485,7 @@ fn ProviderDetailView(
     let form_api_key = RwSignal::new(String::new());
     let form_base_url = RwSignal::new(provider.config.base_url.clone().unwrap_or_default());
     let form_edit_url = RwSignal::new(provider.config.edit_url.clone().unwrap_or_default());
-    let form_model = RwSignal::new(provider.config.model.clone().unwrap_or_default());
+    let form_model = RwSignal::new(provider.config.models.join(","));
     let form_timeout = RwSignal::new(provider.config.timeout_seconds);
     let form_enabled = RwSignal::new(provider.config.enabled);
 
@@ -535,9 +535,9 @@ fn ProviderDetailView(
                 let url = form_edit_url.get();
                 if url.is_empty() { None } else { Some(url) }
             },
-            model: {
+            models: {
                 let m = form_model.get();
-                if m.is_empty() { None } else { Some(m) }
+                if m.is_empty() { vec![] } else { m.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect() }
             },
             enabled: form_enabled.get(),
             color: config_color.clone(),
@@ -589,7 +589,7 @@ fn ProviderDetailView(
                 &config.provider_type,
                 config.api_key,
                 config.base_url,
-                config.model,
+                config.models.first().cloned(),
             ).await {
                 Ok(result) => {
                     testing.set(false);
@@ -923,9 +923,9 @@ fn PresetSetupPanel(
                     if url.is_empty() { None } else { Some(url) }
                 },
                 edit_url: None,
-                model: {
+                models: {
                     let m = form_model.get();
-                    if m.is_empty() { None } else { Some(m) }
+                    if m.is_empty() { vec![] } else { m.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect() }
                 },
                 enabled: true,
                 color: color.clone(),
@@ -1146,7 +1146,7 @@ fn AddCustomProviderPanel(
                 let url = edit_url.get();
                 if url.is_empty() { None } else { Some(url) }
             },
-            model: if form_model.get().is_empty() { None } else { Some(form_model.get()) },
+            models: if form_model.get().is_empty() { vec![] } else { form_model.get().split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect() },
             enabled: true,
             color: "#808080".to_string(),
             capabilities: build_capabilities(),
@@ -1164,7 +1164,7 @@ fn AddCustomProviderPanel(
         let ptype = config.provider_type.clone();
         let key = config.api_key.clone();
         let url = config.base_url.clone();
-        let mdl = config.model.clone();
+        let mdl = config.models.first().cloned();
 
         spawn_local(async move {
             match GenerationProvidersApi::test_connection(&state, &ptype, key, url, mdl).await {

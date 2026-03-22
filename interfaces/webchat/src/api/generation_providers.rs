@@ -12,8 +12,8 @@ pub struct GenerationProviderConfig {
     pub secret_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub base_url: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub model: Option<String>,
+    #[serde(default)]
+    pub models: Vec<String>,
     pub enabled: bool,
     pub color: String,
     pub capabilities: Vec<GenerationType>,
