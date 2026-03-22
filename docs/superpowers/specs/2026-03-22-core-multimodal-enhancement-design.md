@@ -27,26 +27,49 @@ Add `attachments: Vec<Attachment>` field to `RunRequest`. In `executor.rs:132`, 
 
 **Break 2: `add_message()` text-only** (`engine.rs:248`)
 
-Session stores text summaries only. When attachments are present, append markers:
-- Image: `[Image attached: {mime_type}]`
-- Audio: `[Voice message transcript]: "{transcribed_text}"` (after transcription)
-- Other: `[Attachment: {filename} ({mime_type})]`
+Session stores text summaries only. When attachments are present, build a summary string and append to the text before storing:
 
-Actual media data goes through MediaCache, not session storage.
-
-**Break 3: `UnifiedMessage::user(input)` text-only** (`loop_core.rs:195`)
-
-Replace with multimodal construction:
 ```rust
-let mut content = vec![ContentBlock::Text { text: input.to_string() }];
-if !request.attachments.is_empty() {
-    let media_blocks = media_processor.process(
-        &request.attachments, supports_vision, &session_id
-    ).await;
-    content.extend(media_blocks);
+// In engine.rs, before add_message():
+let mut session_text = request.input.clone();
+for att in &request.attachments {
+    let label = att.filename.as_deref().unwrap_or("file");
+    if att.mime_type.starts_with("image/") {
+        session_text.push_str(&format!("\n[Image attached: {}]", att.mime_type));
+    } else if att.mime_type.starts_with("audio/") {
+        session_text.push_str(&format!("\n[Audio attached: {}]", att.mime_type));
+    } else {
+        session_text.push_str(&format!("\n[Attachment: {} ({})]", label, att.mime_type));
+    }
 }
-messages.push(UnifiedMessage::User { content });
+agent.add_message(&request.session_key, MessageRole::User, &session_text).await;
 ```
+
+After transcription completes (in run_loop), the audio marker in session can be updated to include the transcript text. Actual media data goes through MediaCache, not session storage.
+
+**Break 3: Multimodal message construction** (`run_loop.rs`)
+
+The `MediaProcessor.process()` call lives in **`run_loop.rs`**, NOT in `loop_core.rs`. This is because `run_loop.rs` has access to `RunRequest.attachments` and orchestrates the call to `AgentLoop`. The multimodal `UnifiedMessage` for the current input is built in `run_loop.rs` and prepended to the history before passing to `agent_loop.run_with_history()`:
+
+```rust
+// In run_loop.rs, before calling agent_loop.run_with_history():
+let current_user_msg = if !request.attachments.is_empty() {
+    let media_blocks = media_processor.process(
+        &request.attachments, supports_vision, &session_key.to_string()
+    ).await;
+    let mut content = vec![ContentBlock::Text { text: request.input.clone() }];
+    content.extend(media_blocks);
+    UnifiedMessage::User { content }
+} else {
+    UnifiedMessage::user(&request.input)
+};
+
+// Append to history, then pass to agent loop
+history.push(current_user_msg);
+let result = agent_loop.run_with_history_messages(history, &mut callback).await?;
+```
+
+This requires adding a new method `run_with_history_messages(messages, callback)` to `AgentLoop` that accepts pre-built messages (without appending its own `UnifiedMessage::user(input)`). The existing `run_with_history(input, history, callback)` remains for non-multimodal callers.
 
 Only the **current message** gets media blocks. History messages retain text summaries only (no historical image re-injection — saves tokens).
 
@@ -61,8 +84,8 @@ Fix `convert_messages()` to handle `ContentBlock::Image` — see Section 6.
 | `gateway/execution_engine/mod.rs` | Add `attachments` field to `RunRequest` |
 | `gateway/inbound_router/executor.rs` | Pass `ctx.message.attachments` to RunRequest |
 | `gateway/execution_engine/engine.rs` | Store text summary in session, pass attachments to run_loop |
-| `gateway/execution_engine/run_loop.rs` | Build multimodal UnifiedMessage for current input |
-| `agent_loop/loop_core.rs` | Accept attachments, call MediaProcessor |
+| `gateway/execution_engine/run_loop.rs` | Call MediaProcessor, build multimodal UnifiedMessage, pass to AgentLoop |
+| `agent_loop/loop_core.rs` | Add `run_with_history_messages()` method (accepts pre-built messages) |
 
 ## Section 2: MediaCache — Download & Temp Storage
 
@@ -72,7 +95,7 @@ Fix `convert_messages()` to handle `ContentBlock::Image` — see Section 6.
 
 ```rust
 pub struct MediaCache {
-    cache_dir: PathBuf,  // /tmp/aleph/media/
+    cache_dir: PathBuf,  // std::env::temp_dir().join("aleph/media/")
 }
 
 impl MediaCache {
@@ -99,7 +122,7 @@ pub struct CachedMedia {
 ### Constraints
 
 - Max file size: 20MB (configurable), skip if exceeded
-- Cache dir: `/tmp/aleph/media/{session_id}/`
+- Cache dir: `std::env::temp_dir()/aleph/media/{session_id}/` (platform-safe, not hardcoded `/tmp`)
 - Cleanup: on RunComplete/RunError + startup stale cleanup
 - Timeout: 30s for HTTP downloads
 
@@ -126,10 +149,10 @@ pub struct CachedMedia {
 
 When `supports_vision == false`:
 1. `MediaCache.resolve()` → get local file
-2. `VisionPipeline.describe(image_path, "Describe this image concisely")` → text
-3. Return `ContentBlock::Text { text: "[Image: {description}]" }`
+2. `VisionPipeline.understand_image(&ImageInput::from_base64(b64, mime), "Describe this image concisely")` → `VisionResult`
+3. Return `ContentBlock::Text { text: format!("[Image: {}]", result.description) }`
 
-VisionPipeline already exists at `core/src/vision/mod.rs` with Claude Vision support.
+VisionPipeline already exists at `core/src/vision/mod.rs` with `understand_image(&ImageInput, &str) -> Result<VisionResult>` API. Uses `ImageInput` wrapper (not raw path).
 
 ### Capability Propagation
 
@@ -233,7 +256,8 @@ Each attachment processed independently. Single failure → fallback text, not a
 
 ### Lifecycle
 
-- Created at server startup, injected into AgentLoop
+- Created at server startup, owned by `ExecutionEngine` (same pattern as `session_compactor`)
+- Accessed in `run_loop.rs` during message construction (NOT inside AgentLoop)
 - `process()` called per message with attachments
 - `cleanup()` called on RunComplete/RunError
 
@@ -269,28 +293,31 @@ When content is text-only, keep existing simple format (backward compatible):
 {"role": "user", "content": "Hello"}
 ```
 
-### MessageContent Extension
+### MessageContent — Already Exists
 
-Add `Multimodal` variant to OpenAI's `MessageContent`:
+`providers/openai/types.rs` (NOT `providers/protocols/openai/types.rs`) already has:
 ```rust
 pub enum MessageContent {
     Text { content: String },
-    Multimodal { content: Vec<serde_json::Value> },
+    Multimodal { content: Vec<ContentBlock> },  // Already defined!
 }
 ```
 
-Custom serialization: `Text` → `"content": "string"`, `Multimodal` → `"content": [...]`.
+The type layer is ready. Only the `convert_messages()` function in `providers/protocols/openai.rs` needs fixing to actually USE the Multimodal variant when Image blocks are present.
 
 ### Anthropic Adapter
 
 Already supports images via `ImageSource { source_type: "base64", media_type, data }`. No changes needed. Confirm `ContentBlock::Image.data` is pure base64 (no data-URI prefix) — consistent with current convention.
 
+### Dependency Note
+
+Verify `reqwest` has `multipart` feature enabled in `core/Cargo.toml` (needed for Whisper API upload in Section 4). Add if missing.
+
 ### Files
 
 | File | Change |
 |------|--------|
-| `providers/protocols/openai.rs` | Handle ContentBlock::Image in convert_messages() |
-| `providers/protocols/openai/types.rs` | Add Multimodal variant to MessageContent |
+| `providers/protocols/openai.rs` | Handle ContentBlock::Image in convert_messages() using existing Multimodal variant from `providers/openai/types.rs` |
 
 ## Architecture Alignment
 
@@ -323,9 +350,8 @@ Already supports images via `ImageSource { source_type: "base64", media_type, da
 | `gateway/inbound_router/executor.rs` | Pass attachments to RunRequest |
 | `gateway/execution_engine/engine.rs` | Pass attachments to run_loop |
 | `gateway/execution_engine/run_loop.rs` | Call MediaProcessor, build multimodal UnifiedMessage |
-| `agent_loop/loop_core.rs` | Accept + process attachments |
-| `providers/protocols/openai.rs` | Handle ContentBlock::Image |
-| `providers/protocols/openai/types.rs` | Add Multimodal MessageContent variant |
+| `agent_loop/loop_core.rs` | Add `run_with_history_messages()` method |
+| `providers/protocols/openai.rs` | Handle ContentBlock::Image (types already exist in `providers/openai/types.rs`) |
 | `providers/message.rs` | Add `UnifiedMessage::user_multimodal()` constructor |
 
 ## Not In Scope
