@@ -930,6 +930,36 @@ static FEISHU_FIELDS: &[FieldDef] = &[
         default_value: "true",
         options: &[],
     },
+    FieldDef {
+        key: "streaming",
+        label: "Streaming Output",
+        kind: FieldKind::Toggle,
+        placeholder: "",
+        help: "Stream responses in real-time via Feishu cards",
+        required: false,
+        default_value: "true",
+        options: &[],
+    },
+    FieldDef {
+        key: "render_mode",
+        label: "Render Mode",
+        kind: FieldKind::Text,
+        placeholder: "auto",
+        help: "\"auto\" (card for rich content), \"card\" (always card), \"raw\" (plain text)",
+        required: false,
+        default_value: "auto",
+        options: &[],
+    },
+    FieldDef {
+        key: "typing_indicator",
+        label: "Typing Indicator",
+        kind: FieldKind::Toggle,
+        placeholder: "",
+        help: "Show typing emoji on user message while processing",
+        required: false,
+        default_value: "true",
+        options: &[],
+    },
 ];
 
 // ---------------------------------------------------------------------------
