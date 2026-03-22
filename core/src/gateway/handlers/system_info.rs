@@ -38,7 +38,7 @@ pub async fn handle(request: JsonRpcRequest) -> JsonRpcResponse {
         let uptime = System::uptime();
 
         json!({
-            "version": env!("CARGO_PKG_VERSION"),
+            "version": env!("ALEPH_VERSION"),
             "platform": format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH),
             "uptime_secs": uptime,
             "cpu_usage_percent": cpu_usage,

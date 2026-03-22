@@ -467,7 +467,7 @@ impl InitializeParams {
             capabilities: ClientCapabilities::default(),
             client_info: ClientInfo {
                 name: "Aleph".to_string(),
-                version: env!("CARGO_PKG_VERSION").to_string(),
+                version: env!("ALEPH_VERSION").to_string(),
             },
         }
     }

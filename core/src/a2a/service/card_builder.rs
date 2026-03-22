@@ -18,7 +18,7 @@ impl CardBuilder {
         let version = config
             .card_version
             .clone()
-            .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string());
+            .unwrap_or_else(|| env!("ALEPH_VERSION").to_string());
 
         let skills: Vec<AgentSkill> = config
             .skills

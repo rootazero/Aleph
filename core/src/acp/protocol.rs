@@ -39,7 +39,7 @@ impl AcpRequest {
                 "protocolVersion": 1,
                 "clientInfo": {
                     "name": "aleph",
-                    "version": env!("CARGO_PKG_VERSION"),
+                    "version": env!("ALEPH_VERSION"),
                 },
                 "capabilities": {},
             })),

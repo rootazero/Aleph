@@ -51,7 +51,7 @@ fn validate_bind_address(args: &Args) -> Result<(), Box<dyn std::error::Error>> 
 fn print_startup_banner(addr: SocketAddr, full_config: &FullGatewayConfig) {
     println!("PII filtering engine initialized (enabled: {})", full_config.privacy.pii_filtering);
     println!("╔═══════════════════════════════════════════════╗");
-    println!("║         Aleph Gateway v{}           ║", env!("CARGO_PKG_VERSION"));
+    println!("║         Aleph Gateway v{}           ║", env!("ALEPH_VERSION"));
     println!("╠═══════════════════════════════════════════════╣");
     println!("║  WebSocket: ws://{}          ║", addr);
     println!("║  Protocol:  JSON-RPC 2.0                      ║");

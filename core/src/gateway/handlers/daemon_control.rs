@@ -20,7 +20,7 @@ pub async fn handle_status(request: JsonRpcRequest, start_time: Instant) -> Json
         json!({
             "running": true,
             "uptime_secs": uptime,
-            "version": env!("CARGO_PKG_VERSION"),
+            "version": env!("ALEPH_VERSION"),
             "platform": format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH),
         }),
     )

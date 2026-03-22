@@ -92,7 +92,7 @@ pub fn create_hello_notification(auth_mode: &AuthMode) -> JsonRpcRequest {
         "hello",
         Some(json!(HelloParams {
             version: "1".to_string(),
-            server: format!("aleph-gateway/{}", env!("CARGO_PKG_VERSION")),
+            server: format!("aleph-gateway/{}", env!("ALEPH_VERSION")),
             auth_required: auth_mode.is_auth_required(),
         })),
     )

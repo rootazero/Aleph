@@ -28,7 +28,7 @@ pub async fn handle(request: JsonRpcRequest) -> JsonRpcResponse {
         request.id,
         json!({
             "name": "aleph-gateway",
-            "version": env!("CARGO_PKG_VERSION"),
+            "version": env!("ALEPH_VERSION"),
             "protocol": "json-rpc-2.0"
         }),
     )

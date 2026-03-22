@@ -160,6 +160,82 @@ deps:
     done
     $ok || { echo ""; echo "Install missing deps before building."; exit 1; }
 
+# ─── Release ───
+
+# Create a new release: bump version, generate changelog, commit, push, trigger workflow
+# Usage: just release 0.3.0
+release version:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    VERSION="{{version}}"
+
+    # Get previous version tag
+    PREV_TAG=$(git tag --sort=-v:refname | head -1 || echo "")
+
+    # Generate changelog from git log
+    echo "Generating changelog for v${VERSION}..."
+    if [ -n "$PREV_TAG" ]; then
+        COMMITS=$(git log "${PREV_TAG}..HEAD" --pretty=format:"- %s" --no-merges | grep -v "Co-Authored-By" || true)
+        RANGE="${PREV_TAG}..HEAD"
+    else
+        COMMITS=$(git log --pretty=format:"- %s" --no-merges -50 | grep -v "Co-Authored-By" || true)
+        RANGE="(all)"
+    fi
+
+    # Categorize commits
+    FEATURES=$(echo "$COMMITS" | grep -iE "^- (feat|add|new|desktop|core:.*add|core:.*implement)" || true)
+    FIXES=$(echo "$COMMITS" | grep -iE "^- (fix|bugfix|hotfix)" || true)
+    BUILD=$(echo "$COMMITS" | grep -iE "^- (build|ci|release|docs)" || true)
+    REFACTOR=$(echo "$COMMITS" | grep -iE "^- (refactor|clean|remove|phase)" || true)
+
+    # Build changelog entry
+    ENTRY="## [${VERSION}] - $(date +%Y-%m-%d)\n"
+    if [ -n "$FEATURES" ]; then
+        ENTRY="${ENTRY}\n### Added\n${FEATURES}\n"
+    fi
+    if [ -n "$FIXES" ]; then
+        ENTRY="${ENTRY}\n### Fixed\n${FIXES}\n"
+    fi
+    if [ -n "$REFACTOR" ]; then
+        ENTRY="${ENTRY}\n### Changed\n${REFACTOR}\n"
+    fi
+    if [ -n "$BUILD" ]; then
+        ENTRY="${ENTRY}\n### Build\n${BUILD}\n"
+    fi
+
+    # Prepend to CHANGELOG.md (after the header)
+    if [ -f CHANGELOG.md ]; then
+        # Insert after "## [Unreleased]" line
+        perl -i -pe "s/^## \[Unreleased\].*/## [Unreleased]\n\n$(echo -e "$ENTRY" | sed 's/[&/\]/\\&/g' | tr '\n' '\a' | sed 's/\a/\\n/g')/" CHANGELOG.md 2>/dev/null || {
+            # Fallback: just prepend after header
+            HEADER=$(head -7 CHANGELOG.md)
+            BODY=$(tail -n +8 CHANGELOG.md)
+            echo "$HEADER" > CHANGELOG.md
+            echo "" >> CHANGELOG.md
+            echo -e "$ENTRY" >> CHANGELOG.md
+            echo "$BODY" >> CHANGELOG.md
+        }
+    fi
+
+    # Update VERSION file
+    echo "$VERSION" > VERSION
+
+    # Stage, commit, push
+    git add VERSION CHANGELOG.md
+    git commit -m "release: v${VERSION}"
+    git push origin main
+
+    # Delete old release if exists
+    gh release delete "v${VERSION}" --yes 2>/dev/null || true
+    git push origin ":refs/tags/v${VERSION}" 2>/dev/null || true
+
+    # Trigger workflow
+    gh workflow run aleph-server-release.yml
+
+    echo ""
+    echo "✓ Release v${VERSION} triggered!"
+    echo "  Monitor: gh run list --limit 1"
+
 # ─── Integration Probes ───
 
 # Provider config integration probes (Layer 1 + 2)

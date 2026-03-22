@@ -370,7 +370,7 @@ pub async fn handle_schema(request: JsonRpcRequest) -> JsonRpcResponse {
     let response = ConfigSchemaResponse {
         schema,
         ui_hints,
-        version: env!("CARGO_PKG_VERSION").to_string(),
+        version: env!("ALEPH_VERSION").to_string(),
         generated_at: chrono::Utc::now().to_rfc3339(),
     };
 

@@ -5,6 +5,17 @@
 // - Falls back to trunk build if dist/ is missing (for `cargo run` without justfile)
 
 fn main() {
+    // Read version from VERSION file (single source of truth)
+    // This overrides CARGO_PKG_VERSION so all code uses the same version
+    println!("cargo:rerun-if-changed=../VERSION");
+    if let Ok(version) = std::fs::read_to_string("../VERSION") {
+        let version = version.trim();
+        println!("cargo:rustc-env=ALEPH_VERSION={version}");
+    } else {
+        // Fallback to Cargo.toml version
+        println!("cargo:rustc-env=ALEPH_VERSION={}", env!("CARGO_PKG_VERSION"));
+    }
+
     #[cfg(feature = "control-plane")]
     {
         use std::path::Path;
