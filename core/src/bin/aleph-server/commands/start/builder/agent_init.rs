@@ -844,7 +844,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
 
             // Inject parser into chat.send handler (created earlier, uses deferred cell)
             {
-                let mut cell = command_parser_cell.blocking_write();
+                let mut cell = command_parser_cell.write().await;
                 *cell = Some(parser.clone());
             }
 

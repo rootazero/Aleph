@@ -346,11 +346,12 @@ fn parse_cli_args(args_str: &str) -> serde_json::Value {
                 } else {
                     map.insert(k.clone(), serde_json::Value::String(combined));
                 }
-            } else if k == "blocked_by" && combined.contains(',') {
-                // Comma-separated array
+            } else if k == "blocked_by" || k == "task_ids" {
+                // Always parse as array (comma-separated or single value)
                 let arr: Vec<serde_json::Value> = combined
                     .split(',')
                     .map(|s| serde_json::Value::String(s.trim().to_string()))
+                    .filter(|v| !v.as_str().map_or(true, |s| s.is_empty()))
                     .collect();
                 map.insert(k.clone(), serde_json::Value::Array(arr));
             } else {
