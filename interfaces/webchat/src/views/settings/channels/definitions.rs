@@ -1,4 +1,4 @@
-// Channel definition data model and static definitions for all 13 messaging channels.
+// Channel definition data model and static definitions for all 14 messaging channels.
 //
 // This module provides the `ChannelDefinition` type describing each channel's metadata,
 // brand identity, and configuration fields. The definitions drive the generic settings
@@ -83,6 +83,8 @@ const ICON_WEBHOOK: &str = r#"<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.
 const ICON_XMPP: &str = r#"<circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/>"#;
 
 const ICON_NOSTR: &str = r#"<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>"#;
+
+const ICON_FEISHU: &str = r#"<path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-3 12H7v-2h10v2zm0-3H7V9h10v2zm0-3H7V6h10v2z"/>"#;
 
 // ---------------------------------------------------------------------------
 // Per-channel field definitions
@@ -857,6 +859,79 @@ static NOSTR_FIELDS: &[FieldDef] = &[
     },
 ];
 
+static FEISHU_FIELDS: &[FieldDef] = &[
+    FieldDef {
+        key: "app_id",
+        label: "App ID",
+        kind: FieldKind::Text,
+        placeholder: "cli_xxxxxxxxxx",
+        help: "From Feishu/Lark Open Platform → App Credentials",
+        required: true,
+        default_value: "",
+        options: &[],
+    },
+    FieldDef {
+        key: "app_secret",
+        label: "App Secret",
+        kind: FieldKind::Secret,
+        placeholder: "Enter app secret...",
+        help: "From Feishu/Lark Open Platform → App Credentials",
+        required: true,
+        default_value: "",
+        options: &[],
+    },
+    FieldDef {
+        key: "domain",
+        label: "Domain",
+        kind: FieldKind::Text,
+        placeholder: "feishu",
+        help: "\"feishu\" for China, \"lark\" for international, or custom URL",
+        required: false,
+        default_value: "feishu",
+        options: &[],
+    },
+    FieldDef {
+        key: "bot_name",
+        label: "Bot Name",
+        kind: FieldKind::Text,
+        placeholder: "Aleph",
+        help: "Bot display name for group chat @mention detection",
+        required: false,
+        default_value: "",
+        options: &[],
+    },
+    FieldDef {
+        key: "dm_allowed",
+        label: "Allow Direct Messages",
+        kind: FieldKind::Toggle,
+        placeholder: "",
+        help: "Accept private (p2p) messages",
+        required: false,
+        default_value: "true",
+        options: &[],
+    },
+    FieldDef {
+        key: "groups_allowed",
+        label: "Allow Group Chats",
+        kind: FieldKind::Toggle,
+        placeholder: "",
+        help: "Accept messages from group chats",
+        required: false,
+        default_value: "false",
+        options: &[],
+    },
+    FieldDef {
+        key: "require_mention",
+        label: "Require @Mention in Groups",
+        kind: FieldKind::Toggle,
+        placeholder: "",
+        help: "Only respond when @mentioned in group chats",
+        required: false,
+        default_value: "true",
+        options: &[],
+    },
+];
+
 // ---------------------------------------------------------------------------
 // Static channel registry
 // ---------------------------------------------------------------------------
@@ -1006,6 +1081,17 @@ pub static ALL_CHANNELS: &[ChannelDefinition] = &[
         fields: NOSTR_FIELDS,
         docs_url: "https://github.com/nostr-protocol/nips",
     },
+    // 14. Feishu/Lark
+    ChannelDefinition {
+        id: "feishu",
+        name: "Feishu / Lark",
+        description: "Connect to Feishu/Lark via WebSocket event subscription",
+        icon_svg: ICON_FEISHU,
+        brand_color: "#2B65F6",
+        config_section: "channels.feishu",
+        fields: FEISHU_FIELDS,
+        docs_url: "https://open.feishu.cn/document/home/index",
+    },
 ];
 
 // ---------------------------------------------------------------------------
@@ -1025,3 +1111,4 @@ pub static IRC: &ChannelDefinition = &ALL_CHANNELS[9];
 pub static WEBHOOK: &ChannelDefinition = &ALL_CHANNELS[10];
 pub static XMPP: &ChannelDefinition = &ALL_CHANNELS[11];
 pub static NOSTR: &ChannelDefinition = &ALL_CHANNELS[12];
+pub static FEISHU: &ChannelDefinition = &ALL_CHANNELS[13];
