@@ -5,23 +5,15 @@
 //! # Features
 //!
 //! - Long-polling or webhook mode
-//! - User/group allowlists
-//! - File and image attachments
-//! - Inline keyboards (future)
+//! - User/group allowlists with pairing flow
+//! - File and image attachments with URL resolution
+//! - Inline keyboards with callback routing
 //! - Reply threading
-//!
-//! # Usage
-//!
-//! ```toml
-//! [[channels]]
-//! id = "telegram"
-//! channel_type = "telegram"
-//! enabled = true
-//!
-//! [channels.config]
-//! bot_token = "123456:ABC..."
-//! allowed_users = [12345, 67890]
-//! ```
+//! - Forum topic session isolation
+//! - Processing status reactions (👀/👍/👎)
+//! - Sticker support (static/animated/video)
+//! - Network stall detection with watchdog
+//! - Smart retry with error classification
 
 pub mod config;
 pub mod group_chat;
