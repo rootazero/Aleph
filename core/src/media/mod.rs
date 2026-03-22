@@ -16,6 +16,7 @@
 //! - [`MediaPolicy`] — size and lifecycle enforcement
 //! - [`detect`] — format detection from magic bytes and file extension
 
+pub mod cache;
 pub mod detect;
 pub mod error;
 pub mod pipeline;
