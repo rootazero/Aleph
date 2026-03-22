@@ -226,6 +226,20 @@ impl TelegramChannel {
             ConversationId::new(msg.chat.id.0.to_string())
         };
 
+        if !attachments.is_empty() {
+            let mime_types: Vec<&str> = attachments.iter().map(|a| a.mime_type.as_str()).collect();
+            tracing::info!(
+                target: "multimodal",
+                probe = "P1_inbound",
+                channel = "telegram",
+                chat_id = %msg.chat.id.0,
+                message_id = %msg.id.0,
+                attachment_count = attachments.len(),
+                mime_types = %mime_types.join(","),
+                "Inbound message with attachments"
+            );
+        }
+
         Some(InboundMessage {
             id: MessageId::new(msg.id.0.to_string()),
             channel_id: channel_id.clone(),

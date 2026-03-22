@@ -136,6 +136,17 @@ impl InboundMessageRouter {
             attachments: ctx.message.attachments.clone(),
         };
 
+        if !request.attachments.is_empty() {
+            tracing::info!(
+                target: "multimodal",
+                probe = "P2_resolve",
+                run_id = %request.run_id,
+                session_key = %request.session_key.to_key_string(),
+                attachment_count = request.attachments.len(),
+                "RunRequest created with attachments"
+            );
+        }
+
         let label = if is_slash { "slash command for agent" } else { "agent" };
         info!(
             "Executing {} '{}' for session {} (run_id: {})",
