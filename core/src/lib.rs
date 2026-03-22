@@ -123,6 +123,7 @@ pub use crate::config::{
     Config, FullConfig, ChannelInstanceConfig, PluginMarketplaceEntry, ProviderConfig, RoutingRuleConfig,
     MemoryConfig, BehaviorConfig, GeneralConfig, SmartFlowConfig,
     EmbeddingProviderConfig, GenerationProviderConfig,
+    types::generation::GenerationConfig,
     backup::ConfigBackup,
     patcher::ConfigPatcher,
     agent_resolver::{AgentDefinitionResolver, ResolvedAgent},

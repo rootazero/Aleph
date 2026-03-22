@@ -80,6 +80,8 @@ pub(in crate::commands::start) struct AgentHandlersResult {
     pub swappable_registry: Option<Arc<alephcore::SwappableProviderRegistry>>,
     /// Deferred injection cell for ChannelRegistry (created after agent handlers)
     pub channel_registry_cell: Option<Arc<tokio::sync::OnceCell<Arc<alephcore::gateway::channel_registry::ChannelRegistry>>>>,
+    /// Generation provider registry for TTS voice output
+    pub generation_registry: Option<Arc<std::sync::RwLock<alephcore::generation::GenerationProviderRegistry>>>,
 }
 
 /// Register agent.run / agent.status / agent.cancel / chat.* handlers.
@@ -997,5 +999,6 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         compression_service: compression_out,
         swappable_registry: swappable_reg,
         channel_registry_cell: channel_reg_cell,
+        generation_registry: Some(generation_registry),
     }
 }

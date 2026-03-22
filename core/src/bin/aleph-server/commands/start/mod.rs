@@ -778,6 +778,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         agent_result.dispatch_registry,
         Some(session_manager.clone()),
         Some(app_config_for_channels.clone()),
+        agent_result.generation_registry,
         args.daemon,
     ).await;
 

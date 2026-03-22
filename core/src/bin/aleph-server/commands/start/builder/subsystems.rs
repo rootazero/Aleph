@@ -315,6 +315,7 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
     dispatch_registry: Option<Arc<alephcore::dispatcher::ToolRegistry>>,
     session_manager: Option<Arc<alephcore::gateway::session_manager::SessionManager>>,
     app_config: Option<Arc<tokio::sync::RwLock<alephcore::Config>>>,
+    generation_registry: Option<Arc<std::sync::RwLock<alephcore::generation::GenerationProviderRegistry>>>,
     daemon: bool,
 ) {
     let routing_config = RoutingConfig::default();
@@ -383,6 +384,29 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
     // Wire app config for output_mode-aware reply emitters
     if let Some(cfg) = app_config {
         inbound_router = inbound_router.with_app_config(cfg);
+    }
+
+    // Wire generation registry for voice TTS output
+    if let Some(gen_reg) = generation_registry {
+        // Build a fresh registry snapshot from current config
+        let reg = {
+            let guard = gen_reg.read().unwrap_or_else(|e| e.into_inner());
+            // Rebuild a fresh registry with same providers
+            let mut new_reg = alephcore::generation::GenerationProviderRegistry::new();
+            for name in guard.names() {
+                if let Some(provider) = guard.get(&name) {
+                    let _ = new_reg.register(name, provider);
+                }
+            }
+            Arc::new(new_reg)
+        };
+        let gen_config = Arc::new(tokio::sync::RwLock::new(
+            alephcore::GenerationConfig::default()
+        ));
+        inbound_router = inbound_router.with_voice_output(reg, gen_config);
+        if !daemon {
+            println!("  Inbound router: voice TTS output enabled");
+        }
     }
 
     let inbound_router = Arc::new(inbound_router);
