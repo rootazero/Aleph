@@ -237,9 +237,10 @@ impl ReplyEmitter {
                 // Success — reset failure counter
                 self.voice_state.lock().await.record_success();
 
+                // Send voice-only message (no text — voice replaces text)
                 let message = OutboundMessage {
                     conversation_id: self.route.conversation_id.clone(),
-                    text: text.to_string(),
+                    text: String::new(),
                     attachments: vec![attachment],
                     reply_to: self.route.reply_to.clone(),
                     inline_keyboard: None,

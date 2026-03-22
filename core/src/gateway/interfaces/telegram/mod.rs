@@ -821,6 +821,25 @@ impl Channel for TelegramChannel {
             let _ = action_req.await;
         }
 
+        // Voice-only: if text is empty but attachments exist, skip text and send attachments only
+        if message.text.is_empty() && !message.attachments.is_empty() {
+            let mut first_msg_id = None;
+            for attachment in &message.attachments {
+                let result = self.send_attachment(bot, chat_id, thread_id, attachment).await;
+                if let Err(e) = result {
+                    tracing::warn!("Failed to send voice attachment: {}", e);
+                }
+                if first_msg_id.is_none() {
+                    // Use a placeholder message ID for the first attachment
+                    first_msg_id = Some("0".to_string());
+                }
+            }
+            return Ok(SendResult {
+                message_id: MessageId::new(first_msg_id.unwrap_or_else(|| "0".to_string())),
+                timestamp: Utc::now(),
+            });
+        }
+
         // Convert standard Markdown to Telegram HTML for reliable rendering.
         // HTML mode handles **bold**, *italic*, `code`, ```blocks```, [links](url)
         // without the fragile escaping issues of Telegram's legacy Markdown or MarkdownV2.
@@ -1037,10 +1056,16 @@ impl TelegramChannel {
             let req = with_thread!(bot.send_photo(chat_id, input_file), thread_id);
             req.await
                 .map_err(|e| ChannelError::SendFailed(format!("Failed to send photo: {}", e)))?;
-        } else if mime.starts_with("audio/") {
-            let req = with_thread!(bot.send_audio(chat_id, input_file), thread_id);
+        } else if mime == "audio/ogg" || mime == "audio/opus" || mime == "audio/ogg; codecs=opus" {
+            // Voice messages: OGG/Opus → send as voice (inline playable)
+            let req = with_thread!(bot.send_voice(chat_id, input_file), thread_id);
             req.await
-                .map_err(|e| ChannelError::SendFailed(format!("Failed to send audio: {}", e)))?;
+                .map_err(|e| ChannelError::SendFailed(format!("Failed to send voice: {}", e)))?;
+        } else if mime.starts_with("audio/") {
+            // Other audio: MP3, WAV, etc. → also send as voice for TTS output
+            let req = with_thread!(bot.send_voice(chat_id, input_file), thread_id);
+            req.await
+                .map_err(|e| ChannelError::SendFailed(format!("Failed to send voice: {}", e)))?;
         } else if mime.starts_with("video/") {
             let req = with_thread!(bot.send_video(chat_id, input_file), thread_id);
             req.await
