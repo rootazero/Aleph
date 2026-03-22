@@ -38,7 +38,10 @@ use crate::gateway::channel::{
 use crate::gateway::formatter::{MessageFormatter, MarkupFormat};
 use async_trait::async_trait;
 use chrono::{TimeZone, Utc};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::{mpsc, oneshot};
+use tokio_util::sync::CancellationToken;
 
 use teloxide::{
     prelude::*,
@@ -337,6 +340,37 @@ impl TelegramChannel {
     }
 }
 
+/// Classification of Telegram API errors for retry logic.
+#[derive(Debug)]
+enum ErrorClass {
+    /// Transient error (network, server-side) — safe to retry.
+    Recoverable,
+    /// Permanent error (bad request, unauthorized) — do not retry.
+    Unrecoverable,
+    /// Rate limited by Telegram — wait the given seconds before retrying.
+    RateLimited(u64),
+}
+
+/// Classify a teloxide request error for retry decisions.
+fn classify_error(err: &teloxide::RequestError) -> ErrorClass {
+    match err {
+        teloxide::RequestError::Api(api_err) => {
+            let msg = api_err.to_string();
+            if msg.contains("Too Many Requests") || msg.contains("429") {
+                ErrorClass::RateLimited(30)
+            } else if msg.contains("Unauthorized") || msg.contains("401") {
+                ErrorClass::Unrecoverable
+            } else if msg.contains("Bad Request") || msg.contains("400") {
+                ErrorClass::Unrecoverable
+            } else {
+                ErrorClass::Recoverable
+            }
+        }
+        teloxide::RequestError::Network(_) => ErrorClass::Recoverable,
+        _ => ErrorClass::Recoverable,
+    }
+}
+
 #[async_trait]
 impl Channel for TelegramChannel {
     fn info(&self) -> &ChannelInfo {
@@ -445,6 +479,16 @@ impl Channel for TelegramChannel {
         let channel_id = self.info.id.clone();
         let channel_id_for_cb = self.info.id.clone();
 
+        // Stall detection: shared timestamp updated by message/callback handlers
+        let now_secs = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let last_update_at = std::sync::Arc::new(AtomicU64::new(now_secs));
+        let last_update_for_msg = last_update_at.clone();
+        let last_update_for_cb = last_update_at.clone();
+        let last_update_for_watchdog = last_update_at.clone();
+
         tokio::spawn(async move {
             tracing::info!("Starting Telegram long-polling...");
             *status.write().await = ChannelStatus::Connected;
@@ -455,7 +499,13 @@ impl Channel for TelegramChannel {
                     let inbound_tx = inbound_tx.clone();
                     let config = config.clone();
                     let channel_id = channel_id.clone();
+                    let last_update = last_update_for_msg.clone();
                     async move {
+                        // Update stall detection timestamp
+                        last_update.store(
+                            SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs(),
+                            Ordering::Relaxed,
+                        );
                         if let Some(inbound) = TelegramChannel::convert_message(&msg, &bot, &config, &channel_id).await {
                             if let Err(e) = inbound_tx.send(inbound).await {
                                 tracing::error!("Failed to send inbound message: {}", e);
@@ -475,7 +525,13 @@ impl Channel for TelegramChannel {
                     let inbound_tx = inbound_tx_for_cb.clone();
                     let config = config_for_cb.clone();
                     let channel_id = channel_id_for_cb.clone();
+                    let last_update = last_update_for_cb.clone();
                     async move {
+                        // Update stall detection timestamp
+                        last_update.store(
+                            SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs(),
+                            Ordering::Relaxed,
+                        );
                         // Extract chat_id and optional thread_id for forum topic isolation
                         let (raw_chat_id, thread_id_val) = q.message.as_ref()
                             .map(|m| {
@@ -559,12 +615,42 @@ impl Channel for TelegramChannel {
                 .enable_ctrlc_handler()
                 .build();
 
+            // Watchdog: detect polling stalls (no update received for >90s)
+            let watchdog_cancel = CancellationToken::new();
+            let watchdog_token = watchdog_cancel.clone();
+            let _watchdog = tokio::spawn(async move {
+                let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+                loop {
+                    tokio::select! {
+                        _ = interval.tick() => {
+                            let now = SystemTime::now()
+                                .duration_since(UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_secs();
+                            let last = last_update_for_watchdog.load(Ordering::Relaxed);
+                            let gap = now.saturating_sub(last);
+                            if gap > 90 {
+                                tracing::warn!(
+                                    "Telegram polling stall detected ({}s since last update)",
+                                    gap
+                                );
+                                // NOTE: Auto-restart with exponential backoff is spec'd but deferred.
+                                // For now, log warning. The watchdog makes stalls observable.
+                            }
+                        }
+                        _ = watchdog_token.cancelled() => break,
+                    }
+                }
+            });
+
             tokio::select! {
                 _ = dispatcher.dispatch() => {
                     tracing::info!("Telegram dispatcher stopped");
+                    watchdog_cancel.cancel();
                 }
                 _ = &mut shutdown_rx => {
                     tracing::info!("Telegram channel shutdown requested");
+                    watchdog_cancel.cancel();
                     // Dispatcher will stop when this task ends
                 }
             }
@@ -646,17 +732,50 @@ impl Channel for TelegramChannel {
             req
         };
 
-        // Try HTML first, fall back to plain text if it fails.
-        let sent = match build_request(Some(ParseMode::Html), &html_text).await {
-            Ok(msg) => msg,
-            Err(html_err) => {
-                tracing::warn!(
-                    "HTML send failed, retrying as plain text: {}",
-                    html_err
-                );
-                build_request(None, &message.text)
-                    .await
-                    .map_err(|e| ChannelError::SendFailed(format!("Telegram send error: {}", e)))?
+        // Try HTML first with retry logic and error classification.
+        // Falls back to plain text for unrecoverable HTML parse errors.
+        let max_retries = self.config.max_retries;
+        let mut attempts = 0u32;
+        let sent = loop {
+            let result = build_request(Some(ParseMode::Html), &html_text).await;
+            match result {
+                Ok(msg) => break msg,
+                Err(e) => {
+                    attempts += 1;
+                    match classify_error(&e) {
+                        ErrorClass::Unrecoverable => {
+                            // Try plain text fallback (HTML parse errors, bad requests, etc.)
+                            tracing::warn!(
+                                "HTML send failed (unrecoverable), retrying as plain text: {}",
+                                e
+                            );
+                            break build_request(None, &message.text)
+                                .await
+                                .map_err(|e| ChannelError::SendFailed(format!("Telegram send error: {}", e)))?;
+                        }
+                        ErrorClass::RateLimited(secs) => {
+                            if attempts > max_retries {
+                                return Err(ChannelError::RateLimited { retry_after_secs: secs });
+                            }
+                            tracing::warn!(
+                                "Telegram rate limited, waiting {}s (attempt {}/{})",
+                                secs, attempts, max_retries
+                            );
+                            tokio::time::sleep(std::time::Duration::from_secs(secs)).await;
+                        }
+                        ErrorClass::Recoverable => {
+                            if attempts > max_retries {
+                                return Err(ChannelError::SendFailed(e.to_string()));
+                            }
+                            let backoff_ms = 500 * attempts as u64;
+                            tracing::warn!(
+                                "Telegram send error (recoverable), retrying in {}ms (attempt {}/{}): {}",
+                                backoff_ms, attempts, max_retries, e
+                            );
+                            tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
+                        }
+                    }
+                }
             }
         };
 
