@@ -70,8 +70,7 @@ impl InboundMessageRouter {
         // Generate a unique run ID
         let run_id = Uuid::new_v4().to_string();
 
-        // Create a ReplyEmitter to route responses back to the channel,
-        // respecting the configured output_mode (typewriter vs instant)
+        // Create a ReplyEmitter config based on output_mode
         let reply_config = match &self.app_config {
             Some(cfg) => {
                 let cfg = cfg.read().await;
@@ -82,12 +81,36 @@ impl InboundMessageRouter {
             }
             None => ReplyEmitterConfig::default(),
         };
-        let emitter = Arc::new(ReplyEmitter::with_config(
-            self.channel_registry.clone(),
-            ctx.reply_route.clone(),
-            run_id.clone(),
-            reply_config,
-        ));
+
+        // Detect feishu channel and optionally construct FeishuEventEmitter
+        let is_feishu = {
+            if let Some(handle) = self.channel_registry.get(&ctx.reply_route.channel_id).await {
+                let ch = handle.read().await;
+                ch.channel_type() == "feishu"
+            } else {
+                false
+            }
+        };
+
+        let emitter: Arc<dyn crate::gateway::event_emitter::EventEmitter + Send + Sync> = if is_feishu {
+            // Try to create FeishuEventEmitter with streaming + typing
+            match self.try_create_feishu_emitter(ctx, &run_id, reply_config.clone()).await {
+                Some(fe) => Arc::new(fe),
+                None => Arc::new(ReplyEmitter::with_config(
+                    self.channel_registry.clone(),
+                    ctx.reply_route.clone(),
+                    run_id.clone(),
+                    reply_config,
+                )),
+            }
+        } else {
+            Arc::new(ReplyEmitter::with_config(
+                self.channel_registry.clone(),
+                ctx.reply_route.clone(),
+                run_id.clone(),
+                reply_config,
+            ))
+        };
 
         // Build the run request metadata
         let mut metadata = HashMap::new();
@@ -129,5 +152,52 @@ impl InboundMessageRouter {
         });
 
         Ok(())
+    }
+
+    /// Try to create a FeishuEventEmitter for feishu channels.
+    async fn try_create_feishu_emitter(
+        &self,
+        ctx: &InboundContext,
+        run_id: &str,
+        reply_config: ReplyEmitterConfig,
+    ) -> Option<crate::gateway::interfaces::feishu::streaming::FeishuEventEmitter> {
+        use crate::gateway::interfaces::feishu::FeishuConfig;
+        use crate::gateway::interfaces::feishu::streaming::FeishuEventEmitter;
+        use crate::gateway::interfaces::feishu::client::FeishuClient;
+
+        // Read feishu config from app config
+        let feishu_cfg = {
+            let cfg = self.app_config.as_ref()?.read().await;
+            let channel_id = ctx.reply_route.channel_id.as_str();
+            let raw = cfg.channels.get(channel_id)?;
+            serde_json::from_value::<FeishuConfig>(raw.clone()).ok()?
+        };
+
+        // Create a dedicated client for the emitter
+        let client = Arc::new(FeishuClient::new(&feishu_cfg));
+        if let Err(e) = client.refresh_token().await {
+            tracing::warn!("Failed to create feishu emitter client: {e}");
+            return None;
+        }
+
+        let inner = ReplyEmitter::with_config(
+            self.channel_registry.clone(),
+            ctx.reply_route.clone(),
+            run_id.to_string(),
+            reply_config,
+        );
+
+        let chat_id = ctx.message.conversation_id.as_str().to_string();
+        let reply_to = ctx.reply_route.reply_to.as_ref().map(|id| id.as_str().to_string());
+
+        Some(FeishuEventEmitter::new(
+            inner,
+            client,
+            ctx.reply_route.clone(),
+            chat_id,
+            reply_to,
+            feishu_cfg.streaming,
+            feishu_cfg.typing_indicator,
+        ))
     }
 }

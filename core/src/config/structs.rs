@@ -180,7 +180,7 @@ pub struct Config {
 const KNOWN_CHANNEL_TYPES: &[&str] = &[
     "telegram", "discord", "whatsapp", "slack", "imessage",
     "email", "matrix", "signal", "mattermost", "irc",
-    "webhook", "xmpp", "nostr",
+    "webhook", "xmpp", "nostr", "feishu",
 ];
 
 /// A resolved channel instance from the channels config HashMap.
