@@ -354,6 +354,21 @@ impl ReplyEmitter {
         let error_message = format!("Error: {}", error);
         self.send_to_channel(&error_message).await;
     }
+
+    /// React on the original inbound message (best-effort, non-blocking)
+    async fn react_on_inbound(&self, emoji: &str) {
+        if let Some(ref msg_id) = self.route.inbound_message_id {
+            let _ = self
+                .channel_registry
+                .react(
+                    &self.route.channel_id,
+                    &self.route.conversation_id,
+                    msg_id,
+                    emoji,
+                )
+                .await;
+        }
+    }
 }
 
 #[async_trait]
@@ -370,6 +385,11 @@ impl EventEmitter for ReplyEmitter {
                     }
                     // Do NOT buffer — this is a separate message from the final response
                 } else {
+                    // React with 👀 on first non-intermediate chunk (processing started)
+                    if !self.has_sent.load(Ordering::SeqCst) && !content.is_empty() {
+                        self.react_on_inbound("👀").await;
+                    }
+
                     // Existing behavior: accumulate text into buffer
                     if !content.is_empty() {
                         self.buffer.lock().await.push_str(&content);
@@ -389,13 +409,14 @@ impl EventEmitter for ReplyEmitter {
             }
 
             StreamEvent::RunComplete { summary, .. } => {
-                // Flush accumulated buffer
+                // Flush accumulated buffer (always flush — intermediate messages
+                // may have set has_sent, but the buffer holds the final response)
                 let text = {
                     let mut buffer = self.buffer.lock().await;
                     std::mem::take(&mut *buffer)
                 };
 
-                if !text.is_empty() && !self.has_sent.load(Ordering::SeqCst) {
+                if !text.is_empty() {
                     if self.config.stream_enabled {
                         self.send_typewriter(&text).await;
                     } else {
@@ -403,8 +424,9 @@ impl EventEmitter for ReplyEmitter {
                     }
                 }
 
-                // Fallback: if nothing was sent, use final_response from summary
-                if !self.has_sent.load(Ordering::SeqCst) {
+                // Fallback: if buffer was empty (race with fire-and-forget emit),
+                // use final_response from summary
+                if text.is_empty() {
                     if let Some(ref final_response) = summary.final_response {
                         if !final_response.is_empty() {
                             debug!(
@@ -420,6 +442,9 @@ impl EventEmitter for ReplyEmitter {
                         }
                     }
                 }
+
+                // React with 👍 on successful completion
+                self.react_on_inbound("👍").await;
             }
 
             StreamEvent::RunError { error, .. } => {
@@ -434,6 +459,9 @@ impl EventEmitter for ReplyEmitter {
 
                 warn!("Run {} failed: {}", self.run_id, error);
                 self.send_error(&error).await;
+
+                // React with 👎 on error
+                self.react_on_inbound("👎").await;
             }
 
             StreamEvent::AskUser { question, .. } => {

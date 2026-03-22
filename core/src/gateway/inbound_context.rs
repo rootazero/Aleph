@@ -16,6 +16,8 @@ pub struct ReplyRoute {
     pub conversation_id: ConversationId,
     /// Optional: reply to specific message
     pub reply_to: Option<MessageId>,
+    /// Optional: the original inbound message ID (for reactions)
+    pub inbound_message_id: Option<MessageId>,
 }
 
 impl ReplyRoute {
@@ -25,12 +27,19 @@ impl ReplyRoute {
             channel_id,
             conversation_id,
             reply_to: None,
+            inbound_message_id: None,
         }
     }
 
     /// Create reply route with reply-to reference
     pub fn with_reply_to(mut self, message_id: MessageId) -> Self {
         self.reply_to = Some(message_id);
+        self
+    }
+
+    /// Set the original inbound message ID (for reaction lifecycle)
+    pub fn with_inbound_message_id(mut self, id: MessageId) -> Self {
+        self.inbound_message_id = Some(id);
         self
     }
 }

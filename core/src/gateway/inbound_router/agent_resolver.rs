@@ -35,7 +35,8 @@ impl InboundMessageRouter {
         let reply_route = ReplyRoute::new(
             msg.channel_id.clone(),
             msg.conversation_id.clone(),
-        );
+        )
+        .with_inbound_message_id(msg.id.clone());
 
         let base_key = self.resolve_session_key_with_agent(msg, agent_id);
 
