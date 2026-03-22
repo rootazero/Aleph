@@ -131,6 +131,15 @@ impl OpenAiProtocol {
                                 _ => None,
                             })
                             .collect();
+                        let image_count = blocks.iter().filter(|b| matches!(b, OaiContentBlock::ImageUrl { .. })).count();
+                        tracing::info!(
+                            target: "multimodal",
+                            probe = "P6_provider",
+                            role = "user",
+                            content_type = "multimodal",
+                            image_count = image_count,
+                            "OpenAI multimodal message converted"
+                        );
                         result.push(Message {
                             role: "user".to_string(),
                             content: MessageContent::Multimodal { content: blocks },

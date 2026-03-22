@@ -79,6 +79,17 @@ impl AnthropicProtocol {
                             _ => {}
                         }
                     }
+                    let image_count = blocks.iter().filter(|b| matches!(b, ContentBlock::Image { .. })).count();
+                    if image_count > 0 {
+                        tracing::info!(
+                            target: "multimodal",
+                            probe = "P6_provider",
+                            role = "user",
+                            content_type = "multimodal",
+                            image_count = image_count,
+                            "Anthropic multimodal message converted"
+                        );
+                    }
                     if blocks.is_empty() {
                         blocks.push(ContentBlock::Text {
                             text: String::new(),

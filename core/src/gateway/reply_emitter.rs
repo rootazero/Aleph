@@ -439,6 +439,14 @@ impl ReplyEmitter {
     /// React on the original inbound message (best-effort, non-blocking)
     async fn react_on_inbound(&self, emoji: &str) {
         if let Some(ref msg_id) = self.route.inbound_message_id {
+            tracing::info!(
+                target: "multimodal",
+                probe = "P7_reaction",
+                run_id = %self.run_id,
+                emoji = %emoji,
+                message_id = %msg_id.as_str(),
+                "Processing status reaction"
+            );
             let _ = self
                 .channel_registry
                 .react(

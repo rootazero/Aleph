@@ -192,6 +192,20 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             }];
             content.extend(media_blocks);
 
+            let has_images = content.iter().any(|b| matches!(b, crate::providers::message::ContentBlock::Image { .. }));
+            let has_transcripts = content.iter().any(|b| {
+                if let crate::providers::message::ContentBlock::Text { text } = b { text.starts_with("[Voice message transcript]") } else { false }
+            });
+            tracing::info!(
+                target: "multimodal",
+                probe = "P5_inject",
+                run_id = %request.run_id,
+                content_blocks = content.len(),
+                has_images = has_images,
+                has_transcripts = has_transcripts,
+                "Multimodal UnifiedMessage built"
+            );
+
             history.push(crate::providers::message::UnifiedMessage::user_with_content(content));
 
             let result = agent_loop.run_with_history_messages(history, &mut callback).await;
