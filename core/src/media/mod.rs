@@ -1,12 +1,21 @@
-//! Media understanding pipeline — unified interface for image, audio, video, and document processing.
+//! Media processing pipeline for multimodal LLM interaction.
 //!
-//! # Architecture
+//! Handles attachment download, caching, image injection, and audio transcription.
+//! MediaProcessor is the unified entry point, owned by ExecutionEngine.
 //!
-//! The media system follows the same pattern as the [`vision`](crate::vision) module:
-//! a pipeline orchestrator with pluggable providers and fallback chains.
+//! # Data Flow
 //!
-//! Core defines traits only (per R1/R3). Heavy processing (ffmpeg, DOCX parsing)
-//! is delegated to external plugins or API providers.
+//! ```text
+//! Channel → InboundMessage.attachments
+//!     → RunRequest.attachments
+//!         → MediaProcessor.process()
+//!             ├─ Image + vision → ContentBlock::Image (native)
+//!             ├─ Image - vision → VisionPipeline → ContentBlock::Text
+//!             ├─ Audio + STT    → WhisperAPI → ContentBlock::Text
+//!             └─ Other          → ContentBlock::Text (placeholder)
+//!         → UnifiedMessage::User { content: [Text, Image, ...] }
+//!             → Provider adapter → LLM API call
+//! ```
 //!
 //! # Components
 //!
