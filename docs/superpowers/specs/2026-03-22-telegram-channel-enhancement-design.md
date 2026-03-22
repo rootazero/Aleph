@@ -14,24 +14,30 @@ Reference: OpenClaw Telegram implementation analyzed for feature gap identificat
 
 ### 1.1 Processing Status Reactions
 
-**Goal**: Visual feedback — user sees ⏳ immediately, then ✅ or ❌ on completion.
+**Goal**: Visual feedback — user sees a processing reaction immediately, then success or failure on completion.
 
 **Changes**:
 
 1. **`Channel` trait `react()` signature** (`channel.rs:490`):
    - Add `conversation_id: &ConversationId` parameter: `react(conversation_id, message_id, reaction)`
-   - All existing Channel implementations updated (default impl unchanged)
+   - **All Channel implementations that override `react()` must update their signature** (Slack, Nostr, Discord, Matrix, Signal, Mattermost, iMessage `message_ops`)
+   - Default impl remains a no-op but with updated signature
 
 2. **`TelegramChannel`**:
    - Set `capabilities.reactions = true` (`mod.rs:112`)
    - Implement `react()` via `bot.set_message_reaction(chat_id, msg_id, [ReactionType::Emoji(emoji)])`
 
-3. **Reaction lifecycle** (in `ReplyEmitter` or execution layer):
-   - On first `ResponseChunk`: react ⏳ on the inbound message
-   - On `RunComplete` with success: change to ✅
-   - On `RunComplete` with error: change to ❌
+3. **Reaction emoji selection**:
+   - Telegram restricts reactions to a fixed allowlist (not all Unicode emoji are valid)
+   - Use confirmed-valid emoji: `👀` (processing), `👍` (success), `👎` (failure)
+   - **Fallback**: if `set_message_reaction` returns 400, swallow the error silently — reactions are non-critical UX enhancement
 
-**Files**: `channel.rs`, `telegram/mod.rs`, `reply_emitter.rs`
+4. **Reaction lifecycle** (in `ReplyEmitter` or execution layer):
+   - On first `ResponseChunk`: react 👀 on the inbound message
+   - On `RunComplete` with success: change to 👍
+   - On `RunComplete` with error: change to 👎
+
+**Files**: `channel.rs`, `telegram/mod.rs`, `reply_emitter.rs`, and all Channel impls that override `react()`
 
 ### 1.2 Multimodal Media Passthrough
 
@@ -40,13 +46,18 @@ Reference: OpenClaw Telegram implementation analyzed for feature gap identificat
 **Changes**:
 
 1. **`extract_attachments()` → async** (`mod.rs:203`):
-   - Accept `&Bot` parameter
+   - Accept `bot: &Bot` parameter (by-value `Bot` is `Clone`; clone in closure, pass `&bot` to this fn)
    - Call `bot.get_file(file_id)` to obtain `file_path`
    - Construct download URL: `https://api.telegram.org/file/bot<token>/<file_path>`
    - Set `Attachment.url` to this URL
+   - **Security note**: The URL contains the bot token. This is accepted risk because:
+     (a) the URL is only used internally by Core to download the file, never exposed to users or LLM context;
+     (b) Telegram's own Bot API documentation uses this pattern.
+     If this becomes a concern, a future iteration can proxy downloads through a local endpoint.
 
 2. **`convert_message()` → async** (`mod.rs:125`):
-   - Accept `&Bot` parameter (needed by async `extract_attachments`)
+   - Accept `bot: &Bot` parameter (needed by async `extract_attachments`)
+   - In the message handler closure: `bot` is received by value (`bot: Bot`), clone it before the `async move` block, then pass `&bot_clone` to `convert_message`
    - Message handler endpoint updated accordingly
 
 3. **Allow attachment-only messages** (`mod.rs:169-171`):
@@ -96,23 +107,26 @@ Reference: OpenClaw Telegram implementation analyzed for feature gap identificat
    };
    ```
 
-2. **Helper function**:
+2. **Helper function** (returns teloxide-compatible types):
    ```rust
-   fn parse_conversation_id(conv_id: &str) -> (i64, Option<i32>) {
+   fn parse_conversation_id(conv_id: &str) -> (ChatId, Option<ThreadId>) {
        if let Some((chat, topic)) = conv_id.split_once(":topic:") {
-           (chat.parse().unwrap_or(0), topic.parse().ok())
+           let chat_id = ChatId(chat.parse().unwrap_or(0));
+           let thread_id = topic.parse::<i32>().ok().map(|id| ThreadId(MessageId(id)));
+           (chat_id, thread_id)
        } else {
-           (conv_id.parse().unwrap_or(0), None)
+           (ChatId(conv_id.parse().unwrap_or(0)), None)
        }
    }
    ```
 
 3. **`send()`** — set `message_thread_id` when topic is present:
-   - Parse conversation_id to extract `(chat_id, thread_id)`
-   - If `thread_id.is_some() && thread_id != Some(1)`: set `.message_thread_id(thread_id)`
-   - General topic (`thread_id == 1`): do NOT set `message_thread_id`
+   - Parse conversation_id to extract `(ChatId, Option<ThreadId>)`
+   - If `thread_id.is_some() && thread_id != Some(ThreadId(MessageId(1)))`: set `.message_thread_id(thread_id)`
+   - General topic (`thread_id == 1`): do NOT set `message_thread_id` (Telegram API returns 400 "Message thread not found")
+   - **Defensive fallback**: if any send/typing call returns 400 with "message thread not found", retry once without `message_thread_id` (handles the case where Forum mode is disabled on a group with stale topic IDs)
 
-4. **`send_typing()`** — also needs topic-aware chat action
+4. **`send_typing()`** — also needs topic-aware chat action, with same defensive fallback
 5. **`edit()`** — no change needed (edit uses chat_id + message_id, no thread needed)
 
 **Files**: `telegram/mod.rs`
@@ -136,7 +150,8 @@ Covered in Wave 1 section 1.2 (sticker extraction). Additional Wave 2 work:
 
 2. **Persistent typing indicator**:
    - On first `ResponseChunk` received, spawn a background task that sends typing every 4 seconds
-   - Cancel on `RunComplete`
+   - Cancel on `RunComplete` via `tokio_util::CancellationToken`
+   - Store `CancellationToken` in `ReplyEmitter`; also cancel in `Drop` impl as safety net (ensures cleanup even if `RunComplete` is never emitted due to crash/disconnect)
    - Requires storing `channel_id` and `conversation_id` in `ReplyEmitter` (already available via `route`)
 
 3. **Adaptive edit interval**:
@@ -211,7 +226,8 @@ Covered in Wave 1 section 1.2 (sticker extraction). Additional Wave 2 work:
 | `channel.rs` | 1 | `react()` signature: add `conversation_id` |
 | `telegram/mod.rs` | 1,2,3 | Reactions, async media extraction, stickers, topic routing, stall detection, pairing |
 | `telegram/config.rs` | 3 | Pairing code storage, runtime allowlist mutation |
-| `reply_emitter.rs` | 1,2 | Reaction lifecycle, smart chunking, typing persistence, intermediate typewriter |
+| `reply_emitter.rs` | 1,2 | Reaction lifecycle, smart chunking, typing persistence (with CancellationToken), intermediate typewriter |
+| All Channel impls with `react()` override | 1 | Signature update: Slack, Nostr, Discord, Matrix, Signal, Mattermost, iMessage message_ops |
 
 ## Not In Scope
 
