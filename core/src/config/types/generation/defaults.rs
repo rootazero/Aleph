@@ -76,6 +76,10 @@ pub struct GenerationDefaults {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub language: Option<String>,
 
+    /// STT (speech-to-text) model name (default: whisper-1)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stt_model: Option<String>,
+
     // === Common parameters ===
     /// Default guidance scale / CFG scale
     #[serde(default, skip_serializing_if = "Option::is_none")]

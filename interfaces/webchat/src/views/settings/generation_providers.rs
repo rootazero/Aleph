@@ -9,6 +9,34 @@ use crate::context::DashboardState;
 use crate::generation::GenerationType;
 use crate::preset_providers::{PresetProvider, PresetProviders};
 
+/// Extract base URL from a potentially full endpoint URL.
+///
+/// If the URL contains a versioned API path (`/v1/`, `/v2/`, etc.),
+/// strip everything from the version segment onward. Otherwise return as-is.
+///
+/// Examples:
+/// - `https://ai.t8star.cn/v1/audio/speech` → `https://ai.t8star.cn`
+/// - `https://ai.t8star.cn/v2/videos/generations` → `https://ai.t8star.cn`
+/// - `https://ai.t8star.cn` → `https://ai.t8star.cn`
+/// - `https://api.openai.com/v1/images/generations` → `https://api.openai.com`
+fn extract_base_url(url: &str) -> String {
+    let url = url.trim().trim_end_matches('/');
+    // Match /v{digit}/ or /v{digit} at end — covers /v1/, /v2/, /v3/, etc.
+    for (i, _) in url.match_indices("/v") {
+        let rest = &url[i + 2..];
+        // Check if next char is a digit followed by / or end
+        if let Some(ch) = rest.chars().next() {
+            if ch.is_ascii_digit() {
+                // Check if followed by / or nothing more (just /vN at end)
+                let after_digit = &rest[1..];
+                if after_digit.is_empty() || after_digit.starts_with('/') {
+                    return url[..i].to_string();
+                }
+            }
+        }
+    }
+    url.to_string()
+}
 
 #[component]
 pub fn GenerationProvidersView() -> impl IntoView {
@@ -495,6 +523,7 @@ fn ProviderDetailView(
     let form_voice = RwSignal::new(provider.config.defaults.voice.clone().unwrap_or_default());
     let form_speed = RwSignal::new(provider.config.defaults.speed.unwrap_or(1.0));
     let form_audio_format = RwSignal::new(provider.config.defaults.format.clone().unwrap_or_else(|| "mp3".to_string()));
+    let form_stt_model = RwSignal::new(provider.config.defaults.stt_model.clone().unwrap_or_else(|| "whisper-1".to_string()));
     let voices_list: RwSignal<Vec<VoiceInfo>> = RwSignal::new(Vec::new());
     let voices_loading = RwSignal::new(false);
 
@@ -553,6 +582,8 @@ fn ProviderDetailView(
             defaults.speed = Some(form_speed.get());
             let fmt = form_audio_format.get();
             defaults.format = if fmt.is_empty() { None } else { Some(fmt) };
+            let stt = form_stt_model.get();
+            defaults.stt_model = if stt.is_empty() { None } else { Some(stt) };
 
             GenerationProviderConfig {
                 provider_type: config_provider_type.clone(),
@@ -562,7 +593,7 @@ fn ProviderDetailView(
                 },
                 secret_name: None,
                 base_url: {
-                    let url = form_base_url.get();
+                    let url = extract_base_url(&form_base_url.get());
                     if url.is_empty() { None } else { Some(url) }
                 },
                 edit_url: {
@@ -915,6 +946,46 @@ fn ProviderDetailView(
                                 <option value="aac">"AAC"</option>
                                 <option value="flac">"FLAC"</option>
                             </select>
+                        </div>
+
+                        // STT Model
+                        <div>
+                            <label class="block text-sm font-medium text-text-secondary mb-1">"STT Model (Speech-to-Text)"</label>
+                            <input
+                                type="text"
+                                prop:value=move || form_stt_model.get()
+                                on:input=move |ev| form_stt_model.set(event_target_value(&ev))
+                                placeholder="whisper-1"
+                                class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+                            />
+                            <p class="mt-1 text-xs text-text-tertiary">"Model for voice-to-text transcription (default: whisper-1)"</p>
+                        </div>
+
+                        // Derived Endpoints (read-only info)
+                        <div class="bg-surface-sunken rounded-lg p-3 space-y-2">
+                            <h4 class="text-xs font-semibold text-text-tertiary uppercase">"ENDPOINTS (auto-derived)"</h4>
+                            <div class="space-y-1.5 text-xs font-mono">
+                                <div class="flex gap-2">
+                                    <span class="text-text-tertiary w-8 shrink-0">"TTS"</span>
+                                    <span class="text-text-secondary break-all">
+                                        {move || {
+                                            let base = form_base_url.get();
+                                            let base = extract_base_url(&base);
+                                            format!("{}/v1/audio/speech", base)
+                                        }}
+                                    </span>
+                                </div>
+                                <div class="flex gap-2">
+                                    <span class="text-text-tertiary w-8 shrink-0">"STT"</span>
+                                    <span class="text-text-secondary break-all">
+                                        {move || {
+                                            let base = form_base_url.get();
+                                            let base = extract_base_url(&base);
+                                            format!("{}/v1/audio/transcriptions", base)
+                                        }}
+                                    </span>
+                                </div>
+                            </div>
                         </div>
                     </div>
                 }.into_any()
@@ -1288,21 +1359,8 @@ fn AddCustomProviderPanel(
             },
             secret_name: None,
             base_url: {
-                let mut url = base_url.get().trim().to_string();
-                if !url.is_empty() {
-                    // Strip known API paths — providers append these automatically
-                    for suffix in &[
-                        "/v1/audio/speech", "/v1/images/generations", "/v1/images/edits",
-                        "/v1/audio/transcriptions", "/v1/chat/completions",
-                    ] {
-                        if url.ends_with(suffix) {
-                            url = url[..url.len() - suffix.len()].to_string();
-                            break;
-                        }
-                    }
-                    // Strip trailing slash
-                    url = url.trim_end_matches('/').to_string();
-                }
+                let url = base_url.get();
+                let url = extract_base_url(&url);
                 if url.is_empty() { None } else { Some(url) }
             },
             edit_url: {

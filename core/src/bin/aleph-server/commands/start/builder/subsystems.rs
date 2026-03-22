@@ -393,12 +393,14 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
                     if !key.is_empty() {
                         let base = pcfg.base_url.as_deref().unwrap_or("https://api.openai.com");
                         // Strip /v1/audio/speech if present — we need just the base for /v1/audio/transcriptions
-                        let base = base.trim_end_matches("/v1/audio/speech")
-                            .trim_end_matches('/');
+                        // Extract base URL (strip /v1/audio/speech etc.)
+                        let base = crate::extract_base_url(base);
+                        let stt_model = pcfg.defaults.stt_model.clone()
+                            .unwrap_or_else(|| "whisper-1".to_string());
                         let stt = alephcore::gateway::voice::inbound::SttConfig {
                             api_key: key.clone(),
                             base_url: format!("{}/v1", base),
-                            model: "whisper-1".to_string(),
+                            model: stt_model,
                         };
                         inbound_router = inbound_router.with_stt_config(stt);
                         if !daemon {

@@ -32,6 +32,8 @@ pub struct GenerationDefaults {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub language: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stt_model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub guidance_scale: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub steps: Option<u32>,
