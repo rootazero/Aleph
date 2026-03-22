@@ -201,8 +201,9 @@ impl<P: LoopProvider> AgentLoop<P> {
         let mut hit_limit = false;
         let mut stop_requested = false;
         let mut consecutive_errors: usize = 0;
-        let mut nudge_sent = false;
+        let mut completion_nudge_count: usize = 0;
         const MAX_CONSECUTIVE_ERRORS: usize = 10;
+        const MAX_COMPLETION_NUDGES: usize = 3;
 
         let start = Instant::now();
 
@@ -255,28 +256,50 @@ impl<P: LoopProvider> AgentLoop<P> {
             // Push complete assistant message from response
             messages.push(UnifiedMessage::from_provider_response(&response));
 
-            // If no tool calls and EndTurn → check persistence nudge before stopping
+            // If no tool calls and EndTurn → check completion protocol before stopping
             if !response.has_tool_calls() && response.stop_reason == StopReason::EndTurn {
-                if consecutive_errors > 0 && !nudge_sent {
-                    // Persistence nudge: the LLM is giving up after errors.
-                    // Challenge it to try harder before accepting the stop.
-                    nudge_sent = true;
-                    consecutive_errors = 0;
+                // Simple Q&A (no tools used) → stop naturally, no completion protocol
+                if tool_calls_made == 0 {
+                    break;
+                }
+
+                // Complex task: check for completion tag in CURRENT response
+                let has_completion_tag = response
+                    .text
+                    .as_ref()
+                    .map_or(false, |t| t.contains("<task-complete/>"));
+
+                if has_completion_tag {
+                    break;
+                }
+
+                // No completion tag — nudge based on stage
+                if completion_nudge_count < MAX_COMPLETION_NUDGES {
+                    completion_nudge_count += 1;
                     tracing::info!(
                         iteration = iterations,
-                        "Persistence nudge: LLM tried to stop after errors, injecting retry prompt"
+                        nudge = completion_nudge_count,
+                        "Completion protocol: LLM stopped without <task-complete/>, injecting nudge"
                     );
-                    messages.push(UnifiedMessage::user(
-                        "[SYSTEM] Your task is not yet fully resolved — the last tool calls \
-                         failed and you stopped without a successful outcome. Do NOT apologize \
-                         or explain the failure. Instead: try a different approach, use different \
-                         parameters, or attempt an alternative strategy to complete the user's \
-                         original request. If you have genuinely exhausted ALL possible approaches, \
-                         explain each approach you tried and why it failed.",
-                    ));
+
+                    let nudge_msg = if completion_nudge_count < MAX_COMPLETION_NUDGES {
+                        // Stage 1: challenge (first 2 nudges)
+                        "[SYSTEM] You stopped but have not confirmed task completion. \
+                         Do NOT apologize or explain. Review your work against the original request: \
+                         is every requirement met? If not, try a different approach. \
+                         When fully done, output a <completion-check> block and <task-complete/>."
+                    } else {
+                        // Stage 2: graceful exit (3rd nudge)
+                        "[SYSTEM] Final attempt. Summarize: (1) what approaches you tried, \
+                         (2) what succeeded and what failed, (3) what the user should do next. \
+                         Then output <task-complete/>."
+                    };
+
+                    messages.push(UnifiedMessage::user(nudge_msg));
                     continue;
                 }
-                break;
+
+                break; // Exhausted all nudges
             }
 
             // If no tool calls but not EndTurn (e.g., MaxTokens) → done with limit
@@ -697,7 +720,7 @@ mod tests {
                 }),
             },
             ProviderResponse {
-                text: Some("Done echoing.".to_string()),
+                text: Some("Done echoing. <task-complete/>".to_string()),
                 tool_calls: vec![],
                 thinking: None,
                 stop_reason: StopReason::EndTurn,
@@ -713,7 +736,7 @@ mod tests {
         let mut cb = TrackingCallback::default();
         let result = agent.run("Echo something", &mut cb).await.unwrap();
 
-        assert_eq!(result.final_text.as_deref(), Some("Done echoing."));
+        assert_eq!(result.final_text.as_deref(), Some("Done echoing. <task-complete/>"));
         assert_eq!(result.iterations, 2);
         assert_eq!(result.tool_calls_made, 1);
         assert_eq!(result.total_tokens, 65);
@@ -782,7 +805,7 @@ mod tests {
                 usage: None,
             },
             ProviderResponse {
-                text: Some("I cannot do that.".to_string()),
+                text: Some("I cannot do that. <task-complete/>".to_string()),
                 tool_calls: vec![],
                 thinking: None,
                 stop_reason: StopReason::EndTurn,
@@ -809,7 +832,7 @@ mod tests {
         let mut cb = TrackingCallback::default();
         let result = agent.run("delete everything", &mut cb).await.unwrap();
 
-        assert_eq!(result.final_text.as_deref(), Some("I cannot do that."));
+        assert_eq!(result.final_text.as_deref(), Some("I cannot do that. <task-complete/>"));
         assert_eq!(result.iterations, 2);
         assert_eq!(result.tool_calls_made, 1);
         assert!(!result.hit_limit);
@@ -861,7 +884,7 @@ mod tests {
                 },
                 // Turn 3: final text
                 ProviderResponse {
-                    text: Some("All done.".to_string()),
+                    text: Some("All done. <task-complete/>".to_string()),
                     tool_calls: vec![],
                     thinking: None,
                     stop_reason: StopReason::EndTurn,
@@ -894,7 +917,7 @@ mod tests {
 
         assert_eq!(result.iterations, 3);
         assert_eq!(result.tool_calls_made, 2);
-        assert_eq!(result.final_text.as_deref(), Some("All done."));
+        assert_eq!(result.final_text.as_deref(), Some("All done. <task-complete/>"));
         assert!(!result.hit_limit);
 
         // Verify history accumulates: each call should have more messages
@@ -936,7 +959,7 @@ mod tests {
             },
             // Turn 2: final text
             ProviderResponse {
-                text: Some("Both done.".to_string()),
+                text: Some("Both done. <task-complete/>".to_string()),
                 tool_calls: vec![],
                 thinking: None,
                 stop_reason: StopReason::EndTurn,
@@ -950,7 +973,7 @@ mod tests {
 
         assert_eq!(result.iterations, 2);
         assert_eq!(result.tool_calls_made, 2);
-        assert_eq!(result.final_text.as_deref(), Some("Both done."));
+        assert_eq!(result.final_text.as_deref(), Some("Both done. <task-complete/>"));
         assert!(!result.hit_limit);
         assert_eq!(cb.tool_starts, vec!["echo", "echo"]);
     }
@@ -1060,9 +1083,9 @@ mod tests {
             stop_reason: StopReason::EndTurn,
             usage: None,
         });
-        // After nudge: LLM acknowledges and finishes
+        // After completion nudge: LLM acknowledges and finishes with tag
         responses.push(ProviderResponse {
-            text: Some("Survived.".to_string()),
+            text: Some("Survived. <task-complete/>".to_string()),
             tool_calls: vec![],
             thinking: None,
             stop_reason: StopReason::EndTurn,
@@ -1090,7 +1113,7 @@ mod tests {
         let result = agent.run("alternate errors", &mut cb).await.unwrap();
 
         assert!(!result.hit_limit);
-        assert_eq!(result.final_text.as_deref(), Some("Survived."));
+        assert_eq!(result.final_text.as_deref(), Some("Survived. <task-complete/>"));
         // 5 fails + 1 echo + 5 fails = 11 tool calls, +1 nudge iteration
         assert_eq!(result.tool_calls_made, 11);
         // 11 tool iterations + 1 EndTurn (nudge fires) + 1 post-nudge EndTurn = 13
@@ -1352,7 +1375,7 @@ mod tests {
                 },
                 // Turn 2: final response
                 ProviderResponse {
-                    text: Some("Here are the results.".to_string()),
+                    text: Some("Here are the results. <task-complete/>".to_string()),
                     tool_calls: vec![],
                     thinking: None,
                     stop_reason: StopReason::EndTurn,
@@ -1407,49 +1430,37 @@ mod tests {
     }
 
     // =========================================================================
-    // L10: Persistence nudge fires when EndTurn follows errors
+    // L10: Completion protocol nudge fires when EndTurn lacks <task-complete/>
     // =========================================================================
 
     #[tokio::test]
-    async fn test_persistence_nudge_on_premature_stop() {
+    async fn test_completion_nudge_on_missing_tag() {
         let captured = Arc::new(Mutex::new(Vec::<Vec<UnifiedMessage>>::new()));
         let provider = CapturingMockProvider::new(
             vec![
-                // Turn 1: call a tool that fails
+                // Turn 1: call a tool
                 ProviderResponse {
                     text: None,
                     tool_calls: vec![NativeToolCall {
                         id: "call_1".to_string(),
-                        name: "fail".to_string(),
-                        arguments: json!({}),
+                        name: "echo".to_string(),
+                        arguments: json!({ "message": "work" }),
                     }],
                     thinking: None,
                     stop_reason: StopReason::ToolUse,
                     usage: None,
                 },
-                // Turn 2: LLM tries to give up
+                // Turn 2: LLM stops without completion tag
                 ProviderResponse {
-                    text: Some("Sorry, the tool failed.".to_string()),
+                    text: Some("I think I'm done.".to_string()),
                     tool_calls: vec![],
                     thinking: None,
                     stop_reason: StopReason::EndTurn,
                     usage: None,
                 },
-                // Turn 3: After nudge, LLM retries with a different tool
+                // Turn 3: After nudge, LLM completes properly with tag
                 ProviderResponse {
-                    text: None,
-                    tool_calls: vec![NativeToolCall {
-                        id: "call_2".to_string(),
-                        name: "echo".to_string(),
-                        arguments: json!({ "message": "retried" }),
-                    }],
-                    thinking: None,
-                    stop_reason: StopReason::ToolUse,
-                    usage: None,
-                },
-                // Turn 4: Final success
-                ProviderResponse {
-                    text: Some("Done after retry.".to_string()),
+                    text: Some("Verified. <task-complete/>".to_string()),
                     tool_calls: vec![],
                     thinking: None,
                     stop_reason: StopReason::EndTurn,
@@ -1460,7 +1471,6 @@ mod tests {
         );
 
         let mut registry = LoopToolRegistry::new();
-        registry.register(Box::new(FailTool));
         registry.register(Box::new(EchoTool));
         let agent = AgentLoop::new(
             provider,
@@ -1478,19 +1488,18 @@ mod tests {
         let result = agent.run("do something", &mut cb).await.unwrap();
 
         // The loop continued past the first EndTurn thanks to the nudge
-        assert_eq!(result.iterations, 4);
-        assert_eq!(result.final_text.as_deref(), Some("Done after retry."));
+        assert_eq!(result.iterations, 3);
+        assert_eq!(result.final_text.as_deref(), Some("Verified. <task-complete/>"));
         assert!(!result.hit_limit);
 
         // Verify the nudge message was injected
         let caps = captured.lock().unwrap_or_else(|e| e.into_inner());
-        // The 3rd call's messages should contain a user nudge message
         let third_call_msgs = &caps[2];
         let has_nudge = third_call_msgs.iter().any(|m| {
             if let UnifiedMessage::User { content } = m {
                 content.iter().any(|b| {
                     if let ContentBlock::Text { text } = b {
-                        text.contains("not yet fully resolved")
+                        text.contains("have not confirmed task completion")
                     } else {
                         false
                     }
@@ -1499,51 +1508,55 @@ mod tests {
                 false
             }
         });
-        assert!(has_nudge, "Expected a persistence nudge message");
+        assert!(has_nudge, "Expected a completion nudge message");
     }
 
     // =========================================================================
-    // L11: Persistence nudge fires only once
+    // L11: Completion nudge escalates through 3 stages then stops
     // =========================================================================
 
     #[tokio::test]
-    async fn test_persistence_nudge_fires_only_once() {
+    async fn test_completion_nudge_3_stages() {
         let provider = MockProvider::new(vec![
-            // Turn 1: fail
+            // Turn 1: tool call
             ProviderResponse {
                 text: None,
                 tool_calls: vec![NativeToolCall {
                     id: "call_1".to_string(),
-                    name: "fail".to_string(),
-                    arguments: json!({}),
+                    name: "echo".to_string(),
+                    arguments: json!({ "message": "work" }),
                 }],
                 thinking: None,
                 stop_reason: StopReason::ToolUse,
                 usage: None,
             },
-            // Turn 2: LLM gives up (nudge will fire)
+            // Turn 2: EndTurn without tag → nudge 1 (challenge)
             ProviderResponse {
-                text: Some("Failed.".to_string()),
+                text: Some("I'm done.".to_string()),
                 tool_calls: vec![],
                 thinking: None,
                 stop_reason: StopReason::EndTurn,
                 usage: None,
             },
-            // Turn 3: After nudge, fail again
+            // Turn 3: Still no tag → nudge 2 (challenge)
             ProviderResponse {
-                text: None,
-                tool_calls: vec![NativeToolCall {
-                    id: "call_2".to_string(),
-                    name: "fail".to_string(),
-                    arguments: json!({}),
-                }],
+                text: Some("Really done.".to_string()),
+                tool_calls: vec![],
                 thinking: None,
-                stop_reason: StopReason::ToolUse,
+                stop_reason: StopReason::EndTurn,
                 usage: None,
             },
-            // Turn 4: LLM gives up again (no nudge this time — already sent)
+            // Turn 4: Still no tag → nudge 3 (graceful exit)
             ProviderResponse {
-                text: Some("Truly cannot do it.".to_string()),
+                text: Some("Still no tag.".to_string()),
+                tool_calls: vec![],
+                thinking: None,
+                stop_reason: StopReason::EndTurn,
+                usage: None,
+            },
+            // Turn 5: After 3 nudges, still no tag → loop stops unconditionally
+            ProviderResponse {
+                text: Some("Giving up.".to_string()),
                 tool_calls: vec![],
                 thinking: None,
                 stop_reason: StopReason::EndTurn,
@@ -1552,7 +1565,7 @@ mod tests {
         ]);
 
         let mut registry = LoopToolRegistry::new();
-        registry.register(Box::new(FailTool));
+        registry.register(Box::new(EchoTool));
         let agent = AgentLoop::new(
             provider,
             registry,
@@ -1566,11 +1579,11 @@ mod tests {
         );
 
         let mut cb = TrackingCallback::default();
-        let result = agent.run("keep failing", &mut cb).await.unwrap();
+        let result = agent.run("stubborn task", &mut cb).await.unwrap();
 
-        // Nudge fired once, then LLM stopped for real
-        assert_eq!(result.iterations, 4);
-        assert_eq!(result.final_text.as_deref(), Some("Truly cannot do it."));
+        // 1 tool + 3 EndTurns (each nudged) + 1 final EndTurn (stops) = 5 iterations
+        assert_eq!(result.iterations, 5);
+        assert_eq!(result.final_text.as_deref(), Some("Giving up."));
         assert!(!result.hit_limit);
     }
 
@@ -1596,7 +1609,7 @@ mod tests {
             .collect();
         // Final text (EndTurn with consecutive_errors=0 since retryable doesn't count)
         responses.push(ProviderResponse {
-            text: Some("Done after retryable errors.".to_string()),
+            text: Some("Done after retryable errors. <task-complete/>".to_string()),
             tool_calls: vec![],
             thinking: None,
             stop_reason: StopReason::EndTurn,
@@ -1628,12 +1641,12 @@ mod tests {
         assert_eq!(result.tool_calls_made, 12);
         assert_eq!(
             result.final_text.as_deref(),
-            Some("Done after retryable errors.")
+            Some("Done after retryable errors. <task-complete/>")
         );
     }
 
     // =========================================================================
-    // L13: No nudge when EndTurn without errors (normal completion)
+    // L13: No nudge when EndTurn has completion tag
     // =========================================================================
 
     #[tokio::test]
@@ -1653,9 +1666,9 @@ mod tests {
                     stop_reason: StopReason::ToolUse,
                     usage: None,
                 },
-                // Turn 2: clean EndTurn
+                // Turn 2: clean EndTurn with completion tag
                 ProviderResponse {
-                    text: Some("All good.".to_string()),
+                    text: Some("All good. <task-complete/>".to_string()),
                     tool_calls: vec![],
                     thinking: None,
                     stop_reason: StopReason::EndTurn,
@@ -1683,16 +1696,16 @@ mod tests {
         let result = agent.run("clean task", &mut cb).await.unwrap();
 
         assert_eq!(result.iterations, 2);
-        assert_eq!(result.final_text.as_deref(), Some("All good."));
+        assert_eq!(result.final_text.as_deref(), Some("All good. <task-complete/>"));
 
-        // No nudge should have been injected
+        // No nudge should have been injected (completion tag was present)
         let caps = captured.lock().unwrap_or_else(|e| e.into_inner());
         for call_msgs in caps.iter() {
             let has_nudge = call_msgs.iter().any(|m| {
                 if let UnifiedMessage::User { content } = m {
                     content.iter().any(|b| {
                         if let ContentBlock::Text { text } = b {
-                            text.contains("not yet fully resolved")
+                            text.contains("have not confirmed task completion")
                         } else {
                             false
                         }
@@ -1701,7 +1714,7 @@ mod tests {
                     false
                 }
             });
-            assert!(!has_nudge, "No nudge should fire on clean completion");
+            assert!(!has_nudge, "No nudge should fire when completion tag is present");
         }
     }
 
@@ -1726,7 +1739,7 @@ mod tests {
             },
             // Turn 2: text only → should be final
             ProviderResponse {
-                text: Some("Here are the results.".to_string()),
+                text: Some("Here are the results. <task-complete/>".to_string()),
                 tool_calls: vec![],
                 thinking: None,
                 stop_reason: StopReason::EndTurn,
@@ -1742,8 +1755,126 @@ mod tests {
         // Intermediate text goes to intermediate_texts, not texts
         assert_eq!(cb.intermediate_texts, vec!["Let me search for that..."]);
         // Final text goes to texts
-        assert_eq!(cb.texts, vec!["Here are the results."]);
+        assert_eq!(cb.texts, vec!["Here are the results. <task-complete/>"]);
         // final_text should be the last text produced
-        assert_eq!(result.final_text.as_deref(), Some("Here are the results."));
+        assert_eq!(result.final_text.as_deref(), Some("Here are the results. <task-complete/>"));
+    }
+
+    // =========================================================================
+    // L15: No completion protocol for pure Q&A (no tool calls)
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_no_completion_protocol_without_tools() {
+        // Pure Q&A: no tools used, no completion tag needed
+        let provider = MockProvider::new(vec![ProviderResponse {
+            text: Some("The answer is 42.".to_string()),
+            tool_calls: vec![],
+            thinking: None,
+            stop_reason: StopReason::EndTurn,
+            usage: None,
+        }]);
+
+        let agent = make_loop(provider);
+        let mut cb = TrackingCallback::default();
+        let result = agent.run("What is the meaning of life?", &mut cb).await.unwrap();
+
+        assert_eq!(result.iterations, 1);
+        assert_eq!(result.tool_calls_made, 0);
+        assert_eq!(result.final_text.as_deref(), Some("The answer is 42."));
+        assert!(!result.hit_limit);
+    }
+
+    // =========================================================================
+    // L16: Completion tag in intermediate response is ignored
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_completion_tag_in_intermediate_ignored() {
+        let provider = MockProvider::new(vec![
+            // Turn 1: text with tag BUT also has tool calls → tag ignored
+            ProviderResponse {
+                text: Some("Almost done <task-complete/>".to_string()),
+                tool_calls: vec![NativeToolCall {
+                    id: "call_1".to_string(),
+                    name: "echo".to_string(),
+                    arguments: json!({ "message": "more work" }),
+                }],
+                thinking: None,
+                stop_reason: StopReason::ToolUse,
+                usage: None,
+            },
+            // Turn 2: actual final response with tag
+            ProviderResponse {
+                text: Some("Now truly done. <task-complete/>".to_string()),
+                tool_calls: vec![],
+                thinking: None,
+                stop_reason: StopReason::EndTurn,
+                usage: None,
+            },
+        ]);
+
+        let agent = make_loop(provider);
+        let mut cb = TrackingCallback::default();
+        let result = agent.run("complex task", &mut cb).await.unwrap();
+
+        assert_eq!(result.iterations, 2);
+        assert_eq!(result.tool_calls_made, 1);
+        assert_eq!(result.final_text.as_deref(), Some("Now truly done. <task-complete/>"));
+    }
+
+    // =========================================================================
+    // L17: No false positive from stale final_text after nudge
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_no_stale_final_text_false_positive() {
+        let provider = MockProvider::new(vec![
+            // Turn 1: tool call
+            ProviderResponse {
+                text: None,
+                tool_calls: vec![NativeToolCall {
+                    id: "call_1".to_string(),
+                    name: "echo".to_string(),
+                    arguments: json!({ "message": "work" }),
+                }],
+                thinking: None,
+                stop_reason: StopReason::ToolUse,
+                usage: None,
+            },
+            // Turn 2: EndTurn without tag → nudge fires
+            ProviderResponse {
+                text: Some("Done without tag.".to_string()),
+                tool_calls: vec![],
+                thinking: None,
+                stop_reason: StopReason::EndTurn,
+                usage: None,
+            },
+            // Turn 3: EndTurn with NO text at all (response.text = None)
+            // final_text still holds "Done without tag." from turn 2
+            // but we check response.text, not final_text, so no false positive
+            ProviderResponse {
+                text: None,
+                tool_calls: vec![],
+                thinking: None,
+                stop_reason: StopReason::EndTurn,
+                usage: None,
+            },
+            // Turn 4: After 2nd nudge, finally completes with tag
+            ProviderResponse {
+                text: Some("OK. <task-complete/>".to_string()),
+                tool_calls: vec![],
+                thinking: None,
+                stop_reason: StopReason::EndTurn,
+                usage: None,
+            },
+        ]);
+
+        let agent = make_loop(provider);
+        let mut cb = TrackingCallback::default();
+        let result = agent.run("tricky task", &mut cb).await.unwrap();
+
+        assert_eq!(result.iterations, 4);
+        assert_eq!(result.final_text.as_deref(), Some("OK. <task-complete/>"));
     }
 }

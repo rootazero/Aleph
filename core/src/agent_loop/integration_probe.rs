@@ -203,7 +203,7 @@ mod tests {
                 },
                 // Turn 2: final text
                 ProviderResponse {
-                    text: Some("Echo complete.".to_string()),
+                    text: Some("Echo complete. <task-complete/>".to_string()),
                     tool_calls: vec![],
                     thinking: None,
                     stop_reason: StopReason::EndTurn,
@@ -223,7 +223,7 @@ mod tests {
 
         assert_eq!(result.iterations, 2);
         assert_eq!(result.tool_calls_made, 1);
-        assert_eq!(result.final_text.as_deref(), Some("Echo complete."));
+        assert_eq!(result.final_text.as_deref(), Some("Echo complete. <task-complete/>"));
 
         // Verify captured requests show history accumulation
         let caps = captured.lock().unwrap_or_else(|e| e.into_inner());
