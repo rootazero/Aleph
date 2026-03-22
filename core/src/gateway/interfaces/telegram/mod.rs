@@ -662,7 +662,7 @@ impl Channel for TelegramChannel {
 
         // Send attachments if any
         for attachment in &message.attachments {
-            self.send_attachment(bot, chat_id, attachment).await?;
+            self.send_attachment(bot, chat_id, thread_id, attachment).await?;
         }
 
         Ok(SendResult {
@@ -746,11 +746,12 @@ impl TelegramChannel {
         self.callback_rx.take()
     }
 
-    /// Send an attachment
+    /// Send an attachment with optional forum-topic routing.
     async fn send_attachment(
         &self,
         bot: &Bot,
         chat_id: ChatId,
+        thread_id: Option<i32>,
         attachment: &Attachment,
     ) -> ChannelResult<()> {
         let input_file = if let Some(data) = &attachment.data {
@@ -767,23 +768,41 @@ impl TelegramChannel {
             ));
         };
 
+        /// Apply forum-topic thread ID to a teloxide request.
+        macro_rules! with_thread {
+            ($req:expr, $tid:expr) => {{
+                let mut r = $req;
+                if let Some(tid) = $tid {
+                    if tid != 1 {
+                        r = r.message_thread_id(ThreadId(teloxide::types::MessageId(tid)));
+                    }
+                }
+                r
+            }};
+        }
+
         // Determine attachment type by MIME type
         let mime = &attachment.mime_type;
-        if mime.starts_with("image/") {
-            bot.send_photo(chat_id, input_file)
-                .await
+        if mime == "image/webp" || mime == "application/x-tgsticker" || mime == "video/webm" {
+            // Sticker formats: static (webp), animated (tgsticker), video (webm)
+            let req = with_thread!(bot.send_sticker(chat_id, input_file), thread_id);
+            req.await
+                .map_err(|e| ChannelError::SendFailed(format!("Failed to send sticker: {}", e)))?;
+        } else if mime.starts_with("image/") {
+            let req = with_thread!(bot.send_photo(chat_id, input_file), thread_id);
+            req.await
                 .map_err(|e| ChannelError::SendFailed(format!("Failed to send photo: {}", e)))?;
         } else if mime.starts_with("audio/") {
-            bot.send_audio(chat_id, input_file)
-                .await
+            let req = with_thread!(bot.send_audio(chat_id, input_file), thread_id);
+            req.await
                 .map_err(|e| ChannelError::SendFailed(format!("Failed to send audio: {}", e)))?;
         } else if mime.starts_with("video/") {
-            bot.send_video(chat_id, input_file)
-                .await
+            let req = with_thread!(bot.send_video(chat_id, input_file), thread_id);
+            req.await
                 .map_err(|e| ChannelError::SendFailed(format!("Failed to send video: {}", e)))?;
         } else {
-            bot.send_document(chat_id, input_file)
-                .await
+            let req = with_thread!(bot.send_document(chat_id, input_file), thread_id);
+            req.await
                 .map_err(|e| ChannelError::SendFailed(format!("Failed to send document: {}", e)))?;
         }
 
