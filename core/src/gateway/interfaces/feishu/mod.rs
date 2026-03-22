@@ -24,6 +24,19 @@ use client::{FeishuClient, FeishuSendError};
 use events::{extract_text_content, mark_bot_mentions, parse_ws_frame};
 use types::{ChatType, FeishuEvent};
 
+/// Determine if the response should use a Feishu card for markdown rendering.
+fn should_use_card(text: &str, render_mode: &str) -> bool {
+    match render_mode {
+        "card" => true,
+        "raw" => false,
+        // "auto": use card for rich/long content
+        _ => text.len() > 200
+            || text.contains("```")
+            || text.contains("|---|")
+            || text.contains("|:--"),
+    }
+}
+
 fn map_send_error(e: FeishuSendError) -> ChannelError {
     match e {
         FeishuSendError::RateLimited { retry_after_secs } => {
@@ -68,13 +81,13 @@ impl FeishuChannel {
             images: true,
             audio: false,
             video: false,
-            reactions: false,
+            reactions: true,
             replies: true,
-            editing: false,
+            editing: true,
             deletion: false,
-            typing_indicator: false,
+            typing_indicator: true,
             read_receipts: false,
-            rich_text: false,
+            rich_text: true,
             max_message_length: 4096,
             max_attachment_size: 20 * 1024 * 1024,
         }
@@ -322,8 +335,13 @@ impl Channel for FeishuChannel {
             if message.text.is_empty() {
                 return Err(ChannelError::SendFailed("Empty message".to_string()));
             }
-            client.send_text(chat_id, &message.text, reply_to).await
-                .map_err(map_send_error)?
+            if should_use_card(&message.text, &self.config.render_mode) {
+                client.send_card(chat_id, &message.text, reply_to).await
+                    .map_err(map_send_error)?
+            } else {
+                client.send_text(chat_id, &message.text, reply_to).await
+                    .map_err(map_send_error)?
+            }
         };
 
         if has_image && !message.text.is_empty() {
@@ -343,8 +361,44 @@ impl ChannelProvider for FeishuChannel {
             .with_constraints(
                 InteractionConstraints::new()
                     .max_output_chars(4096)
-                    .supports_streaming(false)
+                    .supports_streaming(self.config.streaming)
                     .prefer_compact(false),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_use_card;
+
+    #[test]
+    fn test_should_use_card_auto_plain() {
+        assert!(!should_use_card("Hello world", "auto"));
+    }
+
+    #[test]
+    fn test_should_use_card_auto_code_block() {
+        assert!(should_use_card("Here is code:\n```rust\nfn main() {}\n```", "auto"));
+    }
+
+    #[test]
+    fn test_should_use_card_auto_table() {
+        assert!(should_use_card("| A |---|B |", "auto"));
+    }
+
+    #[test]
+    fn test_should_use_card_auto_long() {
+        let long_text = "a".repeat(201);
+        assert!(should_use_card(&long_text, "auto"));
+    }
+
+    #[test]
+    fn test_should_use_card_forced() {
+        assert!(should_use_card("Hi", "card"));
+    }
+
+    #[test]
+    fn test_should_use_card_raw() {
+        assert!(!should_use_card("```code```", "raw"));
     }
 }
