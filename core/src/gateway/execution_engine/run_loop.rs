@@ -157,7 +157,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         .with_tool_compactor_config(tool_compactor_config);
 
         // Load conversation history from session (for multi-turn context)
-        let history = if let Some(ref sc) = self.session_compactor {
+        let mut history = if let Some(ref sc) = self.session_compactor {
             sc.prepare_history(
                 &agent,
                 &request.session_key,
@@ -172,7 +172,39 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // Create a streaming callback that emits events
         let mut callback = StreamCallback::new(emitter.clone(), run_id.to_string());
 
-        match agent_loop.run_with_history(&request.input, history, &mut callback).await {
+        // If attachments are present and a media processor is available,
+        // process them into multimodal content blocks and use the
+        // pre-built message path.
+        let has_attachments = !request.attachments.is_empty() && self.media_processor.is_some();
+        let loop_result = if has_attachments {
+            let media_processor = self.media_processor.as_ref().unwrap();
+
+            // TODO: Query ProviderModelInfo.supports_vision properly
+            let supports_vision = true;
+
+            let media_blocks = media_processor
+                .process(&request.attachments, supports_vision, &request.session_key.to_key_string())
+                .await;
+
+            // Build multimodal user message: text + media blocks
+            let mut content = vec![crate::providers::message::ContentBlock::Text {
+                text: request.input.clone(),
+            }];
+            content.extend(media_blocks);
+
+            history.push(crate::providers::message::UnifiedMessage::user_with_content(content));
+
+            let result = agent_loop.run_with_history_messages(history, &mut callback).await;
+
+            // Cleanup cached media files for this session
+            media_processor.cleanup(&request.session_key.to_key_string());
+
+            result
+        } else {
+            agent_loop.run_with_history(&request.input, history, &mut callback).await
+        };
+
+        match loop_result {
             Ok(result) => {
                 info!(
                     run_id = run_id,

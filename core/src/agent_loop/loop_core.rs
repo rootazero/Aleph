@@ -174,6 +174,22 @@ impl<P: LoopProvider> AgentLoop<P> {
         history: Vec<UnifiedMessage>,
         callback: &mut dyn LoopCallback,
     ) -> anyhow::Result<LoopRunResult> {
+        let mut messages = history;
+        messages.push(UnifiedMessage::user(input));
+        self.run_with_history_messages(messages, callback).await
+    }
+
+    /// Run with pre-built messages (multimodal support).
+    ///
+    /// Unlike `run_with_history`, the caller is responsible for constructing
+    /// the final user message (e.g. with `UnifiedMessage::user_with_content`
+    /// for multimodal content blocks). This method does not append any
+    /// additional user message.
+    pub async fn run_with_history_messages(
+        &self,
+        messages: Vec<UnifiedMessage>,
+        callback: &mut dyn LoopCallback,
+    ) -> anyhow::Result<LoopRunResult> {
         // Build system prompt with tool info
         let tool_infos: Vec<ToolInfo> = self
             .tool_registry
@@ -190,9 +206,7 @@ impl<P: LoopProvider> AgentLoop<P> {
         // Get tool definitions for the provider
         let tool_defs = self.tool_registry.tool_definitions();
 
-        // Initialize conversation with history + current user message
-        let mut messages = history;
-        messages.push(UnifiedMessage::user(input));
+        let mut messages = messages;
 
         let mut final_text: Option<String> = None;
         let mut iterations: usize = 0;

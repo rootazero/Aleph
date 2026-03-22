@@ -53,6 +53,8 @@ pub struct ExecutionEngine<P: ThinkerProviderRegistry + 'static, R: ToolRegistry
     pub(super) session_manager: Option<Arc<crate::gateway::SessionManager>>,
     /// Event bus for broadcasting session updates
     pub(super) event_bus: Option<Arc<crate::gateway::event_bus::GatewayEventBus>>,
+    /// Media processor for multimodal attachment handling (images, audio, etc.)
+    pub(super) media_processor: Option<Arc<crate::media::processor::MediaProcessor>>,
 }
 
 impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionEngine<P, R> {
@@ -79,6 +81,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             session_compactor: None,
             session_manager: None,
             event_bus: None,
+            media_processor: None,
         }
     }
 
@@ -132,6 +135,15 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
     ) -> Self {
         self.session_manager = Some(session_manager);
         self.event_bus = Some(event_bus);
+        self
+    }
+
+    /// Set the media processor for multimodal attachment handling.
+    pub fn with_media_processor(
+        mut self,
+        processor: Arc<crate::media::processor::MediaProcessor>,
+    ) -> Self {
+        self.media_processor = Some(processor);
         self
     }
 
@@ -244,9 +256,20 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             .is_empty()
             && !request.metadata.contains_key(SLASH_COMMAND_MODE_KEY);
 
-        // Store user message in session
+        // Store user message in session (with attachment markers for history)
+        let mut session_text = request.input.clone();
+        for att in &request.attachments {
+            let label = att.filename.as_deref().unwrap_or("file");
+            if att.mime_type.starts_with("image/") {
+                session_text.push_str(&format!("\n[Image attached: {}]", att.mime_type));
+            } else if att.mime_type.starts_with("audio/") {
+                session_text.push_str(&format!("\n[Audio attached: {}]", att.mime_type));
+            } else {
+                session_text.push_str(&format!("\n[Attachment: {} ({})]", label, att.mime_type));
+            }
+        }
         agent
-            .add_message(&request.session_key, MessageRole::User, &request.input)
+            .add_message(&request.session_key, MessageRole::User, &session_text)
             .await;
 
         // ================================================================
