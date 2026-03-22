@@ -143,7 +143,7 @@ mod tests {
     fn test_session_manager() -> Arc<SessionManager> {
         let temp = tempdir().unwrap();
         let config = SessionManagerConfig {
-            db_path: temp.into_path().join("test.db"),
+            db_path: temp.keep().join("test.db"),
             ..Default::default()
         };
         Arc::new(SessionManager::new(config).unwrap())

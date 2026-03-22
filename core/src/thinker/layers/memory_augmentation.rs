@@ -50,7 +50,7 @@ impl PromptLayer for MemoryAugmentationLayer {
 mod tests {
     use super::*;
     use crate::thinker::prompt_builder::PromptConfig;
-    use crate::thinker::prompt_layer::PromptLayer as _;
+
     use crate::thinker::memory_context::{MemoryContext, MemorySummary};
     use crate::memory::store::types::ScoredFact;
     use crate::memory::context::{FactType, MemoryFact};

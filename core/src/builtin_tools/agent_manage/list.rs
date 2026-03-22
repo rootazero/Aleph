@@ -163,7 +163,7 @@ mod tests {
     fn test_workspace_mgr() -> Arc<AgentEnvStore> {
         let temp = tempdir().unwrap();
         let config = AgentEnvStoreConfig {
-            db_path: temp.into_path().join("test.db"),
+            db_path: temp.keep().join("test.db"),
             default_profile: "default".to_string(),
             archive_after_days: 0,
         };

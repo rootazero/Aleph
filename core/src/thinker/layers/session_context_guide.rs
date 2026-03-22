@@ -57,7 +57,7 @@ impl PromptLayer for SessionContextGuideLayer {
 mod tests {
     use super::*;
     use crate::thinker::prompt_builder::PromptConfig;
-    use crate::thinker::prompt_layer::PromptLayer as _;
+
 
     #[test]
     fn metadata() {

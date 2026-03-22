@@ -165,12 +165,6 @@ mod tests {
     use super::*;
     use crate::providers::message::UnifiedMessage;
 
-    fn make_payload(text: &str) -> RequestPayload<'_> {
-        // We can't return a reference to a local, so tests create msgs externally
-        let _ = text;
-        RequestPayload::default()
-    }
-
     #[tokio::test]
     async fn test_mock_provider_basic() {
         let provider = MockProvider::new("test response");
