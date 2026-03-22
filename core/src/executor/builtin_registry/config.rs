@@ -64,4 +64,6 @@ pub struct BuiltinToolConfig {
     pub coord_task_store: Option<Arc<dyn crate::agents::swarm::tasks::CoordTaskStore>>,
     /// Agent message bus for task update/wait event notifications
     pub agent_message_bus: Option<Arc<crate::agents::swarm::AgentMessageBus>>,
+    /// Channel registry for channel management tools (pairing, etc.)
+    pub channel_registry: Option<Arc<crate::gateway::channel_registry::ChannelRegistry>>,
 }

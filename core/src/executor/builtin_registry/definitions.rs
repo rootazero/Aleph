@@ -281,6 +281,12 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         description: "Disband a team, cancelling remaining tasks",
         requires_config: true,
     },
+    // Channel management tools — require ChannelRegistry
+    BuiltinToolDefinition {
+        name: "channel_pairing",
+        description: "Manage channel pairing codes — generate new codes or list active ones for Telegram/other channels",
+        requires_config: true, // Requires ChannelRegistry (deferred injection)
+    },
 ];
 
 /// Create a boxed tool instance by name

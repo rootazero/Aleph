@@ -421,6 +421,13 @@ impl BuiltinToolRegistry {
             codex_tool,
             gemini_cli_tool,
             acp_switch_tool,
+            channel_registry_cell: {
+                let cell = Arc::new(tokio::sync::OnceCell::new());
+                if let Some(ref cr) = config.channel_registry {
+                    let _ = cell.set(cr.clone());
+                }
+                cell
+            },
             clawhub_tool: crate::builtin_tools::clawhub::ClawHubTool::new(),
             task_create_tool,
             task_update_tool,
@@ -607,6 +614,15 @@ impl BuiltinToolRegistry {
             let def = AlephTool::definition(&tmp_topic);
             reg(tools, "session_rename", SessionSetTopicTool::DESCRIPTION, def.parameters.clone());
             info!("Registered session.rename tool in BuiltinToolRegistry");
+        }
+
+        // Channel pairing tool — always register metadata (ChannelRegistry injected later).
+        // Uses deferred OnceCell injection, same pattern as GatewayContext.
+        {
+            use crate::builtin_tools::channel_manage::ChannelPairingTool;
+            reg(tools, "channel_pairing", ChannelPairingTool::DESCRIPTION,
+                serde_json::to_value(schemars::schema_for!(crate::builtin_tools::channel_manage::ChannelPairingArgs)).unwrap_or_default());
+            info!("Registered channel_pairing tool in BuiltinToolRegistry");
         }
 
         // Sessions tools — always register metadata so LLM sees them.

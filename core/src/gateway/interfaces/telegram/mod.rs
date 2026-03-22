@@ -423,6 +423,21 @@ impl Channel for TelegramChannel {
         Ok(PairingData::Code(code))
     }
 
+    async fn list_active_pairing_codes(&self) -> ChannelResult<Vec<(String, u64)>> {
+        let mut codes = self.pairing_codes.write().await;
+        // Clean up expired entries first
+        codes.retain(|_, e| !e.is_expired());
+        let result = codes
+            .values()
+            .map(|e| {
+                let elapsed = e.created_at.elapsed().as_secs();
+                let remaining = e.ttl_secs.saturating_sub(elapsed);
+                (e.code.clone(), remaining)
+            })
+            .collect();
+        Ok(result)
+    }
+
     async fn start(&mut self) -> ChannelResult<()> {
         // Validate configuration
         self.config

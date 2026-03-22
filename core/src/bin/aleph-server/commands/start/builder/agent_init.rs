@@ -78,6 +78,8 @@ pub(in crate::commands::start) struct AgentHandlersResult {
     pub compression_service: Option<std::sync::Arc<alephcore::memory::compression::CompressionService>>,
     /// Swappable provider registry for hot-switching default provider at runtime
     pub swappable_registry: Option<Arc<alephcore::SwappableProviderRegistry>>,
+    /// Deferred injection cell for ChannelRegistry (created after agent handlers)
+    pub channel_registry_cell: Option<Arc<tokio::sync::OnceCell<Arc<alephcore::gateway::channel_registry::ChannelRegistry>>>>,
 }
 
 /// Register agent.run / agent.status / agent.cancel / chat.* handlers.
@@ -110,6 +112,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
     let mut embedder_out: Option<std::sync::Arc<dyn alephcore::memory::EmbeddingProvider>> = None;
     let mut compression_out: Option<std::sync::Arc<alephcore::memory::compression::CompressionService>> = None;
     let mut swappable_reg: Option<Arc<alephcore::SwappableProviderRegistry>> = None;
+    let mut channel_reg_cell: Option<Arc<tokio::sync::OnceCell<Arc<alephcore::gateway::channel_registry::ChannelRegistry>>>> = None;
 
     // Create coord task store (SQLite-backed task/team coordination for swarm tools).
     // Created unconditionally so it is available regardless of AI provider availability.
@@ -430,9 +433,11 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             );
         }
 
-        // Grab a handle to the GatewayContext OnceCell before wrapping in Arc.
+        // Grab handles to OnceCell's before wrapping in Arc.
         // We'll inject GatewayContext after ExecutionAdapter is created (breaks circular dep).
+        // ChannelRegistry is injected after channel initialization.
         let gateway_context_cell = tool_registry.gateway_context_cell();
+        channel_reg_cell = Some(tool_registry.channel_registry_cell());
 
         let tool_registry = Arc::new(tool_registry);
 
@@ -553,6 +558,9 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             let mcp = super::init_memory_context_provider(memory_db, emb.clone());
             engine = engine.with_memory_context_provider(mcp);
         }
+
+        // Wire session manager + event bus for auto-topic generation on first message
+        engine = engine.with_session_topic_support(session_manager.clone(), event_bus.clone());
 
         let engine = Arc::new(engine);
 
@@ -934,5 +942,6 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         embedder: embedder_out,
         compression_service: compression_out,
         swappable_registry: swappable_reg,
+        channel_registry_cell: channel_reg_cell,
     }
 }

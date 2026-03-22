@@ -41,7 +41,7 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
     ToolCategory {
         id: "system_config",
         name: "系统与配置",
-        tools: &["desktop", "read_config_guide", "vault_store"],
+        tools: &["desktop", "read_config_guide", "vault_store", "channel_pairing"],
     },
     ToolCategory {
         id: "browser",

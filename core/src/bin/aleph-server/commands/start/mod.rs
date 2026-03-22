@@ -761,6 +761,13 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
 
     let app_config_snapshot = app_config_for_channels.read().await.clone();
     let channel_registry = initialize_channels(&mut server, &app_config_snapshot, &app_config_for_channels, agent_result.dispatch_registry.as_deref(), args.daemon).await;
+
+    // Inject ChannelRegistry into BuiltinToolRegistry (deferred — channels created after tools)
+    if let Some(ref cell) = agent_result.channel_registry_cell {
+        let _ = cell.set(channel_registry.clone());
+        tracing::info!("ChannelRegistry injected into BuiltinToolRegistry for channel_pairing tool");
+    }
+
     initialize_inbound_router(
         channel_registry,
         agent_result.execution_adapter, agent_result.agent_registry,

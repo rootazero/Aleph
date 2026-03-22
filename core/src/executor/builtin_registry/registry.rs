@@ -12,6 +12,7 @@ use crate::builtin_tools::sessions::{SessionsListTool, SessionsSendTool};
 use crate::dispatcher::{ToolRegistry as DispatcherToolRegistry, ToolSource, UnifiedTool};
 use crate::error::{AlephError, Result};
 use crate::generation::GenerationProviderRegistry;
+use crate::gateway::channel_registry::ChannelRegistry;
 use crate::gateway::context::GatewayContext;
 use crate::tools::AlephTool;
 use tokio::sync::RwLock;
@@ -124,6 +125,9 @@ pub struct BuiltinToolRegistry {
     pub(crate) team_launch_tool: Option<crate::builtin_tools::team_manage::TeamLaunchTool>,
     pub(crate) team_list_tool: Option<crate::builtin_tools::team_manage::TeamListTool>,
     pub(crate) team_disband_tool: Option<crate::builtin_tools::team_manage::TeamDisbandTool>,
+    /// Channel registry for deferred injection (same pattern as gateway_context).
+    /// Used by channel_pairing tool.
+    pub(crate) channel_registry_cell: Arc<tokio::sync::OnceCell<Arc<ChannelRegistry>>>,
     /// Tool metadata for lookup
     pub(super) tools: HashMap<String, UnifiedTool>,
 }
@@ -158,6 +162,21 @@ impl BuiltinToolRegistry {
     /// Used by agent_init to inject GatewayContext after ExecutionEngine creation.
     pub fn gateway_context_cell(&self) -> Arc<tokio::sync::OnceCell<Arc<GatewayContext>>> {
         Arc::clone(&self.gateway_context)
+    }
+
+    /// Inject ChannelRegistry after construction (deferred — channels are created after tools).
+    ///
+    /// Enables the `channel_pairing` tool for pairing code management.
+    /// Takes `&self` (not `&mut self`) so it works through `Arc`.
+    pub fn set_channel_registry(&self, registry: Arc<ChannelRegistry>) {
+        if self.channel_registry_cell.set(registry).is_ok() {
+            info!("ChannelRegistry injected — channel_pairing tool now available");
+        }
+    }
+
+    /// Get a handle to the ChannelRegistry OnceCell for deferred injection.
+    pub fn channel_registry_cell(&self) -> Arc<tokio::sync::OnceCell<Arc<ChannelRegistry>>> {
+        Arc::clone(&self.channel_registry_cell)
     }
 
     /// Get the parameter schema for a tool by name.
@@ -477,6 +496,15 @@ impl ToolRegistry for BuiltinToolRegistry {
             }),
             "team_disband" => Box::pin(async move {
                 let tool = self.team_disband_tool.as_ref().ok_or_else(|| AlephError::tool("team_disband not available: no CoordTaskStore configured"))?;
+                tool.call_json(arguments).await
+            }),
+
+            // Channel pairing tool (deferred — ChannelRegistry injected after construction)
+            "channel_pairing" => Box::pin(async move {
+                let cr = self.channel_registry_cell.get().ok_or_else(|| {
+                    AlephError::tool("channel_pairing not available: ChannelRegistry not yet injected")
+                })?;
+                let tool = crate::builtin_tools::channel_manage::ChannelPairingTool::new(Arc::clone(cr));
                 tool.call_json(arguments).await
             }),
 

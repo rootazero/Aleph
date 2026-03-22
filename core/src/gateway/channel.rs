@@ -448,6 +448,14 @@ pub trait Channel: Send + Sync {
         Ok(PairingData::None)
     }
 
+    /// List active (non-expired) pairing codes for this channel.
+    ///
+    /// Returns a list of `(code, remaining_ttl_secs)` pairs.
+    /// Default implementation returns an empty list (channel doesn't support pairing).
+    async fn list_active_pairing_codes(&self) -> ChannelResult<Vec<(String, u64)>> {
+        Ok(Vec::new())
+    }
+
     /// Start the channel (connect, authenticate, etc.)
     async fn start(&mut self) -> ChannelResult<()>;
 
