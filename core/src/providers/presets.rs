@@ -38,7 +38,7 @@ pub static PRESETS: Lazy<HashMap<&'static str, ProviderPreset>> = Lazy::new(|| {
         "chatgpt",
         ProviderPreset {
             base_url: "https://chatgpt.com",
-            protocol: "chatgpt",
+            protocol: "codex",
             color: "#10a37f",
             default_model: "gpt-5.4",
         },
@@ -394,7 +394,7 @@ mod tests {
 
     #[test]
     fn test_presets_have_valid_protocol() {
-        let valid_protocols = ["openai", "anthropic", "gemini", "chatgpt"];
+        let valid_protocols = ["openai", "anthropic", "gemini", "codex"];
         for (name, preset) in PRESETS.iter() {
             assert!(
                 valid_protocols.contains(&preset.protocol),

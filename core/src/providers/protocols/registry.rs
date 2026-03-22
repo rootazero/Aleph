@@ -2,7 +2,7 @@
 
 use crate::error::Result;
 use crate::providers::adapter::ProtocolAdapter;
-use crate::providers::protocols::{AnthropicProtocol, ChatGptProtocol, GeminiProtocol, OpenAiProtocol};
+use crate::providers::protocols::{AnthropicProtocol, CodexProtocol, GeminiProtocol, OpenAiProtocol};
 use once_cell::sync::Lazy;
 use reqwest::Client;
 use std::collections::HashMap;
@@ -59,11 +59,11 @@ impl ProtocolRegistry {
                 as ProtocolFactory,
         );
 
-        builtin.insert(
-            "chatgpt".to_string(),
-            (|client| Arc::new(ChatGptProtocol::new(client)) as Arc<dyn ProtocolAdapter>)
-                as ProtocolFactory,
-        );
+        let codex_factory: ProtocolFactory =
+            |client| Arc::new(CodexProtocol::new(client)) as Arc<dyn ProtocolAdapter>;
+        builtin.insert("codex".to_string(), codex_factory);
+        // Backward compatibility: "chatgpt" maps to the same Codex protocol
+        builtin.insert("chatgpt".to_string(), codex_factory);
     }
 
     /// Register a dynamic protocol
@@ -122,10 +122,12 @@ mod tests {
     }
 
     #[test]
-    fn test_chatgpt_protocol_registered() {
+    fn test_codex_protocol_registered() {
         let registry = ProtocolRegistry::new();
         registry.register_builtin();
-        assert!(registry.get("chatgpt").is_some(), "chatgpt protocol should be registered");
+        assert!(registry.get("codex").is_some(), "codex protocol should be registered");
+        // Backward compatibility
+        assert!(registry.get("chatgpt").is_some(), "chatgpt alias should still work");
     }
 
     #[test]

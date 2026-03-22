@@ -1,13 +1,13 @@
-//! Utility functions for the ChatGPT/Codex protocol adapter
+//! Utility functions for the Codex protocol adapter
 //!
 //! Standalone helpers that don't depend on the ProtocolAdapter trait:
 //! - JWT token parsing for account ID extraction
 //! - JSON schema normalization for Codex API compatibility
 
-/// Extract chatgpt_account_id from a Codex OAuth JWT token.
+/// Extract codex account_id from a Codex OAuth JWT token.
 ///
 /// The token payload contains `{"https://api.openai.com/auth": {"chatgpt_account_id": "..."}}`
-pub(crate) fn extract_chatgpt_account_id(token: &str) -> Option<String> {
+pub(crate) fn extract_codex_account_id(token: &str) -> Option<String> {
     use base64::Engine;
     let mut parts = token.split('.');
     let _header = parts.next()?;
@@ -79,7 +79,7 @@ mod tests {
             .encode(serde_json::to_vec(&payload).unwrap());
         let token = format!("header.{}.signature", payload_b64);
         assert_eq!(
-            extract_chatgpt_account_id(&token),
+            extract_codex_account_id(&token),
             Some("acct_abc123".to_string())
         );
     }
@@ -91,13 +91,13 @@ mod tests {
         let payload_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD
             .encode(serde_json::to_vec(&payload).unwrap());
         let token = format!("header.{}.signature", payload_b64);
-        assert_eq!(extract_chatgpt_account_id(&token), None);
+        assert_eq!(extract_codex_account_id(&token), None);
     }
 
     #[test]
     fn test_extract_account_id_invalid_jwt() {
-        assert_eq!(extract_chatgpt_account_id("not-a-jwt"), None);
-        assert_eq!(extract_chatgpt_account_id("a.b.c.d"), None);
+        assert_eq!(extract_codex_account_id("not-a-jwt"), None);
+        assert_eq!(extract_codex_account_id("a.b.c.d"), None);
     }
 
     #[test]

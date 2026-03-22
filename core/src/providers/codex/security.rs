@@ -1,7 +1,7 @@
-//! ChatGPT security layer
+//! Codex security layer
 //!
 //! Handles CSRF tokens, chat-requirements, and proof-of-work challenges
-//! required by the ChatGPT backend API.
+//! required by the Codex backend API.
 
 use crate::error::{AlephError, Result};
 use reqwest::Client;
@@ -14,10 +14,10 @@ use super::types::{ChatRequirements, ProofOfWork};
 const CSRF_URL: &str = "https://chatgpt.com/api/auth/csrf";
 const REQUIREMENTS_URL: &str = "https://chatgpt.com/backend-api/sentinel/chat-requirements";
 
-/// ChatGPT security token manager
-pub struct ChatGptSecurity;
+/// Codex security token manager
+pub struct CodexSecurity;
 
-impl ChatGptSecurity {
+impl CodexSecurity {
     /// Fetch CSRF token from the auth endpoint
     pub async fn fetch_csrf(client: &Client) -> Result<String> {
         let response = client
@@ -138,7 +138,7 @@ mod tests {
 
     #[test]
     fn test_solve_proof_of_work_finds_valid_hash() {
-        let result = ChatGptSecurity::solve_proof_of_work("test_seed_123", "0000");
+        let result = CodexSecurity::solve_proof_of_work("test_seed_123", "0000");
         assert!(result.is_ok());
         let answer = result.unwrap();
         assert!(!answer.is_empty());
@@ -146,7 +146,7 @@ mod tests {
 
     #[test]
     fn test_solve_proof_of_work_empty_difficulty_returns_empty() {
-        let result = ChatGptSecurity::solve_proof_of_work("seed", "");
+        let result = CodexSecurity::solve_proof_of_work("seed", "");
         assert!(result.is_ok());
         assert!(result.unwrap().is_empty());
     }

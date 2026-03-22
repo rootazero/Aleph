@@ -7,10 +7,10 @@ use crate::config::ProviderConfig;
 use crate::error::{AlephError, Result};
 use crate::providers::adapter::{NativeToolCall, ProtocolAdapter, ProviderResponse, RequestPayload, StopReason};
 use crate::providers::message::{ContentBlock, UnifiedMessage};
-use crate::providers::chatgpt::types::{
-    FunctionToolDef, InputItem, MessageContent, ReasoningConfig, ResponseResource, ResponsesRequest, StreamEvent,
+use crate::providers::codex::types::{
+    FunctionToolDef, InputItem, ReasoningConfig, ResponseResource, ResponsesRequest, StreamEvent,
 };
-use super::chatgpt_utils::{extract_chatgpt_account_id, ensure_properties_recursive};
+use super::codex_utils::{extract_codex_account_id, ensure_properties_recursive};
 use async_trait::async_trait;
 use futures::stream::BoxStream;
 use futures::TryStreamExt;
@@ -23,11 +23,11 @@ const CODEX_ENDPOINT: &str = "/backend-api/codex/responses";
 ///
 /// Translates between Aleph's unified request format and the Codex
 /// Responses API format used by chatgpt.com/backend-api/codex/responses.
-pub struct ChatGptProtocol {
+pub struct CodexProtocol {
     client: Client,
 }
 
-impl ChatGptProtocol {
+impl CodexProtocol {
     /// Create a new Codex protocol adapter with the given HTTP client
     pub fn new(client: Client) -> Self {
         Self { client }
@@ -76,7 +76,7 @@ impl ChatGptProtocol {
 
                     if has_images {
                         // Multimodal: text + images via Responses API content array
-                        use crate::providers::chatgpt::types::{InputContentPart, MessageContent};
+                        use crate::providers::codex::types::{InputContentPart, MessageContent};
                         let parts: Vec<InputContentPart> = content
                             .iter()
                             .filter_map(|b| match b {
@@ -103,7 +103,7 @@ impl ChatGptProtocol {
                             role = "user",
                             content_type = "multimodal",
                             image_count = image_count,
-                            "ChatGPT/Codex multimodal message converted"
+                            "Codex multimodal message converted"
                         );
                     } else {
                         // Text-only (existing behavior)
@@ -113,7 +113,7 @@ impl ChatGptProtocol {
                             .collect::<Vec<_>>()
                             .join("\n");
                         {
-                            use crate::providers::chatgpt::types::MessageContent;
+                            use crate::providers::codex::types::MessageContent;
                             items.push(InputItem::Message {
                                 role: "user".to_string(),
                                 content: MessageContent::Text { content: text },
@@ -133,7 +133,7 @@ impl ChatGptProtocol {
                     if !text.is_empty() {
                         items.push(InputItem::Message {
                             role: "assistant".to_string(),
-                            content: crate::providers::chatgpt::types::MessageContent::Text { content: text },
+                            content: crate::providers::codex::types::MessageContent::Text { content: text },
                         });
                     }
                     for block in content {
@@ -222,7 +222,7 @@ impl ChatGptProtocol {
             // Codex mode fields (per pi_agent_rust reference implementation)
             tool_choice: Some("auto".to_string()),
             parallel_tool_calls: Some(true),
-            text: Some(crate::providers::chatgpt::types::TextConfig {
+            text: Some(crate::providers::codex::types::TextConfig {
                 verbosity: "medium".to_string(),
             }),
             include: Some(vec!["reasoning.encrypted_content".to_string()]),
@@ -233,7 +233,7 @@ impl ChatGptProtocol {
     fn extract_text(response: &ResponseResource) -> Option<String> {
         let mut texts = Vec::new();
         for item in &response.output {
-            if let crate::providers::chatgpt::types::OutputItem::Message { content, .. } = item {
+            if let crate::providers::codex::types::OutputItem::Message { content, .. } = item {
                 for part in content {
                     if !part.text.is_empty() {
                         texts.push(part.text.clone());
@@ -252,7 +252,7 @@ impl ChatGptProtocol {
     fn extract_tool_calls(response: &ResponseResource) -> Vec<NativeToolCall> {
         let mut calls = Vec::new();
         for item in &response.output {
-            if let crate::providers::chatgpt::types::OutputItem::FunctionCall {
+            if let crate::providers::codex::types::OutputItem::FunctionCall {
                 call_id,
                 name,
                 arguments,
@@ -282,7 +282,7 @@ impl ChatGptProtocol {
 }
 
 #[async_trait]
-impl ProtocolAdapter for ChatGptProtocol {
+impl ProtocolAdapter for CodexProtocol {
     fn supports_native_tools(&self) -> bool {
         true
     }
@@ -318,7 +318,7 @@ impl ProtocolAdapter for ChatGptProtocol {
             .header("Accept", "text/event-stream");
 
         // Codex mode headers (per pi_agent_rust reference implementation)
-        if let Some(account_id) = extract_chatgpt_account_id(access_token) {
+        if let Some(account_id) = extract_codex_account_id(access_token) {
             builder = builder
                 .header("chatgpt-account-id", account_id)
                 .header("OpenAI-Beta", "responses=experimental")
@@ -377,7 +377,7 @@ impl ProtocolAdapter for ChatGptProtocol {
                         result.push_str(&delta);
                     }
                     StreamEvent::OutputItemAdded {
-                        item: crate::providers::chatgpt::types::OutputItem::FunctionCall {
+                        item: crate::providers::codex::types::OutputItem::FunctionCall {
                             ref id, ref call_id, ref name, ref arguments,
                         },
                         ..
@@ -405,7 +405,7 @@ impl ProtocolAdapter for ChatGptProtocol {
                     // OutputItemDone contains the FINAL complete arguments —
                     // this is the most reliable source (used by pi_agent_rust)
                     StreamEvent::OutputItemDone {
-                        item: crate::providers::chatgpt::types::OutputItem::FunctionCall {
+                        item: crate::providers::codex::types::OutputItem::FunctionCall {
                             ref id, ref call_id, ref name, ref arguments,
                         },
                         ..
@@ -536,20 +536,21 @@ impl ProtocolAdapter for ChatGptProtocol {
     }
 
     fn name(&self) -> &'static str {
-        "chatgpt"
+        "codex"
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::providers::codex::types::MessageContent;
 
     #[test]
     fn test_build_responses_request_basic() {
         use crate::providers::message::UnifiedMessage;
         let msgs = [UnifiedMessage::user("Hello")];
         let payload = RequestPayload::new(&msgs);
-        let request = ChatGptProtocol::build_responses_request(&payload, "codex-mini-latest");
+        let request = CodexProtocol::build_responses_request(&payload, "codex-mini-latest");
 
         assert_eq!(request.model, "codex-mini-latest");
         assert!(!request.store);
@@ -571,7 +572,7 @@ mod tests {
         use crate::providers::message::UnifiedMessage;
         let msgs = [UnifiedMessage::user("Hello")];
         let payload = RequestPayload::new(&msgs).with_system(Some("You are helpful"));
-        let request = ChatGptProtocol::build_responses_request(&payload, "codex-mini-latest");
+        let request = CodexProtocol::build_responses_request(&payload, "codex-mini-latest");
 
         assert_eq!(request.instructions.as_deref(), Some("You are helpful"));
         match &request.input[0] {
@@ -590,7 +591,7 @@ mod tests {
         let msgs = [UnifiedMessage::user("Think about this")];
         let payload = RequestPayload::new(&msgs)
             .with_think_level(Some(ThinkLevel::High));
-        let request = ChatGptProtocol::build_responses_request(&payload, "codex-mini-latest");
+        let request = CodexProtocol::build_responses_request(&payload, "codex-mini-latest");
 
         let reasoning = request.reasoning.unwrap();
         assert_eq!(reasoning.effort.as_deref(), Some("high"));
@@ -600,7 +601,7 @@ mod tests {
     #[test]
     fn test_parse_sse_data_text_delta() {
         let data = r#"{"type":"response.output_text.delta","delta":"Hello","output_index":0,"content_index":0}"#;
-        let event = ChatGptProtocol::parse_sse_data(data);
+        let event = CodexProtocol::parse_sse_data(data);
         assert!(event.is_some());
         match event.unwrap() {
             StreamEvent::TextDelta { delta, .. } => assert_eq!(delta, "Hello"),
@@ -610,19 +611,19 @@ mod tests {
 
     #[test]
     fn test_parse_sse_data_done() {
-        let result = ChatGptProtocol::parse_sse_data("[DONE]");
+        let result = CodexProtocol::parse_sse_data("[DONE]");
         assert!(result.is_none());
     }
 
     #[test]
     fn test_parse_sse_data_completed() {
         let data = r#"{"type":"response.completed","response":{"id":"resp_1","status":"completed","model":"codex-mini","output":[{"type":"message","id":"msg_1","role":"assistant","content":[{"type":"output_text","text":"Hello world"}]}]}}"#;
-        let event = ChatGptProtocol::parse_sse_data(data);
+        let event = CodexProtocol::parse_sse_data(data);
         assert!(event.is_some());
         match event.unwrap() {
             StreamEvent::Completed { response } => {
                 assert_eq!(response.status, "completed");
-                let text = ChatGptProtocol::extract_text(&response);
+                let text = CodexProtocol::extract_text(&response);
                 assert_eq!(text, Some("Hello world".to_string()));
             }
             other => panic!("Expected Completed, got {:?}", other),
@@ -635,10 +636,10 @@ mod tests {
             id: "resp_1".to_string(),
             status: "completed".to_string(),
             model: "codex-mini".to_string(),
-            output: vec![crate::providers::chatgpt::types::OutputItem::Message {
+            output: vec![crate::providers::codex::types::OutputItem::Message {
                 id: "msg_1".to_string(),
                 role: "assistant".to_string(),
-                content: vec![crate::providers::chatgpt::types::ContentPart {
+                content: vec![crate::providers::codex::types::ContentPart {
                     part_type: "output_text".to_string(),
                     text: "Test output".to_string(),
                 }],
@@ -647,7 +648,7 @@ mod tests {
             error: None,
         };
         assert_eq!(
-            ChatGptProtocol::extract_text(&response),
+            CodexProtocol::extract_text(&response),
             Some("Test output".to_string())
         );
     }
@@ -662,19 +663,19 @@ mod tests {
             usage: None,
             error: None,
         };
-        assert_eq!(ChatGptProtocol::extract_text(&response), None);
+        assert_eq!(CodexProtocol::extract_text(&response), None);
     }
 
     #[test]
     fn test_adapter_name() {
-        let adapter = ChatGptProtocol::new(Client::new());
-        assert_eq!(adapter.name(), "chatgpt");
+        let adapter = CodexProtocol::new(Client::new());
+        assert_eq!(adapter.name(), "codex");
     }
 
     #[test]
     fn test_build_endpoint_default() {
         let config = ProviderConfig::test_config("codex-mini-latest");
-        let endpoint = ChatGptProtocol::build_endpoint(&config);
+        let endpoint = CodexProtocol::build_endpoint(&config);
         assert!(endpoint.ends_with("/backend-api/codex/responses"));
     }
 
@@ -684,7 +685,7 @@ mod tests {
         use crate::providers::create_provider;
 
         let mut config = ProviderConfig::test_config("codex-mini-latest");
-        config.protocol = Some("chatgpt".to_string());
+        config.protocol = Some("codex".to_string());
         config.api_key = Some("test_token".to_string());
         config.base_url = Some("https://chatgpt.com".to_string());
         config.enabled = true;
@@ -692,20 +693,20 @@ mod tests {
         let provider = create_provider("chatgpt-sub", config);
         assert!(
             provider.is_ok(),
-            "Should create chatgpt provider: {:?}",
+            "Should create codex provider: {:?}",
             provider.err()
         );
     }
 
     #[test]
-    fn test_chatgpt_preset() {
+    fn test_codex_preset() {
         use crate::providers::presets::get_preset;
 
         let preset = get_preset("chatgpt");
         assert!(preset.is_some(), "chatgpt preset should exist");
 
         let p = preset.unwrap();
-        assert_eq!(p.protocol, "chatgpt");
+        assert_eq!(p.protocol, "codex");
         assert_eq!(p.default_model, "gpt-5.4");
     }
 
@@ -715,7 +716,7 @@ mod tests {
     fn test_convert_s1_pure_text_user_message() {
         use crate::providers::message::UnifiedMessage;
         let msgs = [UnifiedMessage::user("hello")];
-        let items = ChatGptProtocol::convert_messages(&msgs);
+        let items = CodexProtocol::convert_messages(&msgs);
 
         assert_eq!(items.len(), 1);
         assert_eq!(
@@ -735,7 +736,7 @@ mod tests {
             UnifiedMessage::assistant("Rust is a systems programming language."),
             UnifiedMessage::user("Tell me more."),
         ];
-        let items = ChatGptProtocol::convert_messages(&msgs);
+        let items = CodexProtocol::convert_messages(&msgs);
 
         assert_eq!(items.len(), 3);
         match &items[0] {
@@ -776,7 +777,7 @@ mod tests {
                 },
             ],
         }];
-        let items = ChatGptProtocol::convert_messages(&msgs);
+        let items = CodexProtocol::convert_messages(&msgs);
 
         assert_eq!(items.len(), 2);
         assert_eq!(
@@ -810,7 +811,7 @@ mod tests {
             "Found 5 results",
             false,
         )];
-        let items = ChatGptProtocol::convert_messages(&msgs);
+        let items = CodexProtocol::convert_messages(&msgs);
 
         assert_eq!(items.len(), 1);
         assert_eq!(
@@ -837,7 +838,7 @@ mod tests {
             UnifiedMessage::tool_result("call_1", "search", "Tutorial list: ...", false),
             UnifiedMessage::assistant("Here are some Rust tutorials I found."),
         ];
-        let items = ChatGptProtocol::convert_messages(&msgs);
+        let items = CodexProtocol::convert_messages(&msgs);
 
         // User(1) + FunctionCall(1) + FunctionCallOutput(1) + Assistant Message(1) = 4
         // Note: Assistant with only ToolCall has no text, so no Message emitted for it
@@ -897,7 +898,7 @@ mod tests {
                 },
             ],
         }];
-        let items = ChatGptProtocol::convert_messages(&msgs);
+        let items = CodexProtocol::convert_messages(&msgs);
 
         // 1 Message (text) + 3 FunctionCalls = 4
         assert_eq!(items.len(), 4);
@@ -916,7 +917,7 @@ mod tests {
             "Permission denied",
             true, // is_error = true
         )];
-        let items = ChatGptProtocol::convert_messages(&msgs);
+        let items = CodexProtocol::convert_messages(&msgs);
 
         assert_eq!(items.len(), 1);
         // convert_messages does not distinguish is_error — it just passes content through
@@ -939,7 +940,7 @@ mod tests {
             json_val.clone(),
             false,
         )];
-        let items = ChatGptProtocol::convert_messages(&msgs);
+        let items = CodexProtocol::convert_messages(&msgs);
 
         assert_eq!(items.len(), 1);
         match &items[0] {
@@ -956,12 +957,12 @@ mod tests {
     fn test_convert_s9_completed_event_usage_extraction() {
         // Test that parse_sse_data + extract on a Completed event with usage works
         let data = r#"{"type":"response.completed","response":{"id":"resp_u","status":"completed","model":"codex-mini","output":[{"type":"message","id":"msg_1","role":"assistant","content":[{"type":"output_text","text":"done"}]}],"usage":{"input_tokens":10,"output_tokens":5,"total_tokens":15}}}"#;
-        let event = ChatGptProtocol::parse_sse_data(data).unwrap();
+        let event = CodexProtocol::parse_sse_data(data).unwrap();
         match event {
             StreamEvent::Completed { response } => {
                 assert_eq!(response.status, "completed");
                 assert_eq!(
-                    ChatGptProtocol::extract_text(&response),
+                    CodexProtocol::extract_text(&response),
                     Some("done".to_string())
                 );
                 let usage = response.usage.as_ref().expect("usage should be present");
@@ -979,12 +980,12 @@ mod tests {
         // (the protocol maps incomplete → MaxTokens in parse_response, but we verify
         // the status field is correctly captured here)
         let data = r#"{"type":"response.completed","response":{"id":"resp_inc","status":"incomplete","model":"codex-mini","output":[{"type":"message","id":"msg_1","role":"assistant","content":[{"type":"output_text","text":"partial"}]}]}}"#;
-        let event = ChatGptProtocol::parse_sse_data(data).unwrap();
+        let event = CodexProtocol::parse_sse_data(data).unwrap();
         match event {
             StreamEvent::Completed { response } => {
                 assert_eq!(response.status, "incomplete");
                 assert_eq!(
-                    ChatGptProtocol::extract_text(&response),
+                    CodexProtocol::extract_text(&response),
                     Some("partial".to_string())
                 );
             }

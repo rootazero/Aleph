@@ -1,7 +1,7 @@
 //! OAuth RPC Handlers
 //!
 //! Handles browser-based OAuth login/logout/status for providers that
-//! require OAuth authentication (currently ChatGPT/Codex).
+//! require OAuth authentication (currently Codex/ChatGPT subscription).
 //!
 //! Token persistence follows the same pattern as other providers:
 //! `api_key` is stored directly in `aleph.toml` (plaintext), consistent
@@ -15,7 +15,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::config::{Config, ProviderConfig};
 use crate::gateway::security::SharedTokenManager;
-use crate::providers::chatgpt::auth::ChatGptAuth;
+use crate::providers::codex::auth::CodexAuth;
 use crate::providers::presets::get_preset;
 use crate::sync_primitives::Arc;
 
@@ -26,7 +26,7 @@ use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, IN
 
 /// In-memory OAuth token cache with expiry metadata.
 ///
-/// The `access_token` is also persisted as `config.providers["chatgpt"].api_key`
+/// The `access_token` is also persisted as `config.providers["chatgpt"].api_key` (legacy name)
 /// in `aleph.toml`, just like any other provider. This struct adds expiry
 /// tracking and refresh token support on top.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -38,8 +38,8 @@ pub struct OAuthTokenCache {
 }
 
 impl OAuthTokenCache {
-    /// Build from a completed ChatGptAuth.
-    pub fn from_auth(auth: &ChatGptAuth) -> Self {
+    /// Build from a completed `CodexAuth`.
+    pub fn from_auth(auth: &CodexAuth) -> Self {
         let expires_at_unix = auth
             .expires_at
             .duration_since(UNIX_EPOCH)
@@ -53,9 +53,9 @@ impl OAuthTokenCache {
         }
     }
 
-    /// Reconstruct a ChatGptAuth from this cache.
-    pub fn to_auth(&self) -> ChatGptAuth {
-        ChatGptAuth {
+    /// Reconstruct a `CodexAuth` from this cache.
+    pub fn to_auth(&self) -> CodexAuth {
+        CodexAuth {
             access_token: self.access_token.clone(),
             refresh_token: self.refresh_token.clone(),
             expires_at: UNIX_EPOCH + Duration::from_secs(self.expires_at_unix),
@@ -272,7 +272,7 @@ pub async fn handle_oauth_login(
 
     info!(provider = provider_name, "Starting OAuth browser login");
 
-    let auth = match ChatGptAuth::authorize_via_browser().await {
+    let auth = match CodexAuth::authorize_via_browser().await {
         Ok(auth) => auth,
         Err(e) => {
             error!(error = %e, "OAuth browser login failed");
@@ -425,7 +425,7 @@ mod tests {
 
     #[test]
     fn test_oauth_token_cache_roundtrip() {
-        let auth = ChatGptAuth {
+        let auth = CodexAuth {
             access_token: "test_token".to_string(),
             refresh_token: Some("refresh_tok".to_string()),
             expires_at: SystemTime::now() + Duration::from_secs(3600),

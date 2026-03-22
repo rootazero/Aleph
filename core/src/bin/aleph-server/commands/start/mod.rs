@@ -499,7 +499,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         use alephcore::gateway::handlers::oauth::restore_from_vault;
         let restored = restore_from_vault(&*app_config_for_oauth.read().await, &oauth_vault);
         if restored.is_some() && !args.daemon {
-            println!("OAuth: restored ChatGPT token from vault");
+            println!("OAuth: restored Codex token from vault");
         }
         Arc::new(tokio::sync::RwLock::new(restored))
     };

@@ -4,8 +4,8 @@
 
 pub mod openai;
 pub mod anthropic;
-pub mod chatgpt;
-mod chatgpt_utils;
+pub mod codex;
+mod codex_utils;
 pub mod gemini;
 pub mod definition;
 pub mod registry;
@@ -16,7 +16,7 @@ mod jsonpath;
 
 pub use openai::OpenAiProtocol;
 pub use anthropic::AnthropicProtocol;
-pub use chatgpt::ChatGptProtocol;
+pub use codex::CodexProtocol;
 pub use gemini::GeminiProtocol;
 pub use definition::ProtocolDefinition;
 pub use registry::{ProtocolRegistry, PROTOCOL_REGISTRY};

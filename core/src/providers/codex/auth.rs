@@ -1,6 +1,6 @@
-//! ChatGPT OAuth authentication
+//! Codex OAuth authentication
 //!
-//! Implements the browser-based OAuth flow for ChatGPT subscription accounts.
+//! Implements the browser-based OAuth flow for Codex subscription accounts.
 //! Uses PKCE (Proof Key for Code Exchange) with S256 challenge method,
 //! matching the OpenAI Codex CLI implementation.
 
@@ -113,16 +113,16 @@ struct CallbackParams {
     error_description: Option<String>,
 }
 
-/// ChatGPT authentication state
+/// Codex authentication state
 #[derive(Debug, Clone)]
-pub struct ChatGptAuth {
+pub struct CodexAuth {
     pub access_token: String,
     pub refresh_token: Option<String>,
     pub expires_at: SystemTime,
     pub session_id: String,
 }
 
-impl ChatGptAuth {
+impl CodexAuth {
     /// Check if the access token has expired
     pub fn is_expired(&self) -> bool {
         SystemTime::now() >= self.expires_at
@@ -163,7 +163,7 @@ impl ChatGptAuth {
     /// 3. Opens the system browser to the OAuth authorize URL
     /// 4. Waits for the callback with an authorization code (5 min timeout)
     /// 5. Exchanges the code + code_verifier for tokens
-    /// 6. Returns a populated `ChatGptAuth`
+    /// 6. Returns a populated `CodexAuth`
     pub async fn authorize_via_browser() -> Result<Self> {
         let pkce = generate_pkce();
 
@@ -267,7 +267,7 @@ impl ChatGptAuth {
         });
 
         // Open the browser
-        info!("Opening browser for ChatGPT authentication...");
+        info!("Opening browser for Codex authentication...");
         if let Err(e) = open::that(&authorize_url) {
             error!(?e, "Failed to open browser");
             return Err(AlephError::provider(format!(
@@ -349,10 +349,10 @@ impl ChatGptAuth {
 
         info!(
             expires_in_secs = expires_in,
-            "ChatGPT authentication successful"
+            "Codex authentication successful"
         );
 
-        Ok(ChatGptAuth {
+        Ok(CodexAuth {
             access_token: token_resp.access_token,
             refresh_token: token_resp.refresh_token,
             expires_at,
@@ -410,7 +410,7 @@ impl ChatGptAuth {
         let expires_in = token_resp.expires_in.unwrap_or(3600);
         self.expires_at = SystemTime::now() + Duration::from_secs(expires_in);
 
-        debug!("ChatGPT token refreshed successfully");
+        debug!("Codex token refreshed successfully");
         Ok(())
     }
 
@@ -431,7 +431,7 @@ mod tests {
 
     #[test]
     fn test_auth_state_token_expired() {
-        let auth = ChatGptAuth {
+        let auth = CodexAuth {
             access_token: "test_token".to_string(),
             refresh_token: None,
             expires_at: SystemTime::UNIX_EPOCH,
@@ -442,7 +442,7 @@ mod tests {
 
     #[test]
     fn test_auth_state_token_valid() {
-        let auth = ChatGptAuth {
+        let auth = CodexAuth {
             access_token: "test_token".to_string(),
             refresh_token: None,
             expires_at: SystemTime::now() + Duration::from_secs(3600),
@@ -457,7 +457,7 @@ mod tests {
             code_verifier: "test_verifier".to_string(),
             code_challenge: "test_challenge".to_string(),
         };
-        let url = ChatGptAuth::build_authorize_url(12345, "random_state", &pkce);
+        let url = CodexAuth::build_authorize_url(12345, "random_state", &pkce);
         assert!(url.contains("auth.openai.com/oauth/authorize"));
         assert!(url.contains("12345"));
         assert!(url.contains("random_state"));
