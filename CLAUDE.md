@@ -157,6 +157,15 @@ Keep this managed block so 'openspec update' can refresh the instructions.
 | `just build` | Release build (WASM + server) |
 | `just test-all` | All tests (core + desktop + proptest) |
 | `just clippy` | Lint |
+| `just release x.x.x` | **发版**: 自动生成 changelog + 更新 VERSION + 提交推送 + 触发 GitHub workflow |
+
+### 版本管理
+
+- **VERSION 文件是唯一版本源** — `build.rs` 读取 VERSION → 注入 `ALEPH_VERSION` 环境变量 → 所有代码通过 `env!("ALEPH_VERSION")` 使用
+- **禁止** 在代码中硬编码版本号，使用 `env!("ALEPH_VERSION")` 代替 `env!("CARGO_PKG_VERSION")`
+- Panel System Info、Gateway 版本、MCP/ACP 协议版本、CLI --version 全部从 VERSION 文件读取
+- GitHub workflow 也读取 VERSION 文件作为 release tag
+- 发版流程：`just release x.x.x` — 一键完成（changelog 生成 + 版本更新 + 推送 + 触发四平台构建）
 
 ### Feature Flags
 
