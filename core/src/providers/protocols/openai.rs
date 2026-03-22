@@ -10,8 +10,8 @@ use crate::providers::adapter::{
     TokenUsage,
 };
 use crate::providers::openai::{
-    ChatCompletionResponse, Message, MessageContent, OpenAiFunction,
-    OpenAiTool,
+    ChatCompletionResponse, ContentBlock as OaiContentBlock, ImageUrl, Message, MessageContent,
+    OpenAiFunction, OpenAiTool,
 };
 use crate::providers::message::UnifiedMessage;
 use async_trait::async_trait;
@@ -107,15 +107,46 @@ impl OpenAiProtocol {
         for msg in messages {
             match msg {
                 UnifiedMessage::User { content } => {
-                    let text = content
+                    use crate::providers::message::ContentBlock as UCB;
+                    let has_images = content
                         .iter()
-                        .filter_map(|b| b.as_text())
-                        .collect::<Vec<_>>()
-                        .join("\n");
-                    result.push(Message {
-                        role: "user".to_string(),
-                        content: MessageContent::Text { content: text },
-                    });
+                        .any(|b| matches!(b, UCB::Image { .. }));
+
+                    if has_images {
+                        // Use OpenAI's multimodal content array format
+                        let blocks: Vec<OaiContentBlock> = content
+                            .iter()
+                            .filter_map(|b| match b {
+                                UCB::Text { text } => {
+                                    Some(OaiContentBlock::Text { text: text.clone() })
+                                }
+                                UCB::Image { data, mime_type } => {
+                                    Some(OaiContentBlock::ImageUrl {
+                                        image_url: ImageUrl {
+                                            url: format!("data:{};base64,{}", mime_type, data),
+                                            detail: Some("auto".to_string()),
+                                        },
+                                    })
+                                }
+                                _ => None,
+                            })
+                            .collect();
+                        result.push(Message {
+                            role: "user".to_string(),
+                            content: MessageContent::Multimodal { content: blocks },
+                        });
+                    } else {
+                        // Text-only path
+                        let text = content
+                            .iter()
+                            .filter_map(|b| b.as_text())
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        result.push(Message {
+                            role: "user".to_string(),
+                            content: MessageContent::Text { content: text },
+                        });
+                    }
                 }
                 UnifiedMessage::Assistant { content } => {
                     let text: String = content
