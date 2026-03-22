@@ -44,7 +44,7 @@ use teloxide::{
     prelude::*,
     types::{
         CallbackQuery as TgCallbackQuery, ChatId, InlineKeyboardButton, InlineKeyboardMarkup,
-        InputFile, MediaKind, MessageKind, ParseMode,
+        InputFile, MediaKind, MessageKind, ParseMode, ThreadId,
     },
 };
 
@@ -100,6 +100,21 @@ impl TelegramChannel {
     pub fn with_slash_commands(mut self, commands: Vec<(String, String)>) -> Self {
         self.slash_commands = commands;
         self
+    }
+
+    /// Parse a conversation_id that may contain a forum topic suffix.
+    ///
+    /// Format: `"{chat_id}"` or `"{chat_id}:topic:{thread_id}"`.
+    /// Returns the `ChatId` and an optional raw thread id (i32).
+    fn parse_conversation_id(conv_id: &str) -> (ChatId, Option<i32>) {
+        if let Some((chat, topic)) = conv_id.split_once(":topic:") {
+            (
+                ChatId(chat.parse().unwrap_or(0)),
+                topic.parse().ok(),
+            )
+        } else {
+            (ChatId(conv_id.parse().unwrap_or(0)), None)
+        }
     }
 
     /// Get Telegram-specific capabilities
@@ -187,10 +202,18 @@ impl TelegramChannel {
             .single()
             .unwrap_or_else(Utc::now);
 
+        // Encode forum topic into conversation_id for session isolation.
+        // Format: "{chat_id}" or "{chat_id}:topic:{thread_id}"
+        let conversation_id = if let Some(thread_id) = msg.thread_id {
+            ConversationId::new(format!("{}:topic:{}", msg.chat.id.0, thread_id.0.0))
+        } else {
+            ConversationId::new(msg.chat.id.0.to_string())
+        };
+
         Some(InboundMessage {
             id: MessageId::new(msg.id.0.to_string()),
             channel_id: channel_id.clone(),
-            conversation_id: ConversationId::new(msg.chat.id.0.to_string()),
+            conversation_id,
             sender_id,
             sender_name,
             text,
@@ -453,11 +476,27 @@ impl Channel for TelegramChannel {
                     let config = config_for_cb.clone();
                     let channel_id = channel_id_for_cb.clone();
                     async move {
-                        let chat_id_str = q
-                            .message
-                            .as_ref()
-                            .map(|m| m.chat().id.to_string())
-                            .unwrap_or_default();
+                        // Extract chat_id and optional thread_id for forum topic isolation
+                        let (raw_chat_id, thread_id_val) = q.message.as_ref()
+                            .map(|m| {
+                                let chat = m.chat().id.0;
+                                // Extract thread_id from Regular messages for forum topics
+                                let tid = match m {
+                                    teloxide::types::MaybeInaccessibleMessage::Regular(msg) => {
+                                        msg.thread_id.map(|t| t.0.0)
+                                    }
+                                    _ => None,
+                                };
+                                (chat, tid)
+                            })
+                            .unwrap_or((0, None));
+
+                        let conv_id_str = if let Some(tid) = thread_id_val {
+                            format!("{}:topic:{}", raw_chat_id, tid)
+                        } else {
+                            raw_chat_id.to_string()
+                        };
+
                         let msg_id_str = q
                             .message
                             .as_ref()
@@ -471,7 +510,7 @@ impl Channel for TelegramChannel {
                             let query = CallbackQuery {
                                 id: q.id.clone(),
                                 user_id: UserId::new(q.from.id.to_string()),
-                                chat_id: ConversationId::new(chat_id_str.clone()),
+                                chat_id: ConversationId::new(conv_id_str.clone()),
                                 message_id: MessageId::new(msg_id_str),
                                 data: data.clone(),
                             };
@@ -485,7 +524,7 @@ impl Channel for TelegramChannel {
                                 let inbound = InboundMessage {
                                     id: MessageId::new(format!("cb_{}", q.id)),
                                     channel_id: channel_id.clone(),
-                                    conversation_id: ConversationId::new(chat_id_str),
+                                    conversation_id: ConversationId::new(conv_id_str),
                                     sender_id: UserId::new(q.from.id.to_string()),
                                     sender_name: q.from.username.clone().or_else(|| Some(q.from.first_name.clone())),
                                     text: data,
@@ -557,17 +596,17 @@ impl Channel for TelegramChannel {
             .as_ref()
             .ok_or_else(|| ChannelError::NotConnected("Bot not initialized".to_string()))?;
 
-        let chat_id = ChatId(
-            message
-                .conversation_id
-                .as_str()
-                .parse::<i64>()
-                .map_err(|e| ChannelError::SendFailed(format!("Invalid chat ID: {}", e)))?,
-        );
+        let (chat_id, thread_id) = Self::parse_conversation_id(message.conversation_id.as_str());
 
         // Send typing indicator if enabled
         if self.config.send_typing {
-            let _ = bot.send_chat_action(chat_id, teloxide::types::ChatAction::Typing).await;
+            let mut action_req = bot.send_chat_action(chat_id, teloxide::types::ChatAction::Typing);
+            if let Some(tid) = thread_id {
+                if tid != 1 {
+                    action_req = action_req.message_thread_id(ThreadId(teloxide::types::MessageId(tid)));
+                }
+            }
+            let _ = action_req.await;
         }
 
         // Convert standard Markdown to Telegram HTML for reliable rendering.
@@ -575,7 +614,7 @@ impl Channel for TelegramChannel {
         // without the fragile escaping issues of Telegram's legacy Markdown or MarkdownV2.
         let html_text = MessageFormatter::format(&message.text, MarkupFormat::TelegramHtml);
 
-        // Helper to build a SendMessage request with optional reply-to and inline keyboard
+        // Helper to build a SendMessage request with optional reply-to, thread, and inline keyboard
         let build_request = |parse_mode: Option<ParseMode>, text: &str| {
             let mut req = bot.send_message(chat_id, text);
             if let Some(mode) = parse_mode {
@@ -586,6 +625,12 @@ impl Channel for TelegramChannel {
                     req = req.reply_parameters(teloxide::types::ReplyParameters::new(
                         teloxide::types::MessageId(msg_id),
                     ));
+                }
+            }
+            // Forum topic: route reply into the correct thread
+            if let Some(tid) = thread_id {
+                if tid != 1 { // General topic — do NOT set message_thread_id
+                    req = req.message_thread_id(ThreadId(teloxide::types::MessageId(tid)));
                 }
             }
             if let Some(ref keyboard) = message.inline_keyboard {
@@ -632,15 +677,15 @@ impl Channel for TelegramChannel {
             .as_ref()
             .ok_or_else(|| ChannelError::NotConnected("Bot not initialized".to_string()))?;
 
-        let chat_id = ChatId(
-            conversation_id
-                .as_str()
-                .parse::<i64>()
-                .map_err(|e| ChannelError::Internal(format!("Invalid chat ID: {}", e)))?,
-        );
+        let (chat_id, thread_id) = Self::parse_conversation_id(conversation_id.as_str());
 
-        bot.send_chat_action(chat_id, teloxide::types::ChatAction::Typing)
-            .await
+        let mut req = bot.send_chat_action(chat_id, teloxide::types::ChatAction::Typing);
+        if let Some(tid) = thread_id {
+            if tid != 1 {
+                req = req.message_thread_id(ThreadId(teloxide::types::MessageId(tid)));
+            }
+        }
+        req.await
             .map_err(|e| ChannelError::Internal(format!("Failed to send typing: {}", e)))?;
 
         Ok(())
@@ -652,12 +697,7 @@ impl Channel for TelegramChannel {
             .as_ref()
             .ok_or_else(|| ChannelError::NotConnected("Bot not initialized".to_string()))?;
 
-        let chat_id = ChatId(
-            conversation_id
-                .as_str()
-                .parse::<i64>()
-                .map_err(|e| ChannelError::Internal(format!("Invalid chat ID: {}", e)))?,
-        );
+        let (chat_id, _thread_id) = Self::parse_conversation_id(conversation_id.as_str());
 
         let msg_id = teloxide::types::MessageId(
             message_id
@@ -769,9 +809,7 @@ impl TelegramChannel {
             .as_ref()
             .ok_or_else(|| ChannelError::NotConnected("Bot not initialized".to_string()))?;
 
-        let chat = ChatId(chat_id.as_str().parse().map_err(|_| {
-            ChannelError::SendFailed(format!("Invalid chat ID: {}", chat_id.as_str()))
-        })?);
+        let (chat, _thread_id) = Self::parse_conversation_id(chat_id.as_str());
 
         let msg_id = teloxide::types::MessageId(message_id.as_str().parse().map_err(|_| {
             ChannelError::SendFailed("Invalid message ID".into())
@@ -882,5 +920,33 @@ mod tests {
         let channel = TelegramChannel::new("telegram-test", config);
         assert_eq!(channel.info().id.as_str(), "telegram-test");
         assert_eq!(channel.info().channel_type, "telegram");
+    }
+
+    #[test]
+    fn test_parse_conversation_id_plain() {
+        let (chat_id, thread_id) = TelegramChannel::parse_conversation_id("-100123456789");
+        assert_eq!(chat_id.0, -100123456789);
+        assert_eq!(thread_id, None);
+    }
+
+    #[test]
+    fn test_parse_conversation_id_with_topic() {
+        let (chat_id, thread_id) = TelegramChannel::parse_conversation_id("-100123456789:topic:42");
+        assert_eq!(chat_id.0, -100123456789);
+        assert_eq!(thread_id, Some(42));
+    }
+
+    #[test]
+    fn test_parse_conversation_id_general_topic() {
+        let (chat_id, thread_id) = TelegramChannel::parse_conversation_id("-100123456789:topic:1");
+        assert_eq!(chat_id.0, -100123456789);
+        assert_eq!(thread_id, Some(1));
+    }
+
+    #[test]
+    fn test_parse_conversation_id_invalid() {
+        let (chat_id, thread_id) = TelegramChannel::parse_conversation_id("not_a_number");
+        assert_eq!(chat_id.0, 0);
+        assert_eq!(thread_id, None);
     }
 }
