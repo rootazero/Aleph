@@ -384,4 +384,256 @@ impl FeishuClient {
             .map(|b| b.to_vec())
             .map_err(|e| format!("Download media read failed: {e}"))
     }
+
+    // ── Card Kit (Streaming Cards) ──
+
+    /// Create a streaming card and return the card_id.
+    pub async fn create_streaming_card(&self, initial_text: &str) -> Result<String, String> {
+        let token = self.get_token().await?;
+        let url = format!("{}/open-apis/cardkit/v1/cards", self.base_url);
+
+        let card_body = serde_json::json!({
+            "schema": "2.0",
+            "config": {
+                "streaming_mode": true,
+                "summary": { "content": "[Generating...]" },
+                "streaming_config": {
+                    "print_frequency_ms": { "default": 50 },
+                    "print_step": { "default": 1 }
+                }
+            },
+            "body": {
+                "elements": [
+                    { "tag": "markdown", "content": initial_text, "element_id": "content" }
+                ]
+            }
+        });
+
+        let body = serde_json::json!({
+            "type": "card_json",
+            "data": card_body.to_string(),
+        });
+
+        let resp = self.http.post(&url)
+            .header("Authorization", format!("Bearer {token}"))
+            .header("Content-Type", "application/json; charset=utf-8")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| format!("Create streaming card failed: {e}"))?;
+
+        let card_resp: super::types::CardCreateResponse = resp.json().await
+            .map_err(|e| format!("Card create response parse failed: {e}"))?;
+
+        if card_resp.code != 0 {
+            return Err(format!("Card create error: code={}, msg={}", card_resp.code, card_resp.msg));
+        }
+
+        card_resp.data
+            .and_then(|d| d.card_id)
+            .ok_or_else(|| "No card_id in response".to_string())
+    }
+
+    /// Send a card message (streaming or static) to a chat.
+    pub async fn send_card_message(
+        &self,
+        chat_id: &str,
+        card_id: &str,
+        reply_to: Option<&str>,
+    ) -> Result<String, FeishuSendError> {
+        let content = serde_json::json!({
+            "type": "card",
+            "data": { "card_id": card_id }
+        });
+
+        if let Some(msg_id) = reply_to {
+            return self.reply_message(msg_id, "interactive", &content.to_string()).await;
+        }
+
+        let token = self.get_token().await?;
+        let url = format!("{}/open-apis/im/v1/messages?receive_id_type=chat_id", self.base_url);
+
+        let body = serde_json::json!({
+            "receive_id": chat_id,
+            "msg_type": "interactive",
+            "content": content.to_string(),
+        });
+
+        let resp = self.http.post(&url)
+            .header("Authorization", format!("Bearer {token}"))
+            .header("Content-Type", "application/json; charset=utf-8")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| FeishuSendError::Other(format!("Send card message failed: {e}")))?;
+
+        self.parse_send_response(resp).await
+    }
+
+    /// Update a streaming card's content element.
+    pub async fn update_streaming_card(
+        &self,
+        card_id: &str,
+        content: &str,
+        sequence: u32,
+    ) -> Result<(), String> {
+        let token = self.get_token().await?;
+        let url = format!(
+            "{}/open-apis/cardkit/v1/cards/{}/elements/content/content",
+            self.base_url, card_id
+        );
+
+        let body = serde_json::json!({
+            "content": content,
+            "sequence": sequence,
+            "uuid": format!("s_{}_{}", card_id, sequence),
+        });
+
+        let resp = self.http.put(&url)
+            .header("Authorization", format!("Bearer {token}"))
+            .header("Content-Type", "application/json; charset=utf-8")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| format!("Update streaming card failed: {e}"))?;
+
+        if !resp.status().is_success() {
+            return Err(format!("Update streaming card HTTP {}", resp.status()));
+        }
+        Ok(())
+    }
+
+    /// Close a streaming card (disable streaming_mode).
+    pub async fn close_streaming_card(
+        &self,
+        card_id: &str,
+        summary: &str,
+        sequence: u32,
+    ) -> Result<(), String> {
+        let token = self.get_token().await?;
+        let url = format!("{}/open-apis/cardkit/v1/cards/{}/settings", self.base_url, card_id);
+
+        let settings = serde_json::json!({
+            "config": {
+                "streaming_mode": false,
+                "summary": {
+                    "content": summary.get(..50).unwrap_or(summary)
+                }
+            }
+        });
+
+        let body = serde_json::json!({
+            "settings": settings.to_string(),
+            "sequence": sequence,
+            "uuid": format!("c_{}_{}", card_id, sequence),
+        });
+
+        let resp = self.http.patch(&url)
+            .header("Authorization", format!("Bearer {token}"))
+            .header("Content-Type", "application/json; charset=utf-8")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| format!("Close streaming card failed: {e}"))?;
+
+        if !resp.status().is_success() {
+            return Err(format!("Close streaming card HTTP {}", resp.status()));
+        }
+        Ok(())
+    }
+
+    /// Send a static markdown card (non-streaming).
+    pub async fn send_card(
+        &self,
+        chat_id: &str,
+        markdown_text: &str,
+        reply_to: Option<&str>,
+    ) -> Result<String, FeishuSendError> {
+        let card = serde_json::json!({
+            "schema": "2.0",
+            "config": { "wide_screen_mode": true },
+            "body": {
+                "elements": [
+                    { "tag": "markdown", "content": markdown_text }
+                ]
+            }
+        });
+
+        if let Some(msg_id) = reply_to {
+            return self.reply_message(msg_id, "interactive", &card.to_string()).await;
+        }
+
+        let token = self.get_token().await?;
+        let url = format!("{}/open-apis/im/v1/messages?receive_id_type=chat_id", self.base_url);
+
+        let body = serde_json::json!({
+            "receive_id": chat_id,
+            "msg_type": "interactive",
+            "content": card.to_string(),
+        });
+
+        let resp = self.http.post(&url)
+            .header("Authorization", format!("Bearer {token}"))
+            .header("Content-Type", "application/json; charset=utf-8")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| FeishuSendError::Other(format!("Send card failed: {e}")))?;
+
+        self.parse_send_response(resp).await
+    }
+
+    // ── Reactions ──
+
+    /// Add an emoji reaction to a message. Returns reaction_id.
+    pub async fn add_reaction(&self, message_id: &str, emoji_type: &str) -> Result<String, String> {
+        let token = self.get_token().await?;
+        let url = format!(
+            "{}/open-apis/im/v1/messages/{}/reactions",
+            self.base_url, message_id
+        );
+
+        let body = serde_json::json!({
+            "reaction_type": { "emoji_type": emoji_type }
+        });
+
+        let resp = self.http.post(&url)
+            .header("Authorization", format!("Bearer {token}"))
+            .header("Content-Type", "application/json; charset=utf-8")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| format!("Add reaction failed: {e}"))?;
+
+        let reaction_resp: super::types::ReactionResponse = resp.json().await
+            .map_err(|e| format!("Reaction response parse failed: {e}"))?;
+
+        if reaction_resp.code != 0 {
+            return Err(format!("Reaction error: code={}, msg={}", reaction_resp.code, reaction_resp.msg));
+        }
+
+        reaction_resp.data
+            .and_then(|d| d.reaction_id)
+            .ok_or_else(|| "No reaction_id in response".to_string())
+    }
+
+    /// Remove an emoji reaction from a message.
+    pub async fn remove_reaction(&self, message_id: &str, reaction_id: &str) -> Result<(), String> {
+        let token = self.get_token().await?;
+        let url = format!(
+            "{}/open-apis/im/v1/messages/{}/reactions/{}",
+            self.base_url, message_id, reaction_id
+        );
+
+        let resp = self.http.delete(&url)
+            .header("Authorization", format!("Bearer {token}"))
+            .send()
+            .await
+            .map_err(|e| format!("Remove reaction failed: {e}"))?;
+
+        if !resp.status().is_success() {
+            return Err(format!("Remove reaction HTTP {}", resp.status()));
+        }
+        Ok(())
+    }
 }
