@@ -33,6 +33,7 @@ use super::channel::{
     Channel, ChannelConfig, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
     ChannelResult, ChannelStatus, ConversationId, InboundMessage, OutboundMessage, SendResult,
 };
+use super::voice::VoiceState;
 
 /// Type alias for a thread-safe, shareable channel handle
 type ChannelHandle = Arc<RwLock<Box<dyn Channel>>>;
@@ -47,6 +48,8 @@ pub struct ChannelRegistry {
     inbound_tx: mpsc::Sender<InboundMessage>,
     /// Unified inbound message receiver (for consumers)
     inbound_rx: Arc<Mutex<Option<mpsc::Receiver<InboundMessage>>>>,
+    /// Per-channel voice mode state
+    voice_states: RwLock<HashMap<String, VoiceState>>,
 }
 
 impl ChannelRegistry {
@@ -59,6 +62,7 @@ impl ChannelRegistry {
             factories: RwLock::new(HashMap::new()),
             inbound_tx,
             inbound_rx: Arc::new(Mutex::new(Some(inbound_rx))),
+            voice_states: RwLock::new(HashMap::new()),
         }
     }
 
@@ -373,6 +377,33 @@ impl ChannelRegistry {
 
         let _ = conversation_id; // Will be used for routing in future
         result
+    }
+
+    /// Get the voice state for a channel, returning default if not set.
+    pub async fn get_voice_state(&self, channel_id: &str) -> VoiceState {
+        let states = self.voice_states.read().await;
+        states.get(channel_id).cloned().unwrap_or_default()
+    }
+
+    /// Overwrite the voice state for a channel.
+    pub async fn set_voice_state(&self, channel_id: &str, state: VoiceState) {
+        let mut states = self.voice_states.write().await;
+        states.insert(channel_id.to_string(), state);
+    }
+
+    /// Apply a mutation to the voice state for a channel.
+    ///
+    /// If no state exists yet for the channel the default state is used as
+    /// starting point.
+    pub async fn update_voice_state<F>(&self, channel_id: &str, f: F)
+    where
+        F: FnOnce(&mut VoiceState),
+    {
+        let mut states = self.voice_states.write().await;
+        let state = states
+            .entry(channel_id.to_string())
+            .or_insert_with(VoiceState::default);
+        f(state);
     }
 
     /// Get channel status summary
