@@ -1012,7 +1012,18 @@ pub static ALL_CHANNELS: &[ChannelDefinition] = &[
         fields: IMESSAGE_FIELDS,
         docs_url: "https://support.apple.com/messages",
     },
-    // 5. Slack
+    // 5. Feishu/Lark
+    ChannelDefinition {
+        id: "feishu",
+        name: "Feishu / Lark",
+        description: "Connect to Feishu/Lark via WebSocket event subscription",
+        icon_svg: ICON_FEISHU,
+        brand_color: "#2B65F6",
+        config_section: "channels.feishu",
+        fields: FEISHU_FIELDS,
+        docs_url: "https://open.feishu.cn/document/home/index",
+    },
+    // 6. Slack
     ChannelDefinition {
         id: "slack",
         name: "Slack",
@@ -1023,7 +1034,7 @@ pub static ALL_CHANNELS: &[ChannelDefinition] = &[
         fields: SLACK_FIELDS,
         docs_url: "https://api.slack.com/apis/socket-mode",
     },
-    // 6. Email
+    // 7. Email
     ChannelDefinition {
         id: "email",
         name: "Email",
@@ -1111,17 +1122,6 @@ pub static ALL_CHANNELS: &[ChannelDefinition] = &[
         fields: NOSTR_FIELDS,
         docs_url: "https://github.com/nostr-protocol/nips",
     },
-    // 14. Feishu/Lark
-    ChannelDefinition {
-        id: "feishu",
-        name: "Feishu / Lark",
-        description: "Connect to Feishu/Lark via WebSocket event subscription",
-        icon_svg: ICON_FEISHU,
-        brand_color: "#2B65F6",
-        config_section: "channels.feishu",
-        fields: FEISHU_FIELDS,
-        docs_url: "https://open.feishu.cn/document/home/index",
-    },
 ];
 
 // ---------------------------------------------------------------------------
@@ -1132,13 +1132,13 @@ pub static TELEGRAM: &ChannelDefinition = &ALL_CHANNELS[0];
 pub static DISCORD: &ChannelDefinition = &ALL_CHANNELS[1];
 pub static WHATSAPP: &ChannelDefinition = &ALL_CHANNELS[2];
 pub static IMESSAGE: &ChannelDefinition = &ALL_CHANNELS[3];
-pub static SLACK: &ChannelDefinition = &ALL_CHANNELS[4];
-pub static EMAIL: &ChannelDefinition = &ALL_CHANNELS[5];
-pub static MATRIX: &ChannelDefinition = &ALL_CHANNELS[6];
-pub static SIGNAL: &ChannelDefinition = &ALL_CHANNELS[7];
-pub static MATTERMOST: &ChannelDefinition = &ALL_CHANNELS[8];
-pub static IRC: &ChannelDefinition = &ALL_CHANNELS[9];
-pub static WEBHOOK: &ChannelDefinition = &ALL_CHANNELS[10];
-pub static XMPP: &ChannelDefinition = &ALL_CHANNELS[11];
-pub static NOSTR: &ChannelDefinition = &ALL_CHANNELS[12];
-pub static FEISHU: &ChannelDefinition = &ALL_CHANNELS[13];
+pub static FEISHU: &ChannelDefinition = &ALL_CHANNELS[4];
+pub static SLACK: &ChannelDefinition = &ALL_CHANNELS[5];
+pub static EMAIL: &ChannelDefinition = &ALL_CHANNELS[6];
+pub static MATRIX: &ChannelDefinition = &ALL_CHANNELS[7];
+pub static SIGNAL: &ChannelDefinition = &ALL_CHANNELS[8];
+pub static MATTERMOST: &ChannelDefinition = &ALL_CHANNELS[9];
+pub static IRC: &ChannelDefinition = &ALL_CHANNELS[10];
+pub static WEBHOOK: &ChannelDefinition = &ALL_CHANNELS[11];
+pub static XMPP: &ChannelDefinition = &ALL_CHANNELS[12];
+pub static NOSTR: &ChannelDefinition = &ALL_CHANNELS[13];
