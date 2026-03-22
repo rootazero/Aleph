@@ -8,7 +8,7 @@ use crate::error::{AlephError, Result};
 use crate::providers::adapter::{NativeToolCall, ProtocolAdapter, ProviderResponse, RequestPayload, StopReason};
 use crate::providers::message::{ContentBlock, UnifiedMessage};
 use crate::providers::chatgpt::types::{
-    FunctionToolDef, InputItem, ReasoningConfig, ResponseResource, ResponsesRequest, StreamEvent,
+    FunctionToolDef, InputItem, MessageContent, ReasoningConfig, ResponseResource, ResponsesRequest, StreamEvent,
 };
 use super::chatgpt_utils::{extract_chatgpt_account_id, ensure_properties_recursive};
 use async_trait::async_trait;
@@ -70,15 +70,56 @@ impl ChatGptProtocol {
         for msg in messages {
             match msg {
                 UnifiedMessage::User { content } => {
-                    let text = content
+                    let has_images = content
                         .iter()
-                        .filter_map(|b| b.as_text())
-                        .collect::<Vec<_>>()
-                        .join("\n");
-                    items.push(InputItem::Message {
-                        role: "user".to_string(),
-                        content: text,
-                    });
+                        .any(|b| matches!(b, ContentBlock::Image { .. }));
+
+                    if has_images {
+                        // Multimodal: text + images via Responses API content array
+                        use crate::providers::chatgpt::types::{InputContentPart, MessageContent};
+                        let parts: Vec<InputContentPart> = content
+                            .iter()
+                            .filter_map(|b| match b {
+                                ContentBlock::Text { text } => {
+                                    Some(InputContentPart::InputText { text: text.clone() })
+                                }
+                                ContentBlock::Image { data, mime_type } => {
+                                    Some(InputContentPart::InputImage {
+                                        image_url: format!("data:{};base64,{}", mime_type, data),
+                                    })
+                                }
+                                _ => None,
+                            })
+                            .collect();
+                        let image_count = parts.iter().filter(|p| matches!(p, InputContentPart::InputImage { .. })).count();
+                        items.push(InputItem::Message {
+                            role: "user".to_string(),
+                            content: MessageContent::Multimodal { content: parts },
+                        });
+
+                        tracing::info!(
+                            target: "multimodal",
+                            probe = "P6_provider",
+                            role = "user",
+                            content_type = "multimodal",
+                            image_count = image_count,
+                            "ChatGPT/Codex multimodal message converted"
+                        );
+                    } else {
+                        // Text-only (existing behavior)
+                        let text = content
+                            .iter()
+                            .filter_map(|b| b.as_text())
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        {
+                            use crate::providers::chatgpt::types::MessageContent;
+                            items.push(InputItem::Message {
+                                role: "user".to_string(),
+                                content: MessageContent::Text { content: text },
+                            });
+                        }
+                    }
                 }
                 UnifiedMessage::Assistant { content } => {
                     let text: String = content
@@ -92,7 +133,7 @@ impl ChatGptProtocol {
                     if !text.is_empty() {
                         items.push(InputItem::Message {
                             role: "assistant".to_string(),
-                            content: text,
+                            content: crate::providers::chatgpt::types::MessageContent::Text { content: text },
                         });
                     }
                     for block in content {
@@ -519,7 +560,7 @@ mod tests {
         match &request.input[0] {
             InputItem::Message { role, content } => {
                 assert_eq!(role, "user");
-                assert_eq!(content, "Hello");
+                assert_eq!(content.as_text(), "Hello");
             }
             _ => panic!("Expected Message"),
         }
@@ -535,8 +576,8 @@ mod tests {
         assert_eq!(request.instructions.as_deref(), Some("You are helpful"));
         match &request.input[0] {
             InputItem::Message { content, .. } => {
-                assert_eq!(content, "Hello");
-                assert!(!content.contains("You are helpful"));
+                assert_eq!(content.as_text(), "Hello");
+                assert!(!content.as_text().contains("You are helpful"));
             }
             _ => panic!("Expected Message"),
         }
@@ -681,7 +722,7 @@ mod tests {
             items[0],
             InputItem::Message {
                 role: "user".to_string(),
-                content: "hello".to_string(),
+                content: MessageContent::Text { content: "hello".into() },
             }
         );
     }
@@ -700,21 +741,21 @@ mod tests {
         match &items[0] {
             InputItem::Message { role, content } => {
                 assert_eq!(role, "user");
-                assert_eq!(content, "What is Rust?");
+                assert_eq!(content.as_text(), "What is Rust?");
             }
             other => panic!("Expected Message, got {:?}", other),
         }
         match &items[1] {
             InputItem::Message { role, content } => {
                 assert_eq!(role, "assistant");
-                assert_eq!(content, "Rust is a systems programming language.");
+                assert_eq!(content.as_text(), "Rust is a systems programming language.");
             }
             other => panic!("Expected Message, got {:?}", other),
         }
         match &items[2] {
             InputItem::Message { role, content } => {
                 assert_eq!(role, "user");
-                assert_eq!(content, "Tell me more.");
+                assert_eq!(content.as_text(), "Tell me more.");
             }
             other => panic!("Expected Message, got {:?}", other),
         }
@@ -742,7 +783,7 @@ mod tests {
             items[0],
             InputItem::Message {
                 role: "assistant".to_string(),
-                content: "Let me search for that.".to_string(),
+                content: MessageContent::Text { content: "Let me search for that.".into() },
             }
         );
         match &items[1] {
@@ -805,7 +846,7 @@ mod tests {
             items[0],
             InputItem::Message {
                 role: "user".to_string(),
-                content: "Search for Rust tutorials".to_string(),
+                content: MessageContent::Text { content: "Search for Rust tutorials".into() },
             }
         );
         match &items[1] {
@@ -826,7 +867,7 @@ mod tests {
             items[3],
             InputItem::Message {
                 role: "assistant".to_string(),
-                content: "Here are some Rust tutorials I found.".to_string(),
+                content: MessageContent::Text { content: "Here are some Rust tutorials I found.".into() },
             }
         );
     }
