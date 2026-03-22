@@ -13,9 +13,10 @@ pub struct VoiceState {
 }
 
 impl VoiceState {
-    /// Returns true when voice is enabled and a provider is configured.
+    /// Returns true when voice mode is explicitly enabled.
+    /// Provider resolution happens at TTS generation time (auto-detect fallback).
     pub fn is_active(&self) -> bool {
-        self.enabled && self.provider.is_some()
+        self.enabled
     }
 
     /// Record a successful TTS synthesis — resets the failure counter.
@@ -53,7 +54,7 @@ mod tests {
     fn record_success_resets_failures() {
         let mut state = VoiceState {
             enabled: true,
-            provider: Some("openai".to_string()),
+            provider: None,
             voice: None,
             consecutive_failures: 2,
         };
@@ -66,7 +67,7 @@ mod tests {
     fn auto_disable_after_three_failures() {
         let mut state = VoiceState {
             enabled: true,
-            provider: Some("openai".to_string()),
+            provider: None,
             voice: None,
             consecutive_failures: 0,
         };

@@ -394,7 +394,15 @@ impl ChannelRegistry {
     /// Get the voice state for a channel, returning default if not set.
     pub async fn get_voice_state(&self, channel_id: &str) -> VoiceState {
         let states = self.voice_states.read().await;
-        states.get(channel_id).cloned().unwrap_or_default()
+        let result = states.get(channel_id).cloned().unwrap_or_default();
+        tracing::debug!(
+            channel_id = channel_id,
+            enabled = result.enabled,
+            keys = ?states.keys().collect::<Vec<_>>(),
+            registry_ptr = ?std::ptr::addr_of!(*self),
+            "get_voice_state"
+        );
+        result
     }
 
     /// Overwrite the voice state for a channel.
@@ -416,6 +424,12 @@ impl ChannelRegistry {
             .entry(channel_id.to_string())
             .or_insert_with(VoiceState::default);
         f(state);
+        tracing::debug!(
+            channel_id = channel_id,
+            enabled = state.enabled,
+            registry_ptr = ?std::ptr::addr_of!(*self),
+            "update_voice_state AFTER mutation"
+        );
     }
 
     /// Get channel status summary

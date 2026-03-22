@@ -178,6 +178,7 @@ impl ReplyEmitter {
     async fn should_voice(&self) -> bool {
         // Static hint: user sent an audio message
         if self.config.voice_reply_hint {
+            debug!("should_voice=true (voice_reply_hint)");
             return true;
         }
         // Dynamic check: read current voice state from registry
@@ -185,16 +186,20 @@ impl ReplyEmitter {
         // voice_mode_set tool is called without explicit channel_id)
         let channel_id = self.route.channel_id.as_str();
         let live_state = self.channel_registry.get_voice_state(channel_id).await;
+        debug!("should_voice: channel={}, enabled={}", channel_id, live_state.is_active());
         if live_state.is_active() {
             return true;
         }
         // Fallback: check "default" key (used when tool doesn't know channel)
         if channel_id != "default" {
             let default_state = self.channel_registry.get_voice_state("default").await;
+            debug!("should_voice: fallback 'default' enabled={}, has_gen_registry={}", default_state.is_active(), self.generation_registry.is_some());
             if default_state.is_active() {
+                debug!("should_voice => TRUE (default fallback)");
                 return true;
             }
         }
+        debug!("should_voice => FALSE");
         false
     }
 
