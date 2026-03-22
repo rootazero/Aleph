@@ -59,6 +59,7 @@ pub struct InboundContext {
     pub channel: ChannelContext,
     pub session: SessionContext,
     pub message: MessageMetadata,
+    pub voice_mode_active: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -129,6 +130,11 @@ impl InboundContext {
             lines.push(format!("Reply To: {}", reply));
         }
 
+        // Voice mode
+        if self.voice_mode_active {
+            lines.push("Voice Mode: active".to_string());
+        }
+
         lines.join("\n")
     }
 }
@@ -177,6 +183,7 @@ mod tests {
                 active_agent: Some("default".to_string()),
             },
             message: MessageMetadata::default(),
+            ..Default::default()
         };
 
         let output = ctx.format_for_prompt();
@@ -213,6 +220,7 @@ mod tests {
                 attachment_types: vec!["image".to_string()],
                 reply_to: Some("msg_789".to_string()),
             },
+            ..Default::default()
         };
 
         let output = ctx.format_for_prompt();
@@ -226,5 +234,22 @@ mod tests {
         assert!(output.contains("Attachments: image (1)"));
         // Reply
         assert!(output.contains("Reply To: msg_789"));
+    }
+
+    #[test]
+    fn voice_mode_active_included_in_prompt() {
+        let ctx = InboundContext {
+            voice_mode_active: true,
+            ..Default::default()
+        };
+        let output = ctx.format_for_prompt();
+        assert!(output.contains("Voice Mode: active"));
+    }
+
+    #[test]
+    fn voice_mode_inactive_not_in_prompt() {
+        let ctx = InboundContext::default();
+        let output = ctx.format_for_prompt();
+        assert!(!output.contains("Voice Mode"));
     }
 }

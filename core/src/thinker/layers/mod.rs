@@ -29,6 +29,7 @@ mod tools;
 
 // --- Context layers ---
 mod inbound_context;
+mod voice_mode;
 mod runtime_context;
 mod environment;
 mod security;
@@ -71,6 +72,7 @@ pub use tools::ToolsLayer;
 pub use tools::HydratedToolsLayer;
 
 pub use inbound_context::InboundContextLayer;
+pub use voice_mode::VoiceModeLayer;
 pub use runtime_context::RuntimeContextLayer;
 pub use environment::EnvironmentLayer;
 pub use security::SecurityLayer;

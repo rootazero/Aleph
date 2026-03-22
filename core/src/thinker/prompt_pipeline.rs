@@ -206,7 +206,8 @@ impl PromptPipeline {
     ///
     /// **Dynamic zone** (per-request, not cacheable):
     /// 1700  InboundContextLayer
-    /// 1710  RuntimeContextLayer
+    /// 1710  VoiceModeLayer
+    /// 1720  RuntimeContextLayer
     /// 1730  IdentityFilesLayer
     /// 1740  MemoryAugmentationLayer
     /// 1750  SessionContextGuideLayer
@@ -214,6 +215,7 @@ impl PromptPipeline {
         Self::new(vec![
             Box::new(SoulLayer),
             Box::new(InboundContextLayer),
+            Box::new(VoiceModeLayer),
             Box::new(ProfileLayer),
             Box::new(RoleLayer),
             Box::new(RuntimeContextLayer),
