@@ -170,8 +170,32 @@ impl ReplyEmitter {
     }
 
     /// Returns true when voice output should be attempted.
-    fn should_voice(&self) -> bool {
-        self.config.voice_enabled || self.config.voice_reply_hint
+    /// Dynamically check if voice output should be used.
+    ///
+    /// Re-reads VoiceState from ChannelRegistry on every call so that
+    /// mid-request voice_mode_set tool calls take effect immediately
+    /// (e.g. the confirmation message itself is voiced).
+    async fn should_voice(&self) -> bool {
+        // Static hint: user sent an audio message
+        if self.config.voice_reply_hint {
+            return true;
+        }
+        // Dynamic check: read current voice state from registry
+        // Check both the specific channel and "default" (fallback when
+        // voice_mode_set tool is called without explicit channel_id)
+        let channel_id = self.route.channel_id.as_str();
+        let live_state = self.channel_registry.get_voice_state(channel_id).await;
+        if live_state.is_active() {
+            return true;
+        }
+        // Fallback: check "default" key (used when tool doesn't know channel)
+        if channel_id != "default" {
+            let default_state = self.channel_registry.get_voice_state("default").await;
+            if default_state.is_active() {
+                return true;
+            }
+        }
+        false
     }
 
     /// Try to generate TTS audio and send as a voice message.
@@ -181,7 +205,13 @@ impl ReplyEmitter {
     /// plain text via `send_to_channel`.
     async fn send_as_voice(&self, text: &str) {
         if let Some(ref registry) = self.generation_registry {
-            let voice_state = self.voice_state.lock().await.clone();
+            // Read live voice state from registry (not the stale local copy)
+            // Check channel-specific first, then "default" fallback
+            let channel_id = self.route.channel_id.as_str();
+            let mut voice_state = self.channel_registry.get_voice_state(channel_id).await;
+            if !voice_state.is_active() && channel_id != "default" {
+                voice_state = self.channel_registry.get_voice_state("default").await;
+            }
             let gen_config = match self.generation_config {
                 Some(ref cfg) => cfg.read().await.clone(),
                 None => {
@@ -592,7 +622,7 @@ impl EventEmitter for ReplyEmitter {
                 if is_intermediate {
                     // Intermediate message: send immediately as a standalone message
                     if !content.is_empty() {
-                        if self.should_voice() {
+                        if self.should_voice().await {
                             self.send_as_voice(&content).await;
                         } else if self.config.stream_enabled && content.chars().count() > TYPEWRITER_CHARS_PER_STEP * 2 {
                             self.send_typewriter(&content).await;
@@ -619,7 +649,7 @@ impl EventEmitter for ReplyEmitter {
                         if !buffer.is_empty() {
                             let text = std::mem::take(&mut *buffer);
                             drop(buffer);
-                            if self.should_voice() {
+                            if self.should_voice().await {
                                 self.send_as_voice(&text).await;
                             } else {
                                 self.send_to_channel(&text).await;
@@ -642,7 +672,7 @@ impl EventEmitter for ReplyEmitter {
                 };
 
                 if !text.is_empty() {
-                    if self.should_voice() {
+                    if self.should_voice().await {
                         self.send_as_voice(&text).await;
                     } else if self.config.stream_enabled {
                         self.send_typewriter(&text).await;
@@ -661,7 +691,7 @@ impl EventEmitter for ReplyEmitter {
                                 self.run_id,
                                 final_response.len()
                             );
-                            if self.should_voice() {
+                            if self.should_voice().await {
                                 self.send_as_voice(final_response).await;
                             } else if self.config.stream_enabled {
                                 self.send_typewriter(final_response).await;
@@ -686,7 +716,7 @@ impl EventEmitter for ReplyEmitter {
                     std::mem::take(&mut *buffer)
                 };
                 if !text.is_empty() {
-                    if self.should_voice() {
+                    if self.should_voice().await {
                         self.send_as_voice(&text).await;
                     } else {
                         self.send_to_channel(&text).await;
@@ -707,14 +737,14 @@ impl EventEmitter for ReplyEmitter {
                     std::mem::take(&mut *buffer)
                 };
                 if !text.is_empty() {
-                    if self.should_voice() {
+                    if self.should_voice().await {
                         self.send_as_voice(&text).await;
                     } else {
                         self.send_to_channel(&text).await;
                     }
                 }
 
-                if self.should_voice() {
+                if self.should_voice().await {
                     self.send_as_voice(&question).await;
                 } else {
                     self.send_to_channel(&question).await;
