@@ -39,7 +39,7 @@
 
 use crate::generation::{
     GenerationData, GenerationError, GenerationMetadata, GenerationOutput, GenerationProvider,
-    GenerationRequest, GenerationResult, GenerationType,
+    GenerationRequest, GenerationResult, GenerationType, VoiceInfo,
 };
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -237,6 +237,18 @@ impl OpenAiTtsProvider {
     /// Validate a voice string
     pub fn validate_voice(voice: &str) -> bool {
         AVAILABLE_VOICES.contains(&voice)
+    }
+
+    /// Return the static list of available voices for this provider
+    pub fn static_voice_list() -> Vec<VoiceInfo> {
+        vec![
+            VoiceInfo { id: "alloy".into(), name: "Alloy".into(), gender: "neutral".into(), description: "Neutral, balanced".into() },
+            VoiceInfo { id: "echo".into(), name: "Echo".into(), gender: "male".into(), description: "Warm, conversational".into() },
+            VoiceInfo { id: "fable".into(), name: "Fable".into(), gender: "neutral".into(), description: "Expressive, animated".into() },
+            VoiceInfo { id: "onyx".into(), name: "Onyx".into(), gender: "male".into(), description: "Deep, authoritative".into() },
+            VoiceInfo { id: "nova".into(), name: "Nova".into(), gender: "female".into(), description: "Warm, friendly".into() },
+            VoiceInfo { id: "shimmer".into(), name: "Shimmer".into(), gender: "female".into(), description: "Clear, bright".into() },
+        ]
     }
 
     /// Get the content type for a given format
@@ -502,6 +514,10 @@ impl GenerationProvider for OpenAiTtsProvider {
 
     fn default_model(&self) -> Option<&str> {
         Some(&self.model)
+    }
+
+    fn list_voices(&self) -> Vec<VoiceInfo> {
+        Self::static_voice_list()
     }
 }
 

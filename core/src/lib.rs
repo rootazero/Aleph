@@ -283,7 +283,7 @@ pub use crate::search::{ProviderTestResult, SearchProviderTestConfig};
 // Vision & Generation Exports
 // =============================================================================
 
-pub use crate::generation::{GenerationProvider, GenerationProviderRegistry, GenerationType};
+pub use crate::generation::{GenerationProvider, GenerationProviderRegistry, GenerationType, VoiceInfo};
 
 // Media Pipeline Exports
 pub use crate::media::{

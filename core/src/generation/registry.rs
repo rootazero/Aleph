@@ -25,7 +25,7 @@
 /// ```
 use crate::generation::error::{GenerationError, GenerationResult};
 use crate::generation::types::GenerationType;
-use crate::generation::GenerationProvider;
+use crate::generation::{GenerationProvider, VoiceInfo};
 use std::collections::HashMap;
 use crate::sync_primitives::Arc;
 
@@ -345,6 +345,25 @@ impl GenerationProviderRegistry {
     /// Iterator yielding (name, provider) pairs
     pub fn iter(&self) -> impl Iterator<Item = (&String, &Arc<dyn GenerationProvider>)> {
         self.providers.iter()
+    }
+
+    /// Get the list of voices available for a given provider
+    ///
+    /// # Arguments
+    ///
+    /// * `provider_id` - The provider name to query
+    ///
+    /// # Returns
+    ///
+    /// List of voices, or an empty vec if the provider is not found or has none.
+    pub fn get_voices_for_provider(&self, provider_id: &str) -> Vec<VoiceInfo> {
+        if let Some(provider) = self.get(provider_id) {
+            let voices = provider.list_voices();
+            if !voices.is_empty() {
+                return voices;
+            }
+        }
+        vec![]
     }
 
     /// Get the first provider that supports a generation type

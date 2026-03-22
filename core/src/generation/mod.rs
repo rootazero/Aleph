@@ -33,6 +33,7 @@
 /// - `Speech`: Text-to-speech (ElevenLabs, OpenAI TTS)
 use std::future::Future;
 use std::pin::Pin;
+use serde::{Deserialize, Serialize};
 
 // Sub-modules
 pub mod error;
@@ -44,6 +45,20 @@ pub mod types;
 // Re-exports
 pub use error::{GenerationError, GenerationResult};
 pub use registry::GenerationProviderRegistry;
+
+/// Information about a voice supported by a generation provider
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VoiceInfo {
+    /// Unique identifier for the voice (used in API calls)
+    pub id: String,
+    /// Human-readable display name
+    pub name: String,
+    /// Gender descriptor (e.g. "male", "female", "neutral")
+    pub gender: String,
+    /// Short description of the voice character
+    pub description: String,
+}
+
 pub use response_parser::{
     has_generation_requests, parse_generation_requests, ParseResult, ParsedGenerationRequest,
 };
@@ -326,6 +341,18 @@ pub trait GenerationProvider: Send + Sync {
     /// Returns `false`.
     fn supports_image_editing(&self) -> bool {
         false
+    }
+
+    /// List available voices for speech synthesis (optional)
+    ///
+    /// Returns a list of voices supported by this provider.
+    /// Non-speech providers should leave this as the default empty list.
+    ///
+    /// # Default Implementation
+    ///
+    /// Returns an empty `Vec`.
+    fn list_voices(&self) -> Vec<VoiceInfo> {
+        vec![]
     }
 }
 

@@ -8,6 +8,7 @@ use crate::config::Config;
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 use super::super::event_bus::GatewayEventBus;
 use crate::generation::GenerationType;
+use crate::generation::providers::{OpenAiTtsProvider, ElevenLabsProvider};
 use crate::gateway::security::SharedTokenManager;
 use serde::{Deserialize, Serialize};
 use crate::sync_primitives::Arc;
@@ -618,6 +619,46 @@ pub async fn handle_test_connection(
     };
 
     JsonRpcResponse::success(request.id, serde_json::to_value(result).unwrap())
+}
+
+/// Get voices for a generation provider
+///
+/// Returns a list of supported voices for the given provider.
+/// Looks up by provider name, then falls back to a static list by provider_type.
+pub async fn handle_voices(
+    request: JsonRpcRequest,
+    config: Arc<RwLock<Config>>,
+) -> JsonRpcResponse {
+    #[derive(serde::Deserialize)]
+    struct Params {
+        provider_id: String,
+    }
+
+    let params: Params = match super::parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
+    };
+
+    let cfg = config.read().await;
+
+    // Determine the provider_type from config, or treat provider_id itself as provider_type
+    let provider_type = cfg
+        .generation
+        .providers
+        .get(&params.provider_id)
+        .map(|p| p.provider_type.as_str())
+        .unwrap_or(params.provider_id.as_str())
+        .to_lowercase();
+
+    let voices = match provider_type.as_str() {
+        "openai" | "openai-tts" | "openai_tts" | "openai_compat" | "openai-compat" => {
+            OpenAiTtsProvider::static_voice_list()
+        }
+        "elevenlabs" => ElevenLabsProvider::static_voice_list(),
+        _ => vec![],
+    };
+
+    JsonRpcResponse::success(request.id, serde_json::to_value(voices).unwrap_or_default())
 }
 
 #[cfg(test)]
