@@ -3,12 +3,11 @@
 //! When a user sends a voice message via any Channel (Telegram, Discord, etc.),
 //! the audio attachment arrives in the InboundMessage. This middleware transcribes
 //! it to text before the Agent Loop sees it.
-
-use std::sync::Arc;
+//!
+//! Uses Whisper-compatible API directly (no MediaPipeline dependency).
 
 use crate::gateway::channel::{Attachment, InboundMessage};
-use crate::media::pipeline::MediaPipeline;
-use crate::media::types::{AudioFormat, MediaInput, MediaOutput, MediaType};
+use tracing::{debug, warn};
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -20,6 +19,14 @@ pub struct VoiceProcessResult {
     pub message: InboundMessage,
     /// Whether at least one audio attachment was successfully transcribed.
     pub transcribed: bool,
+}
+
+/// Configuration for inbound voice STT.
+#[derive(Clone)]
+pub struct SttConfig {
+    pub api_key: String,
+    pub base_url: String,
+    pub model: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -36,14 +43,12 @@ pub fn has_audio_attachment(msg: &InboundMessage) -> bool {
 /// Process inbound voice: transcribe audio attachments to text.
 ///
 /// - No audio attachments → returns message unchanged, `transcribed = false`.
-/// - Has audio attachments → transcribes the first audio via MediaPipeline STT.
-///   - On success: sets text to transcription (prepends "[Voice] {transcription}\n"
-///     if original text was non-empty), removes audio attachments, `transcribed = true`.
-///   - On failure: restores all attachments, appends error hint to text,
-///     `transcribed = false`.
+/// - Has audio → downloads audio bytes, sends to Whisper API for transcription.
+///   - On success: sets text to transcription, removes audio attachments.
+///   - On failure: keeps attachments, appends error hint.
 pub async fn process_inbound_voice(
     mut msg: InboundMessage,
-    media_pipeline: &Arc<MediaPipeline>,
+    stt_config: &SttConfig,
 ) -> VoiceProcessResult {
     if !has_audio_attachment(&msg) {
         return VoiceProcessResult {
@@ -58,30 +63,31 @@ pub async fn process_inbound_voice(
 
     // Transcribe the first audio attachment.
     let first_audio = &audio_attachments[0];
-    match transcribe_attachment(first_audio, media_pipeline).await {
+    match transcribe_attachment(first_audio, stt_config).await {
         Ok(transcription) => {
-            // Prepend "[Voice]" marker if original text was non-empty.
+            debug!(chars = transcription.len(), "Voice transcription succeeded");
             let new_text = if msg.text.is_empty() {
                 transcription
             } else {
-                format!("[Voice] {}\n{}", transcription, msg.text)
+                format!("{}\n{}", transcription, msg.text)
             };
             msg.text = new_text;
-            // Keep only non-audio attachments.
             msg.attachments = other_attachments;
             VoiceProcessResult {
                 message: msg,
                 transcribed: true,
             }
         }
-        Err(_) => {
-            // Restore all attachments and append failure hint.
+        Err(e) => {
+            warn!(error = %e, "Voice transcription failed");
             let mut all_attachments = audio_attachments;
             all_attachments.extend(other_attachments);
             msg.attachments = all_attachments;
-            msg.text.push_str(
-                "\n[Voice transcription failed, please resend or use text]",
-            );
+            if msg.text.is_empty() {
+                msg.text = "[Voice transcription failed, please resend or use text]".to_string();
+            } else {
+                msg.text.push_str("\n[Voice transcription failed]");
+            }
             VoiceProcessResult {
                 message: msg,
                 transcribed: false,
@@ -94,89 +100,92 @@ pub async fn process_inbound_voice(
 // Private helpers
 // ---------------------------------------------------------------------------
 
-/// Map a MIME type string to an `AudioFormat`.
-fn audio_format_from_mime(mime: &str) -> AudioFormat {
-    match mime {
-        "audio/mp3" | "audio/mpeg" => AudioFormat::Mp3,
-        "audio/ogg" | "audio/opus" => AudioFormat::Ogg,
-        "audio/wav" | "audio/wave" => AudioFormat::Wav,
-        "audio/flac" => AudioFormat::Flac,
-        "audio/m4a" | "audio/mp4" | "audio/x-m4a" => AudioFormat::M4a,
-        _ => AudioFormat::Mp3,
-    }
-}
-
-/// Build a `MediaInput` and invoke `MediaPipeline::process()` for STT.
+/// Download audio bytes and send to Whisper-compatible API for transcription.
 async fn transcribe_attachment(
     attachment: &Attachment,
-    pipeline: &Arc<MediaPipeline>,
-) -> Result<String, crate::media::error::MediaError> {
-    let format = audio_format_from_mime(&attachment.mime_type);
-    let media_type = MediaType::Audio {
-        format,
-        duration_secs: None,
-    };
+    config: &SttConfig,
+) -> Result<String, String> {
+    // Get audio bytes: from inline data, local file, or download from URL
+    let (bytes, filename) = get_audio_bytes(attachment).await?;
 
-    // Prefer local path → inline data → remote URL.
-    let input = if let Some(path) = &attachment.path {
-        MediaInput::FilePath {
-            path: path.into(),
-        }
-    } else if let Some(data) = &attachment.data {
-        MediaInput::Base64 {
-            data: base64_encode(data),
-            media_type: media_type.clone(),
-        }
-    } else if let Some(url) = &attachment.url {
-        MediaInput::Url { url: url.clone() }
-    } else {
-        // No usable source — return an error without hitting the pipeline.
-        return Err(crate::media::error::MediaError::UnsupportedFormat(
-            "audio attachment has no path, data, or url".into(),
-        ));
-    };
+    // Send to Whisper API
+    let mime = &attachment.mime_type;
+    let file_part = reqwest::multipart::Part::bytes(bytes)
+        .file_name(filename)
+        .mime_str(mime)
+        .map_err(|e| format!("Invalid MIME type: {}", e))?;
 
-    let output = pipeline.process(&input, &media_type, None).await?;
+    let form = reqwest::multipart::Form::new()
+        .part("file", file_part)
+        .text("model", config.model.clone())
+        .text("response_format", "json");
 
-    // Extract text from the output variants.
-    let text = match output {
-        MediaOutput::Text { text } => text,
-        MediaOutput::Description { text, .. } => text,
-        MediaOutput::Chunks { chunks } => chunks
-            .into_iter()
-            .map(|c| c.content)
-            .collect::<Vec<_>>()
-            .join(" "),
-        MediaOutput::Structured { data } => data.to_string(),
-    };
+    let url = format!("{}/audio/transcriptions", config.base_url.trim_end_matches('/'));
+    debug!(url = %url, model = %config.model, "Sending Whisper transcription request");
 
-    Ok(text)
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(&url)
+        .bearer_auth(&config.api_key)
+        .multipart(form)
+        .timeout(std::time::Duration::from_secs(60))
+        .send()
+        .await
+        .map_err(|e| format!("Whisper API request failed: {}", e))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("Whisper API error {}: {}", status, body));
+    }
+
+    #[derive(serde::Deserialize)]
+    struct WhisperResponse {
+        text: String,
+    }
+
+    let result: WhisperResponse = resp
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse Whisper response: {}", e))?;
+
+    Ok(result.text)
 }
 
-/// Encode raw bytes as base64 (standard alphabet, no padding issues).
-fn base64_encode(data: &[u8]) -> String {
-    use std::fmt::Write;
-    const TABLE: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity((data.len() + 2) / 3 * 4);
-    for chunk in data.chunks(3) {
-        let b0 = chunk[0] as u32;
-        let b1 = chunk.get(1).copied().unwrap_or(0) as u32;
-        let b2 = chunk.get(2).copied().unwrap_or(0) as u32;
-        let n = (b0 << 16) | (b1 << 8) | b2;
-        out.push(TABLE[((n >> 18) & 63) as usize] as char);
-        out.push(TABLE[((n >> 12) & 63) as usize] as char);
-        if chunk.len() > 1 {
-            out.push(TABLE[((n >> 6) & 63) as usize] as char);
-        } else {
-            let _ = write!(out, "=");
-        }
-        if chunk.len() > 2 {
-            out.push(TABLE[(n & 63) as usize] as char);
-        } else {
-            let _ = write!(out, "=");
-        }
+/// Get audio bytes from attachment (inline data, local file, or URL download).
+async fn get_audio_bytes(attachment: &Attachment) -> Result<(Vec<u8>, String), String> {
+    let filename = attachment
+        .filename
+        .clone()
+        .unwrap_or_else(|| "voice.ogg".to_string());
+
+    if let Some(ref data) = attachment.data {
+        return Ok((data.clone(), filename));
     }
-    out
+
+    if let Some(ref path) = attachment.path {
+        let bytes = tokio::fs::read(path)
+            .await
+            .map_err(|e| format!("Failed to read audio file {}: {}", path, e))?;
+        return Ok((bytes, filename));
+    }
+
+    if let Some(ref url) = attachment.url {
+        debug!(url = %url, "Downloading audio for transcription");
+        let resp = reqwest::get(url)
+            .await
+            .map_err(|e| format!("Failed to download audio from {}: {}", url, e))?;
+        if !resp.status().is_success() {
+            return Err(format!("Audio download failed: HTTP {}", resp.status()));
+        }
+        let bytes = resp
+            .bytes()
+            .await
+            .map_err(|e| format!("Failed to read audio bytes: {}", e))?;
+        return Ok((bytes.to_vec(), filename));
+    }
+
+    Err("Audio attachment has no data, path, or URL".to_string())
 }
 
 // ---------------------------------------------------------------------------

@@ -381,6 +381,36 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
         }
     }
 
+    // Wire STT config for voice transcription (reuse speech provider credentials for Whisper API)
+    if let Some(ref cfg_arc) = app_config {
+        let cfg = cfg_arc.read().await;
+        // Find first speech provider with API key for STT
+        for (_name, pcfg) in &cfg.generation.providers {
+            if pcfg.enabled
+                && pcfg.capabilities.iter().any(|c| *c == alephcore::generation::GenerationType::Speech)
+            {
+                if let Some(ref key) = pcfg.api_key {
+                    if !key.is_empty() {
+                        let base = pcfg.base_url.as_deref().unwrap_or("https://api.openai.com");
+                        // Strip /v1/audio/speech if present — we need just the base for /v1/audio/transcriptions
+                        let base = base.trim_end_matches("/v1/audio/speech")
+                            .trim_end_matches('/');
+                        let stt = alephcore::gateway::voice::inbound::SttConfig {
+                            api_key: key.clone(),
+                            base_url: format!("{}/v1", base),
+                            model: "whisper-1".to_string(),
+                        };
+                        inbound_router = inbound_router.with_stt_config(stt);
+                        if !daemon {
+                            println!("  Inbound router: voice STT transcription enabled");
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
     // Wire app config for output_mode-aware reply emitters
     if let Some(cfg) = app_config {
         inbound_router = inbound_router.with_app_config(cfg);

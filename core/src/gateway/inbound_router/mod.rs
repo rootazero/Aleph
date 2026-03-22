@@ -96,8 +96,8 @@ pub struct InboundMessageRouter {
     pub(super) session_manager: Option<Arc<super::session_manager::SessionManager>>,
     /// App config for reading output_mode at runtime
     pub(super) app_config: Option<Arc<tokio::sync::RwLock<crate::Config>>>,
-    /// Media pipeline for voice STT transcription
-    pub(super) media_pipeline: Option<Arc<crate::media::pipeline::MediaPipeline>>,
+    /// STT config for voice transcription
+    pub(super) stt_config: Option<super::voice::inbound::SttConfig>,
     /// Generation provider registry for TTS
     pub(super) generation_registry: Option<Arc<crate::generation::GenerationProviderRegistry>>,
     /// Generation config for TTS
@@ -128,7 +128,7 @@ impl InboundMessageRouter {
             debounce_buffer: None,
             session_manager: None,
             app_config: None,
-            media_pipeline: None,
+            stt_config: None,
             generation_registry: None,
             generation_config: None,
         }
@@ -195,9 +195,9 @@ impl InboundMessageRouter {
         self
     }
 
-    /// Set the media pipeline for voice STT transcription
-    pub fn with_media_pipeline(mut self, pipeline: Arc<crate::media::pipeline::MediaPipeline>) -> Self {
-        self.media_pipeline = Some(pipeline);
+    /// Set STT config for voice transcription
+    pub fn with_stt_config(mut self, config: super::voice::inbound::SttConfig) -> Self {
+        self.stt_config = Some(config);
         self
     }
 
@@ -314,11 +314,11 @@ impl InboundMessageRouter {
         };
 
         // Voice STT: transcribe audio attachments before further processing
-        if let Some(ref pipeline) = self.media_pipeline {
+        if let Some(ref stt_config) = self.stt_config {
             if super::voice::inbound::has_audio_attachment(&ctx.message) {
                 let result = super::voice::inbound::process_inbound_voice(
                     ctx.message.clone(),
-                    pipeline,
+                    stt_config,
                 )
                 .await;
                 ctx.message = result.message;
