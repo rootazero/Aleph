@@ -393,11 +393,7 @@ fn ProviderCard(
                 }}
             </div>
 
-            <p class="text-sm text-text-secondary mb-3">
-                {preset.description.clone()}
-            </p>
-
-            <div class="flex items-center gap-2 text-xs text-text-tertiary">
+            <div class="flex items-center gap-2 text-xs text-text-tertiary mt-2">
                 <span class="font-mono">{preset.default_model.clone()}</span>
             </div>
         </div>
