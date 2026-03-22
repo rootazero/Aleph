@@ -314,8 +314,11 @@ impl InboundMessageRouter {
         };
 
         // Voice STT: transcribe audio attachments before further processing
+        let has_stt = self.stt_config.is_some();
+        let has_audio = super::voice::inbound::has_audio_attachment(&ctx.message);
+        tracing::debug!(has_stt = has_stt, has_audio = has_audio, attachments = ctx.message.attachments.len(), "Voice STT check");
         if let Some(ref stt_config) = self.stt_config {
-            if super::voice::inbound::has_audio_attachment(&ctx.message) {
+            if has_audio {
                 let result = super::voice::inbound::process_inbound_voice(
                     ctx.message.clone(),
                     stt_config,

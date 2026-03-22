@@ -69,29 +69,14 @@ pub fn build_request_with_mode(
             input.to_string()
         };
 
-        messages.push(Message {
-            role: "user".to_string(),
-            content: MessageContent::Text {
-                content: user_content,
-            },
-        });
+        messages.push(Message::text("user", user_content));
     } else {
         // Standard mode: use separate system message
         if let Some(prompt) = system_prompt {
-            messages.push(Message {
-                role: "system".to_string(),
-                content: MessageContent::Text {
-                    content: prompt.to_string(),
-                },
-            });
+            messages.push(Message::text("system", prompt.to_string()));
         }
 
-        messages.push(Message {
-            role: "user".to_string(),
-            content: MessageContent::Text {
-                content: input.to_string(),
-            },
-        });
+        messages.push(Message::text("user", input.to_string()));
     }
 
     ChatCompletionRequest {
@@ -128,12 +113,7 @@ pub fn build_vision_request(
     // Add system prompt if provided and not using prepend mode
     if !use_prepend_mode {
         if let Some(prompt) = system_prompt {
-            messages.push(Message {
-                role: "system".to_string(),
-                content: MessageContent::Text {
-                    content: prompt.to_string(),
-                },
-            });
+            messages.push(Message::text("system", prompt.to_string()));
         }
     }
 
@@ -155,6 +135,7 @@ pub fn build_vision_request(
 
     messages.push(Message {
         role: "user".to_string(),
+        tool_call_id: None,
         content: MessageContent::Multimodal {
             content: content_blocks,
         },
@@ -184,12 +165,7 @@ pub fn build_multimodal_request(
     // Add system prompt if provided and not using prepend mode
     if !use_prepend_mode {
         if let Some(prompt) = system_prompt {
-            messages.push(Message {
-                role: "system".to_string(),
-                content: MessageContent::Text {
-                    content: prompt.to_string(),
-                },
-            });
+            messages.push(Message::text("system", prompt.to_string()));
         }
     }
 
@@ -223,6 +199,7 @@ pub fn build_multimodal_request(
 
     messages.push(Message {
         role: "user".to_string(),
+        tool_call_id: None,
         content: MessageContent::Multimodal {
             content: content_blocks,
         },

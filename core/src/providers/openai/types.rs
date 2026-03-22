@@ -26,8 +26,32 @@ pub struct ChatCompletionRequest {
 #[derive(Debug, Serialize)]
 pub struct Message {
     pub role: String,
+    /// Required for tool result messages (role="tool").
+    /// OpenAI API rejects tool messages without this field.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
     #[serde(flatten)]
     pub content: MessageContent,
+}
+
+impl Message {
+    /// Create a simple text message
+    pub fn text(role: &str, content: String) -> Self {
+        Self {
+            role: role.to_string(),
+            tool_call_id: None,
+            content: MessageContent::Text { content },
+        }
+    }
+
+    /// Create a tool result message
+    pub fn tool_result(tool_call_id: String, content: String) -> Self {
+        Self {
+            role: "tool".to_string(),
+            tool_call_id: Some(tool_call_id),
+            content: MessageContent::Text { content },
+        }
+    }
 }
 
 /// Message content can be either simple text or structured content blocks

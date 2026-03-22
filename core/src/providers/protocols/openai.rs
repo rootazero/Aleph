@@ -96,12 +96,7 @@ impl OpenAiProtocol {
 
         // Add system message if provided
         if let Some(prompt) = system_prompt {
-            result.push(Message {
-                role: "system".to_string(),
-                content: MessageContent::Text {
-                    content: prompt.to_string(),
-                },
-            });
+            result.push(Message::text("system", prompt.to_string()));
         }
 
         for msg in messages {
@@ -142,6 +137,7 @@ impl OpenAiProtocol {
                         );
                         result.push(Message {
                             role: "user".to_string(),
+                            tool_call_id: None,
                             content: MessageContent::Multimodal { content: blocks },
                         });
                     } else {
@@ -151,10 +147,7 @@ impl OpenAiProtocol {
                             .filter_map(|b| b.as_text())
                             .collect::<Vec<_>>()
                             .join("\n");
-                        result.push(Message {
-                            role: "user".to_string(),
-                            content: MessageContent::Text { content: text },
-                        });
+                        result.push(Message::text("user", text));
                     }
                 }
                 UnifiedMessage::Assistant { content } => {
@@ -202,12 +195,7 @@ impl OpenAiProtocol {
 
                     // We need to build the JSON manually for assistant messages with tool_calls
                     // because the Message struct may not have tool_calls field
-                    result.push(Message {
-                        role: "assistant".to_string(),
-                        content: MessageContent::Text {
-                            content: msg_content.unwrap_or_default(),
-                        },
-                    });
+                    result.push(Message::text("assistant", msg_content.unwrap_or_default()));
                     // Note: tool_calls on assistant messages handled via json serialization override
                     let _ = msg_tool_calls; // TODO: extend Message type if needed
                 }
@@ -227,12 +215,8 @@ impl OpenAiProtocol {
                         })
                         .collect::<Vec<_>>()
                         .join("\n");
-                    // Each ToolResult as separate tool message
-                    result.push(Message {
-                        role: "tool".to_string(),
-                        content: MessageContent::Text { content: output },
-                    });
-                    let _ = tool_call_id; // tool_call_id would need Message extension
+                    // Each ToolResult as separate tool message with required tool_call_id
+                    result.push(Message::tool_result(tool_call_id.clone(), output));
                 }
             }
         }
