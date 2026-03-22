@@ -53,6 +53,8 @@ The current `nudge_sent: bool` (fires once when LLM gives up after `consecutive_
 
 The `consecutive_errors` counter and `MAX_CONSECUTIVE_ERRORS = 10` remain unchanged — they are a safety circuit breaker for continuous tool failures, orthogonal to the completion protocol.
 
+**Behavior change**: The old nudge required `consecutive_errors > 0` to fire and reset `consecutive_errors = 0` when triggered. The new protocol fires unconditionally when `tool_calls_made > 0` and the tag is absent — the `consecutive_errors > 0` precondition is removed. The `consecutive_errors` counter is no longer reset by the completion nudge; it continues to accumulate independently and triggers the circuit breaker at 10 regardless of nudge state.
+
 ## Changes
 
 ### loop_core.rs (~20 lines)
@@ -77,8 +79,11 @@ if !response.has_tool_calls() && response.stop_reason == StopReason::EndTurn {
         break;
     }
 
-    // Complex task: check for completion tag
-    let has_completion_tag = final_text
+    // Complex task: check for completion tag in CURRENT response
+    // (must use response.text, not final_text, to avoid stale values
+    // when LLM returns EndTurn with no text after a nudge)
+    let has_completion_tag = response
+        .text
         .as_ref()
         .map_or(false, |t| t.contains("<task-complete/>"));
 
@@ -130,11 +135,20 @@ Append to `BASE_BEHAVIOR`:
 
 ### Tests
 
-- Update existing `test_persistence_nudge_on_premature_stop` and `test_persistence_nudge_fires_only_once` to use `completion_nudge_count`
-- New test: LLM stops with `<task-complete/>` in response → loop ends immediately
-- New test: LLM stops without tag after tool use → nudge injected up to 3 times
-- New test: LLM stops without tag and no tool use → loop ends naturally (no nudge)
-- New test: `<task-complete/>` in intermediate response (with tool calls) → ignored
+**Existing tests to update** — all tests that exercise tool calls + EndTurn must add `<task-complete/>` to their final mock response text to avoid triggering the new nudge path:
+- `test_tool_call_then_response` — add tag to `"Done echoing."` response
+- `test_multi_turn_tool_chain` — add tag to final response
+- `test_safety_guard_blocks_tool` — add tag to final response
+- `test_persistence_nudge_on_premature_stop` — rewrite to test new completion protocol
+- `test_persistence_nudge_fires_only_once` — rewrite to test 3-nudge stages
+- Any other test where `tool_calls_made > 0` and final response lacks the tag
+
+**New tests**:
+- LLM stops with `<task-complete/>` in response → loop ends immediately
+- LLM stops without tag after tool use → nudge injected up to 3 times, stage escalation
+- LLM stops without tag and no tool use → loop ends naturally (no nudge)
+- `<task-complete/>` in intermediate response (with tool calls) → ignored
+- LLM returns EndTurn with no text after nudge → `response.text` is None, no false positive from stale `final_text`
 
 ## Boundary Conditions
 
@@ -143,6 +157,7 @@ Append to `BASE_BEHAVIOR`:
 3. **Tag in intermediate responses** — ignored; only checked in EndTurn + no tool calls branch
 4. **Tag visible to user** — not stripped; `<completion-check>` is useful for user review. Can add stripping later (YAGNI)
 5. **Subagents** — protocol applies automatically since all agents share `AgentLoop`
+6. **Provider compatibility** — nudge messages are injected as `user` role (matching existing pattern). Up to 3 sequential `[SYSTEM]` user messages may appear in history. This follows the existing architecture choice and works with all supported providers
 
 ## R8 Compliance
 
