@@ -27,20 +27,22 @@ pub mod config;
 pub mod group_chat;
 pub mod message_ops;
 
-pub use config::{TelegramConfig, WebhookConfig};
+pub use config::{PairingEntry, TelegramConfig, WebhookConfig};
 pub use message_ops::TelegramMessageOps;
 
 use crate::gateway::channel::{
     Attachment, CallbackQuery, Channel, ChannelCapabilities, ChannelError, ChannelFactory,
     ChannelId, ChannelInfo, ChannelResult, ChannelState, ChannelStatus, ConversationId,
-    InboundMessage, InlineKeyboard, MessageId, OutboundMessage, SendResult, UserId,
+    InboundMessage, InlineKeyboard, MessageId, OutboundMessage, PairingData, SendResult, UserId,
 };
 use crate::gateway::formatter::{MessageFormatter, MarkupFormat};
 use async_trait::async_trait;
 use chrono::{TimeZone, Utc};
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
-use tokio::sync::{mpsc, oneshot};
+use std::sync::Arc;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use tokio::sync::{mpsc, oneshot, RwLock};
 use tokio_util::sync::CancellationToken;
 
 use teloxide::{
@@ -69,6 +71,12 @@ pub struct TelegramChannel {
     bot: Option<Bot>,
     /// Slash commands to register with Telegram Bot API (command, description)
     slash_commands: Vec<(String, String)>,
+    /// Active pairing codes (code → entry). Shared with handler closure.
+    pairing_codes: Arc<RwLock<HashMap<String, PairingEntry>>>,
+    /// Rate-limit map: user_id → last prompt time. Avoids spamming unauthorized users.
+    pairing_prompt_times: Arc<RwLock<HashMap<i64, Instant>>>,
+    /// Users authorized at runtime via pairing (in-memory only).
+    runtime_allowed_users: Arc<RwLock<Vec<i64>>>,
 }
 
 impl TelegramChannel {
@@ -93,6 +101,9 @@ impl TelegramChannel {
             shutdown_tx: None,
             bot: None,
             slash_commands: Vec::new(),
+            pairing_codes: Arc::new(RwLock::new(HashMap::new())),
+            pairing_prompt_times: Arc::new(RwLock::new(HashMap::new())),
+            runtime_allowed_users: Arc::new(RwLock::new(Vec::new())),
         }
     }
 
@@ -139,8 +150,17 @@ impl TelegramChannel {
         }
     }
 
-    /// Convert Telegram message to InboundMessage
-    async fn convert_message(msg: &teloxide::types::Message, bot: &Bot, config: &TelegramConfig, channel_id: &ChannelId) -> Option<InboundMessage> {
+    /// Convert Telegram message to InboundMessage.
+    ///
+    /// `runtime_users` contains user IDs authorized via the pairing flow at
+    /// runtime. They are checked in addition to the static config allowlist.
+    async fn convert_message(
+        msg: &teloxide::types::Message,
+        bot: &Bot,
+        config: &TelegramConfig,
+        channel_id: &ChannelId,
+        runtime_users: &Arc<RwLock<Vec<i64>>>,
+    ) -> Option<InboundMessage> {
         // Get sender info
         let (sender_id, sender_name) = if let Some(from) = &msg.from {
             (
@@ -155,9 +175,10 @@ impl TelegramChannel {
             (UserId::new("unknown"), None)
         };
 
-        // Check if user is allowed
+        // Check if user is allowed (static config OR runtime-paired)
         let user_id = msg.from.as_ref().map(|u| u.id.0 as i64).unwrap_or(0);
-        if !config.is_user_allowed(user_id) {
+        let runtime_allowed = runtime_users.read().await.contains(&user_id);
+        if !config.is_user_allowed(user_id) && !runtime_allowed {
             tracing::debug!("User {} not in allowlist, ignoring message", user_id);
             return None;
         }
@@ -381,6 +402,27 @@ impl Channel for TelegramChannel {
         &self.channel_state
     }
 
+    async fn get_pairing_data(&self) -> ChannelResult<PairingData> {
+        use rand::Rng;
+
+        // Generate a 6-character alphanumeric code
+        let code: String = rand::thread_rng()
+            .sample_iter(&rand::distributions::Alphanumeric)
+            .take(6)
+            .map(char::from)
+            .collect::<String>()
+            .to_uppercase();
+
+        let entry = PairingEntry::new(code.clone());
+        let mut codes = self.pairing_codes.write().await;
+        codes.insert(code.clone(), entry);
+        // Clean up expired entries
+        codes.retain(|_, e| !e.is_expired());
+        drop(codes);
+
+        Ok(PairingData::Code(code))
+    }
+
     async fn start(&mut self) -> ChannelResult<()> {
         // Validate configuration
         self.config
@@ -489,6 +531,12 @@ impl Channel for TelegramChannel {
         let last_update_for_cb = last_update_at.clone();
         let last_update_for_watchdog = last_update_at.clone();
 
+        // Clone pairing state for the message handler closure
+        let pairing_codes_clone = self.pairing_codes.clone();
+        let prompt_times_clone = self.pairing_prompt_times.clone();
+        let runtime_users_clone = self.runtime_allowed_users.clone();
+        let runtime_users_for_cb = self.runtime_allowed_users.clone();
+
         tokio::spawn(async move {
             tracing::info!("Starting Telegram long-polling...");
             *status.write().await = ChannelStatus::Connected;
@@ -500,15 +548,70 @@ impl Channel for TelegramChannel {
                     let config = config.clone();
                     let channel_id = channel_id.clone();
                     let last_update = last_update_for_msg.clone();
+                    let pairing_codes = pairing_codes_clone.clone();
+                    let prompt_times = prompt_times_clone.clone();
+                    let runtime_users = runtime_users_clone.clone();
                     async move {
                         // Update stall detection timestamp
                         last_update.store(
                             SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs(),
                             Ordering::Relaxed,
                         );
-                        if let Some(inbound) = TelegramChannel::convert_message(&msg, &bot, &config, &channel_id).await {
+                        if let Some(inbound) = TelegramChannel::convert_message(
+                            &msg, &bot, &config, &channel_id, &runtime_users,
+                        ).await {
                             if let Err(e) = inbound_tx.send(inbound).await {
                                 tracing::error!("Failed to send inbound message: {}", e);
+                            }
+                        } else if let Some(from) = &msg.from {
+                            // Message was rejected (unauthorized user or service message).
+                            // Handle pairing flow for DM messages from unauthorized users.
+                            let user_id = from.id.0 as i64;
+                            let is_dm = !msg.chat.is_group() && !msg.chat.is_supergroup();
+                            let has_allowlist = !config.allowed_users.is_empty()
+                                || !runtime_users.read().await.is_empty();
+
+                            if is_dm && has_allowlist && !config.is_user_allowed(user_id) {
+                                if let Some(text) = msg.text() {
+                                    let code = text.trim().to_uppercase();
+                                    let mut codes = pairing_codes.write().await;
+                                    if let Some(entry) = codes.get(&code) {
+                                        if !entry.is_expired() {
+                                            codes.remove(&code);
+                                            drop(codes);
+                                            runtime_users.write().await.push(user_id);
+                                            let _ = bot.send_message(
+                                                msg.chat.id,
+                                                "Paired successfully! You can now send messages.",
+                                            ).await;
+                                            tracing::info!(
+                                                "User {} paired via code {}",
+                                                user_id,
+                                                code
+                                            );
+                                        } else {
+                                            codes.remove(&code);
+                                            let _ = bot.send_message(
+                                                msg.chat.id,
+                                                "Pairing code expired. Please request a new one.",
+                                            ).await;
+                                        }
+                                    } else {
+                                        // Rate-limited prompt: once per 5 minutes per user
+                                        let mut times = prompt_times.write().await;
+                                        let should_prompt = times
+                                            .get(&user_id)
+                                            .map(|t| t.elapsed().as_secs() > 300)
+                                            .unwrap_or(true);
+                                        if should_prompt {
+                                            times.insert(user_id, Instant::now());
+                                            let _ = bot.send_message(
+                                                msg.chat.id,
+                                                "Please enter your pairing code.",
+                                            ).await;
+                                        }
+                                    }
+                                }
                             }
                         }
                         Ok::<(), std::convert::Infallible>(())
@@ -526,6 +629,7 @@ impl Channel for TelegramChannel {
                     let config = config_for_cb.clone();
                     let channel_id = channel_id_for_cb.clone();
                     let last_update = last_update_for_cb.clone();
+                    let runtime_users = runtime_users_for_cb.clone();
                     async move {
                         // Update stall detection timestamp
                         last_update.store(
@@ -575,8 +679,9 @@ impl Channel for TelegramChannel {
                             }
 
                             // Re-inject as InboundMessage if user is allowed
-                            // (so the inbound router processes it as a slash command)
-                            if config.is_user_allowed(user_id_val) {
+                            // (static config or runtime-paired)
+                            let rt_allowed = runtime_users.read().await.contains(&user_id_val);
+                            if config.is_user_allowed(user_id_val) || rt_allowed {
                                 let inbound = InboundMessage {
                                     id: MessageId::new(format!("cb_{}", q.id)),
                                     channel_id: channel_id.clone(),

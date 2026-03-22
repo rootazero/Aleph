@@ -3,6 +3,29 @@
 //! Configuration types for the Telegram Bot integration.
 
 use serde::{Deserialize, Serialize};
+use std::time::Instant;
+
+/// A pending pairing entry: code + creation time + TTL.
+#[derive(Debug, Clone)]
+pub struct PairingEntry {
+    pub code: String,
+    pub created_at: Instant,
+    pub ttl_secs: u64,
+}
+
+impl PairingEntry {
+    pub fn new(code: String) -> Self {
+        Self {
+            code,
+            created_at: Instant::now(),
+            ttl_secs: 3600,
+        }
+    }
+
+    pub fn is_expired(&self) -> bool {
+        self.created_at.elapsed().as_secs() > self.ttl_secs
+    }
+}
 
 /// Telegram channel configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -116,7 +139,11 @@ impl TelegramConfig {
         })
     }
 
-    /// Check if a user ID is allowed
+    /// Check if a user ID is in the static config allowlist.
+    ///
+    /// Returns `true` when the allowlist is empty (open to all) or when the user
+    /// is explicitly listed. Runtime-paired users are tracked separately in
+    /// `TelegramChannel::runtime_allowed_users`.
     pub fn is_user_allowed(&self, user_id: i64) -> bool {
         if self.allowed_users.is_empty() {
             true
@@ -207,5 +234,21 @@ mod tests {
         // Valid format
         config.bot_token = "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11".to_string();
         assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_pairing_entry_not_expired() {
+        let entry = PairingEntry::new("ABC123".to_string());
+        assert!(!entry.is_expired());
+        assert_eq!(entry.code, "ABC123");
+        assert_eq!(entry.ttl_secs, 3600);
+    }
+
+    #[test]
+    fn test_pairing_entry_expired() {
+        let mut entry = PairingEntry::new("XYZ789".to_string());
+        // Backdate the creation time so it appears expired
+        entry.created_at = Instant::now() - std::time::Duration::from_secs(3601);
+        assert!(entry.is_expired());
     }
 }
