@@ -478,7 +478,7 @@ fn ProviderDetailView(
     let is_default_for = provider.is_default_for.clone();
 
     // Editable form signals
-    let form_api_key = RwSignal::new(String::new());
+    let form_api_key = RwSignal::new(provider.config.api_key.clone().unwrap_or_default());
     let form_base_url = RwSignal::new(provider.config.base_url.clone().unwrap_or_default());
     let form_edit_url = RwSignal::new(provider.config.edit_url.clone().unwrap_or_default());
     let form_model = RwSignal::new(provider.config.models.join(","));
