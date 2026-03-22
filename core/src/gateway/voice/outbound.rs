@@ -6,6 +6,7 @@ use crate::generation::{
     GenerationData, GenerationParams, GenerationProviderRegistry, GenerationRequest,
     GenerationType,
 };
+use tracing::{debug, warn};
 
 use super::state::VoiceState;
 
@@ -31,14 +32,42 @@ pub async fn generate_tts(
     generation_registry: &GenerationProviderRegistry,
     generation_config: &GenerationConfig,
 ) -> Option<Attachment> {
-    // Resolve provider ID
-    let provider_id = voice_state
-        .provider
-        .as_deref()
-        .or(generation_config.default_speech_provider.as_deref())?;
+    // Resolve provider ID:
+    // 1. Per-channel override from VoiceState
+    // 2. Global default_speech_provider from config
+    // 3. Fallback: first provider that supports Speech
+    let provider_id_owned: Option<String>;
+    let provider_id = if let Some(ref p) = voice_state.provider {
+        debug!(provider = %p, "TTS: using per-channel provider override");
+        p.as_str()
+    } else if let Some(ref p) = generation_config.default_speech_provider {
+        debug!(provider = %p, "TTS: using default_speech_provider from config");
+        p.as_str()
+    } else {
+        // Auto-detect: find first provider that supports Speech
+        provider_id_owned = generation_registry
+            .first_for_type(GenerationType::Speech)
+            .map(|(name, _)| name);
+        match &provider_id_owned {
+            Some(p) => {
+                debug!(provider = %p, "TTS: auto-detected speech provider (no default configured)");
+                p.as_str()
+            }
+            None => {
+                warn!("TTS: no speech provider available — no override, no default, no auto-detect");
+                return None;
+            }
+        }
+    };
 
     // Look up provider in registry
-    let provider = generation_registry.get(provider_id)?;
+    let provider = match generation_registry.get(provider_id) {
+        Some(p) => p,
+        None => {
+            warn!(provider = %provider_id, "TTS: provider not found in registry");
+            return None;
+        }
+    };
 
     // Build request with optional voice param
     let mut params = GenerationParams::default();
@@ -49,7 +78,13 @@ pub async fn generate_tts(
     let request = GenerationRequest::new(GenerationType::Speech, text).with_params(params);
 
     // Execute TTS
-    let output = provider.generate(request).await.ok()?;
+    let output = match provider.generate(request).await {
+        Ok(o) => o,
+        Err(e) => {
+            warn!(provider = %provider_id, error = %e, "TTS generation failed");
+            return None;
+        }
+    };
 
     // Convert GenerationData → Attachment
     let id = uuid::Uuid::new_v4().to_string();

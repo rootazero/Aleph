@@ -204,6 +204,7 @@ impl ReplyEmitter {
     /// On failure it records the failure on `voice_state` and falls back to
     /// plain text via `send_to_channel`.
     async fn send_as_voice(&self, text: &str) {
+        debug!("send_as_voice called, text_len={}, has_gen_registry={}", text.len(), self.generation_registry.is_some());
         if let Some(ref registry) = self.generation_registry {
             // Read live voice state from registry (not the stale local copy)
             // Check channel-specific first, then "default" fallback
