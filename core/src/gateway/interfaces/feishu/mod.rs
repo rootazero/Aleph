@@ -311,7 +311,7 @@ impl Channel for FeishuChannel {
                     .ok_or_else(|| ChannelError::SendFailed("Image attachment has no data".to_string()))?;
                 let filename = attachment.filename.as_deref().unwrap_or("image.png");
                 let image_key = client.upload_image(image_data, filename).await
-                    .map_err(|e| ChannelError::SendFailed(e))?;
+                    .map_err(ChannelError::SendFailed)?;
                 client.send_image(chat_id, &image_key, reply_to).await
                     .map_err(map_send_error)?
             } else {

@@ -206,7 +206,7 @@ impl FeishuClient {
 
     // ── WebSocket Endpoint ──
 
-    pub fn ws_reconnect_handle(&self) -> (reqwest::Client, String, Arc<RwLock<TokenState>>) {
+    pub(super) fn ws_reconnect_handle(&self) -> (reqwest::Client, String, Arc<RwLock<TokenState>>) {
         (self.http.clone(), self.base_url.clone(), self.token.clone())
     }
 
