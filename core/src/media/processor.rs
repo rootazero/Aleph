@@ -57,12 +57,13 @@ impl MediaProcessor {
         attachments: &[Attachment],
         supports_vision: bool,
         session_id: &str,
+        run_id: &str,
     ) -> Vec<ContentBlock> {
         let mut blocks = Vec::with_capacity(attachments.len());
 
         for attachment in attachments {
             let block = self
-                .process_one(attachment, supports_vision, session_id)
+                .process_one(attachment, supports_vision, session_id, run_id)
                 .await;
             blocks.push(block);
         }
@@ -92,20 +93,30 @@ impl MediaProcessor {
         attachment: &Attachment,
         supports_vision: bool,
         session_id: &str,
+        run_id: &str,
     ) -> ContentBlock {
         let mime = &attachment.mime_type;
 
         if mime.starts_with("image/") {
-            self.process_image(attachment, supports_vision, session_id)
+            self.process_image(attachment, supports_vision, session_id, run_id)
                 .await
         } else if mime.starts_with("audio/") {
-            self.process_audio(attachment, session_id).await
+            self.process_audio(attachment, session_id, run_id).await
         } else {
             // Unsupported media type — emit metadata placeholder
             let name = attachment
                 .filename
                 .as_deref()
                 .unwrap_or(&attachment.id);
+            tracing::info!(
+                target: "multimodal",
+                probe = "P4_process",
+                run_id = %run_id,
+                attachment_id = %attachment.id,
+                media_type = "other",
+                action = "placeholder",
+                "Attachment processed"
+            );
             ContentBlock::Text {
                 text: format!("[Attachment: {} ({})]", name, mime),
             }
@@ -121,21 +132,51 @@ impl MediaProcessor {
         attachment: &Attachment,
         supports_vision: bool,
         session_id: &str,
+        run_id: &str,
     ) -> ContentBlock {
         // Resolve to local file
         let cached = match self.cache.resolve(attachment, session_id).await {
             Ok(c) => c,
             Err(e) => {
                 warn!(attachment_id = %attachment.id, error = %e, "failed to resolve image attachment");
+                tracing::info!(
+                    target: "multimodal",
+                    probe = "P4_process",
+                    run_id = %run_id,
+                    attachment_id = %attachment.id,
+                    media_type = "image",
+                    action = "error_fallback",
+                    "Attachment processed"
+                );
                 return fallback_text(attachment, &e.to_string());
             }
         };
+
+        tracing::info!(
+            target: "multimodal",
+            probe = "P3_download",
+            run_id = %run_id,
+            attachment_id = %attachment.id,
+            mime_type = %cached.mime_type,
+            size_bytes = cached.size,
+            source = if attachment.data.is_some() { "data" } else if attachment.path.is_some() { "path" } else { "url" },
+            "Media attachment resolved"
+        );
 
         // Encode to base64
         let b64 = match MediaCache::to_base64(&cached) {
             Ok(b) => b,
             Err(e) => {
                 warn!(attachment_id = %attachment.id, error = %e, "failed to base64-encode image");
+                tracing::info!(
+                    target: "multimodal",
+                    probe = "P4_process",
+                    run_id = %run_id,
+                    attachment_id = %attachment.id,
+                    media_type = "image",
+                    action = "error_fallback",
+                    "Attachment processed"
+                );
                 return fallback_text(attachment, &e.to_string());
             }
         };
@@ -143,12 +184,30 @@ impl MediaProcessor {
         if supports_vision {
             // LLM supports inline images — send the raw data
             debug!(attachment_id = %attachment.id, "injecting image as base64 block");
+            tracing::info!(
+                target: "multimodal",
+                probe = "P4_process",
+                run_id = %run_id,
+                attachment_id = %attachment.id,
+                media_type = "image",
+                action = "native",
+                "Attachment processed"
+            );
             ContentBlock::Image {
                 data: b64,
                 mime_type: attachment.mime_type.clone(),
             }
         } else {
             // LLM does not support vision — use VisionPipeline for description
+            tracing::info!(
+                target: "multimodal",
+                probe = "P4_process",
+                run_id = %run_id,
+                attachment_id = %attachment.id,
+                media_type = "image",
+                action = "vision_fallback",
+                "Attachment processed"
+            );
             self.describe_image_fallback(&b64, &cached, attachment).await
         }
     }
@@ -197,9 +256,19 @@ impl MediaProcessor {
         &self,
         attachment: &Attachment,
         session_id: &str,
+        run_id: &str,
     ) -> ContentBlock {
         let Some(ref transcription) = self.transcription else {
             let name = attachment.filename.as_deref().unwrap_or(&attachment.id);
+            tracing::info!(
+                target: "multimodal",
+                probe = "P4_process",
+                run_id = %run_id,
+                attachment_id = %attachment.id,
+                media_type = "audio",
+                action = "error_fallback",
+                "Attachment processed"
+            );
             return ContentBlock::Text {
                 text: format!("[Audio: {} — transcription unavailable (no provider)]", name),
             };
@@ -210,9 +279,29 @@ impl MediaProcessor {
             Ok(c) => c,
             Err(e) => {
                 warn!(attachment_id = %attachment.id, error = %e, "failed to resolve audio attachment");
+                tracing::info!(
+                    target: "multimodal",
+                    probe = "P4_process",
+                    run_id = %run_id,
+                    attachment_id = %attachment.id,
+                    media_type = "audio",
+                    action = "error_fallback",
+                    "Attachment processed"
+                );
                 return fallback_text(attachment, &e.to_string());
             }
         };
+
+        tracing::info!(
+            target: "multimodal",
+            probe = "P3_download",
+            run_id = %run_id,
+            attachment_id = %attachment.id,
+            mime_type = %cached.mime_type,
+            size_bytes = cached.size,
+            source = if attachment.data.is_some() { "data" } else if attachment.path.is_some() { "path" } else { "url" },
+            "Media attachment resolved"
+        );
 
         match transcription.transcribe(&cached).await {
             Ok(result) => {
@@ -220,6 +309,15 @@ impl MediaProcessor {
                     attachment_id = %attachment.id,
                     lang = ?result.language,
                     "transcribed audio"
+                );
+                tracing::info!(
+                    target: "multimodal",
+                    probe = "P4_process",
+                    run_id = %run_id,
+                    attachment_id = %attachment.id,
+                    media_type = "audio",
+                    action = "transcribe",
+                    "Attachment processed"
                 );
                 ContentBlock::Text {
                     text: format!(
@@ -230,6 +328,15 @@ impl MediaProcessor {
             }
             Err(e) => {
                 warn!(attachment_id = %attachment.id, error = %e, "transcription failed");
+                tracing::info!(
+                    target: "multimodal",
+                    probe = "P4_process",
+                    run_id = %run_id,
+                    attachment_id = %attachment.id,
+                    media_type = "audio",
+                    action = "error_fallback",
+                    "Attachment processed"
+                );
                 let name = attachment.filename.as_deref().unwrap_or(&attachment.id);
                 ContentBlock::Text {
                     text: format!("[Audio: {} — transcription failed]", name),
@@ -338,7 +445,7 @@ mod tests {
             path: None,
             data: None,
         };
-        let blocks = processor.process(&[att], true, "test-session").await;
+        let blocks = processor.process(&[att], true, "test-session", "test-run").await;
         assert_eq!(blocks.len(), 1);
         if let ContentBlock::Text { text } = &blocks[0] {
             assert!(text.contains("report.pdf"));
@@ -361,7 +468,7 @@ mod tests {
             data: Some(vec![0x89, 0x50, 0x4E, 0x47]), // PNG magic bytes
         };
         let session_id = "test-image-vision";
-        let blocks = processor.process(&[att], true, session_id).await;
+        let blocks = processor.process(&[att], true, session_id, "test-run").await;
         assert_eq!(blocks.len(), 1);
         match &blocks[0] {
             ContentBlock::Image { mime_type, data } => {
@@ -387,7 +494,7 @@ mod tests {
             data: Some(vec![0xFF, 0xD8, 0xFF]),
         };
         let session_id = "test-no-vision";
-        let blocks = processor.process(&[att], false, session_id).await;
+        let blocks = processor.process(&[att], false, session_id, "test-run").await;
         assert_eq!(blocks.len(), 1);
         if let ContentBlock::Text { text } = &blocks[0] {
             assert!(text.contains("description unavailable"));
@@ -409,7 +516,7 @@ mod tests {
             path: None,
             data: Some(vec![0xFF, 0xFB]),
         };
-        let blocks = processor.process(&[att], true, "test-audio").await;
+        let blocks = processor.process(&[att], true, "test-audio", "test-run").await;
         assert_eq!(blocks.len(), 1);
         if let ContentBlock::Text { text } = &blocks[0] {
             assert!(text.contains("transcription unavailable"));
@@ -452,7 +559,7 @@ mod tests {
             },
         ];
         let session_id = "test-multi";
-        let blocks = processor.process(&attachments, true, session_id).await;
+        let blocks = processor.process(&attachments, true, session_id, "test-run").await;
         // All three should produce blocks (no aborts)
         assert_eq!(blocks.len(), 3);
         processor.cleanup(session_id);

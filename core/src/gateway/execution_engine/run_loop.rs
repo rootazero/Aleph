@@ -183,7 +183,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             let supports_vision = true;
 
             let media_blocks = media_processor
-                .process(&request.attachments, supports_vision, &request.session_key.to_key_string())
+                .process(&request.attachments, supports_vision, &request.session_key.to_key_string(), run_id)
                 .await;
 
             // Build multimodal user message: text + media blocks
