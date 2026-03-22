@@ -128,6 +128,22 @@ struct TokenState {
 - Handle frames: Ping→Pong, Event→dispatch
 - Auto-reconnect on disconnect (exponential backoff: 1s → 2s → 4s → ... → 60s cap)
 
+**WebSocket frame envelope:**
+
+Feishu WS frames use a JSON envelope structure:
+```json
+{
+  "header": {
+    "event_id": "unique-id",
+    "event_type": "im.message.receive_v1",
+    "token": "verification_token",
+    "create_time": "1234567890"
+  },
+  "event": { ... }
+}
+```
+The `POST /callback/ws/endpoint` response includes `url` (WSS endpoint) and `client_config` (reconnect settings). The `service_id` may need to be included as a query parameter on the WS URL.
+
 **HTTP API methods:**
 - `send_text(chat_id, text, reply_to)` → `POST /open-apis/im/v1/messages`
 - `send_image(chat_id, image_key)` → `POST /open-apis/im/v1/messages`
@@ -225,7 +241,7 @@ pub struct FeishuChannel {
 
 ```rust
 ChannelCapabilities {
-    attachments: false,
+    attachments: false,          // File attachments deferred; platform supports them
     images: true,
     audio: false,
     video: false,
@@ -241,6 +257,30 @@ ChannelCapabilities {
 }
 ```
 
+### ChannelProvider Implementation
+
+`FeishuChannel` must also implement `ChannelProvider` (defined in `channel.rs`) to provide interaction metadata used by the context aggregator:
+
+```rust
+impl ChannelProvider for FeishuChannel {
+    fn interaction_manifest(&self) -> InteractionManifest {
+        InteractionManifest {
+            paradigm: InteractionParadigm::Chat,
+            max_output_chars: 4096,
+            supports_streaming: false,
+            prefer_compact: false,
+        }
+    }
+}
+```
+
+Note: The `agent` field in the channel config (e.g., `agent = "default"`) is resolved externally by `AgentResolver` (`core/src/config/agent_resolver.rs`), not by `FeishuConfig`.
+
+## Security Notes
+
+- `app_secret` is stored in plaintext in `config.toml`, consistent with how other channels (Telegram `bot_token`, Discord `bot_token`) handle secrets today
+- Vault integration for channel secrets is a broader improvement deferred for all channels, not Feishu-specific
+
 ## Error Handling
 
 | Scenario | Strategy |
@@ -250,6 +290,8 @@ ChannelCapabilities {
 | Message send failure | Return `ChannelError`, upper layer handles |
 | Unknown message type | Warn log, skip message |
 | Invalid credentials | `start()` returns error, channel stays `Disconnected` |
+| API rate limited (429) | Return `ChannelError::RateLimited` with `retry_after_secs` from response header |
+| Duplicate events on reconnect | Maintain bounded set of recent `message_id` values (~1000); skip duplicates |
 
 ## Integration Points
 
@@ -261,15 +303,16 @@ ChannelCapabilities {
 
 **Modified files:**
 - `core/src/gateway/interfaces/mod.rs` — add `pub mod feishu;`
-- Channel factory registration site — add `FeishuChannelFactory` registration
+- `core/src/gateway/handlers/channel.rs` — add `"feishu"` arm to `create_channel_from_config()` match block
+- `core/src/bin/aleph-server/commands/start/builder/subsystems.rs` — add `"feishu"` case to startup channel creation
 
 **No changes to:**
 - `Channel` trait, `ChannelRegistry`, `InboundMessageRouter`, `ReplyEmitter`
 - Any existing channel implementations
 
-## New Dependencies
+## Dependencies
 
-- `tokio-tungstenite` — WebSocket client (all other deps already present)
+- `tokio-tungstenite` — WebSocket client (already in `Cargo.toml`, used by Nostr/Slack/Mattermost)
 
 ## Future Extensions (Not In Scope)
 
@@ -289,4 +332,5 @@ ChannelCapabilities {
 - Unit tests for @mention extraction and removal
 - Unit tests for domain → base_url mapping
 - Integration test: FeishuConfig deserialization from TOML
+- Unit test for WebSocket reconnection state machine — verify backoff progression and cap at 60s
 - Manual test: connect to real Feishu bot, send/receive messages
