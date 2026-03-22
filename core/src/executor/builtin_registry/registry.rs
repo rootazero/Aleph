@@ -508,6 +508,15 @@ impl ToolRegistry for BuiltinToolRegistry {
                 tool.call_json(arguments).await
             }),
 
+            // Voice mode tool (deferred — ChannelRegistry injected after construction)
+            "voice_mode_set" => Box::pin(async move {
+                let cr = self.channel_registry_cell.get().ok_or_else(|| {
+                    AlephError::tool("voice_mode_set not available: ChannelRegistry not yet injected")
+                })?;
+                let tool = crate::builtin_tools::voice_tools::VoiceModeSetTool::new(Arc::clone(cr));
+                tool.call_json(arguments).await
+            }),
+
             // ClawHub tool
             "clawhub" => Box::pin(async move { self.clawhub_tool.call_json(arguments).await }),
 

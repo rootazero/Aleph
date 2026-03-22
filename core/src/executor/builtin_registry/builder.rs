@@ -633,5 +633,11 @@ impl BuiltinToolRegistry {
         reg(tools, "session_send", SessionsSendTool::DESCRIPTION,
             serde_json::to_value(schema_for!(crate::builtin_tools::sessions::SessionsSendArgs)).unwrap_or_default());
         info!("Registered session.list + session.send in BuiltinToolRegistry");
+
+        // Voice mode tool — toggle voice output on/off for a channel (R9)
+        reg(tools, "voice_mode_set",
+            "Enable or disable voice mode for a channel. When enabled, all replies will be converted to speech audio. Use when user says 'turn on voice mode', 'switch to voice', 'enable voice replies', etc.",
+            serde_json::to_value(schema_for!(crate::builtin_tools::voice_tools::VoiceModeSetArgs)).unwrap_or_default());
+        info!("Registered voice_mode_set tool in BuiltinToolRegistry");
     }
 }
