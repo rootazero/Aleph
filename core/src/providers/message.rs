@@ -58,6 +58,11 @@ impl UnifiedMessage {
         }
     }
 
+    /// Create a user message with pre-built content blocks (for multimodal)
+    pub fn user_with_content(content: Vec<ContentBlock>) -> Self {
+        Self::User { content }
+    }
+
     /// Single text assistant message
     pub fn assistant(text: impl Into<String>) -> Self {
         Self::Assistant {
