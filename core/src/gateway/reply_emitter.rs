@@ -310,18 +310,41 @@ impl ReplyEmitter {
         }
 
         let mut chunks = Vec::new();
-        let mut remaining = content;
+        let mut buf = content.to_string();
+        let mut open_fence: Option<String> = None; // e.g. "```rust"
 
-        while !remaining.is_empty() {
-            if remaining.len() <= max_len {
-                chunks.push(remaining.to_string());
+        while !buf.is_empty() {
+            if buf.len() <= max_len {
+                chunks.push(buf);
                 break;
             }
 
-            let split_at = Self::find_split_point(remaining, max_len);
-            let (chunk, rest) = remaining.split_at(split_at);
-            chunks.push(chunk.trim_end().to_string());
-            remaining = rest.trim_start_matches('\n');
+            let split_at = Self::find_split_point(&buf, max_len);
+            let chunk_raw = buf[..split_at].trim_end().to_string();
+            let rest = buf[split_at..].trim_start_matches('\n').to_string();
+
+            // Track code fence state through this chunk
+            for line in chunk_raw.lines() {
+                let trimmed = line.trim();
+                if trimmed.starts_with("```") {
+                    if open_fence.is_some() {
+                        open_fence = None;
+                    } else {
+                        open_fence = Some(trimmed.to_string());
+                    }
+                }
+            }
+
+            // If we're splitting inside an open code block, close + reopen
+            if let Some(ref fence) = open_fence {
+                let mut chunk_closed = chunk_raw;
+                chunk_closed.push_str("\n```");
+                chunks.push(chunk_closed);
+                buf = format!("{}\n{}", fence, rest);
+            } else {
+                chunks.push(chunk_raw);
+                buf = rest;
+            }
         }
 
         chunks
@@ -335,18 +358,41 @@ impl ReplyEmitter {
 
         let search_range = &text[..safe_max];
 
+        // Check if we're inside a code block (odd number of ``` before split point)
+        let fence_count = search_range.matches("```").count();
+        if fence_count % 2 == 1 {
+            // Inside a code block — try to split before the opening fence
+            if let Some(last_fence) = search_range.rfind("```") {
+                if last_fence > 0 {
+                    if let Some(nl) = text[..last_fence].rfind('\n') {
+                        return nl + 1;
+                    }
+                    return last_fence;
+                }
+            }
+        }
+
+        // Check for partial HTML entities at the split point
+        let entity_start = search_range[..safe_max].rfind('&');
+        if let Some(amp_pos) = entity_start {
+            let after_amp = &search_range[amp_pos..safe_max];
+            if !after_amp.contains(';') && after_amp.len() <= 8 {
+                safe_max = amp_pos;
+            }
+        }
+
+        // Existing logic: prefer paragraph boundary, then newline
+        let search_range = &text[..safe_max];
         if let Some(pos) = search_range.rfind("\n\n") {
             if pos > safe_max / 4 {
                 return pos + 1;
             }
         }
-
         if let Some(pos) = search_range.rfind('\n') {
             if pos > safe_max / 4 {
                 return pos + 1;
             }
         }
-
         safe_max
     }
 
@@ -629,6 +675,34 @@ mod tests {
         assert!(chunks.len() >= 2);
         for chunk in &chunks {
             assert!(chunk.len() <= 150);
+        }
+    }
+
+    #[test]
+    fn test_split_message_preserves_code_block() {
+        let code = "x".repeat(100);
+        let content = format!("Before text\n\n```rust\n{}\n```\n\nAfter text", code);
+        let chunks = ReplyEmitter::split_message(&content, 80);
+        for chunk in &chunks {
+            let count = chunk.matches("```").count();
+            assert!(
+                count % 2 == 0 || count == 0,
+                "Chunk has unbalanced code fence: {:?}",
+                chunk
+            );
+        }
+    }
+
+    #[test]
+    fn test_split_message_html_entity_safe() {
+        let content = format!("{}a&amp;b{}", "x".repeat(95), "y".repeat(100));
+        let chunks = ReplyEmitter::split_message(&content, 100);
+        for chunk in &chunks {
+            assert!(
+                !chunk.ends_with('&') && !chunk.ends_with("&a") && !chunk.ends_with("&am"),
+                "Chunk ends with partial HTML entity: {:?}",
+                chunk
+            );
         }
     }
 
