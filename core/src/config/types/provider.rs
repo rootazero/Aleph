@@ -129,10 +129,15 @@ impl ProviderConfig {
             .unwrap_or_else(|| "openai".to_string())
     }
 
-    /// Returns the default model (first in the list)
+    /// Returns the default model (first in the list).
+    ///
+    /// If the first entry is a comma-separated string of fallback models
+    /// (e.g. "gpt-5.4,gpt-5.3-codex"), returns only the first model name.
     pub fn default_model(&self) -> &str {
         debug_assert!(!self.models.is_empty(), "models should never be empty after deserialization");
-        &self.models[0]
+        let first = &self.models[0];
+        // Handle comma-separated model lists stored as a single string
+        first.split(',').next().unwrap_or(first).trim()
     }
 
     /// Returns all configured models
