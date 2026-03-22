@@ -190,7 +190,12 @@ Returns failure with explanation when Channel lacks audio capability or no TTS p
 
 Location: `core/src/agent_loop/prompt_builder.rs`
 
-The `PromptBuilder` receives voice mode status via the `AgentEnv` context (which already carries channel information). When constructing the agent environment, the channel's VoiceState is checked and `voice_mode_active: bool` is set on the env.
+The `PromptBuilder` receives voice mode status via `InboundContext`, which already flows into `LayerInput.inbound` during prompt construction. When the inbound middleware processes a request, it sets `voice_mode_active: bool` on `InboundContext` (true if `VoiceState.enabled` OR `voice_reply_hint`). The `PromptBuilder` reads this flag to conditionally inject the voice prompt layer.
+
+```rust
+// Added to InboundContext (alongside voice_reply_hint)
+pub voice_mode_active: bool,  // true when voice output is active for this request
+```
 
 When voice mode is active, inject into system prompt:
 
@@ -326,7 +331,7 @@ InboundVoiceMiddleware ──reads──→ voice_states
 ReplyEmitter (voice mode) ──reads──→ voice_states + InboundContext.voice_reply_hint
                            ──calls──→ GenerationProviderRegistry (TTS)
                            ──sends──→ Channel.send()
-PromptBuilder ──reads──→ voice_states via AgentEnv
+PromptBuilder ──reads──→ InboundContext.voice_mode_active
 Panel UI ──calls──→ generation_providers.voices RPC (protocol-based resolution)
          ──writes──→ GenerationDefaults (voice, speed, format)
 ```
