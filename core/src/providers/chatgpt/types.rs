@@ -61,7 +61,11 @@ pub struct FunctionToolDef {
 pub enum InputItem {
     /// A text message from user, assistant, or developer
     #[serde(rename = "message")]
-    Message { role: String, content: String },
+    Message {
+        role: String,
+        #[serde(flatten)]
+        content: MessageContent,
+    },
     /// A function call from the assistant
     #[serde(rename = "function_call")]
     FunctionCall {
@@ -72,6 +76,45 @@ pub enum InputItem {
     /// Output from a function call
     #[serde(rename = "function_call_output")]
     FunctionCallOutput { call_id: String, output: String },
+}
+
+/// Message content — either plain text or multimodal (text + images)
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(untagged)]
+pub enum MessageContent {
+    /// Simple text content
+    Text { content: String },
+    /// Multimodal content array (text + images)
+    Multimodal { content: Vec<InputContentPart> },
+}
+
+impl MessageContent {
+    /// Get the text content (for Text variant) or concatenated text parts (for Multimodal)
+    pub fn as_text(&self) -> String {
+        match self {
+            Self::Text { content } => content.clone(),
+            Self::Multimodal { content } => content
+                .iter()
+                .filter_map(|p| match p {
+                    InputContentPart::InputText { text } => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join("\n"),
+        }
+    }
+}
+
+/// A part of multimodal input content
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type")]
+pub enum InputContentPart {
+    /// Text part
+    #[serde(rename = "input_text")]
+    InputText { text: String },
+    /// Image part (base64 data URI)
+    #[serde(rename = "input_image")]
+    InputImage { image_url: String },
 }
 
 /// Reasoning effort configuration
