@@ -3,6 +3,9 @@
 //! Provides `SettingsTab` enum and `SETTINGS_GROUPS` for sidebar navigation.
 //! The sidebar component renders these directly (no separate SettingsSidebar component).
 
+use crate::i18n::*;
+use leptos_i18n::I18nContext;
+
 /// Settings tab identifier
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingsTab {
@@ -94,6 +97,33 @@ impl SettingsTab {
         }
     }
 
+    pub fn i18n_label(&self, i18n: I18nContext<Locale>) -> String {
+        match self {
+            Self::General => t_string!(i18n, settings.tabs.general).to_string(),
+            Self::Behavior => t_string!(i18n, settings.tabs.behavior).to_string(),
+            Self::Providers => t_string!(i18n, settings.tabs.providers).to_string(),
+            Self::EmbeddingProviders => t_string!(i18n, settings.tabs.embedding).to_string(),
+            Self::RerankingProviders => t_string!(i18n, settings.tabs.reranking).to_string(),
+            Self::GenerationProviders => t_string!(i18n, settings.tabs.generation).to_string(),
+            Self::Memory => t_string!(i18n, settings.tabs.memory).to_string(),
+            Self::Mcp => t_string!(i18n, settings.tabs.mcp).to_string(),
+            Self::Plugins => t_string!(i18n, settings.tabs.plugins).to_string(),
+            Self::Skills => t_string!(i18n, settings.tabs.skills).to_string(),
+            Self::ClawHub => t_string!(i18n, settings.tabs.clawhub).to_string(),
+            Self::Acp => t_string!(i18n, settings.tabs.acp).to_string(),
+            Self::Channels => t_string!(i18n, settings.tabs.channels).to_string(),
+            Self::Telegram => t_string!(i18n, settings.tabs.telegram).to_string(),
+            Self::Discord => t_string!(i18n, settings.tabs.discord).to_string(),
+            Self::WhatsApp => t_string!(i18n, settings.tabs.whatsapp).to_string(),
+            Self::IMessage => t_string!(i18n, settings.tabs.imessage).to_string(),
+            Self::Search => t_string!(i18n, settings.tabs.search).to_string(),
+            Self::Policies => t_string!(i18n, settings.tabs.policies).to_string(),
+            Self::RoutingRules => t_string!(i18n, settings.tabs.routing_rules).to_string(),
+            Self::Security => t_string!(i18n, settings.tabs.security).to_string(),
+            Self::Auth => t_string!(i18n, settings.tabs.auth).to_string(),
+        }
+    }
+
     pub fn icon_svg(&self) -> &'static str {
         match self {
             Self::General => r#"<circle cx="12" cy="12" r="3"/><path d="M12 1v6m0 6v6M5.64 5.64l4.24 4.24m4.24 4.24l4.24 4.24M1 12h6m6 0h6M5.64 18.36l4.24-4.24m4.24-4.24l4.24-4.24"/>"#,
@@ -126,6 +156,19 @@ impl SettingsTab {
 pub struct SettingsGroup {
     pub label: &'static str,
     pub tabs: &'static [SettingsTab],
+}
+
+impl SettingsGroup {
+    pub fn i18n_label(&self, i18n: I18nContext<Locale>) -> String {
+        match self.label {
+            "Basic" => t_string!(i18n, settings.groups.basic).to_string(),
+            "AI" => t_string!(i18n, settings.groups.ai).to_string(),
+            "Channels" => t_string!(i18n, settings.groups.channels).to_string(),
+            "Extensions" => t_string!(i18n, settings.groups.extensions).to_string(),
+            "Advanced" => t_string!(i18n, settings.groups.advanced).to_string(),
+            other => other.to_string(),
+        }
+    }
 }
 
 pub const SETTINGS_GROUPS: &[SettingsGroup] = &[

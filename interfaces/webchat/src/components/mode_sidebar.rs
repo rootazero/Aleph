@@ -9,6 +9,7 @@ use super::agents_sidebar::AgentsSidebar;
 use super::chat_sidebar::ChatSidebar;
 use super::dashboard_sidebar::DashboardSidebar;
 use crate::components::settings_sidebar::SETTINGS_GROUPS;
+use crate::i18n::*;
 
 #[component]
 pub fn ModeSidebar() -> impl IntoView {
@@ -31,18 +32,20 @@ pub fn ModeSidebar() -> impl IntoView {
 #[component]
 fn SettingsSidebar() -> impl IntoView {
     let location = use_location();
+    let i18n = use_i18n();
 
     view! {
         <div class="flex flex-col h-full overflow-y-auto">
             {SETTINGS_GROUPS.iter().map(|group| {
+                let group_label = group.i18n_label(i18n);
                 view! {
                     <div class="px-3 py-2 space-y-0.5">
                         <h3 class="px-3 py-1 text-xs font-medium text-text-tertiary uppercase tracking-wider">
-                            {group.label}
+                            {group_label}
                         </h3>
                         {group.tabs.iter().map(|tab| {
                             let path = tab.path();
-                            let tab_label = tab.label();
+                            let tab_label = tab.i18n_label(i18n);
                             let icon_svg = tab.icon_svg();
                             let is_active = {
                                 let location = location.clone();
