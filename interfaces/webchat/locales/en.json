@@ -1,0 +1,162 @@
+{
+  "nav": {
+    "chat": "Chat",
+    "dashboard": "Dashboard",
+    "agents": "Agents",
+    "settings": "Settings"
+  },
+  "common": {
+    "loading": "Loading...",
+    "saving": "Saving...",
+    "saved": "Saved successfully",
+    "save": "Save Changes",
+    "cancel": "Cancel",
+    "delete": "Delete",
+    "retry": "Retry",
+    "confirm": "Confirm",
+    "error": "An error occurred",
+    "no_data": "No data available",
+    "connect": "Connect to Gateway",
+    "disconnect": "Disconnect",
+    "connected": "Connected",
+    "disconnected": "Disconnected",
+    "gateway_unavailable": "Gateway not available — showing default settings"
+  },
+  "settings": {
+    "title": "Settings",
+    "welcome": "Welcome to Settings",
+    "select_category": "Select a category from the sidebar to configure Aleph Gateway",
+    "quick_start": {
+      "title": "Quick Start",
+      "description": "Configure the essential settings to get started with Aleph",
+      "providers": "Set up AI providers and API keys",
+      "behavior": "Customize agent behavior",
+      "memory": "Enable memory and knowledge base"
+    },
+    "help": {
+      "title": "Need Help?",
+      "description": "Learn more about Aleph's features and configuration options",
+      "docs": "Check the documentation",
+      "community": "Join the community",
+      "issues": "Report issues on GitHub",
+      "support": "Contact support"
+    },
+    "groups": {
+      "basic": "Basic",
+      "ai": "AI",
+      "channels": "Channels",
+      "extensions": "Extensions",
+      "advanced": "Advanced"
+    },
+    "tabs": {
+      "general": "General",
+      "behavior": "Behavior",
+      "providers": "AI Providers",
+      "embedding": "Embedding",
+      "reranking": "Reranking",
+      "generation": "Generation",
+      "memory": "Memory & Knowledge",
+      "mcp": "MCP",
+      "plugins": "Plugins",
+      "skills": "Skills",
+      "clawhub": "ClawHub",
+      "acp": "ACP",
+      "channels": "Channels",
+      "telegram": "Telegram",
+      "discord": "Discord",
+      "whatsapp": "WhatsApp",
+      "imessage": "iMessage",
+      "search": "Search",
+      "policies": "Policies",
+      "routing_rules": "Routing Rules",
+      "security": "Security",
+      "auth": "Token Auth"
+    },
+    "general": {
+      "title": "General Settings",
+      "description": "Configure general application settings",
+      "language": {
+        "title": "Language",
+        "label": "Interface Language",
+        "system": "System Default",
+        "en": "English",
+        "zh": "简体中文"
+      },
+      "config_reload": {
+        "title": "Configuration Reload",
+        "description": "Reload configuration files from disk and refresh subsystems (profiles, providers).",
+        "button": "Reload Config",
+        "reloading": "Reloading...",
+        "no_config": "No configuration loaded"
+      }
+    },
+    "behavior": {
+      "title": "Behavior Settings",
+      "description": "Configure agent behavior and output settings"
+    },
+    "providers": {
+      "title": "AI Providers",
+      "description": "Configure AI model providers"
+    },
+    "embedding": {
+      "title": "Embedding Providers",
+      "description": "Configure embedding model providers"
+    },
+    "reranking": {
+      "title": "Reranking Providers",
+      "description": "Configure reranking providers"
+    },
+    "generation": {
+      "title": "Generation Providers",
+      "description": "Configure generation model providers"
+    },
+    "memory": {
+      "title": "Memory & Knowledge",
+      "description": "Configure memory and knowledge settings"
+    },
+    "mcp": {
+      "title": "MCP Servers",
+      "description": "Configure Model Context Protocol servers"
+    },
+    "plugins": {
+      "title": "Plugins",
+      "description": "Manage installed plugins"
+    },
+    "skills": {
+      "title": "Skills",
+      "description": "Manage agent skills"
+    },
+    "clawhub": {
+      "title": "ClawHub",
+      "description": "Browse and install from ClawHub marketplace"
+    },
+    "acp": {
+      "title": "ACP Harnesses",
+      "description": "Configure Agent Communication Protocol harnesses"
+    },
+    "search": {
+      "title": "Search Settings",
+      "description": "Configure search and retrieval settings"
+    },
+    "policies": {
+      "title": "Policies",
+      "description": "Configure security and access policies"
+    },
+    "routing_rules": {
+      "title": "Routing Rules",
+      "description": "Configure message routing rules"
+    },
+    "security": {
+      "title": "Security",
+      "description": "Configure security settings"
+    },
+    "auth": {
+      "title": "Token Auth",
+      "description": "Configure token-based authentication"
+    },
+    "channels": {
+      "title": "Channels",
+      "description": "Configure messaging channels"
+    }
+  }
+}

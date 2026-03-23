@@ -1,3 +1,4 @@
+pub mod i18n;
 pub mod app;
 pub mod api;
 pub mod components;

@@ -1,0 +1,162 @@
+{
+  "nav": {
+    "chat": "聊天",
+    "dashboard": "仪表盘",
+    "agents": "智能体",
+    "settings": "设置"
+  },
+  "common": {
+    "loading": "加载中...",
+    "saving": "保存中...",
+    "saved": "保存成功",
+    "save": "保存更改",
+    "cancel": "取消",
+    "delete": "删除",
+    "retry": "重试",
+    "confirm": "确认",
+    "error": "发生错误",
+    "no_data": "暂无数据",
+    "connect": "连接网关",
+    "disconnect": "断开连接",
+    "connected": "已连接",
+    "disconnected": "未连接",
+    "gateway_unavailable": "网关不可用 — 显示默认设置"
+  },
+  "settings": {
+    "title": "设置",
+    "welcome": "欢迎使用设置",
+    "select_category": "从侧边栏选择一个类别来配置 Aleph 网关",
+    "quick_start": {
+      "title": "快速开始",
+      "description": "配置基本设置以开始使用 Aleph",
+      "providers": "设置 AI 提供商和 API 密钥",
+      "behavior": "自定义智能体行为",
+      "memory": "启用记忆与知识库"
+    },
+    "help": {
+      "title": "需要帮助？",
+      "description": "了解更多关于 Aleph 的功能和配置选项",
+      "docs": "查看文档",
+      "community": "加入社区",
+      "issues": "在 GitHub 上报告问题",
+      "support": "联系支持"
+    },
+    "groups": {
+      "basic": "基础",
+      "ai": "AI",
+      "channels": "频道",
+      "extensions": "扩展",
+      "advanced": "高级"
+    },
+    "tabs": {
+      "general": "通用",
+      "behavior": "行为",
+      "providers": "AI 提供商",
+      "embedding": "嵌入",
+      "reranking": "重排序",
+      "generation": "生成",
+      "memory": "记忆与知识",
+      "mcp": "MCP",
+      "plugins": "插件",
+      "skills": "技能",
+      "clawhub": "ClawHub",
+      "acp": "ACP",
+      "channels": "频道",
+      "telegram": "Telegram",
+      "discord": "Discord",
+      "whatsapp": "WhatsApp",
+      "imessage": "iMessage",
+      "search": "搜索",
+      "policies": "策略",
+      "routing_rules": "路由规则",
+      "security": "安全",
+      "auth": "令牌认证"
+    },
+    "general": {
+      "title": "通用设置",
+      "description": "配置通用应用设置",
+      "language": {
+        "title": "语言",
+        "label": "界面语言",
+        "system": "跟随系统",
+        "en": "English",
+        "zh": "简体中文"
+      },
+      "config_reload": {
+        "title": "配置重载",
+        "description": "从磁盘重新加载配置文件并刷新子系统（配置、提供商）。",
+        "button": "重载配置",
+        "reloading": "重载中...",
+        "no_config": "未加载配置"
+      }
+    },
+    "behavior": {
+      "title": "行为设置",
+      "description": "配置智能体行为和输出设置"
+    },
+    "providers": {
+      "title": "AI 提供商",
+      "description": "配置 AI 模型提供商"
+    },
+    "embedding": {
+      "title": "嵌入提供商",
+      "description": "配置嵌入模型提供商"
+    },
+    "reranking": {
+      "title": "重排序提供商",
+      "description": "配置重排序提供商"
+    },
+    "generation": {
+      "title": "生成提供商",
+      "description": "配置生成模型提供商"
+    },
+    "memory": {
+      "title": "记忆与知识",
+      "description": "配置记忆和知识设置"
+    },
+    "mcp": {
+      "title": "MCP 服务器",
+      "description": "配置模型上下文协议服务器"
+    },
+    "plugins": {
+      "title": "插件",
+      "description": "管理已安装的插件"
+    },
+    "skills": {
+      "title": "技能",
+      "description": "管理智能体技能"
+    },
+    "clawhub": {
+      "title": "ClawHub",
+      "description": "浏览和安装 ClawHub 市场内容"
+    },
+    "acp": {
+      "title": "ACP 适配器",
+      "description": "配置智能体通信协议适配器"
+    },
+    "search": {
+      "title": "搜索设置",
+      "description": "配置搜索和检索设置"
+    },
+    "policies": {
+      "title": "策略",
+      "description": "配置安全和访问策略"
+    },
+    "routing_rules": {
+      "title": "路由规则",
+      "description": "配置消息路由规则"
+    },
+    "security": {
+      "title": "安全",
+      "description": "配置安全设置"
+    },
+    "auth": {
+      "title": "令牌认证",
+      "description": "配置基于令牌的认证"
+    },
+    "channels": {
+      "title": "频道",
+      "description": "配置消息频道"
+    }
+  }
+}

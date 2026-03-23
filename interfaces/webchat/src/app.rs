@@ -2,6 +2,7 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 use leptos_router::components::Router;
 use leptos_router::hooks::use_location;
+use crate::i18n::*;
 
 // Views
 use crate::views::home::Home;
@@ -20,9 +21,11 @@ use crate::context::{DashboardContext, DashboardState};
 #[component]
 pub fn App() -> impl IntoView {
     view! {
-        <DashboardContext>
-            <AppContent />
-        </DashboardContext>
+        <I18nContextProvider>
+            <DashboardContext>
+                <AppContent />
+            </DashboardContext>
+        </I18nContextProvider>
     }
 }
 
@@ -32,7 +35,7 @@ fn AppContent() -> impl IntoView {
 
     // Setup WebSocket connection and alert subscriptions on mount
     Effect::new(move || {
-        let state = state.clone();
+        let state = state;
         spawn_local(async move {
             match state.connect().await {
                 Ok(()) => {
