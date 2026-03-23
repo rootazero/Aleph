@@ -71,6 +71,8 @@ struct RawFrontmatter {
     #[serde(default)]
     disable_model_invocation: Option<bool>,
     #[serde(default)]
+    bound_tool: Option<String>,
+    #[serde(default)]
     eligibility: Option<RawEligibility>,
     #[serde(default)]
     install: Option<Vec<RawInstallSpec>>,
@@ -148,6 +150,11 @@ pub fn parse_skill_content(
             _ => PromptScope::System,
         };
         manifest.set_scope(scope);
+    }
+
+    // Bound tool
+    if let Some(bound_tool) = raw.bound_tool {
+        manifest.set_bound_tool(bound_tool);
     }
 
     // Invocation policy
@@ -358,5 +365,30 @@ Body content from disk."#;
         let manifest = parse_skill_file(&file_path, SkillSource::Workspace).unwrap();
         assert_eq!(manifest.name(), "Disk Test");
         assert_eq!(manifest.content().as_str(), "Body content from disk.");
+    }
+
+    #[test]
+    fn parse_bound_tool_from_frontmatter() {
+        let content = r#"---
+name: Docker Build
+description: Builds Docker images
+scope: tool
+bound-tool: docker_cli
+---
+Docker expert."#;
+        let manifest = parse_skill_content(content, SkillSource::Global).unwrap();
+        assert_eq!(*manifest.scope(), PromptScope::Tool);
+        assert_eq!(manifest.bound_tool(), Some("docker_cli"));
+    }
+
+    #[test]
+    fn parse_no_bound_tool_defaults_to_none() {
+        let content = r#"---
+name: Simple Skill
+description: No bound tool
+---
+Content."#;
+        let manifest = parse_skill_content(content, SkillSource::Bundled).unwrap();
+        assert!(manifest.bound_tool().is_none());
     }
 }
