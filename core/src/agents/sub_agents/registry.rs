@@ -46,6 +46,7 @@ pub struct RegistryStats {
     pub pending: usize,
     pub running: usize,
     pub paused: usize,
+    pub idle: usize,
     pub completed: usize,
     pub failed: usize,
     pub cancelled: usize,
@@ -289,7 +290,7 @@ impl SubAgentRegistry {
                 RunStatus::Completed => stats.completed += 1,
                 RunStatus::Failed => stats.failed += 1,
                 RunStatus::Cancelled => stats.cancelled += 1,
-                RunStatus::Idle => stats.paused += 1, // Idle counted as paused for now
+                RunStatus::Idle => stats.idle += 1,
             }
         }
 
@@ -539,5 +540,55 @@ mod tests {
         let running = registry.get_by_status(RunStatus::Running).await;
         assert_eq!(running.len(), 1);
         assert_eq!(running[0].run_id, run1_id);
+    }
+
+    #[tokio::test]
+    async fn test_idle_status_in_stats() {
+        let registry = SubAgentRegistry::new_in_memory();
+        let run = SubAgentRun::new(
+            make_subagent_key("p1", "s1"),
+            make_session_key("p1"),
+            "Task",
+            "explore",
+        )
+        .with_keep_alive(true);
+        let run_id = run.run_id.clone();
+        registry.register(run).await.unwrap();
+
+        registry.transition(&run_id, RunStatus::Running).await.unwrap();
+        registry.transition(&run_id, RunStatus::Idle).await.unwrap();
+
+        let stats = registry.stats().await;
+        assert_eq!(stats.idle, 1);
+        assert_eq!(stats.running, 0);
+
+        let active = registry.get_active_runs().await;
+        assert_eq!(active.len(), 1);
+        assert_eq!(active[0].status, RunStatus::Idle);
+    }
+
+    #[tokio::test]
+    async fn test_idle_to_running_reentry() {
+        let registry = SubAgentRegistry::new_in_memory();
+        let run = SubAgentRun::new(
+            make_subagent_key("p1", "s1"),
+            make_session_key("p1"),
+            "Task",
+            "explore",
+        )
+        .with_keep_alive(true);
+        let run_id = run.run_id.clone();
+        registry.register(run).await.unwrap();
+
+        // Pending -> Running -> Idle -> Running -> Idle -> Completed
+        registry.transition(&run_id, RunStatus::Running).await.unwrap();
+        registry.transition(&run_id, RunStatus::Idle).await.unwrap();
+        registry.transition(&run_id, RunStatus::Running).await.unwrap();
+        registry.transition(&run_id, RunStatus::Idle).await.unwrap();
+        registry.transition(&run_id, RunStatus::Completed).await.unwrap();
+
+        let run = registry.get(&run_id).await.unwrap().unwrap();
+        assert_eq!(run.status, RunStatus::Completed);
+        assert!(run.ended_at.is_some());
     }
 }
