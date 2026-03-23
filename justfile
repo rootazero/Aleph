@@ -188,33 +188,44 @@ release version:
     BUILD=$(echo "$COMMITS" | grep -iE "^- (build|ci|release|docs)" || true)
     REFACTOR=$(echo "$COMMITS" | grep -iE "^- (refactor|clean|remove|phase)" || true)
 
-    # Build changelog entry
-    ENTRY="## [${VERSION}] - $(date +%Y-%m-%d)\n"
+    # Build changelog entry to a temp file (avoids shell escaping issues)
+    ENTRY_FILE=$(mktemp)
+    echo "## [${VERSION}] - $(date +%Y-%m-%d)" > "$ENTRY_FILE"
+    echo "" >> "$ENTRY_FILE"
     if [ -n "$FEATURES" ]; then
-        ENTRY="${ENTRY}\n### Added\n${FEATURES}\n"
+        echo "### Added" >> "$ENTRY_FILE"
+        echo "$FEATURES" >> "$ENTRY_FILE"
+        echo "" >> "$ENTRY_FILE"
     fi
     if [ -n "$FIXES" ]; then
-        ENTRY="${ENTRY}\n### Fixed\n${FIXES}\n"
+        echo "### Fixed" >> "$ENTRY_FILE"
+        echo "$FIXES" >> "$ENTRY_FILE"
+        echo "" >> "$ENTRY_FILE"
     fi
     if [ -n "$REFACTOR" ]; then
-        ENTRY="${ENTRY}\n### Changed\n${REFACTOR}\n"
+        echo "### Changed" >> "$ENTRY_FILE"
+        echo "$REFACTOR" >> "$ENTRY_FILE"
+        echo "" >> "$ENTRY_FILE"
     fi
     if [ -n "$BUILD" ]; then
-        ENTRY="${ENTRY}\n### Build\n${BUILD}\n"
+        echo "### Build" >> "$ENTRY_FILE"
+        echo "$BUILD" >> "$ENTRY_FILE"
+        echo "" >> "$ENTRY_FILE"
     fi
 
-    # Prepend to CHANGELOG.md (after the header)
+    # Insert entry into CHANGELOG.md after "## [Unreleased]" line
     if [ -f CHANGELOG.md ]; then
-        # Insert after "## [Unreleased]" line
-        perl -i -pe "s/^## \[Unreleased\].*/## [Unreleased]\n\n$(echo -e "$ENTRY" | sed 's/[&/\]/\\&/g' | tr '\n' '\a' | sed 's/\a/\\n/g')/" CHANGELOG.md 2>/dev/null || {
-            # Fallback: just prepend after header
-            HEADER=$(head -7 CHANGELOG.md)
-            BODY=$(tail -n +8 CHANGELOG.md)
-            echo "$HEADER" > CHANGELOG.md
-            echo "" >> CHANGELOG.md
-            echo -e "$ENTRY" >> CHANGELOG.md
-            echo "$BODY" >> CHANGELOG.md
-        }
+        TMPLOG=$(mktemp)
+        awk -v entry_file="$ENTRY_FILE" '
+            /^## \[Unreleased\]/ {
+                print; print "";
+                while ((getline line < entry_file) > 0) print line;
+                next
+            }
+            { print }
+        ' CHANGELOG.md > "$TMPLOG"
+        mv "$TMPLOG" CHANGELOG.md
+        rm -f "$ENTRY_FILE"
     fi
 
     # Update VERSION file
