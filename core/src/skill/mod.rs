@@ -295,11 +295,17 @@ fn is_skill_file(path: &Path) -> bool {
 
 /// Guess the `SkillSource` from a file path.
 ///
+/// - Contains `skills-official` → Bundled (priority 1, overridable by Global/Workspace)
 /// - Contains `.aleph/skills` and is under a workspace → Workspace
 /// - Contains `.aleph/skills` at home dir level → Global
 /// - Otherwise → Bundled
 fn guess_source(path: &Path) -> SkillSource {
     let path_str = path.to_string_lossy();
+
+    // Official skills directory → Bundled (priority 1, overridable by Global/Workspace)
+    if path_str.contains("skills-official") {
+        return SkillSource::Bundled;
+    }
 
     if path_str.contains(".aleph/skills") {
         if let Some(home) = dirs::home_dir() {
@@ -469,6 +475,12 @@ Content."#,
         let statuses = system.skill_status().await;
         assert_eq!(statuses.len(), 1);
         assert!(statuses[0].is_eligible());
+    }
+
+    #[test]
+    fn guess_source_official() {
+        let path = PathBuf::from("/Users/test/.aleph/skills-official/self/SKILL.md");
+        assert_eq!(guess_source(&path), SkillSource::Bundled);
     }
 
     #[test]

@@ -268,11 +268,19 @@ impl ExtensionManager {
         }
 
         // Initialize SkillSystem with discovered skill directories
-        let skill_dirs: Vec<PathBuf> = self.discovery.discover_skill_dirs()
-            .unwrap_or_default()
-            .into_iter()
-            .map(|d| d.path)
-            .collect();
+        let mut skill_dirs: Vec<PathBuf> = Vec::new();
+        // Official skills dir (SkillSource::Bundled via guess_source, priority 1)
+        let official_dir = dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("/tmp"))
+            .join(".aleph")
+            .join("skills-official");
+        if official_dir.exists() {
+            skill_dirs.push(official_dir);
+        }
+        // User skills dirs (SkillSource::Global via guess_source, priority 2 — overrides official)
+        for d in self.discovery.discover_skill_dirs().unwrap_or_default() {
+            skill_dirs.push(d.path);
+        }
         if let Err(e) = self.skill_system.init(skill_dirs).await {
             tracing::warn!("Failed to init skill system: {}", e);
         }
