@@ -1,5 +1,7 @@
 //! PromptBuilder — assembles system prompt from sections.
 
+use crate::domain::skill::{PromptScope, SkillManifest};
+use crate::skill::prompt::build_skills_prompt_xml;
 use crate::thinker::soul::SoulManifest;
 
 // =============================================================================
@@ -59,6 +61,7 @@ pub struct PromptBuilder {
     soul_directives: Vec<String>,
     capability_rules: Option<String>,
     custom_instructions: Option<String>,
+    eligible_skills: Option<Vec<SkillManifest>>,
 }
 
 impl PromptBuilder {
@@ -107,6 +110,7 @@ impl PromptBuilder {
             soul_directives: Vec::new(),
             capability_rules: None,
             custom_instructions: None,
+            eligible_skills: None,
         }
     }
 
@@ -137,6 +141,12 @@ impl PromptBuilder {
     /// Set custom instructions from the user.
     pub fn with_custom_instructions(mut self, instructions: &str) -> Self {
         self.custom_instructions = Some(instructions.to_string());
+        self
+    }
+
+    /// Set eligible skills for scope-aware filtering.
+    pub fn with_eligible_skills(mut self, skills: Vec<SkillManifest>) -> Self {
+        self.eligible_skills = Some(skills);
         self
     }
 
@@ -185,17 +195,41 @@ impl PromptBuilder {
             sections.push(format!("# Available Tools\n\n{}", tool_list));
         }
 
-        // 6. Context from Memory
+        // 6. Available Skills (scope-filtered from SkillSystem v2)
+        if let Some(ref skills) = self.eligible_skills {
+            let active_tool_names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
+            let filtered: Vec<&SkillManifest> = skills
+                .iter()
+                .filter(|s| match *s.scope() {
+                    PromptScope::System => true,
+                    PromptScope::Tool => s.bound_tool().map_or(false, |bound| {
+                        active_tool_names.iter().any(|t| *t == bound)
+                    }),
+                    PromptScope::Standalone | PromptScope::Disabled => false,
+                })
+                .collect();
+
+            if !filtered.is_empty() {
+                let xml = build_skills_prompt_xml(&filtered);
+                sections.push(format!(
+                    "# Available Skills\n\nYou can invoke skills using the `skill` tool. \
+                     Skills provide specialized instructions for specific tasks.\n\n{}",
+                    xml
+                ));
+            }
+        }
+
+        // 7. Context from Memory
         if let Some(ctx) = memory_context {
             sections.push(format!("# Context from Memory\n\n{}", ctx));
         }
 
-        // 7. Additional Instructions
+        // 8. Additional Instructions
         if let Some(instructions) = &self.custom_instructions {
             sections.push(format!("# Additional Instructions\n\n{}", instructions));
         }
 
-        // 8. Behavior
+        // 9. Behavior
         sections.push(format!("# Behavior\n\n{}", BASE_BEHAVIOR));
 
         sections.join(SECTION_SEPARATOR)
@@ -348,5 +382,53 @@ mod tests {
 
         assert!(prompt.contains("# Additional Instructions"));
         assert!(prompt.contains("Reply only in haiku format."));
+    }
+
+    #[test]
+    fn test_build_with_skill_instructions() {
+        use crate::domain::skill::{PromptScope, SkillContent, SkillManifest, SkillSource};
+
+        let mut system_skill = SkillManifest::new(
+            "git-commit", "Git Commit", "Helps write commit messages",
+            SkillContent::new("content"), SkillSource::Bundled,
+        );
+        system_skill.set_scope(PromptScope::System);
+
+        let mut tool_skill = SkillManifest::new(
+            "docker-build", "Docker Build", "Builds Docker images",
+            SkillContent::new("content"), SkillSource::Bundled,
+        );
+        tool_skill.set_scope(PromptScope::Tool);
+        tool_skill.set_bound_tool("docker_cli".to_string());
+
+        let mut standalone_skill = SkillManifest::new(
+            "hidden", "Hidden", "Hidden skill",
+            SkillContent::new("content"), SkillSource::Bundled,
+        );
+        standalone_skill.set_scope(PromptScope::Standalone);
+
+        let builder = PromptBuilder::new()
+            .with_eligible_skills(vec![system_skill, tool_skill, standalone_skill]);
+
+        let tools = vec![
+            ToolInfo {
+                name: "docker_cli".to_string(),
+                description: "Docker CLI".to_string(),
+                parameters_schema: None,
+            },
+        ];
+
+        let prompt = builder.build(&tools, None);
+
+        assert!(prompt.contains("# Available Skills"));
+        assert!(prompt.contains("Git Commit"));
+        assert!(prompt.contains("Docker Build"));
+        assert!(!prompt.contains("Hidden"));
+    }
+
+    #[test]
+    fn test_build_no_skills_no_section() {
+        let prompt = PromptBuilder::new().build(&[], None);
+        assert!(!prompt.contains("# Available Skills"));
     }
 }
