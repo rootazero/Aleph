@@ -75,7 +75,7 @@ pub fn McpView() -> impl IntoView {
                                 load_servers(state, servers, loading, error);
                             }
                         >
-                            "Refresh"
+                            {t!(i18n, settings.mcp.refresh)}
                         </button>
                         <button
                             class="px-3 py-1.5 bg-primary text-white rounded hover:bg-primary-hover text-sm"
@@ -84,7 +84,7 @@ pub fn McpView() -> impl IntoView {
                                 show_dialog.set(true);
                             }
                         >
-                            "+ Add Server"
+                            {t!(i18n, settings.mcp.add_server)}
                         </button>
                     </div>
                 </div>
@@ -99,7 +99,7 @@ pub fn McpView() -> impl IntoView {
                 // Servers List Section
                 <div class="space-y-4">
                     <h2 class="text-lg font-medium text-text-primary">
-                        {move || format!("Configured Servers ({})", servers.get().len())}
+                        {format!("{} ({})", t_string!(i18n, settings.mcp.configured_servers), servers.get().len())}
                     </h2>
 
                     {move || {
@@ -113,9 +113,9 @@ pub fn McpView() -> impl IntoView {
                             view! {
                                 <div class="text-center py-12 border border-dashed border-border rounded">
                                     <div class="text-4xl mb-4">"🔧"</div>
-                                    <p class="text-text-secondary">"No MCP servers configured"</p>
+                                    <p class="text-text-secondary">{t!(i18n, settings.mcp.no_servers)}</p>
                                     <p class="text-xs text-text-tertiary mt-1">
-                                        "Add MCP servers to extend AI capabilities with external tools"
+                                        {t!(i18n, settings.mcp.no_servers_hint)}
                                     </p>
                                 </div>
                             }.into_any()
@@ -149,7 +149,7 @@ pub fn McpView() -> impl IntoView {
                     <div class="flex items-start gap-2">
                         <span class="text-info text-sm">"ℹ️"</span>
                         <span class="text-sm text-info">
-                            "MCP servers provide external tools and integrations. Configure servers with their command, arguments, and environment variables."
+                            {t!(i18n, settings.mcp.info_text)}
                         </span>
                     </div>
                 </div>
@@ -179,6 +179,7 @@ fn McpServerCard(
     show_dialog: RwSignal<bool>,
 ) -> impl IntoView {
     let state = expect_context::<DashboardState>();
+    let i18n = use_i18n();
     let deleting = RwSignal::new(false);
     let server_name = StoredValue::new(server.name.clone());
 
@@ -209,7 +210,7 @@ fn McpServerCard(
                                     "px-2 py-0.5 rounded text-xs bg-surface-sunken text-text-tertiary"
                                 }
                             }>
-                                {if server.enabled { "Enabled" } else { "Disabled" }}
+                                {if server.enabled { t_string!(i18n, settings.mcp.enabled).to_string() } else { t_string!(i18n, settings.mcp.disabled).to_string() }}
                             </span>
                         </div>
                         <p class="text-xs text-text-secondary mt-1 font-mono">
@@ -376,15 +377,15 @@ fn EditMcpServerDialog(
         <div class="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
             <div class="bg-surface border border-border rounded-lg p-6 max-w-md w-full mx-4">
                 <h2 class="text-lg font-semibold text-text-primary mb-2">
-                    {if is_new { "Add MCP Server" } else { "Edit MCP Server" }}
+                    {if is_new { t_string!(i18n, settings.mcp.add_mcp_server).to_string() } else { t_string!(i18n, settings.mcp.edit_mcp_server).to_string() }}
                 </h2>
                 <p class="text-sm text-text-secondary mb-4">
-                    {if is_new { "Configure a new MCP server connection" } else { "Update server configuration" }}
+                    {if is_new { t_string!(i18n, settings.mcp.add_mcp_desc).to_string() } else { t_string!(i18n, settings.mcp.edit_mcp_desc).to_string() }}
                 </p>
 
                 <div class="space-y-4">
                     <div>
-                        <label class="block text-sm font-medium text-text-secondary mb-2">"Name"</label>
+                        <label class="block text-sm font-medium text-text-secondary mb-2">{t!(i18n, settings.mcp.name_label)}</label>
                         <input
                             type="text"
                             class="w-full px-3 py-2 bg-surface-sunken border border-border rounded text-text-primary text-sm disabled:opacity-50"
@@ -396,7 +397,7 @@ fn EditMcpServerDialog(
                     </div>
 
                     <div>
-                        <label class="block text-sm font-medium text-text-secondary mb-2">"Command"</label>
+                        <label class="block text-sm font-medium text-text-secondary mb-2">{t!(i18n, settings.mcp.command_label)}</label>
                         <input
                             type="text"
                             class="w-full px-3 py-2 bg-surface-sunken border border-border rounded text-text-primary text-sm"
@@ -407,7 +408,7 @@ fn EditMcpServerDialog(
                     </div>
 
                     <div>
-                        <label class="block text-sm font-medium text-text-secondary mb-2">"Arguments"</label>
+                        <label class="block text-sm font-medium text-text-secondary mb-2">{t!(i18n, settings.mcp.args_label)}</label>
                         <input
                             type="text"
                             class="w-full px-3 py-2 bg-surface-sunken border border-border rounded text-text-primary text-sm"
@@ -418,7 +419,7 @@ fn EditMcpServerDialog(
                     </div>
 
                     <div>
-                        <label class="block text-sm font-medium text-text-secondary mb-2">"Environment Variables"</label>
+                        <label class="block text-sm font-medium text-text-secondary mb-2">{t!(i18n, settings.mcp.env_label)}</label>
                         <textarea
                             class="w-full px-3 py-2 bg-surface-sunken border border-border rounded text-text-primary text-sm font-mono"
                             rows="4"
@@ -426,7 +427,7 @@ fn EditMcpServerDialog(
                             prop:value=move || env.get()
                             on:input=move |ev| env.set(event_target_value(&ev))
                         />
-                        <p class="text-xs text-text-tertiary mt-1">"One per line, format: KEY=value"</p>
+                        <p class="text-xs text-text-tertiary mt-1">{t!(i18n, settings.mcp.env_hint)}</p>
                     </div>
 
                     {move || dialog_error.get().map(|err| view! {
@@ -442,7 +443,7 @@ fn EditMcpServerDialog(
                         class="flex-1 px-4 py-2 bg-surface-sunken text-text-secondary rounded hover:bg-surface-sunken text-sm"
                         on:click=move |_| on_close()
                     >
-                        "Cancel"
+                        {t!(i18n, common.cancel)}
                     </button>
                     <button
                         class="flex-1 px-4 py-2 bg-primary text-white rounded hover:bg-primary-hover text-sm disabled:opacity-50"

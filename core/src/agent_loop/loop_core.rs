@@ -267,8 +267,12 @@ impl<P: LoopProvider> AgentLoop<P> {
                     callback.on_text(text);
                 }
                 // Append text if auto-continuing from truncation, otherwise replace
-                if auto_continue_count > 0 && final_text.is_some() {
-                    final_text.as_mut().unwrap().push_str(text);
+                if let Some(ref mut existing) = final_text {
+                    if auto_continue_count > 0 {
+                        existing.push_str(text);
+                    } else {
+                        *existing = text.clone();
+                    }
                 } else {
                     final_text = Some(text.clone());
                 }
@@ -288,7 +292,7 @@ impl<P: LoopProvider> AgentLoop<P> {
                 let has_completion_tag = response
                     .text
                     .as_ref()
-                    .map_or(false, |t| t.contains("<task-complete/>"));
+                    .is_some_and(|t| t.contains("<task-complete/>"));
 
                 if has_completion_tag {
                     break;

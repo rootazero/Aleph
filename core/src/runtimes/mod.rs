@@ -20,7 +20,7 @@ pub mod bootstrap;
 mod capability;
 pub mod ensure;
 pub mod ledger;
-mod manifest; // kept for legacy migration
+
 pub mod probe;
 
 // Re-exports

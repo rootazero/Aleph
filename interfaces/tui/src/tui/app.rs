@@ -465,24 +465,6 @@ impl AppState {
         self.verbose = !self.verbose;
     }
 
-    /// Set the current model name.
-    #[allow(dead_code)]
-    pub fn set_model(&mut self, name: String) {
-        self.model_name = name;
-    }
-
-    /// Switch to a different session.
-    #[allow(dead_code)]
-    pub fn switch_session(&mut self, key: String) {
-        self.session_key = key.clone();
-        self.messages.clear();
-        self.scroll_offset = 0;
-        self.auto_scroll = true;
-        self.total_tokens = 0;
-        self.current_run = None;
-        self.add_system_message(format!("Switched to session: {}", key));
-    }
-
     /// Clear the chat screen (keep session state).
     pub fn clear_screen(&mut self) {
         self.messages.clear();

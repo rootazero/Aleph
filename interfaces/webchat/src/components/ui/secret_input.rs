@@ -30,7 +30,7 @@ pub fn SecretInput(
     on_change: impl Fn(String) + 'static,
     /// Optional placeholder
     #[prop(optional)]
-    placeholder: Option<&'static str>,
+    placeholder: Option<String>,
     /// Use monospace font
     #[prop(optional)]
     monospace: bool,
@@ -44,7 +44,7 @@ pub fn SecretInput(
                 type=move || if visible.get() { "text" } else { "password" }
                 value=move || value.get()
                 on:input=move |ev| on_change(event_target_value(&ev))
-                placeholder=placeholder.unwrap_or("")
+                placeholder=placeholder.unwrap_or_default()
                 class=format!(
                     "w-full px-3 py-2 pr-10 bg-surface-raised border border-border rounded-lg text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary {}",
                     font_class

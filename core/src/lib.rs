@@ -74,13 +74,12 @@ pub mod permission;
 pub mod pii;
 pub mod prompt;
 pub mod providers;
-pub mod question;
 pub mod routing;
 pub mod runtimes;
 pub mod search;
 pub mod skills;
 pub mod skill;
-pub mod suggestion;
+
 pub mod supervisor;
 pub mod thinker;
 pub mod tool_output;
@@ -88,7 +87,7 @@ pub mod tools;
 pub mod utils;
 pub mod vision;
 pub mod wizard;
-pub mod spec_driven;
+
 pub mod resilience;
 pub mod resilient;
 pub mod daemon;
@@ -225,16 +224,6 @@ pub use crate::supervisor::{
 
 pub use crate::wizard::{
     WizardFlow, WizardPrompter, WizardSession, WizardSessionError, WizardStatus,
-};
-
-// =============================================================================
-// Spec-Driven Development Exports
-// =============================================================================
-
-pub use crate::spec_driven::{
-    AssertionType, EvaluationResult, LlmJudge, NoOpWorkflowCallback, Spec, SpecDrivenWorkflow,
-    SpecMetadata, SpecTarget, SpecWriter, TestCase, TestResult, TestType, TestWriter,
-    WorkflowCallback, WorkflowConfig, WorkflowResult,
 };
 
 // =============================================================================

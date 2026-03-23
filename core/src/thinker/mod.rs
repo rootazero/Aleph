@@ -61,23 +61,6 @@ pub use memory_context_provider::{MemoryContextProvider, MemoryContextConfig};
 pub use runtime_context::RuntimeContext;
 pub use identity::{IdentityResolver, IdentitySource, IdentitySourceType};
 
-/// Format truncation stats into a human-readable warning message.
-pub fn format_truncation_warning(stats: &[prompt_budget::TruncationStat]) -> String {
-    let parts: Vec<String> = stats.iter().map(|s| {
-        if s.fully_removed {
-            format!("{} fully removed", s.layer_name)
-        } else {
-            let pct = if s.original_chars > 0 {
-                ((s.original_chars - s.final_chars) as f64 / s.original_chars as f64 * 100.0) as u32
-            } else {
-                0
-            };
-            format!("{} {}→{} chars (-{}%)", s.layer_name, s.original_chars, s.final_chars, pct)
-        }
-    }).collect();
-    format!("[System] Context truncated: {}", parts.join(", "))
-}
-
 use crate::providers::AiProvider;
 
 /// Provider registry for model routing
@@ -139,43 +122,6 @@ impl ProviderRegistry for SwappableProviderRegistry {
 
     fn default_provider(&self) -> Arc<dyn AiProvider> {
         self.provider.read().unwrap_or_else(|e| e.into_inner()).clone()
-    }
-}
-
-#[cfg(test)]
-mod truncation_warning_tests {
-    use super::*;
-    use prompt_budget::TruncationStat;
-
-    #[test]
-    fn format_truncation_warning_message() {
-        let stats = vec![
-            TruncationStat {
-                layer_name: "CONTEXT.md".to_string(),
-                original_chars: 45000,
-                final_chars: 20000,
-                fully_removed: false,
-            },
-            TruncationStat {
-                layer_name: "guidelines".to_string(),
-                original_chars: 500,
-                final_chars: 0,
-                fully_removed: true,
-            },
-        ];
-        let msg = format_truncation_warning(&stats);
-        assert!(msg.contains("[System] Context truncated"));
-        assert!(msg.contains("CONTEXT.md"));
-        assert!(msg.contains("45000"));
-        assert!(msg.contains("20000"));
-        assert!(msg.contains("guidelines fully removed"));
-    }
-
-    #[test]
-    fn format_truncation_warning_empty_stats() {
-        let stats: Vec<TruncationStat> = vec![];
-        let msg = format_truncation_warning(&stats);
-        assert_eq!(msg, "[System] Context truncated: ");
     }
 }
 

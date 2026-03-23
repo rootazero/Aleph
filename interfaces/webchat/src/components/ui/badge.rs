@@ -37,7 +37,10 @@ pub fn StatusBadge(
     #[prop(optional)] count: Option<u32>,
 ) -> impl IntoView {
     let (bg_class, animation_class) = match level {
-        AlertLevel::None => return view! {}.into_any(),
+        AlertLevel::None => return {
+            let _: () = view! {};
+            ().into_any()
+        },
         AlertLevel::Info => ("bg-info", ""),
         AlertLevel::Warning => ("bg-warning", ""),
         AlertLevel::Critical => ("bg-danger", "animate-pulse"),

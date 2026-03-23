@@ -107,9 +107,9 @@ pub fn ChannelConfigTemplate(
                 {
                     Ok(val) => {
                         if let Some(s) = val.as_str() {
-                            channel_status.set(ChannelStatus::from_str(s));
+                            channel_status.set(ChannelStatus::parse(s));
                         } else if let Some(s) = val.get("status").and_then(|v| v.as_str()) {
-                            channel_status.set(ChannelStatus::from_str(s));
+                            channel_status.set(ChannelStatus::parse(s));
                         }
                     }
                     Err(_) => {
@@ -338,7 +338,7 @@ pub fn ChannelConfigTemplate(
                     }.into_any()
                 } else {
                     view! {
-                        <SettingsSection title="Configuration">
+                        <SettingsSection title="Configuration".to_string() description=None>
                             {fields
                                 .iter()
                                 .map(|field| render_field(field, field_values))
@@ -396,16 +396,15 @@ fn render_field(
     let key: &'static str = field.key;
 
     // Compute the label (append " *" for required fields)
-    let label: &'static str = if field.required {
-        // Leak is acceptable: FieldDef is static data, finite count
-        Box::leak(format!("{} *", field.label).into_boxed_str())
+    let label: String = if field.required {
+        format!("{} *", field.label)
     } else {
-        field.label
+        field.label.to_string()
     };
 
-    // For #[prop(optional)] fields we pass the raw &'static str.
+    // For #[prop(optional)] fields we pass owned String.
     // Empty strings are treated as "no value" by the components.
-    let help: &'static str = field.help;
+    let help: Option<String> = if field.help.is_empty() { None } else { Some(field.help.to_string()) };
     let placeholder: &'static str = field.placeholder;
 
     // Shared setter
@@ -476,7 +475,7 @@ fn render_field(
                     <SecretInput
                         value=Signal::derive(get_val)
                         on_change=move |v: String| set_value(Value::String(v))
-                        placeholder=placeholder
+                        placeholder=placeholder.to_string()
                         monospace=true
                     />
                 </FormField>
@@ -619,36 +618,32 @@ fn ChannelPairingSection(channel_id: StoredValue<String>) -> impl IntoView {
         let _ = refresh_approved.get();
         let ch_id = channel_id.get_value();
         spawn_local(async move {
-            match state
+            if let Ok(val) = state
                 .rpc_call(
                     "channel.pairing.approved",
                     json!({ "channel": ch_id }),
                 )
-                .await
-            {
-                Ok(val) => {
-                    if let Some(arr) = val.get("senders").and_then(|v| v.as_array()) {
-                        let senders: Vec<ApprovedSenderInfo> = arr
-                            .iter()
-                            .filter_map(|v| {
-                                Some(ApprovedSenderInfo {
-                                    sender_id: v
-                                        .get("sender_id")
-                                        .and_then(|s| s.as_str())
-                                        .unwrap_or("")
-                                        .to_string(),
-                                    approved_at: v
-                                        .get("approved_at")
-                                        .and_then(|s| s.as_str())
-                                        .unwrap_or("")
-                                        .to_string(),
-                                })
-                            })
-                            .collect();
-                        approved_senders.set(senders);
-                    }
+                .await {
+                if let Some(arr) = val.get("senders").and_then(|v| v.as_array()) {
+                    let senders: Vec<ApprovedSenderInfo> = arr
+                        .iter()
+                        .map(|v| {
+                            ApprovedSenderInfo {
+                                sender_id: v
+                                    .get("sender_id")
+                                    .and_then(|s| s.as_str())
+                                    .unwrap_or("")
+                                    .to_string(),
+                                approved_at: v
+                                    .get("approved_at")
+                                    .and_then(|s| s.as_str())
+                                    .unwrap_or("")
+                                    .to_string(),
+                            }
+                        })
+                        .collect();
+                    approved_senders.set(senders);
                 }
-                Err(_) => {}
             }
         });
     });
@@ -687,7 +682,7 @@ fn ChannelPairingSection(channel_id: StoredValue<String>) -> impl IntoView {
     };
 
     view! {
-        <SettingsSection title="Channel Pairing">
+        <SettingsSection title="Channel Pairing".to_string() description=None>
             // Approve pairing code input
             <div class="space-y-3">
                 <p class="text-sm text-text-secondary">

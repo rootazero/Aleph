@@ -30,6 +30,7 @@ pub const CC_PLUGIN_TOML: &str = ".claude-plugin/plugin.toml";
 /// section holds Aleph-specific extensions that CC ignores.
 #[derive(Debug, Deserialize)]
 #[serde(default)]
+#[derive(Default)]
 pub struct CcPluginToml {
     /// Plugin name (required — used as plugin ID source)
     pub name: Option<String>,
@@ -75,25 +76,6 @@ pub struct CcPluginToml {
     pub aleph: Option<AlephExtensionsToml>,
 }
 
-impl Default for CcPluginToml {
-    fn default() -> Self {
-        Self {
-            name: None,
-            version: None,
-            description: None,
-            license: None,
-            keywords: None,
-            homepage: None,
-            repository: None,
-            author: None,
-            skills: None,
-            agents: None,
-            hooks: None,
-            mcp_servers: None,
-            aleph: None,
-        }
-    }
-}
 
 /// Author section in CC plugin.toml
 #[derive(Debug, Deserialize)]
@@ -124,6 +106,7 @@ impl From<CcPluginAuthorToml> for AuthorInfo {
 /// Aleph-specific extensions inside [aleph] section
 #[derive(Debug, Deserialize)]
 #[serde(default)]
+#[derive(Default)]
 pub struct AlephExtensionsToml {
     /// Runtime type: "wasm", "mcp", "static"
     pub runtime: Option<String>,
@@ -152,19 +135,6 @@ pub struct AlephExtensionsToml {
     pub services: Vec<ServiceSection>,
 }
 
-impl Default for AlephExtensionsToml {
-    fn default() -> Self {
-        Self {
-            runtime: None,
-            entry: None,
-            permissions: PermissionsSection::default(),
-            capabilities: CapabilitiesSection::default(),
-            channels: Vec::new(),
-            providers: Vec::new(),
-            services: Vec::new(),
-        }
-    }
-}
 
 // =============================================================================
 // Runtime → PluginKind mapping

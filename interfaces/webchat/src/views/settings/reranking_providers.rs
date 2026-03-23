@@ -88,7 +88,7 @@ pub fn RerankingProvidersView() -> impl IntoView {
                                     // Preset providers
                                     <div>
                                         <h2 class="text-sm font-medium text-text-secondary uppercase tracking-wider mb-3">
-                                            "Reranking Providers"
+                                            {t!(i18n, settings.reranking.providers_section)}
                                         </h2>
                                         <div class="grid grid-cols-1 gap-2">
                                             {RERANK_PRESETS.iter().map(|preset| {
@@ -135,13 +135,13 @@ pub fn RerankingProvidersView() -> impl IntoView {
                                                                     {if is_active_provider && is_enabled {
                                                                         view! {
                                                                             <span class="px-1.5 py-0.5 bg-primary-subtle text-primary text-xs rounded shrink-0">
-                                                                                "Active"
+                                                                                {t!(i18n, settings.reranking.active)}
                                                                             </span>
                                                                         }.into_any()
                                                                     } else if is_active_provider {
                                                                         view! {
                                                                             <span class="px-1.5 py-0.5 bg-surface-sunken text-text-tertiary text-xs rounded shrink-0">
-                                                                                "Selected"
+                                                                                {t!(i18n, settings.reranking.selected)}
                                                                             </span>
                                                                         }.into_any()
                                                                     } else {
@@ -168,7 +168,7 @@ pub fn RerankingProvidersView() -> impl IntoView {
                                             }
                                             class="w-full px-4 py-3 border-2 border-dashed border-border rounded-lg text-text-secondary hover:border-primary hover:text-primary transition-colors"
                                         >
-                                            "+ Add Custom Provider"
+                                            {t!(i18n, settings.reranking.add_custom)}
                                         </button>
                                     </div>
                                 </div>
@@ -218,8 +218,8 @@ pub fn RerankingProvidersView() -> impl IntoView {
                         view! {
                             <div class="flex items-center justify-center h-full text-text-tertiary">
                                 <div class="text-center">
-                                    <p class="text-lg">"Select a provider to configure"</p>
-                                    <p class="text-sm text-text-tertiary mt-1">"or add a custom reranking provider"</p>
+                                    <p class="text-lg">{t!(i18n, settings.reranking.select_to_configure)}</p>
+                                    <p class="text-sm text-text-tertiary mt-1">{t!(i18n, settings.reranking.select_or_add)}</p>
                                 </div>
                             </div>
                         }.into_any()
@@ -371,14 +371,14 @@ fn ProviderDetailPanel(
                             {preset_name}
                         </h2>
                         <p class="text-sm text-text-tertiary mt-0.5">
-                            "Cross-encoder reranking provider"
+                            {t!(i18n, settings.reranking.cross_encoder_desc)}
                         </p>
                     </div>
                     <div class="flex gap-1">
                         {if is_current_provider && rerank_cfg.enabled {
                             view! {
                                 <span class="px-2.5 py-1 rounded-full text-xs font-medium bg-primary-subtle text-primary">
-                                    "Active"
+                                    {t!(i18n, settings.reranking.active)}
                                 </span>
                             }.into_any()
                         } else {
@@ -393,17 +393,17 @@ fn ProviderDetailPanel(
 
             // Configuration card
             <div class="bg-surface-raised border border-border rounded-xl p-4 space-y-4">
-                <h3 class="text-xs font-semibold text-text-tertiary uppercase tracking-wider">"CONFIGURATION"</h3>
+                <h3 class="text-xs font-semibold text-text-tertiary uppercase tracking-wider">{t!(i18n, settings.reranking.configuration)}</h3>
 
                 // API Key
                 <div>
                     <label class="block text-sm font-medium text-text-secondary mb-1">
-                        "API Key"
+                        {t!(i18n, settings.reranking.api_key)}
                     </label>
                     <SecretInput
                         value=Signal::derive(move || api_key.get())
                         on_change=move |v| api_key.set(v)
-                        placeholder="Enter API key"
+                        placeholder=t_string!(i18n, settings.reranking.api_key_placeholder).to_string()
                         monospace=true
                     />
                 </div>
@@ -411,22 +411,22 @@ fn ProviderDetailPanel(
                 // Model
                 <div>
                     <label class="block text-sm font-medium text-text-secondary mb-1">
-                        "Model"
+                        {t!(i18n, settings.reranking.model)}
                     </label>
                     <input
                         type="text"
                         value=move || form_model.get()
                         on:input=move |ev| form_model.set(event_target_value(&ev))
-                        placeholder="e.g. jina-reranker-v2-base-multilingual"
+                        placeholder=move || t_string!(i18n, settings.reranking.model_placeholder).to_string()
                         class="w-full px-3 py-2 border border-border rounded bg-surface text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
                     />
-                    <p class="text-xs text-text-tertiary mt-1">"Enter multiple models, separated by commas"</p>
+                    <p class="text-xs text-text-tertiary mt-1">{t!(i18n, settings.reranking.model_hint)}</p>
                 </div>
 
                 // API Base URL
                 <div>
                     <label class="block text-sm font-medium text-text-secondary mb-1">
-                        "Base URL"
+                        {t!(i18n, settings.reranking.base_url)}
                     </label>
                     <input
                         type="text"
@@ -446,20 +446,20 @@ fn ProviderDetailPanel(
                         class="w-4 h-4 rounded"
                     />
                     <div>
-                        <span class="text-sm text-text-primary">"Enabled"</span>
-                        <p class="text-xs text-text-tertiary">"Use this provider to rerank retrieval results"</p>
+                        <span class="text-sm text-text-primary">{t!(i18n, settings.reranking.enabled)}</span>
+                        <p class="text-xs text-text-tertiary">{t!(i18n, settings.reranking.enabled_desc)}</p>
                     </div>
                 </label>
             </div>
 
             // Parameters card
             <div class="bg-surface-raised border border-border rounded-xl p-4 space-y-4">
-                <h3 class="text-xs font-semibold text-text-tertiary uppercase tracking-wider">"PARAMETERS"</h3>
+                <h3 class="text-xs font-semibold text-text-tertiary uppercase tracking-wider">{t!(i18n, settings.reranking.parameters)}</h3>
 
                 <div class="grid grid-cols-2 gap-4">
                     <div>
                         <label class="block text-sm font-medium text-text-secondary mb-1">
-                            "Timeout (ms)"
+                            {t!(i18n, settings.reranking.timeout_ms)}
                         </label>
                         <input
                             type="number"
@@ -476,7 +476,7 @@ fn ProviderDetailPanel(
 
                     <div>
                         <label class="block text-sm font-medium text-text-secondary mb-1">
-                            "Rerank Weight"
+                            {t!(i18n, settings.reranking.rerank_weight)}
                         </label>
                         <input
                             type="number"
@@ -491,7 +491,7 @@ fn ProviderDetailPanel(
                             }
                             class="w-full px-3 py-2 border border-border rounded bg-surface text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
                         />
-                        <p class="text-xs text-text-tertiary mt-1">"Blend: weight × rerank + (1-w) × original"</p>
+                        <p class="text-xs text-text-tertiary mt-1">{t!(i18n, settings.reranking.rerank_weight_hint)}</p>
                     </div>
                 </div>
             </div>
@@ -519,7 +519,7 @@ fn ProviderDetailPanel(
 
             // Save success
             {move || save_success.get().then(|| view! {
-                <div class="p-3 bg-success-subtle border border-success/20 rounded-lg text-success text-sm">"Saved"</div>
+                <div class="p-3 bg-success-subtle border border-success/20 rounded-lg text-success text-sm">{t!(i18n, settings.reranking.saved)}</div>
             })}
 
             // Action error
@@ -534,7 +534,7 @@ fn ProviderDetailPanel(
                     disabled=move || testing.get()
                     class="flex-1 px-4 py-2.5 bg-info text-white rounded-lg hover:bg-primary-hover disabled:opacity-50 transition-colors font-medium"
                 >
-                    {move || if testing.get() { "Testing..." } else { "Test Connection" }}
+                    {move || if testing.get() { t_string!(i18n, settings.reranking.testing).to_string() } else { t_string!(i18n, settings.reranking.test_connection).to_string() }}
                 </button>
 
                 <button
@@ -669,17 +669,17 @@ fn AddCustomProviderPanel(
                 <div class="flex items-center justify-between">
                     <div>
                         <h2 class="text-lg font-semibold text-text-primary">
-                            "Add Custom Provider"
+                            {t!(i18n, settings.reranking.add_custom)}
                         </h2>
                         <p class="text-sm text-text-tertiary mt-0.5">
-                            "Configure a custom reranking endpoint (vLLM-compatible API)"
+                            {t!(i18n, settings.reranking.custom_endpoint_desc)}
                         </p>
                     </div>
                     <button
                         on:click=move |_| on_cancel()
                         class="px-3 py-1.5 text-sm text-text-secondary hover:text-text-primary border border-border rounded-lg hover:bg-surface-raised transition-colors"
                     >
-                        "Cancel"
+                        {t!(i18n, settings.reranking.cancel)}
                     </button>
                 </div>
             </div>
@@ -689,17 +689,17 @@ fn AddCustomProviderPanel(
 
             // Provider name (optional display name)
             <div class="bg-surface-raised border border-border rounded-xl p-4 space-y-4">
-                <h3 class="text-xs font-semibold text-text-tertiary uppercase tracking-wider">"PROVIDER INFO"</h3>
+                <h3 class="text-xs font-semibold text-text-tertiary uppercase tracking-wider">{t!(i18n, settings.reranking.provider_info)}</h3>
 
                 <div>
                     <label class="block text-sm font-medium text-text-secondary mb-1">
-                        "Name"
+                        {t!(i18n, settings.reranking.name)}
                     </label>
                     <input
                         type="text"
                         value=move || name.get()
                         on:input=move |ev| name.set(event_target_value(&ev))
-                        placeholder="e.g. My Local Reranker"
+                        placeholder=move || t_string!(i18n, settings.reranking.name_placeholder).to_string()
                         class="w-full px-3 py-2 border border-border rounded bg-surface text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
                     />
                 </div>
@@ -707,17 +707,17 @@ fn AddCustomProviderPanel(
 
             // Configuration card
             <div class="bg-surface-raised border border-border rounded-xl p-4 space-y-4">
-                <h3 class="text-xs font-semibold text-text-tertiary uppercase tracking-wider">"CONFIGURATION"</h3>
+                <h3 class="text-xs font-semibold text-text-tertiary uppercase tracking-wider">{t!(i18n, settings.reranking.configuration)}</h3>
 
                 // API Key
                 <div>
                     <label class="block text-sm font-medium text-text-secondary mb-1">
-                        "API Key"
+                        {t!(i18n, settings.reranking.api_key)}
                     </label>
                     <SecretInput
                         value=Signal::derive(move || api_key.get())
                         on_change=move |v| api_key.set(v)
-                        placeholder="Enter API key (optional for local endpoints)"
+                        placeholder=t_string!(i18n, settings.reranking.api_key_optional_placeholder).to_string()
                         monospace=true
                     />
                 </div>
@@ -725,29 +725,29 @@ fn AddCustomProviderPanel(
                 // Model
                 <div>
                     <label class="block text-sm font-medium text-text-secondary mb-1">
-                        "Model"
+                        {t!(i18n, settings.reranking.model)}
                     </label>
                     <input
                         type="text"
                         value=move || form_model.get()
                         on:input=move |ev| form_model.set(event_target_value(&ev))
-                        placeholder="e.g. jina-reranker-v2-base-multilingual"
+                        placeholder=move || t_string!(i18n, settings.reranking.model_placeholder).to_string()
                         class="w-full px-3 py-2 border border-border rounded bg-surface text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
                     />
-                    <p class="text-xs text-text-tertiary mt-1">"Enter multiple models, separated by commas"</p>
+                    <p class="text-xs text-text-tertiary mt-1">{t!(i18n, settings.reranking.model_hint)}</p>
                 </div>
 
                 // API Base URL
                 <div>
                     <label class="block text-sm font-medium text-text-secondary mb-1">
-                        "Base URL"
-                        <span class="text-danger ml-1">"*"</span>
+                        {t!(i18n, settings.reranking.base_url)}
+                        <span class="text-danger ml-1">{t!(i18n, settings.reranking.base_url_required)}</span>
                     </label>
                     <input
                         type="text"
                         value=move || api_base.get()
                         on:input=move |ev| api_base.set(event_target_value(&ev))
-                        placeholder="https://api.example.com/v1"
+                        placeholder=move || t_string!(i18n, settings.reranking.base_url_custom_placeholder).to_string()
                         class="w-full px-3 py-2 border border-border rounded bg-surface text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
                     />
                 </div>
@@ -755,12 +755,12 @@ fn AddCustomProviderPanel(
 
             // Parameters card
             <div class="bg-surface-raised border border-border rounded-xl p-4 space-y-4">
-                <h3 class="text-xs font-semibold text-text-tertiary uppercase tracking-wider">"PARAMETERS"</h3>
+                <h3 class="text-xs font-semibold text-text-tertiary uppercase tracking-wider">{t!(i18n, settings.reranking.parameters)}</h3>
 
                 <div class="grid grid-cols-2 gap-4">
                     <div>
                         <label class="block text-sm font-medium text-text-secondary mb-1">
-                            "Timeout (ms)"
+                            {t!(i18n, settings.reranking.timeout_ms)}
                         </label>
                         <input
                             type="number"
@@ -777,7 +777,7 @@ fn AddCustomProviderPanel(
 
                     <div>
                         <label class="block text-sm font-medium text-text-secondary mb-1">
-                            "Rerank Weight"
+                            {t!(i18n, settings.reranking.rerank_weight)}
                         </label>
                         <input
                             type="number"
@@ -792,7 +792,7 @@ fn AddCustomProviderPanel(
                             }
                             class="w-full px-3 py-2 border border-border rounded bg-surface text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
                         />
-                        <p class="text-xs text-text-tertiary mt-1">"Blend: weight × rerank + (1-w) × original"</p>
+                        <p class="text-xs text-text-tertiary mt-1">{t!(i18n, settings.reranking.rerank_weight_hint)}</p>
                     </div>
                 </div>
             </div>
@@ -830,7 +830,7 @@ fn AddCustomProviderPanel(
                     disabled=move || testing.get()
                     class="flex-1 px-4 py-2.5 bg-info text-white rounded-lg hover:bg-primary-hover disabled:opacity-50 transition-colors font-medium"
                 >
-                    {move || if testing.get() { "Testing..." } else { "Test Connection" }}
+                    {move || if testing.get() { t_string!(i18n, settings.reranking.testing).to_string() } else { t_string!(i18n, settings.reranking.test_connection).to_string() }}
                 </button>
 
                 <button
@@ -838,7 +838,7 @@ fn AddCustomProviderPanel(
                     disabled=move || saving.get()
                     class="flex-1 px-4 py-2.5 bg-primary text-white rounded-lg hover:bg-primary-hover disabled:opacity-50 transition-colors font-medium"
                 >
-                    {move || if saving.get() { t_string!(i18n, common.saving).to_string() } else { "Add Provider".to_string() }}
+                    {move || if saving.get() { t_string!(i18n, common.saving).to_string() } else { t_string!(i18n, settings.reranking.add_provider).to_string() }}
                 </button>
             </div>
 

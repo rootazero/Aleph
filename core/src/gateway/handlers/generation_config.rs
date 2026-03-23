@@ -97,7 +97,7 @@ pub async fn handle_update(
         generation.default_video_provider = dto.default_video_provider.clone();
         generation.default_audio_provider = dto.default_audio_provider.clone();
         generation.default_speech_provider = dto.default_speech_provider.clone();
-        generation.output_dir = dto.output_dir.as_ref().map(|s| std::path::PathBuf::from(s));
+        generation.output_dir = dto.output_dir.as_ref().map(std::path::PathBuf::from);
         generation.auto_paste_threshold_mb = dto.auto_paste_threshold_mb;
         generation.background_task_threshold_seconds = dto.background_task_threshold_seconds;
         generation.smart_routing_enabled = dto.smart_routing_enabled;

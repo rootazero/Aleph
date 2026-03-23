@@ -4,42 +4,6 @@
 // that are handled entirely within the TUI (no Gateway RPC needed).
 // All other slash commands are sent to the Gateway as regular messages.
 
-/// Thinking level for LLM reasoning control.
-/// Currently unused locally (thinking is a Gateway command), but kept for tests.
-#[allow(dead_code)]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ThinkingLevel {
-    Off,
-    Low,
-    Medium,
-    High,
-}
-
-#[allow(dead_code)]
-impl ThinkingLevel {
-    /// Parse a thinking level string. Supports "off", "low", "medium"/"med", "high".
-    /// Case-insensitive. Returns None for unrecognized values.
-    pub fn parse(s: &str) -> Option<Self> {
-        match s.to_lowercase().as_str() {
-            "off" => Some(Self::Off),
-            "low" => Some(Self::Low),
-            "medium" | "med" => Some(Self::Medium),
-            "high" => Some(Self::High),
-            _ => None,
-        }
-    }
-
-    /// Return the canonical string representation of the thinking level.
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Off => "off",
-            Self::Low => "low",
-            Self::Medium => "medium",
-            Self::High => "high",
-        }
-    }
-}
-
 /// Local-only slash commands handled entirely within the TUI.
 /// All other slash commands are forwarded to Gateway as chat messages.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -106,20 +70,6 @@ pub fn parse_input(input: &str) -> ParsedInput {
 /// Return (name, description) pairs for local commands only.
 pub fn local_commands() -> Vec<(&'static str, &'static str)> {
     LOCAL_COMMAND_CATALOG.to_vec()
-}
-
-/// Filter local commands by prefix.
-#[allow(dead_code)]
-pub fn filter_local_commands(prefix: &str) -> Vec<(&'static str, &'static str)> {
-    if prefix.is_empty() {
-        return local_commands();
-    }
-    let prefix_lower = prefix.to_lowercase();
-    LOCAL_COMMAND_CATALOG
-        .iter()
-        .filter(|(name, _)| name.to_lowercase().starts_with(&prefix_lower))
-        .copied()
-        .collect()
 }
 
 #[cfg(test)]
@@ -208,38 +158,6 @@ mod tests {
     }
 
     #[test]
-    fn thinking_level_parse_and_as_str() {
-        let levels = vec![
-            ("off", ThinkingLevel::Off),
-            ("low", ThinkingLevel::Low),
-            ("medium", ThinkingLevel::Medium),
-            ("med", ThinkingLevel::Medium),
-            ("high", ThinkingLevel::High),
-        ];
-        for (input, expected) in &levels {
-            let parsed = ThinkingLevel::parse(input);
-            assert_eq!(parsed.as_ref(), Some(expected), "Failed to parse: {input}");
-        }
-        // as_str round-trip (excluding aliases)
-        for level in &[
-            ThinkingLevel::Off,
-            ThinkingLevel::Low,
-            ThinkingLevel::Medium,
-            ThinkingLevel::High,
-        ] {
-            let s = level.as_str();
-            let parsed = ThinkingLevel::parse(s).unwrap();
-            assert_eq!(&parsed, level, "Round-trip failed for: {s}");
-        }
-    }
-
-    #[test]
-    fn thinking_level_parse_invalid() {
-        assert_eq!(ThinkingLevel::parse("ultra"), None);
-        assert_eq!(ThinkingLevel::parse(""), None);
-    }
-
-    #[test]
     fn local_commands_returns_catalog() {
         let cmds = local_commands();
         assert_eq!(cmds.len(), 4);
@@ -247,17 +165,4 @@ mod tests {
         assert!(cmds.iter().any(|(name, _)| *name == "/quit"));
     }
 
-    #[test]
-    fn filter_local_commands_prefix() {
-        let results = filter_local_commands("/cl");
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].0, "/clear");
-    }
-
-    #[test]
-    fn filter_local_commands_empty_returns_all() {
-        let all = local_commands();
-        let filtered = filter_local_commands("");
-        assert_eq!(all.len(), filtered.len());
-    }
 }

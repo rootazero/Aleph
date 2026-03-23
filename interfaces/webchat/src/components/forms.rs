@@ -24,10 +24,9 @@ use leptos::prelude::*;
 #[component]
 pub fn SettingsSection(
     /// Section title
-    title: &'static str,
-    /// Optional description text
-    #[prop(optional)]
-    description: Option<&'static str>,
+    title: String,
+    /// Optional description text — pass None to omit
+    description: Option<String>,
     /// Section content
     children: Children,
 ) -> impl IntoView {
@@ -63,11 +62,10 @@ pub fn SettingsSection(
 #[component]
 pub fn FormField(
     /// Field label
-    label: &'static str,
-    /// Optional help text shown below the field
-    #[prop(optional)]
-    help_text: Option<&'static str>,
-    /// Form control element
+    label: String,
+    /// Optional help text shown below the field — pass None to omit
+    help_text: Option<String>,
+    /// Section content
     children: Children,
 ) -> impl IntoView {
     view! {
@@ -231,7 +229,7 @@ pub fn SwitchInput(
     on_change: impl Fn(bool) + 'static,
     /// Optional label
     #[prop(optional)]
-    label: Option<&'static str>,
+    label: Option<String>,
 ) -> impl IntoView {
     view! {
         <label class="flex items-center gap-3 cursor-pointer">

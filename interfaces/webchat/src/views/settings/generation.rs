@@ -80,6 +80,7 @@ pub fn GenerationView() -> impl IntoView {
 #[component]
 fn OutputDirSection(config: RwSignal<GenerationConfig>) -> impl IntoView {
     let state = expect_context::<DashboardState>();
+    let i18n = use_i18n();
     let output_dir = RwSignal::new(config.get().output_dir.clone());
     let saving = RwSignal::new(false);
     let save_error = RwSignal::new(Option::<String>::None);
@@ -115,15 +116,15 @@ fn OutputDirSection(config: RwSignal<GenerationConfig>) -> impl IntoView {
 
     view! {
         <div class="bg-surface-raised rounded-lg border border-border p-6">
-            <h2 class="text-lg font-semibold text-text-primary mb-4">"Output Directory"</h2>
+            <h2 class="text-lg font-semibold text-text-primary mb-4">{t!(i18n, settings.generation_config.output_dir)}</h2>
             <p class="text-sm text-text-tertiary mb-4">
-                "Directory where generated files (images, videos, audio) will be saved"
+                {t!(i18n, settings.generation_config.output_dir_desc)}
             </p>
 
             <div class="space-y-4">
                 <div>
                     <label class="block text-sm font-medium text-text-secondary mb-2">
-                        "Directory Path"
+                        {t!(i18n, settings.generation_config.dir_path_label)}
                     </label>
                     <input
                         type="text"
@@ -133,7 +134,7 @@ fn OutputDirSection(config: RwSignal<GenerationConfig>) -> impl IntoView {
                         class="w-full px-3 py-2 border border-border rounded focus:outline-none focus:ring-2 focus:ring-primary/30"
                     />
                     <p class="mt-1 text-xs text-text-tertiary">
-                        "Supports ~ for home directory expansion"
+                        {t!(i18n, settings.generation_config.dir_path_hint)}
                     </p>
                 </div>
 
@@ -147,7 +148,7 @@ fn OutputDirSection(config: RwSignal<GenerationConfig>) -> impl IntoView {
                     if save_success.get() {
                         Some(view! {
                             <div class="p-3 bg-success-subtle border border-success/20 rounded text-success text-sm">
-                                "Saved successfully"
+                                {t!(i18n, settings.generation_config.saved_successfully)}
                             </div>
                         })
                     } else {
@@ -170,6 +171,7 @@ fn OutputDirSection(config: RwSignal<GenerationConfig>) -> impl IntoView {
 #[component]
 fn ThresholdsSection(config: RwSignal<GenerationConfig>) -> impl IntoView {
     let state = expect_context::<DashboardState>();
+    let i18n = use_i18n();
     let auto_paste_threshold = RwSignal::new(config.get().auto_paste_threshold_mb);
     let background_task_threshold = RwSignal::new(config.get().background_task_threshold_seconds);
     let saving = RwSignal::new(false);
@@ -207,16 +209,16 @@ fn ThresholdsSection(config: RwSignal<GenerationConfig>) -> impl IntoView {
 
     view! {
         <div class="bg-surface-raised rounded-lg border border-border p-6">
-            <h2 class="text-lg font-semibold text-text-primary mb-4">"Thresholds"</h2>
+            <h2 class="text-lg font-semibold text-text-primary mb-4">{t!(i18n, settings.generation_config.thresholds)}</h2>
             <p class="text-sm text-text-tertiary mb-4">
-                "Configure automatic behavior thresholds"
+                {t!(i18n, settings.generation_config.thresholds_desc)}
             </p>
 
             <div class="space-y-6">
                 <div>
                     <div class="flex items-center justify-between mb-2">
                         <label class="block text-sm font-medium text-text-secondary">
-                            "Auto-paste threshold: " {move || auto_paste_threshold.get()} " MB"
+                            {t!(i18n, settings.generation_config.auto_paste_label)} ": " {move || auto_paste_threshold.get()} " " {t!(i18n, settings.generation_config.auto_paste_unit)}
                         </label>
                     </div>
                     <input
@@ -233,14 +235,14 @@ fn ThresholdsSection(config: RwSignal<GenerationConfig>) -> impl IntoView {
                         class="w-full h-2 bg-surface-sunken rounded-lg appearance-none cursor-pointer accent-primary"
                     />
                     <p class="mt-1 text-xs text-text-tertiary">
-                        "Files smaller than this will be auto-pasted to clipboard"
+                        {t!(i18n, settings.generation_config.auto_paste_hint)}
                     </p>
                 </div>
 
                 <div>
                     <div class="flex items-center justify-between mb-2">
                         <label class="block text-sm font-medium text-text-secondary">
-                            "Background task threshold: " {move || background_task_threshold.get()} " seconds"
+                            {t!(i18n, settings.generation_config.bg_threshold_label)} ": " {move || background_task_threshold.get()} " " {t!(i18n, settings.generation_config.bg_threshold_unit)}
                         </label>
                     </div>
                     <input
@@ -257,7 +259,7 @@ fn ThresholdsSection(config: RwSignal<GenerationConfig>) -> impl IntoView {
                         class="w-full h-2 bg-surface-sunken rounded-lg appearance-none cursor-pointer accent-primary"
                     />
                     <p class="mt-1 text-xs text-text-tertiary">
-                        "Tasks longer than this will run in background"
+                        {t!(i18n, settings.generation_config.bg_threshold_hint)}
                     </p>
                 </div>
 
@@ -271,7 +273,7 @@ fn ThresholdsSection(config: RwSignal<GenerationConfig>) -> impl IntoView {
                     if save_success.get() {
                         Some(view! {
                             <div class="p-3 bg-success-subtle border border-success/20 rounded text-success text-sm">
-                                "Saved successfully"
+                                {t!(i18n, settings.generation_config.saved_successfully)}
                             </div>
                         })
                     } else {
@@ -294,6 +296,7 @@ fn ThresholdsSection(config: RwSignal<GenerationConfig>) -> impl IntoView {
 #[component]
 fn SmartRoutingSection(config: RwSignal<GenerationConfig>) -> impl IntoView {
     let state = expect_context::<DashboardState>();
+    let i18n = use_i18n();
     let smart_routing = RwSignal::new(config.get().smart_routing_enabled);
     let saving = RwSignal::new(false);
     let save_error = RwSignal::new(Option::<String>::None);
@@ -329,9 +332,9 @@ fn SmartRoutingSection(config: RwSignal<GenerationConfig>) -> impl IntoView {
 
     view! {
         <div class="bg-surface-raised rounded-lg border border-border p-6">
-            <h2 class="text-lg font-semibold text-text-primary mb-4">"Smart Routing"</h2>
+            <h2 class="text-lg font-semibold text-text-primary mb-4">{t!(i18n, settings.generation_config.smart_routing)}</h2>
             <p class="text-sm text-text-tertiary mb-4">
-                "Automatically select the best provider based on generation type and capabilities"
+                {t!(i18n, settings.generation_config.smart_routing_desc)}
             </p>
 
             <div class="space-y-4">
@@ -343,9 +346,9 @@ fn SmartRoutingSection(config: RwSignal<GenerationConfig>) -> impl IntoView {
                         class="w-4 h-4 text-primary focus:ring-primary/30 rounded"
                     />
                     <div>
-                        <div class="font-medium text-text-primary">"Enable Smart Routing"</div>
+                        <div class="font-medium text-text-primary">{t!(i18n, settings.generation_config.enable_smart_routing)}</div>
                         <div class="text-sm text-text-tertiary">
-                            "Automatically route requests to the most suitable provider"
+                            {t!(i18n, settings.generation_config.smart_routing_hint)}
                         </div>
                     </div>
                 </label>
@@ -360,7 +363,7 @@ fn SmartRoutingSection(config: RwSignal<GenerationConfig>) -> impl IntoView {
                     if save_success.get() {
                         Some(view! {
                             <div class="p-3 bg-success-subtle border border-success/20 rounded text-success text-sm">
-                                "Saved successfully"
+                                {t!(i18n, settings.generation_config.saved_successfully)}
                             </div>
                         })
                     } else {

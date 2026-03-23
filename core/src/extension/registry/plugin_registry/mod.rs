@@ -168,9 +168,7 @@ impl PluginRegistry {
         }
 
         // Register under short name for backward compat (first-come wins)
-        if !self.tools.contains_key(&short_key) {
-            self.tools.insert(short_key, tool.clone());
-        }
+        self.tools.entry(short_key).or_insert_with(|| tool.clone());
         // Always register under namespaced key
         self.tools.insert(namespaced_key, tool);
     }
@@ -413,9 +411,7 @@ impl PluginRegistry {
         let short_key = command.name.clone();
 
         // Register under short name for backward compat (first-come wins)
-        if !self.commands.contains_key(&short_key) {
-            self.commands.insert(short_key, command.clone());
-        }
+        self.commands.entry(short_key).or_insert_with(|| command.clone());
         // Always register under namespaced key
         self.commands.insert(namespaced_key, command);
     }

@@ -199,18 +199,6 @@ impl OllamaProvider {
         })
     }
 
-    /// Check if the model supports vision
-    ///
-    /// Vision-capable models include llava, bakllava, and similar.
-    #[allow(dead_code)]
-    fn is_vision_model(&self) -> bool {
-        let model_lower = self.model.to_lowercase();
-        model_lower.contains("llava")
-            || model_lower.contains("bakllava")
-            || model_lower.contains("vision")
-            || model_lower.contains("moondream")
-    }
-
     /// Build generate options from config
     fn build_options(&self) -> Option<GenerateOptions> {
         if self.config.temperature.is_some()
@@ -239,64 +227,6 @@ impl OllamaProvider {
         }
     }
 
-    /// Build request with images for vision generation
-    #[allow(dead_code)]
-    fn build_multimodal_request(
-        &self,
-        input: &str,
-        attachments: &[crate::core::MediaAttachment],
-        system_prompt: Option<&str>,
-    ) -> GenerateRequest {
-        // Separate images and documents
-        let images: Vec<String> = attachments
-            .iter()
-            .filter(|a| a.media_type == "image")
-            .map(|a| a.data.clone()) // Already base64 encoded
-            .collect();
-
-        let documents: Vec<_> = attachments
-            .iter()
-            .filter(|a| a.media_type == "document")
-            .collect();
-
-        // Build document context (prepend to user input)
-        let doc_context = if !documents.is_empty() {
-            documents
-                .iter()
-                .map(|d| {
-                    let name = d.filename.as_deref().unwrap_or("document");
-                    format!("--- {} ---\n{}", name, d.data)
-                })
-                .collect::<Vec<_>>()
-                .join("\n\n")
-        } else {
-            String::new()
-        };
-
-        // Build final input with document context
-        let full_input = if doc_context.is_empty() {
-            input.to_string()
-        } else {
-            format!("{}\n\n{}", doc_context, input)
-        };
-
-        GenerateRequest {
-            model: self.model.clone(),
-            prompt: if full_input.is_empty() {
-                "Describe this image in detail.".to_string()
-            } else {
-                full_input
-            },
-            system: system_prompt.map(|s| s.to_string()),
-            images: if images.is_empty() {
-                None
-            } else {
-                Some(images)
-            },
-            stream: false,
-            options: self.build_options(),
-        }
-    }
 
     /// Handle error response from Ollama
     async fn handle_error(&self, response: reqwest::Response) -> AlephError {
@@ -463,23 +393,6 @@ mod tests {
         config.base_url = Some("http://192.168.1.100:11434".to_string());
         let provider = OllamaProvider::new("ollama".to_string(), config).unwrap();
         assert_eq!(provider.endpoint, "http://192.168.1.100:11434/api/generate");
-    }
-
-    #[test]
-    fn test_is_vision_model() {
-        let config = create_test_config();
-        let provider = OllamaProvider::new("ollama".to_string(), config).unwrap();
-        assert!(!provider.is_vision_model());
-
-        let mut vision_config = create_test_config();
-        vision_config.models = vec!["llava".to_string()];
-        let vision_provider = OllamaProvider::new("ollama".to_string(), vision_config).unwrap();
-        assert!(vision_provider.is_vision_model());
-
-        let mut bak_config = create_test_config();
-        bak_config.models = vec!["bakllava:latest".to_string()];
-        let bak_provider = OllamaProvider::new("ollama".to_string(), bak_config).unwrap();
-        assert!(bak_provider.is_vision_model());
     }
 
     #[test]

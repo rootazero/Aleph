@@ -57,6 +57,12 @@ pub struct ChatState {
     next_msg_id: RwSignal<u64>,
 }
 
+impl Default for ChatState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ChatState {
     pub fn new() -> Self {
         Self {

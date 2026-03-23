@@ -170,7 +170,7 @@ pub fn SearchView() -> impl IntoView {
                                 <line x1="12" y1="16" x2="12" y2="12"/>
                                 <line x1="12" y1="8" x2="12.01" y2="8"/>
                             </svg>
-                            "Gateway not available — showing presets only"
+                            {t!(i18n, settings.search.gateway_unavailable)}
                         </div>
                     })}
 
@@ -189,7 +189,7 @@ pub fn SearchView() -> impl IntoView {
                             }
                             class="w-full px-4 py-3 border-2 border-dashed border-border rounded-lg text-text-secondary hover:border-primary hover:text-primary transition-colors"
                         >
-                            "+ Add Custom Provider"
+                            {t!(i18n, settings.search.add_custom)}
                         </button>
                     </div>
 
@@ -232,10 +232,11 @@ fn PresetGrid(
     selected: RwSignal<Option<String>>,
     show_add_form: RwSignal<bool>,
 ) -> impl IntoView {
+    let i18n = use_i18n();
     view! {
         <div>
             <h2 class="text-sm font-medium text-text-secondary uppercase tracking-wider mb-3">
-                "Search Providers"
+                {t!(i18n, settings.search.providers_section)}
             </h2>
             <div class="grid grid-cols-1 gap-2">
                 {PRESETS.iter().map(|preset| {
@@ -327,6 +328,7 @@ fn CustomSearchProvidersList(
     selected: RwSignal<Option<String>>,
     show_add_form: RwSignal<bool>,
 ) -> impl IntoView {
+    let i18n = use_i18n();
     let preset_names: Vec<&str> = PRESETS.iter().map(|p| p.name).collect();
 
     view! {
@@ -342,7 +344,7 @@ fn CustomSearchProvidersList(
                 view! {
                     <div>
                         <h2 class="text-sm font-medium text-text-secondary uppercase tracking-wider mb-3">
-                            "Custom Providers"
+                            {t!(i18n, settings.search.custom_providers)}
                         </h2>
                         <div class="grid grid-cols-1 gap-2">
                             {custom.into_iter().map(|backend| {
@@ -398,7 +400,7 @@ fn CustomSearchProvidersList(
                                                     }}
                                                 </div>
                                                 <div class="text-xs text-text-tertiary truncate">
-                                                    "Custom search provider"
+                                                    {t!(i18n, settings.search.custom_search_provider)}
                                                 </div>
                                             </div>
                                         </div>
@@ -426,7 +428,7 @@ fn GlobalSettings(
     view! {
         <div>
             <h2 class="text-sm font-medium text-text-secondary uppercase tracking-wider mb-3">
-                "Search Settings"
+                {t!(i18n, settings.search.global_settings)}
             </h2>
             {move || {
                 if loading.get() {
@@ -444,8 +446,8 @@ fn GlobalSettings(
                         <div class="bg-surface-raised rounded-lg border border-border p-4 space-y-3">
                             <div class="flex items-center justify-between">
                                 <div>
-                                    <div class="text-sm font-medium text-text-primary">"Web Search"</div>
-                                    <div class="text-xs text-text-tertiary">"Allow AI to search the web for information"</div>
+                                    <div class="text-sm font-medium text-text-primary">{t!(i18n, settings.search.web_search)}</div>
+                                    <div class="text-xs text-text-tertiary">{t!(i18n, settings.search.web_search_desc)}</div>
                                 </div>
                                 <div class=move || {
                                     if config.get().enabled {
@@ -454,7 +456,7 @@ fn GlobalSettings(
                                         "px-2 py-0.5 bg-surface-sunken text-text-tertiary text-xs font-medium rounded"
                                     }
                                 }>
-                                    {move || if config.get().enabled { "Enabled" } else { "Disabled" }}
+                                    {move || if config.get().enabled { t_string!(i18n, settings.search.enabled).to_string() } else { t_string!(i18n, settings.search.disabled).to_string() }}
                                 </div>
                             </div>
 
@@ -713,7 +715,7 @@ fn ProviderDetailPanel(
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
                                     d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
                             </svg>
-                            <span class="text-sm">"Select a search provider to configure"</span>
+                            <span class="text-sm">{t!(i18n, settings.search.select_to_configure)}</span>
                         </div>
                     }.into_any();
                 }
@@ -791,19 +793,19 @@ fn ProviderDetailPanel(
 
                                 view! {
                                     <div class="bg-surface-raised border border-border rounded-xl p-4 space-y-4">
-                                        <h3 class="text-xs font-medium text-text-secondary uppercase tracking-wider">"Provider Configuration"</h3>
+                                        <h3 class="text-xs font-medium text-text-secondary uppercase tracking-wider">{t!(i18n, settings.search.provider_config)}</h3>
 
                                         // API Key
                                         {if needs_api_key {
                                             view! {
                                                 <div>
                                                     <label class="block text-sm font-medium text-text-secondary mb-1">
-                                                        "API Key"
+                                                        {t!(i18n, settings.search.api_key)}
                                                     </label>
                                                     <SecretInput
                                                         value=Signal::derive(move || form_api_key.get())
                                                         on_change=move |v| form_api_key.set(v)
-                                                        placeholder=placeholder
+                                                        placeholder=placeholder.to_string()
                                                         monospace=true
                                                     />
                                                 </div>
@@ -814,7 +816,7 @@ fn ProviderDetailPanel(
                                                     <svg class="w-4 h-4 text-success" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
                                                     </svg>
-                                                    "No API key required"
+                                                    {t!(i18n, settings.search.no_api_key)}
                                                 </div>
                                             }.into_any()
                                         }}
@@ -822,7 +824,7 @@ fn ProviderDetailPanel(
                                         // Base URL
                                         <div>
                                             <label class="block text-sm font-medium text-text-secondary mb-1">
-                                                "Base URL"
+                                                {t!(i18n, settings.search.base_url)}
                                             </label>
                                             <input
                                                 type="text"
@@ -834,7 +836,7 @@ fn ProviderDetailPanel(
                                             {if is_self_hosted {
                                                 view! {
                                                     <p class="mt-1 text-xs text-text-tertiary">
-                                                        "URL of your self-hosted instance"
+                                                        {t!(i18n, settings.search.base_url_hint_self_hosted)}
                                                     </p>
                                                 }.into_any()
                                             } else {
@@ -851,7 +853,7 @@ fn ProviderDetailPanel(
                                             view! {
                                                 <div>
                                                     <label class="block text-sm font-medium text-text-secondary mb-1">
-                                                        "Search Engine ID"
+                                                        {t!(i18n, settings.search.engine_id)}
                                                     </label>
                                                     <input
                                                         type="text"
@@ -861,7 +863,7 @@ fn ProviderDetailPanel(
                                                         class="w-full px-3 py-2 border border-border rounded-lg bg-surface text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 font-mono"
                                                     />
                                                     <p class="mt-1 text-xs text-text-tertiary">
-                                                        "Required for Google Custom Search"
+                                                        {t!(i18n, settings.search.engine_id_hint)}
                                                     </p>
                                                 </div>
                                             }.into_any()
@@ -873,8 +875,8 @@ fn ProviderDetailPanel(
                                         {if is_self_hosted {
                                             view! {
                                                 <div class="flex items-center gap-2">
-                                                    <span class="px-2 py-0.5 bg-info-subtle text-info text-xs font-medium rounded">"Self-hosted"</span>
-                                                    <span class="text-xs text-text-tertiary">"Runs on your infrastructure"</span>
+                                                    <span class="px-2 py-0.5 bg-info-subtle text-info text-xs font-medium rounded">{t!(i18n, settings.search.self_hosted)}</span>
+                                                    <span class="text-xs text-text-tertiary">{t!(i18n, settings.search.self_hosted_desc)}</span>
                                                 </div>
                                             }.into_any()
                                         } else {
@@ -893,7 +895,7 @@ fn ProviderDetailPanel(
 
                             // Search Settings
                             <div class="bg-surface-raised border border-border rounded-xl p-4 space-y-5">
-                                <h3 class="text-xs font-medium text-text-secondary uppercase tracking-wider">"Search Settings"</h3>
+                                <h3 class="text-xs font-medium text-text-secondary uppercase tracking-wider">{t!(i18n, settings.search.settings_section)}</h3>
 
                                 // Enabled
                                 <label class="flex items-center gap-3 cursor-pointer">
@@ -904,15 +906,15 @@ fn ProviderDetailPanel(
                                         class="w-4 h-4 rounded"
                                     />
                                     <div>
-                                        <span class="text-sm text-text-primary">"Enable Search"</span>
-                                        <p class="text-xs text-text-tertiary">"Allow AI to search the web for information"</p>
+                                        <span class="text-sm text-text-primary">{t!(i18n, settings.search.enable_search)}</span>
+                                        <p class="text-xs text-text-tertiary">{t!(i18n, settings.search.enable_search_desc)}</p>
                                     </div>
                                 </label>
 
                                 // Max Results
                                 <div>
                                     <div class="flex items-center justify-between mb-2">
-                                        <label class="text-sm text-text-secondary">"Max Results"</label>
+                                        <label class="text-sm text-text-secondary">{t!(i18n, settings.search.max_results)}</label>
                                         <span class="text-sm text-text-primary font-mono">{move || form_max_results.get()}</span>
                                     </div>
                                     <input
@@ -937,7 +939,7 @@ fn ProviderDetailPanel(
                                 // Timeout
                                 <div>
                                     <div class="flex items-center justify-between mb-2">
-                                        <label class="text-sm text-text-secondary">"Timeout"</label>
+                                        <label class="text-sm text-text-secondary">{t!(i18n, settings.search.timeout)}</label>
                                         <span class="text-sm text-text-primary font-mono">{move || form_timeout.get()} "s"</span>
                                     </div>
                                     <input
@@ -1001,7 +1003,7 @@ fn ProviderDetailPanel(
                                         prop:disabled=move || testing.get()
                                         class="flex-1 px-4 py-2.5 bg-info text-white rounded-lg hover:bg-primary-hover disabled:opacity-50 transition-colors font-medium text-sm"
                                     >
-                                        {move || if testing.get() { "Testing..." } else { "Test Connection" }}
+                                        {move || if testing.get() { t_string!(i18n, settings.search.testing).to_string() } else { t_string!(i18n, settings.search.test_connection).to_string() }}
                                     </button>
 
                                     <button
@@ -1025,7 +1027,7 @@ fn ProviderDetailPanel(
                                                             prop:disabled=move || saving.get()
                                                             class="flex-1 px-4 py-2.5 bg-success-subtle border border-success/20 text-success text-sm font-medium rounded-lg hover:bg-success-subtle/80 disabled:opacity-50"
                                                         >
-                                                            "Set as Default"
+                                                            {t!(i18n, settings.search.set_as_default)}
                                                         </button>
                                                     })
                                                 } else {
@@ -1038,7 +1040,7 @@ fn ProviderDetailPanel(
                                                             prop:disabled=move || deleting.get()
                                                             class="flex-1 px-4 py-2.5 bg-danger-subtle border border-danger/20 text-danger text-sm font-medium rounded-lg hover:bg-danger-subtle/80 disabled:opacity-50"
                                                         >
-                                                            {move || if deleting.get() { "Deleting..." } else { "Delete" }}
+                                                            {move || if deleting.get() { t_string!(i18n, settings.search.deleting).to_string() } else { t_string!(i18n, common.delete).to_string() }}
                                                         </button>
                                                     })
                                                 } else {
@@ -1070,6 +1072,7 @@ fn AddCustomSearchProviderPanel(
     on_cancel: impl Fn() + 'static + Copy,
 ) -> impl IntoView {
     let state = expect_context::<DashboardState>();
+    let i18n = use_i18n();
 
     let form_name = RwSignal::new(String::new());
     let form_api_key = RwSignal::new(String::new());
@@ -1126,12 +1129,12 @@ fn AddCustomSearchProviderPanel(
             // Header
             <div class="px-6 py-4 border-b border-border">
                 <div class="flex items-center justify-between">
-                    <h2 class="text-xl font-semibold text-text-primary">"Add Custom Provider"</h2>
+                    <h2 class="text-xl font-semibold text-text-primary">{t!(i18n, settings.search.add_custom_provider)}</h2>
                     <button
                         on:click=move |_| on_cancel()
                         class="text-text-tertiary hover:text-text-primary transition-colors"
                     >
-                        "Cancel"
+                        {t!(i18n, common.cancel)}
                     </button>
                 </div>
             </div>
@@ -1143,11 +1146,11 @@ fn AddCustomSearchProviderPanel(
                 })}
 
                 <div class="bg-surface-raised border border-border rounded-xl p-4 space-y-4">
-                    <h3 class="text-xs font-medium text-text-secondary uppercase tracking-wider">"Provider Details"</h3>
+                    <h3 class="text-xs font-medium text-text-secondary uppercase tracking-wider">{t!(i18n, settings.search.provider_details)}</h3>
 
                     // Provider Name
                     <div>
-                        <label class="block text-sm font-medium text-text-secondary mb-1">"Provider Name"</label>
+                        <label class="block text-sm font-medium text-text-secondary mb-1">{t!(i18n, settings.search.provider_name)}</label>
                         <input
                             type="text"
                             prop:value=move || form_name.get()
@@ -1159,18 +1162,18 @@ fn AddCustomSearchProviderPanel(
 
                     // API Key
                     <div>
-                        <label class="block text-sm font-medium text-text-secondary mb-1">"API Key"</label>
+                        <label class="block text-sm font-medium text-text-secondary mb-1">{t!(i18n, settings.search.api_key)}</label>
                         <SecretInput
                             value=Signal::derive(move || form_api_key.get())
                             on_change=move |v| form_api_key.set(v)
-                            placeholder="Optional — leave empty if not required"
+                            placeholder=t_string!(i18n, settings.search.optional_api_key).to_string()
                             monospace=true
                         />
                     </div>
 
                     // Base URL
                     <div>
-                        <label class="block text-sm font-medium text-text-secondary mb-1">"Base URL"</label>
+                        <label class="block text-sm font-medium text-text-secondary mb-1">{t!(i18n, settings.search.base_url)}</label>
                         <input
                             type="text"
                             prop:value=move || form_base_url.get()
@@ -1182,7 +1185,7 @@ fn AddCustomSearchProviderPanel(
 
                     // Engine ID
                     <div>
-                        <label class="block text-sm font-medium text-text-secondary mb-1">"Engine ID"</label>
+                        <label class="block text-sm font-medium text-text-secondary mb-1">{t!(i18n, settings.search.engine_id)}</label>
                         <input
                             type="text"
                             prop:value=move || form_engine_id.get()
@@ -1199,7 +1202,7 @@ fn AddCustomSearchProviderPanel(
                     prop:disabled=move || saving.get() || form_name.get().trim().is_empty()
                     class="w-full px-4 py-2.5 bg-primary hover:bg-primary-hover disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors"
                 >
-                    {move || if saving.get() { "Adding..." } else { "Add Provider" }}
+                    {move || if saving.get() { t_string!(i18n, settings.search.adding).to_string() } else { t_string!(i18n, settings.search.add_provider).to_string() }}
                 </button>
             </div>
         </div>

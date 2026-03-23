@@ -211,7 +211,7 @@ pub async fn handle_plugin_install(source: &str, scope: &str) -> Result<(), Box<
             .collect();
 
         let manager = MarketplaceManager::new(marketplace_configs, None);
-        let plugin_scope = parse_scope(scope).map_err(|e| e)?;
+        let plugin_scope = parse_scope(scope)?;
 
         println!("Searching for plugin '{}'...", source);
         match manager.install_to_scope(source, None, plugin_scope, None) {
@@ -256,7 +256,7 @@ pub async fn handle_marketplace_command(action: MarketplaceAction) -> Result<(),
         MarketplaceAction::List => {
             let marketplaces = manager.list();
             println!("Registered marketplaces:");
-            println!("{:<25} {:<15} {}", "NAME", "TYPE", "SOURCE");
+            println!("{:<25} {:<15} SOURCE", "NAME", "TYPE");
             println!("{}", "-".repeat(70));
             for (name, cfg) in &marketplaces {
                 let type_str = match cfg.source_type {
@@ -326,7 +326,7 @@ pub async fn handle_marketplace_command(action: MarketplaceAction) -> Result<(),
             }
         }
         MarketplaceAction::Remove { name } => {
-            manager.remove(&name).map_err(|e| e)?;
+            manager.remove(&name)?;
 
             // Save to config
             let mut config = Config::load()?;

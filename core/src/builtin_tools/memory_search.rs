@@ -99,8 +99,8 @@ pub struct PathCluster {
 fn extract_depth_from_path(path: &str) -> u32 {
     // Look for a segment matching "dN" after the path prefix
     for segment in path.split('/') {
-        if segment.starts_with('d') {
-            if let Ok(n) = segment[1..].parse::<u32>() {
+        if let Some(rest) = segment.strip_prefix('d') {
+            if let Ok(n) = rest.parse::<u32>() {
                 return n;
             }
         }

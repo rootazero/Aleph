@@ -82,7 +82,7 @@ impl CommandEntry {
             .iter()
             .map(|e| {
                 let label = if e.is_namespace {
-                    format!("{}", e.name)
+                    e.name.to_string()
                 } else if let Some(ref ph) = e.param_hint {
                     format!("{} {}", e.name, ph)
                 } else {

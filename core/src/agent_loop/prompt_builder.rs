@@ -202,8 +202,8 @@ impl PromptBuilder {
                 .iter()
                 .filter(|s| match *s.scope() {
                     PromptScope::System => true,
-                    PromptScope::Tool => s.bound_tool().map_or(false, |bound| {
-                        active_tool_names.iter().any(|t| *t == bound)
+                    PromptScope::Tool => s.bound_tool().is_some_and(|bound| {
+                        active_tool_names.contains(&bound)
                     }),
                     PromptScope::Standalone | PromptScope::Disabled => false,
                 })

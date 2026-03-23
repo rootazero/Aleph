@@ -88,7 +88,7 @@ impl DiscoveryConfig {
             crate::extension::scope::scope_dirs_by_priority(project_dir, agent_id);
         // Prepend so scope dirs take priority over any existing extra_paths.
         let mut new_extra = scope_dirs.into_iter().map(|(_, p)| p).collect::<Vec<_>>();
-        new_extra.extend(self.extra_paths.drain(..));
+        new_extra.append(&mut self.extra_paths);
         self.extra_paths = new_extra;
     }
 }

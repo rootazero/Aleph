@@ -392,11 +392,11 @@ impl BuiltinToolRegistry {
             session_new_tool: config.gateway_context.as_ref()
                 .map(|ctx| Arc::clone(ctx.session_manager()))
                 .or_else(|| config.session_manager.clone())
-                .map(|sm| crate::builtin_tools::sessions::SessionNewTool::new(sm)),
+                .map(crate::builtin_tools::sessions::SessionNewTool::new),
             session_set_topic_tool: config.gateway_context.as_ref()
                 .map(|ctx| Arc::clone(ctx.session_manager()))
                 .or_else(|| config.session_manager.clone())
-                .map(|sm| crate::builtin_tools::sessions::SessionSetTopicTool::new(sm)),
+                .map(crate::builtin_tools::sessions::SessionSetTopicTool::new),
             cron_manage_tool: config.cron_service.as_ref().map(|svc| {
                 crate::builtin_tools::cron_manage::CronManageTool::new(Arc::clone(svc))
             }),

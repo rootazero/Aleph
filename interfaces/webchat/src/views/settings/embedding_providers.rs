@@ -82,7 +82,7 @@ pub fn EmbeddingProvidersView() -> impl IntoView {
                         if is_loading.get() {
                             view! {
                                 <div class="flex items-center justify-center py-12">
-                                    <div class="text-text-tertiary">"Loading embedding providers..."</div>
+                                    <div class="text-text-tertiary">{t!(i18n, settings.embedding.loading)}</div>
                                 </div>
                             }.into_any()
                         } else if let Some(error) = error_message.get() {
@@ -97,7 +97,7 @@ pub fn EmbeddingProvidersView() -> impl IntoView {
                                     // Preset Grid
                                     <div>
                                         <h2 class="text-sm font-medium text-text-secondary uppercase tracking-wider mb-3">
-                                            "Embedding Providers"
+                                            {t!(i18n, settings.embedding.providers_section)}
                                         </h2>
                                         <div class="grid grid-cols-1 gap-2">
                                             {move || {
@@ -236,7 +236,7 @@ pub fn EmbeddingProvidersView() -> impl IntoView {
                                             view! {
                                                 <div class="pt-2">
                                                     <h2 class="text-sm font-medium text-text-secondary uppercase tracking-wider mb-3">
-                                                        "Custom Providers"
+                                                        {t!(i18n, settings.embedding.custom_providers)}
                                                     </h2>
                                                     <div class="grid grid-cols-1 gap-2">
                                                         {custom_providers.into_iter().map(|cp| {
@@ -317,7 +317,7 @@ pub fn EmbeddingProvidersView() -> impl IntoView {
                                             }
                                             class="w-full px-4 py-3 border-2 border-dashed border-border rounded-lg text-text-secondary hover:border-primary hover:text-primary transition-colors"
                                         >
-                                            "+ Add Custom Provider"
+                                            {t!(i18n, settings.embedding.add_custom)}
                                         </button>
                                     </div>
                                 </div>
@@ -367,11 +367,12 @@ pub fn EmbeddingProvidersView() -> impl IntoView {
 
 #[component]
 fn EmptyState() -> impl IntoView {
+    let i18n = use_i18n();
     view! {
         <div class="flex items-center justify-center h-full">
             <div class="text-center text-text-secondary">
-                <p class="text-lg">"Select a provider to view details"</p>
-                <p class="text-sm text-text-tertiary mt-1">"or add a new embedding provider"</p>
+                <p class="text-lg">{t!(i18n, settings.embedding.select_to_view)}</p>
+                <p class="text-sm text-text-tertiary mt-1">{t!(i18n, settings.embedding.add_new)}</p>
             </div>
         </div>
     }
@@ -574,17 +575,17 @@ fn ProviderDetailPanel(
 
             // Configuration card
             <div class="bg-surface-raised border border-border rounded-xl p-4 space-y-4">
-                <h3 class="text-xs font-semibold text-text-tertiary uppercase tracking-wider">"CONFIGURATION"</h3>
+                <h3 class="text-xs font-semibold text-text-tertiary uppercase tracking-wider">{t!(i18n, settings.embedding.configuration)}</h3>
 
                 // API Key
                 <div>
                     <label class="block text-sm font-medium text-text-secondary mb-1">
-                        "API Key"
+                        {t!(i18n, settings.embedding.api_key)}
                     </label>
                     <SecretInput
                         value=Signal::derive(move || api_key.get())
                         on_change=move |v| api_key.set(v)
-                        placeholder="Enter API key (leave blank to use env var)"
+                        placeholder=t_string!(i18n, settings.embedding.api_key_placeholder).to_string()
                         monospace=true
                     />
                     {provider_api_key_env.clone().map(|env_var| view! {
@@ -597,7 +598,7 @@ fn ProviderDetailPanel(
                 // Model
                 <div>
                     <label class="block text-sm font-medium text-text-secondary mb-1">
-                        "Model"
+                        {t!(i18n, settings.embedding.model)}
                     </label>
                     <input
                         type="text"
@@ -606,13 +607,13 @@ fn ProviderDetailPanel(
                         placeholder="e.g. text-embedding-3-small"
                         class="w-full px-3 py-2 border border-border rounded bg-surface text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
                     />
-                    <p class="mt-1 text-xs text-text-tertiary">"Enter multiple models, separated by commas"</p>
+                    <p class="mt-1 text-xs text-text-tertiary">{t!(i18n, settings.embedding.model_hint)}</p>
                 </div>
 
                 // API Base URL
                 <div>
                     <label class="block text-sm font-medium text-text-secondary mb-1">
-                        "Base URL"
+                        {t!(i18n, settings.embedding.base_url)}
                     </label>
                     <input
                         type="text"
@@ -634,7 +635,7 @@ fn ProviderDetailPanel(
                 // Dimensions
                 <div>
                     <label class="block text-sm font-medium text-text-secondary mb-1">
-                        "Dimensions"
+                        {t!(i18n, settings.embedding.dimensions)}
                     </label>
                     <input
                         type="number"
@@ -657,8 +658,8 @@ fn ProviderDetailPanel(
                         class="w-4 h-4 rounded"
                     />
                     <div>
-                        <span class="text-sm text-text-primary">"Enabled"</span>
-                        <p class="text-xs text-text-tertiary">"Include this provider in the available providers list"</p>
+                        <span class="text-sm text-text-primary">{t!(i18n, settings.embedding.enabled)}</span>
+                        <p class="text-xs text-text-tertiary">{t!(i18n, settings.embedding.enabled_desc)}</p>
                     </div>
                 </label>
             </div>
@@ -701,7 +702,7 @@ fn ProviderDetailPanel(
                     disabled=move || testing.get()
                     class="flex-1 px-4 py-2.5 bg-info text-white rounded-lg hover:bg-primary-hover disabled:opacity-50 transition-colors font-medium"
                 >
-                    {move || if testing.get() { "Testing..." } else { "Test Connection" }}
+                    {move || if testing.get() { t_string!(i18n, settings.embedding.testing).to_string() } else { t_string!(i18n, settings.embedding.test_connection).to_string() }}
                 </button>
 
                 <button
@@ -724,7 +725,7 @@ fn ProviderDetailPanel(
                                     disabled=move || activating.get()
                                     class="flex-1 px-4 py-2.5 bg-success-subtle border border-success/20 text-success rounded-lg hover:bg-success-subtle/80 disabled:opacity-50 transition-colors font-medium"
                                 >
-                                    {move || if activating.get() { "Setting default..." } else { "Set as Default" }}
+                                    {move || if activating.get() { t_string!(i18n, settings.embedding.setting_default).to_string() } else { t_string!(i18n, settings.embedding.set_as_default).to_string() }}
                                 </button>
                             })
                         } else {
@@ -737,7 +738,7 @@ fn ProviderDetailPanel(
                                     disabled=move || deleting.get()
                                     class="flex-1 px-4 py-2.5 bg-danger-subtle border border-danger/20 text-danger rounded-lg hover:bg-danger-subtle/80 disabled:opacity-50 transition-colors font-medium"
                                 >
-                                    {move || if deleting.get() { "Deleting..." } else { "Delete" }}
+                                    {move || if deleting.get() { t_string!(i18n, settings.embedding.deleting).to_string() } else { t_string!(i18n, common.delete).to_string() }}
                                 </button>
                             })
                         } else {
@@ -764,6 +765,7 @@ fn ProviderDetailPanel(
 #[component]
 fn ReembedMigrationCard() -> impl IntoView {
     let state = expect_context::<DashboardState>();
+    let i18n = use_i18n();
 
     let (migrating, set_migrating) = signal(false);
     let (progress_phase, set_progress_phase) = signal(String::new());
@@ -856,10 +858,10 @@ fn ReembedMigrationCard() -> impl IntoView {
     view! {
         <div class="bg-surface-raised border border-border rounded-xl p-4 space-y-3">
             <h3 class="text-xs font-semibold text-text-tertiary uppercase tracking-wider">
-                "VECTOR DATA MIGRATION"
+                {t!(i18n, settings.embedding.reembed)}
             </h3>
             <p class="text-sm text-text-secondary">
-                "Re-embed all existing data with the current provider after switching embedding providers."
+                {t!(i18n, settings.embedding.reembed_desc)}
             </p>
 
             // Progress bar (shown during migration)
@@ -916,7 +918,7 @@ fn ReembedMigrationCard() -> impl IntoView {
                     disabled=move || migrating.get()
                     class="flex-1 px-4 py-2.5 bg-warning text-white rounded-lg hover:bg-warning/90 disabled:opacity-50 transition-colors font-medium text-sm"
                 >
-                    {move || if migrating.get() { "Migrating..." } else { "Migrate to Current Provider" }}
+                    {move || if migrating.get() { t_string!(i18n, settings.embedding.migrating).to_string() } else { t_string!(i18n, settings.embedding.migrate).to_string() }}
                 </button>
                 {move || {
                     if migrating.get() {
@@ -947,6 +949,7 @@ fn AddProviderPanel(
     on_cancel: impl Fn() + 'static + Copy + Send,
 ) -> impl IntoView {
     let state = expect_context::<DashboardState>();
+    let i18n = use_i18n();
 
     // Form state — custom provider only
     let id = RwSignal::new(String::new());
@@ -1035,12 +1038,12 @@ fn AddProviderPanel(
             // Fixed header
             <div class="px-6 py-4 border-b border-border">
                 <div class="flex items-center justify-between">
-                    <h2 class="text-xl font-semibold text-text-primary">"Add Custom Provider"</h2>
+                    <h2 class="text-xl font-semibold text-text-primary">{t!(i18n, settings.embedding.add_custom_provider)}</h2>
                     <button
                         on:click=move |_| on_cancel()
                         class="text-text-tertiary hover:text-text-primary transition-colors"
                     >
-                        "Cancel"
+                        {t!(i18n, common.cancel)}
                     </button>
                 </div>
             </div>
@@ -1050,10 +1053,10 @@ fn AddProviderPanel(
 
             // Form fields
             <div class="bg-surface-raised border border-border rounded-xl p-4 space-y-4">
-                <h3 class="text-xs font-semibold text-text-tertiary uppercase tracking-wider">"CONFIGURATION"</h3>
+                <h3 class="text-xs font-semibold text-text-tertiary uppercase tracking-wider">{t!(i18n, settings.embedding.configuration)}</h3>
                 // ID
                 <div>
-                    <label class="block text-sm font-medium text-text-secondary mb-1">"Provider ID"</label>
+                    <label class="block text-sm font-medium text-text-secondary mb-1">{t!(i18n, settings.embedding.provider_id)}</label>
                     <input
                         type="text"
                         value=move || id.get()
@@ -1061,12 +1064,12 @@ fn AddProviderPanel(
                         placeholder="e.g., my-openai"
                         class="w-full px-3 py-2 border border-border rounded bg-surface text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
                     />
-                    <p class="mt-1 text-xs text-text-tertiary">"Unique identifier (lowercase, no spaces)"</p>
+                    <p class="mt-1 text-xs text-text-tertiary">{t!(i18n, settings.embedding.provider_id_hint)}</p>
                 </div>
 
                 // Name
                 <div>
-                    <label class="block text-sm font-medium text-text-secondary mb-1">"Display Name"</label>
+                    <label class="block text-sm font-medium text-text-secondary mb-1">{t!(i18n, settings.embedding.display_name)}</label>
                     <input
                         type="text"
                         value=move || name.get()
@@ -1078,18 +1081,18 @@ fn AddProviderPanel(
 
                 // API Key
                 <div>
-                    <label class="block text-sm font-medium text-text-secondary mb-1">"API Key"</label>
+                    <label class="block text-sm font-medium text-text-secondary mb-1">{t!(i18n, settings.embedding.api_key)}</label>
                     <SecretInput
                         value=Signal::derive(move || api_key.get())
                         on_change=move |v| api_key.set(v)
-                        placeholder="sk-..."
+                        placeholder="sk-...".to_string()
                         monospace=true
                     />
                 </div>
 
                 // Model
                 <div>
-                    <label class="block text-sm font-medium text-text-secondary mb-1">"Model"</label>
+                    <label class="block text-sm font-medium text-text-secondary mb-1">{t!(i18n, settings.embedding.model)}</label>
                     <input
                         type="text"
                         value=move || form_model.get()
@@ -1097,12 +1100,12 @@ fn AddProviderPanel(
                         placeholder="e.g. text-embedding-3-small"
                         class="w-full px-3 py-2 border border-border rounded bg-surface text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
                     />
-                    <p class="mt-1 text-xs text-text-tertiary">"Enter multiple models, separated by commas"</p>
+                    <p class="mt-1 text-xs text-text-tertiary">{t!(i18n, settings.embedding.model_hint)}</p>
                 </div>
 
                 // Base URL
                 <div>
-                    <label class="block text-sm font-medium text-text-secondary mb-1">"Base URL"</label>
+                    <label class="block text-sm font-medium text-text-secondary mb-1">{t!(i18n, settings.embedding.base_url)}</label>
                     <input
                         type="text"
                         value=move || api_base.get()
@@ -1114,7 +1117,7 @@ fn AddProviderPanel(
 
                 // Dimensions
                 <div>
-                    <label class="block text-sm font-medium text-text-secondary mb-1">"Dimensions"</label>
+                    <label class="block text-sm font-medium text-text-secondary mb-1">{t!(i18n, settings.embedding.dimensions)}</label>
                     <input
                         type="number"
                         value=move || dimensions.get()
@@ -1125,7 +1128,7 @@ fn AddProviderPanel(
                         }
                         class="w-full px-3 py-2 border border-border rounded bg-surface text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
                     />
-                    <p class="mt-1 text-xs text-text-tertiary">"Output vector dimensions of the model"</p>
+                    <p class="mt-1 text-xs text-text-tertiary">{t!(i18n, settings.embedding.dimensions_hint)}</p>
                 </div>
             </div>
 
@@ -1162,7 +1165,7 @@ fn AddProviderPanel(
                     disabled=move || testing.get()
                     class="flex-1 px-4 py-2.5 bg-info text-white rounded-lg hover:bg-primary-hover disabled:opacity-50 transition-colors font-medium"
                 >
-                    {move || if testing.get() { "Testing..." } else { "Test Connection" }}
+                    {move || if testing.get() { t_string!(i18n, settings.embedding.testing).to_string() } else { t_string!(i18n, settings.embedding.test_connection).to_string() }}
                 </button>
 
                 <button
@@ -1170,7 +1173,7 @@ fn AddProviderPanel(
                     disabled=move || adding.get()
                     class="flex-1 px-4 py-2.5 bg-primary text-white rounded-lg hover:bg-primary-hover disabled:opacity-50 transition-colors font-medium"
                 >
-                    {move || if adding.get() { "Adding..." } else { "Add Provider" }}
+                    {move || if adding.get() { t_string!(i18n, settings.embedding.adding).to_string() } else { t_string!(i18n, settings.embedding.add_provider).to_string() }}
                 </button>
             </div>
 

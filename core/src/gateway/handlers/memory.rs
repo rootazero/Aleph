@@ -412,6 +412,12 @@ pub struct ReembedState {
     pub cancel: Arc<AtomicBool>,
 }
 
+impl Default for ReembedState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ReembedState {
     pub fn new() -> Self {
         Self {

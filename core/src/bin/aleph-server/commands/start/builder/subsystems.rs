@@ -385,9 +385,9 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
     if let Some(ref cfg_arc) = app_config {
         let cfg = cfg_arc.read().await;
         // Find first speech provider with API key for STT
-        for (_name, pcfg) in &cfg.generation.providers {
+        for pcfg in cfg.generation.providers.values() {
             if pcfg.enabled
-                && pcfg.capabilities.iter().any(|c| *c == alephcore::generation::GenerationType::Speech)
+                && pcfg.capabilities.contains(&alephcore::generation::GenerationType::Speech)
             {
                 if let Some(ref key) = pcfg.api_key {
                     if !key.is_empty() {

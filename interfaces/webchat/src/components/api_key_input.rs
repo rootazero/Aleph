@@ -11,8 +11,8 @@ pub fn ApiKeyInput(
     /// Current API key value
     value: RwSignal<String>,
     /// Placeholder text
-    #[prop(default = "Enter API key...")]
-    placeholder: &'static str,
+    #[prop(default = "Enter API key...".to_string())]
+    placeholder: String,
     /// Called when key changes (after debounce)
     #[prop(optional)]
     on_key_change: Option<Callback<String>>,
@@ -26,7 +26,6 @@ pub fn ApiKeyInput(
         StoredValue::new_local(None);
 
     let on_change = {
-        let on_key_change = on_key_change.clone();
         move |val: String| {
             value.set(val.clone());
 
@@ -36,7 +35,7 @@ pub fn ApiKeyInput(
             // Schedule a new debounce timer if the value is non-empty
             if !val.is_empty() {
                 if let Some(ref cb) = on_key_change {
-                    let cb = cb.clone();
+                    let cb = *cb;
                     let handle = gloo_timers::callback::Timeout::new(debounce_ms, move || {
                         cb.run(val);
                     });

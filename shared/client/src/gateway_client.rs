@@ -88,7 +88,7 @@ impl GatewayClient {
 
         // Send request
         write
-            .send(Message::Text(request.to_string().into()))
+            .send(Message::Text(request.to_string()))
             .await
             .map_err(|e| CliError::Connection(e.to_string()))?;
 
@@ -96,7 +96,7 @@ impl GatewayClient {
         let response = timeout(Duration::from_millis(self.timeout_ms), read.next())
             .await
             .map_err(|_| CliError::Timeout)?
-            .ok_or_else(|| CliError::Disconnected)?
+            .ok_or(CliError::Disconnected)?
             .map_err(|e| CliError::Connection(e.to_string()))?;
 
         // Parse response

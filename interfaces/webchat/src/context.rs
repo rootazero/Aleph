@@ -104,6 +104,12 @@ fn derive_gateway_url() -> String {
     }
 }
 
+impl Default for DashboardState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DashboardState {
     pub fn new() -> Self {
         Self {

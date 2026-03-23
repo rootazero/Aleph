@@ -135,7 +135,7 @@ pub fn GenerationProvidersView() -> impl IntoView {
                         if is_loading.get() {
                             view! {
                                 <div class="flex items-center justify-center py-12">
-                                    <div class="text-text-tertiary">"Loading providers..."</div>
+                                    <div class="text-text-tertiary">{t!(i18n, settings.generation.loading_providers)}</div>
                                 </div>
                             }.into_any()
                         } else if let Some(error) = error_message.get() {
@@ -197,7 +197,7 @@ pub fn GenerationProvidersView() -> impl IntoView {
                                             view! {
                                                 <div class="pt-2">
                                                     <h2 class="text-sm font-medium text-text-secondary uppercase tracking-wider mb-3">
-                                                        "Custom Providers"
+                                                        {t!(i18n, settings.generation.custom_providers)}
                                                     </h2>
                                                     <div class="grid grid-cols-1 gap-2">
                                                         {custom.into_iter().map(|cp| {
@@ -241,13 +241,13 @@ pub fn GenerationProvidersView() -> impl IntoView {
                                                                                 {if is_default {
                                                                                     view! {
                                                                                         <span class="px-1.5 py-0.5 bg-primary-subtle text-primary text-xs rounded shrink-0">
-                                                                                            "Default"
+                                                                                            {t!(i18n, settings.generation.default)}
                                                                                         </span>
                                                                                     }.into_any()
                                                                                 } else if verified {
                                                                                     view! {
                                                                                         <span class="px-1.5 py-0.5 bg-success-subtle text-success text-xs rounded shrink-0">
-                                                                                            "Active"
+                                                                                            {t!(i18n, settings.generation.active)}
                                                                                         </span>
                                                                                     }.into_any()
                                                                                 } else {
@@ -277,7 +277,7 @@ pub fn GenerationProvidersView() -> impl IntoView {
                                             }
                                             class="w-full px-4 py-3 border-2 border-dashed border-border rounded-lg text-text-secondary hover:border-primary hover:text-primary transition-colors"
                                         >
-                                            "+ Add Custom Provider"
+                                            {t!(i18n, settings.generation.add_custom)}
                                         </button>
                                     </div>
                                 </div>
@@ -288,7 +288,7 @@ pub fn GenerationProvidersView() -> impl IntoView {
                     // Generation Settings (always visible, independent of provider loading)
                     <div class="px-6 pb-6 space-y-4">
                         <h2 class="text-lg font-semibold text-text-primary border-t border-border pt-6">
-                            "Generation Settings"
+                            {t!(i18n, settings.generation.generation_settings)}
                         </h2>
                         <GenerationSettingsPanel />
                     </div>
@@ -357,6 +357,7 @@ fn ProviderCard(
     is_selected: bool,
     on_click: impl Fn(ev::MouseEvent) + 'static,
 ) -> impl IntoView {
+    let i18n = use_i18n();
     let is_verified = entry.as_ref().is_some_and(|e| e.config.verified);
 
     let is_default = move || {
@@ -405,19 +406,19 @@ fn ProviderCard(
                             if is_configured && is_default() {
                                 view! {
                                     <span class="px-1.5 py-0.5 bg-primary-subtle text-primary text-xs rounded shrink-0">
-                                        "Default"
+                                        {t!(i18n, settings.generation.default)}
                                     </span>
                                 }.into_any()
                             } else if is_configured && is_verified {
                                 view! {
                                     <span class="px-1.5 py-0.5 bg-success-subtle text-success text-xs rounded shrink-0">
-                                        "Active"
+                                        {t!(i18n, settings.generation.active)}
                                     </span>
                                 }.into_any()
                             } else if is_unsupported {
                                 view! {
                                     <span class="px-1.5 py-0.5 bg-surface-sunken text-text-tertiary text-xs rounded shrink-0">
-                                        "Unsupported"
+                                        {t!(i18n, settings.generation.unsupported)}
                                     </span>
                                 }.into_any()
                             } else {
@@ -492,10 +493,11 @@ fn ProviderDetailPanel(
 
 #[component]
 fn EmptyState() -> impl IntoView {
+    let i18n = use_i18n();
     view! {
         <div class="flex flex-1 items-center justify-center h-full">
             <div class="text-center text-text-secondary">
-                <p class="text-lg">"Select a provider to view details"</p>
+                <p class="text-lg">{t!(i18n, settings.generation.select_provider)}</p>
             </div>
         </div>
     }
@@ -745,7 +747,7 @@ fn ProviderDetailView(
                             on:change=move |ev| form_enabled.set(event_target_checked(&ev))
                             class="w-4 h-4 rounded"
                         />
-                        <span class="text-sm text-text-secondary">"Enabled"</span>
+                        <span class="text-sm text-text-secondary">{t!(i18n, settings.generation.enabled_label)}</span>
                     </label>
                 </div>
             </div>
@@ -759,19 +761,19 @@ fn ProviderDetailView(
 
                 // API Key
                 <div>
-                    <label class="block text-sm font-medium text-text-secondary mb-1">"API Key"</label>
+                    <label class="block text-sm font-medium text-text-secondary mb-1">{t!(i18n, settings.generation.api_key_label)}</label>
                     <SecretInput
                         value=Signal::derive(move || form_api_key.get())
                         on_change=move |v| form_api_key.set(v)
-                        placeholder="Enter new key to update (leave empty to keep current)"
+                        placeholder=t_string!(i18n, settings.generation.api_key_placeholder).to_string()
                         monospace=true
                     />
-                    <p class="mt-1 text-xs text-text-tertiary">"Leave empty to keep existing key"</p>
+                    <p class="mt-1 text-xs text-text-tertiary">{t!(i18n, settings.generation.api_key_hint)}</p>
                 </div>
 
                 // Model
                 <div>
-                    <label class="block text-sm font-medium text-text-secondary mb-1">"Model"</label>
+                    <label class="block text-sm font-medium text-text-secondary mb-1">{t!(i18n, settings.generation.model_label)}</label>
                     <input
                         type="text"
                         prop:value=move || form_model.get()
@@ -783,7 +785,7 @@ fn ProviderDetailView(
 
                 // API Endpoint URL
                 <div>
-                    <label class="block text-sm font-medium text-text-secondary mb-1">"API Endpoint URL"</label>
+                    <label class="block text-sm font-medium text-text-secondary mb-1">{t!(i18n, settings.generation.api_endpoint_label)}</label>
                     <input
                         type="text"
                         prop:value=move || form_base_url.get()
@@ -795,7 +797,7 @@ fn ProviderDetailView(
 
                 // Edit Endpoint URL (optional)
                 <div>
-                    <label class="block text-sm font-medium text-text-secondary mb-1">"Edit Endpoint URL (optional)"</label>
+                    <label class="block text-sm font-medium text-text-secondary mb-1">{t!(i18n, settings.generation.edit_endpoint_label)}</label>
                     <input
                         type="text"
                         prop:value=move || form_edit_url.get()
@@ -803,13 +805,13 @@ fn ProviderDetailView(
                         placeholder="https://api.example.com/v1/images/edits"
                         class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
                     />
-                    <p class="mt-1 text-xs text-text-tertiary">"For image editing. Leave empty to auto-derive."</p>
+                    <p class="mt-1 text-xs text-text-tertiary">{t!(i18n, settings.generation.edit_endpoint_hint)}</p>
                 </div>
 
                 // Timeout
                 <div>
                     <label class="block text-sm font-medium text-text-secondary mb-1">
-                        "Timeout: " {move || form_timeout.get()} "s"
+                        {t!(i18n, settings.generation.timeout_label)} ": " {move || form_timeout.get()} "s"
                     </label>
                     <input
                         type="range" min="10" max="600" step="10"
@@ -831,7 +833,7 @@ fn ProviderDetailView(
                         on:change=move |ev| cap_image.set(event_target_checked(&ev))
                         class="w-4 h-4 rounded"
                     />
-                    <span class="text-sm text-text-primary">"Image Generation"</span>
+                    <span class="text-sm text-text-primary">{t!(i18n, settings.generation.image_generation)}</span>
                 </label>
                 <label class="flex items-center gap-3 cursor-pointer">
                     <input type="checkbox"
@@ -839,7 +841,7 @@ fn ProviderDetailView(
                         on:change=move |ev| cap_video.set(event_target_checked(&ev))
                         class="w-4 h-4 rounded"
                     />
-                    <span class="text-sm text-text-primary">"Video Generation"</span>
+                    <span class="text-sm text-text-primary">{t!(i18n, settings.generation.video_generation)}</span>
                 </label>
                 <label class="flex items-center gap-3 cursor-pointer">
                     <input type="checkbox"
@@ -847,7 +849,7 @@ fn ProviderDetailView(
                         on:change=move |ev| cap_audio.set(event_target_checked(&ev))
                         class="w-4 h-4 rounded"
                     />
-                    <span class="text-sm text-text-primary">"Audio Generation"</span>
+                    <span class="text-sm text-text-primary">{t!(i18n, settings.generation.audio_generation)}</span>
                 </label>
                 <label class="flex items-center gap-3 cursor-pointer">
                     <input type="checkbox"
@@ -855,7 +857,7 @@ fn ProviderDetailView(
                         on:change=move |ev| cap_speech.set(event_target_checked(&ev))
                         class="w-4 h-4 rounded"
                     />
-                    <span class="text-sm text-text-primary">"Speech Synthesis"</span>
+                    <span class="text-sm text-text-primary">{t!(i18n, settings.generation.speech_synthesis)}</span>
                 </label>
             </div>
 
@@ -874,11 +876,11 @@ fn ProviderDetailView(
 
                         // Default Voice dropdown
                         <div>
-                            <label class="block text-sm font-medium text-text-secondary mb-1">"Default Voice"</label>
+                            <label class="block text-sm font-medium text-text-secondary mb-1">{t!(i18n, settings.generation.default_voice)}</label>
                             {if is_loading {
                                 view! {
                                     <div class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-sm text-text-tertiary">
-                                        "Loading voices..."
+                                        {t!(i18n, settings.generation.loading_voices)}
                                     </div>
                                 }.into_any()
                             } else if current_voices.is_empty() {
@@ -887,7 +889,7 @@ fn ProviderDetailView(
                                         type="text"
                                         prop:value=move || form_voice.get()
                                         on:input=move |ev| form_voice.set(event_target_value(&ev))
-                                        placeholder="Enter voice ID (e.g. alloy, echo, shimmer)"
+                                        placeholder=t_string!(i18n, settings.generation.voice_id_placeholder).to_string()
                                         class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
                                     />
                                 }.into_any()
@@ -898,7 +900,7 @@ fn ProviderDetailView(
                                         on:change=move |ev| form_voice.set(event_target_value(&ev))
                                         class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
                                     >
-                                        <option value="">"-- Select a voice --"</option>
+                                        <option value="">{t!(i18n, settings.generation.select_voice)}</option>
                                         {current_voices.iter().map(|v| {
                                             let vid = v.id.clone();
                                             let label = if v.gender.is_empty() {
@@ -920,7 +922,7 @@ fn ProviderDetailView(
                         // Default Speed slider
                         <div>
                             <label class="block text-sm font-medium text-text-secondary mb-1">
-                                "Speed: " {move || format!("{:.2}x", form_speed.get())}
+                                {t!(i18n, settings.generation.speed_label)} ": " {move || format!("{:.2}x", form_speed.get())}
                             </label>
                             <input
                                 type="range"
@@ -942,7 +944,7 @@ fn ProviderDetailView(
 
                         // Default Format dropdown
                         <div>
-                            <label class="block text-sm font-medium text-text-secondary mb-1">"Output Format"</label>
+                            <label class="block text-sm font-medium text-text-secondary mb-1">{t!(i18n, settings.generation.output_format)}</label>
                             <select
                                 prop:value=move || form_audio_format.get()
                                 on:change=move |ev| form_audio_format.set(event_target_value(&ev))
@@ -957,15 +959,15 @@ fn ProviderDetailView(
 
                         // STT Model
                         <div>
-                            <label class="block text-sm font-medium text-text-secondary mb-1">"STT Model (Speech-to-Text)"</label>
+                            <label class="block text-sm font-medium text-text-secondary mb-1">{t!(i18n, settings.generation.stt_model)}</label>
                             <input
                                 type="text"
                                 prop:value=move || form_stt_model.get()
                                 on:input=move |ev| form_stt_model.set(event_target_value(&ev))
-                                placeholder="whisper-1"
+                                placeholder=t_string!(i18n, settings.generation.stt_model_placeholder).to_string()
                                 class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
                             />
-                            <p class="mt-1 text-xs text-text-tertiary">"Model for voice-to-text transcription (default: whisper-1)"</p>
+                            <p class="mt-1 text-xs text-text-tertiary">{t!(i18n, settings.generation.stt_model_hint)}</p>
                         </div>
 
                         // Derived Endpoints (read-only info)
@@ -1021,7 +1023,7 @@ fn ProviderDetailView(
 
             // Save success feedback
             {move || save_success.get().then(|| view! {
-                <div class="p-3 bg-success-subtle border border-success/20 rounded-lg text-success text-sm">"Saved successfully"</div>
+                <div class="p-3 bg-success-subtle border border-success/20 rounded-lg text-success text-sm">{t!(i18n, settings.generation.saved_successfully)}</div>
             })}
 
             // Action error
@@ -1036,7 +1038,7 @@ fn ProviderDetailView(
                     disabled=move || testing.get()
                     class="flex-1 px-4 py-2.5 bg-info text-white rounded-lg hover:bg-primary-hover disabled:opacity-50 transition-colors font-medium"
                 >
-                    {move || if testing.get() { "Testing..." } else { "Test Connection" }}
+                    {move || if testing.get() { t_string!(i18n, settings.generation.testing).to_string() } else { t_string!(i18n, settings.generation.test_connection).to_string() }}
                 </button>
                 <button
                     on:click=on_save
@@ -1069,7 +1071,7 @@ fn ProviderDetailView(
                             }
                         >
                             {gen_type.display_name()}
-                            {if is_default { " (Current)" } else { "" }}
+                            {if is_default { format!(" {}", t_string!(i18n, settings.generation.current_suffix)) } else { String::new() }}
                         </button>
                     }
                 }).collect_view()}
@@ -1083,7 +1085,7 @@ fn ProviderDetailView(
                         disabled=move || deleting.get()
                         class="w-full px-4 py-2.5 bg-danger-subtle text-danger rounded-lg hover:bg-danger-subtle disabled:opacity-50 transition-colors font-medium"
                     >
-                        {move || if deleting.get() { "Deleting..." } else { "Delete Provider" }}
+                        {move || if deleting.get() { t_string!(i18n, settings.generation.deleting).to_string() } else { t_string!(i18n, settings.generation.delete_provider).to_string() }}
                     </button>
                 }.into_any()
             } else {
@@ -1216,7 +1218,7 @@ fn PresetSetupPanel(
                 <div class="flex items-center gap-3">
                     <span class="text-2xl">{preset.icon.clone()}</span>
                     <div>
-                        <h2 class="text-lg font-semibold text-text-primary">{format!("Setup {}", preset.name)}</h2>
+                        <h2 class="text-lg font-semibold text-text-primary">{format!("{} {}", t_string!(i18n, settings.generation.setup_prefix), preset.name)}</h2>
                         <p class="text-sm text-text-tertiary">{preset.description.clone()}</p>
                     </div>
                 </div>
@@ -1227,17 +1229,17 @@ fn PresetSetupPanel(
                     <h3 class="text-xs font-semibold text-text-tertiary uppercase tracking-wider">"CONFIGURATION"</h3>
 
                     <div>
-                        <label class="block text-sm font-medium text-text-secondary mb-1">"API Key"</label>
+                        <label class="block text-sm font-medium text-text-secondary mb-1">{t!(i18n, settings.generation.api_key_label)}</label>
                         <SecretInput
                             value=Signal::derive(move || api_key.get())
                             on_change=move |v| api_key.set(v)
-                            placeholder="Enter your API key"
+                            placeholder=t_string!(i18n, settings.generation.api_key_setup_placeholder).to_string()
                             monospace=true
                         />
                     </div>
 
                     <div>
-                        <label class="block text-sm font-medium text-text-secondary mb-1">"Model"</label>
+                        <label class="block text-sm font-medium text-text-secondary mb-1">{t!(i18n, settings.generation.model_label)}</label>
                         <input
                             type="text"
                             prop:value=move || form_model.get()
@@ -1247,7 +1249,7 @@ fn PresetSetupPanel(
                     </div>
 
                     <div>
-                        <label class="block text-sm font-medium text-text-secondary mb-1">"API Endpoint URL"</label>
+                        <label class="block text-sm font-medium text-text-secondary mb-1">{t!(i18n, settings.generation.api_endpoint_label)}</label>
                         <input
                             type="text"
                             prop:value=move || base_url.get()
@@ -1290,7 +1292,7 @@ fn PresetSetupPanel(
                         disabled=move || testing.get()
                         class="flex-1 px-4 py-2.5 bg-info text-white rounded-lg hover:bg-primary-hover disabled:opacity-50 transition-colors font-medium"
                     >
-                        {move || if testing.get() { "Testing..." } else { "Test Connection" }}
+                        {move || if testing.get() { t_string!(i18n, settings.generation.testing).to_string() } else { t_string!(i18n, settings.generation.test_connection).to_string() }}
                     </button>
                     <button
                         on:click=handle_add
@@ -1315,6 +1317,7 @@ fn AddCustomProviderPanel(
     on_cancel: impl Fn() + 'static + Copy + Send,
 ) -> impl IntoView {
     let state = expect_context::<DashboardState>();
+    let i18n = use_i18n();
 
     // Form state
     let name = RwSignal::new(String::new());
@@ -1445,12 +1448,12 @@ fn AddCustomProviderPanel(
             // Fixed header
             <div class="px-6 py-4 border-b border-border">
                 <div class="flex items-center justify-between">
-                    <h2 class="text-xl font-semibold text-text-primary">"Add Custom Provider"</h2>
+                    <h2 class="text-xl font-semibold text-text-primary">{t!(i18n, settings.generation.add_custom_title)}</h2>
                     <button
                         on:click=move |_| on_cancel()
                         class="text-text-tertiary hover:text-text-primary transition-colors"
                     >
-                        "Cancel"
+                        {t!(i18n, common.cancel)}
                     </button>
                 </div>
             </div>
@@ -1464,44 +1467,44 @@ fn AddCustomProviderPanel(
 
                 // Name
                 <div>
-                    <label class="block text-sm font-medium text-text-secondary mb-1">"Provider Name"</label>
+                    <label class="block text-sm font-medium text-text-secondary mb-1">{t!(i18n, settings.generation.provider_name_label)}</label>
                     <input
                         type="text"
                         value=move || name.get()
                         on:input=move |ev| name.set(event_target_value(&ev))
-                        placeholder="e.g., my-dalle"
+                        placeholder=t_string!(i18n, settings.generation.provider_name_placeholder).to_string()
                         class="w-full px-3 py-2 border border-border rounded bg-surface text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
                     />
-                    <p class="mt-1 text-xs text-text-tertiary">"Unique identifier (lowercase, no spaces)"</p>
+                    <p class="mt-1 text-xs text-text-tertiary">{t!(i18n, settings.generation.provider_name_hint)}</p>
                 </div>
 
                 // Provider Type (auto-inferred from capabilities, editable)
                 <div>
-                    <label class="block text-sm font-medium text-text-secondary mb-1">"Provider Type"</label>
+                    <label class="block text-sm font-medium text-text-secondary mb-1">{t!(i18n, settings.generation.provider_type_label)}</label>
                     <input
                         type="text"
                         value=move || provider_type.get()
                         on:input=move |ev| provider_type.set(event_target_value(&ev))
-                        placeholder="e.g., openai_tts, openai, elevenlabs, replicate"
+                        placeholder=t_string!(i18n, settings.generation.provider_type_placeholder).to_string()
                         class="w-full px-3 py-2 border border-border rounded bg-surface text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
                     />
-                    <p class="mt-1 text-xs text-text-tertiary">"Auto-set from capabilities. Speech: openai_tts/elevenlabs, Image: openai/stability"</p>
+                    <p class="mt-1 text-xs text-text-tertiary">{t!(i18n, settings.generation.provider_type_hint)}</p>
                 </div>
 
                 // API Key
                 <div>
-                    <label class="block text-sm font-medium text-text-secondary mb-1">"API Key"</label>
+                    <label class="block text-sm font-medium text-text-secondary mb-1">{t!(i18n, settings.generation.api_key_label)}</label>
                     <SecretInput
                         value=Signal::derive(move || api_key.get())
                         on_change=move |v| api_key.set(v)
-                        placeholder="sk-..."
+                        placeholder=t_string!(i18n, settings.providers.api_key_placeholder).to_string()
                         monospace=true
                     />
                 </div>
 
                 // Model
                 <div>
-                    <label class="block text-sm font-medium text-text-secondary mb-1">"Model"</label>
+                    <label class="block text-sm font-medium text-text-secondary mb-1">{t!(i18n, settings.generation.model_label)}</label>
                     <input
                         type="text"
                         value=move || form_model.get()
@@ -1509,7 +1512,7 @@ fn AddCustomProviderPanel(
                         placeholder="e.g. dall-e-3, stable-diffusion-xl"
                         class="w-full px-3 py-2 border border-border rounded bg-surface text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
                     />
-                    <p class="mt-1 text-xs text-text-tertiary">"Enter multiple models, separated by commas"</p>
+                    <p class="mt-1 text-xs text-text-tertiary">{t!(i18n, settings.generation.model_hint)}</p>
                 </div>
 
                 // API Base URL
@@ -1522,12 +1525,12 @@ fn AddCustomProviderPanel(
                         placeholder="https://api.openai.com"
                         class="w-full px-3 py-2 border border-border rounded bg-surface text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
                     />
-                    <p class="mt-1 text-xs text-text-tertiary">"Base URL only — API paths like /v1/audio/speech are appended automatically"</p>
+                    <p class="mt-1 text-xs text-text-tertiary">{t!(i18n, settings.generation.api_base_url_hint)}</p>
                 </div>
 
                 // Edit Endpoint URL (optional)
                 <div>
-                    <label class="block text-sm font-medium text-text-secondary mb-1">"Edit Endpoint URL (optional)"</label>
+                    <label class="block text-sm font-medium text-text-secondary mb-1">{t!(i18n, settings.generation.edit_endpoint_label)}</label>
                     <input
                         type="text"
                         value=move || edit_url.get()
@@ -1535,13 +1538,13 @@ fn AddCustomProviderPanel(
                         placeholder="https://api.example.com/v1/images/edits"
                         class="w-full px-3 py-2 border border-border rounded bg-surface text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
                     />
-                    <p class="mt-1 text-xs text-text-tertiary">"For image editing. Leave empty to auto-derive."</p>
+                    <p class="mt-1 text-xs text-text-tertiary">{t!(i18n, settings.generation.edit_endpoint_hint)}</p>
                 </div>
 
                 // Timeout
                 <div>
                     <label class="block text-sm font-medium text-text-secondary mb-1">
-                        "Timeout: " {move || timeout.get()} "s"
+                        {t!(i18n, settings.generation.timeout_label)} ": " {move || timeout.get()} "s"
                     </label>
                     <input
                         type="range" min="10" max="300" step="10"
@@ -1624,7 +1627,7 @@ fn AddCustomProviderPanel(
                     disabled=move || testing.get()
                     class="flex-1 px-4 py-2.5 bg-info text-white rounded-lg hover:bg-primary-hover disabled:opacity-50 transition-colors font-medium"
                 >
-                    {move || if testing.get() { "Testing..." } else { "Test Connection" }}
+                    {move || if testing.get() { t_string!(i18n, settings.generation.testing).to_string() } else { t_string!(i18n, settings.generation.test_connection).to_string() }}
                 </button>
 
                 <button
@@ -1632,7 +1635,7 @@ fn AddCustomProviderPanel(
                     disabled=move || adding.get()
                     class="flex-1 px-4 py-2.5 bg-primary text-white rounded-lg hover:bg-primary-hover disabled:opacity-50 transition-colors font-medium"
                 >
-                    {move || if adding.get() { "Adding..." } else { "Add Provider" }}
+                    {move || if adding.get() { t_string!(i18n, settings.generation.adding).to_string() } else { t_string!(i18n, settings.generation.add_provider).to_string() }}
                 </button>
             </div>
 
@@ -1723,7 +1726,7 @@ fn GenerationSettingsPanel() -> impl IntoView {
         {move || {
             if loading.get() {
                 view! {
-                    <div class="text-text-tertiary text-sm">"Loading settings..."</div>
+                    <div class="text-text-tertiary text-sm">{t!(i18n, settings.generation.loading_settings)}</div>
                 }.into_any()
             } else {
                 view! {
@@ -1732,7 +1735,7 @@ fn GenerationSettingsPanel() -> impl IntoView {
                         <div class="bg-surface-raised rounded-lg border border-border p-4 space-y-4">
                             <div>
                                 <label class="block text-sm font-medium text-text-secondary mb-1">
-                                    "Auto-paste threshold: " {move || auto_paste.get()} " MB"
+                                    {t!(i18n, settings.generation.auto_paste_label)} ": " {move || auto_paste.get()} " " {t!(i18n, settings.generation.auto_paste_unit)}
                                 </label>
                                 <input
                                     type="range" min="1" max="100" step="1"
@@ -1743,12 +1746,12 @@ fn GenerationSettingsPanel() -> impl IntoView {
                                     class="w-full h-2 bg-surface-sunken rounded-lg appearance-none cursor-pointer accent-primary"
                                 />
                                 <p class="mt-1 text-xs text-text-tertiary">
-                                    "Files smaller than this will be auto-pasted to clipboard"
+                                    {t!(i18n, settings.generation.auto_paste_hint)}
                                 </p>
                             </div>
                             <div>
                                 <label class="block text-sm font-medium text-text-secondary mb-1">
-                                    "Background task threshold: " {move || bg_threshold.get()} "s"
+                                    {t!(i18n, settings.generation.bg_threshold_label)} ": " {move || bg_threshold.get()} " " {t!(i18n, settings.generation.bg_threshold_unit)}
                                 </label>
                                 <input
                                     type="range" min="1" max="300" step="5"
@@ -1759,7 +1762,7 @@ fn GenerationSettingsPanel() -> impl IntoView {
                                     class="w-full h-2 bg-surface-sunken rounded-lg appearance-none cursor-pointer accent-primary"
                                 />
                                 <p class="mt-1 text-xs text-text-tertiary">
-                                    "Tasks longer than this will run in background"
+                                    {t!(i18n, settings.generation.bg_threshold_hint)}
                                 </p>
                             </div>
                         </div>
@@ -1774,9 +1777,9 @@ fn GenerationSettingsPanel() -> impl IntoView {
                                     class="w-4 h-4 text-primary focus:ring-primary/30 rounded"
                                 />
                                 <div>
-                                    <div class="text-sm font-medium text-text-primary">"Smart Routing"</div>
+                                    <div class="text-sm font-medium text-text-primary">{t!(i18n, settings.generation.smart_routing)}</div>
                                     <div class="text-xs text-text-tertiary">
-                                        "Auto-route requests to the most suitable provider"
+                                        {t!(i18n, settings.generation.smart_routing_hint)}
                                     </div>
                                 </div>
                             </label>
@@ -1787,7 +1790,7 @@ fn GenerationSettingsPanel() -> impl IntoView {
                             <div class="p-3 bg-danger-subtle border border-danger/20 rounded text-danger text-sm">{e}</div>
                         })}
                         {move || save_success.get().then(|| view! {
-                            <div class="p-3 bg-success-subtle border border-success/20 rounded text-success text-sm">"Saved"</div>
+                            <div class="p-3 bg-success-subtle border border-success/20 rounded text-success text-sm">{t!(i18n, common.saved)}</div>
                         })}
 
                         // Save button

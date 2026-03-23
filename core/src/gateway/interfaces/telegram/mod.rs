@@ -385,9 +385,8 @@ fn classify_error(err: &teloxide::RequestError) -> ErrorClass {
             let msg = api_err.to_string();
             if msg.contains("Too Many Requests") || msg.contains("429") {
                 ErrorClass::RateLimited(30)
-            } else if msg.contains("Unauthorized") || msg.contains("401") {
-                ErrorClass::Unrecoverable
-            } else if msg.contains("Bad Request") || msg.contains("400") {
+            } else if msg.contains("Unauthorized") || msg.contains("401")
+                || msg.contains("Bad Request") || msg.contains("400") {
                 ErrorClass::Unrecoverable
             } else {
                 ErrorClass::Recoverable

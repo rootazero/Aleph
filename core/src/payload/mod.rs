@@ -73,12 +73,7 @@ impl ContextAnchor {
         Self { window_title }
     }
 
-    /// Create from CapturedContext (for compatibility with existing code)
-    pub fn from_captured_context(ctx: &crate::core::CapturedContext) -> Self {
-        Self {
-            window_title: ctx.window_title.clone(),
-        }
-    }
+
 }
 
 /// Payload configuration

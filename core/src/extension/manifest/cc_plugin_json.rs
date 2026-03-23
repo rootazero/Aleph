@@ -26,6 +26,7 @@ pub const CC_PLUGIN_JSON: &str = ".claude-plugin/plugin.json";
 /// Uses camelCase field names to match Claude Code's conventions.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
+#[derive(Default)]
 pub struct CcPluginJson {
     /// Plugin name (required — used as plugin ID source)
     pub name: Option<String>,
@@ -69,25 +70,6 @@ pub struct CcPluginJson {
     pub aleph: Option<JsonValue>,
 }
 
-impl Default for CcPluginJson {
-    fn default() -> Self {
-        Self {
-            name: None,
-            version: None,
-            description: None,
-            license: None,
-            keywords: None,
-            homepage: None,
-            repository: None,
-            author: None,
-            skills: None,
-            agents: None,
-            hooks: None,
-            mcp_servers: None,
-            aleph: None,
-        }
-    }
-}
 
 /// Author in CC plugin.json — either a plain string or an object
 #[derive(Debug, Deserialize)]

@@ -104,7 +104,7 @@ pub fn MemoryView() -> impl IntoView {
                             </div>
                         }.into_any()
                     } else {
-                        view! { <div class="text-text-tertiary">"No configuration loaded"</div> }.into_any()
+                        view! { <div class="text-text-tertiary">{t!(i18n, settings.memory.no_config)}</div> }.into_any()
                     }
                 }}
             </div>
@@ -116,9 +116,10 @@ pub fn MemoryView() -> impl IntoView {
 fn BasicSettings(
     config: RwSignal<Option<MemoryConfig>>,
 ) -> impl IntoView {
+    let i18n = use_i18n();
     view! {
         <div class="bg-surface-raised p-6 rounded-lg border border-border">
-            <h2 class="text-lg font-semibold mb-4">"Basic Settings"</h2>
+            <h2 class="text-lg font-semibold mb-4">{t!(i18n, settings.memory.basic_settings)}</h2>
 
             <div class="space-y-4">
                 <div class="flex items-center">
@@ -133,20 +134,20 @@ fn BasicSettings(
                         }
                         class="mr-2"
                     />
-                    <label class="font-medium">"Enable Memory Module"</label>
+                    <label class="font-medium">{t!(i18n, settings.memory.enable_memory)}</label>
                 </div>
 
                 <div>
-                    <label class="block text-sm font-medium mb-1">"Vector Database"</label>
+                    <label class="block text-sm font-medium mb-1">{t!(i18n, settings.memory.vector_db)}</label>
                     <div class="w-full px-3 py-2 border border-border rounded bg-surface-sunken text-text-secondary">
                         "LanceDB"
                     </div>
-                    <p class="text-xs text-text-tertiary mt-1">"LanceDB is the only supported vector database backend"</p>
+                    <p class="text-xs text-text-tertiary mt-1">{t!(i18n, settings.memory.vector_db_hint)}</p>
                 </div>
 
                 <div class="grid grid-cols-2 gap-4">
                     <div>
-                        <label class="block text-sm font-medium mb-1">"Max Context Items"</label>
+                        <label class="block text-sm font-medium mb-1">{t!(i18n, settings.memory.max_context_items)}</label>
                         <input
                             type="number"
                             prop:value=move || config.get().map(|c| c.max_context_items).unwrap_or(5)
@@ -163,7 +164,7 @@ fn BasicSettings(
                     </div>
 
                     <div>
-                        <label class="block text-sm font-medium mb-1">"Retention Days"</label>
+                        <label class="block text-sm font-medium mb-1">{t!(i18n, settings.memory.retention_days)}</label>
                         <input
                             type="number"
                             prop:value=move || config.get().map(|c| c.retention_days).unwrap_or(90)
@@ -181,7 +182,7 @@ fn BasicSettings(
                 </div>
 
                 <div>
-                    <label class="block text-sm font-medium mb-1">"Similarity Threshold (0.0-1.0)"</label>
+                    <label class="block text-sm font-medium mb-1">{t!(i18n, settings.memory.similarity_threshold)}</label>
                     <input
                         type="number"
                         step="0.01"
@@ -208,9 +209,10 @@ fn BasicSettings(
 fn AIRetrievalSettings(
     config: RwSignal<Option<MemoryConfig>>,
 ) -> impl IntoView {
+    let i18n = use_i18n();
     view! {
         <div class="bg-surface-raised p-6 rounded-lg border border-border">
-            <h2 class="text-lg font-semibold mb-4">"AI-Based Retrieval"</h2>
+            <h2 class="text-lg font-semibold mb-4">{t!(i18n, settings.memory.ai_retrieval)}</h2>
 
             <div class="space-y-4">
                 <div class="flex items-center">
@@ -225,12 +227,12 @@ fn AIRetrievalSettings(
                         }
                         class="mr-2"
                     />
-                    <label class="font-medium">"Enable AI-Based Memory Retrieval"</label>
+                    <label class="font-medium">{t!(i18n, settings.memory.enable_ai_retrieval)}</label>
                 </div>
 
                 <div class="grid grid-cols-2 gap-4">
                     <div>
-                        <label class="block text-sm font-medium mb-1">"Timeout (ms)"</label>
+                        <label class="block text-sm font-medium mb-1">{t!(i18n, settings.memory.timeout_ms)}</label>
                         <input
                             type="number"
                             prop:value=move || config.get().map(|c| c.ai_retrieval_timeout_ms).unwrap_or(3000)
@@ -247,7 +249,7 @@ fn AIRetrievalSettings(
                     </div>
 
                     <div>
-                        <label class="block text-sm font-medium mb-1">"Max Candidates"</label>
+                        <label class="block text-sm font-medium mb-1">{t!(i18n, settings.memory.max_candidates)}</label>
                         <input
                             type="number"
                             prop:value=move || config.get().map(|c| c.ai_retrieval_max_candidates).unwrap_or(20)
@@ -265,7 +267,7 @@ fn AIRetrievalSettings(
                 </div>
 
                 <div>
-                    <label class="block text-sm font-medium mb-1">"Fallback Count"</label>
+                    <label class="block text-sm font-medium mb-1">{t!(i18n, settings.memory.fallback_count)}</label>
                     <input
                         type="number"
                         prop:value=move || config.get().map(|c| c.ai_retrieval_fallback_count).unwrap_or(3)
@@ -289,9 +291,10 @@ fn AIRetrievalSettings(
 fn CompressionSettings(
     config: RwSignal<Option<MemoryConfig>>,
 ) -> impl IntoView {
+    let i18n = use_i18n();
     view! {
         <div class="bg-surface-raised p-6 rounded-lg border border-border">
-            <h2 class="text-lg font-semibold mb-4">"Memory Compression"</h2>
+            <h2 class="text-lg font-semibold mb-4">{t!(i18n, settings.memory.compression)}</h2>
 
             <div class="space-y-4">
                 <div class="flex items-center">
@@ -306,12 +309,12 @@ fn CompressionSettings(
                         }
                         class="mr-2"
                     />
-                    <label class="font-medium">"Enable Memory Compression"</label>
+                    <label class="font-medium">{t!(i18n, settings.memory.enable_compression)}</label>
                 </div>
 
                 <div class="grid grid-cols-2 gap-4">
                     <div>
-                        <label class="block text-sm font-medium mb-1">"Idle Timeout (seconds)"</label>
+                        <label class="block text-sm font-medium mb-1">{t!(i18n, settings.memory.idle_timeout_seconds)}</label>
                         <input
                             type="number"
                             prop:value=move || config.get().map(|c| c.compression_idle_timeout_seconds).unwrap_or(300)
@@ -328,7 +331,7 @@ fn CompressionSettings(
                     </div>
 
                     <div>
-                        <label class="block text-sm font-medium mb-1">"Turn Threshold"</label>
+                        <label class="block text-sm font-medium mb-1">{t!(i18n, settings.memory.turn_threshold)}</label>
                         <input
                             type="number"
                             prop:value=move || config.get().map(|c| c.compression_turn_threshold).unwrap_or(20)
@@ -347,7 +350,7 @@ fn CompressionSettings(
 
                 <div class="grid grid-cols-2 gap-4">
                     <div>
-                        <label class="block text-sm font-medium mb-1">"Compression Interval (seconds)"</label>
+                        <label class="block text-sm font-medium mb-1">{t!(i18n, settings.memory.compression_interval_seconds)}</label>
                         <input
                             type="number"
                             prop:value=move || config.get().map(|c| c.compression_interval_seconds).unwrap_or(3600)
@@ -364,7 +367,7 @@ fn CompressionSettings(
                     </div>
 
                     <div>
-                        <label class="block text-sm font-medium mb-1">"Batch Size"</label>
+                        <label class="block text-sm font-medium mb-1">{t!(i18n, settings.memory.batch_size)}</label>
                         <input
                             type="number"
                             prop:value=move || config.get().map(|c| c.compression_batch_size).unwrap_or(50)
@@ -383,7 +386,7 @@ fn CompressionSettings(
 
                 <div class="grid grid-cols-2 gap-4">
                     <div>
-                        <label class="block text-sm font-medium mb-1">"Conflict Similarity Threshold"</label>
+                        <label class="block text-sm font-medium mb-1">{t!(i18n, settings.memory.conflict_similarity_threshold)}</label>
                         <input
                             type="number"
                             step="0.01"
@@ -403,7 +406,7 @@ fn CompressionSettings(
                     </div>
 
                     <div>
-                        <label class="block text-sm font-medium mb-1">"Max Facts in Context"</label>
+                        <label class="block text-sm font-medium mb-1">{t!(i18n, settings.memory.max_facts_in_context)}</label>
                         <input
                             type="number"
                             prop:value=move || config.get().map(|c| c.max_facts_in_context).unwrap_or(5)
@@ -421,7 +424,7 @@ fn CompressionSettings(
                 </div>
 
                 <div>
-                    <label class="block text-sm font-medium mb-1">"Raw Memory Fallback Count"</label>
+                    <label class="block text-sm font-medium mb-1">{t!(i18n, settings.memory.raw_memory_fallback_count)}</label>
                     <input
                         type="number"
                         prop:value=move || config.get().map(|c| c.raw_memory_fallback_count).unwrap_or(3)
@@ -445,17 +448,18 @@ fn CompressionSettings(
 fn FactDecaySettings(
     config: RwSignal<Option<MemoryConfig>>,
 ) -> impl IntoView {
+    let i18n = use_i18n();
     view! {
         <div class="bg-surface-raised p-6 rounded-lg border border-border">
-            <h2 class="text-lg font-semibold mb-2">"Fact Decay Policy"</h2>
+            <h2 class="text-lg font-semibold mb-2">{t!(i18n, settings.memory.fact_decay)}</h2>
             <p class="text-sm text-text-tertiary mb-4">
-                "Control how memory facts age and get pruned over time"
+                {t!(i18n, settings.memory.fact_decay_desc)}
             </p>
 
             <div class="space-y-4">
                 <div class="grid grid-cols-2 gap-4">
                     <div>
-                        <label class="block text-sm font-medium mb-1">"Half-Life (days)"</label>
+                        <label class="block text-sm font-medium mb-1">{t!(i18n, settings.memory.half_life_days)}</label>
                         <input
                             type="number"
                             step="1"
@@ -471,11 +475,11 @@ fn FactDecaySettings(
                             }
                             class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
                         />
-                        <p class="text-xs text-text-tertiary mt-1">"Days until fact strength halves without access"</p>
+                        <p class="text-xs text-text-tertiary mt-1">{t!(i18n, settings.memory.half_life_days_hint)}</p>
                     </div>
 
                     <div>
-                        <label class="block text-sm font-medium mb-1">"Access Boost"</label>
+                        <label class="block text-sm font-medium mb-1">{t!(i18n, settings.memory.access_boost)}</label>
                         <input
                             type="number"
                             step="0.01"
@@ -492,12 +496,12 @@ fn FactDecaySettings(
                             }
                             class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
                         />
-                        <p class="text-xs text-text-tertiary mt-1">"Strength boost when a fact is accessed"</p>
+                        <p class="text-xs text-text-tertiary mt-1">{t!(i18n, settings.memory.access_boost_hint)}</p>
                     </div>
                 </div>
 
                 <div>
-                    <label class="block text-sm font-medium mb-1">"Min Strength Before Pruning (0.0-1.0)"</label>
+                    <label class="block text-sm font-medium mb-1">{t!(i18n, settings.memory.min_strength)}</label>
                     <input
                         type="number"
                         step="0.01"
@@ -514,11 +518,11 @@ fn FactDecaySettings(
                         }
                         class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
                     />
-                    <p class="text-xs text-text-tertiary mt-1">"Facts below this strength will be pruned"</p>
+                    <p class="text-xs text-text-tertiary mt-1">{t!(i18n, settings.memory.min_strength_hint)}</p>
                 </div>
 
                 <div>
-                    <label class="block text-sm font-medium mb-1">"Protected Fact Types"</label>
+                    <label class="block text-sm font-medium mb-1">{t!(i18n, settings.memory.protected_types)}</label>
                     <input
                         type="text"
                         prop:value=move || config.get().map(|c| c.memory_decay.protected_types.join(", ")).unwrap_or_default()
@@ -534,7 +538,7 @@ fn FactDecaySettings(
                         }
                         class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
                     />
-                    <p class="text-xs text-text-tertiary mt-1">"Comma-separated types that never decay (e.g. personal)"</p>
+                    <p class="text-xs text-text-tertiary mt-1">{t!(i18n, settings.memory.protected_types_hint)}</p>
                 </div>
             </div>
         </div>
@@ -545,17 +549,18 @@ fn FactDecaySettings(
 fn GraphDecaySettings(
     config: RwSignal<Option<MemoryConfig>>,
 ) -> impl IntoView {
+    let i18n = use_i18n();
     view! {
         <div class="bg-surface-raised p-6 rounded-lg border border-border">
-            <h2 class="text-lg font-semibold mb-2">"Knowledge Graph Decay"</h2>
+            <h2 class="text-lg font-semibold mb-2">{t!(i18n, settings.memory.graph_decay)}</h2>
             <p class="text-sm text-text-tertiary mb-4">
-                "Control how graph nodes and edges decay over time"
+                {t!(i18n, settings.memory.graph_decay_desc)}
             </p>
 
             <div class="space-y-4">
                 <div class="grid grid-cols-2 gap-4">
                     <div>
-                        <label class="block text-sm font-medium mb-1">"Node Decay Per Day"</label>
+                        <label class="block text-sm font-medium mb-1">{t!(i18n, settings.memory.node_decay_per_day)}</label>
                         <input
                             type="number"
                             step="0.001"
@@ -575,7 +580,7 @@ fn GraphDecaySettings(
                     </div>
 
                     <div>
-                        <label class="block text-sm font-medium mb-1">"Edge Decay Per Day"</label>
+                        <label class="block text-sm font-medium mb-1">{t!(i18n, settings.memory.edge_decay_per_day)}</label>
                         <input
                             type="number"
                             step="0.001"
@@ -596,7 +601,7 @@ fn GraphDecaySettings(
                 </div>
 
                 <div>
-                    <label class="block text-sm font-medium mb-1">"Min Score Before Pruning"</label>
+                    <label class="block text-sm font-medium mb-1">{t!(i18n, settings.memory.min_score)}</label>
                     <input
                         type="number"
                         step="0.01"
@@ -613,7 +618,7 @@ fn GraphDecaySettings(
                         }
                         class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
                     />
-                    <p class="text-xs text-text-tertiary mt-1">"Nodes/edges below this score will be pruned"</p>
+                    <p class="text-xs text-text-tertiary mt-1">{t!(i18n, settings.memory.min_score_hint)}</p>
                 </div>
             </div>
         </div>
@@ -624,11 +629,12 @@ fn GraphDecaySettings(
 fn DreamingSettings(
     config: RwSignal<Option<MemoryConfig>>,
 ) -> impl IntoView {
+    let i18n = use_i18n();
     view! {
         <div class="bg-surface-raised p-6 rounded-lg border border-border">
-            <h2 class="text-lg font-semibold mb-2">"DreamDaemon"</h2>
+            <h2 class="text-lg font-semibold mb-2">{t!(i18n, settings.memory.dreaming)}</h2>
             <p class="text-sm text-text-tertiary mb-4">
-                "Background process that consolidates and compresses memory facts"
+                {t!(i18n, settings.memory.dreaming_desc)}
             </p>
 
             <div class="space-y-4">
@@ -644,11 +650,11 @@ fn DreamingSettings(
                         }
                         class="mr-2"
                     />
-                    <label class="font-medium">"Enable DreamDaemon"</label>
+                    <label class="font-medium">{t!(i18n, settings.memory.enable_dreaming)}</label>
                 </div>
 
                 <div>
-                    <label class="block text-sm font-medium mb-1">"Idle Threshold (seconds)"</label>
+                    <label class="block text-sm font-medium mb-1">{t!(i18n, settings.memory.idle_threshold_seconds)}</label>
                     <input
                         type="number"
                         prop:value=move || config.get().map(|c| c.dreaming.idle_threshold_seconds).unwrap_or(900)
@@ -662,12 +668,12 @@ fn DreamingSettings(
                         }
                         class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
                     />
-                    <p class="text-xs text-text-tertiary mt-1">"Seconds of inactivity before dreaming starts"</p>
+                    <p class="text-xs text-text-tertiary mt-1">{t!(i18n, settings.memory.idle_threshold_hint)}</p>
                 </div>
 
                 <div class="grid grid-cols-2 gap-4">
                     <div>
-                        <label class="block text-sm font-medium mb-1">"Window Start (HH:MM)"</label>
+                        <label class="block text-sm font-medium mb-1">{t!(i18n, settings.memory.window_start)}</label>
                         <input
                             type="text"
                             prop:value=move || config.get().map(|c| c.dreaming.window_start_local).unwrap_or_else(|| "02:00".to_string())
@@ -683,7 +689,7 @@ fn DreamingSettings(
                     </div>
 
                     <div>
-                        <label class="block text-sm font-medium mb-1">"Window End (HH:MM)"</label>
+                        <label class="block text-sm font-medium mb-1">{t!(i18n, settings.memory.window_end)}</label>
                         <input
                             type="text"
                             prop:value=move || config.get().map(|c| c.dreaming.window_end_local).unwrap_or_else(|| "05:00".to_string())
@@ -698,10 +704,10 @@ fn DreamingSettings(
                         />
                     </div>
                 </div>
-                <p class="text-xs text-text-tertiary">"Local time window when dreaming is allowed to run"</p>
+                <p class="text-xs text-text-tertiary">{t!(i18n, settings.memory.window_hint)}</p>
 
                 <div>
-                    <label class="block text-sm font-medium mb-1">"Max Duration (seconds)"</label>
+                    <label class="block text-sm font-medium mb-1">{t!(i18n, settings.memory.max_duration_seconds)}</label>
                     <input
                         type="number"
                         prop:value=move || config.get().map(|c| c.dreaming.max_duration_seconds).unwrap_or(600)
@@ -715,7 +721,7 @@ fn DreamingSettings(
                         }
                         class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
                     />
-                    <p class="text-xs text-text-tertiary mt-1">"Maximum time per dreaming session"</p>
+                    <p class="text-xs text-text-tertiary mt-1">{t!(i18n, settings.memory.max_duration_hint)}</p>
                 </div>
             </div>
         </div>
@@ -726,13 +732,14 @@ fn DreamingSettings(
 fn StorageBackupSettings(
     config: RwSignal<Option<MemoryConfig>>,
 ) -> impl IntoView {
+    let i18n = use_i18n();
     view! {
         <div class="bg-surface-raised p-6 rounded-lg border border-border">
-            <h2 class="text-lg font-semibold mb-2">"Storage & Backup"</h2>
+            <h2 class="text-lg font-semibold mb-2">{t!(i18n, settings.memory.storage_backup)}</h2>
 
             <div class="space-y-4">
                 <div>
-                    <label class="block text-sm font-medium mb-1">"Dedup Similarity Threshold (0.0-1.0)"</label>
+                    <label class="block text-sm font-medium mb-1">{t!(i18n, settings.memory.dedup_similarity_threshold)}</label>
                     <input
                         type="number"
                         step="0.01"
@@ -749,7 +756,7 @@ fn StorageBackupSettings(
                         }
                         class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
                     />
-                    <p class="text-xs text-text-tertiary mt-1">"Memories above this similarity are considered duplicates"</p>
+                    <p class="text-xs text-text-tertiary mt-1">{t!(i18n, settings.memory.dedup_similarity_hint)}</p>
                 </div>
 
                 <div class="flex items-center">
@@ -764,11 +771,11 @@ fn StorageBackupSettings(
                         }
                         class="mr-2"
                     />
-                    <label class="font-medium">"Enable Automatic JSONL Backup"</label>
+                    <label class="font-medium">{t!(i18n, settings.memory.backup_enabled)}</label>
                 </div>
 
                 <div>
-                    <label class="block text-sm font-medium mb-1">"Max Backup Files"</label>
+                    <label class="block text-sm font-medium mb-1">{t!(i18n, settings.memory.max_backup_files)}</label>
                     <input
                         type="number"
                         min="1"
@@ -783,7 +790,7 @@ fn StorageBackupSettings(
                         }
                         class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
                     />
-                    <p class="text-xs text-text-tertiary mt-1">"Maximum number of backup files to retain"</p>
+                    <p class="text-xs text-text-tertiary mt-1">{t!(i18n, settings.memory.max_backup_files_hint)}</p>
                 </div>
             </div>
         </div>
@@ -798,16 +805,17 @@ fn StorageBackupSettings(
 fn RetrievalPipelineSettings(
     config: RwSignal<Option<MemoryConfig>>,
 ) -> impl IntoView {
+    let i18n = use_i18n();
     view! {
         <div class="bg-surface-raised p-6 rounded-lg border border-border">
-            <h2 class="text-lg font-semibold mb-2">"Retrieval Pipeline"</h2>
+            <h2 class="text-lg font-semibold mb-2">{t!(i18n, settings.memory.retrieval_pipeline)}</h2>
             <p class="text-sm text-text-tertiary mb-4">
-                "Configure hybrid retrieval fusion and query expansion"
+                {t!(i18n, settings.memory.retrieval_pipeline_desc)}
             </p>
 
             <div class="space-y-4">
                 <div>
-                    <label class="block text-sm font-medium mb-1">"Fusion Strategy"</label>
+                    <label class="block text-sm font-medium mb-1">{t!(i18n, settings.memory.fusion_strategy)}</label>
                     <select
                         prop:value=move || config.get().map(|c| c.fusion_strategy.as_str().to_string()).unwrap_or_else(|| "rrf".to_string())
                         on:change=move |ev| {
@@ -818,8 +826,8 @@ fn RetrievalPipelineSettings(
                         }
                         class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
                     >
-                        <option value="rrf">"Reciprocal Rank Fusion (RRF)"</option>
-                        <option value="weighted">"Weighted Linear Combination"</option>
+                        <option value="rrf">{t!(i18n, settings.memory.rrf_option)}</option>
+                        <option value="weighted">{t!(i18n, settings.memory.weighted_option)}</option>
                     </select>
                 </div>
 
@@ -828,7 +836,7 @@ fn RetrievalPipelineSettings(
                     if is_rrf {
                         Some(view! {
                             <div>
-                                <label class="block text-sm font-medium mb-1">"RRF Constant k"</label>
+                                <label class="block text-sm font-medium mb-1">{t!(i18n, settings.memory.rrf_k)}</label>
                                 <input
                                     type="number"
                                     min="1"
@@ -843,7 +851,7 @@ fn RetrievalPipelineSettings(
                                     }
                                     class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
                                 />
-                                <p class="text-xs text-text-tertiary mt-1">"Higher k reduces the impact of rank differences (default: 60)"</p>
+                                <p class="text-xs text-text-tertiary mt-1">{t!(i18n, settings.memory.rrf_k_hint)}</p>
                             </div>
                         })
                     } else {
@@ -852,7 +860,7 @@ fn RetrievalPipelineSettings(
                 }}
 
                 <div>
-                    <label class="block text-sm font-medium mb-1">"BM25 Bonus Weight"</label>
+                    <label class="block text-sm font-medium mb-1">{t!(i18n, settings.memory.bm25_bonus_weight)}</label>
                     <input
                         type="number"
                         step="0.01"
@@ -869,7 +877,7 @@ fn RetrievalPipelineSettings(
                         }
                         class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
                     />
-                    <p class="text-xs text-text-tertiary mt-1">"Extra weight for BM25 full-text matches in fusion"</p>
+                    <p class="text-xs text-text-tertiary mt-1">{t!(i18n, settings.memory.bm25_bonus_weight_hint)}</p>
                 </div>
 
                 <div class="flex items-center">
@@ -884,9 +892,9 @@ fn RetrievalPipelineSettings(
                         }
                         class="mr-2"
                     />
-                    <label class="font-medium">"Enable Query Expansion"</label>
+                    <label class="font-medium">{t!(i18n, settings.memory.query_expansion)}</label>
                 </div>
-                <p class="text-xs text-text-tertiary">"Automatically expand queries with Chinese synonyms for broader recall"</p>
+                <p class="text-xs text-text-tertiary">{t!(i18n, settings.memory.query_expansion_hint)}</p>
             </div>
         </div>
     }
@@ -900,11 +908,12 @@ fn RetrievalPipelineSettings(
 fn ReflectionSettings(
     config: RwSignal<Option<MemoryConfig>>,
 ) -> impl IntoView {
+    let i18n = use_i18n();
     view! {
         <div class="bg-surface-raised p-6 rounded-lg border border-border">
-            <h2 class="text-lg font-semibold mb-2">"Session-End Reflection"</h2>
+            <h2 class="text-lg font-semibold mb-2">{t!(i18n, settings.memory.reflection)}</h2>
             <p class="text-sm text-text-tertiary mb-4">
-                "Automatically extract insights and track open loops at session end"
+                {t!(i18n, settings.memory.reflection_desc)}
             </p>
 
             <div class="space-y-4">
@@ -920,12 +929,12 @@ fn ReflectionSettings(
                         }
                         class="mr-2"
                     />
-                    <label class="font-medium">"Enable Session-End Reflection"</label>
+                    <label class="font-medium">{t!(i18n, settings.memory.enable_reflection)}</label>
                 </div>
 
                 <div class="grid grid-cols-2 gap-4">
                     <div>
-                        <label class="block text-sm font-medium mb-1">"Min Turns"</label>
+                        <label class="block text-sm font-medium mb-1">{t!(i18n, settings.memory.min_turns)}</label>
                         <input
                             type="number"
                             min="1"
@@ -940,11 +949,11 @@ fn ReflectionSettings(
                             }
                             class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
                         />
-                        <p class="text-xs text-text-tertiary mt-1">"Minimum conversation turns before triggering"</p>
+                        <p class="text-xs text-text-tertiary mt-1">{t!(i18n, settings.memory.min_turns_hint)}</p>
                     </div>
 
                     <div>
-                        <label class="block text-sm font-medium mb-1">"Min User Chars"</label>
+                        <label class="block text-sm font-medium mb-1">{t!(i18n, settings.memory.min_user_chars)}</label>
                         <input
                             type="number"
                             min="0"
@@ -959,12 +968,12 @@ fn ReflectionSettings(
                             }
                             class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
                         />
-                        <p class="text-xs text-text-tertiary mt-1">"Minimum total user characters"</p>
+                        <p class="text-xs text-text-tertiary mt-1">{t!(i18n, settings.memory.min_user_chars_hint)}</p>
                     </div>
                 </div>
 
                 <div>
-                    <label class="block text-sm font-medium mb-1">"Cooldown (minutes)"</label>
+                    <label class="block text-sm font-medium mb-1">{t!(i18n, settings.memory.cooldown_minutes)}</label>
                     <input
                         type="number"
                         min="1"
@@ -979,7 +988,7 @@ fn ReflectionSettings(
                         }
                         class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
                     />
-                    <p class="text-xs text-text-tertiary mt-1">"Minimum minutes between reflections"</p>
+                    <p class="text-xs text-text-tertiary mt-1">{t!(i18n, settings.memory.cooldown_hint)}</p>
                 </div>
 
                 <div class="flex items-center">
@@ -994,9 +1003,9 @@ fn ReflectionSettings(
                         }
                         class="mr-2"
                     />
-                    <label class="font-medium">"Enable Open Loop Tracking"</label>
+                    <label class="font-medium">{t!(i18n, settings.memory.open_loop_tracking)}</label>
                 </div>
-                <p class="text-xs text-text-tertiary">"Track unresolved questions and tasks across sessions"</p>
+                <p class="text-xs text-text-tertiary">{t!(i18n, settings.memory.open_loop_tracking_hint)}</p>
 
                 <div class="flex items-center">
                     <input
@@ -1010,9 +1019,9 @@ fn ReflectionSettings(
                         }
                         class="mr-2"
                     />
-                    <label class="font-medium">"Inject to System Prompt"</label>
+                    <label class="font-medium">{t!(i18n, settings.memory.open_loop_inject_prompt)}</label>
                 </div>
-                <p class="text-xs text-text-tertiary">"Inject open loop reminders into the next session's system prompt"</p>
+                <p class="text-xs text-text-tertiary">{t!(i18n, settings.memory.open_loop_inject_hint)}</p>
             </div>
         </div>
     }
@@ -1024,6 +1033,7 @@ fn ReflectionSettings(
 
 #[component]
 fn RetrievalDebugPanel() -> impl IntoView {
+    let i18n = use_i18n();
     let expanded = RwSignal::new(false);
     let query = RwSignal::new(String::new());
     let searching = RwSignal::new(false);
@@ -1067,9 +1077,12 @@ fn RetrievalDebugPanel() -> impl IntoView {
                 class="flex items-center w-full text-left"
             >
                 <span class="text-lg font-semibold">
-                    {move || if expanded.get() { "- Retrieval Debug Panel" } else { "+ Retrieval Debug Panel" }}
+                    {move || {
+                        let prefix = if expanded.get() { "- " } else { "+ " };
+                        format!("{}{}", prefix, t_string!(i18n, settings.memory.retrieval_debug))
+                    }}
                 </span>
-                <span class="ml-2 text-sm text-text-tertiary">"(click to expand)"</span>
+                <span class="ml-2 text-sm text-text-tertiary">{t!(i18n, settings.memory.click_to_expand)}</span>
             </button>
 
             {move || {
@@ -1086,7 +1099,7 @@ fn RetrievalDebugPanel() -> impl IntoView {
                                 on:input=move |ev| {
                                     query.set(event_target_value(&ev));
                                 }
-                                placeholder="Enter a test query..."
+                                placeholder=move || t_string!(i18n, settings.memory.test_query_placeholder).to_string()
                                 class="flex-1 px-3 py-2 border border-border rounded bg-surface-raised"
                             />
                             <button
@@ -1094,7 +1107,7 @@ fn RetrievalDebugPanel() -> impl IntoView {
                                 prop:disabled=move || searching.get()
                                 class="px-4 py-2 bg-info text-white rounded hover:bg-primary-hover disabled:opacity-50"
                             >
-                                {move || if searching.get() { "Searching..." } else { "Search" }}
+                                {move || if searching.get() { t_string!(i18n, settings.memory.searching).to_string() } else { t_string!(i18n, settings.memory.search).to_string() }}
                             </button>
                         </div>
 
@@ -1110,15 +1123,15 @@ fn RetrievalDebugPanel() -> impl IntoView {
                                 <div class="space-y-4">
                                     // Trace stages table
                                     <div>
-                                        <h3 class="text-sm font-semibold mb-2">"Pipeline Stages"</h3>
+                                        <h3 class="text-sm font-semibold mb-2">{t!(i18n, settings.memory.pipeline_stages)}</h3>
                                         <div class="overflow-x-auto">
                                             <table class="w-full text-sm border border-border">
                                                 <thead>
                                                     <tr class="bg-surface-sunken">
-                                                        <th class="px-3 py-2 text-left border-b border-border">"Stage"</th>
-                                                        <th class="px-3 py-2 text-right border-b border-border">"Duration (ms)"</th>
-                                                        <th class="px-3 py-2 text-right border-b border-border">"Input"</th>
-                                                        <th class="px-3 py-2 text-right border-b border-border">"Output"</th>
+                                                        <th class="px-3 py-2 text-left border-b border-border">{t!(i18n, settings.memory.stage)}</th>
+                                                        <th class="px-3 py-2 text-right border-b border-border">{t!(i18n, settings.memory.duration_ms)}</th>
+                                                        <th class="px-3 py-2 text-right border-b border-border">{t!(i18n, settings.memory.input)}</th>
+                                                        <th class="px-3 py-2 text-right border-b border-border">{t!(i18n, settings.memory.output)}</th>
                                                     </tr>
                                                 </thead>
                                                 <tbody>
@@ -1140,7 +1153,7 @@ fn RetrievalDebugPanel() -> impl IntoView {
                                     // Results
                                     <div>
                                         <h3 class="text-sm font-semibold mb-2">
-                                            {format!("Results ({})", results.len())}
+                                            {format!("{} ({})", t_string!(i18n, settings.memory.results), results.len())}
                                         </h3>
                                         <div class="space-y-2">
                                             {results.into_iter().map(|r| {

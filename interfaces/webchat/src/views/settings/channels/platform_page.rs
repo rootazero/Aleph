@@ -10,6 +10,7 @@ use serde_json::json;
 
 use crate::components::ui::channel_status::ChannelStatus;
 use crate::context::DashboardState;
+use crate::i18n::*;
 
 use super::config_template::ChannelConfigTemplate;
 use super::definitions::{ChannelDefinition, ALL_CHANNELS};
@@ -31,12 +32,13 @@ struct InstanceInfo {
 
 /// Master-detail page for managing instances of a single platform type.
 ///
-/// The left sidebar lists all instances (with status dots and a "New Instance"
+/// The left sidebar lists all instances (with status dots and a {t!(i18n, settings.channels.new_instance)}
 /// button), and the right panel shows the configuration for the selected
 /// instance.
 #[component]
 pub fn ChannelPlatformPage(platform_type: String) -> impl IntoView {
     let state = expect_context::<DashboardState>();
+    let i18n = use_i18n();
 
     // ---- State signals ----
     let instances: RwSignal<Vec<InstanceInfo>> = RwSignal::new(Vec::new());
@@ -59,7 +61,7 @@ pub fn ChannelPlatformPage(platform_type: String) -> impl IntoView {
         None => {
             return view! {
                 <div class="flex-1 p-6 overflow-y-auto bg-surface">
-                    <div class="text-text-tertiary">"Unknown channel platform."</div>
+                    <div class="text-text-tertiary">{t!(i18n, settings.channels.unknown_platform)}</div>
                 </div>
             }
             .into_any();
@@ -95,7 +97,7 @@ pub fn ChannelPlatformPage(platform_type: String) -> impl IntoView {
                                     .unwrap_or("disconnected");
                                 found.push(InstanceInfo {
                                     channel_id: ch_id,
-                                    status: ChannelStatus::from_str(status_str),
+                                    status: ChannelStatus::parse(status_str),
                                 });
                             }
                         }
@@ -181,7 +183,7 @@ pub fn ChannelPlatformPage(platform_type: String) -> impl IntoView {
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <polyline points="15 18 9 12 15 6"/>
                     </svg>
-                    "Back to Channels"
+                    {t!(i18n, settings.channels.back_to_channels)}
                 </A>
                 <div class="flex items-center gap-3">
                     <div
@@ -267,7 +269,7 @@ pub fn ChannelPlatformPage(platform_type: String) -> impl IntoView {
                                             disabled=move || creating.get()
                                             class="flex-1 px-2 py-1 text-xs bg-primary text-text-inverse rounded hover:bg-primary-hover disabled:opacity-50 transition-colors"
                                         >
-                                            {move || if creating.get() { "Creating..." } else { "Create" }}
+                                            {move || if creating.get() { t_string!(i18n, settings.channels.creating).to_string() } else { t_string!(i18n, settings.channels.create).to_string() }}
                                         </button>
                                         <button
                                             on:click=move |_| {
@@ -277,7 +279,7 @@ pub fn ChannelPlatformPage(platform_type: String) -> impl IntoView {
                                             }
                                             class="flex-1 px-2 py-1 text-xs border border-border text-text-secondary rounded hover:bg-surface-sunken transition-colors"
                                         >
-                                            "Cancel"
+                                            {t!(i18n, common.cancel)}
                                         </button>
                                     </div>
                                 </div>
@@ -292,7 +294,7 @@ pub fn ChannelPlatformPage(platform_type: String) -> impl IntoView {
                                         <line x1="12" y1="5" x2="12" y2="19"/>
                                         <line x1="5" y1="12" x2="19" y2="12"/>
                                     </svg>
-                                    "New Instance"
+                                    {t!(i18n, settings.channels.new_instance)}
                                 </button>
                             }.into_any()
                         }
@@ -325,7 +327,7 @@ pub fn ChannelPlatformPage(platform_type: String) -> impl IntoView {
                                                 <line x1="12" y1="8" x2="12" y2="16"/>
                                                 <line x1="8" y1="12" x2="16" y2="12"/>
                                             </svg>
-                                            <p class="text-sm">"No instances yet. Create one to get started."</p>
+                                            <p class="text-sm">{t!(i18n, settings.channels.no_instances_yet)}</p>
                                         </div>
                                     }.into_any()
                                 }

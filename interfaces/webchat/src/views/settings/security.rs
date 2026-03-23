@@ -139,9 +139,10 @@ pub fn SecurityView() -> impl IntoView {
 fn GatewaySecuritySettings(
     config: RwSignal<Option<SecurityConfig>>,
 ) -> impl IntoView {
+    let i18n = use_i18n();
     view! {
         <div class="bg-surface-raised p-6 rounded-lg border border-border">
-            <h2 class="text-lg font-semibold mb-4">"Gateway Security"</h2>
+            <h2 class="text-lg font-semibold mb-4">{t!(i18n, settings.security.gateway_security)}</h2>
 
             <div class="space-y-4">
                 <div class="flex items-center">
@@ -156,10 +157,10 @@ fn GatewaySecuritySettings(
                         }
                         class="mr-2"
                     />
-                    <label class="font-medium">"Require Authentication"</label>
+                    <label class="font-medium">{t!(i18n, settings.security.require_auth)}</label>
                 </div>
                 <p class="text-sm text-text-tertiary ml-6">
-                    "Require clients to authenticate before connecting to the Gateway"
+                    {t!(i18n, settings.security.require_auth_desc)}
                 </p>
 
                 <div class="flex items-center">
@@ -174,10 +175,10 @@ fn GatewaySecuritySettings(
                         }
                         class="mr-2"
                     />
-                    <label class="font-medium">"Enable Device Pairing"</label>
+                    <label class="font-medium">{t!(i18n, settings.security.enable_pairing)}</label>
                 </div>
                 <p class="text-sm text-text-tertiary ml-6">
-                    "Allow new devices to pair with the Gateway using pairing codes"
+                    {t!(i18n, settings.security.enable_pairing_desc)}
                 </p>
 
                 <div class="flex items-center">
@@ -192,10 +193,10 @@ fn GatewaySecuritySettings(
                         }
                         class="mr-2"
                     />
-                    <label class="font-medium">"Allow Guest Access"</label>
+                    <label class="font-medium">{t!(i18n, settings.security.allow_guest)}</label>
                 </div>
                 <p class="text-sm text-text-tertiary ml-6">
-                    "Allow temporary guest sessions without device pairing"
+                    {t!(i18n, settings.security.allow_guest_desc)}
                 </p>
             </div>
         </div>
@@ -207,6 +208,7 @@ fn PairedDevices(
     devices: RwSignal<Vec<DeviceInfo>>,
     state: DashboardState,
 ) -> impl IntoView {
+    let i18n = use_i18n();
     let revoke_device = move |device_id: String| {
         spawn_local(async move {
             match SecurityConfigApi::revoke_device(&state, device_id.clone()).await {
@@ -225,7 +227,7 @@ fn PairedDevices(
 
     view! {
         <div class="bg-surface-raised p-6 rounded-lg border border-border">
-            <h2 class="text-lg font-semibold mb-4">"Paired Devices"</h2>
+            <h2 class="text-lg font-semibold mb-4">{t!(i18n, settings.security.paired_devices)}</h2>
 
             <div class="space-y-3">
                 {move || {
@@ -233,7 +235,7 @@ fn PairedDevices(
                     if device_list.is_empty() {
                         view! {
                             <div class="text-text-tertiary text-center py-4">
-                                "No devices paired"
+                                {t!(i18n, settings.security.no_devices)}
                             </div>
                         }.into_any()
                     } else {
@@ -262,8 +264,10 @@ fn DeviceCard<F>(
 where
     F: Fn() + 'static,
 {
+    let i18n = use_i18n();
     let paired_date = device.paired_at.clone();
-    let last_seen_text = device.last_seen.clone().unwrap_or_else(|| "Never".to_string());
+    let last_seen_text = device.last_seen.clone()
+        .unwrap_or_else(|| t_string!(i18n, settings.security.never).to_string());
 
     view! {
         <div class="flex items-center justify-between p-4 bg-surface-sunken rounded border border-border">
@@ -273,14 +277,14 @@ where
                     {device.device_type} " • " {device.device_id}
                 </div>
                 <div class="text-xs text-text-secondary mt-1">
-                    "Paired: " {paired_date} " • Last seen: " {last_seen_text}
+                    {t!(i18n, settings.security.paired)} ": " {paired_date} " • " {t!(i18n, settings.security.last_seen)} ": " {last_seen_text}
                 </div>
             </div>
             <button
                 on:click=move |_| on_revoke()
                 class="px-3 py-1 bg-danger text-white text-sm rounded hover:bg-danger"
             >
-                "Revoke"
+                {t!(i18n, settings.security.revoke)}
             </button>
         </div>
     }
@@ -333,10 +337,7 @@ fn PIISection(config: RwSignal<SearchConfig>) -> impl IntoView {
 
     view! {
         <div class="bg-surface-raised rounded-lg border border-border p-6">
-            <h2 class="text-lg font-semibold text-text-primary mb-4">"PII Scrubbing"</h2>
-            <p class="text-sm text-text-tertiary mb-4">
-                "Automatically remove personally identifiable information from search results"
-            </p>
+            <h2 class="text-lg font-semibold text-text-primary mb-4">{t!(i18n, settings.security.pii_protection)}</h2>
 
             <div class="space-y-4">
                 <label class="flex items-center space-x-3 cursor-pointer">
@@ -347,8 +348,7 @@ fn PIISection(config: RwSignal<SearchConfig>) -> impl IntoView {
                         class="w-4 h-4 text-primary focus:ring-primary/30 rounded"
                     />
                     <div>
-                        <div class="font-medium text-text-primary">"Enable PII Scrubbing"</div>
-                        <div class="text-sm text-text-tertiary">"Remove sensitive information from results"</div>
+                        <div class="font-medium text-text-primary">{t!(i18n, settings.security.enable_pii)}</div>
                     </div>
                 </label>
 
@@ -361,7 +361,7 @@ fn PIISection(config: RwSignal<SearchConfig>) -> impl IntoView {
                             disabled=move || !pii_enabled.get()
                             class="w-4 h-4 text-primary focus:ring-primary/30 rounded disabled:opacity-50"
                         />
-                        <span class="text-sm text-text-secondary">"Email addresses"</span>
+                        <span class="text-sm text-text-secondary">{t!(i18n, settings.security.pii_email)}</span>
                     </label>
 
                     <label class="flex items-center space-x-2 cursor-pointer">
@@ -372,7 +372,7 @@ fn PIISection(config: RwSignal<SearchConfig>) -> impl IntoView {
                             disabled=move || !pii_enabled.get()
                             class="w-4 h-4 text-primary focus:ring-primary/30 rounded disabled:opacity-50"
                         />
-                        <span class="text-sm text-text-secondary">"Phone numbers"</span>
+                        <span class="text-sm text-text-secondary">{t!(i18n, settings.security.pii_phone)}</span>
                     </label>
 
                     <label class="flex items-center space-x-2 cursor-pointer">
@@ -383,7 +383,7 @@ fn PIISection(config: RwSignal<SearchConfig>) -> impl IntoView {
                             disabled=move || !pii_enabled.get()
                             class="w-4 h-4 text-primary focus:ring-primary/30 rounded disabled:opacity-50"
                         />
-                        <span class="text-sm text-text-secondary">"Social Security Numbers"</span>
+                        <span class="text-sm text-text-secondary">{t!(i18n, settings.security.pii_ssn)}</span>
                     </label>
 
                     <label class="flex items-center space-x-2 cursor-pointer">
@@ -394,7 +394,7 @@ fn PIISection(config: RwSignal<SearchConfig>) -> impl IntoView {
                             disabled=move || !pii_enabled.get()
                             class="w-4 h-4 text-primary focus:ring-primary/30 rounded disabled:opacity-50"
                         />
-                        <span class="text-sm text-text-secondary">"Credit card numbers"</span>
+                        <span class="text-sm text-text-secondary">{t!(i18n, settings.security.pii_credit_card)}</span>
                     </label>
                 </div>
 
@@ -408,7 +408,7 @@ fn PIISection(config: RwSignal<SearchConfig>) -> impl IntoView {
                     if save_success.get() {
                         Some(view! {
                             <div class="p-3 bg-success-subtle border border-success/20 rounded text-success text-sm">
-                                "Saved successfully"
+                                {t!(i18n, common.saved)}
                             </div>
                         })
                     } else {

@@ -64,7 +64,7 @@ pub fn BehaviorView() -> impl IntoView {
                                                     <line x1="12" y1="16" x2="12" y2="12"/>
                                                     <line x1="12" y1="8" x2="12.01" y2="8"/>
                                                 </svg>
-                                                "Gateway not available — showing default settings"
+                                                {t!(i18n, settings.behavior.gateway_unavailable)}
                                             </div>
                                         }.into_any())
                                     }
@@ -127,9 +127,9 @@ fn OutputModeSection(config: RwSignal<BehaviorConfig>) -> impl IntoView {
 
     view! {
         <div class="bg-surface-raised rounded-lg border border-border p-6">
-            <h2 class="text-lg font-semibold text-text-primary mb-4">"Output Mode"</h2>
+            <h2 class="text-lg font-semibold text-text-primary mb-4">{t!(i18n, settings.behavior.output_mode)}</h2>
             <p class="text-sm text-text-tertiary mb-4">
-                "Choose how AI responses are displayed"
+                {t!(i18n, settings.behavior.output_mode_desc)}
             </p>
 
             <div class="space-y-4">
@@ -144,8 +144,8 @@ fn OutputModeSection(config: RwSignal<BehaviorConfig>) -> impl IntoView {
                             class="w-4 h-4 text-primary focus:ring-primary/30"
                         />
                         <div>
-                            <div class="font-medium text-text-primary">"Typewriter"</div>
-                            <div class="text-sm text-text-tertiary">"Display responses character by character"</div>
+                            <div class="font-medium text-text-primary">{t!(i18n, settings.behavior.typewriter)}</div>
+                            <div class="text-sm text-text-tertiary">{t!(i18n, settings.behavior.typewriter_desc)}</div>
                         </div>
                     </label>
 
@@ -159,8 +159,8 @@ fn OutputModeSection(config: RwSignal<BehaviorConfig>) -> impl IntoView {
                             class="w-4 h-4 text-primary focus:ring-primary/30"
                         />
                         <div>
-                            <div class="font-medium text-text-primary">"Instant"</div>
-                            <div class="text-sm text-text-tertiary">"Display complete responses immediately"</div>
+                            <div class="font-medium text-text-primary">{t!(i18n, settings.behavior.instant)}</div>
+                            <div class="text-sm text-text-tertiary">{t!(i18n, settings.behavior.instant_desc)}</div>
                         </div>
                     </label>
                 </div>
@@ -175,7 +175,7 @@ fn OutputModeSection(config: RwSignal<BehaviorConfig>) -> impl IntoView {
                     if save_success.get() {
                         Some(view! {
                             <div class="p-3 bg-success-subtle border border-success/20 rounded text-success text-sm">
-                                "Saved successfully"
+                                {t!(i18n, settings.behavior.saved)}
                             </div>
                         })
                     } else {
@@ -234,16 +234,16 @@ fn TypingSpeedSection(config: RwSignal<BehaviorConfig>) -> impl IntoView {
 
     view! {
         <div class="bg-surface-raised rounded-lg border border-border p-6">
-            <h2 class="text-lg font-semibold text-text-primary mb-4">"Typing Speed"</h2>
+            <h2 class="text-lg font-semibold text-text-primary mb-4">{t!(i18n, settings.behavior.typing_speed)}</h2>
             <p class="text-sm text-text-tertiary mb-4">
-                "Characters per second in typewriter mode (50-400)"
+                {t!(i18n, settings.behavior.typing_speed_desc)}
             </p>
 
             <div class="space-y-4">
                 <div>
                     <div class="flex items-center justify-between mb-2">
                         <label class="block text-sm font-medium text-text-secondary">
-                            "Speed: " {move || typing_speed.get()} " chars/sec"
+                            {t!(i18n, settings.behavior.speed_label)} ": " {move || typing_speed.get()} " " {t!(i18n, settings.behavior.chars_sec)}
                         </label>
                     </div>
                     <input
@@ -260,8 +260,8 @@ fn TypingSpeedSection(config: RwSignal<BehaviorConfig>) -> impl IntoView {
                         class="w-full h-2 bg-surface-sunken rounded-lg appearance-none cursor-pointer accent-primary"
                     />
                     <div class="flex justify-between text-xs text-text-tertiary mt-1">
-                        <span>"Slow (50)"</span>
-                        <span>"Fast (400)"</span>
+                        <span>{t!(i18n, settings.behavior.slow)}</span>
+                        <span>{t!(i18n, settings.behavior.fast)}</span>
                     </div>
                 </div>
 
@@ -275,7 +275,7 @@ fn TypingSpeedSection(config: RwSignal<BehaviorConfig>) -> impl IntoView {
                     if save_success.get() {
                         Some(view! {
                             <div class="p-3 bg-success-subtle border border-success/20 rounded text-success text-sm">
-                                "Saved successfully"
+                                {t!(i18n, settings.behavior.saved)}
                             </div>
                         })
                     } else {

@@ -226,7 +226,7 @@ pub async fn handle_marketplace_update(request: JsonRpcRequest) -> JsonRpcRespon
     };
 
     let result = if let Some(name) = &params.name {
-        manager.update(name).map(|_| ()).map_err(|e| e)
+        manager.update(name).map(|_| ())
     } else {
         manager.update_all()
     };

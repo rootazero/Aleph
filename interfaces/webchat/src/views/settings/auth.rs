@@ -157,22 +157,22 @@ fn SharedTokenSection(
         <div class="bg-surface-raised rounded-lg border border-border p-6">
             <div class="flex items-center justify-between mb-4">
                 <div>
-                    <h2 class="text-lg font-semibold text-text-primary">"Shared Access Token"</h2>
+                    <h2 class="text-lg font-semibold text-text-primary">{t!(i18n, settings.auth.shared_access_token)}</h2>
                     <p class="text-sm text-text-tertiary mt-1">
-                        "Used for Panel login, API access (Bearer header), and WebSocket authentication"
+                        {t!(i18n, settings.auth.token_desc)}
                     </p>
                 </div>
                 <div class="flex items-center gap-2 px-3 py-1 rounded-full bg-success-subtle text-success text-xs font-medium">
                     <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
                     </svg>
-                    "Active"
+                    {t!(i18n, settings.auth.active)}
                 </div>
             </div>
 
             // Token display
             <div class="mb-4">
-                <label class="block text-sm font-medium text-text-secondary mb-2">"Current Token"</label>
+                <label class="block text-sm font-medium text-text-secondary mb-2">{t!(i18n, settings.auth.current_token)}</label>
                 <div class="flex items-center gap-2">
                     <div class="flex-1 px-4 py-2.5 bg-surface-sunken border border-border rounded-lg font-mono text-sm select-all">
                         {move || {
@@ -191,7 +191,7 @@ fn SharedTokenSection(
                     <button
                         on:click=move |_| visible.update(|v| *v = !*v)
                         class="p-2.5 bg-surface-sunken border border-border rounded-lg hover:bg-surface text-text-secondary hover:text-text-primary transition-colors"
-                        title=move || if visible.get() { "Hide token" } else { "Show token" }
+                        title=move || if visible.get() { t_string!(i18n, settings.auth.hide_token).to_string() } else { t_string!(i18n, settings.auth.show_token).to_string() }
                     >
                         {move || if visible.get() {
                             view! {
@@ -214,7 +214,7 @@ fn SharedTokenSection(
                     <button
                         on:click=move |_| copy_token()
                         class="p-2.5 bg-surface-sunken border border-border rounded-lg hover:bg-surface text-text-secondary hover:text-text-primary transition-colors"
-                        title="Copy token"
+                        title=t_string!(i18n, settings.auth.copy_token_title).to_string()
                     >
                         {move || if copied.get() {
                             view! {
@@ -245,21 +245,21 @@ fn SharedTokenSection(
                                 <line x1="12" y1="17" x2="12.01" y2="17"/>
                             </svg>
                             <div class="flex-1">
-                                <p class="text-sm font-medium text-text-primary">"Regenerate token?"</p>
-                                <p class="text-xs text-text-tertiary">"All API clients using the current token will lose access."</p>
+                                <p class="text-sm font-medium text-text-primary">{t!(i18n, settings.auth.regen_confirm_title)}</p>
+                                <p class="text-xs text-text-tertiary">{t!(i18n, settings.auth.regen_confirm_desc)}</p>
                             </div>
                             <div class="flex gap-2">
                                 <button
                                     on:click=move |_| show_confirm.set(false)
                                     class="px-3 py-1.5 text-sm bg-surface border border-border rounded-lg hover:bg-surface-raised"
                                 >
-                                    "Cancel"
+                                    {t!(i18n, common.cancel)}
                                 </button>
                                 <button
                                     on:click=move |_| regenerate()
                                     class="px-3 py-1.5 text-sm bg-danger text-white rounded-lg hover:opacity-90"
                                 >
-                                    "Confirm"
+                                    {t!(i18n, common.confirm)}
                                 </button>
                             </div>
                         </div>
@@ -277,7 +277,7 @@ fn SharedTokenSection(
                                         <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
                                         <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                                     </svg>
-                                    "Regenerating..."
+                                    {t!(i18n, settings.auth.regenerating)}
                                 }.into_any()
                             } else {
                                 view! {
@@ -285,7 +285,7 @@ fn SharedTokenSection(
                                         <polyline points="23 4 23 10 17 10"/>
                                         <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
                                     </svg>
-                                    "Regenerate Token"
+                                    {t!(i18n, settings.auth.regenerate_token)}
                                 }.into_any()
                             }}
                         </button>
@@ -307,6 +307,7 @@ fn ActiveSessionsSection(
     error: RwSignal<Option<String>>,
 ) -> impl IntoView {
     let state = expect_context::<DashboardState>();
+    let i18n = use_i18n();
 
     let revoke_session = move |session_id: String| {
         spawn_local(async move {
@@ -330,13 +331,13 @@ fn ActiveSessionsSection(
         <div class="bg-surface-raised rounded-lg border border-border p-6">
             <div class="flex items-center justify-between mb-4">
                 <div>
-                    <h2 class="text-lg font-semibold text-text-primary">"Active Sessions"</h2>
+                    <h2 class="text-lg font-semibold text-text-primary">{t!(i18n, settings.auth.active_sessions)}</h2>
                     <p class="text-sm text-text-tertiary mt-1">
-                        "Browser sessions authenticated via shared token login"
+                        {t!(i18n, settings.auth.sessions_desc)}
                     </p>
                 </div>
                 <div class="px-3 py-1 rounded-full bg-info-subtle text-info text-xs font-medium">
-                    {move || format!("{} active", session_count.get())}
+                    {format!("{} {}", session_count.get(), t_string!(i18n, settings.auth.active_suffix))}
                 </div>
             </div>
 
@@ -350,7 +351,7 @@ fn ActiveSessionsSection(
                                     <rect x="3" y="11" width="18" height="11" rx="2"/>
                                     <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
                                 </svg>
-                                <p class="text-sm">"No active sessions"</p>
+                                <p class="text-sm">{t!(i18n, settings.auth.no_sessions)}</p>
                             </div>
                         }.into_any()
                     } else {
@@ -382,6 +383,7 @@ fn SessionCard<F>(
 where
     F: Fn() + 'static,
 {
+    let i18n = use_i18n();
     let created = format_timestamp(session.created_at);
     let expires = format_timestamp(session.expires_at);
     let last_used = format_timestamp(session.last_used_at);
@@ -397,19 +399,19 @@ where
                         <line x1="12" y1="17" x2="12" y2="21"/>
                     </svg>
                     <span class="font-mono text-sm text-text-primary">{short_id.clone()}</span>
-                    <span class="text-xs px-1.5 py-0.5 rounded bg-success-subtle text-success">"active"</span>
+                    <span class="text-xs px-1.5 py-0.5 rounded bg-success-subtle text-success">{t!(i18n, settings.auth.session_active)}</span>
                 </div>
                 <div class="flex gap-4 mt-1.5 text-xs text-text-tertiary">
-                    <span>"Created: " {created}</span>
-                    <span>"Last used: " {last_used}</span>
-                    <span>"Expires: " {expires}</span>
+                    <span>{t!(i18n, settings.auth.session_created)}: " " {created}</span>
+                    <span>{t!(i18n, settings.auth.session_last_used)}: " " {last_used}</span>
+                    <span>{t!(i18n, settings.auth.session_expires)}: " " {expires}</span>
                 </div>
             </div>
             <button
                 on:click=move |_| on_revoke()
                 class="ml-4 px-3 py-1.5 text-xs bg-danger/10 text-danger border border-danger/20 rounded-lg hover:bg-danger hover:text-white transition-colors"
             >
-                "Revoke"
+                {t!(i18n, settings.auth.revoke)}
             </button>
         </div>
     }

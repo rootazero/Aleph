@@ -84,7 +84,7 @@ fn RulesList(
                     on:click=move |_| selected.set(Some(usize::MAX))
                     class="w-full px-4 py-2 bg-primary hover:bg-primary-hover text-white rounded-lg transition-colors"
                 >
-                    "+ Add Rule"
+                    {t!(i18n, settings.routing_rules.add_rule)}
                 </button>
             </div>
 
@@ -100,7 +100,7 @@ fn RulesList(
                     } else if rules.get().is_empty() {
                         view! {
                             <div class="p-4 text-center text-text-secondary">
-                                "No routing rules configured"
+                                {t!(i18n, settings.routing_rules.no_rules)}
                             </div>
                         }.into_any()
                     } else {
@@ -313,7 +313,7 @@ fn RuleEditor(
                 if !is_editing() {
                     view! {
                         <div class="flex items-center justify-center h-full text-text-tertiary">
-                            "Select a rule to edit or add a new one"
+                            {t!(i18n, settings.routing_rules.select_or_add)}
                         </div>
                     }.into_any()
                 } else {
@@ -322,10 +322,10 @@ fn RuleEditor(
                             // Header
                             <div class="mb-6">
                                 <h2 class="text-2xl font-bold text-text-primary mb-2">
-                                    {move || if is_new() { "Add Routing Rule" } else { "Edit Routing Rule" }}
+                                    {move || if is_new() { t_string!(i18n, settings.routing_rules.add_routing_rule).to_string() } else { t_string!(i18n, settings.routing_rules.edit_routing_rule).to_string() }}
                                 </h2>
                                 <p class="text-sm text-text-secondary">
-                                    "Configure routing rules for AI provider selection"
+                                    {t!(i18n, settings.routing_rules.configure_rules)}
                                 </p>
                             </div>
 
@@ -347,22 +347,22 @@ fn RuleEditor(
                                 // Rule Type
                                 <div>
                                     <label class="block text-sm font-medium text-text-secondary mb-2">
-                                        "Rule Type"
+                                        {t!(i18n, settings.routing_rules.rule_type)}
                                     </label>
                                     <select
                                         prop:value=move || form_rule_type.get()
                                         on:change=move |ev| form_rule_type.set(event_target_value(&ev))
                                         class="w-full px-4 py-2 bg-surface-sunken border border-border rounded-lg text-text-primary focus:outline-none focus:border-primary"
                                     >
-                                        <option value="command">"Command"</option>
-                                        <option value="keyword">"Keyword"</option>
+                                        <option value="command">{t!(i18n, settings.routing_rules.command_type)}</option>
+                                        <option value="keyword">{t!(i18n, settings.routing_rules.keyword_type)}</option>
                                     </select>
                                 </div>
 
                                 // Regex Pattern
                                 <div>
                                     <label class="block text-sm font-medium text-text-secondary mb-2">
-                                        "Regex Pattern"
+                                        {t!(i18n, settings.routing_rules.regex_pattern)}
                                     </label>
                                     <input
                                         type="text"
@@ -372,14 +372,14 @@ fn RuleEditor(
                                         placeholder="^/draw\\s+"
                                     />
                                     <p class="mt-1 text-xs text-text-tertiary">
-                                        "Regular expression to match user input"
+                                        {t!(i18n, settings.routing_rules.regex_hint)}
                                     </p>
                                 </div>
 
                                 // Provider (for command rules)
                                 <div>
                                     <label class="block text-sm font-medium text-text-secondary mb-2">
-                                        "Provider"
+                                        {t!(i18n, settings.routing_rules.provider_label)}
                                     </label>
                                     <input
                                         type="text"
@@ -389,14 +389,14 @@ fn RuleEditor(
                                         placeholder="openai, claude, gemini"
                                     />
                                     <p class="mt-1 text-xs text-text-tertiary">
-                                        "Required for command rules, ignored for keyword rules"
+                                        {t!(i18n, settings.routing_rules.provider_hint)}
                                     </p>
                                 </div>
 
                                 // System Prompt
                                 <div>
                                     <label class="block text-sm font-medium text-text-secondary mb-2">
-                                        "System Prompt"
+                                        {t!(i18n, settings.routing_rules.system_prompt)}
                                     </label>
                                     <textarea
                                         prop:value=move || form_system_prompt.get()
@@ -426,7 +426,7 @@ fn RuleEditor(
                                                 prop:disabled=move || saving.get()
                                                 class="px-6 py-2 bg-danger hover:bg-danger disabled:bg-danger/50 text-white rounded-lg transition-colors disabled:cursor-not-allowed"
                                             >
-                                                "Delete"
+                                                {t!(i18n, settings.routing_rules.delete_rule)}
                                             </button>
                                         }.into_any()
                                     } else {
@@ -438,7 +438,7 @@ fn RuleEditor(
                                     on:click=move |_| selected.set(None)
                                     class="px-6 py-2 bg-surface-sunken hover:bg-surface-sunken text-text-primary rounded-lg transition-colors"
                                 >
-                                    "Cancel"
+                                    {t!(i18n, common.cancel)}
                                 </button>
                             </div>
                         </div>
