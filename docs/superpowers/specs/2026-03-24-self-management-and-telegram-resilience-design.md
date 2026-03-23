@@ -52,15 +52,15 @@ tokio::spawn {
     if which == "shutdown" { break; }
 
     // Set status to Reconnecting
-    *status.write().await = ChannelStatus::Reconnecting;
+    *status.write().await = ChannelStatus::Connecting;
     tracing::error!(attempt, "Telegram polling {} — auto-restarting", which);
 
     // Exponential backoff: 5s → 10s → 20s → 40s → 60s cap
     // Reset attempt counter if last healthy run lasted > 5 min
     if healthy_since.is_some_and(|t| t.elapsed() > Duration::from_secs(300)) {
-      attempt = 0;
+      attempt = 1; // Reset to 1 (not 0) so backoff exponent is valid
     }
-    let delay = std::cmp::min(5 * 2u64.pow(attempt.min(4) - 1), 60);
+    let delay = std::cmp::min(5 * 2u64.pow(attempt.saturating_sub(1).min(4)), 60);
     tokio::time::sleep(Duration::from_secs(delay)).await;
 
     // Reset last_update timestamp and healthy tracker
@@ -78,14 +78,14 @@ tokio::spawn {
 - **`&mut shutdown_rx` borrow**: `tokio::select!` borrows the oneshot receiver, so it survives across loop iterations. Only consumed when the sender fires.
 - **Watchdog lifecycle**: Each iteration creates a fresh `CancellationToken` + watchdog task. On loop restart (stall or unexpected stop), `watchdog_cancel.cancel()` kills the old watchdog before spawning a new one. No duplicate watchers.
 - **No `.enable_ctrlc_handler()`**: Removed because teloxide's Ctrl+C handler would cause `dispatch()` to return normally, triggering an unwanted restart. Shutdown is managed exclusively via `shutdown_tx` from `stop()`.
-- **Attempt counter reset**: If the dispatcher ran healthy for >5 minutes before the next stall, `attempt` resets to 0 so backoff starts fresh.
+- **Attempt counter reset**: If the dispatcher ran healthy for >5 minutes before the next stall, `attempt` resets to 1 (not 0, to avoid unsigned underflow in exponent). `saturating_sub(1)` provides additional safety.
 - **Arc state survives**: `pairing_codes`, `runtime_allowed_users`, `pairing_prompt_times` are all `Arc<RwLock<...>>` — cloned before the spawn, valid across all loop iterations.
 
 #### Queue Coordination
 
 - **No message loss**: Telegram server queues undelivered updates for 24h. On reconnect, teloxide resumes from last acknowledged offset — burst delivery is automatic and ordered.
 - **Backpressure**: The existing bounded `mpsc` channel between Telegram handler and inbound forwarder provides natural backpressure during burst catch-up.
-- **Status visibility**: `ChannelStatus::Reconnecting` during backoff sleep, `Connected` after successful restart. Panel and `/status` reflect current state.
+- **Status visibility**: `ChannelStatus::Connecting` during backoff sleep, `Connected` after successful restart. Panel and `/status` reflect current state.
 - **Reconnect log**: `INFO "Telegram reconnected, queued messages will be delivered"` after each successful restart.
 
 #### Parameters
@@ -97,9 +97,9 @@ tokio::spawn {
 | Backoff | 5s → 10s → 20s → 40s → 60s cap | Resets if healthy >5min |
 | Max attempts | Unlimited | Retry forever until shutdown |
 
-#### ChannelStatus::Reconnecting
+#### Reconnection Status
 
-Add `Reconnecting` variant to `ChannelStatus` enum in `core/src/gateway/channel.rs`. Before adding, verify all `match` sites use `_` wildcards (or update them). Alternatively, reuse `ChannelStatus::Connecting` with a distinguishing log message if exhaustive matches exist.
+Reuse existing `ChannelStatus::Connecting` during reconnection backoff — no new enum variant needed. Log messages distinguish initial connect from reconnect (`"auto-restarting (attempt N)"` vs `"Starting Telegram channel..."`). This avoids breaking exhaustive `match` sites in `channel_registry.rs` and `whatsapp/pairing.rs`.
 
 ---
 
@@ -334,7 +334,7 @@ Add corresponding "Add video provider" and "Add audio provider" operation sectio
 | File | Change |
 |------|--------|
 | `core/src/gateway/interfaces/telegram/mod.rs` | Retry loop + stall restart |
-| `core/src/gateway/channel.rs` | Add `ChannelStatus::Reconnecting` variant (or reuse `Connecting`) |
+| `core/src/gateway/channel.rs` | No change (reuse existing `ChannelStatus::Connecting`) |
 | `core/src/thinker/layers/operational_guidelines.rs` | Paradigm filter: allowlist → denylist |
 | `~/.aleph/skills/self/SKILL.md` | **New**: `/self` skill (SKILL.md with prompt) |
 | `~/Workspace/Aleph-skills/self/SKILL.md` | **New**: same, committed to official skills repo |
