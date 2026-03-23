@@ -3,6 +3,7 @@ use leptos::task::spawn_local;
 
 use crate::api::{AcpApi, AcpHarnessInfo, AcpHarnessConfig};
 use crate::context::DashboardState;
+use crate::i18n::*;
 
 /// Preset harness metadata for the left panel cards
 struct HarnessPreset {
@@ -21,6 +22,7 @@ const HARNESS_PRESETS: &[HarnessPreset] = &[
 #[component]
 pub fn AcpHarnessesView() -> impl IntoView {
     let state = expect_context::<DashboardState>();
+    let i18n = use_i18n();
 
     let harnesses = RwSignal::new(Vec::<AcpHarnessInfo>::new());
     let loading = RwSignal::new(true);
@@ -86,10 +88,10 @@ pub fn AcpHarnessesView() -> impl IntoView {
                     <div class="flex items-center justify-between">
                         <div>
                             <h1 class="text-2xl font-semibold text-text-primary">
-                                "ACP Agent CLI"
+                                {t!(i18n, settings.acp.title)}
                             </h1>
                             <p class="mt-1 text-sm text-text-secondary">
-                                "Manage external CLI tools that Aleph can delegate tasks to"
+                                {t!(i18n, settings.acp.description)}
                             </p>
                         </div>
                         <button
@@ -386,8 +388,6 @@ fn HarnessDetailPanel(
         if let Some(obj) = info.config.output_format.as_object() {
             if obj.contains_key("json") { "json".to_string() }
             else { "plain_text".to_string() }
-        } else if info.config.output_format.as_str() == Some("plain_text") {
-            "plain_text".to_string()
         } else {
             "plain_text".to_string()
         }

@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use crate::components::ui::channel_status::ChannelStatus;
 use crate::components::ui::ChannelCard;
 use crate::context::DashboardState;
+use crate::i18n::*;
 
 use super::definitions::ALL_CHANNELS;
 
@@ -21,6 +22,7 @@ use super::definitions::ALL_CHANNELS;
 #[component]
 pub fn ChannelsOverview() -> impl IntoView {
     let state = expect_context::<DashboardState>();
+    let i18n = use_i18n();
     let statuses = RwSignal::new(HashMap::<String, String>::new());
     let instance_counts = RwSignal::new(HashMap::<String, usize>::new());
 
@@ -54,9 +56,9 @@ pub fn ChannelsOverview() -> impl IntoView {
             <div class="max-w-5xl">
                 // Header
                 <div class="mb-6">
-                    <h1 class="text-2xl font-semibold text-text-primary mb-1">"Channels"</h1>
+                    <h1 class="text-2xl font-semibold text-text-primary mb-1">{t!(i18n, settings.channels.title)}</h1>
                     <p class="text-sm text-text-secondary">
-                        "Manage your messaging integrations. Click a channel to configure it."
+                        {t!(i18n, settings.channels.description)}
                     </p>
                 </div>
 
@@ -67,7 +69,7 @@ pub fn ChannelsOverview() -> impl IntoView {
                         let status_signal = Signal::derive(move || {
                             statuses.get()
                                 .get(&channel_id)
-                                .map(|s| ChannelStatus::from_str(s))
+                                .map(|s| ChannelStatus::parse(s))
                                 .unwrap_or(ChannelStatus::Disconnected)
                         });
                         let channel_id_for_count = def.id.to_string();

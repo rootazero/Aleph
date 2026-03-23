@@ -157,6 +157,10 @@
     "channels": {
       "title": "Channels",
       "description": "Configure messaging channels"
+    },
+    "generation_config": {
+      "title": "Generation Settings",
+      "description": "Configure media generation settings"
     }
   }
 }

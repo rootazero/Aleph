@@ -11,6 +11,7 @@ use crate::context::DashboardState;
 use crate::api::{ProvidersApi, ProviderInfo, ProviderConfig, TestResult, OAuthStatus};
 use crate::components::api_key_input::ApiKeyInput;
 use crate::preset_data::{PRESETS, OAUTH_PRESETS, find_preset};
+use crate::i18n::*;
 
 /// Map OAuth preset name to the canonical name used in config (e.g. "codex" → "chatgpt").
 fn canonical_oauth_name(name: &str) -> &'static str {
@@ -30,6 +31,7 @@ fn canonical_oauth_name(name: &str) -> &'static str {
 #[component]
 pub fn ProvidersView() -> impl IntoView {
     let state = expect_context::<DashboardState>();
+    let i18n = use_i18n();
 
     let providers = RwSignal::new(Vec::<ProviderInfo>::new());
     let selected = RwSignal::new(Option::<String>::None);
@@ -56,9 +58,9 @@ pub fn ProvidersView() -> impl IntoView {
             <div class="flex flex-col w-5/12 min-w-0 border-r border-border">
                 // Header
                 <div class="px-6 py-4 border-b border-border">
-                    <h1 class="text-2xl font-semibold text-text-primary">"AI Providers"</h1>
+                    <h1 class="text-2xl font-semibold text-text-primary">{t!(i18n, settings.providers.title)}</h1>
                     <p class="mt-1 text-sm text-text-tertiary">
-                        "Configure AI model providers. Select a preset or add a custom provider."
+                        {t!(i18n, settings.providers.description)}
                     </p>
                 </div>
 
@@ -188,7 +190,7 @@ fn SubscriptionLoginSection(
                                 let connected = oauth_connected.get().unwrap_or(false);
                                 let is_verified = providers.get().iter()
                                     .find(|p| p.name == name || p.name == canonical)
-                                    .map_or(false, |p| p.verified);
+                                    .is_some_and(|p| p.verified);
                                 if is_sel {
                                     format!("{} bg-primary-subtle border-primary", base)
                                 } else if connected || is_verified {
@@ -214,8 +216,8 @@ fn SubscriptionLoginSection(
                                             let connected = oauth_connected.get().unwrap_or(false);
                                             let list = providers.get();
                                             let provider = list.iter().find(|p| p.name == name || p.name == canonical);
-                                            let is_default = provider.map_or(false, |p| p.is_default);
-                                            let is_verified = provider.map_or(false, |p| p.verified);
+                                            let is_default = provider.is_some_and(|p| p.is_default);
+                                            let is_verified = provider.is_some_and(|p| p.verified);
                                             if is_default {
                                                 view! {
                                                     <span class="px-1.5 py-0.5 bg-primary-subtle text-primary text-xs rounded shrink-0">
@@ -313,7 +315,7 @@ fn PresetGrid(
                                     {move || {
                                         let list = providers.get();
                                         let provider = list.iter().find(|p| p.name == name);
-                                        let is_verified = provider.map_or(false, |p| p.verified);
+                                        let is_verified = provider.is_some_and(|p| p.verified);
                                         if is_verified {
                                             view! {
                                                 <span class="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-success border-2 border-surface-raised" />

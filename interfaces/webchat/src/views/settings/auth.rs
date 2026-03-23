@@ -10,10 +10,12 @@ use leptos::task::spawn_local;
 
 use crate::api::{AuthTokenApi, AuthTokenInfo, SessionInfo};
 use crate::context::DashboardState;
+use crate::i18n::*;
 
 #[component]
 pub fn AuthView() -> impl IntoView {
     let state = expect_context::<DashboardState>();
+    let i18n = use_i18n();
 
     let token_info = RwSignal::new(Option::<AuthTokenInfo>::None);
     let sessions = RwSignal::new(Vec::<SessionInfo>::new());
@@ -58,9 +60,9 @@ pub fn AuthView() -> impl IntoView {
         <div class="flex-1 p-6 overflow-y-auto">
             <div class="max-w-4xl">
                 <div class="mb-8">
-                    <h1 class="text-2xl font-bold text-text-primary">"Token Authentication"</h1>
+                    <h1 class="text-2xl font-bold text-text-primary">{t!(i18n, settings.auth.title)}</h1>
                     <p class="text-text-secondary mt-1">
-                        "Manage access tokens and active sessions for Panel UI and API access"
+                        {t!(i18n, settings.auth.description)}
                     </p>
                 </div>
 
@@ -72,7 +74,7 @@ pub fn AuthView() -> impl IntoView {
                                     <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
                                     <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                                 </svg>
-                                "Loading authentication settings..."
+                                {t!(i18n, common.loading)}
                             </div>
                         }.into_any()
                     } else {

@@ -4,6 +4,7 @@ use leptos::task::spawn_local;
 use crate::api::{RerankConfigApi, RerankConfig, RerankProviderType};
 use crate::components::ui::SecretInput;
 use crate::context::DashboardState;
+use crate::i18n::*;
 
 /// Preset reranking provider metadata
 struct RerankPreset {
@@ -25,6 +26,7 @@ const RERANK_PRESETS: &[RerankPreset] = &[
 #[component]
 pub fn RerankingProvidersView() -> impl IntoView {
     let state = expect_context::<DashboardState>();
+    let i18n = use_i18n();
 
     let config = RwSignal::new(Option::<RerankConfig>::None);
     let loading = RwSignal::new(true);
@@ -60,10 +62,10 @@ pub fn RerankingProvidersView() -> impl IntoView {
             <div class="flex flex-col w-5/12 min-w-[400px] border-r border-border">
                 <div class="px-6 py-4 border-b border-border">
                     <h1 class="text-2xl font-semibold text-text-primary">
-                        "Reranking Providers"
+                        {t!(i18n, settings.reranking.title)}
                     </h1>
                     <p class="mt-1 text-sm text-text-secondary">
-                        "Configure cross-encoder reranking providers for retrieval precision"
+                        {t!(i18n, settings.reranking.description)}
                     </p>
                 </div>
 
@@ -298,14 +300,14 @@ fn ProviderDetailPanel(
 
     // Test connection
     let build_for_test = build_rerank_config.clone();
-    let test_state = state.clone();
+    let test_state = state;
     let handle_test = move |_| {
         set_testing.set(true);
         set_test_result.set(None);
         set_action_error.set(None);
 
         let rerank = build_for_test();
-        let state = test_state.clone();
+        let state = test_state;
         spawn_local(async move {
             match RerankConfigApi::test(&state, rerank).await {
                 Ok(resp) => {
@@ -331,7 +333,7 @@ fn ProviderDetailPanel(
 
     // Save handler
     let build_for_save = build_rerank_config.clone();
-    let save_state = state.clone();
+    let save_state = state;
     let handle_save = move |_| {
         set_action_error.set(None);
         set_save_success.set(false);
@@ -339,7 +341,7 @@ fn ProviderDetailPanel(
 
         let rerank = build_for_save();
         let rerank_clone = rerank.clone();
-        let state = save_state.clone();
+        let state = save_state;
         spawn_local(async move {
             match RerankConfigApi::update(&state, rerank_clone.clone()).await {
                 Ok(_) => {
@@ -588,15 +590,15 @@ fn AddCustomProviderPanel(
     let state = expect_context::<DashboardState>();
 
     // Test connection
-    let build_for_test = build_rerank_config.clone();
-    let test_state = state.clone();
+    let build_for_test = build_rerank_config;
+    let test_state = state;
     let handle_test = move |_| {
         set_testing.set(true);
         set_test_result.set(None);
         set_action_error.set(None);
 
         let rerank = build_for_test();
-        let state = test_state.clone();
+        let state = test_state;
         spawn_local(async move {
             match RerankConfigApi::test(&state, rerank).await {
                 Ok(resp) => {
@@ -621,8 +623,8 @@ fn AddCustomProviderPanel(
     };
 
     // Save handler — saves as vLLM provider with custom endpoint
-    let build_for_save = build_rerank_config.clone();
-    let save_state = state.clone();
+    let build_for_save = build_rerank_config;
+    let save_state = state;
     let handle_save = move |_| {
         // Validate
         if api_base.get().is_empty() {
@@ -639,7 +641,7 @@ fn AddCustomProviderPanel(
 
         let rerank = build_for_save();
         let rerank_clone = rerank.clone();
-        let state = save_state.clone();
+        let state = save_state;
         spawn_local(async move {
             match RerankConfigApi::update(&state, rerank_clone.clone()).await {
                 Ok(_) => {

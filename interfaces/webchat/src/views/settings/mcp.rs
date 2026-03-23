@@ -11,6 +11,7 @@ use std::collections::HashMap;
 
 use crate::api::{McpConfigApi, McpServerConfig, McpServerInfo};
 use crate::context::DashboardState;
+use crate::i18n::*;
 
 /// Load MCP servers list from Gateway
 fn load_servers(
@@ -38,6 +39,7 @@ fn load_servers(
 #[component]
 pub fn McpView() -> impl IntoView {
     let state = expect_context::<DashboardState>();
+    let i18n = use_i18n();
     let servers = RwSignal::new(Vec::<McpServerInfo>::new());
     let loading = RwSignal::new(true);
     let error = RwSignal::new(Option::<String>::None);
@@ -60,10 +62,10 @@ pub fn McpView() -> impl IntoView {
                 <div class="flex items-center justify-between">
                     <div>
                         <h1 class="text-2xl font-semibold text-text-primary mb-1">
-                            "MCP Servers"
+                            {t!(i18n, settings.mcp.title)}
                         </h1>
                         <p class="text-sm text-text-secondary">
-                            "Manage Model Context Protocol server connections"
+                            {t!(i18n, settings.mcp.description)}
                         </p>
                     </div>
                     <div class="flex items-center gap-2">

@@ -10,10 +10,12 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 use crate::context::DashboardState;
 use crate::api::{RoutingRulesApi, RoutingRuleInfo, RoutingRuleConfig};
+use crate::i18n::*;
 
 #[component]
 pub fn RoutingRulesView() -> impl IntoView {
     let state = expect_context::<DashboardState>();
+    let i18n = use_i18n();
 
     // State
     let rules = RwSignal::new(Vec::<RoutingRuleInfo>::new());
@@ -48,9 +50,9 @@ pub fn RoutingRulesView() -> impl IntoView {
         <div class="flex flex-col h-full">
             // Header
             <div class="p-6 border-b border-border">
-                <h1 class="text-2xl font-bold text-text-primary">"Routing Rules"</h1>
+                <h1 class="text-2xl font-bold text-text-primary">{t!(i18n, settings.routing_rules.title)}</h1>
                 <p class="mt-1 text-sm text-text-secondary">
-                    "Configure AI routing rules for commands and keywords"
+                    {t!(i18n, settings.routing_rules.description)}
                 </p>
             </div>
 

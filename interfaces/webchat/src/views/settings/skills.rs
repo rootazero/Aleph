@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::context::DashboardState;
+use crate::i18n::*;
 
 const OFFICIAL_SKILLS_URL: &str = "https://github.com/rootazero/AlephSkills";
 
@@ -59,6 +60,7 @@ fn load_skills(state: DashboardState, skills: RwSignal<Vec<SkillInfo>>, loading:
 #[component]
 pub fn SkillsView() -> impl IntoView {
     let state = expect_context::<DashboardState>();
+    let i18n = use_i18n();
     let skills = RwSignal::new(Vec::<SkillInfo>::new());
     let loading = RwSignal::new(true);
     let error = RwSignal::new(Option::<String>::None);
@@ -107,10 +109,10 @@ pub fn SkillsView() -> impl IntoView {
                 <div class="flex items-center justify-between">
                     <div>
                         <h1 class="text-2xl font-semibold text-text-primary mb-1">
-                            "Skills"
+                            {t!(i18n, settings.skills.title)}
                         </h1>
                         <p class="text-sm text-text-secondary">
-                            "Install and manage AI skills"
+                            {t!(i18n, settings.skills.description)}
                         </p>
                     </div>
                     <div class="flex items-center gap-2">

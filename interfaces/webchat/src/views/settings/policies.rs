@@ -4,6 +4,7 @@ use leptos::task::spawn_local;
 use crate::api::agents::{AgentsApi, ToolGroupInfo};
 use crate::api::tool_permissions::ToolPermissionsApi;
 use crate::context::DashboardState;
+use crate::i18n::*;
 
 /// Permission level constants
 const ALLOW: &str = "allow";
@@ -12,6 +13,7 @@ const DENY: &str = "deny";
 
 #[component]
 pub fn PoliciesView() -> impl IntoView {
+    let i18n = use_i18n();
     let content_filter = RwSignal::new(false);
     let filter_level = RwSignal::new("moderate".to_string());
     let log_conversations = RwSignal::new(true);
@@ -137,10 +139,10 @@ pub fn PoliciesView() -> impl IntoView {
                 // Page Header
                 <div>
                     <h1 class="text-2xl font-semibold text-text-primary mb-1">
-                        "Policies"
+                        {t!(i18n, settings.policies.title)}
                     </h1>
                     <p class="text-sm text-text-secondary">
-                        "Configure tool permissions, content moderation, and data policies"
+                        {t!(i18n, settings.policies.description)}
                     </p>
                 </div>
 

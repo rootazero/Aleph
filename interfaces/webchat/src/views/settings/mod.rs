@@ -39,47 +39,49 @@ pub use channels::ChannelPlatformPage;
 
 // Settings default view (sidebar is provided by SettingsLayout)
 use leptos::prelude::*;
+use crate::i18n::*;
 
 #[component]
 pub fn Settings() -> impl IntoView {
+    let i18n = use_i18n();
     view! {
         <div class="p-8 max-w-5xl mx-auto">
             <div class="mb-8">
                 <h1 class="text-3xl font-bold mb-2 text-text-primary">
-                    "Welcome to Settings"
+                    {t!(i18n, settings.welcome)}
                 </h1>
                 <p class="text-text-secondary">
-                    "Select a category from the sidebar to configure Aleph Gateway"
+                    {t!(i18n, settings.select_category)}
                 </p>
             </div>
 
             <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div class="p-6 bg-surface-raised border border-border rounded-xl">
                     <h3 class="text-lg font-semibold text-text-primary mb-2">
-                        "Quick Start"
+                        {t!(i18n, settings.quick_start.title)}
                     </h3>
                     <p class="text-sm text-text-secondary mb-4">
-                        "Configure the essential settings to get started with Aleph"
+                        {t!(i18n, settings.quick_start.description)}
                     </p>
                     <ul class="space-y-2 text-sm text-text-secondary">
-                        <li>"• Set up AI providers and API keys"</li>
-                        <li>"• Customize agent behavior"</li>
-                        <li>"• Enable memory and knowledge base"</li>
+                        <li>"• " {t!(i18n, settings.quick_start.providers)}</li>
+                        <li>"• " {t!(i18n, settings.quick_start.behavior)}</li>
+                        <li>"• " {t!(i18n, settings.quick_start.memory)}</li>
                     </ul>
                 </div>
 
                 <div class="p-6 bg-surface-raised border border-border rounded-xl">
                     <h3 class="text-lg font-semibold text-text-primary mb-2">
-                        "Need Help?"
+                        {t!(i18n, settings.help.title)}
                     </h3>
                     <p class="text-sm text-text-secondary mb-4">
-                        "Learn more about Aleph's features and configuration options"
+                        {t!(i18n, settings.help.description)}
                     </p>
                     <ul class="space-y-2 text-sm text-text-secondary">
-                        <li>"• Check the documentation"</li>
-                        <li>"• Join the community"</li>
-                        <li>"• Report issues on GitHub"</li>
-                        <li>"• Contact support"</li>
+                        <li>"• " {t!(i18n, settings.help.docs)}</li>
+                        <li>"• " {t!(i18n, settings.help.community)}</li>
+                        <li>"• " {t!(i18n, settings.help.issues)}</li>
+                        <li>"• " {t!(i18n, settings.help.support)}</li>
                     </ul>
                 </div>
             </div>

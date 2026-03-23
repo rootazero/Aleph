@@ -9,6 +9,7 @@ use leptos::task::spawn_local;
 use crate::components::ui::SecretInput;
 use crate::context::DashboardState;
 use crate::api::{SearchBackendEntry, SearchConfig, SearchConfigApi};
+use crate::i18n::*;
 
 // ============================================================================
 // Preset Definitions
@@ -111,6 +112,7 @@ fn find_backend<'a>(backends: &'a [SearchBackendEntry], name: &str) -> Option<&'
 #[component]
 pub fn SearchView() -> impl IntoView {
     let state = expect_context::<DashboardState>();
+    let i18n = use_i18n();
 
     let config = RwSignal::new(SearchConfig {
         enabled: false,
@@ -153,9 +155,9 @@ pub fn SearchView() -> impl IntoView {
             <div class="flex flex-col w-5/12 min-w-0 border-r border-border">
                 // Header
                 <div class="px-6 py-4 border-b border-border">
-                    <h1 class="text-2xl font-semibold text-text-primary">"Search Providers"</h1>
+                    <h1 class="text-2xl font-semibold text-text-primary">{t!(i18n, settings.search.title)}</h1>
                     <p class="mt-1 text-sm text-text-tertiary">
-                        "Configure web search providers for AI-assisted research."
+                        {t!(i18n, settings.search.description)}
                     </p>
                 </div>
 
@@ -284,7 +286,7 @@ fn PresetGrid(
                                         {move || {
                                             let cfg = config.get();
                                             let is_default = !cfg.default_provider.is_empty() && cfg.default_provider == name;
-                                            let backend_verified = cfg.backends.iter().find(|b| b.name == name).map_or(false, |b| b.verified);
+                                            let backend_verified = cfg.backends.iter().find(|b| b.name == name).is_some_and(|b| b.verified);
                                             if is_default {
                                                 view! {
                                                     <span class="px-1.5 py-0.5 bg-primary-subtle text-primary text-xs rounded shrink-0">
@@ -720,7 +722,7 @@ fn ProviderDetailPanel(
                     let dp = config.get().default_provider;
                     !dp.is_empty() && dp == sel_name
                 };
-                let is_verified = config.get().backends.iter().find(|b| b.name == sel_name).map_or(false, |b| b.verified);
+                let is_verified = config.get().backends.iter().find(|b| b.name == sel_name).is_some_and(|b| b.verified);
 
                 view! {
                     <div class="flex flex-col h-full">

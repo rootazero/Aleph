@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::context::DashboardState;
+use crate::i18n::*;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ClawHubSkill {
@@ -120,6 +121,7 @@ fn load_installed_slugs(state: DashboardState, installed_slugs: RwSignal<Vec<Str
 #[component]
 pub fn ClawHubView() -> impl IntoView {
     let state = expect_context::<DashboardState>();
+    let i18n = use_i18n();
     let skills = RwSignal::new(Vec::<ClawHubSkill>::new());
     let loading = RwSignal::new(true);
     let error = RwSignal::new(Option::<String>::None);
@@ -178,10 +180,10 @@ pub fn ClawHubView() -> impl IntoView {
                 // Page Header
                 <div>
                     <h1 class="text-2xl font-semibold text-text-primary mb-1">
-                        "ClawHub Skill Marketplace"
+                        {t!(i18n, settings.clawhub.title)}
                     </h1>
                     <p class="text-sm text-text-secondary">
-                        "Search and install community skills from ClawHub"
+                        {t!(i18n, settings.clawhub.description)}
                     </p>
                 </div>
 

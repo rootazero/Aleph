@@ -11,10 +11,12 @@ use leptos::task::spawn_local;
 
 use crate::api::{SecurityConfigApi, SecurityConfig, DeviceInfo, SearchConfigApi, SearchConfig};
 use crate::context::DashboardState;
+use crate::i18n::*;
 
 #[component]
 pub fn SecurityView() -> impl IntoView {
     let state = expect_context::<DashboardState>();
+    let i18n = use_i18n();
 
     let config = RwSignal::new(Option::<SecurityConfig>::None);
     let devices = RwSignal::new(Vec::<DeviceInfo>::new());
@@ -97,11 +99,11 @@ pub fn SecurityView() -> impl IntoView {
     view! {
         <div class="flex-1 p-6 overflow-y-auto">
             <div class="max-w-4xl">
-                <h1 class="text-2xl font-bold mb-6">"Security Configuration"</h1>
+                <h1 class="text-2xl font-bold mb-6">{t!(i18n, settings.security.title)}</h1>
 
                 {move || {
                     if loading.get() {
-                        view! { <div class="text-text-tertiary">"Loading..."</div> }.into_any()
+                        view! { <div class="text-text-tertiary">{t!(i18n, common.loading)}</div> }.into_any()
                     } else {
                         view! {
                             <div class="space-y-6">

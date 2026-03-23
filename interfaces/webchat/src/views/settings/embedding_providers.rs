@@ -7,10 +7,12 @@ use crate::api::{
 };
 use crate::components::ui::SecretInput;
 use crate::context::DashboardState;
+use crate::i18n::*;
 
 #[component]
 pub fn EmbeddingProvidersView() -> impl IntoView {
     let state = expect_context::<DashboardState>();
+    let i18n = use_i18n();
 
     // State signals
     let (providers, set_providers) = signal(Vec::<EmbeddingProviderEntry>::new());
@@ -67,10 +69,10 @@ pub fn EmbeddingProvidersView() -> impl IntoView {
                 // Header
                 <div class="px-6 py-4 border-b border-border">
                     <h1 class="text-2xl font-semibold text-text-primary">
-                        "Embedding Providers"
+                        {t!(i18n, settings.embedding.title)}
                     </h1>
                     <p class="mt-1 text-sm text-text-secondary">
-                        "Configure vector embedding providers for memory and knowledge base"
+                        {t!(i18n, settings.embedding.description)}
                     </p>
                 </div>
 
@@ -112,8 +114,8 @@ pub fn EmbeddingProvidersView() -> impl IntoView {
                                                     // Check if this preset is configured
                                                     let configured_provider = provider_list.iter().find(|p| p.preset == preset_label);
                                                     let is_configured = configured_provider.is_some();
-                                                    let is_active = configured_provider.map_or(false, |p| p.is_active);
-                                                    let is_verified = configured_provider.map_or(false, |p| p.verified);
+                                                    let is_active = configured_provider.is_some_and(|p| p.is_active);
+                                                    let is_verified = configured_provider.is_some_and(|p| p.verified);
                                                     let configured_id = configured_provider.map(|p| p.id.clone());
 
                                                     let sel_id = configured_id.clone().unwrap_or(preset_id.clone());

@@ -14,10 +14,12 @@ use crate::api::{
     RetrieveWithTraceResponse,
 };
 use crate::context::DashboardState;
+use crate::i18n::*;
 
 #[component]
 pub fn MemoryView() -> impl IntoView {
     let state = expect_context::<DashboardState>();
+    let i18n = use_i18n();
 
     let config = RwSignal::new(Option::<MemoryConfig>::None);
     let loading = RwSignal::new(true);
@@ -65,11 +67,11 @@ pub fn MemoryView() -> impl IntoView {
     view! {
         <div class="flex-1 p-6 overflow-y-auto">
             <div class="max-w-4xl">
-                <h1 class="text-2xl font-bold mb-6">"Memory Configuration"</h1>
+                <h1 class="text-2xl font-bold mb-6">{t!(i18n, settings.memory.title)}</h1>
 
                 {move || {
                     if loading.get() {
-                        view! { <div class="text-text-tertiary">"Loading..."</div> }.into_any()
+                        view! { <div class="text-text-tertiary">{t!(i18n, common.loading)}</div> }.into_any()
                     } else if let Some(_cfg) = config.get() {
                         view! {
                             <div class="space-y-6">

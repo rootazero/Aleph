@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::context::DashboardState;
+use crate::i18n::*;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginInfo {
@@ -46,6 +47,7 @@ fn load_plugins(
 #[component]
 pub fn PluginsView() -> impl IntoView {
     let state = expect_context::<DashboardState>();
+    let i18n = use_i18n();
     let plugins = RwSignal::new(Vec::<PluginInfo>::new());
     let loading = RwSignal::new(true);
     let error = RwSignal::new(Option::<String>::None);
@@ -68,10 +70,10 @@ pub fn PluginsView() -> impl IntoView {
                 <div class="flex items-center justify-between">
                     <div>
                         <h1 class="text-2xl font-semibold text-text-primary mb-1">
-                            "Plugins"
+                            {t!(i18n, settings.plugins.title)}
                         </h1>
                         <p class="text-sm text-text-secondary">
-                            "Extend Aleph with third-party plugins"
+                            {t!(i18n, settings.plugins.description)}
                         </p>
                     </div>
                     <div class="flex items-center gap-2">

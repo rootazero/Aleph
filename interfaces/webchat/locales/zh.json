@@ -157,6 +157,10 @@
     "channels": {
       "title": "频道",
       "description": "配置消息频道"
+    },
+    "generation_config": {
+      "title": "生成设置",
+      "description": "配置媒体生成设置"
     }
   }
 }

@@ -8,6 +8,7 @@ use crate::components::ui::SecretInput;
 use crate::context::DashboardState;
 use crate::generation::GenerationType;
 use crate::preset_providers::{PresetProvider, PresetProviders};
+use crate::i18n::*;
 
 /// Extract base URL from a potentially full endpoint URL.
 ///
@@ -41,6 +42,7 @@ fn extract_base_url(url: &str) -> String {
 #[component]
 pub fn GenerationProvidersView() -> impl IntoView {
     let state = expect_context::<DashboardState>();
+    let i18n = use_i18n();
 
     // State
     let (providers, set_providers) = signal(Vec::<GenerationProviderEntry>::new());
@@ -93,10 +95,10 @@ pub fn GenerationProvidersView() -> impl IntoView {
                 // Header
                 <div class="px-6 py-4 border-b border-border">
                     <h1 class="text-2xl font-semibold text-text-primary">
-                        "Generation Providers"
+                        {t!(i18n, settings.generation.title)}
                     </h1>
                     <p class="mt-1 text-sm text-text-secondary">
-                        "Configure media generation providers and settings"
+                        {t!(i18n, settings.generation.description)}
                     </p>
                 </div>
 
@@ -355,7 +357,7 @@ fn ProviderCard(
     is_selected: bool,
     on_click: impl Fn(ev::MouseEvent) + 'static,
 ) -> impl IntoView {
-    let is_verified = entry.as_ref().map_or(false, |e| e.config.verified);
+    let is_verified = entry.as_ref().is_some_and(|e| e.config.verified);
 
     let is_default = move || {
         if let Some(ref e) = entry {

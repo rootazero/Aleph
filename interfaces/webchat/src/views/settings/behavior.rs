@@ -6,10 +6,12 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 use crate::context::DashboardState;
 use crate::api::{BehaviorConfig, BehaviorConfigApi};
+use crate::i18n::*;
 
 #[component]
 pub fn BehaviorView() -> impl IntoView {
     let state = expect_context::<DashboardState>();
+    let i18n = use_i18n();
 
     // State
     let config = RwSignal::new(BehaviorConfig {
@@ -36,9 +38,9 @@ pub fn BehaviorView() -> impl IntoView {
     view! {
         <div class="p-6 space-y-6">
             <div>
-                <h1 class="text-2xl font-bold text-text-primary">"Behavior Settings"</h1>
+                <h1 class="text-2xl font-bold text-text-primary">{t!(i18n, settings.behavior.title)}</h1>
                 <p class="mt-1 text-sm text-text-tertiary">
-                    "Configure output mode and typing speed"
+                    {t!(i18n, settings.behavior.description)}
                 </p>
             </div>
 
@@ -46,7 +48,7 @@ pub fn BehaviorView() -> impl IntoView {
                 if loading.get() {
                     view! {
                         <div class="flex items-center justify-center py-12">
-                            <div class="text-text-tertiary">"Loading..."</div>
+                            <div class="text-text-tertiary">{t!(i18n, common.loading)}</div>
                         </div>
                     }.into_any()
                 } else {
