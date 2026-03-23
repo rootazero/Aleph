@@ -77,6 +77,8 @@ pub struct PromptConfig {
     /// rather than injected into the system prompt. This also means the LLM will
     /// respond with structured tool calls rather than JSON-in-text.
     pub native_tools_enabled: bool,
+    /// Eligible skills from SkillSystem v2 snapshot for scope-aware filtering.
+    pub eligible_skills: Option<Vec<crate::domain::skill::SkillManifest>>,
 }
 
 impl Default for PromptConfig {
@@ -94,6 +96,7 @@ impl Default for PromptConfig {
             skill_instructions: None,
             token_budget: TokenBudget::default(),
             native_tools_enabled: false,
+            eligible_skills: None,
         }
     }
 }
