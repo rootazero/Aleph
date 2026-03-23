@@ -2,6 +2,13 @@
 
 use crate::domain::skill::SkillManifest;
 
+/// Deferred loading guidance appended after skill index in system prompts.
+/// Tells the LLM to call `skill_read` before executing a skill.
+pub const DEFERRED_LOADING_GUIDANCE: &str =
+    "To use a skill, first call the `skill_read` tool with the skill name \
+     to load its full instructions, then follow those instructions. \
+     Use `skill_list` to discover available skills if needed.";
+
 /// Build an XML fragment listing the given skills for injection into a system prompt.
 ///
 /// Returns an empty string if the slice is empty.
