@@ -41,6 +41,8 @@ pub struct BuiltinToolRegistry {
     pub(crate) image_generate_tool: Option<crate::builtin_tools::ImageGenerateTool>,
     /// List skills tool instance
     pub(crate) list_skills_tool: crate::builtin_tools::skill_reader::ListSkillsTool,
+    /// Read skill tool instance (deferred loading — LLM calls this to load full skill instructions)
+    pub(crate) read_skill_tool: crate::builtin_tools::skill_reader::ReadSkillTool,
     /// Config guide tool instance (progressive disclosure for self-management)
     pub(crate) config_guide_tool: crate::builtin_tools::ReadConfigGuideTool,
     /// Vault store tool instance (optional - requires SharedTokenManager)
@@ -304,6 +306,7 @@ impl ToolRegistry for BuiltinToolRegistry {
 
             // Self-management tools
             "skill_list" => Box::pin(async move { self.list_skills_tool.call_json(arguments).await }),
+            "skill_read" => Box::pin(async move { self.read_skill_tool.call_json(arguments).await }),
             "read_config_guide" => Box::pin(async move { self.config_guide_tool.call_json(arguments).await }),
             "vault_store" => Box::pin(async move {
                 let tool = self.vault_store_tool.as_ref().ok_or_else(|| {

@@ -16,7 +16,7 @@ use crate::builtin_tools::browser_tools::{
     BrowserEvaluateTool, BrowserFillFormTool, BrowserProfileTool,
 };
 use crate::builtin_tools::meta_tools::{ListToolsTool, GetToolSchemaTool};
-use crate::builtin_tools::skill_reader::ListSkillsTool as SkillListTool;
+use crate::builtin_tools::skill_reader::{ListSkillsTool as SkillListTool, ReadSkillTool as SkillReadTool};
 use crate::builtin_tools::sessions::{SessionsListTool, SessionsSendTool};
 use crate::dispatcher::{ToolSource, UnifiedTool};
 use crate::tools::AlephTool;
@@ -51,6 +51,7 @@ impl BuiltinToolRegistry {
 
         // Skill listing tool (read_skill replaced by read_config_guide)
         let list_skills_tool = SkillListTool::default();
+        let read_skill_tool = SkillReadTool::default();
 
         // Config guide tool (Progressive Disclosure for self-management)
         let config_guide_tool = ReadConfigGuideTool::default();
@@ -168,7 +169,7 @@ impl BuiltinToolRegistry {
         }
         info!("Registered browser tools (11 tools) in BuiltinToolRegistry");
 
-        info!("Registered skill.list and read_config_guide tools in BuiltinToolRegistry");
+        info!("Registered skill.list, skill.read, and read_config_guide tools in BuiltinToolRegistry");
 
         // Register optional tool metadata
         Self::register_optional_tools(
@@ -366,6 +367,7 @@ impl BuiltinToolRegistry {
             pdf_generate_tool,
             image_generate_tool,
             list_skills_tool,
+            read_skill_tool,
             config_guide_tool,
             vault_store_tool,
             desktop_tool,
@@ -476,6 +478,8 @@ impl BuiltinToolRegistry {
             serde_json::to_value(schema_for!(crate::builtin_tools::pdf_generate::PdfGenerateArgs)).unwrap_or_default());
         reg(tools, "skill_list", SkillListTool::DESCRIPTION,
             serde_json::json!({"type": "object", "properties": {}, "required": []}));
+        reg(tools, "skill_read", SkillReadTool::DESCRIPTION,
+            serde_json::to_value(schema_for!(crate::builtin_tools::skill_reader::ReadSkillArgs)).unwrap_or_default());
         reg(tools, "read_config_guide", ReadConfigGuideTool::DESCRIPTION,
             serde_json::to_value(schema_for!(crate::builtin_tools::config_guide::ReadConfigGuideArgs)).unwrap_or_default());
         reg(tools, "desktop", DesktopTool::DESCRIPTION,
