@@ -41,6 +41,7 @@
 //! | arena | Multi-agent arena lifecycle |
 //! | guests | Guest invitation management |
 
+pub mod activity;
 pub mod health;
 pub mod echo;
 pub mod version;

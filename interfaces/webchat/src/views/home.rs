@@ -67,14 +67,11 @@ pub fn Home() -> impl IntoView {
                     gateway_latency_ms.set(Some(elapsed));
                 }
 
-                // Fetch active task count
-                match state_clone.rpc_call("services.list", serde_json::Value::Null).await {
+                // Fetch active task count (agent runs + coordination tasks)
+                match state_clone.rpc_call("activity.stats", serde_json::Value::Null).await {
                     Ok(result) => {
-                        let count = result.get("services")
-                            .and_then(|s| s.as_array())
-                            .map(|arr| arr.iter()
-                                .filter(|s| s.get("status").and_then(|v| v.as_str()) == Some("running"))
-                                .count() as u64)
+                        let count = result.get("active_total")
+                            .and_then(|v| v.as_u64())
                             .unwrap_or(0);
                         active_tasks.set(Some(count));
                     }

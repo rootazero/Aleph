@@ -323,6 +323,10 @@ mod tests {
         ) -> Option<crate::gateway::execution_engine::RunStatus> {
             None
         }
+
+        async fn active_run_count(&self) -> usize {
+            0
+        }
     }
 
     /// Helper to create a test bridge with real TaskStore/StreamHub and mock adapter

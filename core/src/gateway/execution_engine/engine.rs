@@ -559,6 +559,11 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         final_result
     }
 
+    /// Get the number of currently active (non-completed) runs
+    pub async fn active_run_count(&self) -> usize {
+        self.active_runs.read().await.len()
+    }
+
     /// Get the status of a run
     pub async fn get_status(&self, run_id: &str) -> Option<RunStatus> {
         let runs = self.active_runs.read().await;

@@ -731,6 +731,19 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         exec_adapter = Some(engine_arc.clone());
         agent_reg = Some(agent_registry.clone());
 
+        // activity.stats — returns active agent run count + coord task count
+        {
+            let exec_adapter_for_stats: Arc<dyn alephcore::gateway::ExecutionAdapter> = engine_arc.clone();
+            let coord_store_for_stats = coord_store.clone();
+            server.handlers_mut().register("activity.stats", move |req| {
+                let adapter = exec_adapter_for_stats.clone();
+                let store = coord_store_for_stats.clone();
+                async move {
+                    alephcore::gateway::handlers::activity::handle_stats(req, adapter, store).await
+                }
+            });
+        }
+
         // Deferred injection: now that ExecutionAdapter exists, build GatewayContext
         // and inject it into BuiltinToolRegistry (via shared OnceCell).
         {
@@ -761,6 +774,33 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         server.handlers_mut().register("chat.send", move |req| {
             let manager = rm_chat.clone();
             async move { chat_handlers::handle_send(req, manager).await }
+        });
+
+        // Fallback: activity.stats with no execution engine
+        let coord_store_fallback = coord_store.clone();
+        server.handlers_mut().register("activity.stats", move |req| {
+            let store = coord_store_fallback.clone();
+            async move {
+                let active_tasks = if let Some(ref s) = store {
+                    s.list_tasks(alephcore::agents::swarm::tasks::CoordTaskFilter {
+                        status: Some(alephcore::agents::swarm::tasks::CoordTaskStatus::InProgress),
+                        ..Default::default()
+                    })
+                    .await
+                    .map(|t| t.len() as u64)
+                    .unwrap_or(0)
+                } else {
+                    0
+                };
+                alephcore::gateway::protocol::JsonRpcResponse::success(
+                    req.id,
+                    serde_json::json!({
+                        "active_agent_runs": 0u64,
+                        "active_coord_tasks": active_tasks,
+                        "active_total": active_tasks,
+                    }),
+                )
+            }
         });
     }
 

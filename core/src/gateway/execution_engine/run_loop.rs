@@ -442,6 +442,10 @@ where
     async fn get_status(&self, run_id: &str) -> Option<RunStatus> {
         ExecutionEngine::get_status(self, run_id).await
     }
+
+    async fn active_run_count(&self) -> usize {
+        ExecutionEngine::active_run_count(self).await
+    }
 }
 
 // ============================================================================

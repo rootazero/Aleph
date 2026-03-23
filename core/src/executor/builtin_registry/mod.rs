@@ -170,6 +170,10 @@ mod tests {
                     current_tool: None,
                 })
             }
+
+            async fn active_run_count(&self) -> usize {
+                0
+            }
         }
 
         fn create_test_gateway_context() -> Arc<GatewayContext> {

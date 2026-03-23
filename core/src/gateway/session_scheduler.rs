@@ -486,6 +486,9 @@ mod tests {
             async fn get_status(&self, _run_id: &str) -> Option<RunStatus> {
                 None
             }
+            async fn active_run_count(&self) -> usize {
+                0
+            }
         }
 
         let scheduler = SessionScheduler::new(

@@ -87,6 +87,9 @@ pub trait ExecutionAdapter: Send + Sync {
     ///
     /// * `run_id` - The unique identifier of the run to query
     async fn get_status(&self, run_id: &str) -> Option<RunStatus>;
+
+    /// Get number of currently active runs
+    async fn active_run_count(&self) -> usize;
 }
 
 #[cfg(test)]
@@ -145,6 +148,10 @@ mod tests {
                 steps_completed: 1,
                 current_tool: None,
             })
+        }
+
+        async fn active_run_count(&self) -> usize {
+            0
         }
     }
 

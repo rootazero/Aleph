@@ -242,6 +242,11 @@ impl SimpleExecutionEngine {
         Ok(response)
     }
 
+    /// Get the number of currently active (non-completed) runs
+    pub async fn active_run_count(&self) -> usize {
+        self.active_runs.read().await.len()
+    }
+
     /// Get the status of a run
     pub async fn get_status(&self, run_id: &str) -> Option<RunStatus> {
         let runs = self.active_runs.read().await;
@@ -312,5 +317,9 @@ impl ExecutionAdapter for SimpleExecutionEngine {
 
     async fn get_status(&self, run_id: &str) -> Option<RunStatus> {
         SimpleExecutionEngine::get_status(self, run_id).await
+    }
+
+    async fn active_run_count(&self) -> usize {
+        SimpleExecutionEngine::active_run_count(self).await
     }
 }
