@@ -195,10 +195,17 @@ fn inject(&self, output: &mut String, input: &LayerInput) {
 
 The caller that builds `PromptConfig` must populate `eligible_skills` from `SkillSystem.current_snapshot().eligible_manifests`. This integration point is in the gateway/execution engine or thinker caller.
 
+### 7. `agent_loop::prompt_builder::PromptBuilder` — Production Path
+
+The production agent loop uses `agent_loop::prompt_builder::PromptBuilder`, not the thinker's `PromptPipeline`. This builder also needs scope-filtered skill injection. Add `eligible_skills: Option<Vec<SkillManifest>>` field, `with_eligible_skills()` builder method, and scope filtering in `build()`.
+
+### 8. `gateway/execution_engine/run_loop.rs` — Upstream Wiring
+
+Use the global `get_extension_manager()` accessor to obtain the `SkillSystem` snapshot and populate `eligible_skills` on the `PromptBuilder` at construction time.
+
 ### Files Not Changed
 
 - `ExtensionSkill` path (v1) — untouched, natural deprecation
-- `agent_loop::prompt_builder::PromptBuilder` — simplified builder, no skill injection
 - `filter_skills_by_scope()` in `skill_tool.rs` — remains dead code (v1 path)
 
 ## Testing
