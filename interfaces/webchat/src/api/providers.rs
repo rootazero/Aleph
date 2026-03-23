@@ -163,9 +163,11 @@ impl ProvidersApi {
     /// Test provider connection
     pub async fn test_connection(
         state: &DashboardState,
+        name: Option<&str>,
         config: ProviderConfig,
     ) -> Result<TestResult, String> {
         let params = serde_json::json!({
+            "name": name,
             "config": config,
         });
 

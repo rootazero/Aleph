@@ -653,9 +653,10 @@ fn ProviderDetailPanel(
         testing.set(true);
         test_result.set(None);
         let config = build_config();
+        let provider_name = selected.get();
 
         spawn_local(async move {
-            match ProvidersApi::test_connection(&state, config).await {
+            match ProvidersApi::test_connection(&state, provider_name.as_deref(), config).await {
                 Ok(r) => test_result.set(Some(r)),
                 Err(e) => error.set(Some(format!("Test failed: {}", e))),
             }
