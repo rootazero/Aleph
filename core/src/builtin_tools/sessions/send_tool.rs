@@ -208,6 +208,25 @@ impl SessionsSendTool {
         self.current_agent_id = agent_id.into();
     }
 
+    /// Fetch the last assistant reply from a target agent's session
+    async fn fetch_last_reply(
+        agent: &crate::gateway::agent_instance::AgentInstance,
+        session_key: &crate::routing::session_key::SessionKey,
+    ) -> Option<String> {
+        let history = agent
+            .get_history(&session_key_to_gateway(session_key), Some(1))
+            .await;
+        history
+            .last()
+            .filter(|msg| {
+                matches!(
+                    msg.role,
+                    crate::gateway::agent_instance::MessageRole::Assistant
+                )
+            })
+            .map(|msg| msg.content.clone())
+    }
+
     /// Execute the tool (internal implementation)
     async fn call_impl(&self, args: SessionsSendArgs) -> SessionsSendOutput {
         let run_id = uuid::Uuid::new_v4().to_string();
@@ -360,25 +379,60 @@ impl SessionsSendTool {
         match execution_result {
             Ok(Ok(())) => {
                 // Execution completed successfully, fetch the last assistant message
-                let history = target_agent
-                    .get_history(
-                        &session_key_to_gateway(&target_session_key),
-                        Some(1),
-                    )
-                    .await;
-
-                let reply = history
-                    .last()
-                    .filter(|msg| {
-                        matches!(
-                            msg.role,
-                            crate::gateway::agent_instance::MessageRole::Assistant
-                        )
-                    })
-                    .map(|msg| msg.content.clone());
+                let reply = Self::fetch_last_reply(&target_agent, &target_session_key).await;
 
                 match reply {
                     Some(content) => {
+                        // Check if the sub-agent's response was truncated (contains truncation marker)
+                        // If so, automatically send a continuation request once
+                        let content = if content.contains("⚠️ 输出因 token 限制被截断") {
+                            info!(
+                                run_id = %run_id,
+                                target = %target_key_str,
+                                "sessions_send: sub-agent response truncated, auto-continuing"
+                            );
+                            // Send a continuation request to the sub-agent
+                            let continue_request = RunRequest {
+                                run_id: format!("{}-continue", run_id),
+                                input: "继续".to_string(),
+                                session_key: session_key_to_gateway(&target_session_key),
+                                timeout_secs: Some(args.timeout_seconds as u64),
+                                metadata: HashMap::new(),
+                                attachments: Vec::new(),
+                            };
+                            let continue_emitter: Arc<dyn crate::gateway::event_emitter::EventEmitter + Send + Sync> =
+                                Arc::new(NoOpEventEmitter::new());
+                            let continue_result = tokio::time::timeout(
+                                timeout_duration,
+                                execution_adapter.execute(continue_request, target_agent.clone(), continue_emitter),
+                            ).await;
+
+                            match continue_result {
+                                Ok(Ok(())) => {
+                                    // Fetch the continuation reply
+                                    let continuation = Self::fetch_last_reply(&target_agent, &target_session_key).await;
+                                    match continuation {
+                                        Some(cont_text) => {
+                                            // Strip the truncation marker from original, append continuation
+                                            let clean = content
+                                                .replace("\n\n---\n⚠️ 输出因 token 限制被截断。请回复「继续」获取剩余内容。", "");
+                                            format!("{}{}", clean, cont_text)
+                                        }
+                                        None => content,
+                                    }
+                                }
+                                _ => {
+                                    warn!(
+                                        run_id = %run_id,
+                                        "sessions_send: auto-continuation failed, returning truncated response"
+                                    );
+                                    content
+                                }
+                            }
+                        } else {
+                            content
+                        };
+
                         info!(
                             run_id = %run_id,
                             target = %target_key_str,

@@ -123,6 +123,48 @@ impl OpenAiCompatProviderBuilder {
         self
     }
 
+    /// Normalize a base URL into a full endpoint URL.
+    ///
+    /// If the URL already contains a known endpoint path (e.g. `/images/generations`,
+    /// `/audio/speech`), it is used as-is. Otherwise, the standard OpenAI-compatible
+    /// path is appended based on the primary supported generation type:
+    ///
+    /// - Image  → `/v1/images/generations`
+    /// - Video  → `/v1/videos/generations`
+    /// - Speech → `/v1/audio/speech`
+    /// - Audio  → `/v1/audio/generations`
+    fn normalize_endpoint(url: &str, supported_types: &[GenerationType]) -> String {
+        let trimmed = url.trim_end_matches('/');
+
+        // Already has a specific endpoint path — use as-is
+        if trimmed.contains("/images/")
+            || trimmed.contains("/audio/")
+            || trimmed.contains("/videos/")
+            || trimmed.ends_with("/generations")
+            || trimmed.ends_with("/speech")
+            || trimmed.ends_with("/generate")
+        {
+            return trimmed.to_string();
+        }
+
+        // Ensure /v1 base
+        let base = if trimmed.ends_with("/v1") {
+            trimmed.to_string()
+        } else {
+            format!("{}/v1", trimmed)
+        };
+
+        // Auto-complete path based on primary supported type
+        let suffix = match supported_types.first() {
+            Some(GenerationType::Video) => "/videos/generations",
+            Some(GenerationType::Speech) => "/audio/speech",
+            Some(GenerationType::Audio) => "/audio/generations",
+            _ => "/images/generations", // Image is the default
+        };
+
+        format!("{}{}", base, suffix)
+    }
+
     /// Build the OpenAiCompatProvider
     ///
     /// # Returns
@@ -172,8 +214,9 @@ impl OpenAiCompatProviderBuilder {
             .build()
             .map_err(|e| GenerationError::network(format!("Failed to build HTTP client: {}", e)))?;
 
-        // base_url is the full endpoint URL — only strip trailing slash
-        let endpoint = self.base_url.trim_end_matches('/').to_string();
+        // Normalize endpoint: if URL is just a base domain (no endpoint path),
+        // auto-complete with the standard OpenAI-compatible path based on primary type.
+        let endpoint = Self::normalize_endpoint(&self.base_url, &self.supported_types);
 
         Ok(OpenAiCompatProvider {
             name: self.name,

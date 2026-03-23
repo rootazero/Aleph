@@ -96,7 +96,14 @@ impl RemoteEmbeddingProvider {
 
     /// Call the embeddings API for a batch of texts
     async fn call_api(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, AlephError> {
-        let url = format!("{}/embeddings", self.api_base.trim_end_matches('/'));
+        // Normalize: ensure /v1 is present before appending /embeddings
+        let base = self.api_base.trim_end_matches('/');
+        let normalized = if base.ends_with("/v1") {
+            base.to_string()
+        } else {
+            format!("{}/v1", base)
+        };
+        let url = format!("{}/embeddings", normalized);
 
         let mut body = serde_json::json!({
             "input": texts,
@@ -145,7 +152,7 @@ impl RemoteEmbeddingProvider {
                 .collect();
             return Err(AlephError::config(format!(
                 "Embedding API returned non-JSON response (content-type: {}). \
-                 Check that api_base ends with /v1. Body: {}",
+                 Check that api_base points to a valid OpenAI-compatible endpoint. Body: {}",
                 content_type, body_snippet
             )));
         }

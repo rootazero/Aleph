@@ -40,8 +40,13 @@ impl GeminiProtocol {
             .map(|s| s.to_string())
             .unwrap_or_else(|| "https://generativelanguage.googleapis.com".to_string());
 
-        // Normalize URL
-        let base_url = raw_base_url.trim_end_matches('/').to_string();
+        // Normalize URL: strip trailing slashes and /v1 suffix
+        // (user may have /v1 from switching between OpenAI/Anthropic protocols)
+        let base_url = raw_base_url
+            .trim_end_matches('/')
+            .trim_end_matches("/v1")
+            .trim_end_matches('/')
+            .to_string();
 
         // Build endpoint based on streaming mode
         if is_streaming {

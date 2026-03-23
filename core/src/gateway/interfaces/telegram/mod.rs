@@ -840,89 +840,151 @@ impl Channel for TelegramChannel {
             });
         }
 
-        // Convert standard Markdown to Telegram HTML for reliable rendering.
-        // HTML mode handles **bold**, *italic*, `code`, ```blocks```, [links](url)
-        // without the fragile escaping issues of Telegram's legacy Markdown or MarkdownV2.
-        let html_text = MessageFormatter::format(&message.text, MarkupFormat::TelegramHtml);
+        // Split long messages to respect Telegram's 4096-char limit.
+        // Use a conservative limit (3500) to leave room for HTML tag expansion.
+        const SPLIT_LIMIT: usize = 3500;
+        let chunks = MessageFormatter::split(&message.text, SPLIT_LIMIT);
 
-        // Helper to build a SendMessage request with optional reply-to, thread, and inline keyboard
-        let build_request = |parse_mode: Option<ParseMode>, text: &str| {
-            let mut req = bot.send_message(chat_id, text);
-            if let Some(mode) = parse_mode {
-                req = req.parse_mode(mode);
-            }
-            if let Some(reply_to) = &message.reply_to {
-                if let Ok(msg_id) = reply_to.as_str().parse::<i32>() {
-                    req = req.reply_parameters(teloxide::types::ReplyParameters::new(
-                        teloxide::types::MessageId(msg_id),
-                    ));
+        // Helper to build a SendMessage request with optional thread routing
+        let build_request =
+            |parse_mode: Option<ParseMode>,
+             text: &str,
+             reply_to: Option<&str>,
+             keyboard: Option<&InlineKeyboard>| {
+                let mut req = bot.send_message(chat_id, text);
+                if let Some(mode) = parse_mode {
+                    req = req.parse_mode(mode);
                 }
-            }
-            // Forum topic: route reply into the correct thread
-            if let Some(tid) = thread_id {
-                if tid != 1 { // General topic — do NOT set message_thread_id
-                    req = req.message_thread_id(ThreadId(teloxide::types::MessageId(tid)));
+                if let Some(reply_to) = reply_to {
+                    if let Ok(msg_id) = reply_to.parse::<i32>() {
+                        req = req.reply_parameters(teloxide::types::ReplyParameters::new(
+                            teloxide::types::MessageId(msg_id),
+                        ));
+                    }
                 }
-            }
-            if let Some(ref keyboard) = message.inline_keyboard {
-                let markup = InlineKeyboardMarkup::new(
-                    keyboard.rows.iter().map(|row| {
-                        row.iter().map(|btn| {
-                            InlineKeyboardButton::callback(&btn.text, &btn.callback_data)
-                        }).collect::<Vec<_>>()
-                    }).collect::<Vec<_>>()
-                );
-                req = req.reply_markup(markup);
-            }
-            req
-        };
+                // Forum topic: route reply into the correct thread
+                if let Some(tid) = thread_id {
+                    if tid != 1 {
+                        // General topic — do NOT set message_thread_id
+                        req =
+                            req.message_thread_id(ThreadId(teloxide::types::MessageId(tid)));
+                    }
+                }
+                if let Some(keyboard) = keyboard {
+                    let markup = InlineKeyboardMarkup::new(
+                        keyboard.rows.iter().map(|row| {
+                            row.iter()
+                                .map(|btn| {
+                                    InlineKeyboardButton::callback(
+                                        &btn.text,
+                                        &btn.callback_data,
+                                    )
+                                })
+                                .collect::<Vec<_>>()
+                        }),
+                    );
+                    req = req.reply_markup(markup);
+                }
+                req
+            };
 
-        // Try HTML first with retry logic and error classification.
-        // Falls back to plain text for unrecoverable HTML parse errors.
+        // Send each chunk with retry logic. Only the first chunk carries
+        // reply_to and inline_keyboard; subsequent chunks are plain continuations.
         let max_retries = self.config.max_retries;
-        let mut attempts = 0u32;
-        let sent = loop {
-            let result = build_request(Some(ParseMode::Html), &html_text).await;
-            match result {
-                Ok(msg) => break msg,
-                Err(e) => {
-                    attempts += 1;
-                    match classify_error(&e) {
-                        ErrorClass::Unrecoverable => {
-                            // Try plain text fallback (HTML parse errors, bad requests, etc.)
-                            tracing::warn!(
-                                "HTML send failed (unrecoverable), retrying as plain text: {}",
-                                e
-                            );
-                            break build_request(None, &message.text)
+        let mut first_msg: Option<teloxide::types::Message> = None;
+
+        for (i, chunk) in chunks.iter().enumerate() {
+            let is_first = i == 0;
+            let is_last = i == chunks.len() - 1;
+            let html_text =
+                MessageFormatter::format(chunk, MarkupFormat::TelegramHtml);
+            let reply_to_ref = if is_first {
+                message.reply_to.as_ref().map(|id| id.as_str())
+            } else {
+                None
+            };
+            let keyboard_ref = if is_last {
+                message.inline_keyboard.as_ref()
+            } else {
+                None
+            };
+
+            let mut attempts = 0u32;
+            let sent = loop {
+                let result = build_request(
+                    Some(ParseMode::Html),
+                    &html_text,
+                    reply_to_ref,
+                    keyboard_ref,
+                )
+                .await;
+                match result {
+                    Ok(msg) => break msg,
+                    Err(e) => {
+                        attempts += 1;
+                        match classify_error(&e) {
+                            ErrorClass::Unrecoverable => {
+                                // Try plain text fallback
+                                tracing::warn!(
+                                    "HTML send failed (unrecoverable), retrying as plain text: {}",
+                                    e
+                                );
+                                break build_request(
+                                    None,
+                                    chunk,
+                                    reply_to_ref,
+                                    keyboard_ref,
+                                )
                                 .await
-                                .map_err(|e| ChannelError::SendFailed(format!("Telegram send error: {}", e)))?;
-                        }
-                        ErrorClass::RateLimited(secs) => {
-                            if attempts > max_retries {
-                                return Err(ChannelError::RateLimited { retry_after_secs: secs });
+                                .map_err(|e| {
+                                    ChannelError::SendFailed(format!(
+                                        "Telegram send error: {}",
+                                        e
+                                    ))
+                                })?;
                             }
-                            tracing::warn!(
-                                "Telegram rate limited, waiting {}s (attempt {}/{})",
-                                secs, attempts, max_retries
-                            );
-                            tokio::time::sleep(std::time::Duration::from_secs(secs)).await;
-                        }
-                        ErrorClass::Recoverable => {
-                            if attempts > max_retries {
-                                return Err(ChannelError::SendFailed(e.to_string()));
+                            ErrorClass::RateLimited(secs) => {
+                                if attempts > max_retries {
+                                    return Err(ChannelError::RateLimited {
+                                        retry_after_secs: secs,
+                                    });
+                                }
+                                tracing::warn!(
+                                    "Telegram rate limited, waiting {}s (attempt {}/{})",
+                                    secs,
+                                    attempts,
+                                    max_retries
+                                );
+                                tokio::time::sleep(std::time::Duration::from_secs(
+                                    secs,
+                                ))
+                                .await;
                             }
-                            let backoff_ms = 500 * attempts as u64;
-                            tracing::warn!(
-                                "Telegram send error (recoverable), retrying in {}ms (attempt {}/{}): {}",
-                                backoff_ms, attempts, max_retries, e
-                            );
-                            tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
+                            ErrorClass::Recoverable => {
+                                if attempts > max_retries {
+                                    return Err(ChannelError::SendFailed(e.to_string()));
+                                }
+                                let backoff_ms = 500 * attempts as u64;
+                                tracing::warn!(
+                                    "Telegram send error (recoverable), retrying in {}ms (attempt {}/{}): {}",
+                                    backoff_ms, attempts, max_retries, e
+                                );
+                                tokio::time::sleep(
+                                    std::time::Duration::from_millis(backoff_ms),
+                                )
+                                .await;
+                            }
                         }
                     }
                 }
+            };
+
+            if is_first {
+                first_msg = Some(sent);
             }
-        };
+        }
+
+        let sent = first_msg.expect("at least one chunk must be sent");
 
         // Send attachments if any
         for attachment in &message.attachments {

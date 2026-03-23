@@ -146,7 +146,7 @@ pub fn GenerationProvidersView() -> impl IntoView {
                             let presets = current_presets();
                             view! {
                                 <div class="p-6 space-y-4">
-                                    <div class="grid grid-cols-1 gap-3">
+                                    <div class="grid grid-cols-1 gap-2">
                                         {presets.into_iter().map(|preset| {
                                             let preset_id = preset.id.clone();
                                             let configured = is_configured(&preset_id);
@@ -197,7 +197,7 @@ pub fn GenerationProvidersView() -> impl IntoView {
                                                     <h2 class="text-sm font-medium text-text-secondary uppercase tracking-wider mb-3">
                                                         "Custom Providers"
                                                     </h2>
-                                                    <div class="grid grid-cols-1 gap-3">
+                                                    <div class="grid grid-cols-1 gap-2">
                                                         {custom.into_iter().map(|cp| {
                                                             let cp_name = cp.name.clone();
                                                             let cp_name_click = cp_name.clone();
@@ -365,66 +365,70 @@ fn ProviderCard(
         }
     };
 
+    let icon = preset.icon.clone();
+    let color = preset.color.clone();
+    let name = preset.name.clone();
+    let model = preset.default_model.clone();
+    let is_unsupported = preset.is_unsupported;
+
     view! {
-        <div
-            class=move || {
-                let base = "border rounded-lg p-4 hover:border-primary cursor-pointer transition-colors";
-                let selected = if is_selected { " ring-2 ring-primary/30 border-primary bg-primary-subtle" } else { " border-border" };
-                let opacity = if preset.is_unsupported { " opacity-50" } else { "" };
-                format!("{}{}{}", base, selected, opacity)
-            }
+        <button
             on:click=on_click
+            class=move || {
+                let base = "text-left p-3 rounded-lg border transition-all";
+                if is_selected {
+                    format!("{} bg-primary-subtle border-primary", base)
+                } else if is_configured {
+                    format!("{} bg-surface-raised border-border hover:border-primary/40", base)
+                } else if is_unsupported {
+                    format!("{} bg-surface-sunken border-border opacity-50", base)
+                } else {
+                    format!("{} bg-surface-sunken border-border hover:border-border-strong", base)
+                }
+            }
         >
-            <div class="flex items-start justify-between mb-3">
-                <div class="flex items-center gap-2">
-                    <span class="text-2xl">{preset.icon.clone()}</span>
-                    <div>
-                        <h3 class="font-semibold text-text-primary">
-                            {preset.name.clone()}
-                        </h3>
-                        {preset.is_unsupported.then(|| view! {
-                            <span class="text-xs text-text-tertiary">"(Unsupported)"</span>
-                        })}
-                    </div>
+            <div class="flex items-center gap-3">
+                <div
+                    class="w-8 h-8 rounded-lg flex items-center justify-center text-sm shrink-0"
+                    style=format!("background-color: {}", color)
+                >
+                    {icon}
                 </div>
-                {move || {
-                    if is_configured {
-                        if is_default() {
-                            view! {
-                                <div class="flex gap-1">
-                                    <span class="px-2 py-1 text-xs font-medium bg-primary-subtle text-primary rounded">
+                <div class="min-w-0">
+                    <div class="flex items-center gap-2">
+                        <span class="font-medium text-text-primary text-sm truncate">
+                            {name}
+                        </span>
+                        {move || {
+                            if is_configured && is_default() {
+                                view! {
+                                    <span class="px-1.5 py-0.5 bg-primary-subtle text-primary text-xs rounded shrink-0">
                                         "Default"
                                     </span>
-                                    {if is_verified {
-                                        view! {
-                                            <span class="px-2 py-1 text-xs font-medium bg-success-subtle text-success rounded">
-                                                "Active"
-                                            </span>
-                                        }.into_any()
-                                    } else {
-                                        view! { <span></span> }.into_any()
-                                    }}
-                                </div>
-                            }.into_any()
-                        } else if is_verified {
-                            view! {
-                                <span class="px-2 py-1 text-xs font-medium bg-success-subtle text-success rounded">
-                                    "Active"
-                                </span>
-                            }.into_any()
-                        } else {
-                            view! { <span></span> }.into_any()
-                        }
-                    } else {
-                        view! { <span></span> }.into_any()
-                    }
-                }}
+                                }.into_any()
+                            } else if is_configured && is_verified {
+                                view! {
+                                    <span class="px-1.5 py-0.5 bg-success-subtle text-success text-xs rounded shrink-0">
+                                        "Active"
+                                    </span>
+                                }.into_any()
+                            } else if is_unsupported {
+                                view! {
+                                    <span class="px-1.5 py-0.5 bg-surface-sunken text-text-tertiary text-xs rounded shrink-0">
+                                        "Unsupported"
+                                    </span>
+                                }.into_any()
+                            } else {
+                                view! { <span></span> }.into_any()
+                            }
+                        }}
+                    </div>
+                    <div class="text-xs text-text-tertiary truncate">
+                        {model}
+                    </div>
+                </div>
             </div>
-
-            <div class="flex items-center gap-2 text-xs text-text-tertiary mt-2">
-                <span class="font-mono">{preset.default_model.clone()}</span>
-            </div>
-        </div>
+        </button>
     }
 }
 

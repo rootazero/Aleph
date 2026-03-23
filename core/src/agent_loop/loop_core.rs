@@ -216,7 +216,8 @@ impl<P: LoopProvider> AgentLoop<P> {
         let mut stop_requested = false;
         let mut consecutive_errors: usize = 0;
         let mut completion_nudge_count: usize = 0;
-        let mut has_auto_continued = false;
+        let mut auto_continue_count: usize = 0;
+        const MAX_AUTO_CONTINUES: usize = 2;
         const MAX_CONSECUTIVE_ERRORS: usize = 10;
         const MAX_COMPLETION_NUDGES: usize = 3;
 
@@ -266,7 +267,7 @@ impl<P: LoopProvider> AgentLoop<P> {
                     callback.on_text(text);
                 }
                 // Append text if auto-continuing from truncation, otherwise replace
-                if has_auto_continued && final_text.is_some() {
+                if auto_continue_count > 0 && final_text.is_some() {
                     final_text.as_mut().unwrap().push_str(text);
                 } else {
                     final_text = Some(text.clone());
@@ -322,13 +323,15 @@ impl<P: LoopProvider> AgentLoop<P> {
                 break; // Exhausted all nudges
             }
 
-            // If no tool calls and MaxTokens → auto-continue once, then warn user
+            // If no tool calls and MaxTokens → auto-continue up to MAX_AUTO_CONTINUES times
             if !response.has_tool_calls() && response.stop_reason == StopReason::MaxTokens {
-                if !has_auto_continued {
-                    has_auto_continued = true;
+                if auto_continue_count < MAX_AUTO_CONTINUES {
+                    auto_continue_count += 1;
                     tracing::info!(
                         iteration = iterations,
-                        "Output truncated by max_tokens, auto-continuing once"
+                        attempt = auto_continue_count,
+                        max = MAX_AUTO_CONTINUES,
+                        "Output truncated by max_tokens, auto-continuing"
                     );
                     messages.push(UnifiedMessage::user(
                         "[SYSTEM] Your previous response was truncated due to output token limit. \
@@ -336,10 +339,12 @@ impl<P: LoopProvider> AgentLoop<P> {
                     ));
                     continue;
                 }
-                // Already auto-continued once, append truncation notice and stop
+                // Exhausted all auto-continue attempts, append truncation notice and stop
                 tracing::warn!(
                     iteration = iterations,
-                    "Output still truncated after auto-continue, notifying user"
+                    attempts = auto_continue_count,
+                    "Output still truncated after {} auto-continues, notifying user",
+                    MAX_AUTO_CONTINUES,
                 );
                 let notice = "\n\n---\n⚠️ 输出因 token 限制被截断。请回复「继续」获取剩余内容。";
                 if let Some(ref mut text) = final_text {
@@ -1231,7 +1236,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_max_tokens_stop_reason() {
-        // First response is truncated (MaxTokens), loop auto-continues once.
+        // First response is truncated (MaxTokens), loop auto-continues.
         // Second response completes normally (EndTurn) — continuation text is appended.
         let provider = MockProvider::new(vec![
             ProviderResponse {
@@ -1268,8 +1273,45 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_max_tokens_double_truncation() {
-        // Both responses are truncated — after auto-continue once, hit_limit is set
+    async fn test_max_tokens_double_auto_continue() {
+        // Truncated twice, second auto-continue succeeds with EndTurn.
+        let provider = MockProvider::new(vec![
+            ProviderResponse {
+                text: Some("Part 1...".to_string()),
+                tool_calls: vec![],
+                thinking: None,
+                stop_reason: StopReason::MaxTokens,
+                usage: None,
+            },
+            ProviderResponse {
+                text: Some("Part 2...".to_string()),
+                tool_calls: vec![],
+                thinking: None,
+                stop_reason: StopReason::MaxTokens,
+                usage: None,
+            },
+            ProviderResponse {
+                text: Some("Part 3 done.".to_string()),
+                tool_calls: vec![],
+                thinking: None,
+                stop_reason: StopReason::EndTurn,
+                usage: None,
+            },
+        ]);
+
+        let agent = make_loop(provider);
+        let mut cb = TrackingCallback::default();
+        let result = agent.run("long question", &mut cb).await.unwrap();
+
+        assert!(!result.hit_limit);
+        assert_eq!(result.iterations, 3);
+        let text = result.final_text.unwrap();
+        assert_eq!(text, "Part 1...Part 2...Part 3 done.");
+    }
+
+    #[tokio::test]
+    async fn test_max_tokens_triple_truncation() {
+        // All 3 responses truncated — after 2 auto-continues, hit_limit is set
         // and a truncation notice is appended.
         let provider = MockProvider::new(vec![
             ProviderResponse {
@@ -1286,6 +1328,13 @@ mod tests {
                 stop_reason: StopReason::MaxTokens,
                 usage: None,
             },
+            ProviderResponse {
+                text: Some("Part 3...".to_string()),
+                tool_calls: vec![],
+                thinking: None,
+                stop_reason: StopReason::MaxTokens,
+                usage: None,
+            },
         ]);
 
         let agent = make_loop(provider);
@@ -1293,9 +1342,9 @@ mod tests {
         let result = agent.run("long question", &mut cb).await.unwrap();
 
         assert!(result.hit_limit);
-        assert_eq!(result.iterations, 2);
+        assert_eq!(result.iterations, 3);
         let text = result.final_text.unwrap();
-        assert!(text.starts_with("Part 1...Part 2..."));
+        assert!(text.starts_with("Part 1...Part 2...Part 3..."));
         assert!(text.contains("⚠️"));
     }
 

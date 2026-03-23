@@ -311,16 +311,23 @@ impl ReplyEmitter {
             return;
         }
 
-        // Step 1: Send initial message with first portion
-        let char_indices: Vec<usize> = formatted.char_indices().map(|(i, _)| i).collect();
+        // Split into chunks that respect Telegram's message length limit.
+        // The first chunk gets the typewriter animation; remaining chunks
+        // are sent as separate messages instantly to avoid overly long waits.
+        let chunks = Self::split_message(&formatted, Self::MAX_MESSAGE_LENGTH);
+
+        // Animate the first chunk with progressive edits
+        let first_chunk = &chunks[0];
+        let char_indices: Vec<usize> = first_chunk.char_indices().map(|(i, _)| i).collect();
         let total_chars = char_indices.len();
+        let has_more = chunks.len() > 1;
         let first_end = TYPEWRITER_CHARS_PER_STEP.min(total_chars);
         let first_byte_end = if first_end < total_chars {
             char_indices[first_end]
         } else {
-            formatted.len()
+            first_chunk.len()
         };
-        let initial_text = &formatted[..first_byte_end];
+        let initial_text = &first_chunk[..first_byte_end];
 
         // Append "▍" cursor indicator
         let initial_with_cursor = format!("{}▍", initial_text);
@@ -345,13 +352,13 @@ impl ReplyEmitter {
             }
             Err(e) => {
                 error!("Typewriter: failed to send initial message: {}", e);
-                // Fall back: send everything at once
+                // Fall back: send everything at once (split-aware)
                 self.send_to_channel(&formatted).await;
                 return;
             }
         };
 
-        // Step 2: Progressive edits
+        // Progressive edits within the first chunk
         let mut revealed_chars = first_end;
 
         while revealed_chars < total_chars {
@@ -369,12 +376,12 @@ impl ReplyEmitter {
             let byte_end = if revealed_chars < total_chars {
                 char_indices[revealed_chars]
             } else {
-                formatted.len()
+                first_chunk.len()
             };
 
-            let partial = &formatted[..byte_end];
-            let edit_text = if revealed_chars < total_chars {
-                format!("{}▍", partial) // Still typing
+            let partial = &first_chunk[..byte_end];
+            let edit_text = if revealed_chars < total_chars || has_more {
+                format!("{}▍", partial) // Still typing (more chunks follow)
             } else {
                 partial.to_string() // Done — remove cursor
             };
@@ -399,13 +406,52 @@ impl ReplyEmitter {
             }
         }
 
-        // Step 3: Final edit to ensure complete text is shown (without cursor)
-        let _ = self.channel_registry.edit(
-            &self.route.channel_id,
-            &self.route.conversation_id,
-            &msg_id,
-            &formatted,
-        ).await;
+        // Final edit on first chunk: remove cursor if no more chunks follow
+        if !has_more {
+            let _ = self.channel_registry.edit(
+                &self.route.channel_id,
+                &self.route.conversation_id,
+                &msg_id,
+                first_chunk,
+            ).await;
+        } else {
+            // Remove the cursor from the first message before sending continuations
+            let _ = self.channel_registry.edit(
+                &self.route.channel_id,
+                &self.route.conversation_id,
+                &msg_id,
+                first_chunk,
+            ).await;
+
+            // Send remaining chunks as separate messages (no animation)
+            for chunk in &chunks[1..] {
+                let message = OutboundMessage {
+                    conversation_id: self.route.conversation_id.clone(),
+                    text: chunk.clone(),
+                    attachments: vec![],
+                    reply_to: None,
+                    inline_keyboard: None,
+                    metadata: Default::default(),
+                };
+
+                match self
+                    .channel_registry
+                    .send(&self.route.channel_id, message)
+                    .await
+                {
+                    Ok(result) => {
+                        debug!(
+                            "Typewriter: sent continuation chunk (message_id: {})",
+                            result.message_id.as_str(),
+                        );
+                    }
+                    Err(e) => {
+                        error!("Typewriter: failed to send continuation chunk: {}", e);
+                        break;
+                    }
+                }
+            }
+        }
     }
 
     // ── Shared helpers ──────────────────────────────────────────────────

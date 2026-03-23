@@ -29,12 +29,15 @@ impl PineconeRerankProvider {
         Self { client, config }
     }
 
-    fn api_url(&self) -> &str {
+    fn api_url(&self) -> String {
         if self.config.api_base.is_empty() {
-            DEFAULT_API_BASE
-        } else {
-            &self.config.api_base
+            return DEFAULT_API_BASE.to_string();
         }
+        let base = self.config.api_base.trim_end_matches('/');
+        if base.ends_with("/rerank") {
+            return base.to_string();
+        }
+        format!("{}/rerank", base)
     }
 }
 

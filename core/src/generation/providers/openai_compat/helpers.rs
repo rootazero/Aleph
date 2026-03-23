@@ -9,7 +9,7 @@ use super::types::{ImageGenerationRequest, OpenAiErrorResponse};
 
 impl OpenAiCompatProvider {
     /// Get the full URL for the generations endpoint
-    /// base_url is already the full endpoint URL (e.g. "https://ai.t8star.cn/v1/images/generations")
+    /// Endpoint is auto-completed from base URL during build (see builder::normalize_endpoint)
     pub(crate) fn generations_url(&self) -> String {
         self.endpoint.clone()
     }
