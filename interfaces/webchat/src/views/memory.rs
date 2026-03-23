@@ -2,10 +2,12 @@ use leptos::prelude::*;
 use crate::components::ui::*;
 use crate::context::DashboardState;
 use crate::api::{MemoryApi, RawMemory, CompressedFact, MemoryStats};
+use crate::i18n::*;
 
 #[component]
 pub fn Memory() -> impl IntoView {
     let state = expect_context::<DashboardState>();
+    let i18n = use_i18n();
     let is_disabled = Signal::derive(move || !state.is_connected.get());
 
     // Memory stats
@@ -27,7 +29,7 @@ pub fn Memory() -> impl IntoView {
     // Fetch stats + facts + raw memories when connected
     Effect::new(move || {
         if state.is_connected.get() {
-            let state = state.clone();
+            let state = state;
             leptos::task::spawn_local(async move {
                 if let Ok(s) = MemoryApi::stats(&state).await {
                     stats.set(Some(s));
@@ -54,7 +56,7 @@ pub fn Memory() -> impl IntoView {
     // Search handler for raw memories
     let do_search = move || {
         let query = search_query.get();
-        let state = state.clone();
+        let state = state;
         leptos::task::spawn_local(async move {
             is_searching.set(true);
             if let Ok(results) = MemoryApi::search(&state, query, Some(20)).await {
@@ -66,7 +68,7 @@ pub fn Memory() -> impl IntoView {
 
     // Delete handler for raw memories
     let on_delete = move |memory_id: String| {
-        let state = state.clone();
+        let state = state;
         leptos::task::spawn_local(async move {
             if MemoryApi::delete(&state, memory_id).await.is_ok() {
                 if let Ok(s) = MemoryApi::stats(&state).await {
@@ -93,9 +95,9 @@ pub fn Memory() -> impl IntoView {
                             <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3" />
                             <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5" />
                         </svg>
-                        "Memory Vault"
+                        {t!(i18n, memory.title)}
                     </h2>
-                    <p class="text-text-secondary">"Browse and manage long-term memory: compressed facts and raw conversation records."</p>
+                    <p class="text-text-secondary">{t!(i18n, memory.description)}</p>
                 </div>
             </header>
 
@@ -110,8 +112,8 @@ pub fn Memory() -> impl IntoView {
                                 <line x1="12" y1="17" x2="12.01" y2="17" />
                             </svg>
                             <div>
-                                <h3 class="text-warning font-semibold mb-1">"Gateway Connection Required"</h3>
-                                <p class="text-sm text-text-secondary">"Please connect to the Aleph Gateway from the System Status page to access memory data."</p>
+                                <h3 class="text-warning font-semibold mb-1">{t!(i18n, dashboard.gateway_required)}</h3>
+                                <p class="text-sm text-text-secondary">{t!(i18n, memory.gateway_required_desc)}</p>
                             </div>
                         </div>
                     }.into_any()
@@ -123,7 +125,7 @@ pub fn Memory() -> impl IntoView {
             // Memory Stats
             <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
                  <Card class="bg-primary-subtle border-primary/10 p-6 flex flex-col items-start".to_string()>
-                    <span class="text-[10px] font-bold text-primary uppercase tracking-widest mb-1.5">"Compressed Facts"</span>
+                    <span class="text-[10px] font-bold text-primary uppercase tracking-widest mb-1.5">{t!(i18n, memory.compressed_facts)}</span>
                     <span class="text-3xl font-bold font-mono">
                         {move || {
                             stats.get()
@@ -133,7 +135,7 @@ pub fn Memory() -> impl IntoView {
                     </span>
                  </Card>
                  <Card class="bg-success-subtle border-success/10 p-6 flex flex-col items-start".to_string()>
-                    <span class="text-[10px] font-bold text-success uppercase tracking-widest mb-1.5">"Raw Memories"</span>
+                    <span class="text-[10px] font-bold text-success uppercase tracking-widest mb-1.5">{t!(i18n, memory.raw_memories)}</span>
                     <span class="text-3xl font-bold font-mono">
                         {move || {
                             stats.get()
@@ -143,7 +145,7 @@ pub fn Memory() -> impl IntoView {
                     </span>
                  </Card>
                  <Card class="bg-primary-subtle border-primary/10 p-6 flex flex-col items-start".to_string()>
-                    <span class="text-[10px] font-bold text-primary uppercase tracking-widest mb-1.5">"Graph Nodes"</span>
+                    <span class="text-[10px] font-bold text-primary uppercase tracking-widest mb-1.5">{t!(i18n, memory.graph_nodes)}</span>
                     <span class="text-3xl font-bold font-mono">
                         {move || {
                             stats.get()
@@ -164,7 +166,7 @@ pub fn Memory() -> impl IntoView {
                     }
                     on:click=move |_| active_tab.set("facts".to_string())
                 >
-                    "Compressed Facts"
+                    {t!(i18n, memory.compressed_facts)}
                 </button>
                 <button
                     class=move || if active_tab.get() == "raw" {
@@ -174,7 +176,7 @@ pub fn Memory() -> impl IntoView {
                     }
                     on:click=move |_| active_tab.set("raw".to_string())
                 >
-                    "Raw Memories"
+                    {t!(i18n, memory.raw_memories)}
                 </button>
 
                 // Search bar (only for raw memories tab)
@@ -189,7 +191,7 @@ pub fn Memory() -> impl IntoView {
                                     </svg>
                                     <input
                                         type="text"
-                                        placeholder="Search raw memories..."
+                                        placeholder=t_string!(i18n, memory.search_placeholder)
                                         class="pl-10 pr-4 py-1.5 bg-surface-raised border border-border rounded-lg focus:outline-none focus:border-primary/50 focus:ring-4 focus:ring-primary/10 w-56 transition-all text-sm text-text-primary placeholder:text-text-tertiary"
                                         disabled=is_disabled
                                         on:input=move |ev| search_query.set(event_target_value(&ev))
@@ -211,7 +213,7 @@ pub fn Memory() -> impl IntoView {
                 if active_tab.get() == "facts" {
                     view! { <FactsTable facts=facts_list loaded=facts_loaded connected=state.is_connected /> }.into_any()
                 } else {
-                    let on_delete = on_delete.clone();
+                    let on_delete = on_delete;
                     view! { <RawMemoriesTable memories=raw_memories loaded=raw_loaded searching=is_searching connected=state.is_connected on_delete=on_delete /> }.into_any()
                 }
             }}
@@ -227,31 +229,32 @@ fn FactsTable(
     loaded: RwSignal<bool>,
     connected: RwSignal<bool>,
 ) -> impl IntoView {
+    let i18n = use_i18n();
     view! {
         <Card class="overflow-hidden".to_string()>
             <table class="w-full text-left border-collapse">
                 <thead>
                     <tr class="bg-surface-sunken text-[10px] font-bold text-text-tertiary uppercase tracking-widest">
-                        <th class="p-4 pl-8">"Content"</th>
-                        <th class="p-4">"Agent"</th>
-                        <th class="p-4">"Type"</th>
-                        <th class="p-4">"Confidence"</th>
-                        <th class="p-4 pr-8">"Date"</th>
+                        <th class="p-4 pl-8">{t!(i18n, memory.col_content)}</th>
+                        <th class="p-4">{t!(i18n, memory.col_agent)}</th>
+                        <th class="p-4">{t!(i18n, memory.col_type)}</th>
+                        <th class="p-4">{t!(i18n, memory.col_confidence)}</th>
+                        <th class="p-4 pr-8">{t!(i18n, memory.col_date)}</th>
                     </tr>
                 </thead>
                 <tbody class="divide-y divide-border-subtle">
                     {move || {
                         if !connected.get() {
                             view! {
-                                <tr><td colspan="5" class="p-8 text-center text-text-tertiary">"Connect to Gateway to view facts"</td></tr>
+                                <tr><td colspan="5" class="p-8 text-center text-text-tertiary">{t!(i18n, memory.connect_to_view_facts)}</td></tr>
                             }.into_any()
                         } else if !loaded.get() {
                             view! {
-                                <tr><td colspan="5" class="p-8 text-center text-text-tertiary">"Loading..."</td></tr>
+                                <tr><td colspan="5" class="p-8 text-center text-text-tertiary">{t!(i18n, common.loading)}</td></tr>
                             }.into_any()
                         } else if facts.get().is_empty() {
                             view! {
-                                <tr><td colspan="5" class="p-8 text-center text-text-tertiary">"No compressed facts yet. Facts are extracted from raw memories by the compression service."</td></tr>
+                                <tr><td colspan="5" class="p-8 text-center text-text-tertiary">{t!(i18n, memory.no_facts)}</td></tr>
                             }.into_any()
                         } else {
                             view! {
@@ -317,34 +320,35 @@ fn RawMemoriesTable(
     connected: RwSignal<bool>,
     on_delete: impl Fn(String) + Clone + Send + 'static,
 ) -> impl IntoView {
+    let i18n = use_i18n();
     view! {
         <Card class="overflow-hidden".to_string()>
             <table class="w-full text-left border-collapse">
                 <thead>
                     <tr class="bg-surface-sunken text-[10px] font-bold text-text-tertiary uppercase tracking-widest">
-                        <th class="p-4 pl-8">"Content"</th>
-                        <th class="p-4">"Agent"</th>
-                        <th class="p-4">"Date"</th>
-                        <th class="p-4 pr-8 text-right">"Actions"</th>
+                        <th class="p-4 pl-8">{t!(i18n, memory.col_content)}</th>
+                        <th class="p-4">{t!(i18n, memory.col_agent)}</th>
+                        <th class="p-4">{t!(i18n, memory.col_date)}</th>
+                        <th class="p-4 pr-8 text-right">{t!(i18n, memory.col_actions)}</th>
                     </tr>
                 </thead>
                 <tbody class="divide-y divide-border-subtle">
                     {move || {
                         if !connected.get() {
                             view! {
-                                <tr><td colspan="4" class="p-8 text-center text-text-tertiary">"Connect to Gateway to view raw memories"</td></tr>
+                                <tr><td colspan="4" class="p-8 text-center text-text-tertiary">{t!(i18n, memory.connect_to_view_raw)}</td></tr>
                             }.into_any()
                         } else if searching.get() {
                             view! {
-                                <tr><td colspan="4" class="p-8 text-center text-text-tertiary">"Searching..."</td></tr>
+                                <tr><td colspan="4" class="p-8 text-center text-text-tertiary">{t!(i18n, memory.searching)}</td></tr>
                             }.into_any()
                         } else if !loaded.get() {
                             view! {
-                                <tr><td colspan="4" class="p-8 text-center text-text-tertiary">"Loading..."</td></tr>
+                                <tr><td colspan="4" class="p-8 text-center text-text-tertiary">{t!(i18n, common.loading)}</td></tr>
                             }.into_any()
                         } else if memories.get().is_empty() {
                             view! {
-                                <tr><td colspan="4" class="p-8 text-center text-text-tertiary">"No raw memories stored yet. Chat with Aleph to start building memory."</td></tr>
+                                <tr><td colspan="4" class="p-8 text-center text-text-tertiary">{t!(i18n, memory.no_raw)}</td></tr>
                             }.into_any()
                         } else {
                             let on_delete = on_delete.clone();
@@ -353,7 +357,7 @@ fn RawMemoriesTable(
                                     each=move || memories.get()
                                     key=|m| m.id.clone()
                                     children=move |entry| {
-                                        let created_at = entry.created_at.clone().unwrap_or_else(|| "Unknown".to_string());
+                                        let created_at = entry.created_at.clone().unwrap_or_else(|| t_string!(i18n, memory.unknown).to_string());
                                         let agent_id = entry.agent_id.clone();
                                         let entry_id = entry.id.clone();
                                         let on_delete = on_delete.clone();

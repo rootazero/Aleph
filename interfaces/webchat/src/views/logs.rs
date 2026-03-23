@@ -2,6 +2,7 @@ use leptos::prelude::*;
 use crate::components::ui::*;
 use crate::context::DashboardState;
 use crate::api::{LogsApi, LogsResponse};
+use crate::i18n::*;
 
 /// Return a Tailwind text color class based on the log level found in the line.
 fn log_line_color(line: &str) -> &'static str {
@@ -19,6 +20,7 @@ fn log_line_color(line: &str) -> &'static str {
 #[component]
 pub fn Logs() -> impl IntoView {
     let state = expect_context::<DashboardState>();
+    let i18n = use_i18n();
 
     // Reactive state
     let logs_data = RwSignal::new(None::<LogsResponse>);
@@ -29,7 +31,7 @@ pub fn Logs() -> impl IntoView {
 
     // Fetch logs action
     let fetch_logs = move || {
-        let state = state.clone();
+        let state = state;
         leptos::task::spawn_local(async move {
             is_loading.set(true);
             error_msg.set(None);
@@ -53,7 +55,7 @@ pub fn Logs() -> impl IntoView {
     };
 
     // Auto-fetch when connected
-    let fetch_on_connect = fetch_logs.clone();
+    let fetch_on_connect = fetch_logs;
     Effect::new(move || {
         if state.is_connected.get() {
             fetch_on_connect();
@@ -63,13 +65,13 @@ pub fn Logs() -> impl IntoView {
     });
 
     // Refresh handler
-    let fetch_on_click = fetch_logs.clone();
+    let fetch_on_click = fetch_logs;
     let handle_refresh = move |_| {
         fetch_on_click();
     };
 
     // Level change handler
-    let fetch_on_level = fetch_logs.clone();
+    let fetch_on_level = fetch_logs;
     let handle_level_change = move |ev: web_sys::Event| {
         let target = event_target::<web_sys::HtmlSelectElement>(&ev);
         selected_level.set(target.value());
@@ -98,16 +100,16 @@ pub fn Logs() -> impl IntoView {
                             <line x1="16" y1="17" x2="8" y2="17" />
                             <polyline points="10 9 9 9 8 9" />
                         </svg>
-                        "Server Logs"
+                        {t!(i18n, logs.title)}
                     </h2>
-                    <p class="text-text-secondary">"View recent log output from Aleph Core."</p>
+                    <p class="text-text-secondary">{t!(i18n, logs.description)}</p>
                 </div>
                 <Button
                     on:click=handle_refresh
                     variant=ButtonVariant::Secondary
                     disabled=Signal::derive(move || is_loading.get() || !state.is_connected.get())
                 >
-                    {move || if is_loading.get() { "Loading..." } else { "Refresh" }}
+                    {move || if is_loading.get() { t_string!(i18n, common.loading).to_string() } else { t_string!(i18n, logs.refresh).to_string() }}
                 </Button>
             </header>
 
@@ -123,23 +125,23 @@ pub fn Logs() -> impl IntoView {
                 <div class="flex items-center gap-6 flex-wrap">
                     // Level filter
                     <div class="flex items-center gap-2">
-                        <label class="text-xs font-medium text-text-tertiary uppercase tracking-wider">"Level"</label>
+                        <label class="text-xs font-medium text-text-tertiary uppercase tracking-wider">{t!(i18n, logs.level)}</label>
                         <select
                             on:change=handle_level_change
                             class="bg-surface-sunken border border-border rounded-lg px-3 py-1.5 text-sm text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/50"
                         >
-                            <option value="all">"All"</option>
-                            <option value="error">"Error"</option>
-                            <option value="warn">"Warn"</option>
-                            <option value="info">"Info"</option>
-                            <option value="debug">"Debug"</option>
-                            <option value="trace">"Trace"</option>
+                            <option value="all">{t!(i18n, logs.filter_all)}</option>
+                            <option value="error">{t!(i18n, logs.filter_error)}</option>
+                            <option value="warn">{t!(i18n, logs.filter_warn)}</option>
+                            <option value="info">{t!(i18n, logs.filter_info)}</option>
+                            <option value="debug">{t!(i18n, logs.filter_debug)}</option>
+                            <option value="trace">{t!(i18n, logs.filter_trace)}</option>
                         </select>
                     </div>
 
                     // Lines count
                     <div class="flex items-center gap-2">
-                        <label class="text-xs font-medium text-text-tertiary uppercase tracking-wider">"Lines"</label>
+                        <label class="text-xs font-medium text-text-tertiary uppercase tracking-wider">{t!(i18n, logs.lines)}</label>
                         <select
                             on:change=handle_lines_change
                             class="bg-surface-sunken border border-border rounded-lg px-3 py-1.5 text-sm text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/50"
@@ -165,14 +167,14 @@ pub fn Logs() -> impl IntoView {
                 if !state.is_connected.get() {
                     view! {
                         <Card class="p-12 text-center">
-                            <p class="text-text-tertiary">"Connect to Gateway to view logs"</p>
+                            <p class="text-text-tertiary">{t!(i18n, logs.connect_to_view)}</p>
                         </Card>
                     }.into_any()
                 } else if let Some(data) = logs_data.get() {
                     if data.logs.is_empty() {
                         view! {
                             <Card class="p-12 text-center">
-                                <p class="text-text-tertiary">"No log entries found"</p>
+                                <p class="text-text-tertiary">{t!(i18n, logs.no_entries)}</p>
                             </Card>
                         }.into_any()
                     } else {
@@ -196,7 +198,7 @@ pub fn Logs() -> impl IntoView {
                 } else {
                     view! {
                         <Card class="p-12 text-center">
-                            <p class="text-text-tertiary">"Loading..."</p>
+                            <p class="text-text-tertiary">{t!(i18n, common.loading)}</p>
                         </Card>
                     }.into_any()
                 }

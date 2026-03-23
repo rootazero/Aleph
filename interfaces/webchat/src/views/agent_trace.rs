@@ -1,6 +1,7 @@
 use leptos::prelude::*;
 use crate::models::{TraceNode, TraceNodeType, TraceStatus};
 use crate::context::{DashboardState, GatewayEvent};
+use crate::i18n::*;
 
 /// Generate a unique node ID
 fn next_node_id() -> String {
@@ -35,6 +36,7 @@ fn format_timestamp(epoch_ms: f64) -> String {
 pub fn AgentTrace() -> impl IntoView {
     // Get dashboard state from context
     let state = expect_context::<DashboardState>();
+    let i18n = use_i18n();
 
     // State - start with empty nodes instead of mock data
     let nodes = RwSignal::new(Vec::<TraceNode>::new());
@@ -48,7 +50,7 @@ pub fn AgentTrace() -> impl IntoView {
     // Subscribe to agent events when connected
     Effect::new(move || {
         if state.is_connected.get() {
-            let state = state.clone();
+            let state = state;
 
             // Subscribe to agent events
             // Note: context.rs remaps "stream.*" → "run.*" topics before dispatch
@@ -64,12 +66,14 @@ pub fn AgentTrace() -> impl IntoView {
                 let node = match topic {
                     "run.run_accepted" => {
                         let run_id = json_str(&event.data, "run_id");
+                        let unknown = t_string!(i18n, trace.unknown).to_string();
+                        let run_started = t_string!(i18n, trace.run_started).to_string();
                         Some(TraceNode {
                             id: next_node_id(),
                             node_type: TraceNodeType::Decision,
                             timestamp: now_ms(),
                             duration_ms: None,
-                            content: format!("Agent run started ({})", if run_id.is_empty() { "unknown".to_string() } else { run_id }),
+                            content: format!("{} ({})", run_started, if run_id.is_empty() { unknown } else { run_id }),
                             status: TraceStatus::InProgress,
                             children: vec![],
                         })
@@ -120,8 +124,9 @@ pub fn AgentTrace() -> impl IntoView {
                             }
                         }
 
+                        let calling_tool = t_string!(i18n, trace.calling_tool).to_string();
                         let content = if params.is_empty() || params == "{}" {
-                            format!("Calling tool: {}", tool_name)
+                            format!("{} {}", calling_tool, tool_name)
                         } else {
                             // Truncate long params
                             let truncated = if params.len() > 200 {
@@ -129,7 +134,7 @@ pub fn AgentTrace() -> impl IntoView {
                             } else {
                                 params
                             };
-                            format!("Calling tool: {} ({})", tool_name, truncated)
+                            format!("{} {} ({})", calling_tool, tool_name, truncated)
                         };
 
                         Some(TraceNode {
@@ -181,12 +186,13 @@ pub fn AgentTrace() -> impl IntoView {
                                 output.to_string()
                             };
                             if display.is_empty() {
-                                "Tool completed successfully".to_string()
+                                t_string!(i18n, trace.tool_completed).to_string()
                             } else {
-                                format!("Result: {}", display)
+                                format!("{} {}", t_string!(i18n, trace.tool_result), display)
                             }
                         } else {
-                            format!("Tool failed: {}", if error.is_empty() { "unknown error" } else { error })
+                            let unknown_error = t_string!(i18n, trace.unknown_error).to_string();
+                            format!("{} {}", t_string!(i18n, trace.tool_failed), if error.is_empty() { &unknown_error } else { error })
                         };
 
                         Some(TraceNode {
@@ -239,48 +245,53 @@ pub fn AgentTrace() -> impl IntoView {
                             .and_then(|l| l.as_u64())
                             .unwrap_or(0);
 
+                        let run_complete = t_string!(i18n, trace.run_complete).to_string();
                         Some(TraceNode {
                             id: next_node_id(),
                             node_type: TraceNodeType::Decision,
                             timestamp: now_ms(),
                             duration_ms: duration,
-                            content: format!("Run complete ({} tool calls, {} loops)", tool_calls, loops),
+                            content: format!("{} ({} tool calls, {} loops)", run_complete, tool_calls, loops),
                             status: TraceStatus::Success,
                             children: vec![],
                         })
                     }
                     "run.run_error" => {
                         let error = json_str(&event.data, "error");
+                        let unknown_error = t_string!(i18n, trace.unknown_error).to_string();
+                        let run_failed = t_string!(i18n, trace.run_failed).to_string();
                         Some(TraceNode {
                             id: next_node_id(),
                             node_type: TraceNodeType::Decision,
                             timestamp: now_ms(),
                             duration_ms: None,
-                            content: format!("Run failed: {}", if error.is_empty() { "unknown error".to_string() } else { error }),
+                            content: format!("{} {}", run_failed, if error.is_empty() { unknown_error } else { error }),
                             status: TraceStatus::Failed,
                             children: vec![],
                         })
                     }
                     "run.ask_user" => {
                         let question = json_str(&event.data, "question");
+                        let asking_user = t_string!(i18n, trace.asking_user).to_string();
                         Some(TraceNode {
                             id: next_node_id(),
                             node_type: TraceNodeType::Observation,
                             timestamp: now_ms(),
                             duration_ms: None,
-                            content: format!("Asking user: {}", question),
+                            content: format!("{} {}", asking_user, question),
                             status: TraceStatus::InProgress,
                             children: vec![],
                         })
                     }
                     "run.uncertainty_signal" => {
                         let uncertainty = json_str(&event.data, "uncertainty");
+                        let uncertainty_label = t_string!(i18n, trace.uncertainty).to_string();
                         Some(TraceNode {
                             id: next_node_id(),
                             node_type: TraceNodeType::Observation,
                             timestamp: now_ms(),
                             duration_ms: None,
-                            content: format!("Uncertainty: {}", uncertainty),
+                            content: format!("{} {}", uncertainty_label, uncertainty),
                             status: TraceStatus::InProgress,
                             children: vec![],
                         })
@@ -325,9 +336,9 @@ pub fn AgentTrace() -> impl IntoView {
                             <svg width="32" height="32" attr:class="w-8 h-8 text-primary" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                                 <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
                             </svg>
-                            "Live Agent Trace"
+                            {t!(i18n, trace.title)}
                         </h2>
-                        <p class="text-text-secondary">"Real-time observation of Agent's internal reasoning and actions."</p>
+                        <p class="text-text-secondary">{t!(i18n, trace.description)}</p>
                     </div>
 
                     <div class="flex items-center gap-3">
@@ -343,7 +354,7 @@ pub fn AgentTrace() -> impl IntoView {
                                             <rect x="6" y="4" width="4" height="16" />
                                             <rect x="14" y="4" width="4" height="16" />
                                         </svg>
-                                        "Pause"
+                                        {t!(i18n, trace.pause)}
                                     </div>
                                 }.into_any()
                             } else {
@@ -352,7 +363,7 @@ pub fn AgentTrace() -> impl IntoView {
                                         <svg width="16" height="16" attr:class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                                             <polygon points="5 3 19 12 5 21 5 3" />
                                         </svg>
-                                        "Resume"
+                                        {t!(i18n, trace.resume)}
                                     </div>
                                 }.into_any()
                             }}
@@ -383,8 +394,8 @@ pub fn AgentTrace() -> impl IntoView {
                                     <line x1="12" y1="17" x2="12.01" y2="17" />
                                 </svg>
                                 <div>
-                                    <h3 class="text-warning font-semibold mb-1">"Gateway Connection Required"</h3>
-                                    <p class="text-sm text-text-secondary">"Please connect to the Aleph Gateway from the System Status page to receive live Agent trace events."</p>
+                                    <h3 class="text-warning font-semibold mb-1">{t!(i18n, dashboard.gateway_required)}</h3>
+                                    <p class="text-sm text-text-secondary">{t!(i18n, trace.gateway_required_desc)}</p>
                                 </div>
                             </div>
                         </div>
@@ -407,8 +418,8 @@ pub fn AgentTrace() -> impl IntoView {
                                             <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
                                         </svg>
                                     </div>
-                                    <p class="text-text-secondary">"No agent trace events yet"</p>
-                                    <p class="text-sm text-text-tertiary mt-2">"Events will appear here when the agent starts processing"</p>
+                                    <p class="text-text-secondary">{t!(i18n, trace.no_events)}</p>
+                                    <p class="text-sm text-text-tertiary mt-2">{t!(i18n, trace.events_hint)}</p>
                                 </div>
                             }.into_any()
                         } else {
@@ -508,7 +519,8 @@ fn TraceNodeItem(node: TraceNode) -> impl IntoView {
                         </div>
                     }.into_any()
                 } else {
-                    view! {}.into_any()
+                    let _: () = view! {};
+                    ().into_any()
                 }}
             </div>
         </div>
