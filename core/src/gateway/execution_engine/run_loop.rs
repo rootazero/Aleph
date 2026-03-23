@@ -120,6 +120,24 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             PromptBuilder::from_soul(&resolved_soul)
         };
 
+        // Populate eligible skills from SkillSystem for scope filtering
+        let prompt_builder = if let Ok(ext_manager) =
+            crate::gateway::handlers::plugins::get_extension_manager()
+        {
+            if ext_manager.is_loaded().await {
+                let snapshot = ext_manager.skill_system().current_snapshot().await;
+                if !snapshot.eligible_manifests.is_empty() {
+                    prompt_builder.with_eligible_skills(snapshot.eligible_manifests)
+                } else {
+                    prompt_builder
+                }
+            } else {
+                prompt_builder
+            }
+        } else {
+            prompt_builder
+        };
+
         // Safety guard from merged global + agent permissions
         let agent_perms = agent.config().tool_permissions();
         let safety = SafetyGuard::from_permissions(&self.global_tool_permissions, &agent_perms);
