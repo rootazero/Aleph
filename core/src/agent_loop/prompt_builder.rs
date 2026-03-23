@@ -213,7 +213,9 @@ impl PromptBuilder {
                 let xml = build_skills_prompt_xml(&filtered);
                 sections.push(format!(
                     "# Available Skills\n\nYou can invoke skills using the `skill` tool. \
-                     Skills provide specialized instructions for specific tasks.\n\n{}",
+                     Skills provide specialized instructions for specific tasks.\n\
+                     {}\n\n{}",
+                    crate::skill::prompt::DEFERRED_LOADING_GUIDANCE,
                     xml
                 ));
             }
@@ -430,5 +432,24 @@ mod tests {
     fn test_build_no_skills_no_section() {
         let prompt = PromptBuilder::new().build(&[], None);
         assert!(!prompt.contains("# Available Skills"));
+    }
+
+    #[test]
+    fn test_build_with_deferred_loading_guidance() {
+        use crate::domain::skill::{PromptScope, SkillContent, SkillManifest, SkillSource};
+        use crate::skill::prompt::DEFERRED_LOADING_GUIDANCE;
+
+        let mut skill = SkillManifest::new(
+            "test-skill", "Test Skill", "A test skill",
+            SkillContent::new("content"), SkillSource::Bundled,
+        );
+        skill.set_scope(PromptScope::System);
+
+        let builder = PromptBuilder::new()
+            .with_eligible_skills(vec![skill]);
+
+        let prompt = builder.build(&[], None);
+
+        assert!(prompt.contains(DEFERRED_LOADING_GUIDANCE));
     }
 }
