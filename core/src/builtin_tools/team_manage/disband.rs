@@ -5,6 +5,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
+use crate::agents::sub_agents::{SubAgentRegistry, RunStatus};
 use crate::agents::swarm::tasks::{
     CoordTaskFilter, CoordTaskStatus, CoordTaskStore, CoordTaskUpdate, TeamStatus, TeamUpdate,
 };
@@ -35,15 +36,17 @@ pub struct TeamDisbandOutput {
 // Tool
 // =============================================================================
 
-/// Tool that disbands a team and cancels all non-completed tasks.
+/// Tool that disbands a team, cancels all non-completed tasks, and kills
+/// keep-alive sub-agent runs.
 #[derive(Clone)]
 pub struct TeamDisbandTool {
     store: Arc<dyn CoordTaskStore>,
+    sub_registry: Arc<SubAgentRegistry>,
 }
 
 impl TeamDisbandTool {
-    pub fn new(store: Arc<dyn CoordTaskStore>) -> Self {
-        Self { store }
+    pub fn new(store: Arc<dyn CoordTaskStore>, sub_registry: Arc<SubAgentRegistry>) -> Self {
+        Self { store, sub_registry }
     }
 }
 
@@ -118,6 +121,22 @@ impl AlephTool for TeamDisbandTool {
             status: Some(TeamStatus::Disbanded),
         };
         self.store.update_team(&args.team_id, update).await?;
+
+        // 4. Kill keep_alive sub-agents (best-effort)
+        if let Ok(Some(team_data)) = self.store.get_team(&args.team_id).await {
+            for member in &team_data.members {
+                if let Some(run_id) = &member.run_id {
+                    if let Err(e) = self.sub_registry.transition(run_id, RunStatus::Cancelled).await {
+                        tracing::warn!(
+                            run_id = %run_id,
+                            role = %member.role,
+                            error = %e,
+                            "Failed to cancel sub-agent during team disband (will be cleaned up at session end)"
+                        );
+                    }
+                }
+            }
+        }
 
         info!(
             team_id = %args.team_id,

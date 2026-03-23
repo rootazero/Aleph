@@ -311,10 +311,23 @@ impl BuiltinToolRegistry {
                     (None, None)
                 };
 
-                let team_create = TeamCreateTool::new(Arc::clone(store));
-                let team_launch = TeamLaunchTool::new(Arc::clone(store));
+                let sub_reg = config.sub_agent_registry.as_ref().map(Arc::clone)
+                    .unwrap_or_else(|| Arc::new(crate::agents::sub_agents::SubAgentRegistry::new_in_memory()));
+                let agent_id = config.current_agent_id.clone()
+                    .unwrap_or_else(|| "main".to_string());
+                let session_key = config.current_session_key.clone()
+                    .unwrap_or_else(|| crate::routing::SessionKey::main("main"));
+
+                let team_create = TeamCreateTool::new(
+                    Arc::clone(store), Arc::clone(&sub_reg), agent_id.clone(), session_key.clone(),
+                );
+                let team_launch = TeamLaunchTool::new(
+                    Arc::clone(store), Arc::clone(&sub_reg), agent_id.clone(), session_key.clone(),
+                );
                 let team_list = TeamListTool::new(Arc::clone(store));
-                let team_disband = TeamDisbandTool::new(Arc::clone(store));
+                let team_disband = TeamDisbandTool::new(
+                    Arc::clone(store), Arc::clone(&sub_reg),
+                );
 
                 // Register parameter schemas for all task/team tools
                 {

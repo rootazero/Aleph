@@ -7,12 +7,14 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
+use crate::agents::sub_agents::{SubAgentRegistry, SubAgentRun};
 use crate::agents::swarm::tasks::template::{self, TeamTemplate};
 use crate::agents::swarm::tasks::{
     CoordTaskId, CoordTaskStore, NewCoordTask, NewTeam, Priority, TeamMember, TeamStatus,
     TeamUpdate,
 };
 use crate::error::{AlephError, Result};
+use crate::routing::SessionKey;
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
 
@@ -108,15 +110,29 @@ pub struct TeamLaunchOutput {
 // =============================================================================
 
 /// Tool that launches a full team from a template file, creating the team,
-/// registering members, and instantiating the task DAG.
+/// registering members as sub-agents, and instantiating the task DAG.
 #[derive(Clone)]
 pub struct TeamLaunchTool {
     store: Arc<dyn CoordTaskStore>,
+    sub_registry: Arc<SubAgentRegistry>,
+    #[allow(dead_code)] // Reserved for future use (e.g., default leader override)
+    current_agent_id: String,
+    current_session_key: SessionKey,
 }
 
 impl TeamLaunchTool {
-    pub fn new(store: Arc<dyn CoordTaskStore>) -> Self {
-        Self { store }
+    pub fn new(
+        store: Arc<dyn CoordTaskStore>,
+        sub_registry: Arc<SubAgentRegistry>,
+        current_agent_id: String,
+        current_session_key: SessionKey,
+    ) -> Self {
+        Self {
+            store,
+            sub_registry,
+            current_agent_id,
+            current_session_key,
+        }
     }
 }
 
@@ -246,15 +262,35 @@ impl AlephTool for TeamLaunchTool {
 
         let team = self.store.create_team(new_team).await?;
 
-        // 4. Register members
+        // 4. Spawn sub-agent members
         let now = now_secs();
         for member in &tmpl.members {
+            let subagent_id = format!("team-{}-{}", team_id, member.name);
+            let session_key = SessionKey::Subagent {
+                parent_key: Box::new(self.current_session_key.clone()),
+                subagent_id: subagent_id.clone(),
+            };
+
+            let persona = format!("You are {} with role: {}", member.name, member.role);
+
+            let run = SubAgentRun::new(
+                session_key,
+                self.current_session_key.clone(),
+                format!("Team member: {}", member.name),
+                "team",
+            )
+            .with_persona(persona.clone())
+            .with_keep_alive(true)
+            .with_label(format!("{}/{}", team_id, member.name));
+
+            let run_id = self.sub_registry.register(run).await?;
+
             let tm = TeamMember {
-                agent_id: member.name.clone(),
+                agent_id: subagent_id,
                 role: member.role.clone(),
                 joined_at: now,
-                run_id: None,
-                persona: None,
+                run_id: Some(run_id),
+                persona: Some(persona),
             };
             if let Err(e) = self.store.add_member(&team_id, tm).await {
                 warn!(member = %member.name, error = %e, "Failed to add member, cleaning up");
