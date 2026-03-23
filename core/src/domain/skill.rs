@@ -373,6 +373,8 @@ pub struct SkillManifest {
     content: SkillContent,
     /// How the content is injected.
     scope: PromptScope,
+    /// Optional tool name this skill is bound to (for scope-aware filtering).
+    bound_tool: Option<String>,
     /// When the skill is eligible.
     eligibility: EligibilitySpec,
     /// How to install dependencies.
@@ -399,6 +401,7 @@ impl SkillManifest {
             description: description.into(),
             content,
             scope: PromptScope::default(),
+            bound_tool: None,
             eligibility: EligibilitySpec::default(),
             install_specs: Vec::new(),
             invocation: InvocationPolicy::default(),
@@ -431,6 +434,11 @@ impl SkillManifest {
     /// How the content is injected.
     pub fn scope(&self) -> &PromptScope {
         &self.scope
+    }
+
+    /// Optional tool name this skill is bound to.
+    pub fn bound_tool(&self) -> Option<&str> {
+        self.bound_tool.as_deref()
     }
 
     /// Eligibility conditions.
@@ -493,6 +501,11 @@ impl SkillManifest {
     /// Set the installation specs.
     pub fn set_install_specs(&mut self, specs: Vec<InstallSpec>) {
         self.install_specs = specs;
+    }
+
+    /// Set the bound tool name.
+    pub fn set_bound_tool(&mut self, tool: String) {
+        self.bound_tool = Some(tool);
     }
 
     /// Set the invocation policy.
@@ -694,5 +707,19 @@ mod tests {
         // Both enabled: visible again
         manifest.set_invocation(InvocationPolicy::default());
         assert!(manifest.is_model_visible());
+    }
+
+    #[test]
+    fn test_skill_manifest_bound_tool() {
+        let mut manifest = SkillManifest::new(
+            "docker:build",
+            "Docker Build",
+            "Builds Docker images",
+            SkillContent::new("content"),
+            SkillSource::Bundled,
+        );
+        assert!(manifest.bound_tool().is_none());
+        manifest.set_bound_tool("docker_cli".to_string());
+        assert_eq!(manifest.bound_tool(), Some("docker_cli"));
     }
 }
