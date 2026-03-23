@@ -64,6 +64,12 @@ pub struct BuiltinToolConfig {
     pub coord_task_store: Option<Arc<dyn crate::agents::swarm::tasks::CoordTaskStore>>,
     /// Agent message bus for task update/wait event notifications
     pub agent_message_bus: Option<Arc<crate::agents::swarm::AgentMessageBus>>,
+    /// Sub-agent registry for team management tools
+    pub sub_agent_registry: Option<Arc<crate::agents::sub_agents::SubAgentRegistry>>,
+    /// Current agent ID for team tools (leader identity)
+    pub current_agent_id: Option<String>,
+    /// Current session key for team tools (parent session for spawned sub-agents)
+    pub current_session_key: Option<crate::routing::SessionKey>,
     /// Channel registry for channel management tools (pairing, etc.)
     pub channel_registry: Option<Arc<crate::gateway::channel_registry::ChannelRegistry>>,
 }
