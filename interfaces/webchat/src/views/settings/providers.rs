@@ -73,7 +73,7 @@ pub fn ProvidersView() -> impl IntoView {
                                 <line x1="12" y1="16" x2="12" y2="12"/>
                                 <line x1="12" y1="8" x2="12.01" y2="8"/>
                             </svg>
-                            "Gateway not available — showing presets only"
+                            {t!(i18n, settings.providers.gateway_unavailable)}
                         </div>
                     })}
 
@@ -92,7 +92,7 @@ pub fn ProvidersView() -> impl IntoView {
                             on:click=move |_| selected.set(Some("__new__".to_string()))
                             class="w-full px-4 py-3 border-2 border-dashed border-border rounded-lg text-text-secondary hover:border-primary hover:text-primary transition-colors"
                         >
-                            "+ Add Custom Provider"
+                            {t!(i18n, settings.providers.add_custom)}
                         </button>
                     </div>
                 </div>
@@ -119,6 +119,7 @@ fn SubscriptionLoginSection(
     providers: RwSignal<Vec<ProviderInfo>>,
     selected: RwSignal<Option<String>>,
 ) -> impl IntoView {
+    let i18n = use_i18n();
     // Track OAuth connection status for each OAuth preset
     let oauth_statuses: Vec<(&'static str, RwSignal<Option<bool>>)> = OAUTH_PRESETS.iter()
         .map(|preset| (preset.name, RwSignal::new(None::<bool>)))
@@ -148,7 +149,7 @@ fn SubscriptionLoginSection(
     view! {
         <div>
             <h2 class="text-sm font-medium text-text-secondary uppercase tracking-wider mb-3">
-                "Subscription Login"
+                {t!(i18n, settings.providers.subscription_login)}
             </h2>
             <div class="space-y-2">
                 {OAUTH_PRESETS.iter().enumerate().map(|(idx, preset)| {
@@ -221,19 +222,19 @@ fn SubscriptionLoginSection(
                                             if is_default {
                                                 view! {
                                                     <span class="px-1.5 py-0.5 bg-primary-subtle text-primary text-xs rounded shrink-0">
-                                                        "Default"
+                                                        {t!(i18n, settings.providers.default)}
                                                     </span>
                                                 }.into_any()
                                             } else if connected || is_verified {
                                                 view! {
                                                     <span class="px-1.5 py-0.5 bg-success-subtle text-success text-xs rounded shrink-0">
-                                                        "Connected"
+                                                        {t!(i18n, settings.providers.connected)}
                                                     </span>
                                                 }.into_any()
                                             } else {
                                                 view! {
                                                     <span class="px-1.5 py-0.5 bg-surface-sunken text-text-tertiary text-xs rounded shrink-0">
-                                                        "Not connected"
+                                                        {t!(i18n, settings.providers.not_connected)}
                                                     </span>
                                                 }.into_any()
                                             }
@@ -263,10 +264,11 @@ fn PresetGrid(
     providers: RwSignal<Vec<ProviderInfo>>,
     selected: RwSignal<Option<String>>,
 ) -> impl IntoView {
+    let i18n = use_i18n();
     view! {
         <div>
             <h2 class="text-sm font-medium text-text-secondary uppercase tracking-wider mb-3">
-                "Quick Setup"
+                {t!(i18n, settings.providers.quick_setup)}
             </h2>
             <div class="grid grid-cols-1 gap-2">
                 {PRESETS.iter().map(|preset| {
@@ -337,13 +339,13 @@ fn PresetGrid(
                                                 if p.is_default {
                                                     view! {
                                                         <span class="px-1.5 py-0.5 bg-primary-subtle text-primary text-xs rounded shrink-0">
-                                                            "Default"
+                                                            {t!(i18n, settings.providers.default)}
                                                         </span>
                                                     }.into_any()
                                                 } else if p.verified {
                                                     view! {
                                                         <span class="px-1.5 py-0.5 bg-success-subtle text-success text-xs rounded shrink-0">
-                                                            "Active"
+                                                            {t!(i18n, settings.providers.verified)}
                                                         </span>
                                                     }.into_any()
                                                 } else {
@@ -376,6 +378,7 @@ fn CustomProvidersList(
     providers: RwSignal<Vec<ProviderInfo>>,
     selected: RwSignal<Option<String>>,
 ) -> impl IntoView {
+    let i18n = use_i18n();
     let mut preset_names: Vec<&str> = PRESETS.iter().chain(OAUTH_PRESETS.iter()).map(|p| p.name).collect();
     // Also exclude canonical OAuth names (e.g. "chatgpt" for "codex")
     for preset in OAUTH_PRESETS.iter() {
@@ -397,7 +400,7 @@ fn CustomProvidersList(
                 view! {
                     <div>
                         <h2 class="text-sm font-medium text-text-secondary uppercase tracking-wider mb-3">
-                            "Custom Providers"
+                            {t!(i18n, settings.providers.custom_providers)}
                         </h2>
                         <div class="grid grid-cols-1 gap-2">
                             {custom.into_iter().map(|p| {
@@ -445,13 +448,13 @@ fn CustomProvidersList(
                                                     {if is_default {
                                                         view! {
                                                             <span class="px-1.5 py-0.5 bg-primary-subtle text-primary text-xs rounded shrink-0">
-                                                                "Default"
+                                                                {t!(i18n, settings.providers.default)}
                                                             </span>
                                                         }.into_any()
                                                     } else if verified {
                                                         view! {
                                                             <span class="px-1.5 py-0.5 bg-success-subtle text-success text-xs rounded shrink-0">
-                                                                "Active"
+                                                                {t!(i18n, settings.providers.verified)}
                                                             </span>
                                                         }.into_any()
                                                     } else {
@@ -708,7 +711,7 @@ fn ProviderDetailPanel(
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
                                     d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
                             </svg>
-                            <span class="text-sm">"Select a provider to configure"</span>
+                            <span class="text-sm">{t!(i18n, settings.providers.select_to_view)}</span>
                         </div>
                     }.into_any();
                 }
@@ -720,9 +723,9 @@ fn ProviderDetailPanel(
                     None
                 };
                 let title = if sel == "__new__" {
-                    "Custom Provider".to_string()
+                    t_string!(i18n, settings.providers.custom_provider).to_string()
                 } else if let Some(ref pn) = preset_name {
-                    format!("Setup {}", pn)
+                    format!("{} {}", t_string!(i18n, settings.providers.setup_prefix), pn)
                 } else {
                     sel.clone()
                 };
@@ -758,7 +761,7 @@ fn ProviderDetailPanel(
                                     {if let Some(preset) = preset_info {
                                         view! { <p class="text-xs text-text-tertiary">{preset.description}</p> }.into_any()
                                     } else {
-                                        view! { <p class="text-xs text-text-tertiary">"Custom provider configuration"</p> }.into_any()
+                                        view! { <p class="text-xs text-text-tertiary">{t!(i18n, settings.providers.custom_provider_desc)}</p> }.into_any()
                                     }}
                                 </div>
                             </div>
@@ -777,7 +780,7 @@ fn ProviderDetailPanel(
                                     <div class="space-y-6">
                                         // Connection Status card (reactive)
                                         <div class="bg-surface-raised border border-border rounded-xl p-4 space-y-4">
-                                            <h3 class="text-xs font-medium text-text-secondary uppercase tracking-wider">"Connection Status"</h3>
+                                            <h3 class="text-xs font-medium text-text-secondary uppercase tracking-wider">{t!(i18n, settings.providers.connection_status)}</h3>
                                             {move || {
                                                 let status = oauth_status.get();
                                                 let is_connected = status.as_ref().map(|s| s.connected).unwrap_or(false);
@@ -787,7 +790,7 @@ fn ProviderDetailPanel(
                                                     view! {
                                                         <div class="flex items-center gap-3">
                                                             <div class="w-3 h-3 rounded-full bg-text-tertiary animate-pulse"></div>
-                                                            <span class="text-sm text-text-tertiary">"Checking..."</span>
+                                                            <span class="text-sm text-text-tertiary">{t!(i18n, settings.providers.checking)}</span>
                                                         </div>
                                                     }.into_any()
                                                 } else if is_connected {
@@ -806,7 +809,7 @@ fn ProviderDetailPanel(
                                                         <div>
                                                             <div class="flex items-center gap-3">
                                                                 <div class="w-3 h-3 rounded-full bg-success"></div>
-                                                                <span class="text-sm text-success font-medium">"Connected"</span>
+                                                                <span class="text-sm text-success font-medium">{t!(i18n, settings.providers.connected)}</span>
                                                             </div>
                                                             {expires.map(|e| view! {
                                                                 <p class="mt-1 text-xs text-text-tertiary">{e}</p>
@@ -817,13 +820,13 @@ fn ProviderDetailPanel(
                                                     view! {
                                                         <div class="flex items-center gap-3">
                                                             <div class="w-3 h-3 rounded-full bg-text-tertiary"></div>
-                                                            <span class="text-sm text-text-secondary">"Not connected"</span>
+                                                            <span class="text-sm text-text-secondary">{t!(i18n, settings.providers.not_connected)}</span>
                                                         </div>
                                                     }.into_any()
                                                 }
                                             }}
                                             <p class="text-xs text-text-tertiary">
-                                                "Use your ChatGPT Plus or Pro subscription to access Codex models. No API key needed."
+                                                {t!(i18n, settings.providers.codex_info)}
                                             </p>
                                             // Login / Logout button (reactive)
                                             {move || {
@@ -855,7 +858,7 @@ fn ProviderDetailPanel(
                                                             }
                                                             class="w-full px-4 py-2.5 bg-surface-sunken border border-border text-text-secondary text-sm font-medium rounded-xl hover:bg-surface-raised transition-colors"
                                                         >
-                                                            "Logout"
+                                                            {t!(i18n, settings.providers.logout)}
                                                         </button>
                                                     }.into_any()
                                                 } else {
@@ -894,7 +897,7 @@ fn ProviderDetailPanel(
                                                             <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
                                                                 <path d="M22.2819 9.8211a5.9847 5.9847 0 0 0-.5157-4.9108 6.0462 6.0462 0 0 0-6.5098-2.9A6.0651 6.0651 0 0 0 4.9807 4.1818a5.9847 5.9847 0 0 0-3.9977 2.9 6.0462 6.0462 0 0 0 .7427 7.0966 5.98 5.98 0 0 0 .511 4.9107 6.051 6.051 0 0 0 6.5146 2.9001A5.9847 5.9847 0 0 0 13.2599 24a6.0557 6.0557 0 0 0 5.7718-4.2058 5.9894 5.9894 0 0 0 3.9977-2.9001 6.0557 6.0557 0 0 0-.7475-7.0729zm-9.022 12.6081a4.4755 4.4755 0 0 1-2.8764-1.0408l.1419-.0804 4.7783-2.7582a.7948.7948 0 0 0 .3927-.6813v-6.7369l2.02 1.1686a.071.071 0 0 1 .038.052v5.5826a4.504 4.504 0 0 1-4.4945 4.4944zm-9.6607-4.1254a4.4708 4.4708 0 0 1-.5346-3.0137l.142.0852 4.783 2.7582a.7712.7712 0 0 0 .7806 0l5.8428-3.3685v2.3324a.0804.0804 0 0 1-.0332.0615L9.74 19.9502a4.4992 4.4992 0 0 1-6.1408-1.6464zM2.3408 7.8956a4.485 4.485 0 0 1 2.3655-1.9728V11.6a.7664.7664 0 0 0 .3879.6765l5.8144 3.3543-2.0201 1.1685a.0757.0757 0 0 1-.071 0l-4.8303-2.7865A4.504 4.504 0 0 1 2.3408 7.872zm16.5963 3.8558L13.1038 8.364l2.0201-1.1638a.0757.0757 0 0 1 .071 0l4.8303 2.7913a4.4944 4.4944 0 0 1-.6765 8.1042v-5.6772a.79.79 0 0 0-.4091-.6765zm2.0107-3.0231l-.142-.0852-4.7735-2.7818a.7759.7759 0 0 0-.7854 0L9.409 9.2297V6.8974a.0662.0662 0 0 1 .0284-.0615l4.8303-2.7866a4.4992 4.4992 0 0 1 6.6802 4.66zM8.3065 12.863l-2.02-1.1638a.0804.0804 0 0 1-.038-.0567V6.0742a4.4992 4.4992 0 0 1 7.3757-3.4537l-.142.0805L8.704 5.459a.7948.7948 0 0 0-.3927.6813zm1.0974-2.3616l2.603-1.5018 2.6029 1.5018v3.0036l-2.6029 1.5018-2.603-1.5018z"/>
                                                             </svg>
-                                                            {move || if oauth_loading.get() { "Logging in..." } else { "Login with ChatGPT" }}
+                                                            {move || if oauth_loading.get() { t_string!(i18n, settings.providers.logging_in).to_string() } else { t_string!(i18n, settings.providers.login_with_chatgpt).to_string() }}
                                                         </button>
                                                     }.into_any()
                                                 }
@@ -903,9 +906,9 @@ fn ProviderDetailPanel(
 
                                         // Model configuration card (simplified for OAuth)
                                         <div class="bg-surface-raised border border-border rounded-xl p-4 space-y-4">
-                                            <h3 class="text-xs font-medium text-text-secondary uppercase tracking-wider">"Configuration"</h3>
+                                            <h3 class="text-xs font-medium text-text-secondary uppercase tracking-wider">{t!(i18n, settings.providers.configuration)}</h3>
                                             <div>
-                                                <label class="block text-sm text-text-secondary mb-1">"Model"</label>
+                                                <label class="block text-sm text-text-secondary mb-1">{t!(i18n, settings.providers.model)}</label>
                                                 <input
                                                     type="text"
                                                     prop:value=move || form_model.get()
@@ -913,10 +916,10 @@ fn ProviderDetailPanel(
                                                     class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
                                                     placeholder="e.g. gpt-4o, gpt-4o-mini"
                                                 />
-                                                <p class="mt-1 text-xs text-text-tertiary">"Enter multiple models, separated by commas"</p>
+                                                <p class="mt-1 text-xs text-text-tertiary">{t!(i18n, settings.providers.model_hint)}</p>
                                             </div>
                                             <div>
-                                                <label class="block text-sm text-text-secondary mb-1">"Timeout (s)"</label>
+                                                <label class="block text-sm text-text-secondary mb-1">{t!(i18n, settings.providers.timeout)}</label>
                                                 <input
                                                     type="number"
                                                     prop:value=move || form_timeout.get()
@@ -946,7 +949,7 @@ fn ProviderDetailPanel(
                                                             prop:disabled=move || saving.get()
                                                             class="w-full px-4 py-2.5 bg-success-subtle border border-success/20 text-success text-sm font-medium rounded-lg hover:bg-success-subtle/80 disabled:opacity-50"
                                                         >
-                                                            "Set Default"
+                                                            {t!(i18n, settings.providers.set_default)}
                                                         </button>
                                                     }.into_any()
                                                 } else {
@@ -962,13 +965,13 @@ fn ProviderDetailPanel(
                                     <div class="space-y-6">
                                         // Configuration form card
                                         <div class="bg-surface-raised border border-border rounded-xl p-4 space-y-4">
-                                            <h3 class="text-xs font-medium text-text-secondary uppercase tracking-wider">"Configuration"</h3>
+                                            <h3 class="text-xs font-medium text-text-secondary uppercase tracking-wider">{t!(i18n, settings.providers.configuration)}</h3>
 
                                             // Name (editable only for new custom)
                                             {move || if sel == "__new__" {
                                                 view! {
                                                     <div>
-                                                        <label class="block text-sm text-text-secondary mb-1">"Name"</label>
+                                                        <label class="block text-sm text-text-secondary mb-1">{t!(i18n, settings.providers.name)}</label>
                                                         <input
                                                             type="text"
                                                             prop:value=move || form_name.get()
@@ -984,30 +987,30 @@ fn ProviderDetailPanel(
 
                                             // Protocol
                                             <div>
-                                                <label class="block text-sm text-text-secondary mb-1">"Protocol"</label>
+                                                <label class="block text-sm text-text-secondary mb-1">{t!(i18n, settings.providers.protocol)}</label>
                                                 <select
                                                     prop:value=move || form_protocol.get()
                                                     on:change=move |ev| form_protocol.set(event_target_value(&ev))
                                                     class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
                                                 >
-                                                    <option value="openai">"OpenAI Compatible"</option>
-                                                    <option value="anthropic">"Anthropic"</option>
-                                                    <option value="gemini">"Google Gemini"</option>
-                                                    <option value="ollama">"Ollama"</option>
-                                                    <option value="chatgpt">"ChatGPT (Codex)"</option>
+                                                    <option value="openai">{t!(i18n, settings.providers.protocol_openai)}</option>
+                                                    <option value="anthropic">{t!(i18n, settings.providers.protocol_anthropic)}</option>
+                                                    <option value="gemini">{t!(i18n, settings.providers.protocol_gemini)}</option>
+                                                    <option value="ollama">{t!(i18n, settings.providers.protocol_ollama)}</option>
+                                                    <option value="chatgpt">{t!(i18n, settings.providers.protocol_chatgpt)}</option>
                                                 </select>
                                             </div>
 
                                             // API Key
                                             <div>
-                                                <label class="block text-sm text-text-secondary mb-1">"API Key"</label>
+                                                <label class="block text-sm text-text-secondary mb-1">{t!(i18n, settings.providers.api_key)}</label>
                                                 <ApiKeyInput
                                                     value=form_api_key
-                                                    placeholder=preset_info.map(|p| p.api_key_placeholder).unwrap_or("sk-...")
+                                                    placeholder=preset_info.map(|p| p.api_key_placeholder).unwrap_or("sk-...").to_string()
                                                 />
                                                 {move || if preset_info.map(|p| !p.needs_api_key).unwrap_or(false) {
                                                     view! {
-                                                        <p class="mt-1 text-xs text-text-tertiary">"Not required for local providers"</p>
+                                                        <p class="mt-1 text-xs text-text-tertiary">{t!(i18n, settings.providers.no_api_key_needed)}</p>
                                                     }.into_any()
                                                 } else {
                                                     view! { <span></span> }.into_any()
@@ -1016,7 +1019,7 @@ fn ProviderDetailPanel(
 
                                             // Model
                                             <div>
-                                                <label class="block text-sm text-text-secondary mb-1">"Model"</label>
+                                                <label class="block text-sm text-text-secondary mb-1">{t!(i18n, settings.providers.model)}</label>
                                                 <input
                                                     type="text"
                                                     prop:value=move || form_model.get()
@@ -1024,12 +1027,12 @@ fn ProviderDetailPanel(
                                                     class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
                                                     placeholder="e.g. gpt-4o, claude-sonnet-4-20250514"
                                                 />
-                                                <p class="mt-1 text-xs text-text-tertiary">"Enter multiple models, separated by commas"</p>
+                                                <p class="mt-1 text-xs text-text-tertiary">{t!(i18n, settings.providers.model_hint)}</p>
                                             </div>
 
                                             // Base URL
                                             <div>
-                                                <label class="block text-sm text-text-secondary mb-1">"Base URL"</label>
+                                                <label class="block text-sm text-text-secondary mb-1">{t!(i18n, settings.providers.base_url)}</label>
                                                 <input
                                                     type="text"
                                                     prop:value=move || form_base_url.get()
@@ -1050,17 +1053,17 @@ fn ProviderDetailPanel(
                                                     class="w-4 h-4 rounded"
                                                 />
                                                 <div>
-                                                    <span class="text-sm text-text-primary">"Enabled"</span>
-                                                    <p class="text-xs text-text-tertiary">"Include this provider in the available providers list"</p>
+                                                    <span class="text-sm text-text-primary">{t!(i18n, settings.providers.enabled)}</span>
+                                                    <p class="text-xs text-text-tertiary">{t!(i18n, settings.providers.enabled_desc)}</p>
                                                 </div>
                                             </label>
                                         </div>
 
                                         // Advanced Settings card
                                         <div class="bg-surface-raised border border-border rounded-xl p-4 space-y-4">
-                                            <h3 class="text-xs font-medium text-text-secondary uppercase tracking-wider">"Advanced Settings"</h3>
+                                            <h3 class="text-xs font-medium text-text-secondary uppercase tracking-wider">{t!(i18n, settings.providers.advanced_settings)}</h3>
                                             <div>
-                                                <label class="block text-sm text-text-secondary mb-1">"Timeout (s)"</label>
+                                                <label class="block text-sm text-text-secondary mb-1">{t!(i18n, settings.providers.timeout)}</label>
                                                 <input
                                                     type="number"
                                                     prop:value=move || form_timeout.get()
@@ -1069,7 +1072,7 @@ fn ProviderDetailPanel(
                                                 />
                                             </div>
                                             <div>
-                                                <label class="block text-sm text-text-secondary mb-1">"Max Tokens"</label>
+                                                <label class="block text-sm text-text-secondary mb-1">{t!(i18n, settings.providers.max_tokens)}</label>
                                                 <input
                                                     type="number"
                                                     prop:value=move || form_max_tokens.get()
@@ -1079,7 +1082,7 @@ fn ProviderDetailPanel(
                                                 />
                                             </div>
                                             <div>
-                                                <label class="block text-sm text-text-secondary mb-1">"Temperature"</label>
+                                                <label class="block text-sm text-text-secondary mb-1">{t!(i18n, settings.providers.temperature)}</label>
                                                 <input
                                                     type="number"
                                                     step="0.1"
@@ -1099,7 +1102,7 @@ fn ProviderDetailPanel(
                                                     prop:disabled=move || testing.get() || saving.get()
                                                     class="flex-1 px-4 py-2.5 bg-info text-white text-sm font-medium rounded-lg hover:bg-primary-hover transition-colors disabled:opacity-50"
                                                 >
-                                                    {move || if testing.get() { "Testing..." } else { "Test Connection" }}
+                                                    {move || if testing.get() { t_string!(i18n, settings.providers.testing).to_string() } else { t_string!(i18n, settings.providers.test_connection).to_string() }}
                                                 </button>
                                                 <button
                                                     on:click=on_save
@@ -1122,7 +1125,7 @@ fn ProviderDetailPanel(
                                                                 prop:disabled=move || saving.get()
                                                                 class="flex-1 px-4 py-2.5 bg-success-subtle border border-success/20 text-success text-sm font-medium rounded-lg hover:bg-success-subtle/80 disabled:opacity-50"
                                                             >
-                                                                "Set Default"
+                                                                {t!(i18n, settings.providers.set_default)}
                                                             </button>
                                                             {if !is_preset {
                                                                 view! {
@@ -1131,7 +1134,7 @@ fn ProviderDetailPanel(
                                                                         prop:disabled=move || saving.get()
                                                                         class="px-4 py-2.5 bg-danger-subtle border border-danger/20 text-danger text-sm font-medium rounded-lg hover:bg-danger-subtle/80 disabled:opacity-50"
                                                                     >
-                                                                        "Delete"
+                                                                        {t!(i18n, settings.providers.delete)}
                                                                     </button>
                                                                 }.into_any()
                                                             } else {
@@ -1154,7 +1157,7 @@ fn ProviderDetailPanel(
                                                             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
                                                             </svg>
-                                                            <span class="font-medium">"Connection successful"</span>
+                                                            <span class="font-medium">{t!(i18n, settings.providers.connection_successful)}</span>
                                                         </div>
                                                         {result.latency_ms.map(|ms| view! {
                                                             <p class="mt-1 text-xs text-success">{format!("Latency: {}ms", ms)}</p>
@@ -1168,7 +1171,7 @@ fn ProviderDetailPanel(
                                                             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
                                                             </svg>
-                                                            <span class="font-medium">"Connection failed"</span>
+                                                            <span class="font-medium">{t!(i18n, settings.providers.connection_failed)}</span>
                                                         </div>
                                                         {result.error.clone().map(|e| view! {
                                                             <p class="mt-1 text-xs text-danger">{e}</p>

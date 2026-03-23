@@ -122,20 +122,20 @@ pub fn SkillsView() -> impl IntoView {
                                 load_skills(state, skills, loading, error);
                             }
                         >
-                            "Refresh"
+                            {t!(i18n, settings.skills.refresh)}
                         </button>
                         <button
                             class="px-3 py-1.5 bg-surface-sunken text-text-secondary rounded hover:bg-surface-sunken text-sm disabled:opacity-50"
                             disabled=move || installing_official.get()
                             on:click=install_official
                         >
-                            {move || if installing_official.get() { "Installing..." } else { "Install Official Skills" }}
+                            {move || if installing_official.get() { t_string!(i18n, settings.skills.installing_official).to_string() } else { t_string!(i18n, settings.skills.install_official).to_string() }}
                         </button>
                         <button
                             class="px-3 py-1.5 bg-primary text-white rounded hover:bg-primary-hover text-sm"
                             on:click=move |_| show_install_dialog.set(true)
                         >
-                            "+ Install Skill"
+                            {t!(i18n, settings.skills.install_skill)}
                         </button>
                     </div>
                 </div>
@@ -163,38 +163,38 @@ pub fn SkillsView() -> impl IntoView {
                 // Aleph Official Skills Section
                 <Show when=move || !loading.get()>
                     <SkillSection
-                        title="Aleph Skills"
+                        title=t_string!(i18n, settings.skills.aleph_skills_title).to_string()
                         icon="A"
                         icon_bg="bg-primary-subtle"
                         icon_color="text-primary"
                         badge_bg="bg-primary-subtle"
                         badge_text="text-primary"
-                        description="Native Aleph skills from ~/.aleph/skills"
+                        description=t_string!(i18n, settings.skills.aleph_skills_desc).to_string()
                         skills_list=aleph_skills
                         all_skills=skills
                         loading=loading
                         error=error
-                        empty_text="No Aleph skills installed"
-                        empty_hint="Click 'Install Official Skills' to get started"
+                        empty_text=t_string!(i18n, settings.skills.aleph_skills_empty).to_string()
+                        empty_hint=t_string!(i18n, settings.skills.aleph_skills_hint).to_string()
                     />
                 </Show>
 
                 // Claude Compatible Skills Section
                 <Show when=move || !loading.get()>
                     <SkillSection
-                        title="Claude Skills"
+                        title=t_string!(i18n, settings.skills.claude_skills_title).to_string()
                         icon="C"
                         icon_bg="bg-[#da7756]/10"
                         icon_color="text-[#da7756]"
                         badge_bg="bg-[#da7756]/10"
                         badge_text="text-[#da7756]"
-                        description="Claude Code compatible skills from ~/.claude/skills"
+                        description=t_string!(i18n, settings.skills.claude_skills_desc).to_string()
                         skills_list=claude_skills
                         all_skills=skills
                         loading=loading
                         error=error
-                        empty_text="No Claude skills installed"
-                        empty_hint="Add SKILL.md files to ~/.claude/skills/"
+                        empty_text=t_string!(i18n, settings.skills.claude_skills_empty).to_string()
+                        empty_hint=t_string!(i18n, settings.skills.claude_skills_hint).to_string()
                     />
                 </Show>
 
@@ -203,8 +203,8 @@ pub fn SkillsView() -> impl IntoView {
                     <div class="flex items-start gap-2">
                         <span class="text-info text-sm">"ℹ️"</span>
                         <div class="text-sm text-info space-y-1">
-                            <p>"Skills extend the AI with specialized capabilities."</p>
-                            <p>"Aleph skills: ~/.aleph/skills/ | Claude skills: ~/.claude/skills/"</p>
+                            <p>{t!(i18n, settings.skills.info_text1)}</p>
+                            <p>{t!(i18n, settings.skills.info_text2)}</p>
                         </div>
                     </div>
                 </div>
@@ -225,20 +225,22 @@ pub fn SkillsView() -> impl IntoView {
 
 #[component]
 fn SkillSection(
-    title: &'static str,
+    title: String,
     icon: &'static str,
     icon_bg: &'static str,
     icon_color: &'static str,
     badge_bg: &'static str,
     badge_text: &'static str,
-    description: &'static str,
+    description: String,
     skills_list: Memo<Vec<SkillInfo>>,
     all_skills: RwSignal<Vec<SkillInfo>>,
     loading: RwSignal<bool>,
     error: RwSignal<Option<String>>,
-    empty_text: &'static str,
-    empty_hint: &'static str,
+    empty_text: String,
+    empty_hint: String,
 ) -> impl IntoView {
+    let empty_text = StoredValue::new(empty_text);
+    let empty_hint = StoredValue::new(empty_hint);
     view! {
         <div class="space-y-3">
             <div class="flex items-center gap-3">
@@ -259,8 +261,8 @@ fn SkillSection(
                 if list.is_empty() {
                     view! {
                         <div class="text-center py-6 border border-dashed border-border rounded">
-                            <p class="text-sm text-text-secondary">{empty_text}</p>
-                            <p class="text-xs text-text-tertiary mt-1">{empty_hint}</p>
+                            <p class="text-sm text-text-secondary">{empty_text.get_value()}</p>
+                            <p class="text-xs text-text-tertiary mt-1">{empty_hint.get_value()}</p>
                         </div>
                     }.into_any()
                 } else {
@@ -296,6 +298,7 @@ fn SkillCard(
     error: RwSignal<Option<String>>,
 ) -> impl IntoView {
     let state = expect_context::<DashboardState>();
+    let i18n = use_i18n();
     let deleting = RwSignal::new(false);
     let skill_id = StoredValue::new(skill.id.clone());
 
@@ -324,7 +327,7 @@ fn SkillCard(
                             view! {
                                 <button
                                     class="p-1.5 text-danger hover:bg-danger-subtle rounded"
-                                    title="Delete"
+                                    title=t_string!(i18n, settings.skills.delete).to_string()
                                     on:click=move |_| {
                                         deleting.set(true);
                                         let id = skill_id.get_value();
@@ -360,6 +363,7 @@ fn InstallSkillDialog(
     error: RwSignal<Option<String>>,
 ) -> impl IntoView {
     let state = expect_context::<DashboardState>();
+    let i18n = use_i18n();
     let source = RwSignal::new("git".to_string());
     let url = RwSignal::new(String::new());
     let installing = RwSignal::new(false);
@@ -390,30 +394,30 @@ fn InstallSkillDialog(
     view! {
         <div class="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
             <div class="bg-surface border border-border rounded-lg p-6 max-w-md w-full mx-4">
-                <h2 class="text-lg font-semibold text-text-primary mb-2">"Install Skill"</h2>
+                <h2 class="text-lg font-semibold text-text-primary mb-2">{t!(i18n, settings.skills.install_skill_dialog_title)}</h2>
                 <p class="text-sm text-text-secondary mb-4">
-                    "Install skills from Git repository, ZIP archive, or local folder"
+                    {t!(i18n, settings.skills.install_skill_dialog_desc)}
                 </p>
 
                 <div class="space-y-4">
                     <div>
-                        <label class="block text-sm font-medium text-text-secondary mb-2">"Source"</label>
+                        <label class="block text-sm font-medium text-text-secondary mb-2">{t!(i18n, settings.skills.source_label)}</label>
                         <select
                             class="w-full px-3 py-2 bg-surface-sunken border border-border rounded text-text-primary text-sm"
                             on:change=move |ev| source.set(event_target_value(&ev))
                         >
-                            <option value="git">"Git Repository"</option>
-                            <option value="zip">"ZIP Archive"</option>
-                            <option value="local">"Local Folder"</option>
+                            <option value="git">{t!(i18n, settings.skills.git_repository)}</option>
+                            <option value="zip">{t!(i18n, settings.skills.zip_archive)}</option>
+                            <option value="local">{t!(i18n, settings.skills.local_folder)}</option>
                         </select>
                     </div>
 
                     <div>
                         <label class="block text-sm font-medium text-text-secondary mb-2">
                             {move || match source.get().as_str() {
-                                "git" => "Repository URL",
-                                "zip" => "ZIP URL or Path",
-                                _ => "Folder Path",
+                                "git" => t_string!(i18n, settings.skills.repo_url).to_string(),
+                                "zip" => t_string!(i18n, settings.skills.zip_url).to_string(),
+                                _ => t_string!(i18n, settings.skills.folder_path).to_string(),
                             }}
                         </label>
                         <input
@@ -442,14 +446,14 @@ fn InstallSkillDialog(
                         class="flex-1 px-4 py-2 bg-surface-sunken text-text-secondary rounded hover:bg-surface-sunken text-sm"
                         on:click=move |_| on_close()
                     >
-                        "Cancel"
+                        {t!(i18n, settings.skills.cancel)}
                     </button>
                     <button
                         class="flex-1 px-4 py-2 bg-primary text-white rounded hover:bg-primary-hover text-sm disabled:opacity-50"
                         disabled=move || url.get().trim().is_empty() || installing.get()
                         on:click=handle_install
                     >
-                        {move || if installing.get() { "Installing..." } else { "Install" }}
+                        {move || if installing.get() { t_string!(i18n, settings.skills.installing).to_string() } else { t_string!(i18n, settings.skills.install).to_string() }}
                     </button>
                 </div>
             </div>

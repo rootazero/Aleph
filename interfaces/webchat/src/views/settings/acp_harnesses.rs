@@ -101,7 +101,7 @@ pub fn AcpHarnessesView() -> impl IntoView {
                             class:bg-primary=move || acp_enabled.get()
                             class:bg-gray-500=move || !acp_enabled.get()
                             class:opacity-50=move || toggling.get()
-                            title="Enable/disable ACP (requires restart)"
+                            title=t_string!(i18n, settings.acp.toggle_hint).to_string()
                         >
                             <span
                                 class="pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out"
@@ -117,7 +117,7 @@ pub fn AcpHarnessesView() -> impl IntoView {
                         if loading.get() {
                             view! {
                                 <div class="flex items-center justify-center py-12">
-                                    <div class="text-text-tertiary">"Loading ACP harnesses..."</div>
+                                    <div class="text-text-tertiary">{t!(i18n, settings.acp.loading)}</div>
                                 </div>
                             }.into_any()
                         } else {
@@ -139,7 +139,7 @@ pub fn AcpHarnessesView() -> impl IntoView {
                                     // Preset CLI section
                                     <div>
                                         <h2 class="text-sm font-medium text-text-secondary uppercase tracking-wider mb-3">
-                                            "Preset CLI"
+                                            {t!(i18n, settings.acp.preset_cli)}
                                         </h2>
                                         <div class="grid grid-cols-1 gap-2">
                                             {HARNESS_PRESETS.iter().map(|preset| {
@@ -186,13 +186,13 @@ pub fn AcpHarnessesView() -> impl IntoView {
                                                                     {if is_available {
                                                                         view! {
                                                                             <span class="px-1.5 py-0.5 bg-success/10 text-success text-xs rounded-full shrink-0">
-                                                                                "Installed"
+                                                                                {t!(i18n, settings.acp.installed)}
                                                                             </span>
                                                                         }.into_any()
                                                                     } else {
                                                                         view! {
                                                                             <span class="px-1.5 py-0.5 bg-text-tertiary/10 text-text-tertiary text-xs rounded-full shrink-0">
-                                                                                "Not Installed"
+                                                                                {t!(i18n, settings.acp.not_installed)}
                                                                             </span>
                                                                         }.into_any()
                                                                     }}
@@ -201,12 +201,12 @@ pub fn AcpHarnessesView() -> impl IntoView {
                                                                     {if is_enabled {
                                                                         view! {
                                                                             <span class="w-1.5 h-1.5 rounded-full bg-success inline-block"></span>
-                                                                            <span>"Enabled"</span>
+                                                                            <span>{t!(i18n, settings.acp.enabled)}</span>
                                                                         }.into_any()
                                                                     } else {
                                                                         view! {
                                                                             <span class="w-1.5 h-1.5 rounded-full bg-text-tertiary/40 inline-block"></span>
-                                                                            <span>"Disabled"</span>
+                                                                            <span>{t!(i18n, settings.acp.disabled)}</span>
                                                                         }.into_any()
                                                                     }}
                                                                 </div>
@@ -224,7 +224,7 @@ pub fn AcpHarnessesView() -> impl IntoView {
                                         view! {
                                             <div>
                                                 <h2 class="text-sm font-medium text-text-secondary uppercase tracking-wider mb-3">
-                                                    "Custom CLI"
+                                                    {t!(i18n, settings.acp.custom_cli)}
                                                 </h2>
                                                 <div class="grid grid-cols-1 gap-2">
                                                     {custom_list.into_iter().map(|h| {
@@ -264,13 +264,13 @@ pub fn AcpHarnessesView() -> impl IntoView {
                                                                             {if is_available {
                                                                                 view! {
                                                                                     <span class="px-1.5 py-0.5 bg-success/10 text-success text-xs rounded-full shrink-0">
-                                                                                        "Installed"
+                                                                                        {t!(i18n, settings.acp.installed)}
                                                                                     </span>
                                                                                 }.into_any()
                                                                             } else {
                                                                                 view! {
                                                                                     <span class="px-1.5 py-0.5 bg-text-tertiary/10 text-text-tertiary text-xs rounded-full shrink-0">
-                                                                                        "Not Installed"
+                                                                                        {t!(i18n, settings.acp.not_installed)}
                                                                                     </span>
                                                                                 }.into_any()
                                                                             }}
@@ -279,12 +279,12 @@ pub fn AcpHarnessesView() -> impl IntoView {
                                                                             {if is_enabled {
                                                                                 view! {
                                                                                     <span class="w-1.5 h-1.5 rounded-full bg-success inline-block"></span>
-                                                                                    <span>"Enabled"</span>
+                                                                                    <span>{t!(i18n, settings.acp.enabled)}</span>
                                                                                 }.into_any()
                                                                             } else {
                                                                                 view! {
                                                                                     <span class="w-1.5 h-1.5 rounded-full bg-text-tertiary/40 inline-block"></span>
-                                                                                    <span>"Disabled"</span>
+                                                                                    <span>{t!(i18n, settings.acp.disabled)}</span>
                                                                                 }.into_any()
                                                                             }}
                                                                         </div>
@@ -309,7 +309,7 @@ pub fn AcpHarnessesView() -> impl IntoView {
                                             }
                                             class="w-full px-4 py-3 border-2 border-dashed border-border rounded-lg text-text-secondary hover:border-primary hover:text-primary transition-colors"
                                         >
-                                            "+ Add Custom CLI"
+                                            {t!(i18n, settings.acp.add_custom_cli)}
                                         </button>
                                     </div>
                                 </div>
@@ -344,8 +344,8 @@ pub fn AcpHarnessesView() -> impl IntoView {
                         view! {
                             <div class="flex items-center justify-center h-full text-text-tertiary">
                                 <div class="text-center">
-                                    <p class="text-lg">"Select a harness to configure"</p>
-                                    <p class="text-sm text-text-tertiary mt-1">"or add a custom CLI harness"</p>
+                                    <p class="text-lg">{t!(i18n, settings.acp.select_harness)}</p>
+                                    <p class="text-sm text-text-tertiary mt-1">{t!(i18n, settings.acp.add_harness_hint)}</p>
                                 </div>
                             </div>
                         }.into_any()
@@ -371,7 +371,7 @@ fn HarnessDetailPanel(
     let Some(info) = info else {
         return view! {
             <div class="flex items-center justify-center h-full text-text-tertiary">
-                "Harness not found"
+                {t!(i18n, settings.acp.harness_not_found)}
             </div>
         }.into_any();
     };
@@ -584,20 +584,20 @@ fn HarnessDetailPanel(
                             {display_name_label}
                         </h2>
                         <p class="text-sm text-text-tertiary mt-0.5">
-                            "External CLI harness configuration"
+                            {t!(i18n, settings.acp.harness_config_desc)}
                         </p>
                     </div>
                     <div class="flex gap-2 items-center">
                         {if is_available {
                             view! {
                                 <span class="px-2.5 py-1 rounded-full text-xs font-medium bg-success/10 text-success">
-                                    "Installed"
+                                    {t!(i18n, settings.acp.installed)}
                                 </span>
                             }.into_any()
                         } else {
                             view! {
                                 <span class="px-2.5 py-1 rounded-full text-xs font-medium bg-text-tertiary/10 text-text-tertiary">
-                                    "Not Installed"
+                                    {t!(i18n, settings.acp.not_installed)}
                                 </span>
                             }.into_any()
                         }}
@@ -610,12 +610,12 @@ fn HarnessDetailPanel(
 
             // Configuration card
             <div class="bg-surface-raised border border-border rounded-xl p-4 space-y-4">
-                <h3 class="text-xs font-semibold text-text-tertiary uppercase tracking-wider">"CONFIGURATION"</h3>
+                <h3 class="text-xs font-semibold text-text-tertiary uppercase tracking-wider">{t!(i18n, settings.acp.config_section)}</h3>
 
                 // Executable
                 <div>
                     <label class="block text-sm font-medium text-text-secondary mb-1">
-                        "Executable Path"
+                        {t!(i18n, settings.acp.executable_path)}
                     </label>
                     <input
                         type="text"
@@ -624,28 +624,28 @@ fn HarnessDetailPanel(
                         placeholder="e.g. claude, codex, gemini"
                         class="w-full px-3 py-2 border border-border rounded bg-surface text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
                     />
-                    <p class="text-xs text-text-tertiary mt-1">"Path to the CLI executable (leave empty for default)"</p>
+                    <p class="text-xs text-text-tertiary mt-1">{t!(i18n, settings.acp.executable_hint)}</p>
                 </div>
 
                 // Mode
                 <div>
                     <label class="block text-sm font-medium text-text-secondary mb-1">
-                        "Mode"
+                        {t!(i18n, settings.acp.mode_label)}
                     </label>
                     <select
                         on:change=move |ev| mode.set(event_target_value(&ev))
                         class="w-full px-3 py-2 border border-border rounded bg-surface text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
                     >
-                        <option value="native_acp" selected=move || mode.get() == "native_acp">"Native ACP"</option>
-                        <option value="oneshot" selected=move || mode.get() == "oneshot">"Oneshot"</option>
+                        <option value="native_acp" selected=move || mode.get() == "native_acp">{t!(i18n, settings.acp.mode_native_acp)}</option>
+                        <option value="oneshot" selected=move || mode.get() == "oneshot">{t!(i18n, settings.acp.mode_oneshot)}</option>
                     </select>
-                    <p class="text-xs text-text-tertiary mt-1">"Native ACP uses the ACP protocol; Oneshot runs a single command and captures output"</p>
+                    <p class="text-xs text-text-tertiary mt-1">{t!(i18n, settings.acp.mode_hint)}</p>
                 </div>
 
                 // Timeout
                 <div>
                     <label class="block text-sm font-medium text-text-secondary mb-1">
-                        "Timeout (seconds)"
+                        {t!(i18n, settings.acp.timeout_label)}
                     </label>
                     <input
                         type="number"
@@ -667,9 +667,9 @@ fn HarnessDetailPanel(
                     on:click=move |_| show_advanced.update(|v| *v = !*v)
                     class="w-full px-4 py-3 flex items-center justify-between text-left hover:bg-surface-sunken/50 transition-colors"
                 >
-                    <h3 class="text-xs font-semibold text-text-tertiary uppercase tracking-wider">"ADVANCED SETTINGS"</h3>
+                    <h3 class="text-xs font-semibold text-text-tertiary uppercase tracking-wider">{t!(i18n, settings.acp.advanced_settings)}</h3>
                     <span class="text-text-tertiary text-sm">
-                        {move || if show_advanced.get() { "Hide" } else { "Show" }}
+                        {move || if show_advanced.get() { t_string!(i18n, settings.acp.hide_advanced).to_string() } else { t_string!(i18n, settings.acp.show_advanced).to_string() }}
                     </span>
                 </button>
 
@@ -680,7 +680,7 @@ fn HarnessDetailPanel(
                         // Args
                         <div>
                             <label class="block text-sm font-medium text-text-secondary mb-1">
-                                "Arguments"
+                                {t!(i18n, settings.acp.arguments_label)}
                             </label>
                             <input
                                 type="text"
@@ -689,7 +689,7 @@ fn HarnessDetailPanel(
                                 placeholder="e.g. --print, --no-input"
                                 class="w-full px-3 py-2 border border-border rounded bg-surface text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
                             />
-                            <p class="text-xs text-text-tertiary mt-1">"Comma-separated list of CLI arguments"</p>
+                            <p class="text-xs text-text-tertiary mt-1">{t!(i18n, settings.acp.arguments_hint)}</p>
                         </div>
 
                         // Output Format (only for oneshot)
@@ -698,21 +698,21 @@ fn HarnessDetailPanel(
                                 <div class="space-y-3">
                                     <div>
                                         <label class="block text-sm font-medium text-text-secondary mb-1">
-                                            "Output Format"
+                                            {t!(i18n, settings.acp.output_format)}
                                         </label>
                                         <select
                                             on:change=move |ev| output_format_type.set(event_target_value(&ev))
                                             class="w-full px-3 py-2 border border-border rounded bg-surface text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
                                         >
-                                            <option value="plain_text" selected=move || output_format_type.get() == "plain_text">"Plain Text"</option>
-                                            <option value="json" selected=move || output_format_type.get() == "json">"JSON"</option>
+                                            <option value="plain_text" selected=move || output_format_type.get() == "plain_text">{t!(i18n, settings.acp.output_plain_text)}</option>
+                                            <option value="json" selected=move || output_format_type.get() == "json">{t!(i18n, settings.acp.output_json)}</option>
                                         </select>
                                     </div>
                                     {move || if output_format_type.get() == "json" {
                                         view! {
                                             <div>
                                                 <label class="block text-sm font-medium text-text-secondary mb-1">
-                                                    "JSON Field Name"
+                                                    {t!(i18n, settings.acp.json_field_name)}
                                                 </label>
                                                 <input
                                                     type="text"
@@ -721,7 +721,7 @@ fn HarnessDetailPanel(
                                                     placeholder="result"
                                                     class="w-full px-3 py-2 border border-border rounded bg-surface text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
                                                 />
-                                                <p class="text-xs text-text-tertiary mt-1">"The JSON field containing the response text"</p>
+                                                <p class="text-xs text-text-tertiary mt-1">{t!(i18n, settings.acp.json_field_hint)}</p>
                                             </div>
                                         }.into_any()
                                     } else {
@@ -736,7 +736,7 @@ fn HarnessDetailPanel(
                         // Environment Variables
                         <div>
                             <label class="block text-sm font-medium text-text-secondary mb-1">
-                                "Environment Variables"
+                                {t!(i18n, settings.acp.env_vars_label)}
                             </label>
                             <div class="space-y-2">
                                 {move || env_pairs.get().into_iter().enumerate().map(|(i, (k, v))| {
@@ -776,7 +776,7 @@ fn HarnessDetailPanel(
                                                     env_pairs.update(|pairs| { pairs.remove(i); });
                                                 }
                                                 class="px-2 py-2 text-danger hover:bg-danger/10 rounded transition-colors"
-                                                title="Remove"
+                                                title=t_string!(i18n, settings.acp.env_remove).to_string()
                                             >
                                                 "x"
                                             </button>
@@ -790,14 +790,14 @@ fn HarnessDetailPanel(
                                 }
                                 class="mt-2 px-3 py-1.5 text-xs text-primary border border-primary/30 rounded-lg hover:bg-primary/5 transition-colors"
                             >
-                                "+ Add Variable"
+                                {t!(i18n, settings.acp.add_variable)}
                             </button>
                         </div>
 
                         // Working Directory
                         <div>
                             <label class="block text-sm font-medium text-text-secondary mb-1">
-                                "Working Directory"
+                                {t!(i18n, settings.acp.working_directory)}
                             </label>
                             <input
                                 type="text"
@@ -838,7 +838,7 @@ fn HarnessDetailPanel(
 
             // Save success
             {move || save_success.get().then(|| view! {
-                <div class="p-3 bg-success-subtle border border-success/20 rounded-lg text-success text-sm">"Saved"</div>
+                <div class="p-3 bg-success-subtle border border-success/20 rounded-lg text-success text-sm">{t!(i18n, settings.acp.saved)}</div>
             })}
 
             // Action error
@@ -853,7 +853,7 @@ fn HarnessDetailPanel(
                     disabled=move || testing.get()
                     class="flex-1 px-4 py-2.5 bg-info text-white rounded-lg hover:bg-primary-hover disabled:opacity-50 transition-colors font-medium"
                 >
-                    {move || if testing.get() { "Testing..." } else { "Test Connection" }}
+                    {move || if testing.get() { t_string!(i18n, settings.acp.testing).to_string() } else { t_string!(i18n, settings.acp.test_connection).to_string() }}
                 </button>
 
                 <button
@@ -874,7 +874,7 @@ fn HarnessDetailPanel(
                         }
                     }
                 >
-                    {move || if enabled.get() { "Disable" } else { "Enable" }}
+                    {move || if enabled.get() { t_string!(i18n, settings.acp.disable).to_string() } else { t_string!(i18n, settings.acp.enable).to_string() }}
                 </button>
 
                 {if !is_preset {
@@ -884,7 +884,7 @@ fn HarnessDetailPanel(
                             disabled=move || deleting.get()
                             class="px-4 py-2.5 bg-danger/10 text-danger border border-danger/20 rounded-lg hover:bg-danger/20 transition-colors font-medium"
                         >
-                            {move || if deleting.get() { "Deleting..." } else { "Delete" }}
+                            {move || if deleting.get() { t_string!(i18n, settings.acp.deleting).to_string() } else { t_string!(i18n, settings.acp.delete).to_string() }}
                         </button>
                     }.into_any()
                 } else {
@@ -907,6 +907,7 @@ fn AddHarnessPanel(
     show_add_form: RwSignal<bool>,
     selected_id: RwSignal<Option<String>>,
 ) -> impl IntoView {
+    let i18n = use_i18n();
     // Form state
     let id = RwSignal::new(String::new());
     let display_name = RwSignal::new(String::new());
@@ -1013,10 +1014,10 @@ fn AddHarnessPanel(
                 <div class="flex items-center justify-between">
                     <div>
                         <h2 class="text-lg font-semibold text-text-primary">
-                            "Add Custom CLI"
+                            {t!(i18n, settings.acp.add_custom_cli_title)}
                         </h2>
                         <p class="text-sm text-text-tertiary mt-0.5">
-                            "Configure a new external CLI harness"
+                            {t!(i18n, settings.acp.add_custom_cli_desc)}
                         </p>
                     </div>
                     <button
@@ -1029,7 +1030,7 @@ fn AddHarnessPanel(
                         }
                         class="px-3 py-1.5 text-sm text-text-secondary hover:text-text-primary border border-border rounded-lg hover:bg-surface-raised transition-colors"
                     >
-                        "Cancel"
+                        {t!(i18n, settings.acp.cancel)}
                     </button>
                 </div>
             </div>
@@ -1039,12 +1040,12 @@ fn AddHarnessPanel(
 
             // Identity card
             <div class="bg-surface-raised border border-border rounded-xl p-4 space-y-4">
-                <h3 class="text-xs font-semibold text-text-tertiary uppercase tracking-wider">"IDENTITY"</h3>
+                <h3 class="text-xs font-semibold text-text-tertiary uppercase tracking-wider">{t!(i18n, settings.acp.identity_section)}</h3>
 
                 // ID
                 <div>
                     <label class="block text-sm font-medium text-text-secondary mb-1">
-                        "ID"
+                        {t!(i18n, settings.acp.id_label)}
                         <span class="text-danger ml-1">"*"</span>
                     </label>
                     <input
@@ -1063,13 +1064,13 @@ fn AddHarnessPanel(
                     {move || id_error.get().map(|e| view! {
                         <p class="text-xs text-danger mt-1">{e}</p>
                     })}
-                    <p class="text-xs text-text-tertiary mt-1">"Lowercase letters, digits, and hyphens only"</p>
+                    <p class="text-xs text-text-tertiary mt-1">{t!(i18n, settings.acp.id_hint)}</p>
                 </div>
 
                 // Display Name
                 <div>
                     <label class="block text-sm font-medium text-text-secondary mb-1">
-                        "Display Name"
+                        {t!(i18n, settings.acp.display_name_label)}
                         <span class="text-danger ml-1">"*"</span>
                     </label>
                     <input
@@ -1084,12 +1085,12 @@ fn AddHarnessPanel(
 
             // Configuration card
             <div class="bg-surface-raised border border-border rounded-xl p-4 space-y-4">
-                <h3 class="text-xs font-semibold text-text-tertiary uppercase tracking-wider">"CONFIGURATION"</h3>
+                <h3 class="text-xs font-semibold text-text-tertiary uppercase tracking-wider">{t!(i18n, settings.acp.config_section)}</h3>
 
                 // Executable
                 <div>
                     <label class="block text-sm font-medium text-text-secondary mb-1">
-                        "Executable Path"
+                        {t!(i18n, settings.acp.executable_path)}
                         <span class="text-danger ml-1">"*"</span>
                     </label>
                     <input
@@ -1104,22 +1105,22 @@ fn AddHarnessPanel(
                 // Mode
                 <div>
                     <label class="block text-sm font-medium text-text-secondary mb-1">
-                        "Mode"
+                        {t!(i18n, settings.acp.mode_label)}
                     </label>
                     <select
                         on:change=move |ev| mode.set(event_target_value(&ev))
                         class="w-full px-3 py-2 border border-border rounded bg-surface text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
                     >
-                        <option value="oneshot" selected=move || mode.get() == "oneshot">"Oneshot"</option>
-                        <option value="native_acp" selected=move || mode.get() == "native_acp">"Native ACP"</option>
+                        <option value="oneshot" selected=move || mode.get() == "oneshot">{t!(i18n, settings.acp.mode_oneshot)}</option>
+                        <option value="native_acp" selected=move || mode.get() == "native_acp">{t!(i18n, settings.acp.mode_native_acp)}</option>
                     </select>
-                    <p class="text-xs text-text-tertiary mt-1">"Oneshot: single command; Native ACP: uses ACP protocol"</p>
+                    <p class="text-xs text-text-tertiary mt-1">{t!(i18n, settings.acp.mode_hint_add)}</p>
                 </div>
 
                 // Timeout
                 <div>
                     <label class="block text-sm font-medium text-text-secondary mb-1">
-                        "Timeout (seconds)"
+                        {t!(i18n, settings.acp.timeout_label)}
                     </label>
                     <input
                         type="number"
@@ -1137,7 +1138,7 @@ fn AddHarnessPanel(
                 // Args
                 <div>
                     <label class="block text-sm font-medium text-text-secondary mb-1">
-                        "Arguments"
+                        {t!(i18n, settings.acp.arguments_label)}
                     </label>
                     <input
                         type="text"
@@ -1146,7 +1147,7 @@ fn AddHarnessPanel(
                         placeholder="e.g. --print, --no-input"
                         class="w-full px-3 py-2 border border-border rounded bg-surface text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
                     />
-                    <p class="text-xs text-text-tertiary mt-1">"Comma-separated list of CLI arguments"</p>
+                    <p class="text-xs text-text-tertiary mt-1">{t!(i18n, settings.acp.arguments_hint)}</p>
                 </div>
 
                 // Output Format (only for oneshot)
@@ -1155,21 +1156,21 @@ fn AddHarnessPanel(
                         <div class="space-y-3">
                             <div>
                                 <label class="block text-sm font-medium text-text-secondary mb-1">
-                                    "Output Format"
+                                    {t!(i18n, settings.acp.output_format)}
                                 </label>
                                 <select
                                     on:change=move |ev| output_format_type.set(event_target_value(&ev))
                                     class="w-full px-3 py-2 border border-border rounded bg-surface text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
                                 >
-                                    <option value="plain_text" selected=move || output_format_type.get() == "plain_text">"Plain Text"</option>
-                                    <option value="json" selected=move || output_format_type.get() == "json">"JSON"</option>
+                                    <option value="plain_text" selected=move || output_format_type.get() == "plain_text">{t!(i18n, settings.acp.output_plain_text)}</option>
+                                    <option value="json" selected=move || output_format_type.get() == "json">{t!(i18n, settings.acp.output_json)}</option>
                                 </select>
                             </div>
                             {move || if output_format_type.get() == "json" {
                                 view! {
                                     <div>
                                         <label class="block text-sm font-medium text-text-secondary mb-1">
-                                            "JSON Field Name"
+                                            {t!(i18n, settings.acp.json_field_name)}
                                         </label>
                                         <input
                                             type="text"
@@ -1192,7 +1193,7 @@ fn AddHarnessPanel(
                 // Environment Variables
                 <div>
                     <label class="block text-sm font-medium text-text-secondary mb-1">
-                        "Environment Variables"
+                        {t!(i18n, settings.acp.env_vars_label)}
                     </label>
                     <div class="space-y-2">
                         {move || env_pairs.get().into_iter().enumerate().map(|(i, (k, v))| {
@@ -1232,7 +1233,7 @@ fn AddHarnessPanel(
                                             env_pairs.update(|pairs| { pairs.remove(i); });
                                         }
                                         class="px-2 py-2 text-danger hover:bg-danger/10 rounded transition-colors"
-                                        title="Remove"
+                                        title=t_string!(i18n, settings.acp.env_remove).to_string()
                                     >
                                         "x"
                                     </button>
@@ -1246,14 +1247,14 @@ fn AddHarnessPanel(
                         }
                         class="mt-2 px-3 py-1.5 text-xs text-primary border border-primary/30 rounded-lg hover:bg-primary/5 transition-colors"
                     >
-                        "+ Add Variable"
+                        {t!(i18n, settings.acp.add_variable)}
                     </button>
                 </div>
 
                 // Working Directory
                 <div>
                     <label class="block text-sm font-medium text-text-secondary mb-1">
-                        "Working Directory"
+                        {t!(i18n, settings.acp.working_directory)}
                     </label>
                     <input
                         type="text"
@@ -1277,7 +1278,7 @@ fn AddHarnessPanel(
                     disabled=move || saving.get()
                     class="flex-1 px-4 py-2.5 bg-primary text-white rounded-lg hover:bg-primary-hover disabled:opacity-50 transition-colors font-medium"
                 >
-                    {move || if saving.get() { "Creating..." } else { "Create" }}
+                    {move || if saving.get() { t_string!(i18n, settings.acp.creating).to_string() } else { t_string!(i18n, settings.acp.create).to_string() }}
                 </button>
             </div>
 

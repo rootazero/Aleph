@@ -117,7 +117,7 @@ pub fn PoliciesView() -> impl IntoView {
                 Ok(()) => {
                     original_perms.set(tool_perms.get());
                     original_default.set(default_perm.get());
-                    tp_success.set(Some("Saved. Changes will take effect on next agent run.".to_string()));
+                    tp_success.set(Some(t_string!(i18n, settings.policies.saved_note).to_string()));
                 }
                 Err(e) => {
                     tp_error.set(Some(format!("Failed to save: {}", e)));
@@ -149,9 +149,9 @@ pub fn PoliciesView() -> impl IntoView {
                 // Tool Permissions Section
                 <div class="space-y-4">
                     <div>
-                        <h2 class="text-lg font-medium text-text-primary">"Tool Permissions"</h2>
+                        <h2 class="text-lg font-medium text-text-primary">{t!(i18n, settings.policies.tool_permissions_title)}</h2>
                         <p class="text-xs text-text-tertiary mt-1">
-                            "Global ceiling for all agents. Per-agent settings cannot exceed these limits."
+                            {t!(i18n, settings.policies.tool_permissions_desc)}
                         </p>
                     </div>
 
@@ -165,7 +165,7 @@ pub fn PoliciesView() -> impl IntoView {
                     {move || {
                         if tp_loading.get() {
                             return view! {
-                                <div class="text-text-secondary py-4 text-center text-sm">"Loading tool permissions..."</div>
+                                <div class="text-text-secondary py-4 text-center text-sm">{t!(i18n, settings.policies.loading_tool_permissions)}</div>
                             }.into_any();
                         }
 
@@ -176,8 +176,8 @@ pub fn PoliciesView() -> impl IntoView {
                                 // Default permission selector
                                 <div class="flex items-center justify-between p-4 bg-surface-raised border border-border rounded-xl">
                                     <div>
-                                        <span class="text-sm font-semibold text-text-primary">"Default Permission"</span>
-                                        <p class="text-xs text-text-tertiary mt-0.5">"Applied to tools without specific overrides"</p>
+                                        <span class="text-sm font-semibold text-text-primary">{t!(i18n, settings.policies.default_permission)}</span>
+                                        <p class="text-xs text-text-tertiary mt-0.5">{t!(i18n, settings.policies.default_permission_desc)}</p>
                                     </div>
                                     <PolicySegmentedControl
                                         value=Signal::derive(move || default_perm.get())
@@ -269,7 +269,7 @@ pub fn PoliciesView() -> impl IntoView {
                                 }).collect_view()}
 
                                 <p class="text-xs text-text-tertiary italic">
-                                    "Changes will take effect on next agent run."
+                                    {t!(i18n, settings.policies.changes_note)}
                                 </p>
 
                                 <div class="flex justify-end gap-3 pt-1">
@@ -277,7 +277,7 @@ pub fn PoliciesView() -> impl IntoView {
                                         class="px-4 py-2 text-sm font-medium text-text-secondary bg-surface-raised border border-border rounded-lg hover:bg-surface-sunken transition-colors"
                                         on:click=tp_reset
                                     >
-                                        "Reset"
+                                        {t!(i18n, settings.policies.reset)}
                                     </button>
                                     <button
                                         class="px-4 py-2 text-sm font-medium text-white bg-primary rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
@@ -294,14 +294,14 @@ pub fn PoliciesView() -> impl IntoView {
 
                 // Content Safety Section
                 <div class="space-y-4">
-                    <h2 class="text-lg font-medium text-text-primary">"Content Safety"</h2>
+                    <h2 class="text-lg font-medium text-text-primary">{t!(i18n, settings.policies.content_safety)}</h2>
 
                     <div class="p-4 bg-surface-raised border border-border rounded">
                         <div class="flex items-center justify-between">
                             <div>
-                                <div class="text-sm font-medium text-text-primary">"Content Filter"</div>
+                                <div class="text-sm font-medium text-text-primary">{t!(i18n, settings.policies.content_filter)}</div>
                                 <div class="text-xs text-text-secondary mt-1">
-                                    "Filter potentially harmful content"
+                                    {t!(i18n, settings.policies.content_filter_desc)}
                                 </div>
                             </div>
                             <label class="relative inline-flex items-center cursor-pointer">
@@ -324,18 +324,18 @@ pub fn PoliciesView() -> impl IntoView {
                                 <div class="p-4 bg-surface-raised border border-border rounded">
                                     <div class="flex items-center justify-between">
                                         <div>
-                                            <div class="text-sm font-medium text-text-primary">"Filter Level"</div>
+                                            <div class="text-sm font-medium text-text-primary">{t!(i18n, settings.policies.filter_level)}</div>
                                             <div class="text-xs text-text-secondary mt-1">
-                                                "Strictness of content filtering"
+                                                {t!(i18n, settings.policies.filter_level_desc)}
                                             </div>
                                         </div>
                                         <select
                                             class="px-3 py-1.5 bg-surface-sunken border border-border rounded text-text-primary text-sm"
                                             on:change=move |ev| filter_level.set(event_target_value(&ev))
                                         >
-                                            <option value="strict" selected=move || filter_level.get() == "strict">"Strict"</option>
-                                            <option value="moderate" selected=move || filter_level.get() == "moderate">"Moderate"</option>
-                                            <option value="off" selected=move || filter_level.get() == "off">"Off"</option>
+                                            <option value="strict" selected=move || filter_level.get() == "strict">{t!(i18n, settings.policies.filter_strict)}</option>
+                                            <option value="moderate" selected=move || filter_level.get() == "moderate">{t!(i18n, settings.policies.filter_moderate)}</option>
+                                            <option value="off" selected=move || filter_level.get() == "off">{t!(i18n, settings.policies.filter_off)}</option>
                                         </select>
                                     </div>
                                 </div>
@@ -348,14 +348,14 @@ pub fn PoliciesView() -> impl IntoView {
 
                 // Data & Privacy Section
                 <div class="space-y-4">
-                    <h2 class="text-lg font-medium text-text-primary">"Data & Privacy"</h2>
+                    <h2 class="text-lg font-medium text-text-primary">{t!(i18n, settings.policies.data_privacy)}</h2>
 
                     <div class="p-4 bg-surface-raised border border-border rounded">
                         <div class="flex items-center justify-between">
                             <div>
-                                <div class="text-sm font-medium text-text-primary">"Log Conversations"</div>
+                                <div class="text-sm font-medium text-text-primary">{t!(i18n, settings.policies.log_conversations)}</div>
                                 <div class="text-xs text-text-secondary mt-1">
-                                    "Save conversation history locally"
+                                    {t!(i18n, settings.policies.log_conversations_desc)}
                                 </div>
                             </div>
                             <label class="relative inline-flex items-center cursor-pointer">
@@ -378,9 +378,9 @@ pub fn PoliciesView() -> impl IntoView {
                                 <div class="p-4 bg-surface-raised border border-border rounded">
                                     <div class="flex items-center justify-between">
                                         <div>
-                                            <div class="text-sm font-medium text-text-primary">"Data Retention"</div>
+                                            <div class="text-sm font-medium text-text-primary">{t!(i18n, settings.policies.data_retention)}</div>
                                             <div class="text-xs text-text-secondary mt-1">
-                                                "Days to keep conversation logs"
+                                                {t!(i18n, settings.policies.data_retention_desc)}
                                             </div>
                                         </div>
                                         <div class="flex items-center gap-3 w-48">
@@ -412,14 +412,14 @@ pub fn PoliciesView() -> impl IntoView {
 
                 // Analytics Section
                 <div class="space-y-4">
-                    <h2 class="text-lg font-medium text-text-primary">"Analytics"</h2>
+                    <h2 class="text-lg font-medium text-text-primary">{t!(i18n, settings.policies.analytics)}</h2>
 
                     <div class="p-4 bg-surface-raised border border-border rounded">
                         <div class="flex items-center justify-between">
                             <div>
-                                <div class="text-sm font-medium text-text-primary">"Allow Analytics"</div>
+                                <div class="text-sm font-medium text-text-primary">{t!(i18n, settings.policies.allow_analytics)}</div>
                                 <div class="text-xs text-text-secondary mt-1">
-                                    "Send anonymous usage data to improve Aleph"
+                                    {t!(i18n, settings.policies.allow_analytics_desc)}
                                 </div>
                             </div>
                             <label class="relative inline-flex items-center cursor-pointer">
@@ -441,7 +441,7 @@ pub fn PoliciesView() -> impl IntoView {
                             view! {
                                 <div class="p-4 bg-primary-subtle border border-primary/20 rounded">
                                     <span class="text-sm text-info">
-                                        "Analytics include: feature usage, performance metrics, and crash reports. No personal data, conversation content, or API keys are collected."
+                                        {t!(i18n, settings.policies.analytics_info)}
                                     </span>
                                 </div>
                             }.into_any()
@@ -461,6 +461,7 @@ fn PolicySegmentedControl(
     value: Signal<String>,
     on_change: impl Fn(String) + 'static + Clone,
 ) -> impl IntoView {
+    let i18n = use_i18n();
     let on_allow = {
         let cb = on_change.clone();
         move |_| cb(ALLOW.to_string())
@@ -484,7 +485,7 @@ fn PolicySegmentedControl(
                 class=("hover:bg-surface-sunken", move || value.get() != ALLOW)
                 on:click=on_allow
             >
-                "Allow"
+                {t!(i18n, settings.policies.allow)}
             </button>
             <button
                 class="px-2 py-0.5 text-xs font-medium transition-colors border-x border-border"
@@ -494,7 +495,7 @@ fn PolicySegmentedControl(
                 class=("hover:bg-surface-sunken", move || value.get() != ASK)
                 on:click=on_ask
             >
-                "Ask"
+                {t!(i18n, settings.policies.ask)}
             </button>
             <button
                 class="px-2 py-0.5 text-xs font-medium transition-colors"
@@ -504,7 +505,7 @@ fn PolicySegmentedControl(
                 class=("hover:bg-surface-sunken", move || value.get() != DENY)
                 on:click=on_deny
             >
-                "Deny"
+                {t!(i18n, settings.policies.deny)}
             </button>
         </div>
     }

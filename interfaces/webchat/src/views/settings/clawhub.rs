@@ -192,7 +192,7 @@ pub fn ClawHubView() -> impl IntoView {
                     <input
                         type="text"
                         class="w-full px-3 py-2 bg-surface-sunken border border-border rounded text-text-primary text-sm"
-                        placeholder="Search skills..."
+                        placeholder=t_string!(i18n, settings.clawhub.search_placeholder)
                         prop:value=move || search_query.get()
                         on:input=on_search_input
                     />
@@ -200,7 +200,7 @@ pub fn ClawHubView() -> impl IntoView {
                         class="px-3 py-1.5 bg-surface-sunken text-text-secondary rounded hover:bg-surface-sunken text-sm flex-shrink-0"
                         on:click=refresh
                     >
-                        "Refresh"
+                        {t!(i18n, settings.clawhub.refresh)}
                     </button>
                 </div>
 
@@ -228,7 +228,7 @@ pub fn ClawHubView() -> impl IntoView {
                 <Show when=move || !loading.get() || !skills.get().is_empty()>
                     <div class="flex items-center gap-2">
                         <h2 class="text-lg font-medium text-text-primary">
-                            {move || if is_searching.get() { "Search Results" } else { "Popular Skills" }}
+                            {move || if is_searching.get() { t_string!(i18n, settings.clawhub.search_results).to_string() } else { t_string!(i18n, settings.clawhub.popular_skills).to_string() }}
                         </h2>
                         <span class="px-2 py-0.5 rounded-full text-xs font-medium bg-primary-subtle text-primary">
                             {move || format!("{}", skills.get().len())}
@@ -257,9 +257,9 @@ pub fn ClawHubView() -> impl IntoView {
                 // Empty state
                 <Show when=move || !loading.get() && skills.get().is_empty()>
                     <div class="text-center py-6 border border-dashed border-border rounded">
-                        <p class="text-sm text-text-secondary">"No skills found"</p>
+                        <p class="text-sm text-text-secondary">{t!(i18n, settings.clawhub.no_skills)}</p>
                         <p class="text-xs text-text-tertiary mt-1">
-                            {move || if is_searching.get() { "Try a different search query" } else { "Use the search bar to find skills on ClawHub" }}
+                            {move || if is_searching.get() { t_string!(i18n, settings.clawhub.no_skills_search_hint).to_string() } else { t_string!(i18n, settings.clawhub.no_skills_browse_hint).to_string() }}
                         </p>
                     </div>
                 </Show>
@@ -271,7 +271,7 @@ pub fn ClawHubView() -> impl IntoView {
                             class="px-3 py-1.5 bg-surface-sunken text-text-secondary rounded hover:bg-surface-sunken text-sm"
                             on:click=load_more
                         >
-                            "Load more..."
+                            {t!(i18n, settings.clawhub.load_more)}
                         </button>
                     </div>
                 </Show>
@@ -293,6 +293,7 @@ fn ClawHubSkillCard(
     installed_slugs: RwSignal<Vec<String>>,
 ) -> impl IntoView {
     let state = expect_context::<DashboardState>();
+    let i18n = use_i18n();
     let installing = RwSignal::new(false);
     let install_error = RwSignal::new(Option::<String>::None);
     let slug = StoredValue::new(skill.slug.clone());
@@ -353,7 +354,7 @@ fn ClawHubSkillCard(
                                         class="px-3 py-1.5 bg-surface-sunken text-text-secondary rounded text-sm disabled:opacity-50"
                                         disabled=true
                                     >
-                                        "Installed"
+                                        {t!(i18n, settings.clawhub.installed)}
                                     </button>
                                 }.into_any()
                             } else if installing.get() {
@@ -362,7 +363,7 @@ fn ClawHubSkillCard(
                                         class="px-3 py-1.5 bg-primary text-white rounded text-sm disabled:opacity-50"
                                         disabled=true
                                     >
-                                        "Installing..."
+                                        {t!(i18n, settings.clawhub.installing)}
                                     </button>
                                 }.into_any()
                             } else {
@@ -371,7 +372,7 @@ fn ClawHubSkillCard(
                                         class="px-3 py-1.5 bg-primary text-white rounded hover:bg-primary-hover text-sm"
                                         on:click=handle_install
                                     >
-                                        "Install"
+                                        {t!(i18n, settings.clawhub.install)}
                                     </button>
                                 }.into_any()
                             }

@@ -83,13 +83,13 @@ pub fn PluginsView() -> impl IntoView {
                                 load_plugins(state, plugins, loading, error);
                             }
                         >
-                            "Refresh"
+                            {t!(i18n, settings.plugins.refresh)}
                         </button>
                         <button
                             class="px-3 py-1.5 bg-primary text-white rounded hover:bg-primary-hover text-sm"
                             on:click=move |_| show_install_dialog.set(true)
                         >
-                            "+ Install Plugin"
+                            {t!(i18n, settings.plugins.install_plugin)}
                         </button>
                     </div>
                 </div>
@@ -103,13 +103,13 @@ pub fn PluginsView() -> impl IntoView {
 
                 // Settings Section
                 <div class="space-y-4">
-                    <h2 class="text-lg font-medium text-text-primary">"Settings"</h2>
+                    <h2 class="text-lg font-medium text-text-primary">{t!(i18n, settings.plugins.settings_section)}</h2>
                     <div class="p-4 bg-surface-raised border border-border rounded">
                         <div class="flex items-center justify-between">
                             <div>
-                                <div class="text-sm font-medium text-text-primary">"Auto Update"</div>
+                                <div class="text-sm font-medium text-text-primary">{t!(i18n, settings.plugins.auto_update)}</div>
                                 <div class="text-xs text-text-secondary mt-1">
-                                    "Automatically update plugins when new versions are available"
+                                    {t!(i18n, settings.plugins.auto_update_desc)}
                                 </div>
                             </div>
                             <label class="relative inline-flex items-center cursor-pointer">
@@ -130,7 +130,7 @@ pub fn PluginsView() -> impl IntoView {
                 // Installed Plugins Section
                 <div class="space-y-4">
                     <h2 class="text-lg font-medium text-text-primary">
-                        {move || format!("Installed Plugins ({})", plugins.get().len())}
+                        {move || format!("{} ({})", t_string!(i18n, settings.plugins.installed_count), plugins.get().len())}
                     </h2>
 
                     {move || {
@@ -144,9 +144,9 @@ pub fn PluginsView() -> impl IntoView {
                             view! {
                                 <div class="text-center py-12 border border-dashed border-border rounded">
                                     <div class="text-4xl mb-4">"🔌"</div>
-                                    <p class="text-text-secondary">"No plugins installed"</p>
+                                    <p class="text-text-secondary">{t!(i18n, settings.plugins.no_plugins)}</p>
                                     <p class="text-xs text-text-tertiary mt-1">
-                                        "Install plugins to extend Aleph's functionality"
+                                        {t!(i18n, settings.plugins.no_plugins_hint)}
                                     </p>
                                 </div>
                             }.into_any()
@@ -178,7 +178,7 @@ pub fn PluginsView() -> impl IntoView {
                     <div class="flex items-start gap-2">
                         <span class="text-info text-sm">"ℹ️"</span>
                         <span class="text-sm text-info">
-                            "Plugins can add new tools, integrations, and capabilities to Aleph. Install plugins from Git repositories, ZIP archives, or local folders."
+                            {t!(i18n, settings.plugins.info_text)}
                         </span>
                     </div>
                 </div>
@@ -205,6 +205,7 @@ fn PluginCard(
     error: RwSignal<Option<String>>,
 ) -> impl IntoView {
     let state = expect_context::<DashboardState>();
+    let i18n = use_i18n();
     let enabled = RwSignal::new(plugin.enabled);
     let deleting = RwSignal::new(false);
     let toggling = RwSignal::new(false);
@@ -237,7 +238,7 @@ fn PluginCard(
                         </p>
                         <div class="flex items-center gap-1 mt-2 text-xs text-text-tertiary">
                             <span>"📦"</span>
-                            <span>"Git Repository"</span>
+                            <span>{t!(i18n, settings.plugins.git_repository)}</span>
                         </div>
                     </div>
                 </div>
@@ -252,7 +253,7 @@ fn PluginCard(
                             view! {
                                 <button
                                     class="p-1.5 text-danger hover:bg-danger-subtle rounded"
-                                    title="Remove"
+                                    title=t_string!(i18n, settings.plugins.remove).to_string()
                                     on:click=move |_| {
                                         deleting.set(true);
                                         let name = plugin_name.get_value();
@@ -325,6 +326,7 @@ fn InstallPluginDialog(
     error: RwSignal<Option<String>>,
 ) -> impl IntoView {
     let state = expect_context::<DashboardState>();
+    let i18n = use_i18n();
     let source = RwSignal::new("git".to_string());
     let url = RwSignal::new(String::new());
     let installing = RwSignal::new(false);
@@ -357,14 +359,14 @@ fn InstallPluginDialog(
     view! {
         <div class="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
             <div class="bg-surface border border-border rounded-lg p-6 max-w-md w-full mx-4">
-                <h2 class="text-lg font-semibold text-text-primary mb-2">"Install Plugin"</h2>
+                <h2 class="text-lg font-semibold text-text-primary mb-2">{t!(i18n, settings.plugins.install_plugin_dialog_title)}</h2>
                 <p class="text-sm text-text-secondary mb-4">
-                    "Install a plugin from Git repository, ZIP file, or local folder"
+                    {t!(i18n, settings.plugins.install_plugin_dialog_desc)}
                 </p>
 
                 <div class="space-y-4">
                     <div>
-                        <label class="block text-sm font-medium text-text-secondary mb-2">"Source"</label>
+                        <label class="block text-sm font-medium text-text-secondary mb-2">{t!(i18n, settings.plugins.source_label)}</label>
                         <select
                             class="w-full px-3 py-2 bg-surface-sunken border border-border rounded text-text-primary text-sm"
                             on:change=move |ev| source.set(event_target_value(&ev))
@@ -378,9 +380,9 @@ fn InstallPluginDialog(
                     <div>
                         <label class="block text-sm font-medium text-text-secondary mb-2">
                             {move || match source.get().as_str() {
-                                "git" => "Repository URL",
-                                "zip" => "ZIP URL or Path",
-                                _ => "Folder Path",
+                                "git" => t_string!(i18n, settings.plugins.repo_url).to_string(),
+                                "zip" => t_string!(i18n, settings.plugins.zip_url).to_string(),
+                                _ => t_string!(i18n, settings.plugins.folder_path).to_string(),
                             }}
                         </label>
                         <input
@@ -409,14 +411,14 @@ fn InstallPluginDialog(
                         class="flex-1 px-4 py-2 bg-surface-sunken text-text-secondary rounded hover:bg-surface-sunken text-sm"
                         on:click=move |_| on_close()
                     >
-                        "Cancel"
+                        {t!(i18n, settings.plugins.cancel)}
                     </button>
                     <button
                         class="flex-1 px-4 py-2 bg-primary text-white rounded hover:bg-primary-hover text-sm disabled:opacity-50"
                         disabled=move || url.get().trim().is_empty() || installing.get()
                         on:click=handle_install
                     >
-                        {move || if installing.get() { "Installing..." } else { "Install" }}
+                        {move || if installing.get() { t_string!(i18n, settings.plugins.installing).to_string() } else { t_string!(i18n, settings.plugins.install).to_string() }}
                     </button>
                 </div>
             </div>
