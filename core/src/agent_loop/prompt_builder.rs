@@ -56,6 +56,7 @@ const BASE_BEHAVIOR: &str = "\
 
 /// Builds the system prompt by assembling sections.
 pub struct PromptBuilder {
+    persona_prefix: Option<String>,
     soul_identity: Option<String>,
     soul_tone: Option<String>,
     soul_directives: Vec<String>,
@@ -105,6 +106,7 @@ impl PromptBuilder {
     /// Create an empty builder.
     pub fn new() -> Self {
         Self {
+            persona_prefix: None,
             soul_identity: None,
             soul_tone: None,
             soul_directives: Vec::new(),
@@ -112,6 +114,13 @@ impl PromptBuilder {
             custom_instructions: None,
             eligible_skills: None,
         }
+    }
+
+    /// Set a persona prefix (prepended before all other content).
+    /// Used by team sub-agents for distinct identity.
+    pub fn with_persona_prefix(mut self, persona: &str) -> Self {
+        self.persona_prefix = Some(persona.to_string());
+        self
     }
 
     /// Set the soul identity (who the assistant is).
@@ -156,6 +165,11 @@ impl PromptBuilder {
     /// Only non-empty/configured sections are included.
     pub fn build(&self, tools: &[ToolInfo], memory_context: Option<&str>) -> String {
         let mut sections: Vec<String> = Vec::new();
+
+        // 0. Persona prefix — highest priority, overrides default identity
+        if let Some(persona) = &self.persona_prefix {
+            sections.push(format!("# Persona\n\n{}", persona));
+        }
 
         // 1. Identity
         let identity = self
