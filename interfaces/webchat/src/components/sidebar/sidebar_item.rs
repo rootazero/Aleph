@@ -11,7 +11,7 @@ use crate::components::ui::StatusBadge;
 #[component]
 pub fn SidebarItem(
     href: &'static str,
-    label: &'static str,
+    label: Signal<String>,
     children: Children,
     #[prop(optional)] alert_key: Option<&'static str>,
 ) -> impl IntoView {
@@ -67,7 +67,7 @@ pub fn SidebarItem(
             </div>
 
             // Text label (always wide mode)
-            <span class="text-sm font-medium">{label}</span>
+            <span class="text-sm font-medium">{move || label.get()}</span>
         </A>
     }
 }

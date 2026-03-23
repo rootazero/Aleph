@@ -2,6 +2,7 @@ use leptos::prelude::*;
 use crate::components::ui::*;
 use crate::context::DashboardState;
 use crate::api::{MemoryApi, MemoryStats, SystemApi, SystemInfo};
+use crate::i18n::*;
 
 fn format_uptime(secs: u64) -> String {
     let days = secs / 86400;
@@ -34,6 +35,7 @@ fn format_bytes(bytes: u64) -> String {
 pub fn Home() -> impl IntoView {
     // Get dashboard state from context
     let state = expect_context::<DashboardState>();
+    let i18n = use_i18n();
 
     // State for stats
     let memory_stats = RwSignal::new(None::<Option<MemoryStats>>); // Some(Some(stats)) = loaded, Some(None) = failed, None = not fetched
@@ -45,7 +47,7 @@ pub fn Home() -> impl IntoView {
     // Fetch stats when connected
     Effect::new(move || {
         if state.is_connected.get() {
-            let state_clone = state.clone();
+            let state_clone = state;
             leptos::task::spawn_local(async move {
                 // Fetch memory stats
                 match MemoryApi::stats(&state_clone).await {
@@ -102,7 +104,7 @@ pub fn Home() -> impl IntoView {
 
     // Connection handlers
     let handle_connect = move |_| {
-        let state = state.clone();
+        let state = state;
         leptos::task::spawn_local(async move {
             is_connecting.set(true);
             match state.connect().await {
@@ -118,7 +120,7 @@ pub fn Home() -> impl IntoView {
     };
 
     let handle_disconnect = move |_| {
-        let state = state.clone();
+        let state = state;
         leptos::task::spawn_local(async move {
             match state.disconnect().await {
                 Ok(()) => {
@@ -132,7 +134,7 @@ pub fn Home() -> impl IntoView {
     };
 
     let handle_reconnect = move |_| {
-        let state = state.clone();
+        let state = state;
         leptos::task::spawn_local(async move {
             match state.reconnect().await {
                 Ok(()) => {
@@ -150,8 +152,8 @@ pub fn Home() -> impl IntoView {
             // Header with connection controls
             <header class="flex items-center justify-between">
                 <div>
-                    <h2 class="text-3xl font-bold tracking-tight mb-2">"System Overview"</h2>
-                    <p class="text-text-secondary">"Command center for your personal AI instance."</p>
+                    <h2 class="text-3xl font-bold tracking-tight mb-2">{move || t_string!(i18n, dashboard.title).to_string()}</h2>
+                    <p class="text-text-secondary">{move || t_string!(i18n, dashboard.description).to_string()}</p>
                 </div>
 
                 <div class="flex gap-3">
@@ -161,7 +163,7 @@ pub fn Home() -> impl IntoView {
                                 on:click=handle_disconnect
                                 variant=ButtonVariant::Secondary
                             >
-                                "Disconnect"
+                                {move || t_string!(i18n, dashboard.actions.disconnect).to_string()}
                             </Button>
                         }.into_any()
                     } else if state.is_reconnecting.get() {
@@ -170,7 +172,7 @@ pub fn Home() -> impl IntoView {
                                 variant=ButtonVariant::Primary
                                 disabled=Signal::derive(|| true)
                             >
-                                {move || format!("Reconnecting... ({})", state.reconnect_count.get() + 1)}
+                                {move || format!("{} ({})", t_string!(i18n, dashboard.actions.reconnecting), state.reconnect_count.get() + 1)}
                             </Button>
                         }.into_any()
                     } else if state.connection_error.get().is_some() {
@@ -180,14 +182,14 @@ pub fn Home() -> impl IntoView {
                                     on:click=handle_reconnect
                                     variant=ButtonVariant::Secondary
                                 >
-                                    "Retry Connection"
+                                    {move || t_string!(i18n, dashboard.actions.retry).to_string()}
                                 </Button>
                                 <Button
                                     on:click=handle_connect
                                     variant=ButtonVariant::Primary
                                     class=if is_connecting.get() { "opacity-80 pointer-events-none" } else { "" }.to_string()
                                 >
-                                    {move || if is_connecting.get() { "Connecting..." } else { "Connect to Gateway" }}
+                                    {move || if is_connecting.get() { t_string!(i18n, dashboard.actions.connecting).to_string() } else { t_string!(i18n, dashboard.actions.connect).to_string() }}
                                 </Button>
                             </>
                         }.into_any()
@@ -198,7 +200,7 @@ pub fn Home() -> impl IntoView {
                                 variant=ButtonVariant::Primary
                                 class=if is_connecting.get() { "opacity-80 pointer-events-none" } else { "" }.to_string()
                             >
-                                {move || if is_connecting.get() { "Connecting..." } else { "Connect to Gateway" }}
+                                {move || if is_connecting.get() { t_string!(i18n, dashboard.actions.connecting).to_string() } else { t_string!(i18n, dashboard.actions.connect).to_string() }}
                             </Button>
                         }.into_any()
                     }}
@@ -210,7 +212,7 @@ pub fn Home() -> impl IntoView {
                 if let Some(error) = state.connection_error.get() {
                     view! {
                         <div class="bg-danger-subtle border border-danger/20 rounded-xl p-4 text-sm text-danger">
-                            <strong>"Connection Error: "</strong> {error}
+                            <strong>{move || t_string!(i18n, dashboard.connection_error).to_string()}</strong> {error}
                         </div>
                     }.into_any()
                 } else if !state.is_connected.get() && state.connection_error.get().is_none() && !state.is_reconnecting.get() {
@@ -222,8 +224,8 @@ pub fn Home() -> impl IntoView {
                                 <line x1="12" y1="17" x2="12.01" y2="17" />
                             </svg>
                             <div>
-                                <h3 class="text-warning font-semibold mb-1">"Gateway Connection Required"</h3>
-                                <p class="text-sm text-text-secondary">"Please connect to the Aleph Gateway to view real-time data."</p>
+                                <h3 class="text-warning font-semibold mb-1">{move || t_string!(i18n, dashboard.gateway_required).to_string()}</h3>
+                                <p class="text-sm text-text-secondary">{move || t_string!(i18n, dashboard.gateway_required_desc).to_string()}</p>
                             </div>
                         </div>
                     }.into_any()
@@ -234,14 +236,14 @@ pub fn Home() -> impl IntoView {
 
             // Stats Grid
             <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 pt-8">
-                <StatCard label="Active Tasks" value=Signal::derive(move || {
+                <StatCard label=Signal::derive(move || t_string!(i18n, dashboard.stats.active_tasks).to_string()) value=Signal::derive(move || {
                     active_tasks.get()
                         .map(|n| n.to_string())
                         .unwrap_or_else(|| "\u{2014}".to_string())
                 }) icon_color="text-primary" icon_bg="bg-primary-subtle">
                     <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
                 </StatCard>
-                <StatCard label="CPU Usage" value=Signal::derive(move || {
+                <StatCard label=Signal::derive(move || t_string!(i18n, dashboard.stats.cpu_usage).to_string()) value=Signal::derive(move || {
                     system_info.get()
                         .map(|info| format!("{:.0}%", info.cpu_usage_percent))
                         .unwrap_or_else(|| "\u{2014}".to_string())
@@ -251,7 +253,7 @@ pub fn Home() -> impl IntoView {
                     <line x1="9" y1="1" x2="9" y2="4" />
                     <line x1="15" y1="1" x2="15" y2="4" />
                 </StatCard>
-                <StatCard label="Memory Vault" value=Signal::derive(move || {
+                <StatCard label=Signal::derive(move || t_string!(i18n, dashboard.stats.memory_vault).to_string()) value=Signal::derive(move || {
                     match memory_stats.get() {
                         Some(Some(ref stats)) => format!("{} entries", stats.total_facts + stats.total_memories + stats.total_graph_nodes),
                         Some(None) => "\u{2014}".to_string(),
@@ -262,7 +264,7 @@ pub fn Home() -> impl IntoView {
                     <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3" />
                     <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5" />
                 </StatCard>
-                <StatCard label="Gateway Latency" value=Signal::derive(move || {
+                <StatCard label=Signal::derive(move || t_string!(i18n, dashboard.stats.gateway_latency).to_string()) value=Signal::derive(move || {
                     gateway_latency_ms.get()
                         .map(|ms| format!("{} ms", ms))
                         .unwrap_or_else(|| "\u{2014}".to_string())
@@ -275,7 +277,7 @@ pub fn Home() -> impl IntoView {
             <div class="grid grid-cols-1 lg:grid-cols-2 gap-8 pt-4">
                 // Left: Core Services + System Info
                 <div class="space-y-6">
-                    <h3 class="text-xl font-semibold px-1 text-text-secondary">"Core Services"</h3>
+                    <h3 class="text-xl font-semibold px-1 text-text-secondary">{move || t_string!(i18n, dashboard.sections.core_services).to_string()}</h3>
                     <div class="space-y-4">
                         <ServiceCard
                             name="Gateway Engine"
@@ -294,19 +296,19 @@ pub fn Home() -> impl IntoView {
                                                     <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
                                                 </svg>
                                             </div>
-                                            <span class="font-medium text-text-primary text-sm">"System Info"</span>
+                                            <span class="font-medium text-text-primary text-sm">{move || t_string!(i18n, dashboard.system_info.title).to_string()}</span>
                                         </div>
                                         <div class="grid grid-cols-3 gap-4">
                                             <div>
-                                                <div class="text-[9px] text-text-tertiary uppercase font-bold tracking-widest mb-1">"Version"</div>
+                                                <div class="text-[9px] text-text-tertiary uppercase font-bold tracking-widest mb-1">{move || t_string!(i18n, dashboard.system_info.version).to_string()}</div>
                                                 <div class="font-mono text-xs text-text-secondary">{info.version.clone()}</div>
                                             </div>
                                             <div>
-                                                <div class="text-[9px] text-text-tertiary uppercase font-bold tracking-widest mb-1">"Platform"</div>
+                                                <div class="text-[9px] text-text-tertiary uppercase font-bold tracking-widest mb-1">{move || t_string!(i18n, dashboard.system_info.platform).to_string()}</div>
                                                 <div class="font-mono text-xs text-text-secondary">{info.platform.clone()}</div>
                                             </div>
                                             <div>
-                                                <div class="text-[9px] text-text-tertiary uppercase font-bold tracking-widest mb-1">"Uptime"</div>
+                                                <div class="text-[9px] text-text-tertiary uppercase font-bold tracking-widest mb-1">{move || t_string!(i18n, dashboard.system_info.uptime).to_string()}</div>
                                                 <div class="font-mono text-xs text-text-secondary">{format_uptime(info.uptime_secs)}</div>
                                             </div>
                                         </div>
@@ -322,7 +324,7 @@ pub fn Home() -> impl IntoView {
                                                     <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
                                                 </svg>
                                             </div>
-                                            <span class="text-sm text-text-tertiary">"Connect to view system info"</span>
+                                            <span class="text-sm text-text-tertiary">{move || t_string!(i18n, dashboard.connect_to_view).to_string()}</span>
                                         </div>
                                     </Card>
                                 }.into_any()
@@ -333,7 +335,7 @@ pub fn Home() -> impl IntoView {
 
                 // Right: Resource Utilization
                 <div class="space-y-6">
-                    <h3 class="text-xl font-semibold px-1 text-text-secondary">"Resource Utilization"</h3>
+                    <h3 class="text-xl font-semibold px-1 text-text-secondary">{move || t_string!(i18n, dashboard.sections.resource_utilization).to_string()}</h3>
                     {move || {
                         if let Some(info) = system_info.get() {
                             let cpu_value = format!("{:.0}%", info.cpu_usage_percent);
@@ -359,34 +361,35 @@ pub fn Home() -> impl IntoView {
 
                             view! {
                                 <Card class="p-8 space-y-8">
-                                    <ResourceMetric label="CPU" value=cpu_value sub=cpu_sub color="bg-success" progress=cpu_progress>
+                                    <ResourceMetric label=t_string!(i18n, dashboard.resource.cpu) value=cpu_value sub=cpu_sub color="bg-success" progress=cpu_progress>
                                         <rect x="4" y="4" width="16" height="16" rx="2" ry="2" />
                                         <rect x="9" y="9" width="6" height="6" />
                                         <line x1="9" y1="1" x2="9" y2="4" />
                                         <line x1="15" y1="1" x2="15" y2="4" />
                                     </ResourceMetric>
-                                    <ResourceMetric label="Memory" value=mem_value sub=mem_sub color="bg-primary" progress=mem_progress>
+                                    <ResourceMetric label=t_string!(i18n, dashboard.resource.memory) value=mem_value sub=mem_sub color="bg-primary" progress=mem_progress>
                                          <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
                                     </ResourceMetric>
-                                    <ResourceMetric label="Storage" value=disk_value sub=disk_sub color="bg-primary" progress=disk_progress>
+                                    <ResourceMetric label=t_string!(i18n, dashboard.resource.storage) value=disk_value sub=disk_sub color="bg-primary" progress=disk_progress>
                                          <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3" />
                                          <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5" />
                                     </ResourceMetric>
                                 </Card>
                             }.into_any()
                         } else {
+                            let connect_to_view = t_string!(i18n, dashboard.resource.connect_to_view).to_string();
                             view! {
                                 <Card class="p-8 space-y-8">
-                                    <ResourceMetric label="CPU" value="--".to_string() sub="Connect to view".to_string() color="bg-surface-sunken" progress=0>
+                                    <ResourceMetric label=t_string!(i18n, dashboard.resource.cpu) value="--".to_string() sub=connect_to_view.clone() color="bg-surface-sunken" progress=0>
                                         <rect x="4" y="4" width="16" height="16" rx="2" ry="2" />
                                         <rect x="9" y="9" width="6" height="6" />
                                         <line x1="9" y1="1" x2="9" y2="4" />
                                         <line x1="15" y1="1" x2="15" y2="4" />
                                     </ResourceMetric>
-                                    <ResourceMetric label="Memory" value="--".to_string() sub="Connect to view".to_string() color="bg-surface-sunken" progress=0>
+                                    <ResourceMetric label=t_string!(i18n, dashboard.resource.memory) value="--".to_string() sub=connect_to_view.clone() color="bg-surface-sunken" progress=0>
                                          <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
                                     </ResourceMetric>
-                                    <ResourceMetric label="Storage" value="--".to_string() sub="Connect to view".to_string() color="bg-surface-sunken" progress=0>
+                                    <ResourceMetric label=t_string!(i18n, dashboard.resource.storage) value="--".to_string() sub=connect_to_view.clone() color="bg-surface-sunken" progress=0>
                                          <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3" />
                                          <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5" />
                                     </ResourceMetric>
@@ -400,20 +403,20 @@ pub fn Home() -> impl IntoView {
             // Recent Activity + Quick Actions
             <div class="grid grid-cols-1 lg:grid-cols-3 gap-8 pt-4">
                 <div class="lg:col-span-2 space-y-6">
-                    <h3 class="text-xl font-semibold px-1">"Recent Activity"</h3>
+                    <h3 class="text-xl font-semibold px-1">{move || t_string!(i18n, dashboard.sections.recent_activity).to_string()}</h3>
                     <div class="bg-surface-raised border border-border rounded-2xl overflow-hidden">
                         <div class="p-4 border-b border-border bg-surface-sunken">
                             <div class="flex items-center justify-between">
-                                <span class="text-sm font-medium text-text-secondary">"Event Log"</span>
-                                <button class="text-xs text-primary hover:text-primary-hover">"View All"</button>
+                                <span class="text-sm font-medium text-text-secondary">{move || t_string!(i18n, dashboard.activity.event_log).to_string()}</span>
+                                <button class="text-xs text-primary hover:text-primary-hover">{move || t_string!(i18n, dashboard.activity.view_all).to_string()}</button>
                             </div>
                         </div>
                         <div class="p-8 text-center text-text-tertiary">
                             {move || {
                                 if !state.is_connected.get() {
-                                    view! { <p>"Connect to Gateway to view activity"</p> }.into_any()
+                                    view! { <p>{move || t_string!(i18n, dashboard.connect_to_view_activity).to_string()}</p> }.into_any()
                                 } else {
-                                    view! { <p>"No recent activity"</p> }.into_any()
+                                    view! { <p>{move || t_string!(i18n, dashboard.activity.no_recent).to_string()}</p> }.into_any()
                                 }
                             }}
                         </div>
@@ -421,18 +424,18 @@ pub fn Home() -> impl IntoView {
                 </div>
 
                 <div class="space-y-6">
-                    <h3 class="text-xl font-semibold px-1">"Quick Actions"</h3>
+                    <h3 class="text-xl font-semibold px-1">{move || t_string!(i18n, dashboard.sections.quick_actions).to_string()}</h3>
                     <div class="grid gap-3">
-                        <QuickAction label="Restart Gateway">
+                        <QuickAction label=Signal::derive(move || t_string!(i18n, dashboard.actions.restart_gateway).to_string())>
                             <path d="M23 4v6h-6" />
                             <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
                         </QuickAction>
-                        <QuickAction label="Clear Buffer">
+                        <QuickAction label=Signal::derive(move || t_string!(i18n, dashboard.actions.clear_buffer).to_string())>
                             <path d="M3 6h18" />
                             <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
                             <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
                         </QuickAction>
-                        <QuickAction label="Export Memory">
+                        <QuickAction label=Signal::derive(move || t_string!(i18n, dashboard.actions.export_memory).to_string())>
                             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
                             <polyline points="7 10 12 15 17 10" />
                             <line x1="12" y1="15" x2="12" y2="3" />
@@ -446,7 +449,7 @@ pub fn Home() -> impl IntoView {
 
 #[component]
 fn StatCard(
-    label: &'static str,
+    label: Signal<String>,
     value: Signal<String>,
     icon_color: &'static str,
     icon_bg: &'static str,
@@ -461,7 +464,7 @@ fn StatCard(
                     </svg>
                 </div>
             </div>
-            <div class="text-sm font-medium text-text-secondary mb-1 group-hover:text-text-primary transition-colors">{label}</div>
+            <div class="text-sm font-medium text-text-secondary mb-1 group-hover:text-text-primary transition-colors">{move || label.get()}</div>
             <div class="text-2xl font-bold tracking-tight">{move || value.get()}</div>
         </div>
     }
@@ -469,7 +472,7 @@ fn StatCard(
 
 #[component]
 fn QuickAction(
-    label: &'static str,
+    label: Signal<String>,
     children: Children,
 ) -> impl IntoView {
     view! {
@@ -478,7 +481,7 @@ fn QuickAction(
                 <svg width="20" height="20" attr:class="w-5 h-5 text-text-tertiary group-hover:text-primary transition-colors" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     {children()}
                 </svg>
-                <span class="text-sm font-medium text-text-secondary group-hover:text-text-primary transition-colors">{label}</span>
+                <span class="text-sm font-medium text-text-secondary group-hover:text-text-primary transition-colors">{move || label.get()}</span>
             </div>
             <div class="text-text-tertiary group-hover:translate-x-1 transition-transform">{"\u{2192}"}</div>
         </button>

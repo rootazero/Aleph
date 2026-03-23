@@ -22,6 +22,62 @@
     "disconnected": "Disconnected",
     "gateway_unavailable": "Gateway not available — showing default settings"
   },
+  "dashboard": {
+    "title": "System Overview",
+    "description": "Command center for your personal AI instance.",
+    "connect_to_view": "Connect to view system info",
+    "gateway_required": "Gateway Connection Required",
+    "gateway_required_desc": "Please connect to the Aleph Gateway to view real-time data.",
+    "connection_error": "Connection Error: ",
+    "connect_to_view_activity": "Connect to Gateway to view activity",
+    "stats": {
+      "active_tasks": "Active Tasks",
+      "cpu_usage": "CPU Usage",
+      "memory_vault": "Memory Vault",
+      "gateway_latency": "Gateway Latency"
+    },
+    "sections": {
+      "core_services": "Core Services",
+      "resource_utilization": "Resource Utilization",
+      "recent_activity": "Recent Activity",
+      "quick_actions": "Quick Actions"
+    },
+    "system_info": {
+      "title": "System Info",
+      "version": "Version",
+      "platform": "Platform",
+      "uptime": "Uptime"
+    },
+    "resource": {
+      "cpu": "CPU",
+      "memory": "Memory",
+      "storage": "Storage",
+      "connect_to_view": "Connect to view"
+    },
+    "activity": {
+      "event_log": "Event Log",
+      "view_all": "View All",
+      "no_recent": "No recent activity"
+    },
+    "actions": {
+      "disconnect": "Disconnect",
+      "connect": "Connect to Gateway",
+      "connecting": "Connecting...",
+      "retry": "Retry Connection",
+      "reconnecting": "Reconnecting...",
+      "restart_gateway": "Restart Gateway",
+      "clear_buffer": "Clear Buffer",
+      "export_memory": "Export Memory"
+    },
+    "sidebar": {
+      "title": "Dashboard",
+      "overview": "Overview",
+      "agent_trace": "Agent Trace",
+      "memory_vault": "Memory Vault",
+      "scheduled_tasks": "Scheduled Tasks",
+      "server_logs": "Server Logs"
+    }
+  },
   "settings": {
     "title": "Settings",
     "welcome": "Welcome to Settings",

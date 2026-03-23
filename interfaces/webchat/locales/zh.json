@@ -22,6 +22,62 @@
     "disconnected": "未连接",
     "gateway_unavailable": "网关不可用 — 显示默认设置"
   },
+  "dashboard": {
+    "title": "系统概览",
+    "description": "您的个人 AI 实例控制中心。",
+    "connect_to_view": "连接网关以查看系统信息",
+    "gateway_required": "需要连接网关",
+    "gateway_required_desc": "请连接到 Aleph 网关以查看实时数据。",
+    "connection_error": "连接错误：",
+    "connect_to_view_activity": "连接网关以查看活动",
+    "stats": {
+      "active_tasks": "活跃任务",
+      "cpu_usage": "CPU 使用率",
+      "memory_vault": "记忆库",
+      "gateway_latency": "网关延迟"
+    },
+    "sections": {
+      "core_services": "核心服务",
+      "resource_utilization": "资源使用",
+      "recent_activity": "最近活动",
+      "quick_actions": "快捷操作"
+    },
+    "system_info": {
+      "title": "系统信息",
+      "version": "版本",
+      "platform": "平台",
+      "uptime": "运行时间"
+    },
+    "resource": {
+      "cpu": "CPU",
+      "memory": "内存",
+      "storage": "存储",
+      "connect_to_view": "连接以查看"
+    },
+    "activity": {
+      "event_log": "事件日志",
+      "view_all": "查看全部",
+      "no_recent": "暂无最近活动"
+    },
+    "actions": {
+      "disconnect": "断开连接",
+      "connect": "连接网关",
+      "connecting": "连接中...",
+      "retry": "重试连接",
+      "reconnecting": "重连中...",
+      "restart_gateway": "重启网关",
+      "clear_buffer": "清空缓冲",
+      "export_memory": "导出记忆"
+    },
+    "sidebar": {
+      "title": "仪表盘",
+      "overview": "概览",
+      "agent_trace": "智能体追踪",
+      "memory_vault": "记忆库",
+      "scheduled_tasks": "定时任务",
+      "server_logs": "服务器日志"
+    }
+  },
   "settings": {
     "title": "设置",
     "welcome": "欢迎使用设置",
