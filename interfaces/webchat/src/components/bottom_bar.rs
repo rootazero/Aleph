@@ -2,6 +2,7 @@
 // Bottom navigation bar with Chat, Dashboard, and Settings tabs.
 // Uses use_navigate() for explicit client-side routing.
 //
+use crate::i18n::*;
 use leptos::prelude::*;
 use leptos_router::hooks::{use_location, use_navigate};
 
@@ -23,8 +24,6 @@ impl PanelMode {
             Self::Dashboard
         } else if path.starts_with("/settings") {
             Self::Settings
-        } else if path.starts_with("/chat") || path == "/" {
-            Self::Chat
         } else {
             Self::Chat
         }
@@ -35,6 +34,8 @@ impl PanelMode {
 pub fn BottomBar() -> impl IntoView {
     let location = use_location();
     let navigate = use_navigate();
+
+    let i18n = use_i18n();
 
     let active_mode = move || {
         let path = location.pathname.get();
@@ -51,7 +52,7 @@ pub fn BottomBar() -> impl IntoView {
     view! {
         <nav class="h-12 bg-sidebar border-t border-border flex justify-around items-center flex-shrink-0">
             <BottomBarItem
-                label="Chat"
+                label=Signal::derive(move || t_string!(i18n, nav.chat).to_string())
                 mode=PanelMode::Chat
                 active_mode=Signal::derive(active_mode)
                 on_click=go("/chat")
@@ -60,7 +61,7 @@ pub fn BottomBar() -> impl IntoView {
             </BottomBarItem>
 
             <BottomBarItem
-                label="Dashboard"
+                label=Signal::derive(move || t_string!(i18n, nav.dashboard).to_string())
                 mode=PanelMode::Dashboard
                 active_mode=Signal::derive(active_mode)
                 on_click=go("/dashboard")
@@ -72,7 +73,7 @@ pub fn BottomBar() -> impl IntoView {
             </BottomBarItem>
 
             <BottomBarItem
-                label="Agents"
+                label=Signal::derive(move || t_string!(i18n, nav.agents).to_string())
                 mode=PanelMode::Agents
                 active_mode=Signal::derive(active_mode)
                 on_click=go("/agents")
@@ -83,7 +84,7 @@ pub fn BottomBar() -> impl IntoView {
             </BottomBarItem>
 
             <BottomBarItem
-                label="Settings"
+                label=Signal::derive(move || t_string!(i18n, nav.settings).to_string())
                 mode=PanelMode::Settings
                 active_mode=Signal::derive(active_mode)
                 on_click=go("/settings")
@@ -97,7 +98,7 @@ pub fn BottomBar() -> impl IntoView {
 
 #[component]
 fn BottomBarItem(
-    label: &'static str,
+    label: Signal<String>,
     mode: PanelMode,
     active_mode: Signal<PanelMode>,
     on_click: impl Fn(web_sys::MouseEvent) + 'static,
