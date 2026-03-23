@@ -133,41 +133,11 @@ jobs:
         run: |
           VERSION=$(cat VERSION | tr -d '[:space:]')
           # Extract changelog section for this version
-          awk "/^## \[${VERSION}\]/{found=1; next} /^## \[/{if(found) exit} found{print}" CHANGELOG.md > /tmp/changelog_section.md
-          # Build full release body
-          {
-            echo "## What's Changed"
-            echo ""
-            if [ -s /tmp/changelog_section.md ]; then
-              cat /tmp/changelog_section.md
-            else
-              echo "See [CHANGELOG.md](https://github.com/rootazero/Aleph/blob/main/CHANGELOG.md) for details."
-            fi
-            echo ""
-            echo "---"
-            echo ""
-            echo "## Install"
-            echo ""
-            echo "**macOS / Linux:**"
-            echo '```bash'
-            echo "curl -fsSL https://raw.githubusercontent.com/rootazero/Aleph/main/install.sh | bash"
-            echo '```'
-            echo ""
-            echo "Or specify version:"
-            echo '```bash'
-            echo "curl -fsSL https://raw.githubusercontent.com/rootazero/Aleph/main/install.sh | bash -s -- v${VERSION}"
-            echo '```'
-            echo ""
-            echo "**Windows (PowerShell):**"
-            echo '```powershell'
-            echo "irm https://raw.githubusercontent.com/rootazero/Aleph/main/install.ps1 | iex"
-            echo '```'
-            echo ""
-            echo "Or specify version:"
-            echo '```powershell'
-            echo "\$env:ALEPH_VERSION=\"v${VERSION}\"; irm https://raw.githubusercontent.com/rootazero/Aleph/main/install.ps1 | iex"
-            echo '```'
-          } > /tmp/release_body.md
+          awk "/^## \[${VERSION}\]/{found=1; next} /^## \[/{if(found) exit} found{print}" CHANGELOG.md > /tmp/release_body.md
+          # Fallback if no changelog entry found
+          if [ ! -s /tmp/release_body.md ]; then
+            echo "See [CHANGELOG.md](https://github.com/rootazero/Aleph/blob/main/CHANGELOG.md) for details." > /tmp/release_body.md
+          fi
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
