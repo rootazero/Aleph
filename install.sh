@@ -1,6 +1,6 @@
 #!/bin/bash
 # One-line installer: curl -fsSL https://raw.githubusercontent.com/rootazero/Aleph/main/install.sh | bash
-# With version:       curl -fsSL ... | bash -s -- v0.1.0
+# With version:       curl -fsSL ... | bash -s -- v0.2.10
 set -euo pipefail
 
 REPO="rootazero/Aleph"
@@ -34,7 +34,18 @@ case "$ARCH" in
 esac
 
 ASSET_NAME="aleph-${PLATFORM}-${ARCH}"
-echo "Detected platform: $PLATFORM/$ARCH"
+
+# ── Check existing installation ──────────────────────────────────
+
+IS_UPGRADE=false
+if command -v "$BINARY_NAME" &>/dev/null; then
+    CURRENT_VERSION=$("$BINARY_NAME" --version 2>/dev/null || echo "unknown")
+    echo "Existing installation found: $CURRENT_VERSION"
+    echo "Upgrading..."
+    IS_UPGRADE=true
+else
+    echo "Fresh install on $PLATFORM/$ARCH"
+fi
 
 # ── Fetch release info ───────────────────────────────────────────
 
@@ -96,7 +107,19 @@ fi
 
 chmod +x "$BIN_PATH"
 
-# ── Install ──────────────────────────────────────────────────────
+# ── Stop existing service before replacing binary ─────────────────
+
+if [ "$IS_UPGRADE" = true ]; then
+    echo "Stopping existing service..."
+    if [ "$PLATFORM" = "darwin" ]; then
+        launchctl bootout "gui/$(id -u)/com.aleph.server" 2>/dev/null || true
+    else
+        systemctl --user stop aleph 2>/dev/null || true
+    fi
+    sleep 1
+fi
+
+# ── Install binary ───────────────────────────────────────────────
 
 echo "Installing to $INSTALL_DIR/$BINARY_NAME..."
 if [ -w "$INSTALL_DIR" ]; then
@@ -122,16 +145,18 @@ mkdir -p "$HOME/.aleph"
 # Verify installation
 INSTALLED_VERSION=$("$INSTALL_DIR/$BINARY_NAME" --version 2>/dev/null || echo "unknown")
 echo ""
-echo "Aleph installed successfully! ($INSTALLED_VERSION)"
+if [ "$IS_UPGRADE" = true ]; then
+    echo "Aleph upgraded successfully! ($CURRENT_VERSION → $INSTALLED_VERSION)"
+else
+    echo "Aleph installed successfully! ($INSTALLED_VERSION)"
+fi
 echo "  Server:  $INSTALL_DIR/$BINARY_NAME"
 if [ "$PLATFORM" = "darwin" ] && [ -f "$HOME/.aleph/bin/aleph-bridge" ]; then
     echo "  Bridge:  ~/.aleph/bin/aleph-bridge"
 fi
 echo "  Config:  ~/.aleph/"
-echo ""
-echo "Run:  aleph-server start"
 
-# ── System service (auto-start on boot) ──────────────────────────
+# ── System service (auto-start on login) ─────────────────────────
 
 install_service() {
     if [ "$PLATFORM" = "darwin" ]; then
@@ -142,21 +167,44 @@ install_service() {
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>Label</key><string>com.aleph.server</string>
-    <key>ProgramArguments</key><array><string>$INSTALL_DIR/$BINARY_NAME</string></array>
-    <key>RunAtLoad</key><true/>
-    <key>KeepAlive</key><true/>
-    <key>StandardOutPath</key><string>$HOME/.aleph/server.log</string>
-    <key>StandardErrorPath</key><string>$HOME/.aleph/server.err</string>
+    <key>Label</key>
+    <string>com.aleph.server</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>$INSTALL_DIR/$BINARY_NAME</string>
+        <string>start</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>$HOME</string>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$HOME/.aleph/bin</string>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>$HOME/.aleph/logs/server.log</string>
+    <key>StandardErrorPath</key>
+    <string>$HOME/.aleph/logs/server.err</string>
+    <key>WorkingDirectory</key>
+    <string>$HOME</string>
 </dict>
 </plist>
 EOFPLIST
-        # Unload first if already loaded (ignore errors)
+        mkdir -p "$HOME/.aleph/logs"
+        # Unload first if already loaded (handles upgrade)
         launchctl bootout "gui/$(id -u)/com.aleph.server" 2>/dev/null || true
+        sleep 1
         launchctl bootstrap "gui/$(id -u)" "$PLIST"
+        echo ""
         echo "Service installed (auto-start on login)."
         echo "  Status:  launchctl print gui/$(id -u)/com.aleph.server"
-        echo "  Logs:    ~/.aleph/server.log"
+        echo "  Logs:    ~/.aleph/logs/server.log"
+        echo "  Stop:    launchctl bootout gui/$(id -u)/com.aleph.server"
+        echo "  Start:   launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.aleph.server.plist"
     else
         SERVICE_FILE="$HOME/.config/systemd/user/aleph.service"
         mkdir -p "$(dirname "$SERVICE_FILE")"
@@ -164,26 +212,36 @@ EOFPLIST
 [Unit]
 Description=Aleph AI Server
 After=network.target
+
 [Service]
-ExecStart=$INSTALL_DIR/$BINARY_NAME
+ExecStart=$INSTALL_DIR/$BINARY_NAME start
 Restart=on-failure
 RestartSec=5
+Environment=HOME=$HOME
+Environment=PATH=/usr/local/bin:/usr/bin:/bin:$HOME/.aleph/bin
+
 [Install]
 WantedBy=default.target
 EOFSVC
         systemctl --user daemon-reload
         systemctl --user enable aleph
-        systemctl --user start aleph
+        systemctl --user restart aleph
+        echo ""
         echo "Service installed (auto-start on login)."
         echo "  Status:  systemctl --user status aleph"
         echo "  Logs:    journalctl --user -u aleph"
+        echo "  Stop:    systemctl --user stop aleph"
+        echo "  Start:   systemctl --user start aleph"
     fi
 }
 
-# Install service: always in pipe mode, prompt in interactive mode
-if [ -t 0 ]; then
+# On upgrade: always reinstall service (picks up new binary)
+# On fresh install: ask in interactive mode, auto-install in pipe mode
+if [ "$IS_UPGRADE" = true ]; then
+    install_service
+elif [ -t 0 ]; then
     echo ""
-    read -p "Install as system service (auto-start on boot)? [Y/n] " -n 1 -r
+    read -p "Install as system service (auto-start on login)? [Y/n] " -n 1 -r
     echo
     if [[ ! $REPLY =~ ^[Nn]$ ]]; then
         install_service

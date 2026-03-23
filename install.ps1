@@ -1,5 +1,5 @@
 # One-line installer: irm https://raw.githubusercontent.com/rootazero/Aleph/main/install.ps1 | iex
-# With version:       $env:ALEPH_VERSION="v0.2.0"; irm ... | iex
+# With version:       $env:ALEPH_VERSION="v0.2.10"; irm ... | iex
 $ErrorActionPreference = "Stop"
 
 $Repo = "rootazero/Aleph"
@@ -16,13 +16,25 @@ switch ($Arch) {
 }
 
 $AssetName = "aleph-windows-$ArchName"
-Write-Host "Detected platform: windows/$ArchName"
 
 # ── Install directory ────────────────────────────────────────────
 
 $InstallDir = "$env:LOCALAPPDATA\Aleph\bin"
 if (-not (Test-Path $InstallDir)) {
     New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
+}
+
+# ── Check existing installation ──────────────────────────────────
+
+$InstalledPath = Join-Path $InstallDir "$BinaryName.exe"
+$IsUpgrade = Test-Path $InstalledPath
+$CurrentVersion = "unknown"
+if ($IsUpgrade) {
+    try { $CurrentVersion = & $InstalledPath --version 2>$null } catch {}
+    Write-Host "Existing installation found: $CurrentVersion"
+    Write-Host "Upgrading..."
+} else {
+    Write-Host "Fresh install on windows/$ArchName"
 }
 
 # ── Fetch release info ──────────────────────────────────────────
@@ -69,10 +81,11 @@ try {
         exit 1
     }
 
-    # Stop existing process if running
+    # Stop existing process before replacing binary
     Get-Process -Name $BinaryName -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 1
 
-    Copy-Item $ExePath (Join-Path $InstallDir "$BinaryName.exe") -Force
+    Copy-Item $ExePath $InstalledPath -Force
 } finally {
     Remove-Item $TmpDir -Recurse -Force -ErrorAction SilentlyContinue
 }
@@ -93,7 +106,6 @@ if (-not (Test-Path $ConfigDir)) {
 }
 
 # Verify installation
-$InstalledPath = Join-Path $InstallDir "$BinaryName.exe"
 try {
     $InstalledVersion = & $InstalledPath --version 2>$null
 } catch {
@@ -101,34 +113,28 @@ try {
 }
 
 Write-Host ""
-Write-Host "Aleph installed successfully! ($InstalledVersion)"
+if ($IsUpgrade) {
+    Write-Host "Aleph upgraded successfully! ($CurrentVersion -> $InstalledVersion)"
+} else {
+    Write-Host "Aleph installed successfully! ($InstalledVersion)"
+}
 Write-Host "  Server:  $InstalledPath"
 Write-Host "  Config:  $ConfigDir"
-Write-Host ""
-Write-Host "Run:  aleph-server start"
 
 # ── Auto-start (Windows Task Scheduler) ──────────────────────────
 
 $TaskName = "AlephServer"
 
-# Check if task already exists
-$ExistingTask = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
-
-$InstallTask = $true
-if ([Environment]::UserInteractive -and [Console]::IsInputRedirected -eq $false) {
-    $Reply = Read-Host "Install as startup task (auto-start on login)? [Y/n]"
-    if ($Reply -match "^[Nn]$") {
-        $InstallTask = $false
-    }
-}
-
-if ($InstallTask) {
-    # Remove existing task if present
+function Install-AlephService {
+    # Remove existing task if present (handles upgrade)
+    $ExistingTask = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
     if ($ExistingTask) {
+        # Stop running task before unregistering
+        Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
         Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
     }
 
-    $Action = New-ScheduledTaskAction -Execute $InstalledPath
+    $Action = New-ScheduledTaskAction -Execute $InstalledPath -Argument "start"
     $Trigger = New-ScheduledTaskTrigger -AtLogon
     $Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
     $Principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
@@ -138,6 +144,23 @@ if ($InstallTask) {
     # Start it now
     Start-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
 
-    Write-Host "Startup task installed (auto-start on login)."
-    Write-Host "  Manage:  Get-ScheduledTask -TaskName $TaskName"
+    Write-Host ""
+    Write-Host "Service installed (auto-start on login)."
+    Write-Host "  Status:  Get-ScheduledTask -TaskName $TaskName"
+    Write-Host "  Stop:    Stop-ScheduledTask -TaskName $TaskName"
+    Write-Host "  Start:   Start-ScheduledTask -TaskName $TaskName"
+    Write-Host "  Remove:  Unregister-ScheduledTask -TaskName $TaskName"
+}
+
+# On upgrade: always reinstall service (picks up new binary + start arg)
+# On fresh install: ask in interactive mode, auto-install in pipe mode
+if ($IsUpgrade) {
+    Install-AlephService
+} elseif ([Environment]::UserInteractive -and [Console]::IsInputRedirected -eq $false) {
+    $Reply = Read-Host "Install as startup task (auto-start on login)? [Y/n]"
+    if ($Reply -notmatch "^[Nn]$") {
+        Install-AlephService
+    }
+} else {
+    Install-AlephService
 }
