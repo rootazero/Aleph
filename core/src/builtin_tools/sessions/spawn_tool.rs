@@ -116,6 +116,20 @@ pub struct SessionsSpawnArgs {
     /// - `persistent`: Session persists for future interactions
     #[serde(default)]
     pub cleanup: CleanupPolicy,
+
+    /// Optional persona prompt for the sub-agent
+    ///
+    /// When provided, this text is prepended to the sub-agent's system prompt,
+    /// giving it a distinct identity. Used by team members.
+    #[serde(default)]
+    pub persona: Option<String>,
+
+    /// Keep the sub-agent alive after task completion
+    ///
+    /// When true, the sub-agent enters Idle state instead of Completed,
+    /// allowing subsequent steer commands. Used by team members.
+    #[serde(default)]
+    pub keep_alive: bool,
 }
 
 fn default_run_timeout() -> u32 {
@@ -728,6 +742,8 @@ mod tests {
             thinking: None,
             run_timeout_seconds: 60,
             cleanup: CleanupPolicy::Ephemeral,
+            persona: None,
+            keep_alive: false,
         };
 
         let output = AlephTool::call(&tool, args).await.unwrap();
@@ -765,5 +781,36 @@ mod tests {
         // "agent:main:subagent:" = 20 chars
         // Total: 56 chars
         assert_eq!(key.len(), 56);
+    }
+
+    // ============================================================================
+    // persona and keep_alive field tests
+    // ============================================================================
+
+    #[test]
+    fn test_args_with_persona_and_keep_alive() {
+        let args: SessionsSpawnArgs = serde_json::from_str(
+            r#"{
+                "task": "Review code",
+                "persona": "You are a senior code reviewer with expertise in Rust.",
+                "keep_alive": true
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(args.task, "Review code");
+        assert_eq!(
+            args.persona,
+            Some("You are a senior code reviewer with expertise in Rust.".to_string())
+        );
+        assert!(args.keep_alive);
+    }
+
+    #[test]
+    fn test_args_persona_defaults_to_none() {
+        let args: SessionsSpawnArgs =
+            serde_json::from_str(r#"{"task": "Do something"}"#).unwrap();
+        assert_eq!(args.persona, None);
+        assert!(!args.keep_alive);
     }
 }
