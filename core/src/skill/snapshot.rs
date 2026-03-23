@@ -24,6 +24,8 @@ pub struct SkillSnapshot {
     pub eligible: Vec<SkillId>,
     /// Skill IDs that failed eligibility, mapped to their reasons.
     pub ineligible: HashMap<SkillId, Vec<IneligibilityReason>>,
+    /// Full manifests for eligible + model-visible skills (for scope-aware filtering).
+    pub eligible_manifests: Vec<SkillManifest>,
     /// When this snapshot was built.
     pub built_at: DateTime<Utc>,
 }
@@ -36,6 +38,7 @@ impl SkillSnapshot {
             prompt_xml: String::new(),
             eligible: Vec::new(),
             ineligible: HashMap::new(),
+            eligible_manifests: Vec::new(),
             built_at: Utc::now(),
         }
     }
@@ -50,6 +53,7 @@ impl SkillSnapshot {
         let mut eligible = Vec::new();
         let mut ineligible: HashMap<SkillId, Vec<IneligibilityReason>> = HashMap::new();
         let mut model_visible: Vec<&SkillManifest> = Vec::new();
+        let mut eligible_manifests: Vec<SkillManifest> = Vec::new();
 
         // Collect and sort by skill ID for deterministic ordering
         let mut entries: Vec<_> = registry.iter().collect();
@@ -61,6 +65,7 @@ impl SkillSnapshot {
                     eligible.push(id.clone());
                     if manifest.is_model_visible() {
                         model_visible.push(manifest);
+                        eligible_manifests.push(manifest.clone());
                     }
                 }
                 EligibilityResult::Ineligible(reasons) => {
@@ -76,6 +81,7 @@ impl SkillSnapshot {
             prompt_xml,
             eligible,
             ineligible,
+            eligible_manifests,
             built_at: Utc::now(),
         }
     }
@@ -180,5 +186,30 @@ mod tests {
         assert!(snap.prompt_xml.contains("visible:skill"));
         assert!(!snap.prompt_xml.contains("hidden:skill"));
         assert!(!snap.prompt_xml.contains("disabled:skill"));
+    }
+
+    #[test]
+    fn eligible_manifests_populated() {
+        let mut registry = SkillRegistry::new();
+        let eligibility = EligibilityService::new();
+
+        let m1 = make_manifest("visible:skill", SkillSource::Bundled);
+        registry.register(m1);
+
+        let mut m2 = make_manifest("disabled:skill", SkillSource::Bundled);
+        m2.set_scope(PromptScope::Disabled);
+        registry.register(m2);
+
+        let mut m3 = make_manifest("hidden:skill", SkillSource::Bundled);
+        m3.set_invocation(InvocationPolicy {
+            disable_model_invocation: true,
+            ..Default::default()
+        });
+        registry.register(m3);
+
+        let snap = SkillSnapshot::build(&registry, &eligibility, 1);
+        assert_eq!(snap.eligible.len(), 3);
+        assert_eq!(snap.eligible_manifests.len(), 1);
+        assert_eq!(snap.eligible_manifests[0].name(), "visible:skill");
     }
 }
