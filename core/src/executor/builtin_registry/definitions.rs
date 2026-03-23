@@ -92,6 +92,11 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         requires_config: false,
     },
     BuiltinToolDefinition {
+        name: "skill_read",
+        description: "Read the full instructions of an installed skill. Call this before executing any skill-based task.",
+        requires_config: false,
+    },
+    BuiltinToolDefinition {
         name: "desktop",
         description: "Control the macOS desktop: screenshots, OCR, UI automation, keyboard/mouse, app launch, canvas overlays",
         requires_config: false,
