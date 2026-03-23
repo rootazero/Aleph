@@ -74,6 +74,8 @@ pub enum SkillSource {
 pub enum SkillEcosystem {
     /// Aleph native skill (from .aleph/skills)
     Aleph,
+    /// Aleph official skill (from .aleph/skills-official, read-only)
+    Official,
     /// Claude Code compatible skill (from .claude/skills)
     Claude,
 }
@@ -338,8 +340,11 @@ impl SkillsRegistry {
                         );
 
                         // Create metadata for Progressive Disclosure
-                        let ecosystem = if skills_dir.to_string_lossy().contains("/.claude/") {
+                        let dir_str = skills_dir.to_string_lossy();
+                        let ecosystem = if dir_str.contains("/.claude/") {
                             SkillEcosystem::Claude
+                        } else if dir_str.contains("skills-official") {
+                            SkillEcosystem::Official
                         } else {
                             SkillEcosystem::Aleph
                         };

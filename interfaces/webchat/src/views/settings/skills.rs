@@ -71,6 +71,9 @@ pub fn SkillsView() -> impl IntoView {
     let aleph_skills = Memo::new(move |_| {
         skills.get().into_iter().filter(|s| s.ecosystem == "aleph").collect::<Vec<_>>()
     });
+    let official_skills = Memo::new(move |_| {
+        skills.get().into_iter().filter(|s| s.ecosystem == "official").collect::<Vec<_>>()
+    });
     let claude_skills = Memo::new(move |_| {
         skills.get().into_iter().filter(|s| s.ecosystem == "claude").collect::<Vec<_>>()
     });
@@ -179,6 +182,26 @@ pub fn SkillsView() -> impl IntoView {
                     />
                 </Show>
 
+                // Official Skills Section (read-only)
+                <Show when=move || !loading.get()>
+                    <SkillSection
+                        title=t_string!(i18n, settings.skills.official_skills_title).to_string()
+                        icon="O"
+                        icon_bg="bg-success-subtle"
+                        icon_color="text-success"
+                        badge_bg="bg-success-subtle"
+                        badge_text="text-success"
+                        description=t_string!(i18n, settings.skills.official_skills_desc).to_string()
+                        skills_list=official_skills
+                        all_skills=skills
+                        loading=loading
+                        error=error
+                        empty_text=t_string!(i18n, settings.skills.official_skills_empty).to_string()
+                        empty_hint=t_string!(i18n, settings.skills.official_skills_hint).to_string()
+                        readonly=true
+                    />
+                </Show>
+
                 // Claude Compatible Skills Section
                 <Show when=move || !loading.get()>
                     <SkillSection
@@ -195,6 +218,7 @@ pub fn SkillsView() -> impl IntoView {
                         error=error
                         empty_text=t_string!(i18n, settings.skills.claude_skills_empty).to_string()
                         empty_hint=t_string!(i18n, settings.skills.claude_skills_hint).to_string()
+                        readonly=true
                     />
                 </Show>
 
@@ -238,6 +262,8 @@ fn SkillSection(
     error: RwSignal<Option<String>>,
     empty_text: String,
     empty_hint: String,
+    #[prop(optional, default = false)]
+    readonly: bool,
 ) -> impl IntoView {
     let empty_text = StoredValue::new(empty_text);
     let empty_hint = StoredValue::new(empty_hint);
@@ -278,6 +304,7 @@ fn SkillSection(
                                             skills=all_skills
                                             loading=loading
                                             error=error
+                                            readonly=readonly
                                         />
                                     }
                                 }
@@ -296,6 +323,8 @@ fn SkillCard(
     skills: RwSignal<Vec<SkillInfo>>,
     loading: RwSignal<bool>,
     error: RwSignal<Option<String>>,
+    #[prop(optional, default = false)]
+    readonly: bool,
 ) -> impl IntoView {
     let state = expect_context::<DashboardState>();
     let i18n = use_i18n();
@@ -319,7 +348,12 @@ fn SkillCard(
 
                 <div class="flex items-center gap-2 flex-shrink-0 ml-4">
                     {move || {
-                        if deleting.get() {
+                        if readonly {
+                            // Read-only skills (official/claude) — no delete button
+                            view! {
+                                <span class="text-xs text-text-tertiary px-2 py-1 bg-surface-sunken rounded">"read-only"</span>
+                            }.into_any()
+                        } else if deleting.get() {
                             view! {
                                 <div class="animate-spin rounded-full h-4 w-4 border-b-2 border-text-secondary"></div>
                             }.into_any()

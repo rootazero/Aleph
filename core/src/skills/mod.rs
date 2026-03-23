@@ -340,6 +340,7 @@ pub fn list_installed_skills() -> Result<Vec<SkillInfo>> {
         if let Some(skill) = registry.get_skill(&meta.id) {
             let eco = match meta.ecosystem {
                 SkillEcosystem::Aleph => "aleph",
+                SkillEcosystem::Official => "official",
                 SkillEcosystem::Claude => "claude",
             };
             result.push(skill.to_info_with_ecosystem(eco));
