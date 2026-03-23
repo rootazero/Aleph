@@ -171,6 +171,13 @@ async fn initialize_session_manager(daemon: bool) -> Arc<SessionManager> {
 
 /// Initialize the ExtensionManager for the plugin system.
 async fn initialize_extension_manager(daemon: bool) {
+    // Migrate old single-dir layout and update official skills
+    let aleph_home = dirs::home_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
+        .join(".aleph");
+    alephcore::skills::updater::migrate_skills_directory(&aleph_home).await;
+    alephcore::skills::updater::update_official_skills(&aleph_home.join("skills-official")).await;
+
     match alephcore::extension::ExtensionManager::with_defaults().await {
         Ok(extension_manager) => {
             // SkillSystem is now always initialized; load_all() will init it
