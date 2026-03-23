@@ -6,11 +6,13 @@ use leptos::task::spawn_local;
 use leptos_router::hooks::use_location;
 use crate::api::agents::{AgentSummary, AgentsApi};
 use crate::context::DashboardState;
+use crate::i18n::*;
 
 #[component]
 pub fn AgentsSidebar() -> impl IntoView {
     let state = expect_context::<DashboardState>();
     let location = use_location();
+    let i18n = use_i18n();
 
     let agents = RwSignal::new(Vec::<AgentSummary>::new());
     let default_id = RwSignal::new(String::new());
@@ -52,7 +54,7 @@ pub fn AgentsSidebar() -> impl IntoView {
                     on:click=move |_| show_create.update(|v| *v = !*v)
                     class="w-full px-3 py-2 bg-primary text-white rounded-lg hover:bg-primary-hover transition-colors text-sm font-medium"
                 >
-                    "+ New Agent"
+                    {t!(i18n, agents.sidebar.new_agent)}
                 </button>
             </div>
 
@@ -61,14 +63,14 @@ pub fn AgentsSidebar() -> impl IntoView {
                 <div class="p-3 border-b border-border space-y-2">
                     <input
                         type="text"
-                        placeholder="Agent ID (e.g. coder)"
+                        placeholder=move || t_string!(i18n, agents.sidebar.agent_id_placeholder).to_string()
                         prop:value=move || new_agent_id.get()
                         on:input=move |ev| new_agent_id.set(event_target_value(&ev))
                         class="w-full px-2 py-1.5 bg-surface-sunken border border-border rounded text-sm text-text-primary focus:outline-none focus:ring-1 focus:ring-primary/30"
                     />
                     <input
                         type="text"
-                        placeholder="Display Name (optional)"
+                        placeholder=move || t_string!(i18n, agents.sidebar.display_name_placeholder).to_string()
                         prop:value=move || new_agent_name.get()
                         on:input=move |ev| new_agent_name.set(event_target_value(&ev))
                         class="w-full px-2 py-1.5 bg-surface-sunken border border-border rounded text-sm text-text-primary focus:outline-none focus:ring-1 focus:ring-primary/30"
@@ -82,7 +84,7 @@ pub fn AgentsSidebar() -> impl IntoView {
                                 let id = new_agent_id.get();
                                 let name_val = new_agent_name.get();
                                 if id.is_empty() {
-                                    create_error.set(Some("Agent ID is required".to_string()));
+                                    create_error.set(Some(t_string!(i18n, agents.sidebar.id_required).to_string()));
                                     return;
                                 }
                                 create_error.set(None);
@@ -104,13 +106,13 @@ pub fn AgentsSidebar() -> impl IntoView {
                             }
                             class="flex-1 px-2 py-1.5 bg-primary text-white rounded text-sm hover:bg-primary-hover"
                         >
-                            "Create"
+                            {t!(i18n, agents.sidebar.create)}
                         </button>
                         <button
                             on:click=move |_| show_create.set(false)
                             class="px-2 py-1.5 border border-border rounded text-sm text-text-secondary hover:bg-surface-raised"
                         >
-                            "Cancel"
+                            {t!(i18n, common.cancel)}
                         </button>
                     </div>
                 </div>
@@ -121,7 +123,7 @@ pub fn AgentsSidebar() -> impl IntoView {
                 {move || {
                     if is_loading.get() {
                         view! {
-                            <div class="p-4 text-center text-text-tertiary text-sm">"Loading..."</div>
+                            <div class="p-4 text-center text-text-tertiary text-sm">{t!(i18n, common.loading)}</div>
                         }.into_any()
                     } else {
                         let current_path = location.pathname.get();
@@ -161,7 +163,7 @@ pub fn AgentsSidebar() -> impl IntoView {
 
             // Default agent selector
             <div class="p-3 border-t border-border">
-                <label class="block text-xs text-text-tertiary mb-1">"Default Agent"</label>
+                <label class="block text-xs text-text-tertiary mb-1">{t!(i18n, agents.sidebar.default_agent)}</label>
                 <select
                     on:change=move |ev| {
                         let id = event_target_value(&ev);

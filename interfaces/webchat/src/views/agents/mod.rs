@@ -13,6 +13,7 @@ use leptos::task::spawn_local;
 use leptos_router::hooks::{use_location, use_navigate};
 use crate::api::agents::{AgentsApi, AgentSummary};
 use crate::context::DashboardState;
+use crate::i18n::*;
 
 /// Parse agent_id and tab from a path like /agents/{id}/{tab}
 fn parse_agents_path(path: &str) -> (Option<String>, String) {
@@ -47,17 +48,6 @@ impl AgentTab {
         }
     }
 
-    fn label(&self) -> &'static str {
-        match self {
-            Self::Overview => "Overview",
-            Self::Behavior => "Behavior",
-            Self::Files => "Files",
-            Self::Skills => "Skills",
-            Self::Tools => "Tools",
-            Self::Channels => "Channels",
-        }
-    }
-
     fn slug(&self) -> &'static str {
         match self {
             Self::Overview => "overview",
@@ -84,6 +74,7 @@ pub fn AgentsView() -> impl IntoView {
     let state = expect_context::<DashboardState>();
     let location = use_location();
     let navigate = StoredValue::new(use_navigate());
+    let i18n = use_i18n();
 
     // Reactive agent_id and tab from URL
     let parsed = Memo::new(move |_| parse_agents_path(&location.pathname.get()));
@@ -146,7 +137,7 @@ pub fn AgentsView() -> impl IntoView {
                 if is_loading.get() {
                     return view! {
                         <div class="flex items-center justify-center py-12">
-                            <div class="text-text-secondary">"Loading agent..."</div>
+                            <div class="text-text-secondary">{t!(i18n, agents.loading)}</div>
                         </div>
                     }.into_any();
                 }
@@ -154,8 +145,8 @@ pub fn AgentsView() -> impl IntoView {
                 let Some(agent) = agent_summary.get() else {
                     return view! {
                         <div class="text-center py-12">
-                            <h2 class="text-xl text-text-secondary">"No agent selected"</h2>
-                            <p class="text-text-tertiary mt-2">"Select an agent from the sidebar or create a new one"</p>
+                            <h2 class="text-xl text-text-secondary">{t!(i18n, agents.no_agent_selected)}</h2>
+                            <p class="text-text-tertiary mt-2">{t!(i18n, agents.no_agent_hint)}</p>
                         </div>
                     }.into_any();
                 };
@@ -173,16 +164,16 @@ pub fn AgentsView() -> impl IntoView {
                                 <span class="text-3xl">{emoji}</span>
                                 <h1 class="text-2xl font-bold text-text-primary">{display_name}</h1>
                                 {agent.is_default.then(|| view! {
-                                    <span class="px-2 py-0.5 bg-warning/10 text-warning text-xs rounded-full font-medium">"Default"</span>
+                                    <span class="px-2 py-0.5 bg-warning/10 text-warning text-xs rounded-full font-medium">{t!(i18n, agents.default_badge)}</span>
                                 })}
                             </div>
                             <button
                                 on:click=handle_delete
                                 class="px-3 py-1.5 border border-danger/30 text-danger rounded-lg hover:bg-danger/10 text-sm transition-colors"
                                 disabled=move || agent.is_default
-                                title=move || if agent.is_default { "Cannot delete default agent" } else { "Delete agent" }
+                                title=move || if agent.is_default { t_string!(i18n, agents.cannot_delete_default).to_string() } else { t_string!(i18n, agents.delete_agent).to_string() }
                             >
-                                "Delete"
+                                {t!(i18n, agents.delete)}
                             </button>
                         </div>
 
@@ -197,6 +188,14 @@ pub fn AgentsView() -> impl IntoView {
                                 let t = *t;
                                 let href = format!("/agents/{}/{}", current_id, t.slug());
                                 let is_active = t == tab;
+                                let label = match t {
+                                    AgentTab::Overview => t_string!(i18n, agents.tabs.overview).to_string(),
+                                    AgentTab::Behavior => t_string!(i18n, agents.tabs.behavior).to_string(),
+                                    AgentTab::Files => t_string!(i18n, agents.tabs.files).to_string(),
+                                    AgentTab::Skills => t_string!(i18n, agents.tabs.skills).to_string(),
+                                    AgentTab::Tools => t_string!(i18n, agents.tabs.tools).to_string(),
+                                    AgentTab::Channels => t_string!(i18n, agents.tabs.channels).to_string(),
+                                };
                                 view! {
                                     <a
                                         href=href
@@ -208,7 +207,7 @@ pub fn AgentsView() -> impl IntoView {
                                             }
                                         }
                                     >
-                                        {t.label()}
+                                        {label}
                                     </a>
                                 }
                             }).collect_view()}

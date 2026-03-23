@@ -5,10 +5,12 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 use crate::api::{AgentConfig, AgentConfigApi, FileOpsConfig, CodeExecConfig};
 use crate::context::DashboardState;
+use crate::i18n::*;
 
 #[component]
 pub fn BehaviorTab() -> impl IntoView {
     let state = expect_context::<DashboardState>();
+    let i18n = use_i18n();
 
     let config = RwSignal::new(Option::<AgentConfig>::None);
     let is_loading = RwSignal::new(true);
@@ -36,14 +38,14 @@ pub fn BehaviorTab() -> impl IntoView {
                 if is_loading.get() {
                     return view! {
                         <div class="flex items-center justify-center py-12">
-                            <div class="text-text-secondary">"Loading configuration..."</div>
+                            <div class="text-text-secondary">{t!(i18n, agents.behavior.loading)}</div>
                         </div>
                     }.into_any();
                 }
 
                 let Some(cfg) = config.get() else {
                     return view! {
-                        <div class="text-text-secondary">"No configuration available"</div>
+                        <div class="text-text-secondary">{t!(i18n, agents.behavior.no_config)}</div>
                     }.into_any();
                 };
 
@@ -104,7 +106,7 @@ pub fn BehaviorTab() -> impl IntoView {
                                         spawn_local(async move {
                                             match AgentConfigApi::update(&state, cfg).await {
                                                 Ok(_) => {
-                                                    success_message.set(Some("Configuration saved".to_string()));
+                                                    success_message.set(Some(t_string!(i18n, agents.behavior.config_saved).to_string()));
                                                     is_saving.set(false);
                                                 }
                                                 Err(e) => {
@@ -118,7 +120,7 @@ pub fn BehaviorTab() -> impl IntoView {
                                 disabled=move || is_saving.get()
                                 class="px-6 py-2 bg-primary text-white rounded-lg hover:bg-primary-hover disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                             >
-                                {move || if is_saving.get() { "Saving..." } else { "Save Configuration" }}
+                                {move || if is_saving.get() { t_string!(i18n, common.saving).to_string() } else { t_string!(i18n, agents.behavior.save_config).to_string() }}
                             </button>
                         </div>
                     </div>
@@ -133,6 +135,7 @@ fn FileOpsSection(
     config: FileOpsConfig,
     on_change: impl Fn(FileOpsConfig) + 'static + Copy,
 ) -> impl IntoView {
+    let i18n = use_i18n();
     let enabled = RwSignal::new(config.enabled);
     let max_file_size = RwSignal::new(config.max_file_size);
     let require_write_confirm = RwSignal::new(config.require_confirmation_for_write);
@@ -153,28 +156,28 @@ fn FileOpsSection(
 
     view! {
         <div class="bg-surface-raised border border-border rounded-xl p-6">
-            <h2 class="text-lg font-semibold text-text-primary mb-4">"File Operations"</h2>
+            <h2 class="text-lg font-semibold text-text-primary mb-4">{t!(i18n, agents.behavior.file_ops.title)}</h2>
             <div class="space-y-4">
                 <div class="flex items-center justify-between">
-                    <label class="text-sm font-medium text-text-secondary">"Enable File Operations"</label>
+                    <label class="text-sm font-medium text-text-secondary">{t!(i18n, agents.behavior.file_ops.enable)}</label>
                     <input type="checkbox" checked=move || enabled.get()
                         on:change=move |ev| { enabled.set(event_target_checked(&ev)); update_config(); }
                         class="w-4 h-4" />
                 </div>
                 <div>
-                    <label class="block text-sm font-medium text-text-secondary mb-1">"Max File Size (bytes)"</label>
+                    <label class="block text-sm font-medium text-text-secondary mb-1">{t!(i18n, agents.behavior.file_ops.max_file_size)}</label>
                     <input type="number" value=move || max_file_size.get()
                         on:input=move |ev| { if let Ok(v) = event_target_value(&ev).parse() { max_file_size.set(v); update_config(); } }
                         class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-text-primary" />
                 </div>
                 <div class="flex items-center justify-between">
-                    <label class="text-sm font-medium text-text-secondary">"Confirm Writes"</label>
+                    <label class="text-sm font-medium text-text-secondary">{t!(i18n, agents.behavior.file_ops.confirm_writes)}</label>
                     <input type="checkbox" checked=move || require_write_confirm.get()
                         on:change=move |ev| { require_write_confirm.set(event_target_checked(&ev)); update_config(); }
                         class="w-4 h-4" />
                 </div>
                 <div class="flex items-center justify-between">
-                    <label class="text-sm font-medium text-text-secondary">"Confirm Deletes"</label>
+                    <label class="text-sm font-medium text-text-secondary">{t!(i18n, agents.behavior.file_ops.confirm_deletes)}</label>
                     <input type="checkbox" checked=move || require_delete_confirm.get()
                         on:change=move |ev| { require_delete_confirm.set(event_target_checked(&ev)); update_config(); }
                         class="w-4 h-4" />
@@ -189,6 +192,7 @@ fn CodeExecSection(
     config: CodeExecConfig,
     on_change: impl Fn(CodeExecConfig) + 'static + Copy,
 ) -> impl IntoView {
+    let i18n = use_i18n();
     let enabled = RwSignal::new(config.enabled);
     let sandbox_enabled = RwSignal::new(config.sandbox_enabled);
     let allow_network = RwSignal::new(config.allow_network);
@@ -215,34 +219,34 @@ fn CodeExecSection(
 
     view! {
         <div class="bg-surface-raised border border-border rounded-xl p-6">
-            <h2 class="text-lg font-semibold text-text-primary mb-4">"Code Execution"</h2>
+            <h2 class="text-lg font-semibold text-text-primary mb-4">{t!(i18n, agents.behavior.code_exec.title)}</h2>
             <div class="space-y-4">
                 <div class="flex items-center justify-between">
-                    <label class="text-sm font-medium text-text-secondary">"Enable Code Execution"</label>
+                    <label class="text-sm font-medium text-text-secondary">{t!(i18n, agents.behavior.code_exec.enable)}</label>
                     <input type="checkbox" checked=move || enabled.get()
                         on:change=move |ev| { enabled.set(event_target_checked(&ev)); update_config(); }
                         class="w-4 h-4" />
                 </div>
                 <div class="flex items-center justify-between">
-                    <label class="text-sm font-medium text-text-secondary">"Sandbox Mode"</label>
+                    <label class="text-sm font-medium text-text-secondary">{t!(i18n, agents.behavior.code_exec.sandbox_mode)}</label>
                     <input type="checkbox" checked=move || sandbox_enabled.get()
                         on:change=move |ev| { sandbox_enabled.set(event_target_checked(&ev)); update_config(); }
                         class="w-4 h-4" />
                 </div>
                 <div class="flex items-center justify-between">
-                    <label class="text-sm font-medium text-text-secondary">"Allow Network"</label>
+                    <label class="text-sm font-medium text-text-secondary">{t!(i18n, agents.behavior.code_exec.allow_network)}</label>
                     <input type="checkbox" checked=move || allow_network.get()
                         on:change=move |ev| { allow_network.set(event_target_checked(&ev)); update_config(); }
                         class="w-4 h-4" />
                 </div>
                 <div>
-                    <label class="block text-sm font-medium text-text-secondary mb-1">"Timeout (seconds)"</label>
+                    <label class="block text-sm font-medium text-text-secondary mb-1">{t!(i18n, agents.behavior.code_exec.timeout)}</label>
                     <input type="number" value=move || timeout_seconds.get()
                         on:input=move |ev| { if let Ok(v) = event_target_value(&ev).parse() { timeout_seconds.set(v); update_config(); } }
                         class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-text-primary" />
                 </div>
                 <div>
-                    <label class="block text-sm font-medium text-text-secondary mb-1">"Default Runtime"</label>
+                    <label class="block text-sm font-medium text-text-secondary mb-1">{t!(i18n, agents.behavior.code_exec.default_runtime)}</label>
                     <select prop:value=move || default_runtime.get()
                         on:change=move |ev| { default_runtime.set(event_target_value(&ev)); update_config(); }
                         class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-text-primary">
@@ -266,42 +270,43 @@ fn GeneralSection(
     sandbox_enabled: bool,
     on_change: impl Fn(&str, String) + 'static + Copy,
 ) -> impl IntoView {
+    let i18n = use_i18n();
     view! {
         <div class="bg-surface-raised border border-border rounded-xl p-6">
-            <h2 class="text-lg font-semibold text-text-primary mb-4">"General Settings"</h2>
+            <h2 class="text-lg font-semibold text-text-primary mb-4">{t!(i18n, agents.behavior.general.title)}</h2>
             <div class="space-y-4">
                 <div class="flex items-center justify-between">
-                    <label class="text-sm font-medium text-text-secondary">"Web Browsing"</label>
+                    <label class="text-sm font-medium text-text-secondary">{t!(i18n, agents.behavior.general.web_browsing)}</label>
                     <input type="checkbox" checked=web_browsing
                         on:change=move |ev| on_change("web_browsing", event_target_checked(&ev).to_string())
                         class="w-4 h-4" />
                 </div>
                 <div>
-                    <label class="block text-sm font-medium text-text-secondary mb-1">"Max Iterations"</label>
+                    <label class="block text-sm font-medium text-text-secondary mb-1">{t!(i18n, agents.behavior.general.max_iterations)}</label>
                     <input type="number" value=max_iterations
                         on:input=move |ev| on_change("max_iterations", event_target_value(&ev))
                         class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-text-primary" />
                 </div>
                 <div>
-                    <label class="block text-sm font-medium text-text-secondary mb-1">"Auto Execute Threshold"</label>
+                    <label class="block text-sm font-medium text-text-secondary mb-1">{t!(i18n, agents.behavior.general.auto_execute_threshold)}</label>
                     <input type="number" step="0.01" min="0" max="1" value=auto_execute_threshold
                         on:input=move |ev| on_change("auto_execute_threshold", event_target_value(&ev))
                         class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-text-primary" />
                 </div>
                 <div>
-                    <label class="block text-sm font-medium text-text-secondary mb-1">"Max Tasks Per Graph"</label>
+                    <label class="block text-sm font-medium text-text-secondary mb-1">{t!(i18n, agents.behavior.general.max_tasks_per_graph)}</label>
                     <input type="number" value=max_tasks_per_graph
                         on:input=move |ev| on_change("max_tasks_per_graph", event_target_value(&ev))
                         class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-text-primary" />
                 </div>
                 <div>
-                    <label class="block text-sm font-medium text-text-secondary mb-1">"Task Timeout (seconds)"</label>
+                    <label class="block text-sm font-medium text-text-secondary mb-1">{t!(i18n, agents.behavior.general.task_timeout)}</label>
                     <input type="number" value=task_timeout_seconds
                         on:input=move |ev| on_change("task_timeout_seconds", event_target_value(&ev))
                         class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-text-primary" />
                 </div>
                 <div class="flex items-center justify-between">
-                    <label class="text-sm font-medium text-text-secondary">"Sandbox Enabled"</label>
+                    <label class="text-sm font-medium text-text-secondary">{t!(i18n, agents.behavior.general.sandbox_enabled)}</label>
                     <input type="checkbox" checked=sandbox_enabled
                         on:change=move |ev| on_change("sandbox_enabled", event_target_checked(&ev).to_string())
                         class="w-4 h-4" />

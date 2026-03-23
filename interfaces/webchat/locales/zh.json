@@ -291,6 +291,117 @@
       "description": "配置媒体生成设置"
     }
   },
+  "agents": {
+    "sidebar": {
+      "new_agent": "+ 新建智能体",
+      "agent_id_placeholder": "智能体 ID（如 coder）",
+      "display_name_placeholder": "显示名称（可选）",
+      "create": "创建",
+      "id_required": "智能体 ID 不能为空",
+      "default_agent": "默认智能体"
+    },
+    "loading": "加载智能体...",
+    "no_agent_selected": "未选择智能体",
+    "no_agent_hint": "从侧边栏选择一个智能体或新建一个",
+    "default_badge": "默认",
+    "delete": "删除",
+    "cannot_delete_default": "不能删除默认智能体",
+    "delete_agent": "删除智能体",
+    "tabs": {
+      "overview": "概览",
+      "behavior": "行为",
+      "files": "文件",
+      "skills": "技能",
+      "tools": "工具",
+      "channels": "频道"
+    },
+    "overview": {
+      "title": "身份",
+      "agent_id": "智能体 ID",
+      "emoji": "表情",
+      "display_name": "显示名称",
+      "description": "描述",
+      "theme": "主题 / 标语",
+      "emoji_placeholder": "🤖",
+      "name_placeholder": "智能体名称",
+      "description_placeholder": "此智能体擅长的领域...",
+      "theme_placeholder": "编写简洁高效的代码",
+      "model_config": "模型配置",
+      "primary_model": "主要模型",
+      "fallback_models": "备选模型",
+      "fallback_placeholder": "claude-sonnet-4, gpt-4o",
+      "fallback_hint": "逗号分隔的备选模型列表",
+      "inference_params": "推理参数",
+      "temperature": "温度",
+      "max_tokens": "最大 Token 数",
+      "top_p": "Top P",
+      "top_k": "Top K",
+      "saved": "保存成功"
+    },
+    "behavior": {
+      "loading": "加载配置...",
+      "no_config": "暂无配置",
+      "config_saved": "配置已保存",
+      "save_config": "保存配置",
+      "file_ops": {
+        "title": "文件操作",
+        "enable": "启用文件操作",
+        "max_file_size": "最大文件大小（字节）",
+        "confirm_writes": "写入需确认",
+        "confirm_deletes": "删除需确认"
+      },
+      "code_exec": {
+        "title": "代码执行",
+        "enable": "启用代码执行",
+        "sandbox_mode": "沙箱模式",
+        "allow_network": "允许网络访问",
+        "timeout": "超时（秒）",
+        "default_runtime": "默认运行时"
+      },
+      "general": {
+        "title": "常规设置",
+        "web_browsing": "网页浏览",
+        "max_iterations": "最大迭代次数",
+        "auto_execute_threshold": "自动执行阈值",
+        "max_tasks_per_graph": "每图最大任务数",
+        "task_timeout": "任务超时（秒）",
+        "sandbox_enabled": "启用沙箱"
+      }
+    },
+    "channels": {
+      "title": "频道绑定",
+      "bound": "已绑定",
+      "not_bound": "未绑定",
+      "not_bound_hint": "请在 设置 → 频道 中绑定此智能体"
+    },
+    "skills": {
+      "search_placeholder": "搜索技能...",
+      "loading": "加载技能...",
+      "saved": "技能已保存",
+      "save": "保存技能"
+    },
+    "tools": {
+      "default_permission": "默认权限",
+      "default_permission_hint": "应用于未设置特定覆盖的工具",
+      "allow": "允许",
+      "ask": "询问",
+      "deny": "拒绝",
+      "globally_denied_title": "已在策略中全局拒绝",
+      "cannot_exceed_global_ask": "不能超过全局询问策略",
+      "allow_tool_title": "允许此工具",
+      "ask_tool_title": "使用前询问",
+      "deny_tool_title": "拒绝此工具",
+      "reset": "重置",
+      "save": "保存",
+      "saved": "已保存"
+    },
+    "files": {
+      "identity_files": "身份文件",
+      "select_to_edit": "选择文件以编辑",
+      "create": "创建",
+      "saved": "文件已保存"
+    }
+  },
   "cron": {
     "title": "定时任务",
     "description": "管理定时任务和自动化调度",

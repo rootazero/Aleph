@@ -291,6 +291,117 @@
       "description": "Configure media generation settings"
     }
   },
+  "agents": {
+    "sidebar": {
+      "new_agent": "+ New Agent",
+      "agent_id_placeholder": "Agent ID (e.g. coder)",
+      "display_name_placeholder": "Display Name (optional)",
+      "create": "Create",
+      "id_required": "Agent ID is required",
+      "default_agent": "Default Agent"
+    },
+    "loading": "Loading agent...",
+    "no_agent_selected": "No agent selected",
+    "no_agent_hint": "Select an agent from the sidebar or create a new one",
+    "default_badge": "Default",
+    "delete": "Delete",
+    "cannot_delete_default": "Cannot delete default agent",
+    "delete_agent": "Delete agent",
+    "tabs": {
+      "overview": "Overview",
+      "behavior": "Behavior",
+      "files": "Files",
+      "skills": "Skills",
+      "tools": "Tools",
+      "channels": "Channels"
+    },
+    "overview": {
+      "title": "Identity",
+      "agent_id": "Agent ID",
+      "emoji": "Emoji",
+      "display_name": "Display Name",
+      "description": "Description",
+      "theme": "Theme / Tagline",
+      "emoji_placeholder": "🤖",
+      "name_placeholder": "Agent name",
+      "description_placeholder": "What this agent specializes in...",
+      "theme_placeholder": "Write clean, efficient code",
+      "model_config": "Model Configuration",
+      "primary_model": "Primary Model",
+      "fallback_models": "Fallback Models",
+      "fallback_placeholder": "claude-sonnet-4, gpt-4o",
+      "fallback_hint": "Comma-separated list of fallback models",
+      "inference_params": "Inference Parameters",
+      "temperature": "Temperature",
+      "max_tokens": "Max Tokens",
+      "top_p": "Top P",
+      "top_k": "Top K",
+      "saved": "Saved successfully"
+    },
+    "behavior": {
+      "loading": "Loading configuration...",
+      "no_config": "No configuration available",
+      "config_saved": "Configuration saved",
+      "save_config": "Save Configuration",
+      "file_ops": {
+        "title": "File Operations",
+        "enable": "Enable File Operations",
+        "max_file_size": "Max File Size (bytes)",
+        "confirm_writes": "Confirm Writes",
+        "confirm_deletes": "Confirm Deletes"
+      },
+      "code_exec": {
+        "title": "Code Execution",
+        "enable": "Enable Code Execution",
+        "sandbox_mode": "Sandbox Mode",
+        "allow_network": "Allow Network",
+        "timeout": "Timeout (seconds)",
+        "default_runtime": "Default Runtime"
+      },
+      "general": {
+        "title": "General Settings",
+        "web_browsing": "Web Browsing",
+        "max_iterations": "Max Iterations",
+        "auto_execute_threshold": "Auto Execute Threshold",
+        "max_tasks_per_graph": "Max Tasks Per Graph",
+        "task_timeout": "Task Timeout (seconds)",
+        "sandbox_enabled": "Sandbox Enabled"
+      }
+    },
+    "channels": {
+      "title": "Channel Binding",
+      "bound": "BOUND",
+      "not_bound": "Not Bound",
+      "not_bound_hint": "Go to Settings → Channels to bind this agent"
+    },
+    "skills": {
+      "search_placeholder": "Search skills...",
+      "loading": "Loading skills...",
+      "saved": "Skills saved",
+      "save": "Save Skills"
+    },
+    "tools": {
+      "default_permission": "Default Permission",
+      "default_permission_hint": "Applied to tools without specific overrides",
+      "allow": "Allow",
+      "ask": "Ask",
+      "deny": "Deny",
+      "globally_denied_title": "Globally denied in Policies",
+      "cannot_exceed_global_ask": "Cannot exceed global Ask policy",
+      "allow_tool_title": "Allow this tool",
+      "ask_tool_title": "Ask before using this tool",
+      "deny_tool_title": "Deny this tool",
+      "reset": "Reset",
+      "save": "Save",
+      "saved": "Saved"
+    },
+    "files": {
+      "identity_files": "Identity Files",
+      "select_to_edit": "Select a file to edit",
+      "create": "create",
+      "saved": "File saved"
+    }
+  },
   "cron": {
     "title": "Scheduled Tasks",
     "description": "Manage cron jobs and scheduled automation tasks",

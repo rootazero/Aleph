@@ -10,6 +10,7 @@ use leptos::task::spawn_local;
 use crate::api::agents::{AgentsApi, ToolGroupInfo};
 use crate::api::tool_permissions::ToolPermissionsApi;
 use crate::context::DashboardState;
+use crate::i18n::*;
 
 /// Permission level constants
 const ALLOW: &str = "allow";
@@ -19,6 +20,7 @@ const DENY: &str = "deny";
 #[component]
 pub fn ToolsTab(agent_id: String) -> impl IntoView {
     let state = expect_context::<DashboardState>();
+    let i18n = use_i18n();
 
     let groups = RwSignal::new(Vec::<ToolGroupInfo>::new());
     // Current per-tool permission state (tool_name -> "allow"|"ask"|"deny")
@@ -195,7 +197,7 @@ pub fn ToolsTab(agent_id: String) -> impl IntoView {
                 Ok(()) => {
                     original_perms.set(tool_perms.get());
                     original_default.set(default_perm.get());
-                    success_msg.set(Some("Saved".to_string()));
+                    success_msg.set(Some(t_string!(i18n, agents.tools.saved).to_string()));
                 }
                 Err(e) => {
                     error_msg.set(Some(format!("Failed to save: {}", e)));
@@ -223,7 +225,7 @@ pub fn ToolsTab(agent_id: String) -> impl IntoView {
             {move || {
                 if is_loading.get() {
                     return view! {
-                        <div class="text-text-secondary py-8 text-center">"Loading..."</div>
+                        <div class="text-text-secondary py-8 text-center">{t!(i18n, common.loading)}</div>
                     }.into_any();
                 }
 
@@ -234,8 +236,8 @@ pub fn ToolsTab(agent_id: String) -> impl IntoView {
                         // Default permission selector
                         <div class="flex items-center justify-between p-4 bg-surface-raised border border-border rounded-xl">
                             <div>
-                                <span class="text-sm font-semibold text-text-primary">"Default Permission"</span>
-                                <p class="text-xs text-text-tertiary mt-0.5">"Applied to tools without specific overrides"</p>
+                                <span class="text-sm font-semibold text-text-primary">{t!(i18n, agents.tools.default_permission)}</span>
+                                <p class="text-xs text-text-tertiary mt-0.5">{t!(i18n, agents.tools.default_permission_hint)}</p>
                             </div>
                             <PermissionSegmentedControl
                                 value=Signal::derive(move || default_perm.get())
@@ -373,14 +375,14 @@ pub fn ToolsTab(agent_id: String) -> impl IntoView {
                                 class="px-4 py-2 text-sm font-medium text-text-secondary bg-surface-raised border border-border rounded-lg hover:bg-surface-sunken transition-colors"
                                 on:click=reset
                             >
-                                "Reset"
+                                {t!(i18n, agents.tools.reset)}
                             </button>
                             <button
                                 class="px-4 py-2 text-sm font-medium text-white bg-primary rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                                 disabled=move || !has_changes.get() || is_saving.get()
                                 on:click=save
                             >
-                                {move || if is_saving.get() { "Saving..." } else { "Save" }}
+                                {move || if is_saving.get() { t_string!(i18n, common.saving).to_string() } else { t_string!(i18n, agents.tools.save).to_string() }}
                             </button>
                         </div>
                     </div>
@@ -402,6 +404,7 @@ fn PermissionSegmentedControl(
     /// Whether this tool is globally "ask" (cannot select Allow)
     globally_ask: Signal<bool>,
 ) -> impl IntoView {
+    let i18n = use_i18n();
     let on_allow = {
         let cb = on_change.clone();
         move |_| cb(ALLOW.to_string())
@@ -429,12 +432,12 @@ fn PermissionSegmentedControl(
                 disabled=move || globally_denied.get() || globally_ask.get()
                 on:click=on_allow
                 title=move || {
-                    if globally_denied.get() { "Globally denied in Policies" }
-                    else if globally_ask.get() { "Cannot exceed global Ask policy" }
-                    else { "Allow this tool" }
+                    if globally_denied.get() { t_string!(i18n, agents.tools.globally_denied_title).to_string() }
+                    else if globally_ask.get() { t_string!(i18n, agents.tools.cannot_exceed_global_ask).to_string() }
+                    else { t_string!(i18n, agents.tools.allow_tool_title).to_string() }
                 }
             >
-                "Allow"
+                {t!(i18n, agents.tools.allow)}
             </button>
             // Ask button
             <button
@@ -448,11 +451,11 @@ fn PermissionSegmentedControl(
                 disabled=move || globally_denied.get()
                 on:click=on_ask
                 title=move || {
-                    if globally_denied.get() { "Globally denied in Policies" }
-                    else { "Ask before using this tool" }
+                    if globally_denied.get() { t_string!(i18n, agents.tools.globally_denied_title).to_string() }
+                    else { t_string!(i18n, agents.tools.ask_tool_title).to_string() }
                 }
             >
-                "Ask"
+                {t!(i18n, agents.tools.ask)}
             </button>
             // Deny button
             <button
@@ -462,9 +465,9 @@ fn PermissionSegmentedControl(
                 class=("text-text-secondary", move || value.get() != DENY)
                 class=("hover:bg-surface-sunken", move || value.get() != DENY && !globally_denied.get())
                 on:click=on_deny
-                title="Deny this tool"
+                title=move || t_string!(i18n, agents.tools.deny_tool_title).to_string()
             >
-                "Deny"
+                {t!(i18n, agents.tools.deny)}
             </button>
         </div>
     }

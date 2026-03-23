@@ -5,10 +5,12 @@ use leptos::task::spawn_local;
 use serde_json::json;
 use crate::api::agents::AgentsApi;
 use crate::context::DashboardState;
+use crate::i18n::*;
 
 #[component]
 pub fn OverviewTab(agent_id: String) -> impl IntoView {
     let state = expect_context::<DashboardState>();
+    let i18n = use_i18n();
 
     // Editable fields
     let emoji = RwSignal::new(String::new());
@@ -119,7 +121,7 @@ pub fn OverviewTab(agent_id: String) -> impl IntoView {
 
         spawn_local(async move {
             match AgentsApi::update(&dash, &id, patch).await {
-                Ok(()) => save_message.set(Some((true, "Saved successfully".to_string()))),
+                Ok(()) => save_message.set(Some((true, t_string!(i18n, agents.overview.saved).to_string()))),
                 Err(e) => save_message.set(Some((false, e))),
             }
             is_saving.set(false);
@@ -130,52 +132,52 @@ pub fn OverviewTab(agent_id: String) -> impl IntoView {
         <div class="space-y-6">
             // Identity section
             <div class="bg-surface-raised border border-border rounded-xl p-6">
-                <h2 class="text-lg font-semibold text-text-primary mb-4">"Identity"</h2>
+                <h2 class="text-lg font-semibold text-text-primary mb-4">{t!(i18n, agents.overview.title)}</h2>
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div class="md:col-span-2">
-                        <label class="block text-sm font-medium text-text-secondary mb-1">"Agent ID"</label>
+                        <label class="block text-sm font-medium text-text-secondary mb-1">{t!(i18n, agents.overview.agent_id)}</label>
                         <div class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-text-tertiary font-mono text-sm select-all">
                             {agent_id.clone()}
                         </div>
                     </div>
                     <div>
-                        <label class="block text-sm font-medium text-text-secondary mb-1">"Emoji"</label>
+                        <label class="block text-sm font-medium text-text-secondary mb-1">{t!(i18n, agents.overview.emoji)}</label>
                         <input
                             type="text"
                             prop:value=move || emoji.get()
                             on:input=move |ev| emoji.set(event_target_value(&ev))
                             class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-text-primary text-lg"
-                            placeholder="🤖"
+                            placeholder=move || t_string!(i18n, agents.overview.emoji_placeholder).to_string()
                         />
                     </div>
                     <div>
-                        <label class="block text-sm font-medium text-text-secondary mb-1">"Display Name"</label>
+                        <label class="block text-sm font-medium text-text-secondary mb-1">{t!(i18n, agents.overview.display_name)}</label>
                         <input
                             type="text"
                             prop:value=move || name.get()
                             on:input=move |ev| name.set(event_target_value(&ev))
                             class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-text-primary"
-                            placeholder="Agent name"
+                            placeholder=move || t_string!(i18n, agents.overview.name_placeholder).to_string()
                         />
                     </div>
                     <div class="md:col-span-2">
-                        <label class="block text-sm font-medium text-text-secondary mb-1">"Description"</label>
+                        <label class="block text-sm font-medium text-text-secondary mb-1">{t!(i18n, agents.overview.description)}</label>
                         <textarea
                             prop:value=move || description.get()
                             on:input=move |ev| description.set(event_target_value(&ev))
                             class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-text-primary resize-none"
                             rows="2"
-                            placeholder="What this agent specializes in..."
+                            placeholder=move || t_string!(i18n, agents.overview.description_placeholder).to_string()
                         />
                     </div>
                     <div class="md:col-span-2">
-                        <label class="block text-sm font-medium text-text-secondary mb-1">"Theme / Tagline"</label>
+                        <label class="block text-sm font-medium text-text-secondary mb-1">{t!(i18n, agents.overview.theme)}</label>
                         <input
                             type="text"
                             prop:value=move || theme.get()
                             on:input=move |ev| theme.set(event_target_value(&ev))
                             class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-text-primary"
-                            placeholder="Write clean, efficient code"
+                            placeholder=move || t_string!(i18n, agents.overview.theme_placeholder).to_string()
                         />
                     </div>
                 </div>
@@ -183,10 +185,10 @@ pub fn OverviewTab(agent_id: String) -> impl IntoView {
 
             // Model Configuration
             <div class="bg-surface-raised border border-border rounded-xl p-6">
-                <h2 class="text-lg font-semibold text-text-primary mb-4">"Model Configuration"</h2>
+                <h2 class="text-lg font-semibold text-text-primary mb-4">{t!(i18n, agents.overview.model_config)}</h2>
                 <div class="space-y-4">
                     <div>
-                        <label class="block text-sm font-medium text-text-secondary mb-1">"Primary Model"</label>
+                        <label class="block text-sm font-medium text-text-secondary mb-1">{t!(i18n, agents.overview.primary_model)}</label>
                         <input
                             type="text"
                             prop:value=move || primary_model.get()
@@ -196,25 +198,25 @@ pub fn OverviewTab(agent_id: String) -> impl IntoView {
                         />
                     </div>
                     <div>
-                        <label class="block text-sm font-medium text-text-secondary mb-1">"Fallback Models"</label>
+                        <label class="block text-sm font-medium text-text-secondary mb-1">{t!(i18n, agents.overview.fallback_models)}</label>
                         <input
                             type="text"
                             prop:value=move || fallbacks.get()
                             on:input=move |ev| fallbacks.set(event_target_value(&ev))
                             class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-text-primary font-mono text-sm"
-                            placeholder="claude-sonnet-4, gpt-4o"
+                            placeholder=move || t_string!(i18n, agents.overview.fallback_placeholder).to_string()
                         />
-                        <p class="mt-1 text-xs text-text-tertiary">"Comma-separated list of fallback models"</p>
+                        <p class="mt-1 text-xs text-text-tertiary">{t!(i18n, agents.overview.fallback_hint)}</p>
                     </div>
                 </div>
             </div>
 
             // Inference Parameters
             <div class="bg-surface-raised border border-border rounded-xl p-6">
-                <h2 class="text-lg font-semibold text-text-primary mb-4">"Inference Parameters"</h2>
+                <h2 class="text-lg font-semibold text-text-primary mb-4">{t!(i18n, agents.overview.inference_params)}</h2>
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div>
-                        <label class="block text-sm font-medium text-text-secondary mb-1">"Temperature"</label>
+                        <label class="block text-sm font-medium text-text-secondary mb-1">{t!(i18n, agents.overview.temperature)}</label>
                         <input
                             type="number"
                             step="0.1"
@@ -227,7 +229,7 @@ pub fn OverviewTab(agent_id: String) -> impl IntoView {
                         />
                     </div>
                     <div>
-                        <label class="block text-sm font-medium text-text-secondary mb-1">"Max Tokens"</label>
+                        <label class="block text-sm font-medium text-text-secondary mb-1">{t!(i18n, agents.overview.max_tokens)}</label>
                         <input
                             type="number"
                             prop:value=move || max_tokens.get()
@@ -237,7 +239,7 @@ pub fn OverviewTab(agent_id: String) -> impl IntoView {
                         />
                     </div>
                     <div>
-                        <label class="block text-sm font-medium text-text-secondary mb-1">"Top P"</label>
+                        <label class="block text-sm font-medium text-text-secondary mb-1">{t!(i18n, agents.overview.top_p)}</label>
                         <input
                             type="number"
                             step="0.05"
@@ -250,7 +252,7 @@ pub fn OverviewTab(agent_id: String) -> impl IntoView {
                         />
                     </div>
                     <div>
-                        <label class="block text-sm font-medium text-text-secondary mb-1">"Top K"</label>
+                        <label class="block text-sm font-medium text-text-secondary mb-1">{t!(i18n, agents.overview.top_k)}</label>
                         <input
                             type="number"
                             prop:value=move || top_k.get()
@@ -278,7 +280,7 @@ pub fn OverviewTab(agent_id: String) -> impl IntoView {
                     disabled=move || is_saving.get()
                     class="px-6 py-2 bg-primary text-white rounded-lg hover:bg-primary-hover disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                 >
-                    {move || if is_saving.get() { "Saving..." } else { "Save Changes" }}
+                    {move || if is_saving.get() { t_string!(i18n, common.saving).to_string() } else { t_string!(i18n, common.save).to_string() }}
                 </button>
             </div>
         </div>

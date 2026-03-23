@@ -4,6 +4,7 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 use crate::api::agents::{AgentsApi, WorkspaceFile};
 use crate::context::DashboardState;
+use crate::i18n::*;
 
 /// The 6 canonical identity files, displayed in this order.
 const IDENTITY_FILES: &[&str] = &[
@@ -18,6 +19,7 @@ const IDENTITY_FILES: &[&str] = &[
 #[component]
 pub fn FilesTab(agent_id: String) -> impl IntoView {
     let state = expect_context::<DashboardState>();
+    let i18n = use_i18n();
     let agent_id = StoredValue::new(agent_id);
 
     let files = RwSignal::new(Vec::<WorkspaceFile>::new());
@@ -81,13 +83,13 @@ pub fn FilesTab(agent_id: String) -> impl IntoView {
             // File list panel — fixed 7 identity files
             <div class="w-64 flex-shrink-0 bg-surface-raised border border-border rounded-xl overflow-hidden">
                 <div class="p-3 border-b border-border">
-                    <h3 class="text-sm font-medium text-text-primary">"Identity Files"</h3>
+                    <h3 class="text-sm font-medium text-text-primary">{t!(i18n, agents.files.identity_files)}</h3>
                 </div>
 
                 <div class="overflow-y-auto">
                     {move || {
                         if is_loading.get() {
-                            view! { <div class="p-3 text-xs text-text-tertiary">"Loading..."</div> }.into_any()
+                            view! { <div class="p-3 text-xs text-text-tertiary">{t!(i18n, common.loading)}</div> }.into_any()
                         } else {
                             let current_files = files.get();
                             let current_selected = selected_file.get();
@@ -117,7 +119,7 @@ pub fn FilesTab(agent_id: String) -> impl IntoView {
                                                                 on:click=move |_| create_file(name_create.clone())
                                                                 class="text-[10px] text-primary hover:text-primary-hover bg-primary/10 px-1.5 py-0.5 rounded cursor-pointer"
                                                             >
-                                                                "create"
+                                                                {t!(i18n, agents.files.create)}
                                                             </button>
                                                         }.into_any()
                                                     } else {
@@ -182,7 +184,7 @@ pub fn FilesTab(agent_id: String) -> impl IntoView {
                                             let dash = state;
                                             spawn_local(async move {
                                                 match AgentsApi::files_set(&dash, &id, &filename, &content).await {
-                                                    Ok(()) => save_message.set(Some((true, "File saved".to_string()))),
+                                                    Ok(()) => save_message.set(Some((true, t_string!(i18n, agents.files.saved).to_string()))),
                                                     Err(e) => save_message.set(Some((false, e))),
                                                 }
                                                 is_saving.set(false);
@@ -191,7 +193,7 @@ pub fn FilesTab(agent_id: String) -> impl IntoView {
                                         disabled=move || is_saving.get()
                                         class="px-4 py-1.5 bg-primary text-white rounded hover:bg-primary-hover disabled:opacity-50 text-sm"
                                     >
-                                        {move || if is_saving.get() { "Saving..." } else { "Save" }}
+                                        {move || if is_saving.get() { t_string!(i18n, common.saving).to_string() } else { t_string!(i18n, common.save).to_string() }}
                                     </button>
                                 </div>
                             </div>
@@ -199,7 +201,7 @@ pub fn FilesTab(agent_id: String) -> impl IntoView {
                     } else {
                         view! {
                             <div class="flex items-center justify-center h-full text-text-tertiary text-sm">
-                                "Select a file to edit"
+                                {t!(i18n, agents.files.select_to_edit)}
                             </div>
                         }.into_any()
                     }

@@ -6,6 +6,7 @@ use serde::Deserialize;
 use serde_json::json;
 use crate::api::agents::AgentsApi;
 use crate::context::DashboardState;
+use crate::i18n::*;
 
 #[derive(Debug, Clone, Deserialize)]
 struct SkillEntry {
@@ -20,6 +21,7 @@ struct SkillEntry {
 #[component]
 pub fn SkillsTab(agent_id: String) -> impl IntoView {
     let state = expect_context::<DashboardState>();
+    let i18n = use_i18n();
     let agent_id = StoredValue::new(agent_id);
 
     let all_skills = RwSignal::new(Vec::<SkillEntry>::new());
@@ -68,7 +70,7 @@ pub fn SkillsTab(agent_id: String) -> impl IntoView {
             {move || {
                 if is_loading.get() {
                     return view! {
-                        <div class="text-text-secondary py-8 text-center">"Loading skills..."</div>
+                        <div class="text-text-secondary py-8 text-center">{t!(i18n, agents.skills.loading)}</div>
                     }.into_any();
                 }
 
@@ -76,7 +78,7 @@ pub fn SkillsTab(agent_id: String) -> impl IntoView {
                     <div class="space-y-4">
                         <input
                             type="text"
-                            placeholder="Search skills..."
+                            placeholder=move || t_string!(i18n, agents.skills.search_placeholder).to_string()
                             prop:value=move || filter.get()
                             on:input=move |ev| filter.set(event_target_value(&ev))
                             class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-text-primary text-sm"
@@ -129,7 +131,7 @@ pub fn SkillsTab(agent_id: String) -> impl IntoView {
                                     let dash = state;
                                     spawn_local(async move {
                                         match AgentsApi::update(&dash, &id, json!({"skills": skills})).await {
-                                            Ok(()) => save_message.set(Some((true, "Skills saved".to_string()))),
+                                            Ok(()) => save_message.set(Some((true, t_string!(i18n, agents.skills.saved).to_string()))),
                                             Err(e) => save_message.set(Some((false, e))),
                                         }
                                         is_saving.set(false);
@@ -138,7 +140,7 @@ pub fn SkillsTab(agent_id: String) -> impl IntoView {
                                 disabled=move || is_saving.get()
                                 class="px-6 py-2 bg-primary text-white rounded-lg hover:bg-primary-hover disabled:opacity-50 transition-colors"
                             >
-                                {move || if is_saving.get() { "Saving..." } else { "Save Skills" }}
+                                {move || if is_saving.get() { t_string!(i18n, common.saving).to_string() } else { t_string!(i18n, agents.skills.save).to_string() }}
                             </button>
                         </div>
                     </div>
