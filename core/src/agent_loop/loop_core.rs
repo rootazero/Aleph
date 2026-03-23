@@ -216,6 +216,7 @@ impl<P: LoopProvider> AgentLoop<P> {
         let mut stop_requested = false;
         let mut consecutive_errors: usize = 0;
         let mut completion_nudge_count: usize = 0;
+        let mut has_auto_continued = false;
         const MAX_CONSECUTIVE_ERRORS: usize = 10;
         const MAX_COMPLETION_NUDGES: usize = 3;
 
@@ -264,7 +265,12 @@ impl<P: LoopProvider> AgentLoop<P> {
                     // Final: LLM said something with no tool calls → done
                     callback.on_text(text);
                 }
-                final_text = Some(text.clone());
+                // Append text if auto-continuing from truncation, otherwise replace
+                if has_auto_continued && final_text.is_some() {
+                    final_text.as_mut().unwrap().push_str(text);
+                } else {
+                    final_text = Some(text.clone());
+                }
             }
 
             // Push complete assistant message from response
@@ -316,9 +322,38 @@ impl<P: LoopProvider> AgentLoop<P> {
                 break; // Exhausted all nudges
             }
 
-            // If no tool calls but not EndTurn (e.g., MaxTokens) → done with limit
+            // If no tool calls and MaxTokens → auto-continue once, then warn user
+            if !response.has_tool_calls() && response.stop_reason == StopReason::MaxTokens {
+                if !has_auto_continued {
+                    has_auto_continued = true;
+                    tracing::info!(
+                        iteration = iterations,
+                        "Output truncated by max_tokens, auto-continuing once"
+                    );
+                    messages.push(UnifiedMessage::user(
+                        "[SYSTEM] Your previous response was truncated due to output token limit. \
+                         Continue exactly where you left off. Do not repeat any content."
+                    ));
+                    continue;
+                }
+                // Already auto-continued once, append truncation notice and stop
+                tracing::warn!(
+                    iteration = iterations,
+                    "Output still truncated after auto-continue, notifying user"
+                );
+                let notice = "\n\n---\n⚠️ 输出因 token 限制被截断。请回复「继续」获取剩余内容。";
+                if let Some(ref mut text) = final_text {
+                    text.push_str(notice);
+                } else {
+                    final_text = Some(notice.to_string());
+                }
+                callback.on_text(notice);
+                hit_limit = true;
+                break;
+            }
+
+            // If no tool calls and not EndTurn/MaxTokens → done
             if !response.has_tool_calls() {
-                hit_limit = response.stop_reason == StopReason::MaxTokens;
                 break;
             }
 
@@ -1196,26 +1231,72 @@ mod tests {
 
     #[tokio::test]
     async fn test_max_tokens_stop_reason() {
-        let provider = MockProvider::new(vec![ProviderResponse {
-            text: Some("Truncated response...".to_string()),
-            tool_calls: vec![],
-            thinking: None,
-            stop_reason: StopReason::MaxTokens,
-            usage: Some(TokenUsage {
-                input_tokens: 100,
-                output_tokens: 4096,
-                cache_read_tokens: None,
-            }),
-        }]);
+        // First response is truncated (MaxTokens), loop auto-continues once.
+        // Second response completes normally (EndTurn) — continuation text is appended.
+        let provider = MockProvider::new(vec![
+            ProviderResponse {
+                text: Some("Truncated response...".to_string()),
+                tool_calls: vec![],
+                thinking: None,
+                stop_reason: StopReason::MaxTokens,
+                usage: Some(TokenUsage {
+                    input_tokens: 100,
+                    output_tokens: 4096,
+                    cache_read_tokens: None,
+                }),
+            },
+            ProviderResponse {
+                text: Some(" and here is the rest.".to_string()),
+                tool_calls: vec![],
+                thinking: None,
+                stop_reason: StopReason::EndTurn,
+                usage: None,
+            },
+        ]);
+
+        let agent = make_loop(provider);
+        let mut cb = TrackingCallback::default();
+        let result = agent.run("long question", &mut cb).await.unwrap();
+
+        assert!(!result.hit_limit);
+        assert_eq!(result.iterations, 2);
+        assert_eq!(result.tool_calls_made, 0);
+        assert_eq!(
+            result.final_text.as_deref(),
+            Some("Truncated response... and here is the rest.")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_max_tokens_double_truncation() {
+        // Both responses are truncated — after auto-continue once, hit_limit is set
+        // and a truncation notice is appended.
+        let provider = MockProvider::new(vec![
+            ProviderResponse {
+                text: Some("Part 1...".to_string()),
+                tool_calls: vec![],
+                thinking: None,
+                stop_reason: StopReason::MaxTokens,
+                usage: None,
+            },
+            ProviderResponse {
+                text: Some("Part 2...".to_string()),
+                tool_calls: vec![],
+                thinking: None,
+                stop_reason: StopReason::MaxTokens,
+                usage: None,
+            },
+        ]);
 
         let agent = make_loop(provider);
         let mut cb = TrackingCallback::default();
         let result = agent.run("long question", &mut cb).await.unwrap();
 
         assert!(result.hit_limit);
-        assert_eq!(result.iterations, 1);
-        assert_eq!(result.tool_calls_made, 0);
-        assert_eq!(result.final_text.as_deref(), Some("Truncated response..."));
+        assert_eq!(result.iterations, 2);
+        let text = result.final_text.unwrap();
+        assert!(text.starts_with("Part 1...Part 2..."));
+        assert!(text.contains("⚠️"));
     }
 
     // =========================================================================

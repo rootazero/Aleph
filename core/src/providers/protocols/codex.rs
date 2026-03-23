@@ -225,6 +225,7 @@ impl CodexProtocol {
             text: Some(crate::providers::codex::types::TextConfig {
                 verbosity: "medium".to_string(),
             }),
+            max_output_tokens: payload.max_tokens,
             include: Some(vec!["reasoning.encrypted_content".to_string()]),
         }
     }
@@ -360,6 +361,8 @@ impl ProtocolAdapter for CodexProtocol {
         // separately, since the Completed event may have empty arguments.
         let mut result = String::new();
         let mut tool_calls: Vec<NativeToolCall> = Vec::new();
+        let mut is_incomplete = false;
+        let mut usage: Option<crate::providers::adapter::TokenUsage> = None;
         // Accumulate function_call arguments by item_id
         let mut fc_args: std::collections::HashMap<String, String> = std::collections::HashMap::new();
         // Track function_call metadata (call_id, name) by item_id
@@ -416,6 +419,20 @@ impl ProtocolAdapter for CodexProtocol {
                         }
                     }
                     StreamEvent::Completed { ref response } => {
+                        // Detect truncation: status="incomplete" means output hit token limit
+                        is_incomplete = response.status == "incomplete";
+                        if is_incomplete {
+                            tracing::warn!(
+                                status = %response.status,
+                                "Codex response truncated (status=incomplete), output hit token limit"
+                            );
+                        }
+                        // Extract usage data
+                        usage = response.usage.as_ref().map(|u| crate::providers::adapter::TokenUsage {
+                            input_tokens: u.input_tokens,
+                            output_tokens: u.output_tokens,
+                            cache_read_tokens: None,
+                        });
                         // Prefer extracting text from completed response for accuracy
                         if let Some(full_text) = Self::extract_text(response) {
                             result = full_text;
@@ -452,17 +469,31 @@ impl ProtocolAdapter for CodexProtocol {
             }
         }
 
+        let stop_reason = if is_incomplete {
+            StopReason::MaxTokens
+        } else if !tool_calls.is_empty() {
+            StopReason::ToolUse
+        } else {
+            StopReason::EndTurn
+        };
+
         if !tool_calls.is_empty() {
             Ok(ProviderResponse {
                 text: if result.is_empty() { None } else { Some(result) },
                 tool_calls,
-                stop_reason: StopReason::ToolUse,
+                stop_reason,
+                usage,
                 ..Default::default()
             })
         } else if result.is_empty() {
             Err(AlephError::provider("Empty response from Codex"))
         } else {
-            Ok(ProviderResponse::text_only(result))
+            Ok(ProviderResponse {
+                text: Some(result),
+                stop_reason,
+                usage,
+                ..Default::default()
+            })
         }
     }
 

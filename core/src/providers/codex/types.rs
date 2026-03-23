@@ -29,6 +29,9 @@ pub struct ResponsesRequest {
     /// Text output verbosity config (Codex mode)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<TextConfig>,
+    /// Maximum number of output tokens (prevents silent truncation)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_output_tokens: Option<u32>,
     /// Additional fields to include in response (e.g. reasoning.encrypted_content)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub include: Option<Vec<String>>,
