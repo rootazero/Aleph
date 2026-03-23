@@ -116,13 +116,6 @@ impl ExtensionManager {
         super::skill_tool::invoke_skill(&skill, arguments, ctx).await
     }
 
-    /// Get skill tool description for LLM
-    pub async fn get_skill_tool_description(&self) -> String {
-        self.ensure_loaded().await.ok();
-        let skills = self.get_auto_invocable_skills().await;
-        super::skill_tool::build_skill_tool_description(&skills)
-    }
-
     // ── Hook Execution ────────────────────────────────────────────────────────
 
     /// Execute hooks for an event

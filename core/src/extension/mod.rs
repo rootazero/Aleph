@@ -61,7 +61,7 @@ pub use plugin_loader::PluginLoader;
 pub use provider_adapter::PluginProviderAdapter;
 pub use registry::*;
 pub use service_manager::ServiceManager;
-pub use skill_tool::{build_skill_tool_description, check_skill_permission, request_skill_permission_async};
+pub use skill_tool::{check_skill_permission, request_skill_permission_async};
 pub use template::SkillTemplate;
 pub use types::*;
 
@@ -335,29 +335,6 @@ impl ExtensionManager {
 // =============================================================================
 // Utility Functions
 // =============================================================================
-
-/// Build skill instructions for LLM prompt injection
-pub fn build_skill_instructions(skills: &[ExtensionSkill]) -> String {
-    if skills.is_empty() {
-        return String::new();
-    }
-
-    let mut output = String::new();
-    output.push_str("\n\n## Available Plugin Skills\n\n");
-    output.push_str("You have access to the following plugin skills. ");
-    output.push_str("Use them when they match the user's intent:\n\n");
-
-    for skill in skills {
-        output.push_str(&format!(
-            "### /{}\n**Description**: {}\n\n{}\n\n---\n\n",
-            skill.qualified_name(),
-            skill.description,
-            skill.content
-        ));
-    }
-
-    output
-}
 
 /// Check if a directory is a valid plugin directory
 pub fn is_valid_plugin_dir(path: &std::path::Path) -> bool {
