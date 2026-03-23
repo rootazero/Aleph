@@ -20,7 +20,7 @@ use crate::sync_primitives::Arc;
 
 use crate::builtin_tools::{
     BashExecTool, CodeExecTool, DesktopTool, EscalateTaskTool,
-    FileOpsTool, ImageGenerateTool, PdfGenerateTool, ReadConfigGuideTool,
+    FileOpsTool, ImageGenerateTool, PdfGenerateTool, ReadConfigGuideTool, SelfManageTool,
     SearchTool, VaultStoreTool, WebFetchTool,
 };
 use crate::builtin_tools::browser_tools::{
@@ -104,6 +104,11 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
     BuiltinToolDefinition {
         name: "read_config_guide",
         description: "Get Aleph configuration manual for self-management operations",
+        requires_config: false,
+    },
+    BuiltinToolDefinition {
+        name: "self_manage",
+        description: "Enter self-management mode when user wants to configure, modify, or fix Aleph",
         requires_config: false,
     },
     BuiltinToolDefinition {
@@ -337,6 +342,7 @@ pub fn create_tool_boxed(
         }
         "skill_list" => Some(Box::new(SkillListTool::default())),
         "read_config_guide" => Some(Box::new(ReadConfigGuideTool::default())),
+        "self_manage" => Some(Box::new(SelfManageTool::default())),
         "desktop" => Some(Box::new(DesktopTool::new())),
         "vault_store" => {
             config.and_then(|c| c.shared_token_manager.as_ref()).map(|mgr| {

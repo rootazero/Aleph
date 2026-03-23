@@ -9,7 +9,7 @@ use crate::sync_primitives::Arc;
 
 use tracing::info;
 
-use crate::builtin_tools::{AutomationTool, BashExecTool, CodeExecTool, DesktopTool, FileOpsTool, ImageGenerateTool, MemoryBrowseTool, MemorySearchTool, PdfGenerateTool, PimTool, ReadConfigGuideTool, ScratchpadTool, SearchTool, SystemTool, VaultStoreTool, WebFetchTool};
+use crate::builtin_tools::{AutomationTool, BashExecTool, CodeExecTool, DesktopTool, FileOpsTool, ImageGenerateTool, MemoryBrowseTool, MemorySearchTool, PdfGenerateTool, PimTool, ReadConfigGuideTool, SelfManageTool, ScratchpadTool, SearchTool, SystemTool, VaultStoreTool, WebFetchTool};
 use crate::builtin_tools::browser_tools::{
     BrowserOpenTool, BrowserClickTool, BrowserTypeTool, BrowserScreenshotTool,
     BrowserSnapshotTool, BrowserNavigateTool, BrowserTabsTool, BrowserSelectTool,
@@ -55,6 +55,9 @@ impl BuiltinToolRegistry {
 
         // Config guide tool (Progressive Disclosure for self-management)
         let config_guide_tool = ReadConfigGuideTool::default();
+
+        // Self-management tool (LLM-triggered entry point)
+        let self_manage_tool = SelfManageTool::default();
 
         // Vault store tool (requires SharedTokenManager)
         let vault_store_tool = config.shared_token_manager.as_ref().map(|mgr| {
@@ -382,6 +385,7 @@ impl BuiltinToolRegistry {
             list_skills_tool,
             read_skill_tool,
             config_guide_tool,
+            self_manage_tool,
             vault_store_tool,
             desktop_tool,
             pim_tool,
@@ -495,6 +499,8 @@ impl BuiltinToolRegistry {
             serde_json::to_value(schema_for!(crate::builtin_tools::skill_reader::ReadSkillArgs)).unwrap_or_default());
         reg(tools, "read_config_guide", ReadConfigGuideTool::DESCRIPTION,
             serde_json::to_value(schema_for!(crate::builtin_tools::config_guide::ReadConfigGuideArgs)).unwrap_or_default());
+        reg(tools, "self_manage", SelfManageTool::DESCRIPTION,
+            serde_json::to_value(schema_for!(crate::builtin_tools::self_manage::SelfManageArgs)).unwrap_or_default());
         reg(tools, "desktop", DesktopTool::DESCRIPTION,
             serde_json::to_value(schema_for!(crate::builtin_tools::desktop::DesktopArgs)).unwrap_or_default());
         reg(tools, "pim", PimTool::DESCRIPTION,

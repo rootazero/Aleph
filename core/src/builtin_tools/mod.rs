@@ -67,6 +67,7 @@ pub mod acp_tools;
 pub mod cron_manage;
 pub mod clawhub;
 pub mod config_guide;
+pub mod self_manage;
 pub mod task_manage;
 pub mod team_manage;
 pub mod channel_manage;
@@ -125,6 +126,7 @@ pub use acp_tools::{
 pub use cron_manage::{CronAction, CronManageArgs, CronManageOutput, CronManageTool};
 pub use clawhub::{ClawHubAction, ClawHubArgs, ClawHubOutput, ClawHubTool};
 pub use config_guide::{GuideTopic, ReadConfigGuideArgs, ReadConfigGuideOutput, ReadConfigGuideTool};
+pub use self_manage::{SelfManageArgs, SelfManageOutput, SelfManageTool};
 pub use task_manage::{TaskCreateTool, TaskListTool, TaskUpdateTool, TaskWaitTool};
 pub use team_manage::{TeamCreateTool, TeamDisbandTool, TeamLaunchTool, TeamListTool};
 pub use channel_manage::{ChannelPairingArgs, ChannelPairingOutput, ChannelPairingTool, PairingAction};
