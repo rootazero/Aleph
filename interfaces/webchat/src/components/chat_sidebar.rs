@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 use crate::api::chat::ChatApi;
 use crate::context::DashboardState;
+use crate::i18n::*;
 use crate::views::chat::state::ChatState;
 
 use web_sys::HtmlInputElement;
@@ -44,6 +45,7 @@ struct AgentEntry {
 pub fn ChatSidebar() -> impl IntoView {
     let dashboard = expect_context::<DashboardState>();
     let chat = expect_context::<ChatState>();
+    let i18n = use_i18n();
 
     let agents = RwSignal::new(Vec::<AgentEntry>::new());
     let sessions = RwSignal::new(Vec::<SessionEntry>::new());
@@ -298,7 +300,7 @@ pub fn ChatSidebar() -> impl IntoView {
                 if let Some(el) = edit_input_ref.get() {
                     let input: &HtmlInputElement = &el;
                     let _ = input.focus();
-                    let _ = input.select();
+                    input.select();
                 }
             });
         }
@@ -354,7 +356,7 @@ pub fn ChatSidebar() -> impl IntoView {
                                hover:bg-primary/90 transition-colors whitespace-nowrap"
                         on:click=on_new_chat
                     >
-                        "+ New"
+                        {move || t_string!(i18n, chat.new).to_string()}
                     </button>
                 </div>
 
@@ -365,7 +367,7 @@ pub fn ChatSidebar() -> impl IntoView {
                         <circle cx="11" cy="11" r="8" />
                         <line x1="21" y1="21" x2="16.65" y2="16.65" />
                     </svg>
-                    <span class="text-text-tertiary">"Search chats..."</span>
+                    <span class="text-text-tertiary">{move || t_string!(i18n, chat.search_placeholder).to_string()}</span>
                 </div>
             </div>
 
@@ -392,7 +394,7 @@ pub fn ChatSidebar() -> impl IntoView {
                     if is_loading.get() && session_list.is_empty() {
                         return view! {
                             <p class="text-xs text-text-tertiary px-3 py-4 text-center">
-                                "Loading..."
+                                {move || t_string!(i18n, common.loading).to_string()}
                             </p>
                         }.into_any();
                     }
@@ -407,12 +409,12 @@ pub fn ChatSidebar() -> impl IntoView {
                     if filtered.is_empty() {
                         return view! {
                             <p class="text-xs text-text-tertiary px-3 py-4 text-center">
-                                "No conversations yet"
+                                {move || t_string!(i18n, chat.no_conversations).to_string()}
                             </p>
                         }.into_any();
                     }
 
-                    let on_select = on_select_session.clone();
+                    let on_select = on_select_session;
                     let do_rename = do_rename.clone();
                     let do_delete = do_delete.clone();
                     view! {
@@ -431,9 +433,8 @@ pub fn ChatSidebar() -> impl IntoView {
                                     let label = session
                                         .topic
                                         .clone()
-                                        .unwrap_or_else(|| "New Chat".to_string());
+                                        .unwrap_or_else(|| t_string!(i18n, chat.new_chat).to_string());
                                     let subtitle = format_session_subtitle(&session);
-                                    let on_select = on_select.clone();
                                     let do_rename = do_rename.clone();
                                     let do_delete = do_delete.clone();
 
@@ -508,7 +509,7 @@ pub fn ChatSidebar() -> impl IntoView {
                                                     }
                                                 }
                                             >
-                                                <span class="text-red-400 font-medium">"确认删除?"</span>
+                                                <span class="text-red-400 font-medium">{move || t_string!(i18n, chat.confirm_delete).to_string()}</span>
                                                 <div class="flex items-center gap-1.5">
                                                     <button
                                                         class="px-2 py-0.5 rounded bg-red-500 text-white text-[10px] font-medium
@@ -519,7 +520,7 @@ pub fn ChatSidebar() -> impl IntoView {
                                                             do_delete(key_for_del.clone());
                                                         }
                                                     >
-                                                        "确认"
+                                                        {move || t_string!(i18n, common.confirm).to_string()}
                                                     </button>
                                                     <button
                                                         class="px-2 py-0.5 rounded bg-surface-sunken text-text-secondary text-[10px]
@@ -529,7 +530,7 @@ pub fn ChatSidebar() -> impl IntoView {
                                                             clear_action_states();
                                                         }
                                                     >
-                                                        "取消"
+                                                        {move || t_string!(i18n, common.cancel).to_string()}
                                                     </button>
                                                 </div>
                                             </div>
@@ -603,7 +604,7 @@ pub fn ChatSidebar() -> impl IntoView {
                                                                     editing_key.set(Some(key_for_edit.clone()));
                                                                 }
                                                             >
-                                                                "重命名"
+                                                                {move || t_string!(i18n, chat.rename).to_string()}
                                                             </button>
                                                             <button
                                                                 class="w-full text-left px-3 py-1.5 text-red-400
@@ -614,7 +615,7 @@ pub fn ChatSidebar() -> impl IntoView {
                                                                     deleting_key.set(Some(key_for_del_menu.clone()));
                                                                 }
                                                             >
-                                                                "删除"
+                                                                {move || t_string!(i18n, common.delete).to_string()}
                                                             </button>
                                                         </div>
                                                     }.into_any()

@@ -78,6 +78,21 @@
       "server_logs": "Server Logs"
     }
   },
+  "chat": {
+    "new": "+ New",
+    "search_placeholder": "Search chats...",
+    "no_conversations": "No conversations yet",
+    "new_chat": "New Chat",
+    "confirm_delete": "Confirm delete?",
+    "rename": "Rename",
+    "back": ".. back",
+    "back_desc": "Return to top level",
+    "thinking": "Thinking...",
+    "send_placeholder": "Send a message...",
+    "attach": "Attach files",
+    "stop": "Stop",
+    "remove": "Remove"
+  },
   "settings": {
     "title": "Settings",
     "welcome": "Welcome to Settings",

@@ -78,6 +78,21 @@
       "server_logs": "服务器日志"
     }
   },
+  "chat": {
+    "new": "+ 新建",
+    "search_placeholder": "搜索对话...",
+    "no_conversations": "暂无对话",
+    "new_chat": "新对话",
+    "confirm_delete": "确认删除？",
+    "rename": "重命名",
+    "back": ".. 返回",
+    "back_desc": "返回顶层",
+    "thinking": "思考中...",
+    "send_placeholder": "发送消息...",
+    "attach": "附加文件",
+    "stop": "停止",
+    "remove": "移除"
+  },
   "settings": {
     "title": "设置",
     "welcome": "欢迎使用设置",

@@ -6,6 +6,7 @@ use wasm_bindgen::prelude::*;
 use crate::components::markdown::MarkdownRenderer;
 use crate::context::DashboardState;
 use crate::api::chat::{ChatApi, ChatAttachment};
+use crate::i18n::*;
 use super::state::{ChatState, ChatPhase, ChatMessage};
 use super::events::subscribe_run_events;
 
@@ -67,6 +68,7 @@ pub fn ChatView() -> impl IntoView {
 #[component]
 fn MessageList() -> impl IntoView {
     let chat = expect_context::<ChatState>();
+    let i18n = use_i18n();
     let scroll_ref = NodeRef::<leptos::html::Div>::new();
 
     // Auto-scroll to bottom when messages change or during streaming
@@ -92,7 +94,7 @@ fn MessageList() -> impl IntoView {
             <Show when=move || chat.phase.get() == ChatPhase::Thinking>
                 <div class="flex items-center gap-2 text-text-secondary text-sm px-3 py-2">
                     <span class="inline-block w-2 h-2 rounded-full bg-primary animate-pulse"></span>
-                    "Thinking..."
+                    {move || t_string!(i18n, chat.thinking).to_string()}
                 </div>
             </Show>
         </div>
@@ -259,6 +261,7 @@ struct PaletteEntry {
 fn InputArea() -> impl IntoView {
     let dashboard = expect_context::<DashboardState>();
     let chat = expect_context::<ChatState>();
+    let i18n = use_i18n();
     let input_text = RwSignal::new(String::new());
     let is_sending = RwSignal::new(false);
     let attachments: RwSignal<Vec<FileAttachment>> = RwSignal::new(Vec::new());
@@ -322,9 +325,9 @@ fn InputArea() -> impl IntoView {
         if let Some(ns) = namespace {
             // Inside a namespace — show "back" + children
             entries.push(PaletteEntry {
-                label: ".. back".to_string(),
+                label: t_string!(i18n, chat.back).to_string(),
                 full_command: "/".to_string(),
-                description: "Return to top level".to_string(),
+                description: t_string!(i18n, chat.back_desc).to_string(),
                 is_namespace: false,
                 is_back: true,
             });
@@ -401,8 +404,8 @@ fn InputArea() -> impl IntoView {
                     commands_loaded.set(true);
                     // Refresh palette with newly loaded commands
                     let text = input_text.get_untracked();
-                    if text.starts_with('/') {
-                        let query = &text[1..]; // safe: '/' is single-byte ASCII
+                    if let Some(query) = text.strip_prefix('/') {
+                        // safe: '/' is single-byte ASCII
                         let ns = current_namespace.get_untracked();
                         let entries = build_palette_entries(&cmds, &ns, query);
                         palette_entries.set(entries);
@@ -421,8 +424,8 @@ fn InputArea() -> impl IntoView {
 
     // Update filtered commands based on current input
     let update_palette = move |text: &str| {
-        if text.starts_with('/') {
-            let after_slash = &text[1..]; // safe: '/' is single-byte ASCII
+        if let Some(after_slash) = text.strip_prefix('/') {
+            // safe: '/' is single-byte ASCII
             let cmds = all_commands.get_untracked();
             let ns = current_namespace.get_untracked();
 
@@ -687,7 +690,7 @@ fn InputArea() -> impl IntoView {
                                     // Delete button
                                     <button
                                         class="ml-0.5 p-0.5 rounded hover:bg-danger/10 hover:text-danger transition-colors"
-                                        title="Remove"
+                                        title=move || t_string!(i18n, chat.remove).to_string()
                                         on:click=move |_| remove_attachment(idx)
                                     >
                                         <svg xmlns="http://www.w3.org/2000/svg" class="w-3 h-3" viewBox="0 0 20 20" fill="currentColor">
@@ -782,7 +785,7 @@ fn InputArea() -> impl IntoView {
                 <button
                     class="p-2.5 rounded-xl text-text-secondary hover:text-text-primary
                            hover:bg-surface-raised transition-colors"
-                    title="Attach files"
+                    title=move || t_string!(i18n, chat.attach).to_string()
                     on:click=on_attach_click
                 >
                     <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" viewBox="0 0 20 20" fill="currentColor">
@@ -797,7 +800,7 @@ fn InputArea() -> impl IntoView {
                            text-sm text-text-primary placeholder:text-text-tertiary
                            focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary
                            min-h-[40px] max-h-[120px]"
-                    placeholder="Send a message..."
+                    placeholder=move || t_string!(i18n, chat.send_placeholder).to_string()
                     rows=1
                     prop:value=move || input_text.get()
                     on:input=move |ev| {
@@ -812,7 +815,7 @@ fn InputArea() -> impl IntoView {
                 <Show when=move || chat.active_run_id.get().is_some()>
                     <button
                         class="p-2.5 rounded-xl bg-danger/10 text-danger hover:bg-danger/20 transition-colors"
-                        title="Stop"
+                        title=move || t_string!(i18n, chat.stop).to_string()
                         on:click=on_abort
                     >
                         <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" viewBox="0 0 20 20" fill="currentColor">
