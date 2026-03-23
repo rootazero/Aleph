@@ -36,6 +36,8 @@ pub enum RunStatus {
     Running,
     /// Run is temporarily paused
     Paused,
+    /// Run is idle, waiting for next steer (keep_alive mode)
+    Idle,
     /// Run completed successfully
     Completed,
     /// Run failed with an error
@@ -66,6 +68,14 @@ impl RunStatus {
             // Paused can resume (Running) or be Cancelled
             (RunStatus::Paused, RunStatus::Running) => true,
             (RunStatus::Paused, RunStatus::Cancelled) => true,
+
+            // Running can also go to Idle (keep_alive completion)
+            (RunStatus::Running, RunStatus::Idle) => true,
+
+            // Idle can resume (Running), complete (Completed), or be cancelled
+            (RunStatus::Idle, RunStatus::Running) => true,
+            (RunStatus::Idle, RunStatus::Completed) => true,
+            (RunStatus::Idle, RunStatus::Cancelled) => true,
 
             // Terminal states cannot transition
             (RunStatus::Completed, _) => false,
@@ -240,6 +250,14 @@ pub struct SubAgentRun {
     pub retry_count: u32,
     /// Cleanup policy after completion
     pub cleanup_policy: CleanupPolicy,
+    /// Persona prompt for team sub-agents (injected as system prompt prefix)
+    /// Skipped during serialization to avoid leaking into MemoryFact persistence.
+    #[serde(skip)]
+    pub persona: Option<String>,
+    /// When true, the sub-agent stays alive (Idle) after completing a task,
+    /// waiting for the next steer. Used by team members.
+    #[serde(default)]
+    pub keep_alive: bool,
 }
 
 impl SubAgentRun {
@@ -283,6 +301,8 @@ impl SubAgentRun {
             checkpoint_id: None,
             retry_count: 0,
             cleanup_policy: CleanupPolicy::default(),
+            persona: None,
+            keep_alive: false,
         }
     }
 
@@ -322,6 +342,18 @@ impl SubAgentRun {
         self.cleanup_policy = policy;
         self
     }
+
+    /// Set the persona prompt
+    pub fn with_persona(mut self, persona: String) -> Self {
+        self.persona = Some(persona);
+        self
+    }
+
+    /// Set keep-alive mode
+    pub fn with_keep_alive(mut self, keep_alive: bool) -> Self {
+        self.keep_alive = keep_alive;
+        self
+    }
 }
 
 #[cfg(test)]
@@ -343,6 +375,7 @@ mod tests {
         assert!(RunStatus::Running.can_transition_to(&RunStatus::Paused));
         assert!(RunStatus::Running.can_transition_to(&RunStatus::Cancelled));
         assert!(!RunStatus::Running.can_transition_to(&RunStatus::Pending));
+        assert!(RunStatus::Running.can_transition_to(&RunStatus::Idle));
 
         // Valid transitions from Paused
         assert!(RunStatus::Paused.can_transition_to(&RunStatus::Running));
@@ -350,6 +383,13 @@ mod tests {
         assert!(!RunStatus::Paused.can_transition_to(&RunStatus::Completed));
         assert!(!RunStatus::Paused.can_transition_to(&RunStatus::Failed));
         assert!(!RunStatus::Paused.can_transition_to(&RunStatus::Pending));
+
+        // Valid transitions from Idle
+        assert!(RunStatus::Idle.can_transition_to(&RunStatus::Running));
+        assert!(RunStatus::Idle.can_transition_to(&RunStatus::Completed));
+        assert!(RunStatus::Idle.can_transition_to(&RunStatus::Cancelled));
+        assert!(!RunStatus::Idle.can_transition_to(&RunStatus::Pending));
+        assert!(!RunStatus::Idle.can_transition_to(&RunStatus::Failed));
 
         // Terminal states cannot transition
         assert!(!RunStatus::Completed.can_transition_to(&RunStatus::Running));
@@ -363,6 +403,7 @@ mod tests {
         assert!(!RunStatus::Pending.is_terminal());
         assert!(!RunStatus::Running.is_terminal());
         assert!(!RunStatus::Paused.is_terminal());
+        assert!(!RunStatus::Idle.is_terminal());
         assert!(RunStatus::Completed.is_terminal());
         assert!(RunStatus::Failed.is_terminal());
         assert!(RunStatus::Cancelled.is_terminal());
@@ -481,5 +522,69 @@ mod tests {
 
         let deserialized: Lane = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized, Lane::Subagent);
+    }
+
+    #[test]
+    fn test_idle_status_transitions() {
+        assert!(RunStatus::Running.can_transition_to(&RunStatus::Idle));
+        assert!(RunStatus::Idle.can_transition_to(&RunStatus::Running));
+        assert!(RunStatus::Idle.can_transition_to(&RunStatus::Completed));
+        assert!(RunStatus::Idle.can_transition_to(&RunStatus::Cancelled));
+        assert!(!RunStatus::Idle.is_terminal());
+        assert!(!RunStatus::Idle.can_transition_to(&RunStatus::Failed));
+        assert!(!RunStatus::Idle.can_transition_to(&RunStatus::Pending));
+        assert!(!RunStatus::Idle.can_transition_to(&RunStatus::Paused));
+    }
+
+    #[test]
+    fn test_idle_serialization() {
+        let status = RunStatus::Idle;
+        let json = serde_json::to_string(&status).unwrap();
+        assert_eq!(json, "\"idle\"");
+        let deserialized: RunStatus = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, RunStatus::Idle);
+    }
+
+    #[test]
+    fn test_subagent_run_persona_and_keep_alive() {
+        let parent_key = SessionKey::main("main");
+        let session_key = SessionKey::Subagent {
+            parent_key: Box::new(parent_key.clone()),
+            subagent_id: "persona-test".to_string(),
+        };
+        let run = SubAgentRun::new(session_key, parent_key, "Test", "explore")
+            .with_persona("You are a code reviewer".to_string())
+            .with_keep_alive(true);
+        assert_eq!(run.persona, Some("You are a code reviewer".to_string()));
+        assert!(run.keep_alive);
+
+        let run2 = SubAgentRun::new(
+            SessionKey::Subagent {
+                parent_key: Box::new(SessionKey::main("p")),
+                subagent_id: "s".to_string(),
+            },
+            SessionKey::main("p"),
+            "T",
+            "e",
+        );
+        assert_eq!(run2.persona, None);
+        assert!(!run2.keep_alive);
+    }
+
+    #[test]
+    fn test_persona_not_serialized() {
+        let run = SubAgentRun::new(
+            SessionKey::Subagent {
+                parent_key: Box::new(SessionKey::main("p")),
+                subagent_id: "s".to_string(),
+            },
+            SessionKey::main("p"),
+            "Task",
+            "explore",
+        )
+        .with_persona("Secret persona".to_string());
+        let json = serde_json::to_string(&run).unwrap();
+        assert!(!json.contains("Secret persona"));
+        assert!(!json.contains("persona"));
     }
 }

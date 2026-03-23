@@ -289,6 +289,7 @@ impl SubAgentRegistry {
                 RunStatus::Completed => stats.completed += 1,
                 RunStatus::Failed => stats.failed += 1,
                 RunStatus::Cancelled => stats.cancelled += 1,
+                RunStatus::Idle => stats.paused += 1, // Idle counted as paused for now
             }
         }
 
