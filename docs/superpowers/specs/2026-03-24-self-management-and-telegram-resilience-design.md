@@ -1,16 +1,18 @@
 # Self-Management System & Telegram Resilience
 
-Date: 2026-03-24
+Date: 2026-03-24 (v3 — full skill-ization + skills repo separation)
 
 ## Problem Statement
 
-Three related issues prevent Aleph from reliably handling self-configuration requests via Telegram:
+Four related issues prevent Aleph from reliably handling self-configuration requests:
 
 1. **Telegram polling stall with no recovery**: The watchdog detects long-polling stalls (>90s) but only logs warnings. A stall on 2026-03-22 16:55 persisted for 22000+ seconds with no auto-restart. All Telegram messages were silently dropped.
 
-2. **Messaging paradigm lacks self-management prompt**: `OperationalGuidelinesLayer` only injects self-management instructions for `Background` and `CLI` paradigms. Telegram (`Messaging`) never gets the `read_config_guide` prompt, so the LLM doesn't know it can self-manage.
+2. **Self-management embedded in core**: Self-management logic lives in `OperationalGuidelinesLayer` (prompt layer) and is paradigm-restricted (only Background/CLI). This violates R3 (Core Minimalism) and R10 (Intelligence Lives in the Prompt) — it should be a skill.
 
-3. **No explicit self-management entry point**: Even with the prompt, the LLM may not proactively enter self-management mode. Users need a `/self` command to explicitly tell the LLM "you're managing yourself now" with full workspace context.
+3. **No explicit self-management entry point**: Users need a `/self` command to explicitly tell the LLM "you're managing yourself now" with full workspace context, available on all channels.
+
+4. **Official skills repo lacks update mechanism**: `~/.aleph/skills/` is git-cloned from the official repo on first install, but never updated. User-added skills in the same directory create git conflicts on pull.
 
 ## Design
 
@@ -51,7 +53,7 @@ tokio::spawn {
 
     if which == "shutdown" { break; }
 
-    // Set status to Reconnecting
+    // Set status to Connecting (reuse existing variant)
     *status.write().await = ChannelStatus::Connecting;
     tracing::error!(attempt, "Telegram polling {} — auto-restarting", which);
 
@@ -85,7 +87,7 @@ tokio::spawn {
 
 - **No message loss**: Telegram server queues undelivered updates for 24h. On reconnect, teloxide resumes from last acknowledged offset — burst delivery is automatic and ordered.
 - **Backpressure**: The existing bounded `mpsc` channel between Telegram handler and inbound forwarder provides natural backpressure during burst catch-up.
-- **Status visibility**: `ChannelStatus::Connecting` during backoff sleep, `Connected` after successful restart. Panel and `/status` reflect current state.
+- **Status visibility**: `ChannelStatus::Connecting` during backoff sleep, `Connected` after successful restart. Log messages distinguish initial connect from reconnect.
 - **Reconnect log**: `INFO "Telegram reconnected, queued messages will be delivered"` after each successful restart.
 
 #### Parameters
@@ -103,37 +105,32 @@ Reuse existing `ChannelStatus::Connecting` during reconnection backoff — no ne
 
 ---
 
-### Fix 2: OperationalGuidelinesLayer Paradigm Expansion
+### Fix 2: Self-Management Full Skill-ization
+
+Self-management moves entirely out of core into a skill. This aligns with R3 (Core Minimalism), R8 (LLM Sovereignty), and R10 (Intelligence Lives in the Prompt).
+
+#### 2a. Remove self-management from OperationalGuidelinesLayer
 
 **File**: `core/src/thinker/layers/operational_guidelines.rs`
 
-Change the paradigm filter from allowlist to denylist:
+Remove the "Self-Management" section (lines 46-53) that mentions `read_config_guide`. Keep the "Diagnostic Capabilities" section (read-only monitoring) and "When You Detect Issues" / "What You Must NEVER Do Autonomously" sections — these are safety guidelines, not self-management.
 
+Before:
 ```rust
-// Before:
-match paradigm {
-    InteractionParadigm::Background | InteractionParadigm::CLI => {}
-    _ => return,
-}
-
-// After:
-match paradigm {
-    InteractionParadigm::Embedded => return,
-    _ => {}
-}
+output.push_str("### Self-Management\n");
+output.push_str("You can manage all Aleph configuration. When needed, call read_config_guide(topic) ");
+// ...
 ```
 
-**Rationale**: Messaging (Telegram/Discord) and WebRich (Panel) are primary user interfaces. Self-management should be available everywhere except Embedded (minimal UI, no config changes expected). Cost is ~500 tokens added to Messaging/WebRich prompts.
+After: Section removed entirely. The `/self` skill now owns all self-management prompt content.
 
----
+**Paradigm filter unchanged**: The remaining diagnostic/safety content stays limited to Background/CLI as before — these are operational awareness features that don't need Messaging paradigm support. When users want self-management on any channel, they use `/self`.
 
-### Fix 3: `/self` Explicit Command
+#### 2b. `/self` Skill in Official Repo
 
-#### 3a. Skill Registration
+**New file**: `~/Workspace/Aleph-skills/self/SKILL.md`
 
-**New file**: `~/.aleph/skills/self/SKILL.md` (SKILL.md with YAML frontmatter)
-
-Also committed to the official skills repo (`~/Workspace/Aleph-skills/self/SKILL.md`) for distribution.
+Deployed to `~/.aleph/skills-official/self/SKILL.md` via the skills repo mechanism (see Fix 4).
 
 Frontmatter:
 ```yaml
@@ -147,19 +144,15 @@ invocation:
 ---
 ```
 
-`SkillSystem::init()` scans `~/.aleph/skills/` and registers this as `SkillSource::Global`. No Rust code changes needed for registration.
+User flow: `/self <request>` → skill fallthrough → LLM receives self-management prompt + user's original request → LLM calls `read_config_guide(topic)` → follows guide to configure.
 
-User flow: `/self <request>` → skill fallthrough in `execute_slash_command_fast_path` → LLM receives self-management prompt + user's original request → LLM calls `read_config_guide(topic)` → follows guide to configure.
-
-#### 3b. Skill Prompt Content
+#### 2c. Skill Prompt Content
 
 The prompt provides three layers of knowledge:
 
 1. **Workspace map** (`~/.aleph/` directory tree with purpose annotations)
 2. **Operation protocol** (backup → read → plan → confirm → write → verify → reload)
 3. **Domain routing** (table mapping topics to `read_config_guide(topic)` calls)
-
-Full prompt:
 
 ```markdown
 # Aleph Self-Management Mode
@@ -199,7 +192,10 @@ and manage your own configuration and workspace.
 │   ├── general.md           # Default provider, language, policies
 │   └── cron.md              # Scheduled tasks
 │
-├── skills/                  # Installed skills
+├── skills/                  # User custom skills (not git-managed by Aleph)
+│   └── {name}/SKILL.md
+│
+├── skills-official/         # Official skills repo (git clone, auto-updated)
 │   └── {name}/SKILL.md
 │
 ├── plugins/                 # Plugin system
@@ -282,11 +278,15 @@ structure templates, field definitions, and caveats you need.
 2. aleph plugin install <name>
 ```
 
-#### 3c. Update `~/.aleph/guides/overview.md`
+#### 2d. `read_config_guide` Tool and Guides — Preserved
 
-Add the workspace directory tree and missing entries (plugins/, workspaces/, backups/, browser/, templates/, output/) to the overview guide, keeping it as the authoritative file map.
+`ReadConfigGuideTool` (`core/src/builtin_tools/config_guide.rs`) and `~/.aleph/guides/*.md` are **kept as-is**. They serve as the data layer that the `/self` skill directs the LLM to use. The skill provides routing knowledge; the tool + guides provide domain knowledge.
 
-#### 3d. Update `~/.aleph/guides/generation.md`
+#### 2e. Update `~/.aleph/guides/overview.md`
+
+Add the workspace directory tree (including new `skills-official/` directory) and missing entries (plugins/, workspaces/, backups/, browser/, templates/, output/).
+
+#### 2f. Update `~/.aleph/guides/generation.md`
 
 Add video and audio provider examples, plus URL auto-completion rules:
 
@@ -325,7 +325,108 @@ model = "v4"
 # api_key — vault_store with key "gen:suno"
 ```
 
-Add corresponding "Add video provider" and "Add audio provider" operation sections.
+---
+
+### Fix 3: Skills Directory Separation + Auto-Update
+
+#### 3a. Directory Separation
+
+Split the current single `~/.aleph/skills/` into two directories:
+
+```
+~/.aleph/skills/            # User custom skills (user-managed, no Aleph git ops)
+~/.aleph/skills-official/   # Official repo (git clone from GitHub, auto-updated)
+```
+
+**Migration**: On first startup after upgrade, if `~/.aleph/skills/.git` exists and remote matches the official repo URL:
+1. Move `~/.aleph/skills/` → `~/.aleph/skills-official/`
+2. Create empty `~/.aleph/skills/`
+3. Any non-git-tracked files in the old dir (user skills) are moved to new `~/.aleph/skills/`
+
+If `.git` doesn't exist or remote doesn't match, leave as-is and create `skills-official/` fresh via clone.
+
+#### 3b. SkillSystem::init() — Scan Both Directories
+
+**File**: `core/src/skill/mod.rs` and startup code
+
+Update `SkillSystem::init()` to receive both directories:
+
+```rust
+// Startup provides both paths:
+let dirs = vec![
+    skills_official_dir,  // ~/.aleph/skills-official/ (SkillSource::Global)
+    skills_user_dir,      // ~/.aleph/skills/ (SkillSource::Global)
+];
+skill_system.init(dirs).await?;
+```
+
+Scan order matters: user dir is scanned **after** official dir. Since `SkillRegistry::register()` replaces lower-priority entries with equal-or-higher-priority ones, and both are `SkillSource::Global` (priority 2), the **later registration wins**. This means user skills with the same name override official skills.
+
+#### 3c. Auto-Update on Startup
+
+**File**: New function in `core/src/skills/mod.rs` (or a new `core/src/skills/updater.rs`)
+
+On server startup, before `SkillSystem::init()`:
+
+```rust
+/// Update the official skills repo via git pull.
+/// Non-blocking: errors are logged, never prevent startup.
+pub async fn update_official_skills(skills_official_dir: &Path) -> Result<()> {
+    if !skills_official_dir.join(".git").exists() {
+        // First install: clone
+        let url = "https://github.com/rootazero/Aleph-skills.git";
+        Command::new("git")
+            .args(["clone", "--depth", "1", url])
+            .arg(skills_official_dir)
+            .output().await?;
+        return Ok(());
+    }
+
+    // Existing repo: fast-forward pull
+    let output = Command::new("git")
+        .args(["pull", "--ff-only"])
+        .current_dir(skills_official_dir)
+        .output().await?;
+
+    if output.status.success() {
+        info!("Official skills updated");
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        warn!("Official skills update failed (non-fatal): {}", stderr);
+        // If ff-only fails (diverged), reset to remote
+        // This is safe because skills-official is read-only
+        let _ = Command::new("git")
+            .args(["fetch", "origin"])
+            .current_dir(skills_official_dir)
+            .output().await;
+        let _ = Command::new("git")
+            .args(["reset", "--hard", "origin/main"])
+            .current_dir(skills_official_dir)
+            .output().await;
+        info!("Official skills force-reset to origin/main");
+    }
+    Ok(())
+}
+```
+
+**Key decisions**:
+- `--ff-only` first: safe, no merge conflicts possible
+- If ff-only fails (shouldn't happen for a read-only dir, but defensive): `fetch` + `reset --hard origin/main`. This is safe because `skills-official/` is Aleph-managed, not user-editable
+- Runs on every server startup (not cron): startup frequency is reasonable, and it's the simplest reliable trigger
+- Async with timeout (10s): if network is unavailable, log WARN and continue with existing skills
+- Never blocks startup
+
+#### 3d. Config for Official Repo URL
+
+**File**: `~/.aleph/config.toml`
+
+```toml
+[skills]
+official_repo = "https://github.com/rootazero/Aleph-skills.git"  # default
+auto_update = true  # default true
+```
+
+This allows users to disable auto-update or point to a fork.
 
 ---
 
@@ -334,15 +435,18 @@ Add corresponding "Add video provider" and "Add audio provider" operation sectio
 | File | Change |
 |------|--------|
 | `core/src/gateway/interfaces/telegram/mod.rs` | Retry loop + stall restart |
-| `core/src/gateway/channel.rs` | No change (reuse existing `ChannelStatus::Connecting`) |
-| `core/src/thinker/layers/operational_guidelines.rs` | Paradigm filter: allowlist → denylist |
-| `~/.aleph/skills/self/SKILL.md` | **New**: `/self` skill (SKILL.md with prompt) |
-| `~/Workspace/Aleph-skills/self/SKILL.md` | **New**: same, committed to official skills repo |
-| `~/.aleph/guides/overview.md` | Add workspace directory tree |
-| `~/.aleph/guides/generation.md` | Add video/audio examples + URL auto-completion rules |
+| `core/src/thinker/layers/operational_guidelines.rs` | Remove Self-Management section (keep diagnostics/safety) |
+| `core/src/skill/mod.rs` | Scan `skills-official/` in addition to `skills/` |
+| `core/src/skills/mod.rs` (or new `updater.rs`) | `update_official_skills()` function |
+| Startup code (`server_init.rs` or `coordinator.rs`) | Call `update_official_skills()` before `SkillSystem::init()`, migration logic |
+| `~/Workspace/Aleph-skills/self/SKILL.md` | **New**: `/self` skill in official repo |
+| `~/.aleph/guides/overview.md` | Add workspace tree with `skills-official/` |
+| `~/.aleph/guides/generation.md` | Add video/audio examples + URL rules |
 
 ## Testing
 
-- **Telegram stall**: Unit test with mock dispatcher that exits immediately, verify retry loop increments attempt and resets timestamp. Integration: manually kill network → verify reconnect log.
-- **Paradigm filter**: Existing `test_operational_guidelines_*` tests updated for new behavior.
-- **`/self` skill**: Verify skill registration in bundled registry. End-to-end: `/self list providers` via Panel, confirm LLM calls `read_config_guide`.
+- **Telegram stall**: Unit test with mock dispatcher that exits immediately — verify retry loop increments attempt, resets timestamp, and cancels old watchdog. Test backoff calculation edge cases (attempt=1, healthy reset). Integration: manually kill network → verify reconnect log.
+- **Self-management removal**: Verify `OperationalGuidelinesLayer` output no longer contains "Self-Management" or "read_config_guide". Existing diagnostic/safety tests still pass.
+- **`/self` skill**: Verify SKILL.md parses correctly. End-to-end: `/self list providers` via Panel, confirm LLM calls `read_config_guide`.
+- **Skills separation**: Test migration logic: (a) existing git repo migrates correctly, (b) user files preserved, (c) fresh install clones successfully.
+- **Auto-update**: Test `update_official_skills()`: (a) fresh clone, (b) ff-only success, (c) network failure → graceful degradation, (d) diverged repo → force reset.
