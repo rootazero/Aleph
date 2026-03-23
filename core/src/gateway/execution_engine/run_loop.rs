@@ -343,7 +343,9 @@ impl<E: EventEmitter + Send + Sync + 'static> crate::agent_loop::LoopCallback
         // Fire-and-forget emit (LoopCallback is sync, emitter is async)
         let emitter = self.emitter.clone();
         tokio::spawn(async move {
-            let _ = emitter.emit(event).await;
+            if let Err(e) = emitter.emit(event).await {
+                tracing::warn!(error = %e, "StreamCallback: emit failed");
+            }
         });
     }
 
@@ -364,7 +366,9 @@ impl<E: EventEmitter + Send + Sync + 'static> crate::agent_loop::LoopCallback
         // Fire-and-forget emit (LoopCallback is sync, emitter is async)
         let emitter = self.emitter.clone();
         tokio::spawn(async move {
-            let _ = emitter.emit(event).await;
+            if let Err(e) = emitter.emit(event).await {
+                tracing::warn!(error = %e, "StreamCallback: emit failed");
+            }
         });
     }
 
