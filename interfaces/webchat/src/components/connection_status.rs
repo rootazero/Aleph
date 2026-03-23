@@ -1,3 +1,4 @@
+use crate::i18n::*;
 use leptos::prelude::*;
 use crate::context::DashboardState;
 
@@ -6,6 +7,7 @@ pub fn ConnectionStatus() -> impl IntoView {
     let state = use_context::<DashboardState>()
         .expect("DashboardState not provided");
 
+    let i18n = use_i18n();
     let is_connected = state.is_connected;
     let reconnect_count = state.reconnect_count;
 
@@ -19,9 +21,9 @@ pub fn ConnectionStatus() -> impl IntoView {
 
     let status_text = move || {
         if is_connected.get() {
-            "Connected"
+            t_string!(i18n, common.connected).to_string()
         } else {
-            "Disconnected"
+            t_string!(i18n, common.disconnected).to_string()
         }
     };
 
@@ -32,15 +34,16 @@ pub fn ConnectionStatus() -> impl IntoView {
                     <div class=format!("w-2 h-2 rounded-full {}", status_class())></div>
                     <span class="text-sm font-medium">{status_text()}</span>
                 </div>
-                
+
                 {move || if !is_connected.get() {
                     view! {
                         <div class="text-xs text-text-tertiary">
-                            "Reconnecting... (" {reconnect_count.get()} ")"
+                            {t_string!(i18n, common.reconnecting).to_string()} " (" {reconnect_count.get()} ")"
                         </div>
                     }.into_any()
                 } else {
-                    view! {}.into_any()
+                    let _: () = view! {};
+                    ().into_any()
                 }}
             </div>
         </div>

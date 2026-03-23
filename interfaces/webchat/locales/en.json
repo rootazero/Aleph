@@ -20,7 +20,13 @@
     "disconnect": "Disconnect",
     "connected": "Connected",
     "disconnected": "Disconnected",
-    "gateway_unavailable": "Gateway not available — showing default settings"
+    "reconnecting": "Reconnecting...",
+    "gateway_unavailable": "Gateway not available — showing default settings",
+    "channel_disconnected": "Disconnected",
+    "channel_connecting": "Connecting",
+    "channel_connected": "Connected",
+    "channel_error": "Error",
+    "channel_disabled": "Disabled"
   },
   "dashboard": {
     "title": "System Overview",

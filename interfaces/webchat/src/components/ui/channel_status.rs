@@ -1,3 +1,4 @@
+use crate::i18n::*;
 use leptos::prelude::*;
 
 /// Five-state model for channel connection status.
@@ -13,7 +14,7 @@ pub enum ChannelStatus {
 
 impl ChannelStatus {
     /// Parse a status string (case-insensitive).
-    pub fn from_str(s: &str) -> Self {
+    pub fn parse(s: &str) -> Self {
         match s.to_lowercase().as_str() {
             "connected" => Self::Connected,
             "connecting" => Self::Connecting,
@@ -23,7 +24,7 @@ impl ChannelStatus {
         }
     }
 
-    /// Human-readable label for the status.
+    /// Human-readable label for the status (non-reactive, for non-UI use).
     pub fn label(&self) -> &'static str {
         match self {
             Self::Disconnected => "Disconnected",
@@ -74,6 +75,14 @@ impl ChannelStatus {
 pub fn ChannelStatusBadge(
     status: Signal<ChannelStatus>,
 ) -> impl IntoView {
+    let i18n = use_i18n();
+    let label = move || match status.get() {
+        ChannelStatus::Disconnected => t_string!(i18n, common.channel_disconnected).to_string(),
+        ChannelStatus::Connecting => t_string!(i18n, common.channel_connecting).to_string(),
+        ChannelStatus::Connected => t_string!(i18n, common.channel_connected).to_string(),
+        ChannelStatus::Error => t_string!(i18n, common.channel_error).to_string(),
+        ChannelStatus::Disabled => t_string!(i18n, common.channel_disabled).to_string(),
+    };
     view! {
         <span class="inline-flex items-center gap-1.5">
             <span class=move || {
@@ -82,7 +91,7 @@ pub fn ChannelStatusBadge(
             <span class=move || {
                 format!("text-xs {}", status.get().text_class())
             }>
-                {move || status.get().label()}
+                {label}
             </span>
         </span>
     }
@@ -95,6 +104,14 @@ pub fn ChannelStatusBadge(
 pub fn ChannelStatusPill(
     status: Signal<ChannelStatus>,
 ) -> impl IntoView {
+    let i18n = use_i18n();
+    let label = move || match status.get() {
+        ChannelStatus::Disconnected => t_string!(i18n, common.channel_disconnected).to_string(),
+        ChannelStatus::Connecting => t_string!(i18n, common.channel_connecting).to_string(),
+        ChannelStatus::Connected => t_string!(i18n, common.channel_connected).to_string(),
+        ChannelStatus::Error => t_string!(i18n, common.channel_error).to_string(),
+        ChannelStatus::Disabled => t_string!(i18n, common.channel_disabled).to_string(),
+    };
     view! {
         <span class=move || {
             format!(
@@ -102,7 +119,7 @@ pub fn ChannelStatusPill(
                 status.get().pill_class()
             )
         }>
-            {move || status.get().label()}
+            {label}
         </span>
     }
 }
