@@ -253,6 +253,8 @@ impl AlephTool for TeamLaunchTool {
                 agent_id: member.name.clone(),
                 role: member.role.clone(),
                 joined_at: now,
+                run_id: None,
+                persona: None,
             };
             if let Err(e) = self.store.add_member(&team_id, tm).await {
                 warn!(member = %member.name, error = %e, "Failed to add member, cleaning up");

@@ -183,6 +183,12 @@ pub struct TeamMember {
     pub agent_id: AgentId,
     pub role: String,
     pub joined_at: u64,
+    /// Sub-agent run ID (for team members spawned as sub-agents)
+    #[serde(default)]
+    pub run_id: Option<String>,
+    /// Persona prompt used for this team member
+    #[serde(default)]
+    pub persona: Option<String>,
 }
 
 // ---------------------------------------------------------------------------

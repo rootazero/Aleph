@@ -142,6 +142,8 @@ fn load_team(conn: &Connection, team_id: &str) -> rusqlite::Result<Option<Team>>
                     agent_id: row.get(0)?,
                     role: row.get(1)?,
                     joined_at: row.get(2)?,
+                    run_id: None,
+                    persona: None,
                 })
             })?;
             for m in members {
@@ -895,6 +897,8 @@ mod tests {
                     agent_id: "agent-a".into(),
                     role: "worker".into(),
                     joined_at: now_epoch(),
+                    run_id: None,
+                    persona: None,
                 },
             )
             .await
@@ -906,6 +910,8 @@ mod tests {
                     agent_id: "agent-b".into(),
                     role: "reviewer".into(),
                     joined_at: now_epoch(),
+                    run_id: None,
+                    persona: None,
                 },
             )
             .await
@@ -967,6 +973,8 @@ mod tests {
                     agent_id: "agent-x".into(),
                     role: "helper".into(),
                     joined_at: now_epoch(),
+                    run_id: None,
+                    persona: None,
                 },
             )
             .await
