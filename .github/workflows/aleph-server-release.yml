@@ -129,33 +129,52 @@ jobs:
           git tag "${{ steps.version.outputs.value }}" || true
           git push origin "${{ steps.version.outputs.value }}" || true
 
+      - name: Build release body from CHANGELOG.md
+        run: |
+          VERSION=$(cat VERSION | tr -d '[:space:]')
+          # Extract changelog section for this version
+          awk "/^## \[${VERSION}\]/{found=1; next} /^## \[/{if(found) exit} found{print}" CHANGELOG.md > /tmp/changelog_section.md
+          # Build full release body
+          {
+            echo "## What's Changed"
+            echo ""
+            if [ -s /tmp/changelog_section.md ]; then
+              cat /tmp/changelog_section.md
+            else
+              echo "See [CHANGELOG.md](https://github.com/rootazero/Aleph/blob/main/CHANGELOG.md) for details."
+            fi
+            echo ""
+            echo "---"
+            echo ""
+            echo "## Install"
+            echo ""
+            echo "**macOS / Linux:**"
+            echo '```bash'
+            echo "curl -fsSL https://raw.githubusercontent.com/rootazero/Aleph/main/install.sh | bash"
+            echo '```'
+            echo ""
+            echo "Or specify version:"
+            echo '```bash'
+            echo "curl -fsSL https://raw.githubusercontent.com/rootazero/Aleph/main/install.sh | bash -s -- v${VERSION}"
+            echo '```'
+            echo ""
+            echo "**Windows (PowerShell):**"
+            echo '```powershell'
+            echo "irm https://raw.githubusercontent.com/rootazero/Aleph/main/install.ps1 | iex"
+            echo '```'
+            echo ""
+            echo "Or specify version:"
+            echo '```powershell'
+            echo "\$env:ALEPH_VERSION=\"v${VERSION}\"; irm https://raw.githubusercontent.com/rootazero/Aleph/main/install.ps1 | iex"
+            echo '```'
+          } > /tmp/release_body.md
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.value }}
           name: Aleph ${{ steps.version.outputs.value }}
-          body: |
-            ## Install
-
-            **macOS / Linux:**
-            ```bash
-            curl -fsSL https://raw.githubusercontent.com/rootazero/Aleph/main/install.sh | bash
-            ```
-
-            Or specify version:
-            ```bash
-            curl -fsSL https://raw.githubusercontent.com/rootazero/Aleph/main/install.sh | bash -s -- ${{ steps.version.outputs.value }}
-            ```
-
-            **Windows (PowerShell):**
-            ```powershell
-            irm https://raw.githubusercontent.com/rootazero/Aleph/main/install.ps1 | iex
-            ```
-
-            Or specify version:
-            ```powershell
-            $env:ALEPH_VERSION="${{ steps.version.outputs.value }}"; irm https://raw.githubusercontent.com/rootazero/Aleph/main/install.ps1 | iex
-            ```
+          body_path: /tmp/release_body.md
           files: |
             artifacts/**/*.tar.gz
             artifacts/**/*.zip
