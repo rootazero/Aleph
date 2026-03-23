@@ -507,6 +507,7 @@ fn ProviderDetailView(
     on_reload: impl Fn() + 'static + Copy + Send,
 ) -> impl IntoView {
     let state = expect_context::<DashboardState>();
+    let i18n = use_i18n();
 
     let provider_name = provider.name.clone();
     let is_default_for = provider.is_default_for.clone();
@@ -1042,7 +1043,7 @@ fn ProviderDetailView(
                     disabled=move || saving.get()
                     class="flex-1 px-4 py-2.5 bg-primary text-white rounded-lg hover:bg-primary-hover disabled:opacity-50 transition-colors font-medium"
                 >
-                    {move || if saving.get() { "Saving..." } else { "Save" }}
+                    {move || if saving.get() { t_string!(i18n, common.saving).to_string() } else { t_string!(i18n, common.save).to_string() }}
                 </button>
             </div>
 
@@ -1104,6 +1105,7 @@ fn PresetSetupPanel(
     on_added: impl Fn() + 'static + Copy + Send,
 ) -> impl IntoView {
     let state = expect_context::<DashboardState>();
+    let i18n = use_i18n();
 
     let api_key = RwSignal::new(String::new());
     let form_model = RwSignal::new(preset.default_model.clone());
@@ -1295,7 +1297,7 @@ fn PresetSetupPanel(
                         disabled=move || adding.get()
                         class="flex-1 px-4 py-2.5 bg-primary text-white rounded-lg hover:bg-primary-hover disabled:opacity-50 transition-colors font-medium"
                     >
-                        {move || if adding.get() { "Saving..." } else { "Save" }}
+                        {move || if adding.get() { t_string!(i18n, common.saving).to_string() } else { t_string!(i18n, common.save).to_string() }}
                     </button>
                 </div>
             </div>
@@ -1646,6 +1648,7 @@ fn AddCustomProviderPanel(
 #[component]
 fn GenerationSettingsPanel() -> impl IntoView {
     let state = expect_context::<DashboardState>();
+    let i18n = use_i18n();
 
     let config = RwSignal::new(GenerationConfig {
         default_image_provider: None,
@@ -1793,7 +1796,7 @@ fn GenerationSettingsPanel() -> impl IntoView {
                             disabled=move || saving.get()
                             class="px-4 py-2 bg-primary text-white rounded hover:bg-primary-hover disabled:opacity-50"
                         >
-                            {move || if saving.get() { "Saving..." } else { "Save Settings" }}
+                            {move || if saving.get() { t_string!(i18n, common.saving).to_string() } else { t_string!(i18n, common.save).to_string() }}
                         </button>
                     </div>
                 }.into_any()

@@ -36,7 +36,7 @@ fn SettingsSidebar() -> impl IntoView {
 
     view! {
         <div class="flex flex-col h-full overflow-y-auto">
-            {SETTINGS_GROUPS.iter().map(|group| {
+            {move || SETTINGS_GROUPS.iter().map(|group| {
                 let group_label = group.i18n_label(i18n);
                 view! {
                     <div class="px-3 py-2 space-y-0.5">

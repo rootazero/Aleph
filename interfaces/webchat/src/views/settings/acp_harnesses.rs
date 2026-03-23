@@ -366,6 +366,7 @@ fn HarnessDetailPanel(
     harnesses: RwSignal<Vec<AcpHarnessInfo>>,
     selected_id: RwSignal<Option<String>>,
 ) -> impl IntoView {
+    let i18n = use_i18n();
     let info = harnesses.get().into_iter().find(|h| h.id == harness_id);
     let Some(info) = info else {
         return view! {
@@ -860,7 +861,7 @@ fn HarnessDetailPanel(
                     disabled=move || saving.get()
                     class="flex-1 px-4 py-2.5 bg-primary text-white rounded-lg hover:bg-primary-hover disabled:opacity-50 transition-colors font-medium"
                 >
-                    {move || if saving.get() { "Saving..." } else { "Save" }}
+                    {move || if saving.get() { t_string!(i18n, common.saving).to_string() } else { t_string!(i18n, common.save).to_string() }}
                 </button>
 
                 <button

@@ -98,7 +98,7 @@ pub fn MemoryView() -> impl IntoView {
                                         prop:disabled=move || saving.get()
                                         class="px-6 py-2 bg-info text-white rounded hover:bg-primary-hover disabled:opacity-50"
                                     >
-                                        {move || if saving.get() { "Saving..." } else { "Save Changes" }}
+                                        {move || if saving.get() { t_string!(i18n, common.saving).to_string() } else { t_string!(i18n, common.save).to_string() }}
                                     </button>
                                 </div>
                             </div>

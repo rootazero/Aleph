@@ -239,6 +239,7 @@ fn ProviderDetailPanel(
     provider_key: String,
     config: RwSignal<Option<RerankConfig>>,
 ) -> impl IntoView {
+    let i18n = use_i18n();
     let preset = RERANK_PRESETS.iter().find(|p| p.key == provider_key);
     let preset_name = preset.map(|p| p.name).unwrap_or("Custom").to_string();
     let preset_key = provider_key.clone();
@@ -541,7 +542,7 @@ fn ProviderDetailPanel(
                     disabled=move || saving.get()
                     class="flex-1 px-4 py-2.5 bg-primary text-white rounded-lg hover:bg-primary-hover disabled:opacity-50 transition-colors font-medium"
                 >
-                    {move || if saving.get() { "Saving..." } else { "Save" }}
+                    {move || if saving.get() { t_string!(i18n, common.saving).to_string() } else { t_string!(i18n, common.save).to_string() }}
                 </button>
             </div>
 
@@ -560,6 +561,7 @@ fn AddCustomProviderPanel(
     on_saved: impl Fn() + 'static + Copy + Send,
     on_cancel: impl Fn() + 'static + Copy + Send,
 ) -> impl IntoView {
+    let i18n = use_i18n();
     // Form state
     let name = RwSignal::new(String::new());
     let api_base = RwSignal::new(String::new());
@@ -836,7 +838,7 @@ fn AddCustomProviderPanel(
                     disabled=move || saving.get()
                     class="flex-1 px-4 py-2.5 bg-primary text-white rounded-lg hover:bg-primary-hover disabled:opacity-50 transition-colors font-medium"
                 >
-                    {move || if saving.get() { "Saving..." } else { "Add Provider" }}
+                    {move || if saving.get() { t_string!(i18n, common.saving).to_string() } else { "Add Provider".to_string() }}
                 </button>
             </div>
 

@@ -70,33 +70,6 @@ impl SettingsTab {
         }
     }
 
-    pub fn label(&self) -> &'static str {
-        match self {
-            Self::General => "General",
-            Self::Behavior => "Behavior",
-            Self::Providers => "AI Providers",
-            Self::EmbeddingProviders => "Embedding",
-            Self::RerankingProviders => "Reranking",
-            Self::GenerationProviders => "Generation",
-            Self::Memory => "Memory & Knowledge",
-            Self::Mcp => "MCP",
-            Self::Plugins => "Plugins",
-            Self::Skills => "Skills",
-            Self::ClawHub => "ClawHub",
-            Self::Acp => "ACP",
-            Self::Channels => "Channels",
-            Self::Telegram => "Telegram",
-            Self::Discord => "Discord",
-            Self::WhatsApp => "WhatsApp",
-            Self::IMessage => "iMessage",
-            Self::Search => "Search",
-            Self::Policies => "Policies",
-            Self::RoutingRules => "Routing Rules",
-            Self::Security => "Security",
-            Self::Auth => "Token Auth",
-        }
-    }
-
     pub fn i18n_label(&self, i18n: I18nContext<Locale>) -> String {
         match self {
             Self::General => t_string!(i18n, settings.tabs.general).to_string(),

@@ -284,7 +284,7 @@ pub fn PoliciesView() -> impl IntoView {
                                         disabled=move || !tp_has_changes.get() || tp_saving.get()
                                         on:click=tp_save
                                     >
-                                        {move || if tp_saving.get() { "Saving..." } else { "Save" }}
+                                        {move || if tp_saving.get() { t_string!(i18n, common.saving).to_string() } else { t_string!(i18n, common.save).to_string() }}
                                     </button>
                                 </div>
                             </div>

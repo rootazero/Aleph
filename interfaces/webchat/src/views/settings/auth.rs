@@ -114,6 +114,7 @@ fn SharedTokenSection(
     error: RwSignal<Option<String>>,
 ) -> impl IntoView {
     let state = expect_context::<DashboardState>();
+    let i18n = use_i18n();
     let visible = RwSignal::new(false);
     let regenerating = RwSignal::new(false);
     let show_confirm = RwSignal::new(false);
@@ -181,7 +182,7 @@ fn SharedTokenSection(
                                     Some(_) => "••••••••••••••••••••••••••••••••••••••••••".to_string(),
                                     None => "Token not in memory — check ~/.aleph/data/.shared_token".to_string(),
                                 },
-                                None => "Loading...".to_string(),
+                                None => t_string!(i18n, common.loading).to_string(),
                             }
                         }}
                     </div>

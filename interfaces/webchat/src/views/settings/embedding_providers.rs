@@ -387,6 +387,7 @@ fn ProviderDetailPanel(
     on_reload: impl Fn() + 'static + Copy + Send,
 ) -> impl IntoView {
     let state = expect_context::<DashboardState>();
+    let i18n = use_i18n();
 
     let provider_id = provider.id.clone();
     let is_active = provider.is_active;
@@ -708,7 +709,7 @@ fn ProviderDetailPanel(
                     disabled=move || saving.get()
                     class="flex-1 px-4 py-2.5 bg-primary text-white rounded-lg hover:bg-primary-hover disabled:opacity-50 transition-colors font-medium"
                 >
-                    {move || if saving.get() { "Saving..." } else { "Save" }}
+                    {move || if saving.get() { t_string!(i18n, common.saving).to_string() } else { t_string!(i18n, common.save).to_string() }}
                 </button>
             </div>
 

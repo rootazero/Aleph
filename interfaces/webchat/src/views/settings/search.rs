@@ -422,6 +422,7 @@ fn GlobalSettings(
     config: RwSignal<SearchConfig>,
     loading: RwSignal<bool>,
 ) -> impl IntoView {
+    let i18n = use_i18n();
     view! {
         <div>
             <h2 class="text-sm font-medium text-text-secondary uppercase tracking-wider mb-3">
@@ -430,7 +431,7 @@ fn GlobalSettings(
             {move || {
                 if loading.get() {
                     view! {
-                        <div class="text-center py-4 text-text-tertiary text-sm">"Loading..."</div>
+                        <div class="text-center py-4 text-text-tertiary text-sm">{t_string!(i18n, common.loading).to_string()}</div>
                     }.into_any()
                 } else {
                     let cfg = config.get();
@@ -483,6 +484,7 @@ fn ProviderDetailPanel(
     error: RwSignal<Option<String>>,
 ) -> impl IntoView {
     let state = expect_context::<DashboardState>();
+    let i18n = use_i18n();
 
     // Form state mirrors config for editing
     let form_enabled = RwSignal::new(false);
@@ -1007,7 +1009,7 @@ fn ProviderDetailPanel(
                                         prop:disabled=move || saving.get()
                                         class="flex-1 px-4 py-2.5 bg-primary hover:bg-primary-hover disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors"
                                     >
-                                        {move || if saving.get() { "Saving..." } else { "Save" }}
+                                        {move || if saving.get() { t_string!(i18n, common.saving).to_string() } else { t_string!(i18n, common.save).to_string() }}
                                     </button>
                                 </div>
 

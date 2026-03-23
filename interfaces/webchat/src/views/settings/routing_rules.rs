@@ -75,6 +75,7 @@ fn RulesList(
     selected: RwSignal<Option<usize>>,
     loading: RwSignal<bool>,
 ) -> impl IntoView {
+    let i18n = use_i18n();
     view! {
         <div class="w-80 border-r border-border flex flex-col">
             // Add button
@@ -93,7 +94,7 @@ fn RulesList(
                     if loading.get() {
                         view! {
                             <div class="p-4 text-center text-text-secondary">
-                                "Loading..."
+                                {t_string!(i18n, common.loading).to_string()}
                             </div>
                         }.into_any()
                     } else if rules.get().is_empty() {
@@ -187,6 +188,7 @@ fn RuleEditor(
     error: RwSignal<Option<String>>,
 ) -> impl IntoView {
     let state = expect_context::<DashboardState>();
+    let i18n = use_i18n();
 
     // Form state
     let form_rule_type = RwSignal::new(String::from("command"));
@@ -413,7 +415,7 @@ fn RuleEditor(
                                     prop:disabled=move || saving.get()
                                     class="px-6 py-2 bg-primary hover:bg-primary-hover disabled:bg-primary/50 text-white rounded-lg transition-colors disabled:cursor-not-allowed"
                                 >
-                                    {move || if saving.get() { "Saving..." } else { "Save" }}
+                                    {move || if saving.get() { t_string!(i18n, common.saving).to_string() } else { t_string!(i18n, common.save).to_string() }}
                                 </button>
 
                                 {move || {

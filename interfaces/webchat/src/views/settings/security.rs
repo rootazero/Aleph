@@ -123,7 +123,7 @@ pub fn SecurityView() -> impl IntoView {
                                         prop:disabled=move || saving.get()
                                         class="px-6 py-2 bg-info text-white rounded hover:bg-primary-hover disabled:opacity-50"
                                     >
-                                        {move || if saving.get() { "Saving..." } else { "Save Changes" }}
+                                        {move || if saving.get() { t_string!(i18n, common.saving).to_string() } else { t_string!(i18n, common.save).to_string() }}
                                     </button>
                                 </div>
                             </div>
@@ -289,6 +289,7 @@ where
 #[component]
 fn PIISection(config: RwSignal<SearchConfig>) -> impl IntoView {
     let state = expect_context::<DashboardState>();
+    let i18n = use_i18n();
     let pii_enabled = RwSignal::new(config.get().pii_enabled);
     let scrub_email = RwSignal::new(config.get().pii_scrub_email);
     let scrub_phone = RwSignal::new(config.get().pii_scrub_phone);
@@ -420,7 +421,7 @@ fn PIISection(config: RwSignal<SearchConfig>) -> impl IntoView {
                     disabled=move || saving.get()
                     class="px-4 py-2 bg-primary text-white rounded hover:bg-primary-hover disabled:opacity-50"
                 >
-                    {move || if saving.get() { "Saving..." } else { "Save" }}
+                    {move || if saving.get() { t_string!(i18n, common.saving).to_string() } else { t_string!(i18n, common.save).to_string() }}
                 </button>
             </div>
         </div>

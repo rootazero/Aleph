@@ -91,6 +91,7 @@ pub fn BehaviorView() -> impl IntoView {
 #[component]
 fn OutputModeSection(config: RwSignal<BehaviorConfig>) -> impl IntoView {
     let state = expect_context::<DashboardState>();
+    let i18n = use_i18n();
     let output_mode = RwSignal::new(config.get().output_mode.clone());
     let saving = RwSignal::new(false);
     let save_error = RwSignal::new(Option::<String>::None);
@@ -187,7 +188,7 @@ fn OutputModeSection(config: RwSignal<BehaviorConfig>) -> impl IntoView {
                     disabled=move || saving.get()
                     class="px-4 py-2 bg-primary text-white rounded hover:bg-primary-hover disabled:opacity-50"
                 >
-                    {move || if saving.get() { "Saving..." } else { "Save" }}
+                    {move || if saving.get() { t_string!(i18n, common.saving).to_string() } else { t_string!(i18n, common.save).to_string() }}
                 </button>
             </div>
         </div>
@@ -197,6 +198,7 @@ fn OutputModeSection(config: RwSignal<BehaviorConfig>) -> impl IntoView {
 #[component]
 fn TypingSpeedSection(config: RwSignal<BehaviorConfig>) -> impl IntoView {
     let state = expect_context::<DashboardState>();
+    let i18n = use_i18n();
     let typing_speed = RwSignal::new(config.get().typing_speed);
     let saving = RwSignal::new(false);
     let save_error = RwSignal::new(Option::<String>::None);
@@ -286,7 +288,7 @@ fn TypingSpeedSection(config: RwSignal<BehaviorConfig>) -> impl IntoView {
                     disabled=move || saving.get()
                     class="px-4 py-2 bg-primary text-white rounded hover:bg-primary-hover disabled:opacity-50"
                 >
-                    {move || if saving.get() { "Saving..." } else { "Save" }}
+                    {move || if saving.get() { t_string!(i18n, common.saving).to_string() } else { t_string!(i18n, common.save).to_string() }}
                 </button>
             </div>
         </div>

@@ -283,6 +283,7 @@ fn EditMcpServerDialog(
     error: RwSignal<Option<String>>,
 ) -> impl IntoView {
     let state = expect_context::<DashboardState>();
+    let i18n = use_i18n();
     let name = RwSignal::new(String::new());
     let command = RwSignal::new(String::new());
     let args = RwSignal::new(String::new());
@@ -448,7 +449,7 @@ fn EditMcpServerDialog(
                         disabled=move || name.get().trim().is_empty() || command.get().trim().is_empty() || saving.get()
                         on:click=handle_save
                     >
-                        {move || if saving.get() { "Saving..." } else { "Save" }}
+                        {move || if saving.get() { t_string!(i18n, common.saving).to_string() } else { t_string!(i18n, common.save).to_string() }}
                     </button>
                 </div>
             </div>
