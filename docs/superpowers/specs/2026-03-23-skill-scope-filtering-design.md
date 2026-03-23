@@ -57,6 +57,20 @@ SkillSnapshot::build()
 | `Standalone` | Never auto-injected | User must explicitly invoke via `/skill` command |
 | `Disabled` | Never injected | Completely hidden |
 
+### Assembly Paths
+
+**Bug fix**: The existing `SkillInstructionsLayer` only participates in `[Basic, Hydration]`, but the Soul path is the primary production path. This change adds `Soul` (and `Context`, `Cached` for completeness):
+
+```rust
+fn paths(&self) -> &'static [AssemblyPath] {
+    &[AssemblyPath::Basic, AssemblyPath::Hydration, AssemblyPath::Soul, AssemblyPath::Context, AssemblyPath::Cached]
+}
+```
+
+### Hydration Path Behavior
+
+On the Hydration path, `input.tools` is `None`, so `active_tool_names` will be empty. This means all `Tool`-scoped skills are automatically excluded on Hydration — this is acceptable because the Hydration path uses semantic retrieval for tool discovery rather than explicit tool lists.
+
 ### Explicit `/skill` Invocation
 
 The `skill_instructions: Option<String>` field in `PromptConfig` is **preserved** for the capability layer's explicit skill invocation (`/skill` command). When present and non-empty, it takes priority over the automatic skill list — they are mutually exclusive in a single prompt.
@@ -148,7 +162,7 @@ fn inject(&self, output: &mut String, input: &LayerInput) {
         .unwrap_or_default();
 
     let filtered: Vec<&SkillManifest> = skills.iter().filter(|s| {
-        match s.scope() {
+        match *s.scope() {
             PromptScope::System => true,
             PromptScope::Tool => {
                 s.bound_tool().map_or(false, |bound|
@@ -158,6 +172,12 @@ fn inject(&self, output: &mut String, input: &LayerInput) {
             PromptScope::Standalone | PromptScope::Disabled => false,
         }
     }).collect();
+
+    tracing::debug!(
+        total = skills.len(),
+        after_filter = filtered.len(),
+        "skill_instructions: scope filtering applied"
+    );
 
     if filtered.is_empty() { return; }
 
