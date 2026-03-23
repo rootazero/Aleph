@@ -10,6 +10,7 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 use crate::context::DashboardState;
 use crate::api::cron::{CronApi, CronJobInfo, CreateCronJob, UpdateCronJob, JobRunInfo};
+use crate::i18n::*;
 
 // ============================================================================
 // Helper Functions
@@ -85,14 +86,14 @@ fn format_ms_interval(ms: u64) -> String {
 }
 
 /// Format a UNIX timestamp (seconds) as a relative time string.
-/// e.g. "5min", "2h", "3d", or "overdue".
-fn format_relative_time(ts: i64) -> String {
+/// e.g. "5min", "2h", "3d", or the provided overdue_label.
+fn format_relative_time(ts: i64, overdue_label: &str) -> String {
     let now_ms = js_sys::Date::now();
     let now_s = (now_ms / 1000.0) as i64;
     let diff = ts - now_s;
 
     if diff < 0 {
-        return "overdue".to_string();
+        return overdue_label.to_string();
     }
 
     let minutes = diff / 60;
@@ -280,6 +281,7 @@ fn parse_interval_to_ms(s: &str) -> Option<u64> {
 #[component]
 pub fn CronView() -> impl IntoView {
     let state = expect_context::<DashboardState>();
+    let i18n = use_i18n();
 
     // State
     let jobs = RwSignal::new(Vec::<CronJobInfo>::new());
@@ -306,9 +308,9 @@ pub fn CronView() -> impl IntoView {
         <div class="flex flex-col h-full">
             // Header
             <div class="p-6 border-b border-border">
-                <h1 class="text-2xl font-bold text-text-primary">"Scheduled Tasks"</h1>
+                <h1 class="text-2xl font-bold text-text-primary">{t!(i18n, cron.title)}</h1>
                 <p class="mt-1 text-sm text-text-secondary">
-                    "Manage cron jobs and scheduled automation tasks"
+                    {t!(i18n, cron.description)}
                 </p>
             </div>
 
@@ -331,6 +333,8 @@ fn JobList(
     selected: RwSignal<Option<usize>>,
     loading: RwSignal<bool>,
 ) -> impl IntoView {
+    let i18n = use_i18n();
+
     view! {
         <div class="w-80 border-r border-border flex flex-col">
             // Add button
@@ -339,7 +343,7 @@ fn JobList(
                     on:click=move |_| selected.set(Some(usize::MAX))
                     class="w-full px-4 py-2 bg-primary hover:bg-primary-hover text-white rounded-lg transition-colors"
                 >
-                    "+ New Job"
+                    {t!(i18n, cron.new_job_btn)}
                 </button>
             </div>
 
@@ -349,7 +353,7 @@ fn JobList(
                     if loading.get() {
                         view! {
                             <div class="p-4 text-center text-text-secondary">
-                                "Loading..."
+                                {t!(i18n, cron.loading)}
                             </div>
                         }.into_any()
                     } else if jobs.get().is_empty() {
@@ -360,7 +364,7 @@ fn JobList(
                                     <circle cx="12" cy="12" r="10" stroke-width="1.5"/>
                                     <path d="M12 6v6l4 2" stroke-width="1.5" stroke-linecap="round"/>
                                 </svg>
-                                <span class="text-sm">"No scheduled tasks yet"</span>
+                                <span class="text-sm">{t!(i18n, cron.no_tasks)}</span>
                             </div>
                         }.into_any()
                     } else {
@@ -395,6 +399,8 @@ fn JobListItem(
     is_selected: Signal<bool>,
     selected: RwSignal<Option<usize>>,
 ) -> impl IntoView {
+    let i18n = use_i18n();
+
     let name = job.name.clone();
     let enabled = job.enabled;
     let schedule_kind_str = job.schedule_kind_str.clone();
@@ -448,14 +454,16 @@ fn JobListItem(
                 if is_running {
                     view! {
                         <div class="ml-4 mt-1 text-xs text-blue-500">
-                            "running..."
+                            {t!(i18n, cron.running)}
                         </div>
                     }.into_any()
                 } else if let Some(ts) = next_run_at {
-                    let relative = format_relative_time(ts);
+                    let overdue_label = t_string!(i18n, cron.overdue).to_string();
+                    let relative = format_relative_time(ts, &overdue_label);
+                    let next_prefix = t_string!(i18n, cron.next).to_string();
                     view! {
                         <div class="ml-4 mt-1 text-xs text-text-tertiary">
-                            "Next: "{relative}
+                            {format!("{}{}", next_prefix, relative)}
                         </div>
                     }.into_any()
                 } else {
@@ -478,6 +486,7 @@ fn JobEditor(
     error: RwSignal<Option<String>>,
 ) -> impl IntoView {
     let state = expect_context::<DashboardState>();
+    let i18n = use_i18n();
 
     // Form state
     let form_name = RwSignal::new(String::new());
@@ -590,7 +599,7 @@ fn JobEditor(
     let on_save = move |_| {
         let name = form_name.get();
         if name.trim().is_empty() {
-            error.set(Some("Job name is required".to_string()));
+            error.set(Some(t_string!(i18n, cron.error_name_required).to_string()));
             return;
         }
 
@@ -807,7 +816,7 @@ fn JobEditor(
                                 <circle cx="12" cy="12" r="10" stroke-width="1.5"/>
                                 <path d="M12 6v6l4 2" stroke-width="1.5" stroke-linecap="round"/>
                             </svg>
-                            <span class="text-sm">"Select a job to edit or create a new one"</span>
+                            <span class="text-sm">{t!(i18n, cron.select_or_create)}</span>
                         </div>
                     }.into_any()
                 } else {
@@ -816,10 +825,10 @@ fn JobEditor(
                             // Header
                             <div class="mb-6">
                                 <h2 class="text-2xl font-bold text-text-primary mb-2">
-                                    {move || if is_new() { "New Scheduled Task" } else { "Edit Scheduled Task" }}
+                                    {move || if is_new() { t_string!(i18n, cron.new_task_title) } else { t_string!(i18n, cron.edit_task_title) }}
                                 </h2>
                                 <p class="text-sm text-text-secondary">
-                                    "Configure the job schedule and execution parameters"
+                                    {t!(i18n, cron.form_description)}
                                 </p>
                             </div>
 
@@ -841,14 +850,14 @@ fn JobEditor(
                                 // Name
                                 <div>
                                     <label class="block text-sm font-medium text-text-secondary mb-2">
-                                        "Name"
+                                        {t!(i18n, cron.field_name)}
                                     </label>
                                     <input
                                         type="text"
                                         prop:value=move || form_name.get()
                                         on:input=move |ev| form_name.set(event_target_value(&ev))
                                         class="w-full px-4 py-2 bg-surface-sunken border border-border rounded-lg text-text-primary focus:outline-none focus:border-primary"
-                                        placeholder="Daily report generation"
+                                        placeholder=move || t_string!(i18n, cron.placeholder_name).to_string()
                                     />
                                 </div>
 
@@ -856,21 +865,21 @@ fn JobEditor(
                                 <div class="grid grid-cols-3 gap-4">
                                     <div>
                                         <label class="block text-sm font-medium text-text-secondary mb-2">
-                                            "Schedule Type"
+                                            {t!(i18n, cron.field_schedule_type)}
                                         </label>
                                         <select
                                             prop:value=move || form_schedule_kind.get()
                                             on:change=move |ev| form_schedule_kind.set(event_target_value(&ev))
                                             class="w-full px-4 py-2 bg-surface-sunken border border-border rounded-lg text-text-primary focus:outline-none focus:border-primary"
                                         >
-                                            <option value="cron">"Cron"</option>
-                                            <option value="every">"Every"</option>
-                                            <option value="at">"At"</option>
+                                            <option value="cron">{t!(i18n, cron.schedule_type_cron)}</option>
+                                            <option value="every">{t!(i18n, cron.schedule_type_every)}</option>
+                                            <option value="at">{t!(i18n, cron.schedule_type_at)}</option>
                                         </select>
                                     </div>
                                     <div class="col-span-2">
                                         <label class="block text-sm font-medium text-text-secondary mb-2">
-                                            "Schedule"
+                                            {t!(i18n, cron.field_schedule)}
                                         </label>
                                         {move || {
                                             if form_schedule_kind.get() == "at" {
@@ -882,7 +891,7 @@ fn JobEditor(
                                                         class="w-full px-4 py-2 bg-surface-sunken border border-border rounded-lg text-text-primary focus:outline-none focus:border-primary"
                                                     />
                                                     <p class="mt-1.5 text-xs text-text-tertiary">
-                                                        "One-shot: runs once at the specified date and time, then auto-deletes"
+                                                        {t!(i18n, cron.at_hint)}
                                                     </p>
                                                 }.into_any()
                                             } else {
@@ -896,8 +905,8 @@ fn JobEditor(
                                                     />
                                                     <p class="mt-1.5 text-xs text-text-tertiary">
                                                         {move || match form_schedule_kind.get().as_str() {
-                                                            "cron" => "6-field cron: sec min hour day month weekday. e.g. \"0 30 9 * * *\" = daily 9:30",
-                                                            "every" => "Interval: 30s, 5m, 2h, 1d, or milliseconds. e.g. \"5m\" = every 5 minutes",
+                                                            "cron" => t_string!(i18n, cron.cron_hint),
+                                                            "every" => t_string!(i18n, cron.every_hint),
                                                             _ => "",
                                                         }}
                                                     </p>
@@ -914,28 +923,28 @@ fn JobEditor(
                                         "every" => view! {
                                             <div>
                                                 <label class="block text-sm font-medium text-text-secondary mb-2">
-                                                    "Anchor (ms)"
+                                                    {t!(i18n, cron.field_anchor_ms)}
                                                 </label>
                                                 <input
                                                     type="text"
                                                     prop:value=move || form_anchor_ms.get()
                                                     on:input=move |ev| form_anchor_ms.set(event_target_value(&ev))
                                                     class="w-full px-4 py-2 bg-surface-sunken border border-border rounded-lg text-text-primary focus:outline-none focus:border-primary"
-                                                    placeholder="Leave empty to use creation time"
+                                                    placeholder=move || t_string!(i18n, cron.anchor_placeholder).to_string()
                                                 />
                                             </div>
                                         }.into_any(),
                                         "cron" => view! {
                                             <div>
                                                 <label class="block text-sm font-medium text-text-secondary mb-2">
-                                                    "Stagger (ms)"
+                                                    {t!(i18n, cron.field_stagger_ms)}
                                                 </label>
                                                 <input
                                                     type="text"
                                                     prop:value=move || form_stagger_ms.get()
                                                     on:input=move |ev| form_stagger_ms.set(event_target_value(&ev))
                                                     class="w-full px-4 py-2 bg-surface-sunken border border-border rounded-lg text-text-primary focus:outline-none focus:border-primary"
-                                                    placeholder="Spread window, e.g. 5000"
+                                                    placeholder=move || t_string!(i18n, cron.stagger_placeholder).to_string()
                                                 />
                                             </div>
                                         }.into_any(),
@@ -946,28 +955,28 @@ fn JobEditor(
                                 // Agent
                                 <div>
                                     <label class="block text-sm font-medium text-text-secondary mb-2">
-                                        "Agent"
+                                        {t!(i18n, cron.field_agent)}
                                     </label>
                                     <input
                                         type="text"
                                         prop:value=move || form_agent_id.get()
                                         on:input=move |ev| form_agent_id.set(event_target_value(&ev))
                                         class="w-full px-4 py-2 bg-surface-sunken border border-border rounded-lg text-text-primary focus:outline-none focus:border-primary"
-                                        placeholder="default"
+                                        placeholder=move || t_string!(i18n, cron.placeholder_agent).to_string()
                                     />
                                 </div>
 
                                 // Prompt
                                 <div>
                                     <label class="block text-sm font-medium text-text-secondary mb-2">
-                                        "Prompt"
+                                        {t!(i18n, cron.field_prompt)}
                                     </label>
                                     <textarea
                                         prop:value=move || form_prompt.get()
                                         on:input=move |ev| form_prompt.set(event_target_value(&ev))
                                         class="w-full px-4 py-2 bg-surface-sunken border border-border rounded-lg text-text-primary focus:outline-none focus:border-primary"
                                         rows="3"
-                                        placeholder="Generate a daily summary of..."
+                                        placeholder=move || t_string!(i18n, cron.placeholder_prompt).to_string()
                                     ></textarea>
                                 </div>
 
@@ -975,26 +984,26 @@ fn JobEditor(
                                 <div class="grid grid-cols-2 gap-4">
                                     <div>
                                         <label class="block text-sm font-medium text-text-secondary mb-2">
-                                            "Timezone"
+                                            {t!(i18n, cron.field_timezone)}
                                         </label>
                                         <input
                                             type="text"
                                             prop:value=move || form_timezone.get()
                                             on:input=move |ev| form_timezone.set(event_target_value(&ev))
                                             class="w-full px-4 py-2 bg-surface-sunken border border-border rounded-lg text-text-primary focus:outline-none focus:border-primary"
-                                            placeholder="Asia/Shanghai"
+                                            placeholder=move || t_string!(i18n, cron.placeholder_timezone).to_string()
                                         />
                                     </div>
                                     <div>
                                         <label class="block text-sm font-medium text-text-secondary mb-2">
-                                            "Tags"
+                                            {t!(i18n, cron.field_tags)}
                                         </label>
                                         <input
                                             type="text"
                                             prop:value=move || form_tags.get()
                                             on:input=move |ev| form_tags.set(event_target_value(&ev))
                                             class="w-full px-4 py-2 bg-surface-sunken border border-border rounded-lg text-text-primary focus:outline-none focus:border-primary"
-                                            placeholder="report, daily"
+                                            placeholder=move || t_string!(i18n, cron.placeholder_tags).to_string()
                                         />
                                     </div>
                                 </div>
@@ -1002,7 +1011,7 @@ fn JobEditor(
                                 // Enabled toggle
                                 <div>
                                     <label class="block text-sm font-medium text-text-secondary mb-2">
-                                        "Status"
+                                        {t!(i18n, cron.field_status)}
                                     </label>
                                     <button
                                         on:click=move |_| form_enabled.set(!form_enabled.get())
@@ -1014,21 +1023,21 @@ fn JobEditor(
                                             }
                                         }
                                     >
-                                        {move || if form_enabled.get() { "Enabled" } else { "Disabled" }}
+                                        {move || if form_enabled.get() { t_string!(i18n, cron.enabled) } else { t_string!(i18n, cron.disabled) }}
                                     </button>
                                 </div>
 
                                 // Session Target
                                 <div>
                                     <label class="block text-sm font-medium text-text-secondary mb-2">
-                                        "Session Target"
+                                        {t!(i18n, cron.field_session_target)}
                                     </label>
                                     <input
                                         type="text"
                                         prop:value=move || form_session_target.get()
                                         on:input=move |ev| form_session_target.set(event_target_value(&ev))
                                         class="w-full px-4 py-2 bg-surface-sunken border border-border rounded-lg text-text-primary focus:outline-none focus:border-primary"
-                                        placeholder="e.g. new, reuse, reuse:session-id"
+                                        placeholder=move || t_string!(i18n, cron.placeholder_session_target).to_string()
                                     />
                                 </div>
 
@@ -1039,7 +1048,7 @@ fn JobEditor(
                                         class="w-full px-4 py-3 flex items-center gap-2 text-sm font-medium text-text-secondary hover:text-text-primary transition-colors"
                                     >
                                         <span>{move || if form_alert_expanded.get() { "\u{25BC}" } else { "\u{25B6}" }}</span>
-                                        "Failure Alert"
+                                        {t!(i18n, cron.field_failure_alert)}
                                     </button>
                                     {move || {
                                         if form_alert_expanded.get() {
@@ -1048,7 +1057,7 @@ fn JobEditor(
                                                     <div class="grid grid-cols-2 gap-4">
                                                         <div>
                                                             <label class="block text-xs font-medium text-text-secondary mb-1">
-                                                                "After N failures"
+                                                                {t!(i18n, cron.alert_after_n)}
                                                             </label>
                                                             <input
                                                                 type="number"
@@ -1060,7 +1069,7 @@ fn JobEditor(
                                                         </div>
                                                         <div>
                                                             <label class="block text-xs font-medium text-text-secondary mb-1">
-                                                                "Cooldown"
+                                                                {t!(i18n, cron.alert_cooldown)}
                                                             </label>
                                                             <input
                                                                 type="text"
@@ -1074,27 +1083,27 @@ fn JobEditor(
                                                     <div class="grid grid-cols-2 gap-4">
                                                         <div>
                                                             <label class="block text-xs font-medium text-text-secondary mb-1">
-                                                                "Alert to"
+                                                                {t!(i18n, cron.alert_to)}
                                                             </label>
                                                             <select
                                                                 prop:value=move || form_alert_kind.get()
                                                                 on:change=move |ev| form_alert_kind.set(event_target_value(&ev))
                                                                 class="w-full px-3 py-1.5 bg-surface-sunken border border-border rounded-lg text-text-primary text-sm focus:outline-none focus:border-primary"
                                                             >
-                                                                <option value="announce">"Announce"</option>
-                                                                <option value="webhook">"Webhook"</option>
+                                                                <option value="announce">{t!(i18n, cron.alert_announce)}</option>
+                                                                <option value="webhook">{t!(i18n, cron.alert_webhook)}</option>
                                                             </select>
                                                         </div>
                                                         <div>
                                                             <label class="block text-xs font-medium text-text-secondary mb-1">
-                                                                "Channel / URL"
+                                                                {t!(i18n, cron.alert_channel_url)}
                                                             </label>
                                                             <input
                                                                 type="text"
                                                                 prop:value=move || form_alert_channel.get()
                                                                 on:input=move |ev| form_alert_channel.set(event_target_value(&ev))
                                                                 class="w-full px-3 py-1.5 bg-surface-sunken border border-border rounded-lg text-text-primary text-sm focus:outline-none focus:border-primary"
-                                                                placeholder="channel name or webhook URL"
+                                                                placeholder=move || t_string!(i18n, cron.alert_channel_placeholder).to_string()
                                                             />
                                                         </div>
                                                     </div>
@@ -1114,7 +1123,7 @@ fn JobEditor(
                                     prop:disabled=move || saving.get()
                                     class="px-6 py-2 bg-primary hover:bg-primary-hover disabled:bg-primary/50 text-white rounded-lg transition-colors disabled:cursor-not-allowed"
                                 >
-                                    {move || if saving.get() { "Saving..." } else { "Save" }}
+                                    {move || if saving.get() { t_string!(i18n, cron.btn_saving) } else { t_string!(i18n, cron.btn_save) }}
                                 </button>
 
                                 {move || {
@@ -1125,7 +1134,7 @@ fn JobEditor(
                                                 prop:disabled=move || saving.get()
                                                 class="px-6 py-2 bg-success/80 hover:bg-success disabled:bg-success/40 text-white rounded-lg transition-colors disabled:cursor-not-allowed"
                                             >
-                                                "Run Now"
+                                                {t!(i18n, cron.btn_run_now)}
                                             </button>
                                         }.into_any()
                                     } else {
@@ -1147,7 +1156,7 @@ fn JobEditor(
                                                     }
                                                 }
                                             >
-                                                {move || if confirm_delete.get() { "Confirm Delete?" } else { "Delete" }}
+                                                {move || if confirm_delete.get() { t_string!(i18n, cron.btn_confirm_delete) } else { t_string!(i18n, cron.btn_delete) }}
                                             </button>
                                         }.into_any()
                                     } else {
@@ -1159,7 +1168,7 @@ fn JobEditor(
                                     on:click=move |_| selected.set(None)
                                     class="px-6 py-2 bg-surface-sunken hover:bg-surface-sunken text-text-primary rounded-lg transition-colors"
                                 >
-                                    "Cancel"
+                                    {t!(i18n, cron.btn_cancel)}
                                 </button>
                             </div>
 
@@ -1191,10 +1200,12 @@ fn JobEditor(
 fn RunHistory(
     runs: RwSignal<Vec<JobRunInfo>>,
 ) -> impl IntoView {
+    let i18n = use_i18n();
+
     view! {
         <div class="border border-border rounded-lg">
             <div class="px-4 py-3 border-b border-border">
-                <h3 class="text-sm font-semibold text-text-primary">"Execution History"</h3>
+                <h3 class="text-sm font-semibold text-text-primary">{t!(i18n, cron.history_title)}</h3>
             </div>
 
             {move || {
@@ -1202,7 +1213,7 @@ fn RunHistory(
                 if run_list.is_empty() {
                     view! {
                         <div class="p-6 text-center text-sm text-text-tertiary">
-                            "No execution records yet"
+                            {t!(i18n, cron.history_no_records)}
                         </div>
                     }.into_any()
                 } else {
@@ -1210,11 +1221,11 @@ fn RunHistory(
                         <table class="w-full text-sm">
                             <thead>
                                 <tr class="border-b border-border text-text-secondary">
-                                    <th class="px-4 py-2 text-left font-medium">"Status"</th>
-                                    <th class="px-4 py-2 text-left font-medium">"Time"</th>
-                                    <th class="px-4 py-2 text-left font-medium">"Duration"</th>
-                                    <th class="px-4 py-2 text-left font-medium">"Delivery"</th>
-                                    <th class="px-4 py-2 text-left font-medium">"Error"</th>
+                                    <th class="px-4 py-2 text-left font-medium">{t!(i18n, cron.col_status)}</th>
+                                    <th class="px-4 py-2 text-left font-medium">{t!(i18n, cron.col_time)}</th>
+                                    <th class="px-4 py-2 text-left font-medium">{t!(i18n, cron.col_duration)}</th>
+                                    <th class="px-4 py-2 text-left font-medium">{t!(i18n, cron.col_delivery)}</th>
+                                    <th class="px-4 py-2 text-left font-medium">{t!(i18n, cron.col_error)}</th>
                                 </tr>
                             </thead>
                             <tbody>
