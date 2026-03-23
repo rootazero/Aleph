@@ -82,7 +82,7 @@ Expected: FAIL — output does not contain the guidance text
 
 - [ ] **Step 3: Add guidance to inject()**
 
-In `skill_instructions.rs`, modify lines 75-79. Change from:
+In `skill_instructions.rs`, modify lines 75-79. Note: the third `push_str` changes from `\n\n` to `\n` (single newline) so the guidance text flows naturally after the header. Change from:
 
 ```rust
         output.push_str("## Available Skills\n\n");
@@ -239,23 +239,11 @@ In `builder.rs`, after the `skill_list` registration (line 477-478), add:
             serde_json::to_value(schema_for!(crate::builtin_tools::skill_reader::ReadSkillArgs)).unwrap_or_default());
 ```
 
-Note: verify `ReadSkillArgs` derives `JsonSchema` (schemars). If not, use a manual schema:
-
-```rust
-        reg(tools, "skill_read", SkillReadTool::DESCRIPTION,
-            serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "skill_id": { "type": "string", "description": "The skill identifier to read" },
-                    "file_name": { "type": "string", "description": "Optional specific file within the skill to read" }
-                },
-                "required": ["skill_id"]
-            }));
-```
+Note: `ReadSkillArgs` already derives `JsonSchema` (schemars) at `skill_reader.rs:29`.
 
 - [ ] **Step 4: Add field to struct initialization**
 
-In `builder.rs`, in the `Self { ... }` block (around line 360-441), add after `list_skills_tool,`:
+In `builder.rs`, in the `Self { ... }` block, add after `list_skills_tool,` (line 368):
 
 ```rust
             read_skill_tool,
@@ -293,7 +281,11 @@ Expected: compiles successfully
 Run: `cargo test -p alephcore --lib`
 Expected: all tests PASS
 
-- [ ] **Step 9: Commit**
+- [ ] **Step 9: Verify tool is registered**
+
+Run: `cargo test -p alephcore --lib` and manually verify that `BuiltinToolRegistry::with_config()` produces a registry where `tools.get("skill_read")` returns `Some(...)`. If there is an existing test for tool registration, add `skill_read` to it. Otherwise, verify by checking the info log output includes "skill.read".
+
+- [ ] **Step 10: Commit**
 
 ```bash
 git add core/src/executor/builtin_registry/registry.rs core/src/executor/builtin_registry/builder.rs
@@ -308,14 +300,9 @@ git commit -m "executor: register ReadSkillTool (skill_read) in BuiltinToolRegis
 - Modify: `core/src/extension/skill_tool.rs:246-343` (remove dead functions)
 - Modify: `core/src/extension/skill_tool.rs:443-652` (remove dead tests)
 
-- [ ] **Step 1: Remove dead functions**
+**Important:** All line numbers below reference the original file state. Perform all deletions in a single pass (delete tests first bottom-to-top, then functions bottom-to-top) to avoid line number shifts.
 
-In `skill_tool.rs`, delete:
-- `build_skill_tool_description()` (lines 246-269)
-- `filter_skills_by_scope()` (lines 271-300)
-- `build_skill_tool_description_v2()` (lines 302-343)
-
-- [ ] **Step 2: Remove dead tests**
+- [ ] **Step 1: Remove dead tests (delete bottom-to-top)**
 
 In the `#[cfg(test)] mod tests` section, delete:
 - `test_build_tool_description_empty` (lines 443-447)
@@ -333,6 +320,13 @@ In the `#[cfg(test)] mod tests` section, delete:
 - `test_build_skill_tool_description_v2_format` (lines 638-652+)
 
 Keep all other tests (permission tests, invoke_skill test).
+
+- [ ] **Step 2: Remove dead functions (delete bottom-to-top)**
+
+In `skill_tool.rs`, delete:
+- `build_skill_tool_description_v2()` (lines 302-343)
+- `filter_skills_by_scope()` (lines 271-300)
+- `build_skill_tool_description()` (lines 246-269)
 
 - [ ] **Step 3: Verify compilation**
 
@@ -376,7 +370,7 @@ pub use skill_tool::{check_skill_permission, request_skill_permission_async};
 
 - [ ] **Step 2: Remove build_skill_instructions()**
 
-In `extension/mod.rs`, delete the entire `build_skill_instructions()` function (lines 339-360, including the preceding comment line).
+In `extension/mod.rs`, delete the `build_skill_instructions()` function and its doc comment (lines 339-360). Keep the section separator comment at lines 335-338 (`// === Utility Functions ===`).
 
 - [ ] **Step 3: Remove get_skill_tool_description()**
 
