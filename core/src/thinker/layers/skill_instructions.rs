@@ -74,7 +74,9 @@ impl PromptLayer for SkillInstructionsLayer {
         let xml = sanitize_for_prompt(&xml, SanitizeLevel::Moderate);
         output.push_str("## Available Skills\n\n");
         output.push_str("You can invoke skills using the `skill` tool. ");
-        output.push_str("Skills provide specialized instructions for specific tasks.\n\n");
+        output.push_str("Skills provide specialized instructions for specific tasks.\n");
+        output.push_str(crate::skill::prompt::DEFERRED_LOADING_GUIDANCE);
+        output.push_str("\n\n");
         output.push_str(&xml);
         output.push_str("\n\n");
     }
@@ -279,5 +281,23 @@ mod tests {
         assert!(paths.contains(&AssemblyPath::Soul));
         assert!(paths.contains(&AssemblyPath::Context));
         assert!(paths.contains(&AssemblyPath::Cached));
+    }
+
+    #[test]
+    fn deferred_loading_guidance_present() {
+        use crate::skill::prompt::DEFERRED_LOADING_GUIDANCE;
+
+        let layer = SkillInstructionsLayer;
+        let skills = vec![make_skill("SomeSkill", PromptScope::System)];
+        let config = PromptConfig {
+            eligible_skills: Some(skills),
+            ..Default::default()
+        };
+        let tools: Vec<ToolInfo> = vec![];
+        let input = LayerInput::basic(&config, &tools);
+        let mut out = String::new();
+        layer.inject(&mut out, &input);
+
+        assert!(out.contains(DEFERRED_LOADING_GUIDANCE));
     }
 }
