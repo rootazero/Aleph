@@ -12,6 +12,8 @@ use futures::stream::BoxStream;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use super::delta::ProviderDelta;
+
 use super::message::UnifiedMessage;
 
 /// Tool selection control for protocol adapters.
@@ -115,12 +117,14 @@ impl<'a> RequestPayload<'a> {
 /// to handle protocol-specific serialization and deserialization.
 #[async_trait]
 pub trait ProtocolAdapter: Send + Sync {
-    /// Build an HTTP request from the payload
+    /// Build an HTTP request from the payload.
+    ///
+    /// All requests are stream-first: adapters should configure the request
+    /// for streaming output (e.g. `"stream": true` for OpenAI-compatible APIs).
     ///
     /// # Arguments
     /// * `payload` - The unified request payload
     /// * `config` - Provider configuration (API key, model, etc.)
-    /// * `is_streaming` - Whether to enable streaming response
     ///
     /// # Returns
     /// A configured reqwest::RequestBuilder ready to send
@@ -128,7 +132,6 @@ pub trait ProtocolAdapter: Send + Sync {
         &self,
         payload: &RequestPayload,
         config: &ProviderConfig,
-        is_streaming: bool,
     ) -> Result<reqwest::RequestBuilder>;
 
     /// Parse a non-streaming response
@@ -169,6 +172,18 @@ pub trait ProtocolAdapter: Send + Sync {
         &self,
         response: reqwest::Response,
     ) -> Result<BoxStream<'static, Result<String>>>;
+
+    /// Stream-first output path. Returns fine-grained delta events.
+    ///
+    /// Default implementation bridges via parse_response() for backward compatibility.
+    /// Each adapter should override this with a real streaming implementation.
+    async fn stream_deltas(
+        &self,
+        response: reqwest::Response,
+    ) -> Result<BoxStream<'static, Result<ProviderDelta>>> {
+        let provider_response = self.parse_response(response).await?;
+        Ok(crate::providers::delta::response_to_delta_stream_result(provider_response))
+    }
 
     /// Get the protocol name for logging
     fn name(&self) -> &'static str;

@@ -31,8 +31,8 @@ impl GeminiProtocol {
         Self { client }
     }
 
-    /// Build the endpoint URL
-    fn build_endpoint(config: &ProviderConfig, is_streaming: bool) -> String {
+    /// Build the endpoint URL — always uses the streaming endpoint (stream-first architecture)
+    fn build_endpoint(config: &ProviderConfig) -> String {
         let raw_base_url = config
             .base_url
             .as_ref()
@@ -48,18 +48,11 @@ impl GeminiProtocol {
             .trim_end_matches('/')
             .to_string();
 
-        // Build endpoint based on streaming mode
-        if is_streaming {
-            format!(
-                "{}/v1beta/models/{}:streamGenerateContent",
-                base_url, config.default_model()
-            )
-        } else {
-            format!(
-                "{}/v1beta/models/{}:generateContent",
-                base_url, config.default_model()
-            )
-        }
+        // Always use the streaming endpoint
+        format!(
+            "{}/v1beta/models/{}:streamGenerateContent",
+            base_url, config.default_model()
+        )
     }
 
     /// Convert UnifiedMessages to Gemini Contents
@@ -199,9 +192,8 @@ impl ProtocolAdapter for GeminiProtocol {
         &self,
         payload: &RequestPayload,
         config: &ProviderConfig,
-        is_streaming: bool,
     ) -> Result<reqwest::RequestBuilder> {
-        let endpoint = Self::build_endpoint(config, is_streaming);
+        let endpoint = Self::build_endpoint(config);
         let contents = Self::convert_messages(payload.messages);
         let system_instruction = Self::build_system_instruction(payload.system_prompt);
 
@@ -262,7 +254,6 @@ impl ProtocolAdapter for GeminiProtocol {
         debug!(
             endpoint = %endpoint,
             model = %config.default_model(),
-            streaming = is_streaming,
             "Building Gemini request"
         );
 
@@ -270,11 +261,8 @@ impl ProtocolAdapter for GeminiProtocol {
         let mut url = endpoint;
         url.push_str("?key=");
         url.push_str(api_key);
-
-        // Add alt=sse for streaming
-        if is_streaming {
-            url.push_str("&alt=sse");
-        }
+        // Always add alt=sse for streaming (stream-first architecture)
+        url.push_str("&alt=sse");
 
         // Serialize to JSON value so we can add tool_config if needed
         let mut body = serde_json::to_value(&request_body)
@@ -446,19 +434,10 @@ mod tests {
     use crate::providers::message::UnifiedMessage;
 
     #[test]
-    fn test_build_endpoint_non_streaming() {
+    fn test_build_endpoint_always_streaming() {
+        // Stream-first architecture: always uses streamGenerateContent endpoint
         let config = ProviderConfig::test_config("gemini-pro");
-        let endpoint = GeminiProtocol::build_endpoint(&config, false);
-        assert_eq!(
-            endpoint,
-            "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent"
-        );
-    }
-
-    #[test]
-    fn test_build_endpoint_streaming() {
-        let config = ProviderConfig::test_config("gemini-pro");
-        let endpoint = GeminiProtocol::build_endpoint(&config, true);
+        let endpoint = GeminiProtocol::build_endpoint(&config);
         assert_eq!(
             endpoint,
             "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:streamGenerateContent"
@@ -469,10 +448,10 @@ mod tests {
     fn test_build_endpoint_custom_base_url() {
         let mut config = ProviderConfig::test_config("gemini-pro");
         config.base_url = Some("https://custom.api.com".to_string());
-        let endpoint = GeminiProtocol::build_endpoint(&config, false);
+        let endpoint = GeminiProtocol::build_endpoint(&config);
         assert_eq!(
             endpoint,
-            "https://custom.api.com/v1beta/models/gemini-pro:generateContent"
+            "https://custom.api.com/v1beta/models/gemini-pro:streamGenerateContent"
         );
     }
 
@@ -609,34 +588,13 @@ mod tests {
         let payload = RequestPayload::new(&msgs);
 
         let request = protocol
-            .build_request(&payload, &config, false)
+            .build_request(&payload, &config)
             .expect("Failed to build request");
 
-        let url = request.build().unwrap().url().to_string();
-        assert!(url.contains("generateContent"));
-        assert!(url.contains("key=test-api-key"));
-        assert!(!url.contains("alt=sse"));
-    }
-
-    #[test]
-    fn test_build_request_streaming() {
-        let client = Client::new();
-        let protocol = GeminiProtocol::new(client);
-
-        let mut config = ProviderConfig::test_config("gemini-pro");
-        config.api_key = Some("test-api-key".to_string());
-
-        let msgs = [UnifiedMessage::user("Hello")];
-        let payload = RequestPayload::new(&msgs);
-
-        let request = protocol
-            .build_request(&payload, &config, true)
-            .expect("Failed to build request");
-
+        // Always uses streaming endpoint (stream-first architecture)
         let url = request.build().unwrap().url().to_string();
         assert!(url.contains("streamGenerateContent"));
         assert!(url.contains("key=test-api-key"));
-        assert!(url.contains("alt=sse"));
     }
 
     #[test]
@@ -652,7 +610,7 @@ mod tests {
             .with_think_level(Some(ThinkLevel::Medium));
 
         let request = protocol
-            .build_request(&payload, &config, false)
+            .build_request(&payload, &config)
             .expect("Failed to build request");
 
         // We can't easily inspect the request body, but we can verify it builds successfully
@@ -693,7 +651,7 @@ mod tests {
         let payload = RequestPayload::new(&msgs).with_tools(Some(&tools));
 
         let request = protocol
-            .build_request(&payload, &config, false)
+            .build_request(&payload, &config)
             .expect("Failed to build request");
 
         assert!(request.build().is_ok());

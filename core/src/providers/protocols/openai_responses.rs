@@ -94,7 +94,6 @@ impl ProtocolAdapter for OpenAiResponsesProtocol {
         &self,
         payload: &RequestPayload,
         config: &ProviderConfig,
-        _is_streaming: bool,
     ) -> Result<reqwest::RequestBuilder> {
         let endpoint = Self::build_endpoint(config);
         let request = Self::build_responses_request(payload, config.default_model());

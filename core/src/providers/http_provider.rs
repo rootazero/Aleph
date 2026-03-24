@@ -101,7 +101,7 @@ impl HttpProvider {
 
         let request = self
             .adapter
-            .build_request(&final_payload, &self.config, false)?;
+            .build_request(&final_payload, &self.config)?;
         let response = request.send().await.map_err(|e| {
             if e.is_timeout() {
                 crate::error::AlephError::Timeout {

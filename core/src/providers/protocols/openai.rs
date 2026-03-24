@@ -253,16 +253,15 @@ impl ProtocolAdapter for OpenAiProtocol {
         &self,
         payload: &RequestPayload,
         config: &ProviderConfig,
-        is_streaming: bool,
     ) -> Result<reqwest::RequestBuilder> {
         let endpoint = Self::build_endpoint(config);
         let messages = Self::convert_messages(payload.messages, payload.system_prompt);
 
-        // Build request body
+        // Build request body — always streaming (stream-first architecture)
         let mut body = json!({
             "model": config.default_model(),
             "messages": messages,
-            "stream": is_streaming,
+            "stream": true,
         });
 
         // Add optional parameters (per-request overrides provider config)
@@ -342,7 +341,6 @@ impl ProtocolAdapter for OpenAiProtocol {
         debug!(
             endpoint = %endpoint,
             model = %config.default_model(),
-            streaming = is_streaming,
             "Building OpenAI request"
         );
 
@@ -756,7 +754,7 @@ mod tests {
         let mut config = ProviderConfig::test_config("gpt-4o");
         config.api_key = Some("test-key".to_string());
 
-        let request = protocol.build_request(&payload, &config, false).unwrap();
+        let request = protocol.build_request(&payload, &config).unwrap();
         let built = request.build().unwrap();
 
         // Verify the body contains tools in OpenAI format
@@ -777,7 +775,7 @@ mod tests {
         let mut config = ProviderConfig::test_config("gpt-4o");
         config.api_key = Some("test-key".to_string());
 
-        let request = protocol.build_request(&payload, &config, false).unwrap();
+        let request = protocol.build_request(&payload, &config).unwrap();
         let built = request.build().unwrap();
 
         let body_bytes = built.body().unwrap().as_bytes().unwrap();
@@ -811,7 +809,7 @@ mod tests {
         let mut config = ProviderConfig::test_config("gpt-4o");
         config.api_key = Some("test-key".to_string());
 
-        let request = protocol.build_request(&payload, &config, false).unwrap();
+        let request = protocol.build_request(&payload, &config).unwrap();
         let built = request.build().unwrap();
 
         let body_bytes = built.body().unwrap().as_bytes().unwrap();

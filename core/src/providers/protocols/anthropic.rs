@@ -255,7 +255,6 @@ impl ProtocolAdapter for AnthropicProtocol {
         &self,
         payload: &RequestPayload,
         config: &ProviderConfig,
-        is_streaming: bool,
     ) -> Result<reqwest::RequestBuilder> {
         let endpoint = Self::build_endpoint(config);
         let messages = Self::convert_messages(payload.messages);
@@ -302,7 +301,7 @@ impl ProtocolAdapter for AnthropicProtocol {
             max_tokens,
             system: payload.system_prompt.map(|s| vec![SystemBlock::text(s)]),
             temperature,
-            stream: if is_streaming { Some(true) } else { None },
+            stream: Some(true), // always streaming (stream-first architecture)
             thinking,
             tools,
             service_tier: None,
@@ -316,7 +315,6 @@ impl ProtocolAdapter for AnthropicProtocol {
         debug!(
             endpoint = %endpoint,
             model = %config.default_model(),
-            streaming = is_streaming,
             "Building Anthropic request"
         );
 
@@ -547,7 +545,7 @@ mod tests {
         let mut config = ProviderConfig::test_config("claude-3-5-sonnet");
         config.api_key = Some("test-key".to_string());
 
-        let request = protocol.build_request(&payload, &config, false).unwrap();
+        let request = protocol.build_request(&payload, &config).unwrap();
         let built = request.build().unwrap();
 
         // Verify the body contains tools
@@ -568,7 +566,7 @@ mod tests {
         let mut config = ProviderConfig::test_config("claude-3-5-sonnet");
         config.api_key = Some("test-key".to_string());
 
-        let request = protocol.build_request(&payload, &config, false).unwrap();
+        let request = protocol.build_request(&payload, &config).unwrap();
         let built = request.build().unwrap();
 
         let body_bytes = built.body().unwrap().as_bytes().unwrap();

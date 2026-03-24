@@ -66,7 +66,6 @@ impl ProtocolAdapter for ConfigurableProtocol {
         &self,
         payload: &RequestPayload,
         config: &ProviderConfig,
-        is_streaming: bool,
     ) -> Result<reqwest::RequestBuilder> {
         // Minimal mode: extend base protocol
         if let Some(ref base) = self.base_protocol {
@@ -76,8 +75,8 @@ impl ProtocolAdapter for ConfigurableProtocol {
                 "Building request using minimal mode (extend base)"
             );
 
-            // Delegate to base protocol to build the request
-            let mut request = base.build_request(payload, config, is_streaming)?;
+            // Delegate to base protocol to build the request (always streaming)
+            let mut request = base.build_request(payload, config)?;
 
             // Apply auth differences if specified
             if let Some(ref differences) = self.definition.differences {
@@ -122,19 +121,14 @@ impl ProtocolAdapter for ConfigurableProtocol {
                 .as_deref()
                 .ok_or_else(|| AlephError::invalid_config("base_url is required for custom protocols"))?;
 
-            // Determine endpoint
-            let endpoint = if is_streaming {
-                custom.endpoints.stream.as_deref().unwrap_or(&custom.endpoints.chat)
-            } else {
-                &custom.endpoints.chat
-            };
+            // Always prefer stream endpoint if available (stream-first architecture)
+            let endpoint = custom.endpoints.stream.as_deref().unwrap_or(&custom.endpoints.chat);
 
             // Build full URL
             let url = format!("{}{}", base_url, endpoint);
 
             debug!(
                 url = %url,
-                is_streaming = is_streaming,
                 "Building custom protocol request"
             );
 
@@ -377,7 +371,7 @@ mod tests {
 
         // Build request (this should work now)
         let request = proto
-            .build_request(&payload, &config, false)
+            .build_request(&payload, &config)
             .expect("Should build request");
 
         // Verify the request was built (we can't easily inspect headers in reqwest::RequestBuilder,
@@ -414,7 +408,7 @@ mod tests {
 
         // Build request (should use base protocol's auth)
         let request = proto
-            .build_request(&payload, &config, false)
+            .build_request(&payload, &config)
             .expect("Should build request");
 
         drop(request);
@@ -463,7 +457,7 @@ mod tests {
         let payload = RequestPayload::new(&msgs);
 
         // Build request should work now
-        let result = proto.build_request(&payload, &config, false);
+        let result = proto.build_request(&payload, &config);
         assert!(result.is_ok(), "Should build custom request successfully");
 
         // The request was built (we can't easily inspect the body in unit tests,
