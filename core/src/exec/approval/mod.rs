@@ -1,4 +1,5 @@
 pub mod audit;
+pub mod path_canonicalize;
 pub mod binding;
 pub mod escalation;
 pub mod storage;
