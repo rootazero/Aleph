@@ -170,7 +170,7 @@ Keep this managed block so 'openspec update' can refresh the instructions.
 
 **由 AI (Claude) 驱动的两步流程：**
 
-1. **AI 写版本日志** — 读取 git log，总结 10-20 条有价值的内容，分为 Added（新增功能）和 Fixed（修复）两个分类，写入 CHANGELOG.md
+1. **AI 写版本日志** — 读取**上一个 release 版本到 HEAD 之间**的 git log（通过 `git log <上次release commit>..HEAD`），总结 10-20 条有价值的内容，分为 Added（新增功能）和 Fixed（修复）两个分类，写入 CHANGELOG.md
 2. **运行 `just release x.x.x`** — 自动完成：版本号更新 + 提交推送 + 触发四平台构建
 
 `just release` 会校验 CHANGELOG.md 中是否有对应版本的条目，没有则拒绝发布。GitHub Release 页面自动从 CHANGELOG.md 提取版本日志。
