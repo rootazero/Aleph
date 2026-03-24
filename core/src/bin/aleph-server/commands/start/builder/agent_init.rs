@@ -76,8 +76,8 @@ pub(in crate::commands::start) struct AgentHandlersResult {
     pub sub_agent_dispatcher: Option<Arc<tokio::sync::RwLock<alephcore::agents::sub_agents::SubAgentDispatcher>>>,
     pub embedder: Option<std::sync::Arc<dyn alephcore::memory::EmbeddingProvider>>,
     pub compression_service: Option<std::sync::Arc<alephcore::memory::compression::CompressionService>>,
-    /// Swappable provider registry for hot-switching default provider at runtime
-    pub swappable_registry: Option<Arc<alephcore::SwappableProviderRegistry>>,
+    /// Multi-provider registry for routing and hot-switching
+    pub multi_registry: Option<Arc<alephcore::MultiProviderRegistry>>,
     /// Deferred injection cell for ChannelRegistry (created after agent handlers)
     pub channel_registry_cell: Option<Arc<tokio::sync::OnceCell<Arc<alephcore::gateway::channel_registry::ChannelRegistry>>>>,
     /// Generation provider registry for TTS voice output
@@ -113,7 +113,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
     let mut sub_agent_disp: Option<Arc<tokio::sync::RwLock<alephcore::agents::sub_agents::SubAgentDispatcher>>> = None;
     let mut embedder_out: Option<std::sync::Arc<dyn alephcore::memory::EmbeddingProvider>> = None;
     let mut compression_out: Option<std::sync::Arc<alephcore::memory::compression::CompressionService>> = None;
-    let mut swappable_reg: Option<Arc<alephcore::SwappableProviderRegistry>> = None;
+    let mut multi_reg: Option<Arc<alephcore::MultiProviderRegistry>> = None;
     let mut channel_reg_cell: Option<Arc<tokio::sync::OnceCell<Arc<alephcore::gateway::channel_registry::ChannelRegistry>>>> = None;
 
     // Create coord task store (SQLite-backed task/team coordination for swarm tools).
@@ -276,21 +276,73 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         });
     }
 
-    // Try to create provider: env vars first, then app config
-    let initial_provider = if can_create_provider_from_env() {
-        create_provider_registry_from_env()
-            .ok()
-            .map(|reg| reg.default_provider())
-    } else {
-        create_provider_from_config(app_config)
-    };
+    // Build MultiProviderRegistry: register ALL configured providers
+    let provider_registry = {
+        use alephcore::providers::create_provider;
 
-    // Wrap in SwappableProviderRegistry for hot-switching
-    let provider_registry = initial_provider.map(|provider| {
-        let registry = Arc::new(alephcore::SwappableProviderRegistry::new(provider));
-        swappable_reg = Some(registry.clone());
-        registry
-    });
+        // Determine default provider name
+        let default_name = app_config.general.default_provider.clone()
+            .or_else(|| {
+                app_config.providers.iter()
+                    .find(|(_, cfg)| cfg.enabled && cfg.api_key.as_ref().map(|k| !k.is_empty()).unwrap_or(false))
+                    .map(|(name, _)| name.clone())
+            });
+
+        // Try env vars first for the initial provider
+        let env_provider = if can_create_provider_from_env() {
+            create_provider_registry_from_env()
+                .ok()
+                .map(|reg| {
+                    let p = reg.default_provider();
+                    let name = available_provider_from_env().unwrap_or("env");
+                    (name, p)
+                })
+        } else {
+            None
+        };
+
+        // Build multi-provider registry
+        if let Some((env_name, env_prov)) = env_provider {
+            let registry = Arc::new(alephcore::MultiProviderRegistry::new(env_name.to_string(), env_prov));
+            // Also register all config providers
+            for (name, provider_cfg) in &app_config.providers {
+                if !provider_cfg.enabled || name == &env_name { continue; }
+                if provider_cfg.api_key.as_ref().map(|k| k.is_empty()).unwrap_or(true) { continue; }
+                if let Ok(p) = create_provider(name, provider_cfg.clone()) {
+                    registry.register(name.clone(), p);
+                    tracing::info!(provider = %name, "Registered provider from config");
+                }
+            }
+            multi_reg = Some(registry.clone());
+            if !daemon { println!("  Providers: {} registered", registry.list_providers().len()); }
+            Some(registry as Arc<alephcore::MultiProviderRegistry>)
+        } else if let Some(def_name) = default_name {
+            // No env provider — create from config
+            if let Some(provider_cfg) = app_config.providers.get(&def_name) {
+                if let Ok(default_prov) = create_provider(&def_name, provider_cfg.clone()) {
+                    let registry = Arc::new(alephcore::MultiProviderRegistry::new(def_name.clone(), default_prov));
+                    // Register remaining providers
+                    for (name, pcfg) in &app_config.providers {
+                        if !pcfg.enabled || name == &def_name { continue; }
+                        if pcfg.api_key.as_ref().map(|k| k.is_empty()).unwrap_or(true) { continue; }
+                        if let Ok(p) = create_provider(name, pcfg.clone()) {
+                            registry.register(name.clone(), p);
+                            tracing::info!(provider = %name, "Registered provider from config");
+                        }
+                    }
+                    multi_reg = Some(registry.clone());
+                    if !daemon { println!("  Providers: {} registered (default: {})", registry.list_providers().len(), def_name); }
+                    Some(registry as Arc<alephcore::MultiProviderRegistry>)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    };
 
     // Shared cell for deferred CommandParser injection into chat.send handler.
     // Created here (outer scope) so both the if-branch (chat.send registration)
@@ -1037,7 +1089,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         sub_agent_dispatcher: sub_agent_disp,
         embedder: embedder_out,
         compression_service: compression_out,
-        swappable_registry: swappable_reg,
+        multi_registry: multi_reg,
         channel_registry_cell: channel_reg_cell,
         generation_registry: Some(generation_registry),
     }

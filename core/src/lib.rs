@@ -152,7 +152,7 @@ pub use crate::agent_loop::{
 };
 
 // Thinker (LLM layer - provider registry)
-pub use crate::thinker::{ProviderRegistry, SingleProviderRegistry, SwappableProviderRegistry};
+pub use crate::thinker::{ProviderRegistry, SingleProviderRegistry, SwappableProviderRegistry, MultiProviderRegistry};
 
 // =============================================================================
 // Tool System Exports

@@ -520,7 +520,7 @@ pub(in crate::commands::start) fn register_config_handlers(
     config_patcher: Arc<alephcore::ConfigPatcher>,
     event_bus: Arc<alephcore::gateway::event_bus::GatewayEventBus>,
     device_store: Arc<alephcore::gateway::device_store::DeviceStore>,
-    swappable_registry: Option<Arc<alephcore::SwappableProviderRegistry>>,
+    multi_registry: Option<Arc<alephcore::MultiProviderRegistry>>,
     shared_token_mgr: Arc<alephcore::gateway::security::SharedTokenManager>,
     acp_manager: Option<Arc<alephcore::acp::manager::AcpHarnessManager>>,
 ) {
@@ -554,7 +554,7 @@ pub(in crate::commands::start) fn register_config_handlers(
     register_handler!(server, "providers.update", providers::handle_update, config, event_bus, shared_token_mgr);
     register_handler!(server, "providers.delete", providers::handle_delete, config, event_bus, shared_token_mgr);
     // providers.setDefault needs the swappable registry for hot-switching
-    if let Some(ref registry) = swappable_registry {
+    if let Some(ref registry) = multi_registry {
         register_handler!(server, "providers.setDefault", providers::handle_set_default, config, event_bus, registry);
     } else {
         // Fallback: config-only update without runtime provider swap

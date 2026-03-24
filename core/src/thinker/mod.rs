@@ -231,6 +231,12 @@ impl MultiProviderRegistry {
         let state = self.state.read().unwrap_or_else(|e| e.into_inner());
         state.fallbacks.clone()
     }
+
+    /// List all registered provider names (inherent method for direct access)
+    pub fn list_providers(&self) -> Vec<String> {
+        let state = self.state.read().unwrap_or_else(|e| e.into_inner());
+        state.providers.keys().cloned().collect()
+    }
 }
 
 impl ProviderRegistry for MultiProviderRegistry {

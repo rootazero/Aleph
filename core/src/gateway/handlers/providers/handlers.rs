@@ -484,14 +484,14 @@ pub async fn handle_set_default(
     request: JsonRpcRequest,
     config: Arc<RwLock<Config>>,
     event_bus: Arc<GatewayEventBus>,
-    swappable_registry: Arc<crate::thinker::SwappableProviderRegistry>,
+    multi_registry: Arc<crate::thinker::MultiProviderRegistry>,
 ) -> JsonRpcResponse {
     let params: SetDefaultParams = match parse_params(&request) {
         Ok(p) => p,
         Err(e) => return e,
     };
 
-    set_default_provider_inner(&request, &params, &config, &event_bus, Some(&swappable_registry)).await
+    set_default_provider_inner(&request, &params, &config, &event_bus, Some(&multi_registry)).await
 }
 
 /// Shared implementation for setting the default provider
@@ -500,7 +500,7 @@ async fn set_default_provider_inner(
     params: &SetDefaultParams,
     config: &Arc<RwLock<Config>>,
     event_bus: &Arc<GatewayEventBus>,
-    swappable_registry: Option<&Arc<crate::thinker::SwappableProviderRegistry>>,
+    multi_registry: Option<&Arc<crate::thinker::MultiProviderRegistry>>,
 ) -> JsonRpcResponse {
     // Resolve canonical name (e.g. "codex" → "chatgpt")
     let name = match params.name.to_lowercase().as_str() {
@@ -525,7 +525,7 @@ async fn set_default_provider_inner(
         }
 
         // Capture provider config before setting default (for runtime swap)
-        provider_config_for_swap = if swappable_registry.is_some() {
+        provider_config_for_swap = if multi_registry.is_some() {
             cfg.providers.get(&name).map(|pc| (name.clone(), pc.clone()))
         } else {
             None
@@ -551,16 +551,19 @@ async fn set_default_provider_inner(
         }
     }
 
-    // Hot-swap the runtime provider
-    if let (Some(registry), Some((name, provider_config))) = (swappable_registry, provider_config_for_swap) {
+    // Hot-swap the runtime provider using MultiProviderRegistry
+    if let (Some(registry), Some((name, provider_config))) = (multi_registry, provider_config_for_swap) {
         match crate::providers::create_provider(&name, provider_config) {
             Ok(new_provider) => {
-                registry.swap(new_provider);
-                info!(name = %name, "Runtime provider hot-swapped");
+                registry.register(name.clone(), new_provider);
+                if let Err(e) = registry.set_default(&name) {
+                    error!(name = %name, error = %e, "Failed to set default in multi-registry");
+                } else {
+                    info!(name = %name, providers = ?registry.list_providers(), "Provider set as default in multi-registry");
+                }
             }
             Err(e) => {
-                // Config was saved but runtime swap failed — log but don't fail the request
-                error!(name = %name, error = %e, "Failed to hot-swap runtime provider (config saved)");
+                error!(name = %name, error = %e, "Failed to create provider for hot-swap (config saved)");
             }
         }
     }
