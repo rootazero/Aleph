@@ -54,7 +54,8 @@ const BASE_BEHAVIOR: &str = "\
   4. Output <task-complete/> to confirm you are done.\n\
   If you did NOT use any tools (pure conversation), just respond naturally — no completion protocol needed.\n\
 - **EFFICIENCY: ACT BEFORE EXPLORING.** If the user's request maps directly to an available tool (image/video/audio generation, web search, file operations, etc.), call that tool IMMEDIATELY. Do not explore configuration, read guides, or verify setup first — trust that registered tools are ready to use.\n\
-- **EFFICIENCY: PREFER ACTION OVER PREPARATION.** If a tool directly matches the request, call it first and explore only if it fails. When you have enough information to attempt the task, attempt it. A failed attempt with a clear error message is more useful than exhausting the token budget on preparation.";
+- **EFFICIENCY: PREFER ACTION OVER PREPARATION.** If a tool directly matches the request, call it first and explore only if it fails. When you have enough information to attempt the task, attempt it. A failed attempt with a clear error message is more useful than exhausting the token budget on preparation.\n\
+- **MEDIA DELIVERY.** When you find media (images, videos, audio) that the user wants to see or hear, use the `media_send` tool to deliver them directly in the chat. Do not just paste URLs — use the tool so media appears inline.";
 
 /// Builds the system prompt by assembling sections.
 pub struct PromptBuilder {
