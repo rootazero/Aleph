@@ -7,6 +7,1349 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-03-24
+
+### Added
+- feat: wire MultiProviderRegistry into server initialization
+- feat: add provider fallback module with transient error retry
+- feat: add MultiProviderRegistry with model-key routing
+- feat: add tool_choice support in Codex protocol
+- feat: add tool_choice support and hash-based IDs in Gemini protocol
+- feat: add tool_choice support in Anthropic protocol
+- feat: add tool_choice support and fix argument parsing in OpenAI protocol
+- feat: add ToolChoice enum and protocol capabilities to adapter
+- feat: add is_transient() to AlephError for provider fallback
+- feat(panel): add streaming, render_mode, typing_indicator fields to Feishu settings
+- feat(feishu): wire FeishuEventEmitter into execution flow
+- feat(feishu): add markdown card rendering and updated capabilities
+- feat(feishu): add FeishuEventEmitter with streaming cards and typing indicators
+- feat(feishu): add Card Kit streaming, static card, and reaction API methods
+- feat(feishu): add streaming, render_mode, typing config fields and API types
+- feat(panel): add Feishu/Lark channel settings card
+- feat(feishu): fix clippy warnings — unused import, visibility, closure
+- feat(feishu): add FeishuChannel impl and wire into factory registry
+- feat(feishu): add FeishuClient with token, HTTP API, and media support
+- feat(feishu): add WebSocket event parsing and text extraction
+- feat(feishu): add types, config, and API response structs
+- feat: add Persistent Completion Protocol for agent task verification
+- desktop-macos: implement PimCapability via SwiftBridge
+- desktop-macos: implement SystemCapability (apps, notifications, clipboard, sysinfo)
+- desktop-macos: implement AutomationCapability (osascript + Shortcuts CLI)
+- desktop: wire NativeScreen into all platform crates
+- desktop: add NativeScreen shared ScreenCapability implementation
+- core: add SystemTool and AutomationTool builtin tools
+- desktop: add per-platform crate skeletons (macos, linux, windows)
+- desktop: add SwiftBridge utility for macOS native API calls
+- desktop: update crate doc to reflect two-layer architecture
+- desktop: add capability trait hierarchy and shared types
+- core: add aleph-client dependency for server binary
+- feat: enable native tool calling for ChatGPT/Codex Responses API
+- core: add Strict Mode support (schema strictification + provider integration)
+- core: add #[cfg(unix)] guards for Unix socket code on Windows
+- desktop: fix Windows OCR compilation errors
+- feat(browser): add profile config types and browser system configuration
+- feat(browser): add SsrfPolicy for URL validation and private network blocking
+- feat(config): add queue_mode session configuration with gateway wiring
+- feat(anthropic): wire cache_control ephemeral breakpoint for system prompt caching
+- feat(thinker): partition system prompt into stable/dynamic zones for cache optimization
+- feat(compressor): add pre-compaction silent memory flush
+- feat(agent-loop): add CollectQueue with time-window message merging
+- feat(agent-loop): add SteerQueue with interrupt signaling
+- feat(agent-loop): add SessionQueue trait and FollowupQueue implementation
+- feat(agent-loop): wire interrupt channel into RunContext and loop execution
+- feat(agent-loop): add InterruptChannel for steering support
+- core: add missing tracing::warn import for non-macOS builds
+- feat: unified slash command system
+- feat: wire memory tools into agent execution + Two-Phase Smart Recall
+- feat(server): add desktop feature gate for in-process desktop capabilities
+- feat(desktop): integrate DesktopCapability into DesktopTool with dual-path execution
+- feat(desktop): implement input actions with enigo
+- feat(desktop): implement screenshot and OCR via xcap
+- feat: add aleph-desktop crate skeleton with DesktopCapability trait
+- desktop: fix Tauri build for macOS and add app/dmg bundle targets
+- feat(wasm): register host functions via PluginBuilder with capability kernel
+- feat(manifest): parse WASM capabilities from aleph.plugin.toml
+- feat(wasm): add WasmCapabilityKernel — per-execution security enforcement
+- feat(wasm): add CredentialInjector — plugins never see secrets
+- feat(wasm): add AllowlistValidator with anti-bypass security
+- feat(wasm): add WasmCapabilities types with default-deny model
+- feat(exec): add LeakDetector with Aho-Corasick bidirectional scanning
+- desktop: add all_day and calendar_id to PimCalendarUpdate
+- desktop: add PIM variants to DesktopRequest and JSON-RPC mapping
+- desktop: remove macOS target, add server embedding for Linux/Windows
+- desktop: fix flaky tests that assumed bridge socket absence
+- desktop-bridge: implement Windows OCR (WinRT) and UI Automation AX tree
+- desktop-bridge: implement window management (list, focus, launch)
+- desktop-bridge: implement Windows input simulation (click, type, key combo, scroll)
+- desktop: wire snapshot and new actions in DesktopBridgeServer dispatch
+- desktop: implement scroll, double-click, drag, hover, paste, and ref-aware targeting
+- desktop: implement UI snapshot with ref generation in Perception.swift
+- desktop: add RefStore for snapshot ref management (Swift)
+- desktop: update tool args and build_request for snapshot, ref targeting, and new actions
+- desktop: add core types for snapshot, ref system, and new action primitives
+- desktop: update tool messaging for bridge architecture
+- desktop: probe managed and standalone socket paths
+- feat(runtimes): add ensure_capability orchestration (Probe -> Bootstrap -> Register)
+- feat(runtimes): wire CapabilityLedger into prompt system
+- feat(runtimes): add bootstrap module with shell-driven installation
+- feat(runtimes): wire ledger into exec layer PATH
+- feat(runtimes): add Probe module for system-first capability detection
+- feat(runtimes): add legacy manifest.json migration to ledger.json
+- feat(runtimes): add CapabilityLedger for lightweight runtime state tracking
+- feat(desktop): implement desktop.screenshot in Tauri DesktopBridge
+- feat(desktop): add DesktopBridge UDS server with ping support
+- feat(protocol): add desktop_bridge types for cross-platform Bridge
+- feat(halo): switch macOS HaloWindow from SwiftUI to WKWebView
+- feat(halo): add /halo route with chat UI, message list, and input area
+- feat(halo): add event handler to wire run.* streaming events to HaloState
+- feat(halo): add HaloState reactive signals for chat state management
+- feat(halo): add ChatApi module for chat.send/abort/history/clear
+- feat(desktop): Task 11 complete — DesktopTool active in agent via builtin registry
+- feat(desktop): implement WKWebView canvas overlay with A2UI patch support
+- feat(desktop): implement mouse, keyboard, and window actions in Action.swift
+- feat(desktop): add accessibility permission description and runtime check
+- feat(desktop): implement screenshot, OCR, and AX tree in Perception.swift
+- feat(desktop): point settings window to Leptos Control Plane server
+- feat(macos): add Settings menu item opening Control Plane WebView
+- feat(macos): add SettingsWebView WKWebView wrapper
+- feat(desktop): add Swift UDS server skeleton with stub handlers
+- feat(desktop): register DesktopTool in executor builtin registry
+- feat(desktop): add DesktopTool builtin with graceful degradation
+- feat(desktop): add UDS client with JSON-RPC 2.0 and unit tests
+- feat(desktop): add types, error, and module scaffold
+- feat(skill): integrate SkillSystem v2 into ExtensionManager and ExecutionEngine
+- feat(skill): add SkillSystem facade with Arc<Inner> pattern
+- feat(skill): add slash command resolution
+- feat(skill): add InstallSpec to shell command converter
+- feat(skill): add SkillStatusReport for eligibility dashboard
+- feat(skill): add SkillSnapshot with version-invalidated cache
+- feat(skill): add XML prompt builder for skill injection
+- feat(skill): add EligibilityService with OS/binary/env checks
+- feat(skill): add SKILL.md parser with YAML frontmatter support
+- feat(skill): add SkillRegistry with priority-based dedup
+- feat(skill): add SkillManifest AggregateRoot with Entity trait
+- feat(skill): add EligibilitySpec, InstallSpec, InvocationPolicy, PromptScope ValueObjects
+- feat(skill): add SkillId, PluginId, SkillSource domain types
+- feat(thinker): add skill_instructions to PromptConfig for SkillSystem v2
+- feat(extension): add SkillSystem v2 and wire skill XML into agent prompts
+- feat(swarm): add event statistics and logging
+- feat(agent_loop): integrate ContextProvider into MessageBuilder
+- feat(swarm): implement SwarmContextProvider
+- feat(agent_loop): define ContextProvider trait
+- feat(agent_loop): implement event publishing (shadow mode)
+- feat(agent_loop): define AgentLoopEvent enum
+- feat(agent_loop): implement Builder build() method
+- feat(agent_loop): add AgentLoopBuilder structure
+- feat(perception): integrate PAL with SystemStateBus
+- feat(perception): add Platform Abstraction Layer (PAL)
+- feat(swarm): Phase 5 - End-to-End Integration
+- feat(perception): implement Phase 5 - Documentation, Examples & Testing
+- feat(perception): implement Phase 4 - Vision Connector architecture
+- feat(ssb): implement Phase 3 - action dispatcher
+- feat(ssb): implement Phase 2 - robustness & privacy
+- feat(ssb): implement Phase 1 - core infrastructure
+- feat(control-plane): implement WebSocket subscription for real-time alerts
+- feat(shared_ui_logic): add alerts API module for system health and memory monitoring
+- feat(skill-evolution): integrate SuccessManifest with tool execution
+- feat(control-plane): pass mode and alert_key to SidebarItems
+- feat(control-plane): integrate Tooltip and Badge into SidebarItem
+- feat(control-plane): add StatusBadge component for alert indicators
+- feat(control-plane): add Tooltip component for narrow mode labels
+- feat(skill-evolution): implement CollaborativeSolidificationPipeline
+- feat(control-plane): implement Sidebar narrow/wide mode switching
+- feat(skill-evolution): implement ConstraintValidator
+- feat(skill-evolution): implement SuccessManifest data structure
+- feat(control-plane): add SettingsLayout for nested routing
+- feat(control-plane): add alert bus and sidebar mode override to DashboardState
+- feat(control-plane): add sidebar types (SidebarMode, AlertLevel, SystemAlert)
+- feat(control-plane): compile Tailwind CSS locally for production
+- feat(dashboard): add Plugins, Skills, and Policies settings pages
+- feat(dashboard): add sidebar navigation to settings UI
+- feat(dashboard): add Generation Providers navigation card to Settings page
+- feat(dashboard): implement Generation Providers CRUD functionality
+- feat(dashboard): add Generation Providers frontend UI
+- feat(dashboard): add Generation Providers backend and API layer
+- feat(dashboard): implement comprehensive configuration management UI
+- feat(macos): implement WebSocket client for Gateway connection
+- feat(macos): complete Phase 4 client simplification for ControlPlane integration
+- feat(dashboard): complete Phase 3 SDK integration with RPC, events, and API layer
+- feat(dashboard): complete Phase 2 SDK integration with error handling and reconnection
+- feat(dashboard): add connection state awareness to Memory view
+- feat(dashboard): integrate shared_ui_logic SDK into Dashboard
+- feat(dashboard): full architectual refactor with Leptos 0.8.15 and rust-ui components
+- feat(dashboard): complete Memory Explorer view and fix System Status
+- feat(dashboard): initialize Aleph Dashboard with Leptos 0.6
+- feat(shared-ui-logic): implement Plugins and Providers APIs
+- feat(shared-ui-logic): implement WASM WebSocket connector
+- feat(shared-ui-logic): implement API and Observability layers
+- feat(shared_ui_logic): implement protocol layer
+- feat(shared_ui_logic): implement native WebSocket connector
+- feat(shared_ui_logic): initialize Aleph UI Logic SDK
+- feat(cortex): implement LLM-based critic report generation
+- feat(cortex): add AiProvider to CriticAgent
+- feat(cortex): implement LLM-based root cause analysis
+- feat(cortex): add AiProvider to ReactiveReflector
+- feat(agent_loop): add meta-cognition integration for Phase 6
+- feat(cortex): implement CortexIntegration orchestrator (Task #11)
+- feat(cortex): implement experience clustering and deduplication
+- feat(dispatcher): implement L1.5 ExperienceReplayLayer
+- feat(cortex): implement Cortex Dreaming background service
+- feat(cortex): implement LLM-based pattern extraction
+- feat(cortex): implement DistillationService core structure
+- feat(engine): add FeatureExtractor for advanced ML rule learning
+- feat(cortex): implement multi-dimensional experience value estimator
+- feat(cortex): add agent loop telemetry capture
+- feat(cortex): implement Experience CRUD operations
+- feat(cortex): define core data structures
+- feat(engine): add ML-based L2 rule generation (RuleLearner)
+- feat(cortex): add experience_replays database table
+- feat(builtin_tools): add AtomicOpsTool for atomic operations
+- feat(browser): implement JavaScript-based context freeze/resume
+- feat(browser): implement Phase 2.4 CDP integration for context freeze/resume
+- feat(engine): add comprehensive testing and performance validation
+- feat(executor): add AtomicActionExecutor with L1/L2 routing
+- feat(engine): implement atomic engine with L1/L2/L3 routing
+- feat(dispatcher): implement Phase 2 Intelligent Scheduling for Liquid Hub
+- feat(macos): add guest session activity log UI
+- feat(macos): add activity log RPC types and methods
+- feat(gateway): add RPC request activity logging for guest sessions
+- feat(gateway): add guests.getActivityLogs RPC handler
+- feat(gateway): integrate activity logging into GuestSessionManager
+- feat: implement guests.revokeInvitation RPC method
+- feat(macos): add Guest management UI in Settings
+- feat(gateway): register config.get and config.patch RPC handlers
+- feat(gateway): add SessionIdentityMeta for identity storage
+- feat(protocol): add IdentityContext for stateless security
+- feat(gateway): add config.patch RPC handler with events
+- feat(memory): add idempotent namespace migration
+- feat(gateway): add RPC handlers for guest management
+- feat(memory): add namespace column for data isolation
+- feat(protocol): add discovery types for mDNS
+- feat(protocol): add ConfigChangedEvent for config sync
+- feat(gateway): add InvitationManager for guest invitations
+- feat(protocol): add invitation types for guest management
+- feat(gateway): add PolicyEngine for permission checks
+- feat(gateway): add IdentityMap for external identity resolution
+- feat(protocol): add Role and GuestScope for Owner+Guest model
+- feat(phase3): complete Tauri Desktop migration to thin client
+- feat(phase3): migrate Tauri Desktop to SDK architecture (WIP)
+- feat(phase2): refactor CLI to use SDK
+- feat(phase2): implement GatewayClient with authentication
+- feat(phase2): implement transport and RPC layers in SDK
+- feat(phase2): create aleph-client-sdk skeleton
+- feat(gateway): add Server-Client routing infrastructure to ConnectionState
+- feat: add tool routing config and scope checking for Server-Client architecture
+- feat(executor): integrate RoutedExecutor with Agent Loop
+- feat(cli): create aleph-cli as protocol reference implementation
+- feat(protocol): create aleph-protocol crate for shared types
+- feat(executor): integrate ToolRouter with execution engine
+- feat(dispatcher): add execution_policy field to UnifiedTool
+- feat(executor): add ToolRouter for Server-Client routing decisions
+- feat(gateway): add tool.call protocol messages
+- feat(gateway): add ReverseRpcManager for Server-to-Client calls
+- feat(gateway): store ClientManifest in ConnectionState
+- feat(gateway): extend ConnectParams to accept ClientManifest
+- feat(gateway): add ClientManifest for capability negotiation
+- feat(dispatcher): add ExecutionPolicy enum for Server-Client routing
+- feat(spec_driven): implement BDD dual-track testing system
+- feat(domain): implement DDD foundation with marker traits
+- feat(dispatcher): implement L2 async LLM enhancement for tool descriptions
+- feat(memory): add performance monitoring for LLM calls
+- feat(scheduler): implement recursion depth tracking
+- feat(scheduler): implement anti-starvation logic
+- feat(scheduler): implement LaneScheduler core
+- feat: implement CompressionDaemon for background compression scheduling
+- feat(scheduler): implement LaneState with queue and semaphore
+- feat: enhance ContextComptroller with priority-based token management
+- feat: implement ValueEstimator for memory importance scoring
+- feat(scheduler): add lane scheduler infrastructure
+- feat: add sliding window chunking to TranscriptIndexer
+- feat: add TranscriptIndexer for near-realtime memory indexing
+- feat(sub_agents): add active runs query and stats to SubAgentRegistry
+- feat(sub_agents): add FactsDB persistence helpers for SubAgentRun
+- feat(sub_agents): add state transition to SubAgentRegistry
+- feat(sub_agents): add SubAgentRegistry with in-memory indexing
+- feat(memory): add SubAgent fact types for Multi-Agent 2.0 persistence
+- feat(sub_agents): add SubAgentRun data model for Multi-Agent 2.0
+- feat(dispatcher): integrate HydrationPipeline into Agent Loop
+- feat(core): export tool_index types from lib.rs
+- feat(memory): add VectorDatabase::in_memory() for testing
+- feat(dispatcher): add ToolRetrieval with dual-threshold hydration
+- feat(dispatcher): add ToolIndexCoordinator for Memory synchronization
+- feat(dispatcher): add SemanticPurposeInferrer for L0/L1 inference
+- feat(dispatcher): add tool_index module with ToolRetrievalConfig
+- feat(memory): add Tool variant to FactType for tool-as-resource
+- feat(memory): add Multi-Agent Resilience database layer
+- feat(gateway): add identity management RPC handlers
+- feat(thinker): add thinking transparency guidance to PromptBuilder
+- feat(agent_loop): integrate ThinkingParser into DecisionParser
+- feat(gateway): add ReasoningBlock and UncertaintySignal stream events
+- feat(agent_loop): add ThinkingParser for semantic reasoning extraction
+- feat(agent_loop): add StructuredThinking types for CoT Transparency
+- feat(thinker): integrate Soul into PromptBuilder
+- feat(thinker): add markdown parser for soul.md files
+- feat(thinker): add IdentityResolver for layered identity resolution
+- feat(thinker): add SoulManifest types for Embodiment Engine
+- feat(test): migrate logging, security, and e2e tests to BDD
+- feat(test): migrate iMessage routing and subagent tests to BDD
+- feat(gateway): add ChannelProvider trait for interaction manifests
+- feat(agent_loop): add Silent and HeartbeatOk decision types
+- feat(thinker): add environment contract and security sections to PromptBuilder
+- feat(thinker): add ContextAggregator for environment reconciliation
+- feat(test): migrate markdown skills tests to BDD
+- feat(thinker): add SecurityContext for policy-driven permissions
+- feat(thinker): add InteractionManifest for channel capability awareness
+- feat(test): migrate models and protocol integration tests to BDD
+- feat(test): migrate DAG and worldmodel dispatcher tests to BDD
+- feat(test): migrate smart tool discovery and sessions tests to BDD
+- feat(thinker): add provider-specific context caching strategies
+- feat(dispatcher): add dual-layer profile-based tool filtering
+- feat(test): migrate extension v2 and runtime tests to BDD
+- feat(gateway): add WorkspaceManager for Anti-Gravity Architecture
+- feat(test): migrate extension plugin registry tests to BDD
+- feat(test): migrate tool server tests to BDD
+- feat(test): migrate gateway inbound router tests to BDD
+- feat(test): migrate dispatcher cortex tests to BDD
+- feat(test): migrate memory integration tests to BDD
+- feat(tests): migrate memory facts tests to BDD
+- feat(tests): migrate message builder tests to BDD
+- feat(tests): migrate thinker prompt builder tests to BDD
+- feat(tests): migrate POE tests to BDD
+- feat(tests): migrate agent loop tests to BDD
+- feat(config): add ProfileConfig for Workspace Architecture
+- feat(tests): migrate perception and watcher tests to BDD
+- feat(tests): migrate daemon IPC and launchd tests to BDD
+- feat(tests): migrate daemon core tests to BDD
+- feat(tests): migrate config validation tests to BDD
+- feat(tests): migrate config basic tests to BDD
+- feat(tests): migrate scripting engine tests to BDD
+- feat(tests): add cucumber BDD infrastructure
+- feat: add example YAML policies and E2E tests
+- feat(dispatcher): add YAML policy loader and PolicyEngine integration
+- feat(dispatcher): implement YamlPolicy with Rhai evaluation
+- feat(scripting): add BaselineApi with lazy TTL caching
+- feat(scripting): implement HistoryApi.last() with WorldModel queries
+- feat(scripting): implement EventApi and EventCollection filtering
+- feat(scripting): add HistoryApi and EventCollection stubs
+- feat(scripting): add duration parsing and helpers for Rhai
+- feat(dispatcher): add YAML rule schema parsing
+- feat(dispatcher): add Rhai sandbox engine with strict limits
+- feat(worldmodel): add JSON state persistence
+- feat(dispatcher): add core data structures
+- feat(daemon): integrate perception layer with daemon CLI
+- feat(daemon): implement FSEventWatcher
+- feat(daemon): implement SystemStateWatcher
+- feat(daemon): implement ProcessWatcher
+- feat(daemon): implement TimeWatcher
+- feat(daemon): add watcher trait and registry
+- feat(daemon): add perception configuration system
+- feat(daemon): add event system foundation
+- feat(protocols): implement hot reload with notify file watching
+- feat(protocols): implement ProtocolLoader file and directory loading
+- feat(protocols): implement ConfigurableProtocol custom mode with template rendering
+- feat(protocols): implement ConfigurableProtocol minimal mode (extends base + differences)
+- feat(protocols): add JSONPath parser for response value extraction
+- feat(protocols): add template engine wrapper for request/response transformation
+- feat(protocols): add dependencies for configurable protocols (handlebars, jsonpath, notify)
+- feat(providers): add ProtocolLoader stub for hot reload
+- feat(providers): add ConfigurableProtocol stub
+- feat(providers): implement ProtocolRegistry for dynamic protocol management
+- feat(providers): add ProtocolDefinition types for YAML configs
+- feat(tools): implement VirtualFs sandbox mode
+- feat(tools): add Evolution auto-load integration
+- feat(gateway): add Markdown Skills RPC handlers
+- feat(tools): add replace_tool() API with explicit update semantics
+- feat(tools): add hot reload support for Markdown Skills (Phase 4)
+- feat(tools): add Evolution Loop integration for Markdown Skills (Phase 3)
+- feat(tools): add examples() method to AetherTool trait (Phase 2)
+- feat(tools): complete Markdown Tool Adapter integration
+- feat(tools): implement Markdown Tool Adapter (Phase 1)
+- feat(providers): add Tier 3 specialized OpenAI-compatible provider presets
+- feat(providers): add Tier 2 OpenAI-compatible provider presets
+- feat(providers): add Tier 1 OpenAI-compatible provider presets
+- feat(providers): add Gemini presets and update factory
+- feat(providers): implement GeminiProtocol adapter
+- feat(providers): add Gemini API types module
+- feat(providers): add Claude/Anthropic presets
+- feat(providers): implement AnthropicProtocol adapter
+- feat(providers): add Anthropic API types module
+- feat(gateway): add approval RPC handlers
+- feat(mcp): add ApprovalHandler for human-in-the-loop
+- feat(mcp): add approval request types for human-in-the-loop
+- feat(mcp): add streaming types for sampling responses
+- feat(mcp): add TokenRefreshManager for automatic token refresh
+- feat(mcp): add OAuth token refresh support
+- feat(mcp): integrate context injection with SamplingHandler
+- feat(mcp): add ContextInjector for cross-server context
+- feat(mcp): add IncludeContext enum type for sampling requests
+- feat(config): add protocol field to ProviderConfig
+- feat(providers): add provider presets registry
+- feat(providers): add HttpProvider container with ProtocolAdapter
+- feat(providers): implement OpenAiProtocol adapter
+- feat(providers): add ProtocolAdapter trait with streaming support
+- feat(providers): add RequestPayload DTO for protocol adapters
+- feat(mcp): add sampling callback integration to McpManager
+- feat(mcp): add response mechanism for server-initiated requests
+- feat(mcp): integrate SamplingHandler with McpClient
+- feat(memory): complete Memory v3 Milestones 4-6
+- feat(mcp): add SamplingHandler for server-initiated LLM calls
+- feat(mcp): implement real SSE event listening with reqwest-eventsource
+- feat(mcp): add SSE event types and reqwest-eventsource dependency
+- feat(memory): implement CLI list and show commands
+- feat(memory): implement AuditLogger for operation tracking
+- feat(mcp): add Sampling RPC types for P2 server-initiated LLM calls
+- feat(memory): add audit log schema and types
+- feat(memory): add CLI module with file locking
+- feat(memory): implement ArchivalService for scratchpad archiving
+- feat(memory): implement HybridTrigger with token threshold safety net
+- feat(memory): implement LazyDecayEngine for read-time decay evaluation
+- feat(memory): add type-aware decay calculation with temporal scope
+- feat(memory): add decay_invalidated_at field for recycle bin
+- feat(memory): complete Milestone 1 - Scratchpad Foundation
+- feat(memory): implement ScratchpadManager with CRUD operations
+- feat(memory): implement SessionHistory for scratchpad archival
+- feat(memory): add scratchpad module structure and template
+- feat(mcp): implement real McpResourceManager and McpPromptManager
+- feat(tools): add mcp_get_prompt builtin tool
+- feat(tools): add mcp_read_resource builtin tool
+- feat(mcp): implement real aggregation for resources and prompts
+- feat(mcp): add resources and prompts methods to McpClient
+- feat(mcp): add resources and prompts support to McpServerConnection
+- feat(mcp): add Resources and Prompts RPC types
+- feat(mcp): add health check logic for servers
+- feat(gateway): wire MCP handlers to McpManagerHandle
+- feat(mcp): implement McpManagerActor core loop
+- feat(mcp): add config persistence for McpManager
+- feat(mcp): add McpManagerHandle public API
+- feat(mcp): add McpCommand and McpManagerEvent types
+- feat(cortex): implement DecisionConfig with session override
+- feat(cortex): implement security rules (tag injection, PII masking, instruction override)
+- feat(cortex): add SanitizerRule trait and SecurityPipeline
+- feat(cortex): add greedy JSON repair logic
+- feat(cortex): implement JsonStreamDetector state machine
+- feat(cortex): add module skeleton with unified error types
+- feat(extension): add PluginHttpHandler for plugin REST routes
+- feat(extension): add PluginProviderAdapter for plugin AI providers
+- feat(extension): add ChannelManager skeleton for plugin channels
+- feat(extension): add HTTP route types
+- feat(extension): add provider plugin types
+- feat(extension): add channel plugin types
+- feat(gateway): add service lifecycle RPC handlers
+- feat(extension): integrate ServiceManager with ExtensionManager
+- feat(extension): add ServiceManager for background services
+- feat(extension): add service lifecycle types
+- feat(gateway): add plugins.executeCommand RPC handler
+- feat(extension): add command execution to PluginLoader
+- feat(extension): add DirectCommandResult type
+- feat(extension): implement scope-aware skill injection
+- feat(extension): implement V2 prompt loading with scope support
+- feat(extension): add scope and bound_tool to ExtensionSkill
+- feat(extension): add PromptScope enum for V2 skill injection
+- feat(extension): add V2 hook conversion from TOML manifest
+- feat(extension): implement typed hook execution (interceptor/observer/resolver)
+- feat(extension): add kind and priority to HookConfig
+- feat(extension): add HookKind and HookPriority enums
+- feat(extension): integrate TOML parser with auto-detection (TOML > JSON)
+- feat(extension): add V2 fields to PluginManifest
+- feat(extension): add TOML manifest parser types
+- feat(exec): check skill_allowlist in approval decision
+- feat(exec): add skill_allowlist config option
+- feat(exec): extend ExecContext with skill origin info
+- feat(skills): implement CLI Wrapper validator
+- feat(skills): add health checking methods to SkillsRegistry
+- feat(skills): add install suggestion methods to SkillsInstaller
+- feat(skills): implement HealthChecker for dependency validation
+- feat(skills): extend SkillFrontmatter with requirements and metadata
+- feat(skills): add types for requirements and health checking
+- feat(poe): replace PlaceholderWorker with real AgentLoopWorker
+- feat(gateway): wire POE contract signing to Gateway
+- feat(poe): implement contract signing workflow for first principles closure
+- feat(core): add snapshot capture tool and registry updates
+- feat(config): add memory configuration types and validation
+- feat(memory): enhance retrieval and add dreaming module
+- feat(macos): add tool emoji formatting to HaloStreamingView
+- feat(macos): update GatewayStreamAdapter with enhanced summary
+- feat(macos): add HaloResultViewV2 with detail popover support
+- feat(macos): add HaloResultDetailPopover for detailed results
+- feat(macos): add EnhancedRunSummary and ToolSummaryItem models
+- feat(gateway): add EnhancedRunSummary and per-runId sequences
+- feat(gateway): add message deduplication with text normalization
+- feat(gateway): add stream buffer for block-level text flushing
+- feat(gateway): add tool display module with emoji and smart formatting
+- feat(halo): integrate commandList state into HaloViewV2
+- feat(halo): add HaloCommandListView for / command panel
+- feat(halo): add CommandItem and CommandListContext types for / command
+- feat(halo): add HaloInputCoordinator for lightweight input handling
+- feat(gateway): add 150ms throttling for response chunks
+- feat(halo): add HaloViewV2 main component integrating all state views
+- feat(halo): add HaloHistoryListView for conversation history
+- feat(halo): add HaloResultView for compact result display
+- feat(halo): add HaloStreamingView for unified streaming display
+- feat(halo): add HaloStateV2 with 6 simplified states
+- feat(halo): add new streaming types for simplified state model
+- feat(skill-evolution): implement Skill Compiler (Phase 10)
+- feat(agent-loop): add on_user_question method to LoopCallback
+- feat(agent-loop): add AskUserRich decision variant with QuestionKind
+- feat(agent-loop): export question and answer modules
+- feat(agent-loop): add UserAnswer type for structured responses
+- feat(agent-loop): add QuestionKind types for structured user interaction
+- feat(resilient): add cron integration with PodcastTask example
+- feat(resilient): implement ResilientExecutor with retry and fallback
+- feat(resilient): define ResilientTask trait
+- feat(resilient): add core types for resilient task execution
+- feat(skill_evolution): implement GitCommitter for auto-commit
+- feat(skill_evolution): implement SkillGenerator for SKILL.md creation
+- feat(skill_evolution): implement SolidificationDetector for pattern detection
+- feat(skill_evolution): implement EvolutionTracker for execution logging
+- feat(skill_evolution): add core types for skill evolution system
+- feat(spec_driven): implement SpecDrivenWorkflow orchestrator
+- feat(spec_driven): implement LlmJudge for evaluation
+- feat(spec_driven): implement TestWriter for test generation
+- feat(spec_driven): implement SpecWriter for requirement analysis
+- feat(spec_driven): add core types for spec-driven workflow
+- feat(gateway): add exec.callback.handle RPC for approval callbacks
+- feat(telegram): add edit_message method for approval updates
+- feat(gateway): add approval bridge handler utilities
+- feat(exec): add ApprovalBridge for channel integration
+- feat(telegram): add callback query handling
+- feat(telegram): add inline keyboard support
+
+### Fixed
+- fix: serialize tool_calls on assistant messages in OpenAI protocol
+- fix: unify provider verified pattern across embedding and reranking
+- fix: pass provider name in generation test_connection for verified persistence
+- fix: pass provider name in test_connection so verified=true persists
+- fix: rewrite changelog generator (fix escape bug), clean up CHANGELOG.md
+- fix: add tool_call_id to OpenAI tool result messages
+- fix: unignore CHANGELOG.md, fix release recipe git add
+- fix: remove unused imports across codebase (cargo fix)
+- fix: resolve 42 test warnings — deprecated API, unused imports, dead code
+- fix: slash command fast-path + CLI arg parser + E2E tests
+- fix: enable slash command fast-path for WebChat chat.send
+- fix: replace env!("HOME") with dirs::home_dir() for Windows compatibility
+- fix: correct PluginKind::Mcp mapping and remove debug output
+- fix: update discovery to find CC-format plugins in installed/ directory
+- fix: channel binding not replacing old peer_id rows
+- fix: channel status showing disconnected after page refresh
+- fix: pass session_manager to BuiltinToolConfig for session tools
+- fix: resolve agent from session_key instead of WorkspaceManager
+- fix: separate agent identity files from workspace directory
+- fix: use bold *name* for agent prefix instead of [name]
+- fix: use Markdown (legacy) instead of MarkdownV2 for Telegram messages
+- fix: remove backslash escaping from agent name prefix in replies
+- fix: override relative working_dir with agent workspace
+- fix: change default workspace root from agents/ to workspaces/
+- fix: default bash/code_exec working directory to agent workspace
+- fix: register JSON Schema for all builtin tools + Codex protocol alignment
+- fix: prevent token regeneration on HMAC mismatch to protect vault secrets
+- fix: Codex SSE function_call_arguments delta collection + logging
+- fix: use vault_key() function instead of undefined VAULT_KEY constant
+- fix: unify reranking vault key format with other modules
+- fix: reranking Panel fetches per-provider API key from vault
+- fix: clear api_key from reranking config signal after save
+- fix: isolate rerank API keys per provider in vault
+- fix: move rerank API key from config.toml to encrypted vault
+- fix: correct default reranking model name in Panel and tests
+- fix: ACP panel buttons hang due to spawn_local context loss
+- fix: ACP test/save button hang and preset mode defaults
+- fix: ACP panel gemini preset ID mismatch and test button hang
+- fix: resolve all 75 compilation errors from provider routing refactor
+- fix: vault-backed provider API keys and config handler improvements
+- fix(acp): adapt harnesses to real CLI protocols after e2e probe testing
+- fix: workspace schema migration, workspace.getActive response, and providers page freeze
+- fix: remove redundant binding in ConfigPatcher
+- fix: session history, agent.list RPC, and embedding dedup
+- fix: count only running runs for concurrency limit, reduce cleanup delay
+- fix: add multi-dimension vector columns to memories table schema
+- fix: hot-swap runtime provider when switching default via Panel UI
+- fix: resolve chat quality issues — bootstrap, escalation, and response format
+- fix: resolve pre-existing test compilation errors
+- fix: wire missing RPC handlers and correct TUI method names
+- fix: update remaining port 18789 references to 18790
+- fix: unify channel config persistence — Panel UI save/load/connect now works
+- fix: resolve compilation errors from feature flag removal
+- fix(desktop): address final review — version alignment, input validation, Unicode
+- fix(desktop): address clippy needless-borrow warning in agent handler
+- fix(desktop): address code quality review — validation, approval gates
+- fix(desktop): wire NativeDesktop into registry + complete re-exports
+- fix: logic review R2 architecture — 14 findings across 5 categories
+- fix: logic review R2 — 29 files across 4 priority batches
+- fix: address code review findings for self-configuration
+- fix: RAII semaphore guard and env var expansion ordering (Known Issues)
+- fix: replace std::sync::RwLock with crate::sync_primitives (P2-15)
+- fix: sort HashMap-derived collections for deterministic ordering (P2-14)
+- fix: replace SystemTime UNIX_EPOCH .unwrap() with .unwrap_or_default() (P2-12)
+- fix: release locks before awaiting in 4 async patterns (P2-11)
+- fix: normalize task_type and task_id in SessionKey::task() (P1-9)
+- fix: use bounded cast for POE token count u32 conversion (P1-8)
+- fix: resolve remaining UTF-8 byte slicing panics (P1-7)
+- fix: ConfigPatcher use save_incremental and hard-error on conflict
+- fix: logic review Phase 6 — 45 fixes across gateway, memory, poe, exec, providers, and 15 more modules
+- fix: resolve 5 remaining Warning-level issues from logic review Phase 5
+- fix: logic review Phase 4 — 18 fixes across daemon, engine, secrets, skills, components, cron
+- fix: resolve 5 Known Issues from logic review
+- fix: comprehensive logic review fixes across 53 files in 77 modules
+- fix: use cfg(feature = "loom") instead of cfg(loom) to avoid poisoning dependencies
+- fix(gateway): eliminate TOCTOU in execution_engine concurrent run limit check
+- fix(gateway): use Mutex for channel_registry take-once inbound_rx pattern
+- fix(resilience): simplify governor session_tokens from AtomicU64 to u64
+- fix: update doctest to use poe::meta_cognition::BehavioralAnchor
+- fix: add Clone derive to NoiseFilter and remove duplicate mod declarations
+- fix: remove duplicate scoring_pipeline module declaration in memory/mod.rs
+- fix(clippy): resolve print_literal warnings in secret providers command
+- fix(tests): migrate secret_boundary_integration tests to async
+- fix(runtimes): address critical and important code review findings
+- fix: resolve all clippy warnings in aleph-tauri and alephcore
+- fix(desktop): use ERR_NOT_IMPLEMENTED for stubbed methods, add debug logging
+- fix(halo): address code review findings for view and events
+- fix(halo): guard against empty run_id in event handler
+- fix(halo): use monotonic counter for unique message IDs, remove redundant phase guard
+- fix(desktop): restrict UDS socket to owner-only access
+- fix(desktop): add 30s timeout to UDS request to prevent indefinite task hang
+- fix(desktop): log evaluateJavaScript errors in Canvas, add runAsync main-thread assert
+- fix(desktop): replace deprecated activate(options:) with activate() for macOS 15
+- fix(desktop): avoid PNG round-trip in OCR path by sharing captureCurrentScreen
+- fix: address code review findings
+- fix(desktop): replace strcpy with strncpy to prevent buffer overflow
+- fix(desktop): require x/y for click and window_id for focus_window
+- fix(desktop): remove misleading serde tags from DesktopRequest, add From conversions
+- fix(skill): address code review findings
+- fix(skill): resolve clippy warnings in skill module
+- fix(skill): use single colon separator for SkillId (matches OpenClaw convention)
+- fix(start): add cfg guard for builder mod, tighten handler visibility to pub(in crate::commands::start)
+- fix(start): move session banner print into register_session_handlers for consistency
+- fix: resolve all compilation errors from server purification
+- fix: clean up remaining Server-Client terminology in source comments
+- fix: repair 2 broken doc-tests in skill_evolution module
+- fix: resolve 8 pre-existing test failures
+- fix(control-plane): document AlertsApi integration limitation
+- fix(control-plane): complete mock data removal
+- fix(control-plane): fix memory leaks and improve error handling in alert subscriptions
+- fix(shared-ui-logic): improve error handling in alerts API
+- fix(control-plane): use Tailwind CDN for CSS compilation
+- fix(control-plane): add WASM initialization in lib.rs
+- fix(control-plane): update startup log message to show correct URL
+- fix(control-plane): fix root path access and static asset loading
+- fix: resolve compilation errors and add missing imports
+- fix(dashboard): add wasm_bindgen entry point to enable app initialization
+- fix(gateway): extract guest_session_id when require_auth=false
+- fix: resolve compilation errors in auth and guest handlers
+- fix: use rowid instead of id for sqlite-vec virtual table updates
+- fix(phase2): fix RPC tests and update progress report
+- fix(cli): use correct method names for session commands
+- fix(cli): resolve event streaming issue between gateway and CLI
+- fix(cli): align command handlers with gateway API
+- fix(memory): handle new SubAgent FactType variants in consolidation
+- fix: resolve failing BDD tests for embodiment and CoT transparency
+- fix: resolve failing unit tests
+- fix: resolve module export and test compilation errors
+- fix: resolve all 29 compiler warnings
+- fix: add dylib.* pattern to gitignore
+- fix: update .gitignore for Aleph rename and remove dylib from tracking
+- fix(compressor): fix string concatenation in tests
+- fix(protocols): error on nonexistent JSONPath instead of returning null
+- fix(scratchpad): use EAFP pattern instead of sync exists() checks
+- fix(scratchpad): remove async from exists() and export ScratchpadConfig
+- fix(core): fix format strings in manifest.rs and doctest in pty.rs
+- fix: clean up remaining MultiTurnCoordinator references
+- fix(gateway): remove MultiTurnCoordinator dependency from adapter
+- fix(halo): update DependencyContainer comment for HaloInputCoordinator
+- fix(halo): update AppDelegate to use HaloInputCoordinator
+- fix(halo): update HotkeyService to use HaloInputCoordinator
+- fix: update tests for 5 builtin tools and skill evolution
+- fix: compilation errors in skill evolution and perception modules
+- fix: resolve test compilation errors
+
+### Changed
+- refactor: delete ~38K lines of dead dispatcher code
+- refactor: rename chatgpt → codex protocol across codebase
+- refactor: rename ToolGroup → ToolCategory to avoid confusion with Team
+- phase4: clean all Tauri references from codebase
+- phase4: remove Tauri, archive old apps, move Swift bridge to crates/desktop-macos/bridge
+- refactor: move CLI/TUI/WebChat to interfaces/, client to shared/
+- cleanup: remove bootstrap auto-clone and legacy plugin index code
+- cleanup: remove AgentLifecycleEvent::Switched and AgentRouter from inbound router
+- cleanup: remove agent switching (tool, intent detector, /switch command)
+- cleanup: remove unregistered self-management tool source files
+- cleanup: remove old subagent tools (spawn/steer/kill + delegate)
+- cleanup: move e2e tests into tests/, remove unused shared_ui_logic crate, add secret scanning exclusion
+- cleanup: remove temporary debug logging for chatgpt protocol
+- refactor: rename workspace to agent across memory/config/paths, enhance agent loop and ChatGPT protocol
+- cleanup: remove zombie code, update default config and shared_ui_logic
+- cleanup: remove stale ALEPH_MASTER_KEY references from docs and error messages
+- refactor: flatten agent_loop/ — remove minimal/ subdirectory
+- cleanup: remove deprecated APIs (register_agent_tools, with_working_dir, ToolCategory::Native, PolicyEngine stubs, AuditStore, InvalidateOld)
+- refactor: rename Minimal* types to standard names — this IS the loop
+- cleanup: fix clippy warning in legacy_adapter detect_entry_point
+- cleanup: eliminate all clippy warnings (58→0)
+- cleanup: fix clippy warnings (derive Default, redundant closures, simplified conditionals)
+- cleanup: remove stale app_bundle_id references from comments and BDD tests
+- cleanup: remove TypeScript webchat (replaced by Panel /chat route)
+- cleanup: remove dead SubagentAuthority and tools/sessions domain layer
+- refactor: simplify memory types, use floor_char_boundary, add mtime cache to daily memory
+- refactor(pdf): split pdf_generate.rs into module directory
+- refactor: strip #[cfg(feature)] from gateway, server, extension, and misc modules
+- refactor: strip #[cfg(feature)] from all 12 channel implementations
+- refactor: strip 20+ Cargo feature flags from core crate
+- refactor: Occam's Razor pass — eliminate clippy warnings and dead code
+- cleanup: remove fastembed and local embedding model remnants
+- cleanup: fix unused import in host_functions.rs
+- refactor(wasm): simplify PermissionChecker to facade over WasmCapabilities
+- cleanup: broad DRY refactoring and clippy compliance across codebase
+- cleanup: remove stale fastembed references, fix integration tests
+- cleanup: remove macOS-specific CI workflow and build scripts (C8-C12)
+- cleanup: remove deprecated macOS Swift app (C7)
+- cleanup: remove UniFFI Swift bindings (C1-C2)
+- refactor(core): introduce register_handler! macro, eliminate handler boilerplate (Wave 4)
+- refactor(core): replace &Vec<T> with &[T] in arrow_convert and shadow_replay (Wave 3B)
+- refactor(core): convert InternalEventHandler String params to &str (Wave 3A)
+- refactor(core): manual Clippy fixes — expect_fun_call, useless_vec, ptr_arg, type_complexity, module_inception, needless_borrows, and more (Wave 2B)
+- refactor(core): replace Default::default() field reassignment with struct literals (Wave 2A)
+- refactor(core): auto-fix Clippy warnings and remove unused imports (Wave 1)
+- refactor(runtimes): delete old runtime managers, replace with Ledger/Probe system
+- refactor(video): replace RuntimeRegistry with CapabilityLedger in caption.rs
+- refactor(init): replace forced runtime installation with zero-install ledger
+- refactor(desktop): delete RPC proxy commands and clean up dead code (~1600 lines)
+- refactor(halo): delete React frontend source from Tauri app
+- refactor(halo): point Tauri halo window to Leptos server URL
+- refactor(halo): delete legacy Swift Halo views and fix references (~4500 lines removed)
+- refactor(start): split initialize_auth, extract load_app_config, restore register calls to orchestrator
+- refactor(start): move register_* handler functions to commands/builder/handlers.rs
+- refactor(extension): thin mod.rs facade, delegate load_all to ComponentLoader
+- refactor(start): extract subsystem initializers from start_server
+- refactor: remove distributed execution infrastructure (ExecutionPolicy, ClientManifest, ReverseRpc, ToolRouter, RoutedExecutor)
+- refactor: clean up auth handler by removing ClientManifest references
+- refactor: simplify gateway server by removing client routing infrastructure
+- refactor: simplify ExecutionEngine by removing client routing
+- refactor: rename gateway/channels/ to gateway/interfaces/
+- refactor: rename clients/ to apps/
+- cleanup: remove unused imports from exec_security_gate (post-rebase)
+- cleanup: fix Arc misuse, large variants, and private interfaces (Pass 3 final)
+- cleanup: extract type aliases and parameter structs (Pass 3)
+- cleanup: suppress module_inception for intentional nested module pattern
+- cleanup: fix 22 miscellaneous clippy warnings
+- cleanup: Pass 2 local refactoring (clone, strip_prefix, dead code, redundant closures)
+- cleanup: fix boolean simplifications, identity ops, and &PathBuf signatures
+- cleanup: remove unused imports and replace derivable impls
+- cleanup: apply cargo clippy --fix auto-corrections
+- refactor(control-plane): split Sidebar into sidebar/ directory
+- refactor(control-plane): use nested routes for Settings with SettingsLayout
+- refactor(control-plane): remove /cp prefix from routing
+- refactor(core): rename aleph-gateway to aleph-server
+- refactor(macos): completely remove settings UI from macOS client
+- refactor(desktop): completely remove settings UI from Tauri client
+- refactor(desktop): migrate Plugins, Skills, and Policies settings to Dashboard
+- refactor(clients): complete Phase 4 - remove Generation Providers UI
+- refactor(clients): migrate Providers, Memory, and MCP config to Dashboard
+- refactor(agent_loop): introduce RunContext pattern for cleaner API
+- refactor(agent-loop): add RunContext structure (WIP)
+- refactor(domain): implement Newtype pattern for Answer and Ruleset
+- refactor(domain): implement Newtype pattern for 5 ID types
+- refactor(api): implement FromStr trait for remaining types
+- refactor(api): implement FromStr trait for extension and resilience types
+- refactor(api): implement FromStr trait for memory context types
+- refactor(perf): replace trim_start_matches with strip_prefix for fixed prefixes
+- refactor(perf): optimize &PathBuf → &Path in 6 files
+- refactor(core): add #[allow(dead_code)] to 12 reserved fields
+- refactor(deps): remove 5 unused dependencies
+- refactor(core): remove 2 confirmed dead code items
+- refactor(core): remove 160+ unused imports across 50 files
+- refactor(tools): extract builtin tool registration and types (Phase 6)
+- refactor(gateway): modularize plugins handlers (Phase 5.1)
+- refactor(poe): extract services to dedicated modules (Phase 4.2 - P1)
+- refactor(poe): extract handler types to dedicated modules (Phase 4.1 - P0)
+- refactor(browser): extract types and scripts modules (Phase 3 - Part 1)
+- refactor(engine): complete atomic executor composition refactoring (Phase 2)
+- refactor(engine): add atomic module base architecture (Phase 2 WIP)
+- refactor(extension): split types.rs into modular structure
+- refactor(security): transform PolicyEngine to stateless
+- refactor(protocol): add equality derives and helper methods to auth types
+- refactor(phase1): reorganize client directory structure
+- refactor: complete final Aether to Aleph cleanup
+- refactor: complete Aether to Aleph rename - scripts, workflows, and remaining code
+- refactor: complete Aether to Aleph rename across entire codebase
+- refactor(providers): use ProtocolRegistry in create_provider factory
+- refactor(providers): remove technical alias presets
+- refactor(config): remove provider_type field from ProviderConfig
+- refactor: fix P3 clippy warnings - batch 2
+- refactor: fix P3 clippy warnings - batch 1
+- refactor: fix P1/P2 clippy warnings and improve code quality
+- refactor(providers): delete legacy OpenAiProvider
+- refactor(providers): delete legacy GeminiProvider
+- refactor(providers): delete legacy ClaudeProvider
+- refactor(providers): use HttpProvider for Anthropic protocol
+- refactor(providers): remove redundant vendor wrappers (~850 lines)
+- refactor(providers): use HttpProvider for OpenAI protocol in factory
+- refactor(macos): cleanup and improve hotkey/halo components
+- refactor(halo): replace HaloState with simplified 6-state version
+- refactor(halo): switch HaloWindow to V2 components
+- refactor(halo): remove MultiTurn references from EventHandler
+- refactor(halo): remove MultiTurn directory (~3000 lines)
+- refactor: split large modules into smaller files
+- cleanup: remove unused modules and merge thinking into thinker
+- cleanup: eliminate all compilation warnings
+- cleanup(lib): slim down exports from 590 to 272 lines
+- cleanup: remove FFI-related comments
+- cleanup: rename FFI types to standard names
+- cleanup(dispatcher): rename ffi.rs to tool_info.rs
+- cleanup(intent): remove Type A FFI residuals
+
+### Build
+- docs: add official repositories to CLAUDE.md, fix security headers
+- docs: add generation provider isolation implementation plan
+- docs: add generation provider isolation and URL normalization spec
+- docs: add media attachment infrastructure implementation plan
+- docs: fix second review issues in media attachment spec
+- docs: update media attachment spec — fix review issues and unify temp files
+- docs: add media attachment infrastructure design spec
+- docs: add model routing optimization implementation plan
+- docs: add full-chain security hardening implementation plan
+- docs: fix security spec based on review feedback
+- docs: update model routing spec with review feedback
+- docs: add full-chain security hardening design spec
+- docs: add model routing optimization design spec
+- docs: add generation tools unification spec and plan
+- docs: add implementation plan for self-management and telegram resilience
+- docs: spec v3 — full skill-ization + skills repo separation
+- docs: fix spec review issues — backoff off-by-one, reuse ChannelStatus::Connecting
+- docs: add self-management system and telegram resilience design spec
+- ci: remove install instructions from release body, keep changelog only
+- ci: include changelog in GitHub Release page body
+- release: v0.2.11
+- build: fix install scripts — proper upgrade flow and service management
+- release: v0.2.10
+- docs: add skill scope filtering implementation plan
+- docs: fix skill scope filtering spec per review
+- docs: add skill scope filtering design spec
+- release: v0.2.9
+- docs: add voice conversation implementation plan
+- docs: fix PromptBuilder voice state access path in voice spec
+- docs: update voice conversation spec with review fixes
+- docs: add voice conversation system design spec
+- docs: add release workflow and version management to CLAUDE.md
+- release: v0.2.8
+- build: unify version source — VERSION file drives all version strings
+- release: v0.2.8
+- docs: add multimodal probe tests implementation plan
+- docs: add multimodal probe tests design spec
+- docs: add core multimodal enhancement implementation plan
+- docs: fix spec review issues in core multimodal design
+- docs: add core multimodal enhancement design spec
+- docs: add Telegram channel enhancement implementation plan
+- docs: fix spec review issues in Telegram enhancement design
+- docs: add Telegram channel enhancement design spec
+- docs: add Feishu enhanced features implementation plan
+- docs: address spec review — FeishuEventEmitter, typing lifecycle, capabilities
+- docs: add Feishu enhanced features design spec
+- docs: add Feishu channel implementation plan
+- docs: address spec review feedback for Feishu channel
+- docs: add Feishu/Lark channel design spec
+- release: v0.2.7 — multi-agent system, UI updates, bug fixes
+- docs: fix spec issues from review — stale final_text, test plan, consecutive_errors
+- docs: add Persistent Completion Protocol design spec
+- docs: fix multi-agent modes spec per review findings
+- docs: add multi-agent modes taxonomy design spec
+- docs: add task coordination implementation plan (12 tasks)
+- docs: fix event type conventions in task coordination spec
+- docs: address spec review findings for task coordination
+- docs: add task coordination system design spec
+- build: update WASM panel dist
+- ci: upgrade GitHub Actions to Node.js 24 compatible versions
+- ci: scope fmt check to maintained crates (skip legacy formatting issues)
+- build: consolidate to single release workflow, fix CI protoc dependency
+- build: remove archive from git (large binaries exceed GitHub limit)
+- release: bump version to 0.2.6
+- build: update install scripts for aleph-server binary name
+- build: rename workflows, fix --bin aleph→aleph-server, add platform release workflows
+- build: update justfile and CI workflows for post-Tauri architecture
+- build: add swift-bridge recipe to justfile for macOS native APIs
+- docs: add Phase 3 implementation plan for macOS PIM & system capabilities
+- docs: add Phase 2 implementation plan for screen control native migration
+- docs: address spec review feedback for hierarchical commands
+- docs: add hierarchical slash commands design spec
+- docs: add Phase 1 implementation plan for desktop native capabilities
+- docs: add desktop native capabilities design spec
+- docs: update design spec with new directory structure
+- docs: add implementation plan for intermediate message delivery
+- docs: add PLUGIN_SYSTEM.md — CC-compatible plugin architecture reference
+- docs: address spec review feedback for CLI/TUI separation
+- docs: add CLI/TUI separation design spec
+- docs: add P4 runtime migration implementation plan
+- docs: add prompt guidance as in-scope changes to intermediate message spec
+- docs: add edge cases to intermediate message delivery spec
+- docs: add intermediate message delivery design spec
+- docs: add P3 scope management implementation plan
+- docs: add P2 marketplace system implementation plan
+- docs: add P0+P1 implementation plan for plugin CC compat
+- docs: fix remaining spec review items (round 2)
+- docs: address spec review findings for plugin compat design
+- docs: add plugin system Claude Code compatibility redesign spec
+- docs: update spec and plan — keep peer_id signatures unchanged
+- docs: update agent-bot 1:1 binding spec with review fixes
+- docs: add agent-bot 1:1 binding simplification design spec
+- docs: add chat sidebar redesign spec and implementation plan
+- docs: add panel agent routing fix design spec
+- docs: add workspace output migration implementation plan
+- docs: revise workspace output migration spec after review
+- docs: add workspace output migration design spec
+- docs: add generation providers wiring implementation plan
+- docs: fix generation providers spec after review
+- docs: add generation providers wiring design spec
+- docs: add ClawHub integration implementation plan
+- docs: address spec review feedback for ClawHub integration
+- docs: add ClawHub integration design spec
+- ci: upgrade GitHub Actions to Node.js 24, fix Windows dead-code warnings
+- docs: fix plan review issues (3 blockers + 6 warnings)
+- docs: address spec review feedback for Chrome DevTools MCP Mode
+- docs: add Chrome DevTools MCP Mode design spec
+- docs: add process management rules to CLAUDE.md
+- docs: add tool permission system implementation plan
+- docs: update tool permission spec after review
+- docs: add tool permission system design spec
+- docs: add ACP probe tests design document
+- docs: add ACP harness management implementation plan
+- docs: add ACP harness management design document
+- docs: add provider routing refactor implementation plan
+- docs: fix remaining spec review issues
+- docs: fix spec issues from review
+- docs: add provider routing refactor design spec
+- docs: add provider config testing implementation plan
+- docs: update provider config testing spec after review
+- docs: add provider config testing design spec
+- docs: add simplify-model-config implementation plan
+- docs: update simplify-model-config spec after review
+- docs: add simplify-model-config design spec
+- ci: read release version from VERSION file instead of manual input
+- docs: add cron probe tests implementation plan
+- docs: add cron probe tests design spec
+- docs: add cron module redesign implementation plan
+- docs: add cron module redesign spec
+- build: rebuild panel WASM and update docs after worktree merges
+- docs: add provider zero-config implementation plan
+- docs: add message pipeline implementation plan
+- docs: add provider zero-config UX design spec
+- docs: add message pipeline design for gateway pre-processing
+- docs: add model discovery probe tests implementation plan
+- docs: add model discovery probe tests design spec
+- docs: add model discovery implementation plan
+- docs: fix model discovery spec issues from review
+- docs: add model discovery design spec
+- docs: add cognitive evolution beta implementation plan
+- docs: add cognitive evolution beta design (immune-complete loop)
+- docs: add POE Phase 2+3 implementation plan
+- docs: add POE Phase 1 implementation plan (BlastRadius + Taboo)
+- docs: add POE Architecture Evolution Whitepaper 2026
+- ci: fix Linux/Windows compilation errors for missing imports
+- docs: update extension system architecture documentation
+- docs: add unified plugin system implementation plan
+- docs: add unified plugin system design
+- docs: add one-line install commands as primary installation method
+- docs: remove refactoring backstory from intent section
+- docs: update intent detection section to reflect unified LLM pipeline
+- docs: add detailed Aleph vs OpenClaw comparison
+- docs: add P4.3 core plugins implementation plan
+- docs: add plugin development guide
+- docs: add P4 plugin ecosystem implementation plan
+- ci: add Windows x86_64 build target and PowerShell installer
+- docs: add P3 media pipeline implementation plan
+- ci: fix Linux warn import, remove darwin-x86_64 target
+- ci: add libxdo-dev for Linux, fix darwin x86_64 AVX-512 link error
+- ci: fix Linux pipewire compat (ubuntu-24.04) and macOS x86_64 openssl
+- ci: add libegl and X11 extension deps for Linux build
+- ci: use macos-latest for x86_64 cross-compile (macos-13 EOL)
+- ci: add dbus, drm, gbm deps for Linux build
+- ci: add pipewire and clang deps for Linux xcap build
+- ci: add libwayland-dev to Linux build dependencies
+- docs: add author note to README
+- docs: rename panel screenshots with consistent numbering
+- docs: restore dashboard screenshot, keep all 3 panel images
+- docs: update README screenshots with Panel chat and settings views
+- build: remove webchat recipes from justfile
+- docs: add webchat Rust rewrite implementation plan
+- docs: add webchat Rust rewrite design
+- docs: remove acknowledgments section from README
+- ci: enable all platform build targets for server release
+- ci: add manual server release workflow and improve install script
+- docs: overhaul README.md, CLAUDE.md and add LICENSE
+- docs: add inline directives and legacy cleanup implementation plan
+- docs: add inline directives and legacy cleanup design
+- docs: add language-agnostic intent detection implementation plan
+- docs: add language-agnostic intent detection design
+- docs: update cleanup plan with execution results
+- docs: clarify cleanup strategy — scoped responsibility, not fallback
+- docs: add multi-agent code redundancy cleanup plan
+- docs: add A2A protocol implementation plan
+- docs: add A2A protocol design document
+- docs: add per-agent tool configuration implementation plan
+- docs: add per-agent tool configuration design
+- docs: add multi-bot Panel UI implementation plan
+- docs: add multi-bot Panel UI design
+- docs: add multi-bot channel implementation plan
+- docs: add multi-bot channel support design
+- docs: add memory alignment design for dual-directory architecture
+- docs: add agent-workspace separation implementation plan
+- docs: add agent-workspace separation design
+- docs: add agent management panel implementation plan
+- docs: add agent management panel design
+- docs: add webchat restructure implementation plan
+- docs: add webchat restructure design
+- docs: add agent switching enhancement implementation plan
+- docs: add agent switching enhancement design
+- docs: add unified command registry implementation plan
+- docs: add unified command registry design
+- docs: add dynamic agent switching implementation plan
+- docs: add dynamic agent switching design
+- docs: add system prompt optimization implementation plan
+- docs: add system prompt architecture optimization design
+- docs: add Agent/Workspace/Session unification implementation plan
+- docs: add Agent/Workspace/Session relationship design
+- docs: add task routing decision layer implementation plan
+- docs: add task routing decision layer design
+- docs: add architecture activation diagnostic report
+- docs: add architecture activation diagnostic implementation plan
+- docs: add architecture activation diagnostic design
+- docs: add native tool_use implementation plan (9 tasks)
+- docs: add native tool_use migration design
+- docs: add PDF dual-engine implementation plan
+- docs: add PDF dual-engine rendering design
+- docs: add cron and group chat backend implementation plan
+- docs: add cron and group chat backend implementation design
+- docs: add scheduled tasks panel implementation plan
+- docs: add scheduled tasks panel design
+- docs: add CLI full RPC coverage implementation plan
+- docs: add CLI full RPC coverage design
+- docs: add CLI bugfix and JSON unification design
+- docs: add CLI full commands implementation plan
+- docs: add CLI full commands design
+- docs: add CLI infrastructure enhancement implementation plan
+- docs: add CLI infrastructure enhancement design
+- docs: add lifecycle observability logging implementation plan
+- docs: add lifecycle observability logging design
+- docs: add system prompt enhancement implementation plan
+- docs: add system prompt enhancement design
+- docs: add agent system Phase 2 full coverage implementation plan
+- docs: add agent system full coverage design (Phase 2)
+- docs: add Codex panel UI design and implementation plan
+- docs: add Codex Responses API implementation plan
+- docs: add Codex Responses API protocol adapter design
+- docs: add gateway enhancement implementation plan (20 tasks)
+- docs: add gateway enhancement design (OpenClaw-inspired)
+- docs: add implementation plan for agent/workspace/binding
+- docs: add agent definition + workspace + binding design
+- docs: add OpenAI subscription provider implementation plan
+- docs: add OpenAI subscription provider design
+- docs: add Lazy POE Activation design
+- build: rename just server → just build, add just all
+- docs: update binary name and port references across all documentation
+- build: enable axum ws feature for port unification
+- docs: add port unification implementation plan
+- docs: add port unification and binary rename design
+- docs: add channel infrastructure fix implementation plan
+- docs: add channel infrastructure fix design
+- docs: update CLAUDE.md for feature flag removal
+- build: simplify justfile — remove all --features flags
+- docs: add runtime channel control implementation plan
+- docs: add runtime channel control design — eliminate feature flag fragmentation
+- docs: add chat persistence & memory pipeline implementation plan
+- docs: add chat persistence & memory pipeline fix design
+- docs: add full chain + smart recall implementation plan
+- docs: add full chain + smart recall design
+- docs: add workspace enhancements implementation plan (9 tasks)
+- docs: add workspace enhancements design (4 features)
+- docs: add workspace wiring implementation plan (11 tasks)
+- docs: add workspace wiring design for multi-role persona system
+- docs: add config externalization implementation plan
+- docs: add config externalization design for ~/.aleph workspace
+- ci: keep only macOS ARM64 build, document other platform blockers
+- ci: fix remaining build issues across platforms
+- ci: fix cross-platform build issues
+- ci: pin wasm-bindgen-cli to 0.2.108 matching Cargo.lock
+- ci: allow test job to fail without blocking builds
+- ci: add X11/xscrnsaver dev libraries for Linux builds
+- ci: install protoc for lance-encoding build dependency
+- ci: improve release workflow with WASM build, test job, and cross-platform desktop
+- build: rewrite justfile for desktop-as-muscle architecture
+- docs: add crates/desktop to project structure and build commands
+- docs: add Desktop-as-Muscle implementation plan
+- docs: add Desktop-as-Muscle architecture design
+- docs: add self-configuration implementation plan
+- docs: add self-configuration design document
+- ci: add loom concurrency test job and increase proptest coverage
+- build: add test-proptest, test-loom, test-logic just recipes
+- docs: add logic review system implementation plan (15 tasks, 49 properties)
+- docs: add logic review system design (three-layer defense architecture)
+- docs: move obsolete embedding/sqlite-vec plans to legacy
+- docs: update memory system docs to reflect remote embedding migration
+- build: replace trunk with manual WASM pipeline in justfile
+- docs: fix macOS Resources path in build pipeline design
+- build: add justfile for unified build pipeline
+- docs: add unified build pipeline design
+- docs: add channel config panel implementation plan
+- docs: add channel config panel design document
+- docs: add POE full evolution implementation plan (19 tasks, 4 phases)
+- docs: add POE full evolution design (event-driven closed loop)
+- docs: add WASM capability kernel implementation plan
+- docs: add WASM capability kernel design
+- docs: add macOS PIM native API implementation plan
+- docs: add macOS PIM native API integration design
+- docs: add POE cognitive hub implementation plan
+- docs: add POE cognitive hub upgrade design
+- docs: add social bot channels expansion implementation plan
+- docs: add social bot channels expansion design
+- docs: add surgical DRY refactoring implementation plan
+- docs: add surgical DRY refactoring design for embedding provider files
+- docs: add embedding provider LLM migration implementation plan
+- docs: add embedding provider LLM migration design
+- docs: add large file refactoring implementation plan — 6 tasks, 5 files
+- docs: add large file refactoring design — 5 files, pure module splitting
+- ci: add server, macOS app, and Tauri release workflows
+- docs: add distribution implementation plan (24 tasks, 9 phases)
+- docs: add distribution architecture design
+- docs: add PromptPipeline implementation plan — 10 tasks, TDD, strangler fig
+- docs: add PromptPipeline design — Trait-per-Layer evolution from Plan A
+- docs: add automation skills implementation plan
+- docs: add automation skills (#21-30) design
+- docs: add memory event sourcing implementation plan
+- docs: add memory event sourcing design (CQRS Light)
+- docs: add prompt system enhancement implementation plan
+- docs: add prompt system enhancement design
+- docs: add skills system, update runtimes refs, add macOS components
+- docs: update acceptance results after bridge fixes (27/30 pass)
+- docs: add implementation plan for fixing bridge known issues
+- docs: add design for fixing bridge known issues
+- docs: remove remaining Swift references from CLAUDE.md
+- docs: update CLAUDE.md and create migration completion record (C13-C16)
+- docs: add macOS Swift app removal implementation plan
+- docs: add macOS Swift app removal design with acceptance criteria
+- docs: add desktop capabilities evolution implementation plan
+- docs: add desktop capabilities evolution design
+- docs: add semantic targeting implementation plan
+- docs: add semantic targeting and action primitives design
+- docs: update CLAUDE.md for Server-Centric Build Architecture
+- docs: add Phase 3 and Phase 4 implementation plans
+- docs: replace Ghost aesthetic with concrete product constraints R5-R7
+- docs: add Phase 2.5 bridge integration completion plan
+- docs: add design for removing Ghost aesthetic concept
+- docs: add Phase 1 bridge skeleton implementation plan
+- docs: add server-centric build architecture design
+- docs: update worktree guidelines with EnterWorktree CWD lock caveat
+- docs: add cron system redesign plan — surpassing openclaw
+- docs: add memory optimization implementation plan
+- docs: add memory module optimization design
+- docs: address code review findings (JIT-approval TODO, RwLock rationale)
+- docs: bring in Late-Binding Secure Execution design and plan from main
+- docs: add Late-Binding Secure Execution implementation plan (14 tasks, 4 waves)
+- docs: add Late-Binding Secure Execution Architecture design
+- docs: add git worktree safety guide; fix missing ScreenRegion import
+- docs: add Rust refactoring implementation plan (7 tasks, 4 waves)
+- docs: add Rust core refactoring design (4-wave strategy)
+- docs: add runtime on-demand implementation plan (13 tasks, 4 phases)
+- docs: add runtime on-demand implementation plan (13 tasks, 4 phases)
+- docs: add runtime on-demand native bootstrapping architecture design
+- docs: add verification test results to Tauri shell design doc
+- docs: add Tauri cross-platform shell implementation plan
+- docs: add Tauri cross-platform shell & DesktopBridge design
+- build(halo): rebuild WASM with /halo route
+- docs: split CLAUDE.md and reorganize docs/ into docs/reference/
+- docs: add 1-2-3-4 architecture constitution design document
+- docs: add Halo UI Unification implementation plan (10 tasks)
+- docs: establish 1-2-3-4 architecture model as constitutional principles in CLAUDE.md
+- build(macos): add WebKit framework dependency for Settings WebView
+- docs: add Phase 1 implementation plan — Settings WebView integration
+- docs: add UI unification design — Leptos as single UI codebase
+- docs: add Desktop Bridge implementation plan (11 tasks, 4 phases)
+- docs: add Desktop Bridge design for UDS-based Swift-Rust IPC
+- docs: add Skill System v2 implementation plan (15 TDD tasks)
+- docs: add Skill System v2 design (complete DDD rebuild)
+- docs: update all documentation for server-centric architecture
+- docs: update CLAUDE.md for server-centric architecture
+- docs: add server purification implementation plan
+- docs: add server purification design - remove desktop control, embrace MCP plugins
+- docs: add Skill System implementation plan with 14 TDD tasks
+- docs: add server-centric architecture implementation plan
+- docs: add server-centric architecture reframing design
+- docs: add Skill System domain-driven design document
+- docs: add P0 refactoring implementation plan for start.rs and extension/mod.rs
+- docs: add CODE_ORGANIZATION guide with refactoring backlog
+- docs: add social connectivity evolution design and implementation plan
+- build: add missing imports in control-plane cfg block
+- docs: add IronClaw Phase 2/3 detailed implementation plan
+- docs: add IronClaw Phase 2/3 design (host-boundary + EVM signing)
+- docs: add code cleanup implementation plan (16 tasks, 3 passes)
+- docs: add code cleanup design plan (Occam's Razor Pass)
+- docs: add ACMA implementation plan with 7 TDD tasks
+- docs: add ACMA (Aleph Cognitive Memory Architecture) design document
+- docs: add exec security integration design
+- docs: add blog post on PII filtering gateway implementation
+- docs: add agent secret management implementation plan
+- docs: add agent secret management design (Phase 1)
+- docs: add Discord Control Plane implementation plan
+- docs: add Discord Control Plane panel design
+- docs: add memory workspace implementation plan
+- docs: add memory workspace isolation design
+- docs: update architecture docs to reflect LanceDB migration
+- docs: add WhatsApp Bridge implementation plan (10 tasks)
+- docs: add WhatsApp Bridge design (Thin Sidecar + Rich Adapter)
+- docs: update MEMORY_SYSTEM.md and CLAUDE.md for LanceDB migration
+- docs: embedding evolution implementation plan (13 tasks)
+- docs: embedding evolution design (abstract provider + lazy migration)
+- docs: add Memory VFS Evolution implementation plan
+- docs: add Memory VFS Evolution design document
+- docs: add Swarm Agent Loop integration implementation plan
+- docs: add Swarm Intelligence Architecture Agent Loop integration design
+- docs(ssb): add Phase 6 cross-platform implementation plan
+- docs(ssb): add cross-platform architecture design
+- docs: clarify server-side execution model in CLAUDE.md
+- docs(ssb): add Phase 6 enhancement plan and complete roadmap
+- docs: add Swarm Intelligence Architecture design
+- build(control-plane): update compiled UI assets for Phase 3
+- docs: add System State Bus (SSB) architecture design
+- docs(skill-evolution): add comprehensive documentation and examples
+- docs: add Collaborative Skill Evolution architecture design
+- docs: add detailed implementation plan for Control Plane three-column layout
+- docs: add Control Plane three-column layout architecture design
+- docs: update Control Plane UI build workflow with Tailwind CSS compilation
+- docs(claude.md): add WASM initialization mechanism explanation
+- docs(claude.md): add comprehensive Server development and deployment guide
+- docs: add UI comparison analysis for ControlPlane and Tauri settings
+- docs: add WebSocket client implementation summary and migration plan
+- docs: add ControlPlane integration implementation summary
+- docs: add Phase 3 implementation plan
+- docs: add Phase 3 design for skill sandboxing
+- docs: add comprehensive skill sandboxing documentation
+- docs: add Phase 2 skill sandboxing implementation plan
+- docs: add Phase 2 skill sandboxing design document
+- docs(shared-ui-logic): mark API Layer as complete
+- docs(shared-ui-logic): mark WASM connector as complete
+- docs(shared-ui-logic): update README with API and Observability progress
+- docs(shared_ui_logic): update README with protocol layer status
+- docs(shared_ui_logic): update README with native connector status
+- docs(shared_ui_logic): add comprehensive README
+- docs: add shared_ui_logic design document
+- docs: complete Phase 3 architecture documentation
+- docs: add Phase 1 implementation plan for skill sandboxing
+- docs: add skill sandboxing architecture design
+- docs(architecture): add comprehensive cleanup design document
+- docs: reorganize root directory and establish documentation structure
+- docs(architecture): add Phase 3 browser refactoring design
+- docs(architecture): add Phase 6 tools server refactoring design
+- docs(architecture): add Phase 5 plugins handlers refactoring design
+- docs(architecture): add Phase 4 POE handlers refactoring design
+- docs: add Phase 2 continuation guide for next session
+- docs(architecture): add Phase 2 atomic executor refactoring design
+- docs(architecture): add Phase 1 types refactoring design
+- docs(cortex): add Month 3 implementation plan
+- docs(cortex): add Month 3 Meta-Cognition Layer design
+- docs: add Atomic Engine final implementation report
+- docs: add comprehensive Atomic Engine documentation
+- docs: add Atomic Engine progress report (90% complete)
+- docs: add Atomic Engine short-term task completion status
+- docs: add Cortex evolution system design
+- docs: add Atomic Engine evolution roadmap (3-12+ months)
+- docs: add atomic engine implementation status report
+- docs: add language preference to CLAUDE.md
+- docs: add Phase 2 Intelligent Scheduling design
+- docs: add guest session activity logging implementation plan
+- docs: add Liquid Hub cross-platform architecture design
+- docs: complete Identity Context security documentation
+- docs: add Identity Context & Security Enforcement design
+- docs: add ConfigManager and Memory Namespace implementation plan
+- docs: add ConfigManager and Memory Namespace design
+- docs: add Personal AI Hub implementation plan
+- docs: add Personal AI Hub architecture design
+- docs: add client architecture documentation and testing guide
+- docs: add Phase 2 progress report
+- docs: add client architecture refactoring plan
+- docs: document Server-Client architecture in CLAUDE.md
+- docs: add Server-Client implementation plan
+- docs: add Server-Client architecture design
+- docs: add DDD terminology and domain modeling guide
+- docs: add DDD+BDD dual-wheel architecture design
+- docs: add comprehensive Tool-as-Resource usage guide and update Phase 4 status
+- docs: update Phase 3 progress - L2 and observability completed
+- docs: update Phase 2 checkboxes to completed
+- docs: update MEMORY_SYSTEM.md with Memory Evolution features
+- docs(bdd): add comprehensive BDD testing guide and update plans
+- docs: add Phase 3 implementation plan
+- docs: mark Phase 2 as complete with all tasks done
+- docs: document Phase 2 memory system components in TOOL_SYSTEM.md
+- docs: update Phase 2 plan with completion status
+- docs: update implementation plan with completion summary
+- docs: add Phase 1 MVP implementation plan
+- docs: add Multi-Agent 2.0 Phase 1 implementation plan
+- docs: add memory system evolution design
+- docs: add Multi-Agent Resilience documentation
+- docs: update Phase 1 checkboxes to completed
+- docs: update Tool-as-Resource design status to In Progress
+- docs: add Tool-as-Resource implementation plan
+- docs: add Multi-Agent Resilience & Governance architecture design
+- docs: add Tool-as-Resource architecture design
+- docs: add Embodiment Engine and CoT Transparency documentation
+- docs: add Multi-Agent 2.0 architecture design
+- docs(plans): add Embodiment Engine & CoT Transparency design
+- docs(agent-system): add Channel Capability Awareness documentation
+- docs: add channel capability awareness implementation plan
+- docs: add channel capability awareness architecture design
+- docs: add workspace architecture design
+- docs: add Phase 5 implementation plan
+- docs: add Phase 5 Custom Rules Engine architecture design
+- docs: add WorldModel + Dispatcher architecture design
+- docs(daemon): add perception layer documentation
+- docs: add Protocol Adapter Phase 4 implementation summary
+- docs(architecture): document configurable protocol adapter system
+- docs(protocols): add comprehensive protocol adapter user guide
+- docs: add Phase 2 Perception Layer implementation plan
+- docs(protocols): add example YAML protocol configurations
+- docs: add Phase 2 Perception Layer design
+- docs: add daemon module documentation
+- docs: add Phase 1 daemon implementation plan
+- docs: add proactive AI architecture design
+- build: remove deprecated cabi feature and fix Discord API
+- docs: add comprehensive Markdown Tool Adapter implementation summary
+- docs: add Protocol Adapter Phase 4 design
+- docs: add Markdown Tool Adapter design specification
+- docs: add Protocol Adapter Phase 3 implementation summary
+- docs: add Protocol Adapter Phase 2 implementation summary
+- docs: add Protocol Adapter Phase 2 implementation plan
+- docs: add Protocol Adapter Phase 2 design for Claude/Gemini migration
+- docs(providers): update module documentation for Protocol Adapter architecture
+- docs: add Protocol Adapter implementation plan
+- docs: add Protocol Adapter architecture design
+- docs(plans): add P2.5 MCP Advanced Features implementation plan
+- docs(mcp): add P2 advanced features implementation plan
+- docs: add Memory v3 implementation plan with bite-sized TDD tasks
+- docs(mcp): add P1 capabilities implementation plan
+- docs: add Memory System v3 "Glass Box" architecture design
+- docs(mcp): add MCP Orchestration Layer implementation plan
+- docs(mcp): add MCP Orchestration Layer design
+- docs(cortex): add detailed implementation plan with TDD steps
+- docs(extension): add P0.5-P2 feature documentation
+- docs(extension): add P0.5-P2 implementation plan
+- docs(extension): add SDK V2 documentation
+- docs(dispatcher): add Cortex 2.0 architecture design
+- docs(extension): add SDK V2 P0 implementation plan
+- docs(extension): add Aether Extension SDK V2 design specification
+- docs(skills): add detailed implementation plan for requirements feature
+- docs(skills): add requirements & CLI wrapper architecture design
+- docs(poe): add contract signing design for first principles closure
+- docs: update memory system docs and add halo command system plan
+- docs: add message flow optimization design and implementation plan
+- docs: add Halo-Only message flow design and implementation plan
+- docs: add comprehensive architecture documentation
+- docs: add detailed POE implementation plan
+- docs: add POE (Principle-Operation-Evaluation) architecture design
+- docs: add Agent-Action interaction implementation plan
+- docs: add Agent-Action interaction system design
+- docs: mark Milestone 6 (ResilientTask) as complete
+- docs: add Rust layer code cleanup design plan
+- docs: add Milestone 6 resilient task implementation plan
+- docs: mark Milestone 5 (skill evolution) as complete
+- docs: add Milestone 5 skill evolution implementation plan
+- docs: mark Milestone 4 (spec-driven dev) as complete
+- docs: add Milestone 4 spec-driven development implementation plan
+- docs: mark Milestone 3 (Telegram approval) as complete
+
+
 ## [0.2.11] - 2026-03-23
 
 ### Added
