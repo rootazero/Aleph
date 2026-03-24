@@ -270,17 +270,17 @@ fn NetworkAccessSection(
                             {t!(i18n, settings.security.localhost_only)}
                         </option>
                         <option
-                            value="lan"
-                            selected=move || config.get().map(|c| c.network_access == "lan").unwrap_or(false)
+                            value="allnetworks"
+                            selected=move || config.get().map(|c| c.network_access == "allnetworks").unwrap_or(false)
                         >
-                            {t!(i18n, settings.security.lan_access)}
+                            {t!(i18n, settings.security.all_networks)}
                         </option>
                     </select>
                     <p class="text-xs text-text-tertiary mt-1">
                         {move || {
-                            let is_lan = config.get().map(|c| c.network_access == "lan").unwrap_or(false);
-                            if is_lan {
-                                t_string!(i18n, settings.security.lan_access_desc).to_string()
+                            let is_all = config.get().map(|c| c.network_access == "allnetworks").unwrap_or(false);
+                            if is_all {
+                                t_string!(i18n, settings.security.all_networks_desc).to_string()
                             } else {
                                 t_string!(i18n, settings.security.localhost_only_desc).to_string()
                             }

@@ -38,21 +38,21 @@ fn read_gateway_host_from_config(patcher: &ConfigPatcher) -> String {
 pub enum NetworkAccess {
     /// Localhost only (127.0.0.1) — most secure
     Localhost,
-    /// LAN access (0.0.0.0) — accessible from local network
-    Lan,
+    /// All network interfaces (0.0.0.0) — accessible from any network
+    AllNetworks,
 }
 
 impl NetworkAccess {
     pub fn to_bind_address(&self) -> &str {
         match self {
             Self::Localhost => "127.0.0.1",
-            Self::Lan => "0.0.0.0",
+            Self::AllNetworks => "0.0.0.0",
         }
     }
 
     pub fn from_bind_address(addr: &str) -> Self {
         if addr == "0.0.0.0" || addr == "::" {
-            Self::Lan
+            Self::AllNetworks
         } else {
             Self::Localhost
         }
