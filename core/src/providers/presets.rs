@@ -354,6 +354,22 @@ pub fn get_merged_preset(
     }
 }
 
+/// Resolve provider name from model name using known prefix patterns.
+pub fn resolve_provider_from_model(model: &str) -> Option<String> {
+    let m = model.to_lowercase();
+    if m.starts_with("gpt-") || m.starts_with("o1-") || m.starts_with("o3-") || m.starts_with("o4-") {
+        Some("openai".into())
+    } else if m.starts_with("claude-") {
+        Some("anthropic".into())
+    } else if m.starts_with("gemini-") {
+        Some("google".into())
+    } else if m.starts_with("deepseek-") {
+        Some("deepseek".into())
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

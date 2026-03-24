@@ -94,7 +94,7 @@ pub use registry::ProviderRegistry;
 pub use retry::retry_with_backoff;
 pub use adapter::{ProtocolAdapter, RequestPayload, ProviderResponse, NativeToolCall, StopReason, TokenUsage};
 pub use http_provider::HttpProvider;
-pub use presets::{get_preset, ProviderPreset, PRESETS};
+pub use presets::{get_preset, resolve_provider_from_model, ProviderPreset, PRESETS};
 pub use protocols::OpenAiProtocol;
 
 use crate::config::ProviderConfig;
