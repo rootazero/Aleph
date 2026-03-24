@@ -1,0 +1,368 @@
+//! Tool output compression for context-heavy tools.
+//!
+//! Compresses outputs from Chrome DevTools MCP tools before they enter
+//! conversation history. Each tool type gets a tailored strategy that
+//! preserves actionable information while drastically reducing token count.
+
+use serde_json::Value;
+
+/// Known Chrome DevTools Protocol tool names.
+const DEVTOOLS_TOOLS: &[&str] = &[
+    "take_snapshot",
+    "take_screenshot",
+    "navigate_page",
+    "click",
+    "evaluate_script",
+    "list_network_requests",
+    "list_console_messages",
+    "get_network_request",
+    "get_console_message",
+    "new_page",
+    "close_page",
+    "select_page",
+    "list_pages",
+    "hover",
+    "fill",
+    "fill_form",
+    "type_text",
+    "press_key",
+    "drag",
+    "upload_file",
+    "handle_dialog",
+    "wait_for",
+    "emulate",
+    "resize_page",
+    "performance_start_trace",
+    "performance_stop_trace",
+    "performance_analyze_insight",
+    "take_memory_snapshot",
+    "lighthouse_audit",
+];
+
+/// Interactive accessibility roles to keep during snapshot compression.
+const INTERACTIVE_ROLES: &[&str] = &[
+    "link",
+    "button",
+    "textbox",
+    "input",
+    "textarea",
+    "select",
+    "checkbox",
+    "radio",
+    "combobox",
+    "menuitem",
+    "tab",
+    "switch",
+    "searchbox",
+    "spinbutton",
+    "slider",
+];
+
+/// Check whether a tool name belongs to the Chrome DevTools MCP toolset.
+pub fn is_devtools_tool(name: &str) -> bool {
+    DEVTOOLS_TOOLS.contains(&name)
+}
+
+/// Compress a DevTools tool output using a type-specific strategy.
+///
+/// Non-DevTools tools are returned unchanged. Each DevTools tool gets a
+/// tailored compression that preserves actionable information while
+/// drastically reducing token count.
+pub fn compress_tool_output(tool_name: &str, output: &str) -> String {
+    if !is_devtools_tool(tool_name) {
+        return output.to_owned();
+    }
+    match tool_name {
+        "take_snapshot" => compress_snapshot(output),
+        "take_screenshot" => compress_screenshot(output),
+        "evaluate_script" => compress_generic(output, 8 * 1024),
+        "list_network_requests" => compress_network_requests(output),
+        "list_console_messages" => compress_console_messages(output),
+        "get_network_request" => compress_generic(output, 8 * 1024),
+        _ => compress_generic(output, 10 * 1024),
+    }
+}
+
+/// Replace screenshot output (typically base64) with a short confirmation.
+fn compress_screenshot(_output: &str) -> String {
+    "[Screenshot captured successfully]".to_owned()
+}
+
+/// Compress accessibility snapshot by keeping only interactive elements.
+///
+/// Lines are considered interactive if, after stripping leading whitespace
+/// and dashes, they start with a known interactive role name followed by
+/// a space or quote character.
+fn compress_snapshot(output: &str) -> String {
+    // Small snapshots pass through unchanged
+    if output.len() < 4 * 1024 {
+        return output.to_owned();
+    }
+
+    let lines: Vec<&str> = output.lines().collect();
+    let total_nodes = lines.len();
+    let mut kept: Vec<&str> = Vec::new();
+
+    for line in &lines {
+        let trimmed = line.trim_start().trim_start_matches('-').trim_start();
+        let is_interactive = INTERACTIVE_ROLES.iter().any(|role| {
+            trimmed.starts_with(role)
+                && trimmed
+                    .as_bytes()
+                    .get(role.len())
+                    .map_or(false, |&b| b == b' ' || b == b'"')
+        });
+        if is_interactive {
+            kept.push(line);
+        }
+    }
+
+    if kept.is_empty() {
+        return compress_generic(output, 5 * 1024);
+    }
+
+    let kept_count = kept.len();
+    let mut result = kept.join("\n");
+    result.push_str(&format!(
+        "\n[Snapshot compressed: kept {} interactive elements out of {} total nodes]",
+        kept_count, total_nodes,
+    ));
+    result
+}
+
+/// Compress network request listing by keeping at most 30 summary lines.
+fn compress_network_requests(output: &str) -> String {
+    let parsed: Result<Vec<Value>, _> = serde_json::from_str(output);
+    let entries = match parsed {
+        Ok(v) => v,
+        Err(_) => return compress_generic(output, 3 * 1024),
+    };
+
+    let total = entries.len();
+    let limit = 30;
+    let mut lines: Vec<String> = Vec::with_capacity(limit.min(total));
+
+    for entry in entries.iter().take(limit) {
+        let method = entry
+            .get("method")
+            .and_then(|v| v.as_str())
+            .unwrap_or("GET");
+        let url = entry
+            .get("url")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown");
+        let status = entry
+            .get("status")
+            .and_then(|v| v.as_u64())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| "pending".to_owned());
+        lines.push(format!("{} {} → {}", method, url, status));
+    }
+
+    let mut result = lines.join("\n");
+    if total > limit {
+        result.push_str(&format!(
+            "\n[... showing {} of {} total requests]",
+            limit, total
+        ));
+    }
+    result
+}
+
+/// Compress console messages by keeping only the last 50 lines.
+fn compress_console_messages(output: &str) -> String {
+    let lines: Vec<&str> = output.lines().collect();
+    let total = lines.len();
+    let limit = 50;
+
+    if total <= limit {
+        return output.to_owned();
+    }
+
+    let kept = &lines[total - limit..];
+    format!(
+        "[... showing last {} of {} total console messages]\n{}",
+        limit,
+        total,
+        kept.join("\n"),
+    )
+}
+
+/// Generic truncation: keep at most `max_bytes` with a UTF-8-safe cut.
+fn compress_generic(output: &str, max_bytes: usize) -> String {
+    if output.len() <= max_bytes {
+        return output.to_owned();
+    }
+
+    let total = output.len();
+    // Walk back to a valid UTF-8 char boundary
+    let mut end = max_bytes;
+    while end > 0 && !output.is_char_boundary(end) {
+        end -= 1;
+    }
+
+    let mut result = output[..end].to_owned();
+    result.push_str(&format!(
+        "\n[... output truncated, showing first {} bytes of {} total]",
+        end, total,
+    ));
+    result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // --- is_devtools_tool ---
+
+    #[test]
+    fn test_is_devtools_tool() {
+        assert!(is_devtools_tool("take_snapshot"));
+        assert!(is_devtools_tool("click"));
+        assert!(is_devtools_tool("lighthouse_audit"));
+        assert!(!is_devtools_tool("bash"));
+        assert!(!is_devtools_tool("web_search"));
+        assert!(!is_devtools_tool(""));
+    }
+
+    // --- passthrough ---
+
+    #[test]
+    fn test_passthrough_non_devtools() {
+        let output = "some output from bash command";
+        assert_eq!(compress_tool_output("bash", output), output);
+        assert_eq!(compress_tool_output("web_search", output), output);
+    }
+
+    #[test]
+    fn test_passthrough_small_devtools_output() {
+        let output = "Clicked element at (100, 200)";
+        assert_eq!(
+            compress_tool_output("click", output),
+            output,
+        );
+    }
+
+    // --- screenshot ---
+
+    #[test]
+    fn test_compress_screenshot_replaces_base64() {
+        let base64_data = format!("data:image/png;base64,{}", "A".repeat(50_000));
+        let result = compress_tool_output("take_screenshot", &base64_data);
+        assert_eq!(result, "[Screenshot captured successfully]");
+        assert!(result.len() < 100);
+    }
+
+    // --- snapshot ---
+
+    #[test]
+    fn test_compress_snapshot_filters_interactive() {
+        // Build input > 4KB with many non-interactive nodes and a few interactive ones
+        let mut lines: Vec<String> = Vec::new();
+        for i in 0..200 {
+            lines.push(format!("  paragraph \"Some text content line {}\"", i));
+        }
+        // Sprinkle in interactive elements
+        lines.push("  button \"Submit\"".to_owned());
+        lines.push("  link \"Home page\"".to_owned());
+        lines.push("    textbox \"Email\"".to_owned());
+        lines.push("  heading \"Title\"".to_owned());
+        lines.push("  - checkbox \"Accept terms\"".to_owned());
+
+        let input = lines.join("\n");
+        // Ensure it's > 4KB
+        assert!(input.len() > 4 * 1024, "Test input must be > 4KB");
+
+        let result = compress_tool_output("take_snapshot", &input);
+
+        // Interactive elements should be kept
+        assert!(result.contains("button \"Submit\""));
+        assert!(result.contains("link \"Home page\""));
+        assert!(result.contains("textbox \"Email\""));
+        assert!(result.contains("checkbox \"Accept terms\""));
+
+        // Non-interactive elements should be stripped
+        assert!(!result.contains("paragraph"));
+        assert!(!result.contains("heading \"Title\""));
+
+        // Summary should be present
+        assert!(result.contains("Snapshot compressed: kept 4 interactive elements out of"));
+    }
+
+    #[test]
+    fn test_compress_snapshot_passthrough_small() {
+        let output = "button \"OK\"\nlink \"Home\"";
+        assert!(output.len() < 4 * 1024);
+        assert_eq!(compress_tool_output("take_snapshot", output), output);
+    }
+
+    // --- evaluate_script ---
+
+    #[test]
+    fn test_compress_evaluate_script_truncates_large() {
+        let output = "x".repeat(20 * 1024);
+        let result = compress_tool_output("evaluate_script", &output);
+        // Should be truncated to ~8KB + notice
+        assert!(result.len() < 9 * 1024);
+        assert!(result.contains("output truncated"));
+    }
+
+    #[test]
+    fn test_compress_evaluate_script_passthrough_small() {
+        let output = "{\"value\": 42}";
+        assert_eq!(compress_tool_output("evaluate_script", output), output);
+    }
+
+    // --- network requests ---
+
+    #[test]
+    fn test_compress_network_requests_limits_entries() {
+        let entries: Vec<Value> = (0..100)
+            .map(|i| {
+                serde_json::json!({
+                    "method": "GET",
+                    "url": format!("https://example.com/api/{}", i),
+                    "status": 200
+                })
+            })
+            .collect();
+        let input = serde_json::to_string(&entries).unwrap();
+
+        let result = compress_tool_output("list_network_requests", &input);
+
+        assert!(result.contains("showing 30 of 100"));
+        assert!(result.contains("https://example.com/api/0"));
+        assert!(result.contains("https://example.com/api/29"));
+        assert!(!result.contains("https://example.com/api/50"));
+    }
+
+    // --- console messages ---
+
+    #[test]
+    fn test_compress_console_messages_keeps_last() {
+        let lines: Vec<String> = (0..200).map(|i| format!("console line {}", i)).collect();
+        let input = lines.join("\n");
+
+        let result = compress_tool_output("list_console_messages", &input);
+
+        assert!(result.contains("showing last 50 of 200"));
+        // Old lines should be dropped
+        assert!(!result.contains("console line 0"));
+        assert!(!result.contains("console line 149"));
+        // Recent lines should be present
+        assert!(result.contains("console line 150"));
+        assert!(result.contains("console line 199"));
+    }
+
+    // --- generic ---
+
+    #[test]
+    fn test_compress_generic_devtools_truncates() {
+        let output = "y".repeat(20 * 1024);
+        // "click" maps to compress_generic(_, 10*1024) for unknown-ish tools —
+        // but click IS in the list and falls through to the _ arm.
+        let result = compress_tool_output("click", &output);
+        assert!(result.len() < 11 * 1024);
+        assert!(result.contains("output truncated"));
+    }
+}
