@@ -127,42 +127,6 @@ impl CodeExecConfigToml {
 
         Ok(())
     }
-
-    /// Create a CodeExecutor from this configuration
-    pub fn create_executor(
-        &self,
-        permission_checker: crate::dispatcher::executor::PathPermissionChecker,
-    ) -> crate::dispatcher::executor::CodeExecutor {
-        use std::path::PathBuf;
-
-        // Expand tilde in working directory
-        let working_dir = self.working_directory.as_ref().map(|s| {
-            if s.starts_with("~/") {
-                if let Some(home) = dirs::home_dir() {
-                    return PathBuf::from(s.replacen("~", home.to_string_lossy().as_ref(), 1));
-                }
-            } else if s == "~" {
-                if let Some(home) = dirs::home_dir() {
-                    return home;
-                }
-            }
-            PathBuf::from(s)
-        });
-
-        crate::dispatcher::executor::CodeExecutor::new(
-            self.enabled,
-            self.default_runtime.clone(),
-            self.timeout_seconds,
-            self.sandbox_enabled,
-            self.allowed_runtimes.clone(),
-            self.allow_network,
-            self.blocked_commands.clone(),
-            permission_checker,
-            working_dir,
-            self.pass_env.clone(),
-            None, // aleph_path will be set later from CapabilityLedger
-        )
-    }
 }
 
 // =============================================================================

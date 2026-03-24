@@ -109,17 +109,6 @@ impl FileOpsConfigToml {
 
         Ok(())
     }
-
-    /// Create a FileOpsExecutor from this configuration
-    pub fn create_executor(&self) -> crate::dispatcher::executor::FileOpsExecutor {
-        crate::dispatcher::executor::FileOpsExecutor::new(
-            self.allowed_paths.clone(),
-            self.denied_paths.clone(),
-            self.max_file_size,
-            self.require_confirmation_for_write,
-            self.require_confirmation_for_delete,
-        )
-    }
 }
 
 // =============================================================================

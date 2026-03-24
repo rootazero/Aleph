@@ -4,42 +4,19 @@
 //! - CoworkConfigToml: Main configuration for the Agent engine
 //! - FileOpsConfigToml: File operations executor configuration
 //! - CodeExecConfigToml: Code execution executor configuration
-//! - ModelProfileConfigToml: AI model profile configuration
-//! - ModelRoutingConfigToml: Multi-model routing configuration
-//! - MetricsConfigToml: Runtime metrics collection configuration
-//! - HealthConfigToml: Model health monitoring configuration
-//! - PromptAnalysisConfigToml: Prompt analysis for routing (P2)
-//! - SemanticCacheConfigToml: Semantic caching configuration (P2)
-//! - ABTestingConfigToml: A/B testing experiments (P3)
-//! - EnsembleConfigToml: Multi-model ensemble configuration (P3)
-//!
-//! Agent is the core AI task orchestration system that decomposes complex requests
-//! into DAG-structured task graphs and executes them with parallel scheduling.
 
-mod ab_testing;
 mod code_exec;
-mod ensemble;
 mod file_ops;
-mod health;
-mod metrics;
-mod model_profile;
-mod model_routing;
-mod prompt_analysis;
-mod semantic_cache;
 mod subagents;
 
 // Re-export all public types
 pub use code_exec::CodeExecConfigToml;
 pub use file_ops::FileOpsConfigToml;
-pub use model_profile::ModelProfileConfigToml;
-pub use model_routing::ModelRoutingConfigToml;
 pub use subagents::SubagentsConfigToml;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
-use crate::dispatcher::model_router::{ModelProfile, ModelRoutingRules};
 use crate::dispatcher::{
     DEFAULT_SANDBOX_ENABLED, MAX_PARALLELISM, MAX_TASK_RETRIES, REQUIRE_CONFIRMATION,
 };
@@ -52,9 +29,6 @@ use crate::dispatcher::{
 ///
 /// Configures the Agent engine for multi-task orchestration.
 /// This includes task decomposition, parallel execution, and confirmation settings.
-///
-/// Note: Core execution parameters (require_confirmation, max_parallelism, max_task_retries)
-/// are hardcoded for security and stability. This config contains planning and routing settings.
 ///
 /// # Example TOML
 /// ```toml
@@ -125,15 +99,6 @@ pub struct CoworkConfigToml {
     #[serde(default)]
     pub code_exec: CodeExecConfigToml,
 
-    /// Model profiles configuration
-    /// Maps profile ID to profile configuration
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub model_profiles: HashMap<String, ModelProfileConfigToml>,
-
-    /// Model routing configuration
-    #[serde(default)]
-    pub model_routing: ModelRoutingConfigToml,
-
     /// Sub-agent orchestration configuration
     ///
     /// Controls which agents can be spawned and default spawn settings.
@@ -192,8 +157,6 @@ impl Default for CoworkConfigToml {
             blocked_categories: Vec::new(),
             file_ops: FileOpsConfigToml::default(),
             code_exec: CodeExecConfigToml::default(),
-            model_profiles: HashMap::new(),
-            model_routing: ModelRoutingConfigToml::default(),
             subagents: SubagentsConfigToml::default(),
         }
     }
@@ -204,18 +167,6 @@ impl Default for CoworkConfigToml {
 // =============================================================================
 
 impl CoworkConfigToml {
-    /// Convert to engine configuration
-    ///
-    /// This creates an AgentConfig suitable for the AgentEngine.
-    /// Note: Core execution parameters (confirmation, parallelism, retries) are hardcoded.
-    /// The enable_pipelines flag is now part of routing_rules.
-    pub fn to_engine_config(&self) -> crate::dispatcher::AgentConfig {
-        crate::dispatcher::AgentConfig {
-            model_profiles: self.get_model_profiles(),
-            routing_rules: Some(self.get_routing_rules()),
-        }
-    }
-
     /// Validate the configuration
     pub fn validate(&self) -> Result<(), String> {
         // Validate max_parallelism
@@ -223,7 +174,6 @@ impl CoworkConfigToml {
             return Err("agent.max_parallelism must be greater than 0".to_string());
         }
         if self.max_parallelism > 32 {
-            // Warning but not error
             tracing::warn!(
                 max_parallelism = self.max_parallelism,
                 "agent.max_parallelism is very high (>32), this may cause resource issues"
@@ -282,39 +232,10 @@ impl CoworkConfigToml {
         // Validate code_exec configuration
         self.code_exec.validate()?;
 
-        // Validate model profiles
-        for (profile_id, profile_config) in &self.model_profiles {
-            profile_config.validate(profile_id)?;
-        }
-
-        // Validate model routing (check profile references)
-        let profile_ids: Vec<&str> = self.model_profiles.keys().map(|s| s.as_str()).collect();
-        self.model_routing.validate(&profile_ids)?;
-
         // Validate subagents configuration
         self.subagents.validate()?;
 
         Ok(())
-    }
-
-    /// Get all model profiles as ModelProfile objects
-    pub fn get_model_profiles(&self) -> Vec<ModelProfile> {
-        self.model_profiles
-            .iter()
-            .map(|(id, config)| config.to_model_profile(id.clone()))
-            .collect()
-    }
-
-    /// Get model routing rules
-    pub fn get_routing_rules(&self) -> ModelRoutingRules {
-        self.model_routing.to_routing_rules()
-    }
-
-    /// Get a specific model profile by ID
-    pub fn get_model_profile(&self, id: &str) -> Option<ModelProfile> {
-        self.model_profiles
-            .get(id)
-            .map(|config| config.to_model_profile(id.to_string()))
     }
 
     /// Check if a task category is allowed
@@ -341,7 +262,6 @@ impl CoworkConfigToml {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dispatcher::model_router::{Capability, CostStrategy, CostTier, LatencyTier};
 
     #[test]
     fn test_default_config() {
@@ -399,118 +319,9 @@ mod tests {
     }
 
     #[test]
-    fn test_to_engine_config() {
-        let config = CoworkConfigToml::default();
-
-        let engine_config = config.to_engine_config();
-        // Core execution parameters are now hardcoded, not in AgentConfig
-        // AgentConfig only contains model routing settings
-        // enable_pipelines is now accessed via pipelines_enabled() from routing_rules
-        // Default is true (pipelines enabled by default)
-        assert!(engine_config.pipelines_enabled());
-    }
-
-    #[test]
     fn test_agent_config_includes_file_ops() {
         let config = CoworkConfigToml::default();
         assert!(config.file_ops.enabled);
         assert!(config.file_ops.require_confirmation_for_write);
-    }
-
-    #[test]
-    fn test_agent_config_model_profiles() {
-        let mut config = CoworkConfigToml::default();
-
-        // Add model profiles
-        config.model_profiles.insert(
-            "claude-opus".to_string(),
-            ModelProfileConfigToml {
-                provider: "anthropic".to_string(),
-                model: "claude-opus-4".to_string(),
-                capabilities: vec![Capability::Reasoning],
-                cost_tier: CostTier::High,
-                latency_tier: LatencyTier::Slow,
-                max_context: Some(200_000),
-                local: false,
-                parameters: None,
-            },
-        );
-
-        config.model_profiles.insert(
-            "claude-sonnet".to_string(),
-            ModelProfileConfigToml {
-                provider: "anthropic".to_string(),
-                model: "claude-sonnet-4".to_string(),
-                capabilities: vec![Capability::CodeGeneration],
-                cost_tier: CostTier::Medium,
-                latency_tier: LatencyTier::Medium,
-                max_context: Some(200_000),
-                local: false,
-                parameters: None,
-            },
-        );
-
-        // Get profiles
-        let profiles = config.get_model_profiles();
-        assert_eq!(profiles.len(), 2);
-
-        // Get specific profile
-        let opus = config.get_model_profile("claude-opus").unwrap();
-        assert_eq!(opus.provider, "anthropic");
-        assert_eq!(opus.model, "claude-opus-4");
-
-        // Non-existent profile
-        assert!(config.get_model_profile("nonexistent").is_none());
-    }
-
-    #[test]
-    fn test_agent_config_model_routing_validation() {
-        let mut config = CoworkConfigToml::default();
-
-        // Add a model profile
-        config.model_profiles.insert(
-            "claude-opus".to_string(),
-            ModelProfileConfigToml {
-                provider: "anthropic".to_string(),
-                model: "claude-opus-4".to_string(),
-                capabilities: vec![],
-                cost_tier: CostTier::High,
-                latency_tier: LatencyTier::Slow,
-                max_context: None,
-                local: false,
-                parameters: None,
-            },
-        );
-
-        // Valid routing reference
-        config.model_routing.code_generation = Some("claude-opus".to_string());
-        assert!(config.validate().is_ok());
-
-        // Invalid routing reference
-        config.model_routing.code_review = Some("nonexistent".to_string());
-        assert!(config.validate().is_err());
-    }
-
-    #[test]
-    fn test_agent_config_get_routing_rules() {
-        let config = CoworkConfigToml {
-            model_routing: ModelRoutingConfigToml {
-                code_generation: Some("claude-opus".to_string()),
-                cost_strategy: CostStrategy::BestQuality,
-                enable_pipelines: false,
-                default_model: Some("claude-sonnet".to_string()),
-                ..Default::default()
-            },
-            ..CoworkConfigToml::default()
-        };
-
-        let rules = config.get_routing_rules();
-        assert_eq!(
-            rules.get_for_task_type("code_generation"),
-            Some("claude-opus")
-        );
-        assert_eq!(rules.cost_strategy, CostStrategy::BestQuality);
-        assert!(!rules.enable_pipelines);
-        assert_eq!(rules.get_default(), Some("claude-sonnet"));
     }
 }

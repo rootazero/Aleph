@@ -1,6 +1,7 @@
-//! Hardcoded agent configuration constants
+//! Hardcoded configuration constants
 //!
 //! Security-enforced constants that are not user-configurable.
+//! Previously in engine/constants.rs, retained here for backward compatibility.
 
 // Hardcoded agent configuration constants (security-enforced, not user-configurable)
 /// Whether to require user confirmation before execution (always true for safety)
@@ -40,8 +41,6 @@ pub const MAX_STDERR_SIZE: usize = 1024 * 1024;
 
 // AI model defaults
 /// Default max tokens for AI model responses.
-/// Agent responses need room for reasoning + action JSON + tool arguments.
-/// 4096 is too small for complex multi-step tasks with CJK content.
 pub const DEFAULT_MAX_TOKENS: u32 = 16384;
 
 // Retry defaults
@@ -50,7 +49,6 @@ pub const DEFAULT_MAX_RETRIES: u32 = 3;
 
 // Timeout defaults (in seconds)
 /// Default confirmation timeout (0 = no timeout, wait indefinitely)
-/// User confirmation should wait forever until user responds, like Claude Code
 pub const DEFAULT_CONFIRMATION_TIMEOUT_SECS: u64 = 0;
 /// Default connection timeout
 pub const DEFAULT_CONNECTION_TIMEOUT_SECS: u64 = 30;
