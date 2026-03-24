@@ -5,10 +5,12 @@
 //! history through `transform_messages` before calling the provider.
 
 use async_trait::async_trait;
+use futures::stream::BoxStream;
 
 use crate::dispatcher::ToolCategory;
 use crate::dispatcher::ToolDefinition as DispatcherToolDefinition;
-use crate::providers::adapter::{ProviderResponse, RequestPayload};
+use crate::providers::adapter::RequestPayload;
+use crate::providers::delta::{response_to_delta_stream, ProviderDelta};
 use crate::providers::message::{transform_messages, UnifiedMessage};
 use crate::providers::AiProvider;
 use crate::sync_primitives::Arc;
@@ -47,12 +49,12 @@ impl AiProviderBridge {
 
 #[async_trait]
 impl LoopProvider for AiProviderBridge {
-    async fn call(
+    async fn stream(
         &self,
         messages: &[UnifiedMessage],
         system_prompt: &str,
         tools: &[LoopToolDefinition],
-    ) -> anyhow::Result<ProviderResponse> {
+    ) -> anyhow::Result<BoxStream<'static, anyhow::Result<ProviderDelta>>> {
         // Pre-process: repair orphaned tool calls
         let cleaned = transform_messages(messages, Some(self.provider.name()));
 
@@ -71,10 +73,18 @@ impl LoopProvider for AiProviderBridge {
             ..Default::default()
         };
 
-        self.provider
+        // Try real streaming via HttpProvider first
+        if let Some(http) = self.provider.as_http_provider() {
+            return http.stream_raw(payload).await;
+        }
+
+        // Fallback: call process() and wrap as a one-shot delta stream
+        let response = self
+            .provider
             .process(payload)
             .await
-            .map_err(|e| anyhow::anyhow!("{}", e))
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
+        Ok(response_to_delta_stream(response))
     }
 }
 

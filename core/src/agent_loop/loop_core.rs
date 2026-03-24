@@ -11,6 +11,7 @@
 //! - Timeout expires
 
 use async_trait::async_trait;
+use futures::StreamExt;
 use serde_json::Value;
 use std::time::Instant;
 
@@ -18,7 +19,9 @@ use super::prompt_builder::{PromptBuilder, ToolInfo};
 use super::safety::{SafetyError, SafetyGuard, ToolCall as SafetyToolCall};
 use super::tool::{LoopToolRegistry, ToolDefinition, ToolResult};
 use crate::providers::adapter::{ProviderResponse, StopReason};
+use crate::providers::delta::{DeltaCollector, DeltaSink, NoopSink, ProviderDelta};
 use crate::providers::message::UnifiedMessage;
+use futures::stream::BoxStream;
 
 // =============================================================================
 // Context limit enforcement
@@ -119,15 +122,16 @@ fn enforce_context_limit(
 /// Abstraction over AI provider for testability.
 ///
 /// Implementations translate `UnifiedMessage` history into provider-specific
-/// API calls and return a structured `ProviderResponse`.
+/// API calls and return a delta stream. Callers accumulate the stream via
+/// `DeltaCollector` to reconstruct a `ProviderResponse`.
 #[async_trait]
 pub trait LoopProvider: Send + Sync {
-    async fn call(
+    async fn stream(
         &self,
         messages: &[UnifiedMessage],
         system_prompt: &str,
         tools: &[ToolDefinition],
-    ) -> anyhow::Result<ProviderResponse>;
+    ) -> anyhow::Result<BoxStream<'static, anyhow::Result<ProviderDelta>>>;
 }
 
 // =============================================================================
@@ -218,10 +222,14 @@ pub struct AgentLoop<P: LoopProvider> {
     config: LoopConfig,
     /// Optional in-loop tool result compactor configuration.
     tool_compactor_config: Option<ToolCompactorConfig>,
+    /// Sink for streaming deltas during the Think step. Defaults to NoopSink.
+    delta_sink: Box<dyn DeltaSink>,
 }
 
 impl<P: LoopProvider> AgentLoop<P> {
     /// Create a new agent loop with all dependencies injected.
+    ///
+    /// `delta_sink` defaults to `NoopSink` — call `with_delta_sink()` to attach a real sink.
     pub fn new(
         provider: P,
         tool_registry: LoopToolRegistry,
@@ -236,12 +244,22 @@ impl<P: LoopProvider> AgentLoop<P> {
             safety_guard,
             config,
             tool_compactor_config: None,
+            delta_sink: Box::new(NoopSink),
         }
     }
 
     /// Attach an optional `ToolCompactorConfig` to enable in-loop context compression.
     pub fn with_tool_compactor_config(mut self, cfg: Option<ToolCompactorConfig>) -> Self {
         self.tool_compactor_config = cfg;
+        self
+    }
+
+    /// Attach a `DeltaSink` to observe streaming deltas during each Think step.
+    ///
+    /// This replaces the default `NoopSink`. Used to forward real-time text tokens
+    /// to WebSocket clients or other reactive consumers.
+    pub fn with_delta_sink(mut self, sink: Box<dyn DeltaSink>) -> Self {
+        self.delta_sink = sink;
         self
     }
 
@@ -354,11 +372,19 @@ impl<P: LoopProvider> AgentLoop<P> {
                     .unwrap_or(3.5),
             );
 
-            // Think: call the provider
-            let response = self
+            // Think: stream deltas from the provider and accumulate into ProviderResponse
+            let delta_stream = self
                 .provider
-                .call(&messages, &system_prompt, &tool_defs)
+                .stream(&messages, &system_prompt, &tool_defs)
                 .await?;
+            let mut collector = DeltaCollector::new();
+            futures::pin_mut!(delta_stream);
+            while let Some(delta) = delta_stream.next().await {
+                let delta = delta?;
+                self.delta_sink.on_delta(&delta).await;
+                collector.push(delta);
+            }
+            let response = collector.finish();
 
             // Removed debug logging
 
@@ -661,18 +687,19 @@ mod tests {
 
     #[async_trait]
     impl LoopProvider for MockProvider {
-        async fn call(
+        async fn stream(
             &self,
             _messages: &[UnifiedMessage],
             _system_prompt: &str,
             _tools: &[ToolDefinition],
-        ) -> anyhow::Result<ProviderResponse> {
+        ) -> anyhow::Result<BoxStream<'static, anyhow::Result<ProviderDelta>>> {
             let mut responses = self.responses.lock().unwrap_or_else(|e| e.into_inner());
-            if let Some(resp) = responses.pop() {
-                Ok(resp)
+            let resp = if let Some(resp) = responses.pop() {
+                resp
             } else {
-                Ok(ProviderResponse::text_only("(no more mock responses)".to_string()))
-            }
+                ProviderResponse::text_only("(no more mock responses)".to_string())
+            };
+            Ok(crate::providers::delta::response_to_delta_stream(resp))
         }
     }
 
@@ -698,22 +725,23 @@ mod tests {
 
     #[async_trait]
     impl LoopProvider for CapturingMockProvider {
-        async fn call(
+        async fn stream(
             &self,
             messages: &[UnifiedMessage],
             _system_prompt: &str,
             _tools: &[ToolDefinition],
-        ) -> anyhow::Result<ProviderResponse> {
+        ) -> anyhow::Result<BoxStream<'static, anyhow::Result<ProviderDelta>>> {
             self.captured_messages
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
                 .push(messages.to_vec());
             let mut responses = self.responses.lock().unwrap_or_else(|e| e.into_inner());
-            if let Some(resp) = responses.pop() {
-                Ok(resp)
+            let resp = if let Some(resp) = responses.pop() {
+                resp
             } else {
-                Ok(ProviderResponse::text_only("(no more mock responses)".to_string()))
-            }
+                ProviderResponse::text_only("(no more mock responses)".to_string())
+            };
+            Ok(crate::providers::delta::response_to_delta_stream(resp))
         }
     }
 
