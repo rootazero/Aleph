@@ -2,7 +2,7 @@
 //!
 //! Each protocol handles the specific request/response format for an API family.
 
-pub mod openai;
+pub mod openai_chat;
 pub mod anthropic;
 pub mod openai_common;
 pub mod openai_responses;
@@ -14,7 +14,7 @@ pub mod loader;
 pub mod template;
 mod jsonpath;
 
-pub use openai::OpenAiProtocol;
+pub use openai_chat::OpenAiProtocol;
 pub use anthropic::AnthropicProtocol;
 pub use openai_responses::OpenAiResponsesProtocol;
 pub use gemini::GeminiProtocol;

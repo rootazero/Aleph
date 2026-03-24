@@ -9,6 +9,7 @@ use crate::providers::adapter::{
     NativeToolCall, ProtocolAdapter, ProviderResponse, RequestPayload, StopReason,
     TokenUsage,
 };
+use crate::providers::delta::{IndexIdTracker, ProviderDelta};
 use crate::providers::openai::{
     ChatCompletionResponse, ContentBlock as OaiContentBlock, ImageUrl, Message, MessageContent,
     OpenAiFunction, OpenAiTool,
@@ -16,10 +17,12 @@ use crate::providers::openai::{
 use crate::providers::message::UnifiedMessage;
 use async_trait::async_trait;
 use futures::stream::BoxStream;
+use futures::StreamExt as _;
 use futures::TryStreamExt;
 use reqwest::Client;
 use serde_json::json;
-use tracing::{debug, error};
+use std::collections::VecDeque;
+use tracing::{debug, error, warn};
 
 // ── Tool-name sanitization ──────────────────────────────────────────────
 //
@@ -466,6 +469,134 @@ impl ProtocolAdapter for OpenAiProtocol {
         Ok(Box::pin(stream))
     }
 
+    /// Real stream_deltas() implementation for OpenAI Chat Completions.
+    ///
+    /// Parses SSE events from the Chat Completions streaming format and emits
+    /// fine-grained [`ProviderDelta`] events. Uses the unfold+pending-queue pattern
+    /// so that finish_reason chunks (which produce multiple deltas) can emit all
+    /// of them without loss.
+    async fn stream_deltas(
+        &self,
+        response: reqwest::Response,
+    ) -> Result<BoxStream<'static, Result<ProviderDelta>>> {
+        let status = response.status();
+        if !status.is_success() {
+            let error_text = response.text().await.unwrap_or_default();
+            return Err(AlephError::provider(format!(
+                "OpenAI Chat API error ({}): {}",
+                status, error_text
+            )));
+        }
+
+        // Wrap the bytes stream in an AlephError-typed stream
+        let byte_stream = response
+            .bytes_stream()
+            .map_err(|e| AlephError::network(format!("Stream error: {}", e)))
+            .boxed();
+
+        /// Per-iteration mutable state carried through unfold
+        struct State {
+            bytes: futures::stream::BoxStream<'static, Result<axum::body::Bytes>>,
+            /// Incomplete SSE line buffer (handles chunk boundaries)
+            line_buf: String,
+            /// Maps tool call stream index → call id (from first chunk with `id` field)
+            index_tracker: IndexIdTracker,
+            /// Pending deltas queued from multi-delta events (e.g. finish_reason chunk)
+            pending: VecDeque<Result<ProviderDelta>>,
+            /// Set to true after a terminal event to stop the stream
+            done: bool,
+        }
+
+        let state = State {
+            bytes: byte_stream,
+            line_buf: String::new(),
+            index_tracker: IndexIdTracker::new(),
+            pending: VecDeque::new(),
+            done: false,
+        };
+
+        let stream = futures::stream::unfold(state, |mut state| async move {
+            loop {
+                // Drain pending queue first (handles multi-delta events)
+                if let Some(delta) = state.pending.pop_front() {
+                    return Some((delta, state));
+                }
+
+                if state.done {
+                    return None;
+                }
+
+                // Try to parse a complete SSE line from the buffer
+                if let Some(pos) = state.line_buf.find('\n') {
+                    let line = state.line_buf[..pos].trim_end().to_string();
+                    state.line_buf.drain(..=pos);
+
+                    if let Some(data) = line.strip_prefix("data: ") {
+                        if data != "[DONE]" {
+                            parse_chat_sse_event(
+                                data,
+                                &mut state.index_tracker,
+                                &mut state.pending,
+                            );
+                            // If a Done was queued, stop after draining pending
+                            if state.pending.iter().any(|d| {
+                                matches!(d, Ok(ProviderDelta::Done(_)))
+                            }) {
+                                state.done = true;
+                            }
+                        }
+                    }
+                    // Loop to drain more lines or pop from pending
+                    continue;
+                }
+
+                // No complete line — fetch next chunk from HTTP
+                match state.bytes.next().await {
+                    None => {
+                        // HTTP stream ended — flush any remaining partial line
+                        let remaining = state.line_buf.trim().to_string();
+                        state.line_buf.clear();
+                        if !remaining.is_empty() {
+                            if let Some(data) = remaining.strip_prefix("data: ") {
+                                if data != "[DONE]" {
+                                    parse_chat_sse_event(
+                                        data,
+                                        &mut state.index_tracker,
+                                        &mut state.pending,
+                                    );
+                                }
+                            }
+                        }
+                        state.done = true;
+                        if let Some(delta) = state.pending.pop_front() {
+                            return Some((delta, state));
+                        }
+                        return None;
+                    }
+                    Some(Err(e)) => {
+                        state.done = true;
+                        return Some((Err(e), state));
+                    }
+                    Some(Ok(chunk)) => {
+                        match std::str::from_utf8(&chunk) {
+                            Ok(text) => state.line_buf.push_str(text),
+                            Err(e) => {
+                                state.done = true;
+                                return Some((
+                                    Err(AlephError::provider(format!("UTF-8 error: {}", e))),
+                                    state,
+                                ));
+                            }
+                        }
+                        // Loop to try parsing again with the new data
+                    }
+                }
+            }
+        });
+
+        Ok(Box::pin(stream))
+    }
+
     fn supports_native_tools(&self) -> bool {
         true
     }
@@ -478,6 +609,139 @@ impl ProtocolAdapter for OpenAiProtocol {
         "openai"
     }
 
+}
+
+// =============================================================================
+// SSE parsing helper for Chat Completions streaming format
+// =============================================================================
+
+/// Parse one SSE data line from the Chat Completions stream and push
+/// zero or more [`ProviderDelta`] events into `out`.
+///
+/// OpenAI Chat Completions SSE delta format (simplified):
+/// ```json
+/// {"choices":[{"delta":{"content":"Hello"},"index":0}]}
+/// {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"search","arguments":""}}]},"index":0}]}
+/// {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"q\":"}}]},"index":0}]}
+/// {"choices":[{"delta":{},"finish_reason":"stop","index":0}],"usage":{...}}
+/// ```
+fn parse_chat_sse_event(
+    data: &str,
+    tracker: &mut IndexIdTracker,
+    out: &mut VecDeque<Result<ProviderDelta>>,
+) {
+    use super::openai_common::tools::desanitize_tool_name;
+
+    let v: serde_json::Value = match serde_json::from_str(data) {
+        Ok(v) => v,
+        Err(e) => {
+            warn!(error = %e, data = %data, "Failed to parse Chat Completions SSE event");
+            return;
+        }
+    };
+
+    let choice = match v.get("choices").and_then(|c| c.get(0)) {
+        Some(c) => c,
+        None => return,
+    };
+
+    let delta = match choice.get("delta") {
+        Some(d) => d,
+        None => return,
+    };
+
+    // ── Text content delta ──────────────────────────────────────────────
+    if let Some(content) = delta.get("content").and_then(|c| c.as_str()) {
+        if !content.is_empty() {
+            out.push_back(Ok(ProviderDelta::TextDelta(content.to_string())));
+        }
+    }
+
+    // ── Tool call deltas ────────────────────────────────────────────────
+    if let Some(tool_calls) = delta.get("tool_calls").and_then(|t| t.as_array()) {
+        for tc in tool_calls {
+            let index = tc.get("index").and_then(|i| i.as_u64()).unwrap_or(0);
+
+            // First chunk: has `id` and `function.name` — emit ToolCallStart
+            if let Some(id) = tc.get("id").and_then(|i| i.as_str()) {
+                let name = tc
+                    .get("function")
+                    .and_then(|f| f.get("name"))
+                    .and_then(|n| n.as_str())
+                    .unwrap_or("");
+                tracker.track(index, id.to_string());
+                out.push_back(Ok(ProviderDelta::ToolCallStart {
+                    id: id.to_string(),
+                    name: desanitize_tool_name(name),
+                }));
+            }
+
+            // Argument fragment delta (may be on the same or subsequent chunks)
+            if let Some(args) = tc
+                .get("function")
+                .and_then(|f| f.get("arguments"))
+                .and_then(|a| a.as_str())
+            {
+                if !args.is_empty() {
+                    if let Some(call_id) = tracker.get(index) {
+                        out.push_back(Ok(ProviderDelta::ToolCallArgDelta {
+                            id: call_id.to_string(),
+                            delta: args.to_string(),
+                        }));
+                    }
+                }
+            }
+        }
+    }
+
+    // ── Usage (usually in final chunk alongside finish_reason) ──────────
+    if let Some(usage) = v.get("usage") {
+        let input = usage
+            .get("prompt_tokens")
+            .and_then(|t| t.as_u64())
+            .unwrap_or(0) as u32;
+        let output = usage
+            .get("completion_tokens")
+            .and_then(|t| t.as_u64())
+            .unwrap_or(0) as u32;
+        out.push_back(Ok(ProviderDelta::Usage(TokenUsage {
+            input_tokens: input,
+            output_tokens: output,
+            cache_read_tokens: None,
+        })));
+    }
+
+    // ── Finish reason — emit ToolCallEnd for all tracked tools, then Done ──
+    let finish_reason = choice
+        .get("finish_reason")
+        .and_then(|r| r.as_str());
+
+    if let Some(reason) = finish_reason {
+        let stop_reason = match reason {
+            "stop" => Some(StopReason::EndTurn),
+            "tool_calls" => Some(StopReason::ToolUse),
+            "length" | "content_filter" => Some(StopReason::MaxTokens),
+            _ => None,
+        };
+
+        if let Some(stop) = stop_reason {
+            // Emit ToolCallEnd for all tracked tool calls (by scanning the tracker)
+            // We reconstruct ids from the tracker's internal map (indices 0..N)
+            let mut idx = 0u64;
+            loop {
+                match tracker.get(idx) {
+                    Some(call_id) => {
+                        out.push_back(Ok(ProviderDelta::ToolCallEnd {
+                            id: call_id.to_string(),
+                        }));
+                        idx += 1;
+                    }
+                    None => break,
+                }
+            }
+            out.push_back(Ok(ProviderDelta::Done(stop)));
+        }
+    }
 }
 
 #[cfg(test)]
@@ -975,5 +1239,108 @@ mod tests {
         let json = serde_json::to_value(&result[0]).unwrap();
         assert_eq!(json["content"], "You are a helpful assistant.");
         assert_eq!(result[1].role, "user");
+    }
+
+    // =========================================================================
+    // parse_chat_sse_event() Tests
+    // =========================================================================
+
+    #[test]
+    fn test_parse_sse_text_delta() {
+        let mut tracker = IndexIdTracker::new();
+        let mut pending = VecDeque::new();
+        let data = r#"{"choices":[{"delta":{"content":"Hello"},"index":0}]}"#;
+        parse_chat_sse_event(data, &mut tracker, &mut pending);
+
+        assert_eq!(pending.len(), 1);
+        let delta = pending.pop_front().unwrap().unwrap();
+        assert!(matches!(delta, ProviderDelta::TextDelta(t) if t == "Hello"));
+    }
+
+    #[test]
+    fn test_parse_sse_empty_content_skipped() {
+        let mut tracker = IndexIdTracker::new();
+        let mut pending = VecDeque::new();
+        let data = r#"{"choices":[{"delta":{"content":""},"index":0}]}"#;
+        parse_chat_sse_event(data, &mut tracker, &mut pending);
+
+        // Empty content should not emit any delta
+        assert_eq!(pending.len(), 0);
+    }
+
+    #[test]
+    fn test_parse_sse_tool_call_start() {
+        let mut tracker = IndexIdTracker::new();
+        let mut pending = VecDeque::new();
+        let data = r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_abc","function":{"name":"search","arguments":""}}]},"index":0}]}"#;
+        parse_chat_sse_event(data, &mut tracker, &mut pending);
+
+        // Should emit ToolCallStart
+        assert_eq!(pending.len(), 1);
+        let delta = pending.pop_front().unwrap().unwrap();
+        assert!(matches!(delta, ProviderDelta::ToolCallStart { id, name } if id == "call_abc" && name == "search"));
+
+        // Tracker should have the index mapped
+        assert_eq!(tracker.get(0), Some("call_abc"));
+    }
+
+    #[test]
+    fn test_parse_sse_tool_call_arg_delta() {
+        let mut tracker = IndexIdTracker::new();
+        let mut pending = VecDeque::new();
+
+        // First: start chunk establishes the id
+        tracker.track(0, "call_abc".to_string());
+
+        let data = r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"q\":"}}]},"index":0}]}"#;
+        parse_chat_sse_event(data, &mut tracker, &mut pending);
+
+        assert_eq!(pending.len(), 1);
+        let delta = pending.pop_front().unwrap().unwrap();
+        assert!(matches!(delta, ProviderDelta::ToolCallArgDelta { id, delta } if id == "call_abc" && delta == r#"{"q":"#));
+    }
+
+    #[test]
+    fn test_parse_sse_finish_reason_stop() {
+        let mut tracker = IndexIdTracker::new();
+        let mut pending = VecDeque::new();
+        let data = r#"{"choices":[{"delta":{},"finish_reason":"stop","index":0}],"usage":{"prompt_tokens":10,"completion_tokens":5}}"#;
+        parse_chat_sse_event(data, &mut tracker, &mut pending);
+
+        // Should emit Usage then Done(EndTurn)
+        let events: Vec<ProviderDelta> = pending.drain(..).map(|r| r.unwrap()).collect();
+        assert_eq!(events.len(), 2);
+        assert!(matches!(&events[0], ProviderDelta::Usage(u) if u.input_tokens == 10 && u.output_tokens == 5));
+        assert!(matches!(&events[1], ProviderDelta::Done(StopReason::EndTurn)));
+    }
+
+    #[test]
+    fn test_parse_sse_finish_reason_tool_calls() {
+        let mut tracker = IndexIdTracker::new();
+        let mut pending = VecDeque::new();
+
+        // Pre-register a tool call so ToolCallEnd is emitted
+        tracker.track(0, "call_1".to_string());
+
+        let data = r#"{"choices":[{"delta":{},"finish_reason":"tool_calls","index":0}]}"#;
+        parse_chat_sse_event(data, &mut tracker, &mut pending);
+
+        // Should emit ToolCallEnd(call_1) then Done(ToolUse)
+        let events: Vec<ProviderDelta> = pending.drain(..).map(|r| r.unwrap()).collect();
+        assert_eq!(events.len(), 2);
+        assert!(matches!(&events[0], ProviderDelta::ToolCallEnd { id } if id == "call_1"));
+        assert!(matches!(&events[1], ProviderDelta::Done(StopReason::ToolUse)));
+    }
+
+    #[test]
+    fn test_parse_sse_finish_reason_length() {
+        let mut tracker = IndexIdTracker::new();
+        let mut pending = VecDeque::new();
+        let data = r#"{"choices":[{"delta":{},"finish_reason":"length","index":0}]}"#;
+        parse_chat_sse_event(data, &mut tracker, &mut pending);
+
+        let events: Vec<ProviderDelta> = pending.drain(..).map(|r| r.unwrap()).collect();
+        assert_eq!(events.len(), 1);
+        assert!(matches!(&events[0], ProviderDelta::Done(StopReason::MaxTokens)));
     }
 }
