@@ -93,6 +93,7 @@ pub struct GatewaySharedState {
     pub rate_limiter: Arc<RateLimiter>,
     pub lane_manager: Arc<LaneManager>,
     pub event_scope_guard: Arc<EventScopeGuard>,
+    pub audit_log: Option<crate::security::audit::SecurityAuditLog>,
 }
 
 /// Configuration for the Gateway server
@@ -281,6 +282,7 @@ impl GatewayServer {
             rate_limiter: self.rate_limiter.clone(),
             lane_manager: self.lane_manager.clone(),
             event_scope_guard: self.event_scope_guard.clone(),
+            audit_log: None,
         });
 
         let control_plane = create_control_plane_router();

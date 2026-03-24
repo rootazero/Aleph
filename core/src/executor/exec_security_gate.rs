@@ -36,6 +36,7 @@ pub struct ExecSecurityGate {
     approval_manager: Arc<ExecApprovalManager>,
     sandbox_manager: Option<Arc<SandboxManager>>,
     masker: SecretMasker,
+    audit_log: Option<crate::security::audit::SecurityAuditLog>,
 }
 
 impl ExecSecurityGate {
@@ -49,7 +50,14 @@ impl ExecSecurityGate {
             approval_manager,
             sandbox_manager,
             masker: SecretMasker::new(),
+            audit_log: None,
         }
+    }
+
+    /// Attach an audit log for security event recording.
+    pub fn with_audit_log(mut self, log: crate::security::audit::SecurityAuditLog) -> Self {
+        self.audit_log = Some(log);
+        self
     }
 
     /// Returns true if tool_name is a shell execution tool requiring this gate
@@ -109,6 +117,13 @@ impl ExecSecurityGate {
                     to = ?escalated,
                     "Risk escalated due to invisible Unicode characters"
                 );
+                if let Some(ref audit) = self.audit_log {
+                    audit.log_event(
+                        crate::security::audit::AuditEventType::InvisibleCharsDetected,
+                        crate::security::audit::AuditSeverity::Warn,
+                        format!("Invisible chars in command: {}", cmd),
+                    );
+                }
             }
             escalated
         } else {
@@ -118,10 +133,14 @@ impl ExecSecurityGate {
         match risk {
             RiskLevel::Blocked => {
                 let assessment = self.security_kernel.assess_detailed(&cmd);
-                warn!(
-                    cmd = %cmd,
-                    "Shell command blocked by SecurityKernel"
-                );
+                warn!(cmd = %cmd, "Shell command blocked by SecurityKernel");
+                if let Some(ref audit) = self.audit_log {
+                    audit.log_event(
+                        crate::security::audit::AuditEventType::ExecBlocked,
+                        crate::security::audit::AuditSeverity::Critical,
+                        format!("Blocked command: {}", cmd),
+                    );
+                }
                 PreExecDecision::Block {
                     reason: format!("Blocked: {} ({})", assessment.reason, cmd),
                 }
