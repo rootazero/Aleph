@@ -13,12 +13,13 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use tracing::{debug, warn};
 
 use crate::gateway::channel::Attachment;
+use crate::gateway::media::{MediaItem, detect_mime};
 
-/// Maximum file size allowed (20 MB).
-const MAX_FILE_SIZE: u64 = 20 * 1024 * 1024;
+/// Maximum file size allowed (50 MB — for video files).
+const MAX_FILE_SIZE: u64 = 50 * 1024 * 1024;
 
-/// HTTP download timeout.
-const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(30);
+/// HTTP download timeout (60s — large media files).
+const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Stale session threshold (1 hour).
 const STALE_THRESHOLD: Duration = Duration::from_secs(3600);
@@ -40,7 +41,7 @@ pub enum CacheError {
     #[error("No source available (data/path/url all None)")]
     NoSource,
 
-    #[error("File exceeds 20 MB limit: {size} bytes")]
+    #[error("File exceeds 50 MB limit: {size} bytes")]
     TooLarge { size: u64 },
 
     #[error("I/O error: {0}")]
@@ -205,6 +206,120 @@ impl MediaCache {
             }
         }
     }
+
+    /// Convert a [`MediaItem`] (from tool `_media` output) to a channel [`Attachment`].
+    ///
+    /// Downloads to temp file on success, falls back to URL-only on failure.
+    pub async fn download_media_item(
+        &self,
+        item: &MediaItem,
+        session_id: &str,
+    ) -> Attachment {
+        let id = uuid::Uuid::new_v4().to_string();
+        let mime = item
+            .mime_type
+            .clone()
+            .unwrap_or_else(|| detect_mime(&item.url, &item.media_type));
+
+        // Build a temporary Attachment to pass through resolve()
+        let temp_attachment = if item.url.starts_with("data:") {
+            // Parse data URL: data:[<mediatype>][;base64],<data>
+            match Self::decode_data_url(&item.url) {
+                Ok((decoded_mime, bytes)) => Attachment {
+                    id: id.clone(),
+                    mime_type: decoded_mime.unwrap_or_else(|| mime.clone()),
+                    filename: item.filename.clone().or_else(|| Some(format!("{}.bin", &id[..8]))),
+                    size: Some(bytes.len() as u64),
+                    url: None,
+                    path: None,
+                    data: Some(bytes),
+                },
+                Err(e) => {
+                    let prefix_len = item.url.len().min(30);
+                    warn!(url_prefix = &item.url[..prefix_len], error = %e, "Failed to decode data URL, falling back to URL-only");
+                    return Self::url_only_attachment(&id, &item.url, &mime, &item.filename);
+                }
+            }
+        } else if item.url.starts_with('/') || item.url.starts_with("./") || item.url.starts_with("~/") {
+            // Local file path
+            Attachment {
+                id: id.clone(),
+                mime_type: mime.clone(),
+                filename: item.filename.clone(),
+                size: None,
+                url: None,
+                path: Some(item.url.clone()),
+                data: None,
+            }
+        } else {
+            // HTTP/HTTPS URL
+            Attachment {
+                id: id.clone(),
+                mime_type: mime.clone(),
+                filename: item.filename.clone().or_else(|| Some(format!("{}.bin", &id[..8]))),
+                size: None,
+                url: Some(item.url.clone()),
+                path: None,
+                data: None,
+            }
+        };
+
+        match self.resolve(&temp_attachment, session_id).await {
+            Ok(cached) => Attachment {
+                id,
+                mime_type: cached.mime_type,
+                filename: item.filename.clone(),
+                size: Some(cached.size),
+                url: Some(item.url.clone()),
+                path: Some(cached.local_path.to_string_lossy().to_string()),
+                data: None,
+            },
+            Err(e) => {
+                warn!(url = %item.url, error = %e, "Media download failed, falling back to URL-only");
+                Self::url_only_attachment(&id, &item.url, &mime, &item.filename)
+            }
+        }
+    }
+
+    /// Parse a data URL and decode its content.
+    fn decode_data_url(url: &str) -> Result<(Option<String>, Vec<u8>), CacheError> {
+        // Format: data:[<mediatype>][;base64],<data>
+        let rest = url.strip_prefix("data:").ok_or_else(|| {
+            CacheError::Download("Not a data URL".to_string())
+        })?;
+        let (header, data) = rest.split_once(',').ok_or_else(|| {
+            CacheError::Download("Invalid data URL: no comma separator".to_string())
+        })?;
+        let mime = if header.contains(';') {
+            let mime_part = header.split(';').next().unwrap_or("");
+            if mime_part.is_empty() { None } else { Some(mime_part.to_string()) }
+        } else if !header.is_empty() && !header.contains("base64") {
+            Some(header.to_string())
+        } else {
+            None
+        };
+
+        let bytes = if header.contains("base64") {
+            BASE64.decode(data).map_err(|e| CacheError::Download(format!("Base64 decode failed: {}", e)))?
+        } else {
+            data.as_bytes().to_vec()
+        };
+
+        Ok((mime, bytes))
+    }
+
+    /// Create a URL-only fallback Attachment (no local file).
+    fn url_only_attachment(id: &str, url: &str, mime: &str, filename: &Option<String>) -> Attachment {
+        Attachment {
+            id: id.to_string(),
+            mime_type: mime.to_string(),
+            filename: filename.clone(),
+            size: None,
+            url: Some(url.to_string()),
+            path: None,
+            data: None,
+        }
+    }
 }
 
 impl Default for MediaCache {
@@ -286,5 +401,76 @@ mod tests {
         assert_eq!(b64, "SGVsbG8="); // base64("Hello")
 
         let _ = MediaCache::cleanup_session(session_id);
+    }
+
+    #[tokio::test]
+    async fn test_download_media_item_local_path() {
+        use crate::gateway::media::MediaItem;
+        let cache = MediaCache::new();
+
+        // Create a temp file to use as "local path"
+        let dir = session_dir("test-media-item-local");
+        std::fs::create_dir_all(&dir).unwrap();
+        let local_file = dir.join("test.png");
+        std::fs::write(&local_file, b"fake png data").unwrap();
+
+        let item = MediaItem {
+            url: local_file.to_string_lossy().to_string(),
+            media_type: "image".to_string(),
+            mime_type: Some("image/png".to_string()),
+            filename: None,
+        };
+
+        let att = cache.download_media_item(&item, "test-media-item-local").await;
+        assert_eq!(att.mime_type, "image/png");
+        assert!(att.path.is_some());
+        assert!(att.url.is_some());
+
+        let _ = MediaCache::cleanup_session("test-media-item-local");
+    }
+
+    #[tokio::test]
+    async fn test_download_media_item_data_url() {
+        use crate::gateway::media::MediaItem;
+        let cache = MediaCache::new();
+
+        // "Hello" in base64 = SGVsbG8=
+        let item = MediaItem {
+            url: "data:text/plain;base64,SGVsbG8=".to_string(),
+            media_type: "file".to_string(),
+            mime_type: None,
+            filename: Some("hello.txt".to_string()),
+        };
+
+        let att = cache.download_media_item(&item, "test-media-item-data").await;
+        assert_eq!(att.mime_type, "text/plain");
+        assert!(att.path.is_some(), "data URL should be decoded to file");
+
+        // Verify content
+        let content = std::fs::read_to_string(att.path.as_ref().unwrap()).unwrap();
+        assert_eq!(content, "Hello");
+
+        let _ = MediaCache::cleanup_session("test-media-item-data");
+    }
+
+    #[tokio::test]
+    async fn test_download_media_item_invalid_url_fallback() {
+        use crate::gateway::media::MediaItem;
+        let cache = MediaCache::new();
+
+        let item = MediaItem {
+            url: "https://invalid.example.com/does-not-exist.png".to_string(),
+            media_type: "image".to_string(),
+            mime_type: Some("image/png".to_string()),
+            filename: None,
+        };
+
+        let att = cache.download_media_item(&item, "test-media-item-fallback").await;
+        // Should fallback to URL-only
+        assert!(att.url.is_some());
+        assert!(att.path.is_none());
+        assert_eq!(att.mime_type, "image/png");
+
+        let _ = MediaCache::cleanup_session("test-media-item-fallback");
     }
 }
