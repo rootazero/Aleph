@@ -23,6 +23,7 @@ pub mod manager;
 pub mod masker;
 pub mod parser;
 pub mod risk;
+pub mod sanitize;
 pub mod sandbox;
 pub mod socket;
 pub mod storage;
@@ -48,6 +49,7 @@ pub use manager::{ExecApprovalManager, ExecApprovalRecord, PendingApproval};
 pub use masker::SecretMasker;
 pub use parser::{analyze_shell_command, tokenize_segment};
 pub use risk::{RiskLevel, BLOCKED_PATTERNS, DANGER_PATTERNS, SAFE_PATTERNS};
+pub use sanitize::{has_invisible_chars, sanitize_display_text};
 // Sandbox re-exports will be enabled as types are implemented
 // pub use sandbox::{
 //     Capabilities, EnvironmentCapability, ExecutionStatus, FallbackPolicy, FileSystemCapability,
