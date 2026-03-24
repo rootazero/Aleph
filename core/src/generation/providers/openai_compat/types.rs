@@ -63,6 +63,51 @@ pub struct ImageData {
     pub revised_prompt: Option<String>,
 }
 
+/// Polling interval for async task APIs (seconds)
+pub const POLL_INTERVAL_SECS: u64 = 3;
+
+/// Maximum polling attempts (10 minutes / 3 seconds = 200)
+pub const MAX_POLL_ATTEMPTS: u32 = 200;
+
+/// Async task submit response (e.g., video generation APIs that return a task_id)
+#[derive(Debug, Clone, Deserialize)]
+pub struct AsyncTaskSubmitResponse {
+    /// Task ID for polling
+    pub task_id: String,
+}
+
+/// Async task poll response
+#[derive(Debug, Clone, Deserialize)]
+pub struct AsyncTaskPollResponse {
+    /// Task status: typically NOT_START, IN_PROGRESS, SUCCESS, FAILURE
+    #[serde(default)]
+    pub status: String,
+    /// Failure reason
+    pub fail_reason: Option<String>,
+    /// Progress (e.g., "50%")
+    pub progress: Option<String>,
+    /// Result data
+    pub data: Option<AsyncTaskData>,
+}
+
+/// Async task result data
+#[derive(Debug, Clone, Deserialize)]
+pub struct AsyncTaskData {
+    /// Output URL (video/audio/image)
+    pub output: Option<String>,
+    /// Alternative: URL field
+    pub url: Option<String>,
+}
+
+impl AsyncTaskData {
+    /// Get the output URL from whichever field is present
+    pub fn output_url(&self) -> Option<&str> {
+        self.output
+            .as_deref()
+            .or(self.url.as_deref())
+    }
+}
+
 /// OpenAI API error response format
 #[derive(Debug, Clone, Deserialize)]
 pub struct OpenAiErrorResponse {

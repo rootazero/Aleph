@@ -1,12 +1,17 @@
-//! Image generation implementation for OpenAI-compatible provider
+//! Generation implementation for OpenAI-compatible provider
 //!
-//! Contains the `GenerationProvider::generate` implementation.
+//! Supports two response modes:
+//! - **Synchronous**: API returns `{ "data": [...] }` directly (OpenAI standard)
+//! - **Async polling**: API returns `{ "task_id": "..." }`, then poll for completion
+//!
+//! The mode is auto-detected from the response — no configuration needed.
 
 use base64::Engine;
 use std::future::Future;
 use std::pin::Pin;
 use std::time::{Duration, Instant};
-use tracing::{debug, error, info};
+use tokio::time::sleep;
+use tracing::{debug, error, info, warn};
 
 use crate::generation::{
     GenerationData, GenerationError, GenerationMetadata, GenerationOutput, GenerationProvider,
@@ -14,7 +19,10 @@ use crate::generation::{
 };
 
 use super::provider::OpenAiCompatProvider;
-use super::types::{ImageGenerationResponse, DEFAULT_TIMEOUT_SECS};
+use super::types::{
+    AsyncTaskPollResponse, AsyncTaskSubmitResponse, ImageGenerationResponse,
+    DEFAULT_TIMEOUT_SECS, MAX_POLL_ATTEMPTS, POLL_INTERVAL_SECS,
+};
 
 impl GenerationProvider for OpenAiCompatProvider {
     fn generate(
@@ -81,95 +89,53 @@ impl GenerationProvider for OpenAiCompatProvider {
                 return Err(self.parse_error_response(status, &response_text));
             }
 
-            // Parse successful response
-            let api_response: ImageGenerationResponse = serde_json::from_str(&response_text)
+            // Auto-detect response mode:
+            // - Async task: response contains "task_id" → poll for completion
+            // - Sync response: response contains "data" → parse directly
+            let parsed: serde_json::Value = serde_json::from_str(&response_text)
                 .map_err(|e| {
-                    error!(
-                        error = %e,
-                        body = %response_text,
-                        "Failed to parse OpenAI-compatible response"
-                    );
+                    error!(error = %e, body = %response_text, "Failed to parse response JSON");
                     GenerationError::serialization(format!("Failed to parse response: {}", e))
                 })?;
 
-            // Extract first image
-            let first_image = api_response.data.first().ok_or_else(|| {
-                GenerationError::provider("No images in response", None, &self.name)
-            })?;
+            let data = if parsed.get("task_id").is_some() {
+                // === Async polling mode ===
+                let submit: AsyncTaskSubmitResponse = serde_json::from_value(parsed)
+                    .map_err(|e| GenerationError::serialization(format!("Failed to parse task submit response: {}", e)))?;
 
-            // Convert to GenerationData
-            let data = if let Some(url) = &first_image.url {
-                GenerationData::url(url.clone())
-            } else if let Some(b64) = &first_image.b64_json {
-                // Decode base64 to bytes
-                let bytes = base64::engine::general_purpose::STANDARD
-                    .decode(b64)
-                    .map_err(|e| {
-                        GenerationError::serialization(format!("Failed to decode base64: {}", e))
-                    })?;
-                GenerationData::bytes(bytes)
+                info!(provider = %self.name, task_id = %submit.task_id, "Async task submitted, starting poll");
+
+                let poll_url = format!("{}/{}", url.trim_end_matches('/'), submit.task_id);
+                self.poll_async_task(&poll_url).await?
             } else {
-                return Err(GenerationError::provider(
-                    "Response contains neither URL nor base64 data",
-                    None,
-                    &self.name,
-                ));
+                // === Synchronous mode (OpenAI standard) ===
+                let api_response: ImageGenerationResponse = serde_json::from_value(parsed)
+                    .map_err(|e| {
+                        error!(error = %e, body = %response_text, "Failed to parse OpenAI-compatible response");
+                        GenerationError::serialization(format!("Failed to parse response: {}", e))
+                    })?;
+                self.extract_sync_result(&api_response)?
             };
 
             // Build metadata
             let duration = start_time.elapsed();
-            let mut metadata = GenerationMetadata::new()
+            let metadata = GenerationMetadata::new()
                 .with_provider(&self.name)
                 .with_model(body.model.clone())
                 .with_duration(duration);
-
-            if let Some(revised) = &first_image.revised_prompt {
-                metadata = metadata.with_revised_prompt(revised.clone());
-            }
-
-            // Add dimensions from request params
-            if let (Some(w), Some(h)) = (request.params.width, request.params.height) {
-                metadata = metadata.with_dimensions(w, h);
-            }
 
             info!(
                 provider = %self.name,
                 duration_ms = duration.as_millis(),
                 model = %body.model,
-                "OpenAI-compatible image generation completed"
+                "Generation completed"
             );
 
-            // Build output
             let mut output =
                 GenerationOutput::new(request.generation_type, data).with_metadata(metadata);
 
             if let Some(id) = request_id {
                 output = output.with_request_id(id);
-            }
-
-            // Handle additional images (if n > 1 and provider supports it)
-            if api_response.data.len() > 1 {
-                let additional: Vec<GenerationData> = api_response
-                    .data
-                    .iter()
-                    .skip(1)
-                    .filter_map(|img| {
-                        if let Some(url) = &img.url {
-                            Some(GenerationData::url(url.clone()))
-                        } else if let Some(b64) = &img.b64_json {
-                            base64::engine::general_purpose::STANDARD
-                                .decode(b64)
-                                .ok()
-                                .map(GenerationData::bytes)
-                        } else {
-                            None
-                        }
-                    })
-                    .collect();
-
-                if !additional.is_empty() {
-                    output = output.with_additional_outputs(additional);
-                }
             }
 
             Ok(output)
@@ -201,5 +167,115 @@ impl GenerationProvider for OpenAiCompatProvider {
         request: GenerationRequest,
     ) -> Pin<Box<dyn Future<Output = GenerationResult<GenerationOutput>> + Send + '_>> {
         Box::pin(super::edit::edit_image_impl(self, request))
+    }
+}
+
+// === Helper methods for sync/async response handling ===
+
+impl OpenAiCompatProvider {
+    /// Extract result from synchronous OpenAI-format response
+    fn extract_sync_result(
+        &self,
+        api_response: &ImageGenerationResponse,
+    ) -> GenerationResult<GenerationData> {
+        let first = api_response.data.first().ok_or_else(|| {
+            GenerationError::provider("No data in response", None, &self.name)
+        })?;
+
+        if let Some(url) = &first.url {
+            Ok(GenerationData::url(url.clone()))
+        } else if let Some(b64) = &first.b64_json {
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(b64)
+                .map_err(|e| {
+                    GenerationError::serialization(format!("Failed to decode base64: {}", e))
+                })?;
+            Ok(GenerationData::bytes(bytes))
+        } else {
+            Err(GenerationError::provider(
+                "Response contains neither URL nor base64 data",
+                None,
+                &self.name,
+            ))
+        }
+    }
+
+    /// Poll an async task until completion
+    async fn poll_async_task(&self, poll_url: &str) -> GenerationResult<GenerationData> {
+        for attempt in 1..=MAX_POLL_ATTEMPTS {
+            debug!(
+                provider = %self.name,
+                attempt = attempt,
+                max = MAX_POLL_ATTEMPTS,
+                url = %poll_url,
+                "Polling async task"
+            );
+
+            let response = self
+                .client
+                .get(poll_url)
+                .header("Authorization", format!("Bearer {}", self.api_key))
+                .send()
+                .await
+                .map_err(|e| GenerationError::network(format!("Poll request failed: {}", e)))?;
+
+            let status = response.status();
+            let body = response.text().await.map_err(|e| {
+                GenerationError::network(format!("Failed to read poll response: {}", e))
+            })?;
+
+            if !status.is_success() {
+                error!(provider = %self.name, status = %status, body = %body, "Poll request failed");
+                return Err(self.parse_error_response(status, &body));
+            }
+
+            let task: AsyncTaskPollResponse = serde_json::from_str(&body).map_err(|e| {
+                error!(error = %e, body = %body, "Failed to parse poll response");
+                GenerationError::serialization(format!("Failed to parse poll response: {}", e))
+            })?;
+
+            match task.status.to_uppercase().as_str() {
+                "SUCCESS" => {
+                    info!(
+                        provider = %self.name,
+                        attempt = attempt,
+                        progress = %task.progress.as_deref().unwrap_or("100%"),
+                        "Async task completed"
+                    );
+
+                    let output_url = task
+                        .data
+                        .as_ref()
+                        .and_then(|d| d.output_url())
+                        .ok_or_else(|| {
+                            GenerationError::provider(
+                                "Task completed but no output URL in response",
+                                None,
+                                &self.name,
+                            )
+                        })?;
+
+                    return Ok(GenerationData::url(output_url.to_string()));
+                }
+                "FAILURE" | "FAILED" => {
+                    let reason = task
+                        .fail_reason
+                        .unwrap_or_else(|| "Unknown error".to_string());
+                    error!(provider = %self.name, reason = %reason, "Async task failed");
+                    return Err(GenerationError::job_failed(reason, None));
+                }
+                _ => {
+                    // NOT_START, IN_PROGRESS, QUEUED, PROCESSING, etc.
+                    if let Some(ref progress) = task.progress {
+                        debug!(progress = %progress, status = %task.status, "Task still processing");
+                    }
+                    sleep(Duration::from_secs(POLL_INTERVAL_SECS)).await;
+                }
+            }
+        }
+
+        Err(GenerationError::timeout(Duration::from_secs(
+            MAX_POLL_ATTEMPTS as u64 * POLL_INTERVAL_SECS,
+        )))
     }
 }
