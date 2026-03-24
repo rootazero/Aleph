@@ -137,6 +137,21 @@ impl BuiltinToolRegistry {
             ImageGenerateTool::new(Arc::clone(registry))
         });
 
+        let video_generate_tool = config.generation_registry.as_ref().map(|registry| {
+            info!("Creating VideoGenerateTool with generation registry");
+            crate::builtin_tools::generation::VideoGenerateTool::new(Arc::clone(registry))
+        });
+
+        let audio_generate_tool = config.generation_registry.as_ref().map(|registry| {
+            info!("Creating AudioGenerateTool with generation registry");
+            crate::builtin_tools::generation::AudioGenerateTool::new(Arc::clone(registry))
+        });
+
+        let speech_generate_tool = config.generation_registry.as_ref().map(|registry| {
+            info!("Creating SpeechGenerateTool with generation registry");
+            crate::builtin_tools::generation::SpeechGenerateTool::new(Arc::clone(registry))
+        });
+
         // Build tool metadata
         let mut tools = HashMap::new();
 
@@ -382,6 +397,9 @@ impl BuiltinToolRegistry {
             code_exec_tool,
             pdf_generate_tool,
             image_generate_tool,
+            video_generate_tool,
+            audio_generate_tool,
+            speech_generate_tool,
             list_skills_tool,
             read_skill_tool,
             config_guide_tool,
@@ -575,29 +593,24 @@ impl BuiltinToolRegistry {
                 use crate::generation::GenerationType;
 
                 if reg_inner.first_for_type(GenerationType::Video).is_some() {
-                    reg(tools, "generate_video", "Generate videos from text descriptions",
-                        serde_json::json!({
-                            "type": "object",
-                            "properties": {
-                                "prompt": { "type": "string", "description": "Text description of the video to generate" },
-                                "provider": { "type": "string", "description": "Optional provider name" }
-                            },
-                            "required": ["prompt"]
-                        }));
-                    info!("Registered generate_video tool in BuiltinToolRegistry");
+                    reg(tools, "video_generate",
+                        crate::builtin_tools::generation::VideoGenerateTool::DESCRIPTION,
+                        serde_json::to_value(schemars::schema_for!(crate::builtin_tools::generation::VideoGenerateArgs)).unwrap_or_default());
+                    info!("Registered video_generate tool in BuiltinToolRegistry");
                 }
 
                 if reg_inner.first_for_type(GenerationType::Audio).is_some() {
-                    reg(tools, "generate_audio", "Generate audio/music from text descriptions",
-                        serde_json::json!({
-                            "type": "object",
-                            "properties": {
-                                "prompt": { "type": "string", "description": "Text description of the audio to generate" },
-                                "provider": { "type": "string", "description": "Optional provider name" }
-                            },
-                            "required": ["prompt"]
-                        }));
-                    info!("Registered generate_audio tool in BuiltinToolRegistry");
+                    reg(tools, "audio_generate",
+                        crate::builtin_tools::generation::AudioGenerateTool::DESCRIPTION,
+                        serde_json::to_value(schemars::schema_for!(crate::builtin_tools::generation::AudioGenerateArgs)).unwrap_or_default());
+                    info!("Registered audio_generate tool in BuiltinToolRegistry");
+                }
+
+                if reg_inner.first_for_type(GenerationType::Speech).is_some() {
+                    reg(tools, "speech_generate",
+                        crate::builtin_tools::generation::SpeechGenerateTool::DESCRIPTION,
+                        serde_json::to_value(schemars::schema_for!(crate::builtin_tools::generation::SpeechGenerateArgs)).unwrap_or_default());
+                    info!("Registered speech_generate tool in BuiltinToolRegistry");
                 }
             }
         }

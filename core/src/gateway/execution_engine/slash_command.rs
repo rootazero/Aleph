@@ -43,6 +43,10 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // Map common shorthand commands to their actual tool names
         let cmd_name = match cmd_name.as_str() {
             "rename" => "session_set_topic".to_string(),
+            "video" => "video_generate".to_string(),
+            "image" => "image_generate".to_string(),
+            "audio" => "audio_generate".to_string(),
+            "speech" => "speech_generate".to_string(),
             other => other.to_string(),
         };
 
@@ -304,6 +308,14 @@ fn build_tool_arguments(tool_id: &str, args_str: &str, raw_input: &str) -> serde
                 serde_json::json!({ "input": args_str })
             }
         }
+        // Generation tools: /video <prompt>, /image <prompt>, /audio <prompt>
+        "video_generate" | "image_generate" | "audio_generate" => serde_json::json!({
+            "prompt": args_str,
+        }),
+        // Speech tool: /speech <text>
+        "speech_generate" => serde_json::json!({
+            "text": args_str,
+        }),
         _ => {
             // Generic --key value parser: if args contain "--", parse as named parameters.
             // This handles tools with structured schemas (team_create, task_create, etc.)

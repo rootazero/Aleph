@@ -6,7 +6,7 @@
 use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use crate::sync_primitives::Arc;
+use crate::sync_primitives::{Arc, RwLock};
 use std::time::Instant;
 use tracing::{debug, info};
 
@@ -70,7 +70,7 @@ pub struct SpeechGenerateOutput {
 
 /// Speech generation tool using GenerationProviderRegistry
 pub struct SpeechGenerateTool {
-    registry: Arc<GenerationProviderRegistry>,
+    registry: Arc<RwLock<GenerationProviderRegistry>>,
 }
 
 impl SpeechGenerateTool {
@@ -81,7 +81,7 @@ impl SpeechGenerateTool {
     pub const DESCRIPTION: &'static str = "Convert text to speech audio. Use this when you need to generate spoken audio from text content.";
 
     /// Create a new SpeechGenerateTool with the given provider registry
-    pub fn new(registry: Arc<GenerationProviderRegistry>) -> Self {
+    pub fn new(registry: Arc<RwLock<GenerationProviderRegistry>>) -> Self {
         Self { registry }
     }
 
@@ -119,29 +119,34 @@ impl SpeechGenerateTool {
             "Starting speech generation"
         );
 
-        // Find provider
-        let (provider_name, provider) = if let Some(name) = &args.provider {
-            let provider = self
-                .registry
-                .get(name)
-                .ok_or_else(|| ToolError::InvalidArgs(format!("Provider '{}' not found", name)))?;
+        // Find provider — lock must be dropped before any .await call
+        let (provider_name, provider) = {
+            let reg = self.registry.read().map_err(|e| {
+                let error_msg = format!("Failed to acquire registry lock: {}", e);
+                ToolError::Execution(error_msg)
+            })?;
 
-            // Check if provider supports speech generation
-            if !provider.supports(GenerationType::Speech) {
-                return Err(ToolError::InvalidArgs(format!(
-                    "Provider '{}' does not support speech generation",
-                    name
-                )));
+            if let Some(name) = &args.provider {
+                let provider = reg
+                    .get(name)
+                    .ok_or_else(|| ToolError::InvalidArgs(format!("Provider '{}' not found", name)))?;
+
+                // Check if provider supports speech generation
+                if !provider.supports(GenerationType::Speech) {
+                    return Err(ToolError::InvalidArgs(format!(
+                        "Provider '{}' does not support speech generation",
+                        name
+                    )));
+                }
+
+                (name.clone(), provider)
+            } else {
+                // Find first provider that supports speech generation
+                reg.first_for_type(GenerationType::Speech)
+                    .ok_or_else(|| {
+                        ToolError::InvalidArgs("No speech generation provider available".to_string())
+                    })?
             }
-
-            (name.clone(), provider)
-        } else {
-            // Find first provider that supports speech generation
-            self.registry
-                .first_for_type(GenerationType::Speech)
-                .ok_or_else(|| {
-                    ToolError::InvalidArgs("No speech generation provider available".to_string())
-                })?
         };
 
         debug!(provider = %provider_name, "Using provider for speech generation");
@@ -257,12 +262,12 @@ mod tests {
     use crate::generation::MockGenerationProvider;
     use crate::tools::AlephTool;
 
-    fn create_test_registry() -> Arc<GenerationProviderRegistry> {
+    fn create_test_registry() -> Arc<RwLock<GenerationProviderRegistry>> {
         let mut registry = GenerationProviderRegistry::new();
         // MockGenerationProvider::new supports Image and Speech by default
         let mock = Arc::new(MockGenerationProvider::new("mock-tts"));
         registry.register("mock-tts".to_string(), mock).unwrap();
-        Arc::new(registry)
+        Arc::new(RwLock::new(registry))
     }
 
     #[test]
@@ -424,7 +429,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_generate_speech_no_provider_available() {
-        let registry = Arc::new(GenerationProviderRegistry::new());
+        let registry = Arc::new(RwLock::new(GenerationProviderRegistry::new()));
         let tool = SpeechGenerateTool::new(registry);
 
         let args = SpeechGenerateArgs {

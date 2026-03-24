@@ -39,6 +39,12 @@ pub struct BuiltinToolRegistry {
     pub(crate) pdf_generate_tool: crate::builtin_tools::PdfGenerateTool,
     /// Image generation tool instance (optional - requires generation registry)
     pub(crate) image_generate_tool: Option<crate::builtin_tools::ImageGenerateTool>,
+    /// Video generation tool instance (optional - requires generation registry)
+    pub(crate) video_generate_tool: Option<crate::builtin_tools::generation::VideoGenerateTool>,
+    /// Audio generation tool instance (optional - requires generation registry)
+    pub(crate) audio_generate_tool: Option<crate::builtin_tools::generation::AudioGenerateTool>,
+    /// Speech generation tool instance (optional - requires generation registry)
+    pub(crate) speech_generate_tool: Option<crate::builtin_tools::generation::SpeechGenerateTool>,
     /// List skills tool instance
     pub(crate) list_skills_tool: crate::builtin_tools::skill_reader::ListSkillsTool,
     /// Read skill tool instance (deferred loading — LLM calls this to load full skill instructions)
@@ -287,8 +293,24 @@ impl ToolRegistry for BuiltinToolRegistry {
                 })?;
                 tool.call_json(arguments).await
             }),
-            "generate_video" => Box::pin(async move { self.execute_video_generate(arguments).await }),
-            "generate_audio" => Box::pin(async move { self.execute_audio_generate(arguments).await }),
+            "video_generate" => Box::pin(async move {
+                let tool = self.video_generate_tool.as_ref().ok_or_else(|| {
+                    AlephError::tool("Video generation not available: no generation registry configured")
+                })?;
+                tool.call_json(arguments).await
+            }),
+            "audio_generate" => Box::pin(async move {
+                let tool = self.audio_generate_tool.as_ref().ok_or_else(|| {
+                    AlephError::tool("Audio generation not available: no generation registry configured")
+                })?;
+                tool.call_json(arguments).await
+            }),
+            "speech_generate" => Box::pin(async move {
+                let tool = self.speech_generate_tool.as_ref().ok_or_else(|| {
+                    AlephError::tool("Speech generation not available: no generation registry configured")
+                })?;
+                tool.call_json(arguments).await
+            }),
 
             // Meta tools for smart tool discovery - use call_json
             "list_tools" => Box::pin(async move {

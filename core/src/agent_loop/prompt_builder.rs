@@ -52,7 +52,9 @@ const BASE_BEHAVIOR: &str = "\
      - Risks: [none / specific concerns]\n\
      </completion-check>\n\
   4. Output <task-complete/> to confirm you are done.\n\
-  If you did NOT use any tools (pure conversation), just respond naturally — no completion protocol needed.";
+  If you did NOT use any tools (pure conversation), just respond naturally — no completion protocol needed.\n\
+- **EFFICIENCY: ACT BEFORE EXPLORING.** If the user's request maps directly to an available tool (image/video/audio generation, web search, file operations, etc.), call that tool IMMEDIATELY. Do not explore configuration, read guides, or verify setup first — trust that registered tools are ready to use.\n\
+- **EFFICIENCY: PREFER ACTION OVER PREPARATION.** If a tool directly matches the request, call it first and explore only if it fails. When you have enough information to attempt the task, attempt it. A failed attempt with a clear error message is more useful than exhausting the token budget on preparation.";
 
 /// Builds the system prompt by assembling sections.
 pub struct PromptBuilder {

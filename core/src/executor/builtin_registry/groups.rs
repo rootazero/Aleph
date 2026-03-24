@@ -31,12 +31,12 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
     ToolCategory {
         id: "memory_knowledge",
         name: "记忆与知识",
-        tools: &["memory_search", "memory_browse", "skill_list"],
+        tools: &["memory_search", "memory_browse", "skill_list", "skill_read"],
     },
     ToolCategory {
         id: "content_gen",
         name: "内容生成",
-        tools: &["image_generate"],
+        tools: &["image_generate", "video_generate", "audio_generate", "speech_generate"],
     },
     ToolCategory {
         id: "system_config",

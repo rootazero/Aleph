@@ -254,7 +254,11 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                         "Agent hit iteration/token limit without producing a response"
                     );
                     format!(
-                        "Sorry, I was unable to complete the task within the allowed limits ({} iterations, {} tool calls). Please try a simpler request.",
+                        "抱歉，我在处理这个请求时用了太多步骤但没能完成（{} 次迭代，{} 次工具调用）。\n\
+                         请尝试更直接的指令，比如使用 /video、/image、/audio 等命令直接生成内容。\n\n\
+                         Sorry, I was unable to complete the task within the allowed limits ({} iterations, {} tool calls). \
+                         Try using direct commands like /video, /image, or /audio for generation tasks.",
+                        result.iterations, result.tool_calls_made,
                         result.iterations, result.tool_calls_made
                     )
                 } else {

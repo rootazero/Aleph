@@ -25,7 +25,6 @@
 mod builder;
 mod config;
 mod definitions;
-mod executors;
 mod groups;
 mod registry;
 
