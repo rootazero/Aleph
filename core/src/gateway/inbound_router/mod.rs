@@ -467,7 +467,6 @@ impl InboundMessageRouter {
                 } else {
                     // Command not resolved — check if it's a namespace-only command.
                     // e.g. "/session" when tools like "session_new", "session_list" exist.
-                    // Reply with an inline keyboard showing available sub-commands.
                     let namespace = slash_text
                         .trim_start_matches('/')
                         .split_whitespace()
@@ -476,7 +475,10 @@ impl InboundMessageRouter {
                         .split('@')  // Strip @botname suffix
                         .next()
                         .unwrap_or("");
-                    if !namespace.is_empty() {
+                    // Skip namespace check for shorthand aliases — these are resolved
+                    // by slash_command.rs fast-path (e.g. /image → image_generate).
+                    let is_shorthand = matches!(namespace, "image" | "video" | "audio" | "speech" | "rename");
+                    if !namespace.is_empty() && !is_shorthand {
                         let registry = parser.tool_registry();
                         if registry.is_namespace(namespace).await {
                             let children = registry.list_namespace_children(namespace).await;
