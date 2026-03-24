@@ -43,6 +43,7 @@ pub mod openai_image;
 pub mod openai_tts;
 pub mod replicate;
 pub mod stability;
+pub mod url_normalize;
 
 #[cfg(test)]
 mod tests;
