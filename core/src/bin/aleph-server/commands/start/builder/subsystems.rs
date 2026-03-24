@@ -213,6 +213,21 @@ pub(in crate::commands::start) async fn initialize_channels(
             }
         }
 
+        // Add shorthand aliases for generation tools
+        // These match slash_command.rs shorthand mappings
+        let aliases = [
+            ("image", "Generate an image from a text prompt"),
+            ("video", "Generate a video from a text prompt"),
+            ("audio", "Generate audio/music from a text prompt"),
+            ("speech", "Convert text to speech"),
+        ];
+        for (alias, desc) in aliases {
+            if !seen.contains(alias) {
+                seen.insert(alias.to_string());
+                commands.push((alias.to_string(), desc.to_string()));
+            }
+        }
+
         commands
     } else {
         Vec::new()
