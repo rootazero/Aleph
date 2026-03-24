@@ -127,9 +127,10 @@ impl EmbeddingProvidersApi {
     /// Test an embedding provider's connectivity
     pub async fn test(
         state: &DashboardState,
+        id: Option<&str>,
         config: EmbeddingProviderConfig,
     ) -> Result<EmbeddingTestResult, String> {
-        let params = serde_json::json!({ "config": config });
+        let params = serde_json::json!({ "id": id, "config": config });
         let result = state.rpc_call("embedding_providers.test", params).await?;
         serde_json::from_value(result).map_err(|e| e.to_string())
     }

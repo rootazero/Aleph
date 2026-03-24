@@ -585,7 +585,7 @@ pub(in crate::commands::start) fn register_config_handlers(
     // Rerank config (dedicated handlers, API key in vault)
     register_handler!(server, "rerank_config.get", rerank_config::handle_get, config, shared_token_mgr);
     register_handler!(server, "rerank_config.update", rerank_config::handle_update, config, event_bus, shared_token_mgr);
-    register_handler!(server, "rerank_config.test", rerank_config::handle_test, shared_token_mgr);
+    register_handler!(server, "rerank_config.test", rerank_config::handle_test, config, shared_token_mgr);
 
     // Security config
     register_handler!(server, "security_config.get", security_config::handle_get);

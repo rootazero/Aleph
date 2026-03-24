@@ -86,6 +86,10 @@ pub struct RerankConfig {
     /// Weight of rerank score in final blended score (0.0–1.0)
     #[serde(default = "default_rerank_weight")]
     pub rerank_weight: f32,
+
+    /// Whether this provider has been verified via a successful test connection
+    #[serde(default)]
+    pub verified: bool,
 }
 
 fn default_rerank_models() -> Vec<String> {
@@ -110,6 +114,7 @@ impl Default for RerankConfig {
             models: default_rerank_models(),
             timeout_ms: default_rerank_timeout(),
             rerank_weight: default_rerank_weight(),
+            verified: false,
         }
     }
 }

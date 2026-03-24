@@ -117,6 +117,16 @@ pub async fn handle_update(
 
     {
         let mut cfg = config.write().await;
+
+        // Reset verified if provider changed
+        let provider_changed = cfg.memory.rerank.provider != rerank_config.provider;
+        if provider_changed {
+            rerank_config.verified = false;
+        } else {
+            // Preserve existing verified status
+            rerank_config.verified = cfg.memory.rerank.verified;
+        }
+
         cfg.memory.rerank = rerank_config;
 
         if let Err(e) = cfg.save_incremental(&["memory.rerank"]) {
@@ -144,8 +154,10 @@ pub async fn handle_update(
 ///
 /// Builds a rerank provider from the supplied config and sends a test query.
 /// If no api_key in request, falls back to vault.
+/// On success, persists verified=true to config.
 pub async fn handle_test(
     request: JsonRpcRequest,
+    config_store: Arc<RwLock<Config>>,
     vault: Arc<SharedTokenManager>,
 ) -> JsonRpcResponse {
     let params = match &request.params {
@@ -189,6 +201,15 @@ pub async fn handle_test(
         .await
     {
         Ok(results) => {
+            // Persist verified=true on success
+            {
+                let mut cfg = config_store.write().await;
+                cfg.memory.rerank.verified = true;
+                if let Err(e) = cfg.save_incremental(&["memory.rerank"]) {
+                    error!(error = %e, "Failed to save rerank verified status");
+                }
+            }
+
             JsonRpcResponse::success(
                 request.id,
                 json!({

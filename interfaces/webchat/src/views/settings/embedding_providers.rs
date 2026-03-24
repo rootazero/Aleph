@@ -445,15 +445,17 @@ fn ProviderDetailPanel(
 
     // Test connection handler
     let build_config_for_test = build_config.clone();
+    let provider_id_for_test = provider_id.clone();
     let handle_test = move |_| {
         set_testing.set(true);
         set_test_result.set(None);
         set_action_error.set(None);
 
         let config = build_config_for_test();
+        let id = provider_id_for_test.clone();
 
         spawn_local(async move {
-            match EmbeddingProvidersApi::test(&state, config).await {
+            match EmbeddingProvidersApi::test(&state, Some(&id), config).await {
                 Ok(result) => {
                     set_testing.set(false);
                     set_test_result.set(Some((result.success, result.message)));
@@ -993,7 +995,7 @@ fn AddProviderPanel(
         let config = build_config();
 
         spawn_local(async move {
-            match EmbeddingProvidersApi::test(&state, config).await {
+            match EmbeddingProvidersApi::test(&state, None, config).await {
                 Ok(result) => {
                     set_testing.set(false);
                     set_test_result.set(Some((result.success, result.message)));
