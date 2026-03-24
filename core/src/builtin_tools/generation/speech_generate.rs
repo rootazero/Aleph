@@ -43,6 +43,9 @@ pub struct SpeechGenerateArgs {
 /// Output from speech generation tool
 #[derive(Debug, Clone, Serialize)]
 pub struct SpeechGenerateOutput {
+    /// Human-readable display text
+    pub _display: String,
+
     /// Location of the generated audio (URL, file path, or data URL)
     pub audio_location: String,
 
@@ -221,7 +224,14 @@ impl SpeechGenerateTool {
             "Speech generation completed"
         );
 
+        let display = format!(
+            "🔊 语音已生成 ({:.1}s)\n{}",
+            duration_ms as f64 / 1000.0,
+            audio_location
+        );
+
         Ok(SpeechGenerateOutput {
+            _display: display,
             audio_location,
             location_type,
             text: args.text,
@@ -520,6 +530,7 @@ mod tests {
     #[test]
     fn test_output_serialization() {
         let output = SpeechGenerateOutput {
+            _display: "🔊 语音已生成 (1.5s)\nhttps://example.com/audio.mp3".to_string(),
             audio_location: "https://example.com/audio.mp3".to_string(),
             location_type: "url".to_string(),
             text: "Hello world".to_string(),

@@ -47,6 +47,9 @@ pub struct ImageGenerateArgs {
 /// Output from image generation tool
 #[derive(Debug, Clone, Serialize)]
 pub struct ImageGenerateOutput {
+    /// Human-readable display text (used by fast-path slash commands)
+    pub _display: String,
+
     /// Location of the generated image (URL or file path)
     pub image_location: String,
 
@@ -213,7 +216,14 @@ impl ImageGenerateTool {
         );
         notify_tool_result(Self::NAME, &result_summary, true);
 
+        let display = format!(
+            "🎨 图像已生成 ({:.1}s)\n{}",
+            duration_ms as f64 / 1000.0,
+            image_location
+        );
+
         Ok(ImageGenerateOutput {
+            _display: display,
             image_location,
             location_type,
             prompt: args.prompt,
@@ -398,6 +408,7 @@ mod tests {
     #[test]
     fn test_output_serialization() {
         let output = ImageGenerateOutput {
+            _display: "🎨 图像已生成 (1.5s)\nhttps://example.com/image.png".to_string(),
             image_location: "https://example.com/image.png".to_string(),
             location_type: "url".to_string(),
             prompt: "Test prompt".to_string(),
