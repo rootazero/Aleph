@@ -4,7 +4,6 @@
 
 pub mod openai;
 pub mod anthropic;
-pub mod codex;
 pub mod openai_common;
 pub mod openai_responses;
 pub mod gemini;
@@ -17,7 +16,6 @@ mod jsonpath;
 
 pub use openai::OpenAiProtocol;
 pub use anthropic::AnthropicProtocol;
-pub use codex::CodexProtocol;
 pub use openai_responses::OpenAiResponsesProtocol;
 pub use gemini::GeminiProtocol;
 pub use definition::ProtocolDefinition;

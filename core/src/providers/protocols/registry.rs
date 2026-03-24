@@ -2,7 +2,8 @@
 
 use crate::error::Result;
 use crate::providers::adapter::ProtocolAdapter;
-use crate::providers::protocols::{AnthropicProtocol, CodexProtocol, GeminiProtocol, OpenAiProtocol, OpenAiResponsesProtocol};
+use crate::providers::protocols::{AnthropicProtocol, GeminiProtocol, OpenAiProtocol, OpenAiResponsesProtocol};
+use crate::providers::protocols::openai_responses::ResponsesVariant;
 use once_cell::sync::Lazy;
 use reqwest::Client;
 use std::collections::HashMap;
@@ -59,15 +60,16 @@ impl ProtocolRegistry {
                 as ProtocolFactory,
         );
 
+        // Codex variant — same wire format as Responses API, different endpoint + fields
         let codex_factory: ProtocolFactory =
-            |client| Arc::new(CodexProtocol::new(client)) as Arc<dyn ProtocolAdapter>;
+            |client| Arc::new(OpenAiResponsesProtocol::new(client, ResponsesVariant::codex())) as Arc<dyn ProtocolAdapter>;
         builtin.insert("codex".to_string(), codex_factory);
         // Backward compatibility: "chatgpt" maps to the same Codex protocol
         builtin.insert("chatgpt".to_string(), codex_factory);
 
         builtin.insert(
             "openai-responses".to_string(),
-            (|client| Arc::new(OpenAiResponsesProtocol::new(client)) as Arc<dyn ProtocolAdapter>)
+            (|client| Arc::new(OpenAiResponsesProtocol::new(client, ResponsesVariant::default())) as Arc<dyn ProtocolAdapter>)
                 as ProtocolFactory,
         );
     }
