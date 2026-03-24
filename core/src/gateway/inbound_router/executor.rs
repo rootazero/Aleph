@@ -91,6 +91,9 @@ impl InboundMessageRouter {
         reply_config.voice_enabled = voice_enabled;
         reply_config.voice_reply_hint = ctx.voice_reply_hint;
 
+        let pending_media: crate::gateway::media::PendingMedia =
+            std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+
         // Detect feishu channel and optionally construct FeishuEventEmitter
         let is_feishu = {
             if let Some(handle) = self.channel_registry.get(&ctx.reply_route.channel_id).await {
@@ -126,6 +129,7 @@ impl InboundMessageRouter {
                         ctx.reply_route.clone(),
                         run_id.clone(),
                         reply_config,
+                        pending_media.clone(),
                     );
                     Arc::new(attach_voice(re))
                 }
@@ -136,6 +140,7 @@ impl InboundMessageRouter {
                 ctx.reply_route.clone(),
                 run_id.clone(),
                 reply_config,
+                pending_media.clone(),
             );
             Arc::new(attach_voice(re))
         };
@@ -165,7 +170,7 @@ impl InboundMessageRouter {
             timeout_secs: None,
             metadata,
             attachments: ctx.message.attachments.clone(),
-            pending_media: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            pending_media: pending_media.clone(),
         };
 
         if !request.attachments.is_empty() {
@@ -229,6 +234,7 @@ impl InboundMessageRouter {
             ctx.reply_route.clone(),
             run_id.to_string(),
             reply_config,
+            std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
         );
 
         let chat_id = ctx.message.conversation_id.as_str().to_string();

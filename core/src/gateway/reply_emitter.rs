@@ -22,6 +22,8 @@ use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, warn};
 
+use crate::gateway::media::PendingMedia;
+use crate::media::cache::MediaCache;
 use super::channel::OutboundMessage;
 use super::channel_registry::ChannelRegistry;
 use super::event_emitter::{EventEmitError, EventEmitter, StreamEvent};
@@ -99,6 +101,11 @@ pub struct ReplyEmitter {
     generation_config: Option<Arc<tokio::sync::RwLock<crate::config::types::generation::GenerationConfig>>>,
     /// Per-channel voice state
     voice_state: Mutex<super::voice::VoiceState>,
+
+    /// Pending media items from tool outputs (shared with StreamCallback)
+    pending_media: PendingMedia,
+    /// Media cache for downloading media items
+    media_cache: MediaCache,
 }
 
 /// Number of characters to reveal per edit step.
@@ -110,6 +117,7 @@ impl ReplyEmitter {
         channel_registry: Arc<ChannelRegistry>,
         route: ReplyRoute,
         run_id: String,
+        pending_media: PendingMedia,
     ) -> Self {
         Self {
             channel_registry,
@@ -123,6 +131,8 @@ impl ReplyEmitter {
             generation_registry: None,
             generation_config: None,
             voice_state: Mutex::new(Default::default()),
+            pending_media,
+            media_cache: MediaCache::new(),
         }
     }
 
@@ -132,6 +142,7 @@ impl ReplyEmitter {
         route: ReplyRoute,
         run_id: String,
         config: ReplyEmitterConfig,
+        pending_media: PendingMedia,
     ) -> Self {
         Self {
             channel_registry,
@@ -145,6 +156,8 @@ impl ReplyEmitter {
             generation_registry: None,
             generation_config: None,
             voice_state: Mutex::new(Default::default()),
+            pending_media,
+            media_cache: MediaCache::new(),
         }
     }
 
@@ -281,6 +294,39 @@ impl ReplyEmitter {
         } else {
             // No generation registry — fall back to text
             self.send_to_channel(text).await;
+        }
+
+        let media_attachments = self.drain_and_send_media().await;
+        self.send_media_standalone(media_attachments).await;
+    }
+
+    /// Drain pending media, download in parallel via MediaCache, return Attachments.
+    async fn drain_and_send_media(&self) -> Vec<crate::gateway::channel::Attachment> {
+        let media_items = std::mem::take(
+            &mut *self.pending_media.lock().unwrap_or_else(|e| e.into_inner())
+        );
+        if media_items.is_empty() {
+            return vec![];
+        }
+
+        futures::future::join_all(
+            media_items.iter().map(|item| self.media_cache.download_media_item(item, &self.run_id))
+        ).await
+    }
+
+    /// Send media as a separate standalone message.
+    async fn send_media_standalone(&self, attachments: Vec<crate::gateway::channel::Attachment>) {
+        if attachments.is_empty() { return; }
+        let message = OutboundMessage {
+            conversation_id: self.route.conversation_id.clone(),
+            text: String::new(),
+            attachments,
+            reply_to: None,
+            inline_keyboard: None,
+            metadata: Default::default(),
+        };
+        if let Err(e) = self.channel_registry.send(&self.route.channel_id, message).await {
+            warn!(error = %e, "Failed to send media standalone message");
         }
     }
 
@@ -452,6 +498,9 @@ impl ReplyEmitter {
                 }
             }
         }
+
+        let media_attachments = self.drain_and_send_media().await;
+        self.send_media_standalone(media_attachments).await;
     }
 
     // ── Shared helpers ──────────────────────────────────────────────────
@@ -512,6 +561,9 @@ impl ReplyEmitter {
                 }
             }
         }
+
+        let media_attachments = self.drain_and_send_media().await;
+        self.send_media_standalone(media_attachments).await;
     }
 
     fn split_message(content: &str, max_len: usize) -> Vec<String> {
@@ -784,6 +836,10 @@ impl EventEmitter for ReplyEmitter {
             }
 
             StreamEvent::AskUser { question, .. } => {
+                // Drain any pending media before sending the question
+                let media_attachments = self.drain_and_send_media().await;
+                self.send_media_standalone(media_attachments).await;
+
                 // Flush buffer first
                 let text = {
                     let mut buffer = self.buffer.lock().await;
@@ -854,7 +910,7 @@ mod tests {
         );
 
         let registry = Arc::new(ChannelRegistry::new());
-        let emitter = ReplyEmitter::new(registry, route.clone(), "run-123".to_string());
+        let emitter = ReplyEmitter::new(registry, route.clone(), "run-123".to_string(), std::sync::Arc::new(std::sync::Mutex::new(Vec::new())));
 
         assert_eq!(emitter.run_id(), "run-123");
         assert_eq!(emitter.route().channel_id.as_str(), "imessage");
@@ -881,6 +937,7 @@ mod tests {
             route,
             "run-456".to_string(),
             config,
+            std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
         );
 
         assert_eq!(emitter.config.buffer_threshold, 1000);
@@ -895,7 +952,7 @@ mod tests {
         );
 
         let registry = Arc::new(ChannelRegistry::new());
-        let emitter = ReplyEmitter::new(registry, route, "run-789".to_string());
+        let emitter = ReplyEmitter::new(registry, route, "run-789".to_string(), std::sync::Arc::new(std::sync::Mutex::new(Vec::new())));
 
         assert_eq!(emitter.next_seq(), 0);
         assert_eq!(emitter.next_seq(), 1);
@@ -910,7 +967,7 @@ mod tests {
         );
 
         let registry = Arc::new(ChannelRegistry::new());
-        let emitter = ReplyEmitter::new(registry, route, "run-test".to_string());
+        let emitter = ReplyEmitter::new(registry, route, "run-test".to_string(), std::sync::Arc::new(std::sync::Mutex::new(Vec::new())));
 
         emitter.buffer.lock().await.push_str("Hello ");
         emitter.buffer.lock().await.push_str("World!");

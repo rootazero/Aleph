@@ -173,11 +173,14 @@ impl SessionScheduler {
             }
             None => ReplyEmitterConfig::default(),
         };
+        let pending_media: crate::gateway::media::PendingMedia =
+            std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let reply_emitter: Arc<dyn EventEmitter + Send + Sync> = Arc::new(ReplyEmitter::with_config(
             self.channel_registry.clone(),
             enriched.merged.primary_context.reply_route.clone(),
             run_id.clone(),
             reply_config,
+            pending_media.clone(),
         ));
 
         // Wrap with scheduler event listener
@@ -212,7 +215,7 @@ impl SessionScheduler {
             timeout_secs: None,
             metadata,
             attachments: ctx.message.attachments.clone(),
-            pending_media: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            pending_media: pending_media.clone(),
         };
 
         info!(
@@ -390,11 +393,14 @@ async fn execute_next(
         }
         None => ReplyEmitterConfig::default(),
     };
+    let pending_media: crate::gateway::media::PendingMedia =
+        std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let reply_emitter: Arc<dyn EventEmitter + Send + Sync> = Arc::new(ReplyEmitter::with_config(
         channel_registry.clone(),
         enriched.merged.primary_context.reply_route.clone(),
         run_id.clone(),
         reply_config,
+        pending_media.clone(),
     ));
 
     // Wrap with a new listener for the next run
@@ -429,7 +435,7 @@ async fn execute_next(
         timeout_secs: None,
         metadata,
         attachments: ctx.message.attachments.clone(),
-        pending_media: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+        pending_media: pending_media.clone(),
     };
 
     info!(
