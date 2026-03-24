@@ -809,6 +809,11 @@ impl EventEmitter for ReplyEmitter {
 
                 // React with 👍 on successful completion
                 self.react_on_inbound("👍").await;
+
+                // Clean up media temp files for this run
+                if let Err(e) = crate::media::cache::MediaCache::cleanup_session(&self.run_id) {
+                    tracing::warn!(error = %e, "Failed to cleanup media session");
+                }
             }
 
             StreamEvent::RunError { error, .. } => {
