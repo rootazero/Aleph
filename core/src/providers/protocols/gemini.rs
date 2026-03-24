@@ -7,8 +7,9 @@ use crate::config::ProviderConfig;
 use crate::dispatcher::DEFAULT_MAX_TOKENS;
 use crate::error::{AlephError, Result};
 use crate::providers::adapter::{
-    NativeToolCall, ProtocolAdapter, ProviderResponse, RequestPayload, StopReason,
+    NativeToolCall, ProtocolAdapter, ProviderResponse, RequestPayload, StopReason, TokenUsage,
 };
+use crate::providers::delta::ProviderDelta;
 use crate::providers::gemini::{
     Content, GeminiFunctionDeclaration, GeminiToolConfig, GenerateContentRequest,
     GenerateContentResponse, GenerationConfig, Part, ThinkingConfig,
@@ -16,8 +17,9 @@ use crate::providers::gemini::{
 use crate::providers::message::UnifiedMessage;
 use async_trait::async_trait;
 use futures::stream::BoxStream;
-use futures::StreamExt;
+use futures::{StreamExt, TryStreamExt};
 use reqwest::Client;
+use std::collections::VecDeque;
 use tracing::{debug, error};
 
 /// Google Gemini protocol adapter
@@ -423,8 +425,272 @@ impl ProtocolAdapter for GeminiProtocol {
         Ok(stream)
     }
 
+    /// Stream fine-grained [`ProviderDelta`] events from a Gemini SSE response.
+    ///
+    /// Gemini streams complete function calls per chunk (not incremental args), so
+    /// each `functionCall` part yields `ToolCallStart + ToolCallArgDelta + ToolCallEnd`
+    /// in one shot. Synthetic call IDs are generated as `gemini_fc_{counter}` because
+    /// the Gemini API does not assign tool call IDs.
+    async fn stream_deltas(
+        &self,
+        response: reqwest::Response,
+    ) -> Result<BoxStream<'static, Result<ProviderDelta>>> {
+        let status = response.status();
+        if !status.is_success() {
+            let error_text = response.text().await.unwrap_or_default();
+            return Err(AlephError::provider(format!(
+                "Gemini streaming error ({}): {}",
+                status, error_text
+            )));
+        }
+
+        let byte_stream = response
+            .bytes_stream()
+            .map_err(|e| AlephError::network(format!("Stream error: {}", e)))
+            .boxed();
+
+        /// Per-iteration mutable state carried through unfold
+        struct State {
+            bytes: BoxStream<'static, Result<axum::body::Bytes>>,
+            /// Incomplete SSE line buffer (handles chunk boundaries)
+            line_buf: String,
+            /// Monotonically increasing counter for synthetic tool call IDs
+            fc_counter: u64,
+            /// Pending deltas queued from multi-delta events
+            pending: VecDeque<Result<ProviderDelta>>,
+            /// Set to true after a terminal event to stop the stream
+            done: bool,
+        }
+
+        let state = State {
+            bytes: byte_stream,
+            line_buf: String::new(),
+            fc_counter: 0,
+            pending: VecDeque::new(),
+            done: false,
+        };
+
+        let stream = futures::stream::unfold(state, |mut state| async move {
+            loop {
+                // Drain pending queue first
+                if let Some(delta) = state.pending.pop_front() {
+                    return Some((delta, state));
+                }
+
+                if state.done {
+                    return None;
+                }
+
+                // Try to parse a complete SSE line from the buffer
+                if let Some(pos) = state.line_buf.find('\n') {
+                    let line = state.line_buf[..pos].trim_end().to_string();
+                    state.line_buf.drain(..=pos);
+
+                    if let Some(data) = line.strip_prefix("data: ") {
+                        if data != "[DONE]" {
+                            parse_gemini_sse_chunk(
+                                data,
+                                &mut state.fc_counter,
+                                &mut state.pending,
+                            );
+                            // If Done was queued, stop after draining pending
+                            if state.pending.iter().any(|d| {
+                                matches!(d, Ok(ProviderDelta::Done(_)))
+                            }) {
+                                state.done = true;
+                            }
+                        }
+                    }
+                    continue;
+                }
+
+                // No complete line — fetch next chunk from HTTP
+                match state.bytes.next().await {
+                    None => {
+                        // HTTP stream ended — flush any remaining partial line
+                        let remaining = state.line_buf.trim().to_string();
+                        state.line_buf.clear();
+                        if !remaining.is_empty() {
+                            if let Some(data) = remaining.strip_prefix("data: ") {
+                                if data != "[DONE]" {
+                                    parse_gemini_sse_chunk(
+                                        data,
+                                        &mut state.fc_counter,
+                                        &mut state.pending,
+                                    );
+                                }
+                            }
+                        }
+                        state.done = true;
+                        if let Some(delta) = state.pending.pop_front() {
+                            return Some((delta, state));
+                        }
+                        return None;
+                    }
+                    Some(Err(e)) => {
+                        state.done = true;
+                        return Some((Err(e), state));
+                    }
+                    Some(Ok(chunk)) => match std::str::from_utf8(&chunk) {
+                        Ok(text) => state.line_buf.push_str(text),
+                        Err(e) => {
+                            state.done = true;
+                            return Some((
+                                Err(AlephError::provider(format!("UTF-8 error: {}", e))),
+                                state,
+                            ));
+                        }
+                    },
+                }
+            }
+        });
+
+        Ok(Box::pin(stream))
+    }
+
     fn name(&self) -> &'static str {
         "gemini"
+    }
+}
+
+// =============================================================================
+// SSE parsing helper for Gemini streaming format
+// =============================================================================
+
+/// Parse one Gemini SSE data JSON chunk and push [`ProviderDelta`] events into `out`.
+///
+/// Gemini SSE chunk format:
+/// ```json
+/// {"candidates":[{"content":{"parts":[{"text":"Hello"}]},"finishReason":"STOP"}],
+///  "usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":5}}
+/// ```
+///
+/// Since Gemini delivers **complete** function calls (not incremental arg fragments),
+/// each `functionCall` part immediately emits `ToolCallStart + ToolCallArgDelta + ToolCallEnd`.
+/// Synthetic IDs are generated as `gemini_fc_{counter}` (Gemini has no real IDs).
+fn parse_gemini_sse_chunk(
+    data: &str,
+    fc_counter: &mut u64,
+    out: &mut VecDeque<Result<ProviderDelta>>,
+) {
+    let json: serde_json::Value = match serde_json::from_str(data) {
+        Ok(v) => v,
+        Err(e) => {
+            out.push_back(Err(AlephError::provider(format!(
+                "Gemini SSE parse error: {}",
+                e
+            ))));
+            return;
+        }
+    };
+
+    // Extract candidate[0]
+    let candidate = json
+        .get("candidates")
+        .and_then(|c| c.get(0));
+
+    if let Some(candidate) = candidate {
+        // Process content parts
+        if let Some(parts) = candidate
+            .get("content")
+            .and_then(|c| c.get("parts"))
+            .and_then(|p| p.as_array())
+        {
+            for part in parts {
+                // Text delta
+                if let Some(text) = part.get("text").and_then(|t| t.as_str()) {
+                    if !text.is_empty() {
+                        out.push_back(Ok(ProviderDelta::TextDelta(text.to_string())));
+                    }
+                }
+
+                // Function call — complete in one chunk, emit Start+ArgDelta+End
+                if let Some(fc) = part.get("functionCall") {
+                    let name = fc
+                        .get("name")
+                        .and_then(|n| n.as_str())
+                        .unwrap_or("unknown")
+                        .to_string();
+                    let args = fc.get("args").cloned().unwrap_or(serde_json::Value::Null);
+                    let args_str = args.to_string();
+
+                    // Generate synthetic ID (Gemini provides no call IDs)
+                    let id = format!("gemini_fc_{}", *fc_counter);
+                    *fc_counter += 1;
+
+                    out.push_back(Ok(ProviderDelta::ToolCallStart {
+                        id: id.clone(),
+                        name,
+                    }));
+                    if !args_str.is_empty() && args_str != "null" {
+                        out.push_back(Ok(ProviderDelta::ToolCallArgDelta {
+                            id: id.clone(),
+                            delta: args_str,
+                        }));
+                    }
+                    out.push_back(Ok(ProviderDelta::ToolCallEnd { id }));
+                }
+            }
+        }
+
+        // Map finishReason to Done
+        let finish_reason = candidate
+            .get("finishReason")
+            .and_then(|r| r.as_str());
+
+        let has_tool_calls = out.iter().any(|d| {
+            matches!(d, Ok(ProviderDelta::ToolCallStart { .. }))
+        });
+
+        let stop_reason = match finish_reason {
+            Some("STOP") => Some(StopReason::EndTurn),
+            Some("MAX_TOKENS") => Some(StopReason::MaxTokens),
+            Some("FUNCTION_CALL") => Some(StopReason::ToolUse),
+            Some(other) if !other.is_empty() => {
+                // If we emitted tool calls in this same chunk, treat as ToolUse
+                if has_tool_calls {
+                    Some(StopReason::ToolUse)
+                } else {
+                    Some(StopReason::Unknown)
+                }
+            }
+            _ => {
+                // No finish reason in this chunk — check if we saw tool calls
+                // without an explicit reason (some Gemini variants omit the field)
+                None
+            }
+        };
+
+        if let Some(reason) = stop_reason {
+            out.push_back(Ok(ProviderDelta::Done(reason)));
+        }
+    }
+
+    // Usage metadata (usually in the last chunk)
+    if let Some(usage) = json.get("usageMetadata") {
+        let input = usage
+            .get("promptTokenCount")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0) as u32;
+        let output = usage
+            .get("candidatesTokenCount")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0) as u32;
+
+        // Insert Usage before the Done event so consumers see it in the right order
+        let done_pos = out.iter().position(|d| matches!(d, Ok(ProviderDelta::Done(_))));
+        let usage_event = Ok(ProviderDelta::Usage(TokenUsage {
+            input_tokens: input,
+            output_tokens: output,
+            cache_read_tokens: None,
+        }));
+
+        if let Some(pos) = done_pos {
+            // Splice Usage before Done
+            out.insert(pos, usage_event);
+        } else {
+            out.push_back(usage_event);
+        }
     }
 }
 

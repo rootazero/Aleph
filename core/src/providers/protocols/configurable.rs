@@ -5,6 +5,7 @@
 use crate::config::ProviderConfig;
 use crate::error::{AlephError, Result};
 use crate::providers::adapter::{ProtocolAdapter, ProviderResponse, RequestPayload};
+use crate::providers::delta::ProviderDelta;
 use crate::providers::protocols::{
     extract_value, ProtocolDefinition, ProtocolRegistry, TemplateContext, TemplateRenderer,
 };
@@ -294,6 +295,36 @@ impl ProtocolAdapter for ConfigurableProtocol {
             return Err(AlephError::provider(
                 "Custom protocol streaming not yet implemented (deferred to future enhancement)",
             ));
+        }
+
+        Err(AlephError::invalid_config(
+            "Protocol must either extend a base protocol or provide custom configuration",
+        ))
+    }
+
+    async fn stream_deltas(
+        &self,
+        response: reqwest::Response,
+    ) -> Result<BoxStream<'static, Result<ProviderDelta>>> {
+        // Minimal mode: delegate entirely to the base protocol
+        if let Some(ref base) = self.base_protocol {
+            debug!(
+                protocol = %self.definition.name,
+                base = %base.name(),
+                "Streaming deltas using base protocol (minimal mode)"
+            );
+            return base.stream_deltas(response).await;
+        }
+
+        // Custom mode: arbitrary API formats cannot produce fine-grained deltas.
+        // Bridge via parse_response() → response_to_delta_stream_result().
+        if self.definition.custom.is_some() {
+            debug!(
+                protocol = %self.definition.name,
+                "Streaming deltas via bridge (custom mode — parse_response wrapping)"
+            );
+            let provider_response = self.parse_response(response).await?;
+            return Ok(crate::providers::delta::response_to_delta_stream_result(provider_response));
         }
 
         Err(AlephError::invalid_config(
