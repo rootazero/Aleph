@@ -157,6 +157,33 @@ impl fmt::Display for RateLimitError {
 
 impl std::error::Error for RateLimitError {}
 
+impl RateLimitError {
+    /// Convert to an HTTP 429 JSON body suitable for JSON-RPC error responses.
+    pub fn to_jsonrpc_error(&self) -> String {
+        let (retry_after_ms, message) = match self {
+            Self::Exceeded { scope, retry_after_ms } => {
+                (*retry_after_ms, format!("Rate limit exceeded for {scope}"))
+            }
+            Self::LockedOut { scope, lockout_remaining_ms } => {
+                (*lockout_remaining_ms, format!("Locked out for {scope}"))
+            }
+        };
+        format!(
+            r#"{{"jsonrpc":"2.0","error":{{"code":-32029,"message":"{}","data":{{"retry_after_ms":{}}}}},"id":null}}"#,
+            message, retry_after_ms
+        )
+    }
+
+    /// Return the retry-after value in seconds (for HTTP Retry-After header).
+    pub fn retry_after_secs(&self) -> u64 {
+        let ms = match self {
+            Self::Exceeded { retry_after_ms, .. } => *retry_after_ms,
+            Self::LockedOut { lockout_remaining_ms, .. } => *lockout_remaining_ms,
+        };
+        (ms + 999) / 1000 // ceil division
+    }
+}
+
 // ---------------------------------------------------------------------------
 // SlidingWindow (private)
 // ---------------------------------------------------------------------------
@@ -493,5 +520,26 @@ mod tests {
         limiter.prune_stale(Duration::ZERO);
         // The entry should have been removed — next request starts fresh
         assert!(limiter.windows.is_empty(), "stale entries should be pruned");
+    }
+
+    #[test]
+    fn test_rate_limit_error_to_jsonrpc() {
+        let err = RateLimitError::Exceeded {
+            scope: RateLimitScope::Auth,
+            retry_after_ms: 5000,
+        };
+        let json = err.to_jsonrpc_error();
+        assert!(json.contains("-32029"));
+        assert!(json.contains("5000"));
+        assert_eq!(err.retry_after_secs(), 5);
+    }
+
+    #[test]
+    fn test_retry_after_secs_rounds_up() {
+        let err = RateLimitError::Exceeded {
+            scope: RateLimitScope::RpcDefault,
+            retry_after_ms: 1500,
+        };
+        assert_eq!(err.retry_after_secs(), 2);
     }
 }
