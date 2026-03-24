@@ -21,6 +21,7 @@ use tokio::sync::{mpsc, RwLock};
 use crate::error::{AlephError, Result};
 use crate::mcp::jsonrpc::{JsonRpcError, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse};
 use crate::mcp::transport::traits::{McpTransport, NotificationCallback};
+use crate::security::ssrf::{validate_url, SsrfPolicy};
 
 use super::sse_events::SseEvent;
 
@@ -135,6 +136,12 @@ impl SseTransport {
     /// * `Ok(())` - If the listener started successfully
     /// * `Err(AlephError)` - If starting the listener failed
     pub async fn start_event_listener(&self) -> Result<()> {
+        // SSRF protection: validate the base URL before opening an SSE connection
+        let ssrf_policy = SsrfPolicy::default();
+        validate_url(&self.config.url, &ssrf_policy).map_err(|e| {
+            AlephError::IoError(format!("SSRF blocked for '{}': {}", self.server_name, e))
+        })?;
+
         let (shutdown_tx, mut shutdown_rx) = mpsc::channel::<()>(1);
 
         {
@@ -336,6 +343,12 @@ impl SseTransport {
 #[async_trait]
 impl McpTransport for SseTransport {
     async fn send_request(&self, request: &JsonRpcRequest) -> Result<JsonRpcResponse> {
+        // SSRF protection: validate the target URL before sending
+        let ssrf_policy = SsrfPolicy::default();
+        validate_url(&self.config.url, &ssrf_policy).map_err(|e| {
+            AlephError::IoError(format!("SSRF blocked for '{}': {}", self.server_name, e))
+        })?;
+
         let body = serde_json::to_string(request).map_err(|e| {
             AlephError::IoError(format!("Failed to serialize request: {}", e))
         })?;

@@ -13,6 +13,7 @@ use tokio::sync::RwLock;
 use crate::error::{AlephError, Result};
 use crate::mcp::jsonrpc::{JsonRpcNotification, JsonRpcRequest, JsonRpcResponse};
 use crate::mcp::transport::traits::{McpTransport, NotificationCallback};
+use crate::security::ssrf::{validate_url, SsrfPolicy};
 
 /// HTTP transport configuration
 #[derive(Debug, Clone)]
@@ -122,6 +123,12 @@ impl HttpTransport {
 #[async_trait]
 impl McpTransport for HttpTransport {
     async fn send_request(&self, request: &JsonRpcRequest) -> Result<JsonRpcResponse> {
+        // SSRF protection: validate the target URL before sending
+        let ssrf_policy = SsrfPolicy::default();
+        validate_url(&self.config.url, &ssrf_policy).map_err(|e| {
+            AlephError::IoError(format!("SSRF blocked for '{}': {}", self.server_name, e))
+        })?;
+
         let body = serde_json::to_string(request).map_err(|e| {
             AlephError::IoError(format!("Failed to serialize request: {}", e))
         })?;
