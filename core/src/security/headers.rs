@@ -13,7 +13,7 @@ use tower::{Layer, Service};
 
 // --- Header values ---------------------------------------------------------
 
-const CSP_VALUE: &str = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self'; connect-src 'self' ws: wss:; frame-ancestors 'none'; object-src 'none'; base-uri 'none'";
+const CSP_VALUE: &str = "default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self'; connect-src 'self' ws: wss:; frame-ancestors 'none'; object-src 'none'; base-uri 'none'";
 const HSTS_VALUE: &str = "max-age=31536000; includeSubDomains";
 const X_CONTENT_TYPE_OPTIONS_VALUE: &str = "nosniff";
 const X_FRAME_OPTIONS_VALUE: &str = "DENY";

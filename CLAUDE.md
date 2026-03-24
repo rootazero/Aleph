@@ -233,6 +233,19 @@ target/release/aleph-server start
 
 ---
 
+## 🏢 官方仓库 (Official Repositories)
+
+| 仓库 | 路径 | 说明 |
+|------|------|------|
+| Aleph (主项目) | `/Users/zouguojun/Workspace/Aleph` | Rust Core + 多端架构 |
+| Aleph-docs | `/Users/zouguojun/Workspace/Aleph-docs` | 官方文档 |
+| Aleph-homepage | `/Users/zouguojun/Workspace/Aleph-homepage` | 官方首页 |
+| Aleph-mcp | `/Users/zouguojun/Workspace/Aleph-mcp` | 官方 MCP 项目 |
+| Aleph-plugins | `/Users/zouguojun/Workspace/Aleph-plugins` | 官方插件 |
+| Aleph-skills | `/Users/zouguojun/Workspace/Aleph-skills` | 官方技能 |
+
+---
+
 ## 📝 Session Context
 
 - **项目**: 自托管个人 AI 助手，Rust Core + 多端架构
