@@ -30,41 +30,6 @@ use crate::server_init::{handle_run_with_engine, handle_chat_send_with_engine};
 use alephcore::providers::message::UnifiedMessage;
 use alephcore::providers::adapter::RequestPayload;
 
-/// Try to create a provider from app config (Settings UI configured providers).
-/// Returns None if no usable provider is found.
-pub(in crate::commands::start) fn create_provider_from_config(
-    app_config: &alephcore::Config,
-) -> Option<Arc<dyn alephcore::providers::AiProvider>> {
-    use alephcore::providers::create_provider;
-
-    // Determine which provider to use: default_provider or first enabled one
-    let provider_name = app_config.general.default_provider.clone()
-        .or_else(|| {
-            app_config.providers.iter()
-                .find(|(_, cfg)| cfg.enabled && cfg.api_key.as_ref().map(|k| !k.is_empty()).unwrap_or(false))
-                .map(|(name, _)| name.clone())
-        });
-
-    let provider_name = provider_name?;
-    let provider_config = app_config.providers.get(&provider_name)?;
-
-    // Must have an API key
-    if provider_config.api_key.as_ref().map(|k| k.is_empty()).unwrap_or(true) {
-        return None;
-    }
-
-    match create_provider(&provider_name, provider_config.clone()) {
-        Ok(provider) => {
-            tracing::info!(provider = %provider_name, "Created provider from app config");
-            Some(provider)
-        }
-        Err(e) => {
-            tracing::warn!(provider = %provider_name, error = %e, "Failed to create provider from config");
-            None
-        }
-    }
-}
-
 /// Result from registering agent handlers — includes optional execution support
 /// for use by InboundMessageRouter.
 pub(in crate::commands::start) struct AgentHandlersResult {
@@ -312,7 +277,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             let registry = Arc::new(alephcore::MultiProviderRegistry::new(env_name.to_string(), env_prov));
             // Also register all config providers
             for (name, provider_cfg) in &app_config.providers {
-                if !provider_cfg.enabled || name == &env_name { continue; }
+                if !provider_cfg.enabled || name.as_str() == env_name { continue; }
                 if provider_cfg.api_key.as_ref().map(|k| k.is_empty()).unwrap_or(true) { continue; }
                 if let Ok(p) = create_provider(name, provider_cfg.clone()) {
                     registry.register(name.clone(), p);

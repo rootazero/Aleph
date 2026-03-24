@@ -18,7 +18,7 @@ use std::time::Instant;
 use super::prompt_builder::{PromptBuilder, ToolInfo};
 use super::safety::{SafetyError, SafetyGuard, ToolCall as SafetyToolCall};
 use super::tool::{LoopToolRegistry, ToolDefinition, ToolResult};
-use crate::providers::adapter::{ProviderResponse, StopReason};
+use crate::providers::adapter::StopReason;
 use crate::providers::delta::{DeltaCollector, DeltaSink, NoopSink, ProviderDelta};
 use crate::providers::message::UnifiedMessage;
 use futures::stream::BoxStream;
@@ -666,7 +666,7 @@ impl<P: LoopProvider> AgentLoop<P> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::providers::adapter::{NativeToolCall, TokenUsage};
+    use crate::providers::adapter::{NativeToolCall, ProviderResponse, TokenUsage};
     use crate::providers::message::ContentBlock;
     use serde_json::json;
     use std::sync::{Arc, Mutex};

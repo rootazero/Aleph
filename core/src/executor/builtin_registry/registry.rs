@@ -11,7 +11,6 @@ use crate::builtin_tools::meta_tools::{ListToolsTool, GetToolSchemaTool};
 use crate::builtin_tools::sessions::{SessionsListTool, SessionsSendTool};
 use crate::dispatcher::{ToolRegistry as DispatcherToolRegistry, ToolSource, UnifiedTool};
 use crate::error::{AlephError, Result};
-use crate::generation::GenerationProviderRegistry;
 use crate::gateway::channel_registry::ChannelRegistry;
 use crate::gateway::context::GatewayContext;
 use crate::tools::AlephTool;
@@ -74,8 +73,6 @@ pub struct BuiltinToolRegistry {
     pub(crate) memory_browse_tool: Option<crate::builtin_tools::MemoryBrowseTool>,
     /// Shared workspace handle for memory tools — written by ExecutionEngine after workspace resolution
     pub(super) memory_workspace_handle: Option<Arc<RwLock<String>>>,
-    /// Generation provider registry for video/audio generation
-    pub(crate) generation_registry: Option<Arc<std::sync::RwLock<GenerationProviderRegistry>>>,
     /// Dispatcher tool registry for meta tools (smart tool discovery)
     pub(crate) dispatcher_registry: Option<Arc<RwLock<DispatcherToolRegistry>>>,
     /// Gateway context for sessions tools (session.list, session.send).

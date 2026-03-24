@@ -54,7 +54,7 @@ async fn try_provider(
         messages: payload.messages,
         system_prompt: payload.system_prompt,
         tools: payload.tools,
-        think_level: payload.think_level.clone(),
+        think_level: payload.think_level,
         temperature: payload.temperature,
         max_tokens: payload.max_tokens,
         tool_choice: payload.tool_choice.clone(),

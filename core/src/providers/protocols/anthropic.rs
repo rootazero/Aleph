@@ -533,20 +533,17 @@ pub fn parse_anthropic_sse_event(
                 None => return,
             };
             let block_type = block.get("type").and_then(|t| t.as_str()).unwrap_or("");
-            match block_type {
-                "tool_use" => {
-                    let id = block.get("id").and_then(|i| i.as_str()).unwrap_or("");
-                    let name = block.get("name").and_then(|n| n.as_str()).unwrap_or("");
-                    // Track index → id for subsequent input_json_delta events
-                    block_ids.track(index, id.to_string());
-                    out.push_back(Ok(ProviderDelta::ToolCallStart {
-                        id: id.to_string(),
-                        name: name.to_string(),
-                    }));
-                }
-                // text and thinking blocks: no delta emitted at start
-                _ => {}
+            if block_type == "tool_use" {
+                let id = block.get("id").and_then(|i| i.as_str()).unwrap_or("");
+                let name = block.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                // Track index → id for subsequent input_json_delta events
+                block_ids.track(index, id.to_string());
+                out.push_back(Ok(ProviderDelta::ToolCallStart {
+                    id: id.to_string(),
+                    name: name.to_string(),
+                }));
             }
+            // text and thinking blocks: no delta emitted at start
         }
 
         // ── content_block_delta ───────────────────────────────────────────────

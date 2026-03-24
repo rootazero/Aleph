@@ -593,16 +593,11 @@ fn parse_chat_sse_event(
             // Emit ToolCallEnd for all tracked tool calls (by scanning the tracker)
             // We reconstruct ids from the tracker's internal map (indices 0..N)
             let mut idx = 0u64;
-            loop {
-                match tracker.get(idx) {
-                    Some(call_id) => {
-                        out.push_back(Ok(ProviderDelta::ToolCallEnd {
-                            id: call_id.to_string(),
-                        }));
-                        idx += 1;
-                    }
-                    None => break,
-                }
+            while let Some(call_id) = tracker.get(idx) {
+                out.push_back(Ok(ProviderDelta::ToolCallEnd {
+                    id: call_id.to_string(),
+                }));
+                idx += 1;
             }
             out.push_back(Ok(ProviderDelta::Done(stop)));
         }

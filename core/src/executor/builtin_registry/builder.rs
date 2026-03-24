@@ -415,7 +415,6 @@ impl BuiltinToolRegistry {
             memory_browse_tool,
             memory_workspace_handle,
             memory_session_key_handle,
-            generation_registry: config.generation_registry.clone(),
             dispatcher_registry: config.dispatcher_registry.clone(),
             gateway_context: {
                 let cell = Arc::new(tokio::sync::OnceCell::new());
