@@ -13,12 +13,19 @@ This design implements a layered security hardening in three phases, ordered by 
 
 ## Guiding Constraints
 
-- **R3 (Core Minimalism):** No heavy third-party deps — rate limiter uses stdlib, no `governor` crate
+- **R3 (Core Minimalism):** No heavy third-party deps — reuse existing rate limiter, no new crates
 - **R8 (LLM Sovereignty):** Content sanitizer marks suspicious patterns but lets LLM judge trust
 - **P6 (KISS/YAGNI):** No premature trait abstractions — each feature is a concrete struct/fn
 - **P7 (Defensive Design):** Lock poisoning handled, UTF-8 safe, graceful degradation
 
 ## Module Layout
+
+### Module placement rationale
+
+Aleph already has `core/src/gateway/security/` for auth/pairing/tokens/policy. The new `core/src/security/` module is a **peer**, not a replacement. The split is intentional:
+
+- `gateway/security/` — Authentication, authorization, identity (gateway-specific concerns)
+- `security/` — Cross-cutting security primitives (headers, SSRF, content sanitization, audit) used by gateway, exec, and agent_loop alike
 
 ### New modules
 
@@ -26,7 +33,6 @@ This design implements a layered security hardening in three phases, ordered by 
 core/src/security/
 ├── mod.rs                  — Module entry
 ├── headers.rs              — Security response headers (tower Layer)
-├── rate_limiter.rs         — Per-IP sliding window rate limiter
 ├── ssrf.rs                 — SSRF protection engine
 ├── content_sanitizer.rs    — External content boundary marking + homoglyph normalization
 └── audit.rs                — Persistent security audit log (SQLite)
@@ -41,7 +47,10 @@ core/src/exec/
 └── sanitize.rs             — New: Unicode/invisible character sanitization
 
 core/src/exec/approval/
-└── path_security.rs        — Extend: canonical path validation
+└── path_canonicalize.rs    — New: canonical path validation (test file already exists at approval/tests/security_path_traversal.rs)
+
+core/src/gateway/
+└── rate_limiter.rs          — Extend: add HTTP-level rate limit scope + 429 response helper (reuse existing implementation)
 
 core/src/gateway/server/
 └── mod.rs                  — Integrate: add tower layers (headers + rate limit)
@@ -80,40 +89,24 @@ A tower `Layer` that injects security headers on all HTTP responses.
 
 **Integration point:** `GatewayServer::build_router()` adds `.layer(SecurityHeadersLayer::new())` as the outermost layer.
 
-### 1.2 Request Rate Limiter (`security/rate_limiter.rs`)
+### 1.2 Request Rate Limiter (extend existing `gateway/rate_limiter.rs`)
 
-In-memory sliding-window per-IP rate limiter.
+Aleph already has a comprehensive sliding-window rate limiter at `core/src/gateway/rate_limiter.rs` with:
+- `RateLimiter` struct backed by `DashMap` (lock-free concurrent access)
+- Per-identity, per-scope limiting with `RateLimitScope` enum (`Auth`, `RpcDefault`, `RpcWrite`, `RpcHeavy`, `WebhookAuth`)
+- Lockout support for auth scopes (5 min default)
+- Loopback exemption (`exempt_loopback: true`)
+- Periodic pruning
 
-```rust
-pub struct GatewayRateLimiter {
-    windows: Mutex<HashMap<IpAddr, SlidingWindow>>,
-    config: RateLimitConfig,
-}
+**What to add (not replace):**
 
-pub struct RateLimitConfig {
-    pub max_requests: u32,           // default: 100
-    pub window_duration: Duration,   // default: 60s
-    pub lockout_duration: Duration,  // default: 5min
-    pub exempt_loopback: bool,       // default: true
-}
+1. **HTTP-level 429 response helper** — A function that converts `RateLimitError` into an Axum `Response<Body>` with proper `429 Too Many Requests` status and `Retry-After` header. Currently the rate limiter returns errors but the HTTP layer may not map them to proper 429 responses consistently.
 
-struct SlidingWindow {
-    timestamps: VecDeque<Instant>,
-    locked_until: Option<Instant>,
-}
-```
+2. **Gateway server integration** — Ensure `build_router()` applies rate limiting as an Axum middleware layer (or in auth middleware) that calls the existing `RateLimiter::check()` and returns 429 on failure. The `RateLimiter` instance is already in `GatewaySharedState`.
 
-**Behavior:**
-- Loopback addresses (`127.0.0.1`, `::1`) exempt by default (personal assistant model)
-- Unauthenticated requests get stricter limit (`max_requests / 4`)
-- Exceeding limit returns `429 Too Many Requests` with `Retry-After` header
-- Lockout state auto-expires after `lockout_duration`
-- Background cleanup every 5 minutes: prune entries with no activity in the last `window_duration * 2`
-- Lock poisoning: `unwrap_or_else(|e| e.into_inner())`
+3. **Audit log hookup** — On rate limit events, emit `AuditEventType::RateLimited` to the persistent audit log (Phase 3).
 
-**Relationship to existing `rate_limiter` field:** The current `GatewaySharedState.rate_limiter` is checked for overlap. If it handles a different concern (e.g., LLM call concurrency), this new limiter coexists as a separate HTTP-level concern. If it's unused or duplicates intent, it gets replaced.
-
-**Integration:** Axum tower Layer wrapping the router, or called explicitly in auth middleware before handler dispatch.
+**No new rate limiter implementation needed.** The existing one is well-designed.
 
 ### 1.3 SSRF Protection Engine (`security/ssrf.rs`)
 
@@ -231,14 +224,14 @@ pub fn has_invisible_chars(text: &str) -> bool
 
 1. **Approval display** — `ExecApprovalManager` calls `sanitize_display_text()` before showing command to user. If `has_invisible_chars()` returns true, appends warning indicator to the display.
 
-2. **Risk escalation** — `ExecSecurityGate::pre_execute()` checks `has_invisible_chars()`. If true, escalates risk by one tier:
+2. **Risk escalation** — In `ExecSecurityGate::pre_execute()` (file: `core/src/executor/exec_security_gate.rs`), after `SecurityKernel::assess()` returns a `RiskLevel`, check `has_invisible_chars()` on the command. If true, escalate by one tier:
    - Safe → Caution
    - Caution → Danger
    - Danger/Blocked → unchanged
 
-### 2.3 Path Canonicalization (`exec/approval/path_security.rs` extension)
+### 2.3 Path Canonicalization (`exec/approval/path_canonicalize.rs` — new file)
 
-Replace simple prefix matching with canonical path validation.
+New module for canonical path validation. Tests already exist at `exec/approval/tests/security_path_traversal.rs`.
 
 ```rust
 pub fn validate_path_in_scope(
@@ -247,7 +240,7 @@ pub fn validate_path_in_scope(
 ) -> Result<PathBuf, PathSecurityError>
 ```
 
-**Improvements over current `is_path_inside()`:**
+**Features:**
 
 1. **Canonicalization** — `std::fs::canonicalize()` resolves symlinks and `..` segments before scope comparison
 2. **Non-existent paths** — For paths that don't exist yet, manually normalize by resolving the longest existing prefix via `canonicalize()`, then appending the remaining segments with `..` collapsed
@@ -255,7 +248,7 @@ pub fn validate_path_in_scope(
 4. **Null byte rejection** — Reject any path containing `\0`
 5. **Return canonical path** — Caller uses the validated canonical path, not the original input
 
-**Integration:** Replace existing `is_path_inside()` calls in approval path checks with `validate_path_in_scope()`.
+**Integration:** Called from the exec approval decision flow (`exec/decision.rs`) when scope-checking paths extracted from commands. The existing path traversal tests in `approval/tests/security_path_traversal.rs` will be extended to cover the new canonicalization logic.
 
 ---
 
@@ -392,12 +385,12 @@ CREATE INDEX idx_audit_event_type ON security_audit_log(event_type);
 |------|-----------|-------|-------------|
 | 1 | `security/mod.rs` + module scaffolding | — | None |
 | 2 | `security/headers.rs` | P1 | Step 1 |
-| 3 | `security/rate_limiter.rs` | P1 | Step 1 |
+| 3 | Extend `gateway/rate_limiter.rs` + 429 helper | P1 | Step 1 |
 | 4 | `security/ssrf.rs` | P1 | Step 1 |
 | 5 | Gateway integration (tower layers) | P1 | Steps 2-4 |
 | 6 | `exec/sanitize.rs` (Unicode) | P2 | None |
 | 7 | `exec/kernel.rs` env injection rules | P2 | None |
-| 8 | `exec/approval/path_security.rs` | P2 | None |
+| 8 | `exec/approval/path_canonicalize.rs` | P2 | None |
 | 9 | Exec gate integration | P2 | Steps 6-8 |
 | 10 | `security/content_sanitizer.rs` | P3 | Step 6 (reuse) |
 | 11 | `security/audit.rs` | P3 | Step 1 |
@@ -414,6 +407,13 @@ CREATE INDEX idx_audit_event_type ON security_audit_log(event_type);
 ## Cleanup Plan
 
 - Remove any dead code paths replaced by new implementations
-- If existing `rate_limiter` in `GatewaySharedState` is superseded, remove old implementation
 - Update `docs/reference/SECURITY.md` to document new security features
 - No backward compatibility shims needed (internal APIs only)
+
+## SSRF Implementation Note
+
+DNS resolution via `tokio::net::lookup_host()` and IP validation happen before the HTTP connection. There is a classic TOCTOU gap between resolution and connection — `reqwest` may re-resolve the hostname. If `reqwest`'s `resolve()` API allows connection pinning to specific IPs, use it. Otherwise, the DNS check is still valuable as a best-effort defense (raises the bar significantly vs. no protection).
+
+## Env Injection False Positives Note
+
+Regex-based detection of env vars in command text will produce false positives on quoted strings and comments (e.g., `echo "MAVEN_OPTS is set to..."`). This is acceptable because the escalation is to `Danger` (human approval), not `Blocked`. The approval dialog shows the full command, allowing the user to make an informed decision.
