@@ -131,11 +131,20 @@ impl MediaCache {
         item: &MediaItem,
         session_id: &str,
     ) -> Attachment {
-        // 1. Build a temporary Attachment from MediaItem for resolve()
-        // 2. Call self.resolve(&temp_attachment, session_id)
-        // 3. On Ok(cached) → Attachment { path: Some(cached.local_path), url: Some(item.url), ... }
-        // 4. On Err → Attachment { url: Some(item.url), path: None, ... } (fallback)
-        // Special: data_url → decode base64, write via resolve(data path)
+        // IMPORTANT: data: URLs cannot go through resolve()'s URL path (reqwest
+        // doesn't support data: scheme). Must be handled BEFORE calling resolve():
+        //
+        // 1. If item.url starts with "data:" → parse MIME from header, base64 decode
+        //    body, build Attachment with data: Some(decoded_bytes), pass to resolve()
+        //    via Priority 1 (inline bytes) path
+        // 2. If item.url is a local file path → build Attachment with path: Some(...)，
+        //    pass to resolve() via Priority 2 (local path) path
+        // 3. Otherwise (HTTP/HTTPS URL) → build Attachment with url: Some(...),
+        //    pass to resolve() via Priority 3 (URL download) path
+        //
+        // On Ok(cached) → Attachment { id: uuid, path: Some(cached.local_path),
+        //                               url: Some(item.url), mime_type, ... }
+        // On Err → Attachment { id: uuid, url: Some(item.url), path: None, ... } (fallback)
     }
 }
 ```
@@ -203,12 +212,17 @@ fn on_tool_done(&mut self, name: &str, result: &crate::agent_loop::ToolResult) {
 
 #### 6. ReplyEmitter Media Delivery
 
-New method `drain_and_send_media()` called from ALL message delivery paths:
+New fields and method:
 
 ```rust
+pub struct ReplyEmitter {
+    // ... existing fields ...
+    pending_media: PendingMedia,        // NEW — shared with StreamCallback
+    media_cache: MediaCache,            // NEW — injected at construction, reuses HTTP connection pool
+}
+
 impl ReplyEmitter {
     /// Drain pending media, download in parallel via MediaCache, return Attachments.
-    /// Called from send_to_channel(), send_as_voice(), and send_typewriter().
     async fn drain_and_send_media(&self) -> Vec<Attachment> {
         let media_items = std::mem::take(
             &mut *self.pending_media.lock().unwrap_or_else(|e| e.into_inner())
@@ -217,38 +231,62 @@ impl ReplyEmitter {
             return vec![];
         }
 
-        let cache = MediaCache::new();
-        let session_id = &self.run_id;  // reuse run_id as session scope
+        let session_id = &self.run_id;
         futures::future::join_all(
-            media_items.iter().map(|item| cache.download_media_item(item, session_id))
+            media_items.iter().map(|item| self.media_cache.download_media_item(item, session_id))
         ).await
+    }
+
+    /// Send media as a separate standalone message (used by voice and AskUser paths).
+    async fn send_media_standalone(&self, attachments: Vec<Attachment>) {
+        if attachments.is_empty() { return; }
+        let message = OutboundMessage {
+            conversation_id: self.route.conversation_id.clone(),
+            text: String::new(),
+            attachments,
+            reply_to: None,
+            inline_keyboard: None,
+            metadata: Default::default(),
+        };
+        // Send via channel_registry (same pattern as existing send_to_channel)
     }
 }
 ```
 
-Integration points (all three delivery paths):
+**Unified media delivery strategy across ALL paths**:
 
-**`send_to_channel()`** — media attaches to the last text chunk:
+All paths use the same approach: **send media as a separate message after the text/voice message**. This is the simplest strategy that works uniformly — no need to modify `send_to_channel` signature or chunk-splitting logic.
+
+**`send_to_channel()`** — media sent as standalone message after text:
 ```rust
+// After all text chunks are sent:
 let media_attachments = self.drain_and_send_media().await;
-// Attach to last chunk's OutboundMessage.attachments
+self.send_media_standalone(media_attachments).await;
 ```
 
-**`send_as_voice()`** — media sent as separate message(s) after voice:
+**`send_as_voice()`** — media sent as standalone message after voice:
 ```rust
+// After voice OutboundMessage is sent:
 let media_attachments = self.drain_and_send_media().await;
-// After sending voice OutboundMessage, send a second message with media attachments
-if !media_attachments.is_empty() {
-    let media_msg = OutboundMessage { text: String::new(), attachments: media_attachments, ... };
-    channel.send(media_msg).await;
-}
+self.send_media_standalone(media_attachments).await;
 ```
 
-**`send_typewriter()`** — media attaches to the final edit step:
+**`send_typewriter()`** — media sent as standalone message after typewriter completes:
 ```rust
+// After final edit step:
 let media_attachments = self.drain_and_send_media().await;
-// Attach to the final OutboundMessage in the typewriter sequence
+self.send_media_standalone(media_attachments).await;
 ```
+
+**`AskUser` path** — drain media before sending the question to user:
+```rust
+// In StreamEvent::AskUser handler, before sending the question:
+let media_attachments = self.drain_and_send_media().await;
+self.send_media_standalone(media_attachments).await;
+// Then send the AskUser prompt as usual
+```
+
+This ensures media generated before an `AskUser` interruption is delivered immediately, not lost until `RunComplete`.
 
 ### Temp File Management (unified with existing `media/cache.rs`)
 
