@@ -21,6 +21,98 @@ use crate::providers::adapter::{ProviderResponse, StopReason};
 use crate::providers::message::UnifiedMessage;
 
 // =============================================================================
+// Context limit enforcement
+// =============================================================================
+
+/// Hard safety net: truncate message history if total estimated tokens exceed budget.
+///
+/// This runs after the soft compactor and is the last line of defense before
+/// the LLM call. If context is still over budget, it aggressively drops old
+/// messages (session summaries, old turns) while keeping the fresh tail.
+///
+/// **Philosophy**: keep the agent running > preserve history.
+fn enforce_context_limit(
+    messages: &mut Vec<UnifiedMessage>,
+    system_prompt: &str,
+    tool_defs: &[ToolDefinition],
+    token_budget: usize,
+    fresh_tail_count: usize,
+    ratio: f64,
+) {
+    use crate::memory::session_compactor::context_window::{
+        estimate_tokens, estimate_total_tokens,
+    };
+
+    // Estimate overhead from system prompt + tool definitions (JSON schemas)
+    let prompt_tokens = estimate_tokens(system_prompt, ratio);
+    let tool_tokens: usize = tool_defs
+        .iter()
+        .map(|td| {
+            estimate_tokens(&td.name, ratio)
+                + estimate_tokens(&td.description, ratio)
+                + estimate_tokens(&td.parameters.to_string(), ratio)
+        })
+        .sum();
+    let overhead = prompt_tokens + tool_tokens;
+
+    // Budget available for messages
+    let msg_budget = token_budget.saturating_sub(overhead);
+    let msg_tokens = estimate_total_tokens(messages, ratio);
+
+    if msg_tokens <= msg_budget {
+        return; // Within budget, nothing to do
+    }
+
+    tracing::warn!(
+        target: "agent_loop",
+        msg_tokens = msg_tokens,
+        msg_budget = msg_budget,
+        overhead = overhead,
+        total = msg_tokens + overhead,
+        budget = token_budget,
+        "Context exceeds budget after compaction — enforcing hard limit"
+    );
+
+    // Keep at most fresh_tail_count messages from the end.
+    // If even that is too big, progressively reduce.
+    let tail_start = if messages.len() > fresh_tail_count {
+        messages.len() - fresh_tail_count
+    } else {
+        0
+    };
+
+    // Drain everything before the tail
+    if tail_start > 0 {
+        messages.drain(0..tail_start);
+
+        // Inject truncation notice so the LLM knows context was lost
+        messages.insert(
+            0,
+            UnifiedMessage::user(
+                "[SYSTEM] Earlier conversation history and memory context were truncated \
+                 to fit the model's context window. Continue based on the remaining context."
+                    .to_string(),
+            ),
+        );
+    }
+
+    // If still over budget (individual messages are huge), trim from front
+    // one-by-one, always keeping at least 2 messages (notice + last user msg)
+    while messages.len() > 2 && estimate_total_tokens(messages, ratio) > msg_budget {
+        messages.remove(1); // Remove oldest after the notice
+    }
+
+    let final_tokens = estimate_total_tokens(messages, ratio);
+    tracing::warn!(
+        target: "agent_loop",
+        remaining_messages = messages.len(),
+        final_tokens = final_tokens,
+        msg_budget = msg_budget,
+        "Context limit enforced"
+    );
+}
+
+// =============================================================================
 // LoopProvider trait
 // =============================================================================
 
@@ -243,6 +335,24 @@ impl<P: LoopProvider> AgentLoop<P> {
                     tc_config.fresh_tail_count,
                 );
             }
+
+            // Hard safety net: if context STILL exceeds budget after compaction,
+            // aggressively truncate old messages to guarantee the LLM call succeeds.
+            // Priority: keep running > preserve history.
+            enforce_context_limit(
+                &mut messages,
+                &system_prompt,
+                &tool_defs,
+                self.config.token_budget,
+                self.tool_compactor_config
+                    .as_ref()
+                    .map(|c| c.fresh_tail_count)
+                    .unwrap_or(6),
+                self.tool_compactor_config
+                    .as_ref()
+                    .map(|c| c.token_estimate_ratio)
+                    .unwrap_or(3.5),
+            );
 
             // Think: call the provider
             let response = self
@@ -2024,5 +2134,61 @@ mod tests {
 
         assert_eq!(result.iterations, 4);
         assert_eq!(result.final_text.as_deref(), Some("OK. <task-complete/>"));
+    }
+
+    // =========================================================================
+    // enforce_context_limit tests
+    // =========================================================================
+
+    #[test]
+    fn test_enforce_context_limit_no_op_under_budget() {
+        let mut msgs = vec![
+            UnifiedMessage::user("hello"),
+            UnifiedMessage::assistant("world"),
+        ];
+        let original_len = msgs.len();
+        enforce_context_limit(&mut msgs, "system", &[], 100_000, 6, 3.5);
+        assert_eq!(msgs.len(), original_len, "should not truncate under budget");
+    }
+
+    #[test]
+    fn test_enforce_context_limit_truncates_over_budget() {
+        // Create a large message list that exceeds a small budget
+        let mut msgs: Vec<UnifiedMessage> = (0..50)
+            .map(|i| UnifiedMessage::user(format!("Message {} with some content to use tokens", i)))
+            .collect();
+        // Small budget: only room for ~6 messages
+        enforce_context_limit(&mut msgs, "system prompt", &[], 200, 6, 3.5);
+        // Should have truncated to fresh_tail + notice
+        assert!(msgs.len() <= 8, "should truncate to ~7 messages, got {}", msgs.len());
+        // First message should be the truncation notice
+        let first_text = msgs[0].text_content();
+        assert!(first_text.contains("[SYSTEM]"), "first msg should be truncation notice");
+        assert!(first_text.contains("truncated"), "notice should mention truncation");
+    }
+
+    #[test]
+    fn test_enforce_context_limit_keeps_last_messages() {
+        let mut msgs: Vec<UnifiedMessage> = (0..20)
+            .map(|i| UnifiedMessage::user(format!("msg-{}", i)))
+            .collect();
+        // Budget allows ~10 messages worth of tokens
+        enforce_context_limit(&mut msgs, "", &[], 300, 4, 3.5);
+        // Last message should be preserved
+        let last = msgs.last().unwrap().text_content();
+        assert_eq!(last, "msg-19", "last message must be preserved");
+    }
+
+    #[test]
+    fn test_enforce_context_limit_extreme_single_huge_message() {
+        // One message that is way too big — should still keep at least 2 msgs
+        let huge = "x".repeat(1_000_000); // ~285K tokens at ratio 3.5
+        let mut msgs = vec![
+            UnifiedMessage::user(huge),
+            UnifiedMessage::user("final question"),
+        ];
+        enforce_context_limit(&mut msgs, "sys", &[], 10_000, 6, 3.5);
+        // Should keep at least 2 (notice + something) or the original 2
+        assert!(msgs.len() >= 2, "should keep at least 2 messages");
     }
 }
