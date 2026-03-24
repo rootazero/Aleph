@@ -2,6 +2,7 @@
 //!
 //! Provides RPC methods for managing generation providers (image, video, audio, speech).
 
+use std::collections::HashMap;
 use crate::config::types::generation::GenerationProviderConfig;
 use crate::config::types::generation::presets::get_merged_generation_preset;
 use crate::config::Config;
@@ -107,6 +108,84 @@ fn build_generation_provider_for_persistence(
 }
 
 // =============================================================================
+// Helpers — typed provider map access
+// =============================================================================
+
+use crate::config::GenerationConfig;
+
+/// Get an immutable reference to the typed provider map for a given generation type string.
+fn get_typed_provider_map<'a>(
+    config: &'a GenerationConfig,
+    gen_type_str: &str,
+) -> &'a HashMap<String, GenerationProviderConfig> {
+    match gen_type_str {
+        "image" => &config.image_providers,
+        "video" => &config.video_providers,
+        "speech" => &config.speech_providers,
+        "audio" => &config.audio_providers,
+        _ => &config.providers, // fallback to legacy
+    }
+}
+
+/// Get a mutable reference to the typed provider map for a given generation type string.
+fn get_typed_provider_map_mut<'a>(
+    config: &'a mut GenerationConfig,
+    gen_type_str: &str,
+) -> &'a mut HashMap<String, GenerationProviderConfig> {
+    match gen_type_str {
+        "image" => &mut config.image_providers,
+        "video" => &mut config.video_providers,
+        "speech" => &mut config.speech_providers,
+        "audio" => &mut config.audio_providers,
+        _ => &mut config.providers,
+    }
+}
+
+/// Find which typed map contains a provider by name. Returns the type string.
+fn find_provider_type(config: &GenerationConfig, name: &str) -> Option<String> {
+    if config.image_providers.contains_key(name) {
+        return Some("image".to_string());
+    }
+    if config.video_providers.contains_key(name) {
+        return Some("video".to_string());
+    }
+    if config.speech_providers.contains_key(name) {
+        return Some("speech".to_string());
+    }
+    if config.audio_providers.contains_key(name) {
+        return Some("audio".to_string());
+    }
+    // Legacy: derive from capabilities
+    if let Some(cfg) = config.providers.get(name) {
+        if let Some(gen_type) = cfg.capabilities.first() {
+            return Some(format!("{:?}", gen_type).to_lowercase());
+        }
+        // Legacy provider with no capabilities — treat as legacy bucket
+        return Some("legacy".to_string());
+    }
+    None
+}
+
+/// Check if a provider exists in any map (typed or legacy).
+fn provider_exists(config: &GenerationConfig, name: &str) -> bool {
+    config.image_providers.contains_key(name)
+        || config.video_providers.contains_key(name)
+        || config.speech_providers.contains_key(name)
+        || config.audio_providers.contains_key(name)
+        || config.providers.contains_key(name)
+}
+
+/// Parse a generation type string into a GenerationType enum.
+fn parse_generation_type(s: &str) -> GenerationType {
+    match s {
+        "video" => GenerationType::Video,
+        "speech" => GenerationType::Speech,
+        "audio" => GenerationType::Audio,
+        _ => GenerationType::Image,
+    }
+}
+
+// =============================================================================
 // RPC Handlers
 // =============================================================================
 
@@ -118,48 +197,56 @@ pub async fn handle_list(
 ) -> JsonRpcResponse {
     let cfg = config.read().await;
 
-    let mut providers: Vec<GenerationProviderEntry> = cfg
+    let mut providers: Vec<(GenerationProviderEntry, GenerationType)> = cfg
         .generation
-        .providers
-        .iter()
-        .map(|(name, provider_config)| {
+        .merged_providers()
+        .into_iter()
+        .map(|(name, provider_config, gen_type)| {
             // Check which generation types this provider is default for
             let mut is_default_for = Vec::new();
-            if cfg.generation.default_image_provider.as_deref() == Some(name) {
+            if cfg.generation.default_image_provider.as_deref() == Some(name.as_str()) {
                 is_default_for.push(GenerationType::Image);
             }
-            if cfg.generation.default_video_provider.as_deref() == Some(name) {
+            if cfg.generation.default_video_provider.as_deref() == Some(name.as_str()) {
                 is_default_for.push(GenerationType::Video);
             }
-            if cfg.generation.default_audio_provider.as_deref() == Some(name) {
+            if cfg.generation.default_audio_provider.as_deref() == Some(name.as_str()) {
                 is_default_for.push(GenerationType::Audio);
             }
-            if cfg.generation.default_speech_provider.as_deref() == Some(name) {
+            if cfg.generation.default_speech_provider.as_deref() == Some(name.as_str()) {
                 is_default_for.push(GenerationType::Speech);
             }
 
-            let mut cfg_clone = provider_config.clone();
-            cfg_clone.api_key = resolve_api_key(name, &vault);
-            GenerationProviderEntry {
-                name: name.clone(),
+            let mut cfg_clone = provider_config;
+            cfg_clone.api_key = resolve_api_key(&name, &vault);
+            (GenerationProviderEntry {
+                name,
                 config: cfg_clone,
                 is_default_for,
-            }
+            }, gen_type)
         })
         .collect();
 
     // Sort by name for consistent ordering
-    providers.sort_by(|a, b| a.name.cmp(&b.name));
+    providers.sort_by(|a, b| a.0.name.cmp(&b.0.name));
 
     // Serialize and inject api_key (which is #[serde(skip)] on the config struct)
+    // Also inject generation_type field
     let json_arr: Vec<serde_json::Value> = providers
         .iter()
-        .map(|entry| {
+        .map(|(entry, gen_type)| {
             let mut val = serde_json::to_value(entry).unwrap_or_default();
             if let Some(ref key) = entry.config.api_key {
                 if let Some(obj) = val.get_mut("config").and_then(|c| c.as_object_mut()) {
                     obj.insert("api_key".into(), serde_json::json!(key));
                 }
+            }
+            // Add generation_type to the response
+            if let Some(obj) = val.as_object_mut() {
+                obj.insert(
+                    "generation_type".into(),
+                    serde_json::Value::String(format!("{:?}", gen_type).to_lowercase()),
+                );
             }
             val
         })
@@ -186,37 +273,50 @@ pub async fn handle_get(
 
     let cfg = config.read().await;
 
-    match cfg.generation.providers.get(&params.name) {
-        Some(provider_config) => {
+    // Find provider across all typed maps and legacy
+    let found = cfg.generation.merged_providers()
+        .into_iter()
+        .find(|(name, _, _)| name == &params.name);
+
+    match found {
+        Some((name, provider_config, gen_type)) => {
             // Check which generation types this provider is default for
             let mut is_default_for = Vec::new();
-            if cfg.generation.default_image_provider.as_deref() == Some(&params.name) {
+            if cfg.generation.default_image_provider.as_deref() == Some(name.as_str()) {
                 is_default_for.push(GenerationType::Image);
             }
-            if cfg.generation.default_video_provider.as_deref() == Some(&params.name) {
+            if cfg.generation.default_video_provider.as_deref() == Some(name.as_str()) {
                 is_default_for.push(GenerationType::Video);
             }
-            if cfg.generation.default_audio_provider.as_deref() == Some(&params.name) {
+            if cfg.generation.default_audio_provider.as_deref() == Some(name.as_str()) {
                 is_default_for.push(GenerationType::Audio);
             }
-            if cfg.generation.default_speech_provider.as_deref() == Some(&params.name) {
+            if cfg.generation.default_speech_provider.as_deref() == Some(name.as_str()) {
                 is_default_for.push(GenerationType::Speech);
             }
 
-            let mut cfg_clone = provider_config.clone();
-            cfg_clone.api_key = resolve_api_key(&params.name, &vault);
+            let mut cfg_clone = provider_config;
+            cfg_clone.api_key = resolve_api_key(&name, &vault);
+            let api_key_copy = cfg_clone.api_key.clone();
             let entry = GenerationProviderEntry {
-                name: params.name,
-                config: cfg_clone.clone(),
+                name,
+                config: cfg_clone,
                 is_default_for,
             };
 
             // Serialize and inject api_key (which is #[serde(skip)] on the config struct)
             let mut val = serde_json::to_value(entry).unwrap_or_default();
-            if let Some(ref key) = cfg_clone.api_key {
+            if let Some(ref key) = api_key_copy {
                 if let Some(obj) = val.get_mut("config").and_then(|c| c.as_object_mut()) {
                     obj.insert("api_key".into(), serde_json::json!(key));
                 }
+            }
+            // Add generation_type to the response
+            if let Some(obj) = val.as_object_mut() {
+                obj.insert(
+                    "generation_type".into(),
+                    serde_json::Value::String(format!("{:?}", gen_type).to_lowercase()),
+                );
             }
             JsonRpcResponse::success(request.id, val)
         }
@@ -239,6 +339,8 @@ pub async fn handle_create(
     struct Params {
         name: String,
         config: GenerationProviderConfig,
+        #[serde(default)]
+        generation_type: Option<String>,
     }
 
     let params: Params = match super::parse_params(&request) {
@@ -246,11 +348,23 @@ pub async fn handle_create(
         Err(e) => return e,
     };
 
+    // Determine generation type from explicit param or capabilities
+    let gen_type_str = params.generation_type
+        .as_deref()
+        .or_else(|| params.config.capabilities.first().map(|g| match g {
+            GenerationType::Image => "image",
+            GenerationType::Video => "video",
+            GenerationType::Speech => "speech",
+            GenerationType::Audio => "audio",
+        }))
+        .unwrap_or("image");
+    let gen_type = parse_generation_type(gen_type_str);
+
     {
         let mut cfg = config.write().await;
 
-        // Check if provider already exists
-        if cfg.generation.providers.contains_key(&params.name) {
+        // Check if provider already exists in any map
+        if provider_exists(&cfg.generation, &params.name) {
             return JsonRpcResponse::error(
                 request.id,
                 INVALID_PARAMS,
@@ -263,6 +377,9 @@ pub async fn handle_create(
             params.config,
             &cfg.presets_override.generation,
         );
+
+        // Set capabilities from generation type
+        provider_config.capabilities = vec![gen_type];
 
         // Validate provider config
         if let Err(e) = provider_config.validate(&params.name) {
@@ -282,8 +399,9 @@ pub async fn handle_create(
         }
         provider_config.api_key = None;
 
-        // Add provider
-        cfg.generation.providers.insert(params.name.clone(), provider_config);
+        // Insert into the correct typed map
+        get_typed_provider_map_mut(&mut cfg.generation, gen_type_str)
+            .insert(params.name.clone(), provider_config);
 
         // Save to file
         if let Err(e) = save_config(&cfg) {
@@ -326,20 +444,26 @@ pub async fn handle_update(
     {
         let mut cfg = config.write().await;
 
-        // Check if provider exists
-        if !cfg.generation.providers.contains_key(&params.name) {
-            return JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                format!("Provider '{}' not found", params.name),
-            );
-        }
+        // Find which typed map contains the provider
+        let gen_type_str = match find_provider_type(&cfg.generation, &params.name) {
+            Some(t) => t,
+            None => {
+                return JsonRpcResponse::error(
+                    request.id,
+                    INVALID_PARAMS,
+                    format!("Provider '{}' not found", params.name),
+                );
+            }
+        };
 
         let mut provider_config = build_generation_provider_for_persistence(
             &params.name,
             params.config,
             &cfg.presets_override.generation,
         );
+
+        // Preserve capabilities from the typed map
+        provider_config.capabilities = vec![parse_generation_type(&gen_type_str)];
 
         // Validate provider config
         if let Err(e) = provider_config.validate(&params.name) {
@@ -361,7 +485,8 @@ pub async fn handle_update(
 
         // Update provider — config change resets verified
         provider_config.verified = false;
-        cfg.generation.providers.insert(params.name.clone(), provider_config);
+        get_typed_provider_map_mut(&mut cfg.generation, &gen_type_str)
+            .insert(params.name.clone(), provider_config);
 
         // Save to file
         if let Err(e) = save_config(&cfg) {
@@ -403,14 +528,17 @@ pub async fn handle_delete(
     {
         let mut cfg = config.write().await;
 
-        // Check if provider exists
-        if !cfg.generation.providers.contains_key(&params.name) {
-            return JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                format!("Provider '{}' not found", params.name),
-            );
-        }
+        // Find which typed map contains the provider
+        let gen_type_str = match find_provider_type(&cfg.generation, &params.name) {
+            Some(t) => t,
+            None => {
+                return JsonRpcResponse::error(
+                    request.id,
+                    INVALID_PARAMS,
+                    format!("Provider '{}' not found", params.name),
+                );
+            }
+        };
 
         // Check if provider is set as default for any generation type
         let mut default_for = Vec::new();
@@ -439,8 +567,9 @@ pub async fn handle_delete(
             );
         }
 
-        // Remove provider
-        cfg.generation.providers.remove(&params.name);
+        // Remove provider from the correct typed map
+        get_typed_provider_map_mut(&mut cfg.generation, &gen_type_str)
+            .remove(&params.name);
 
         // Delete API key from vault
         if let Err(e) = vault.delete_secret(&vault_key(&params.name)) {
@@ -487,30 +616,9 @@ pub async fn handle_set_default(
     {
         let mut cfg = config.write().await;
 
-        // Check if provider exists, is verified, and supports the generation type
-        match cfg.generation.providers.get(&params.name) {
-            Some(provider_config) => {
-                if !provider_config.verified {
-                    return JsonRpcResponse::error(
-                        request.id,
-                        INVALID_PARAMS,
-                        format!(
-                            "Provider '{}' must pass a connection test before being set as default",
-                            params.name
-                        ),
-                    );
-                }
-                if !provider_config.capabilities.contains(&params.generation_type) {
-                    return JsonRpcResponse::error(
-                        request.id,
-                        INVALID_PARAMS,
-                        format!(
-                            "Provider '{}' does not support {:?} generation",
-                            params.name, params.generation_type
-                        ),
-                    );
-                }
-            }
+        // Find provider across all typed maps
+        let gen_type_str = match find_provider_type(&cfg.generation, &params.name) {
+            Some(t) => t,
             None => {
                 return JsonRpcResponse::error(
                     request.id,
@@ -518,6 +626,34 @@ pub async fn handle_set_default(
                     format!("Provider '{}' not found", params.name),
                 );
             }
+        };
+
+        let provider_config = get_typed_provider_map(&cfg.generation, &gen_type_str)
+            .get(&params.name)
+            .expect("provider must exist after find_provider_type succeeded");
+
+        if !provider_config.verified {
+            return JsonRpcResponse::error(
+                request.id,
+                INVALID_PARAMS,
+                format!(
+                    "Provider '{}' must pass a connection test before being set as default",
+                    params.name
+                ),
+            );
+        }
+
+        // Validate that the provider's type matches the requested default type
+        let provider_gen_type = parse_generation_type(&gen_type_str);
+        if provider_gen_type != params.generation_type {
+            return JsonRpcResponse::error(
+                request.id,
+                INVALID_PARAMS,
+                format!(
+                    "Provider '{}' is a {} provider and cannot be set as default for {:?}",
+                    params.name, gen_type_str, params.generation_type
+                ),
+            );
         }
 
         // Set as default
@@ -604,10 +740,12 @@ pub async fn handle_test_connection(
         // Persist verified=true if provider name was given
         if let Some(ref name) = provider_name {
             let mut cfg = config.write().await;
-            if let Some(p) = cfg.generation.providers.get_mut(name) {
-                p.verified = true;
-                if let Err(e) = save_config(&cfg) {
-                    tracing::error!(error = %e, "Failed to save config after generation test");
+            if let Some(type_str) = find_provider_type(&cfg.generation, name) {
+                if let Some(p) = get_typed_provider_map_mut(&mut cfg.generation, &type_str).get_mut(name) {
+                    p.verified = true;
+                    if let Err(e) = save_config(&cfg) {
+                        tracing::error!(error = %e, "Failed to save config after generation test");
+                    }
                 }
             }
         }
@@ -641,13 +779,14 @@ pub async fn handle_voices(
 
     let cfg = config.read().await;
 
-    // Determine the provider_type from config, or treat provider_id itself as provider_type
+    // Determine the provider_type from config (search all typed maps), or treat provider_id as provider_type
     let provider_type = cfg
         .generation
-        .providers
-        .get(&params.provider_id)
-        .map(|p| p.provider_type.as_str())
-        .unwrap_or(params.provider_id.as_str())
+        .merged_providers()
+        .iter()
+        .find(|(name, _, _)| name == &params.provider_id)
+        .map(|(_, cfg, _)| cfg.provider_type.clone())
+        .unwrap_or_else(|| params.provider_id.clone())
         .to_lowercase();
 
     let voices = match provider_type.as_str() {
