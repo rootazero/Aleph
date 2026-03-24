@@ -8,6 +8,7 @@ use crate::providers::adapter::{ProtocolAdapter, ProviderResponse, RequestPayloa
 use crate::providers::message::{ContentBlock, UnifiedMessage};
 use crate::providers::AiProvider;
 use crate::secrets::leak_detector::{LeakDecision, LeakDetector};
+use futures::StreamExt;
 use std::future::Future;
 use std::pin::Pin;
 use crate::sync_primitives::Arc;
@@ -112,7 +113,14 @@ impl HttpProvider {
             }
         })?;
 
-        let provider_response = self.adapter.parse_response(response).await?;
+        // Collect streaming deltas into a ProviderResponse
+        let stream = self.adapter.stream_deltas(response).await?;
+        let mut collector = crate::providers::DeltaCollector::new();
+        futures::pin_mut!(stream);
+        while let Some(delta) = stream.next().await {
+            collector.push(delta?);
+        }
+        let provider_response = collector.finish();
 
         // Validate response
         provider_response.validate(self.adapter.name());
@@ -135,6 +143,60 @@ impl HttpProvider {
         Ok(provider_response)
     }
 
+    /// Expose raw delta stream with outbound safety checks applied.
+    ///
+    /// Used by AiProviderBridge for real streaming to AgentLoop.
+    /// Inbound leak check is deferred to the DeltaCollector consumer.
+    pub async fn stream_raw<'a>(
+        &'a self,
+        payload: RequestPayload<'a>,
+    ) -> anyhow::Result<futures::stream::BoxStream<'static, anyhow::Result<crate::providers::ProviderDelta>>> {
+        // PII filtering
+        let mut filtered_messages: Vec<UnifiedMessage> = payload.messages.to_vec();
+        if let Some(engine_lock) = crate::pii::PiiEngine::global() {
+            if let Ok(engine) = engine_lock.read() {
+                if !engine.is_provider_excluded(&self.name) {
+                    for msg in &mut filtered_messages {
+                        for block in msg.content_blocks_mut() {
+                            if let ContentBlock::Text { ref mut text } = block {
+                                let result = engine.filter(text);
+                                if result.has_detections() {
+                                    *text = result.text;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Secret leak detection outbound
+        let detector = LeakDetector::new();
+        let all_text = UnifiedMessage::extract_all_text(&filtered_messages);
+        if let LeakDecision::Block { reason, .. } = detector.scan_outbound(&all_text) {
+            return Err(anyhow::anyhow!("Secret leak blocked: {}", reason));
+        }
+
+        let final_payload = RequestPayload {
+            messages: &filtered_messages,
+            system_prompt: payload.system_prompt,
+            tools: payload.tools,
+            think_level: payload.think_level,
+            temperature: payload.temperature,
+            max_tokens: payload.max_tokens,
+            tool_choice: payload.tool_choice.clone(),
+        };
+
+        let request = self.adapter.build_request(&final_payload, &self.config)
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
+        let response = request.send().await
+            .map_err(|e| anyhow::anyhow!("Network error: {}", e))?;
+        let stream = self.adapter.stream_deltas(response).await
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
+
+        Ok(stream.map(|r| r.map_err(|e| anyhow::anyhow!("{}", e))).boxed())
+    }
+
 }
 
 impl AiProvider for HttpProvider {
@@ -155,6 +217,10 @@ impl AiProvider for HttpProvider {
 
     fn color(&self) -> &str {
         &self.config.color
+    }
+
+    fn as_http_provider(&self) -> Option<&HttpProvider> {
+        Some(self)
     }
 }
 

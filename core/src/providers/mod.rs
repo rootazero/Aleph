@@ -221,6 +221,14 @@ pub trait AiProvider: Send + Sync {
     fn supports_thinking(&self) -> bool {
         false
     }
+
+    /// Downcast to HttpProvider for streaming access.
+    ///
+    /// Returns Some(&HttpProvider) only for HttpProvider instances.
+    /// Used by AiProviderBridge to call stream_raw().
+    fn as_http_provider(&self) -> Option<&http_provider::HttpProvider> {
+        None
+    }
 }
 
 #[cfg(test)]
