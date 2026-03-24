@@ -221,6 +221,14 @@ impl MediaCache {
             .clone()
             .unwrap_or_else(|| detect_mime(&item.url, &item.media_type));
 
+        debug!(
+            url = %item.url,
+            media_type = %item.media_type,
+            mime = %mime,
+            session_id = %session_id,
+            "download_media_item: starting download"
+        );
+
         // Build a temporary Attachment to pass through resolve()
         let temp_attachment = if item.url.starts_with("data:") {
             // Parse data URL: data:[<mediatype>][;base64],<data>

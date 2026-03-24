@@ -401,6 +401,12 @@ impl<E: EventEmitter + Send + Sync + 'static> crate::agent_loop::LoopCallback
             | crate::agent_loop::ToolResult::SuccessAndStopLoop { output } => {
                 if let Some(media_val) = output.get("_media") {
                     if let Ok(items) = serde_json::from_value::<Vec<MediaItem>>(media_val.clone()) {
+                        tracing::info!(
+                            tool = %name,
+                            count = items.len(),
+                            urls = ?items.iter().map(|i| &i.url).collect::<Vec<_>>(),
+                            "Extracted _media from tool output"
+                        );
                         let mut pending = self.pending_media.lock().unwrap_or_else(|e| e.into_inner());
                         let remaining = MAX_MEDIA_PER_RUN.saturating_sub(pending.len());
                         if remaining < items.len() {

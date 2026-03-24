@@ -20,7 +20,7 @@ use crate::sync_primitives::{AtomicBool, AtomicU64, Ordering};
 use crate::sync_primitives::Arc;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::gateway::media::PendingMedia;
 use crate::media::cache::MediaCache;
@@ -309,14 +309,41 @@ impl ReplyEmitter {
             return vec![];
         }
 
-        futures::future::join_all(
+        info!(
+            run_id = %self.run_id,
+            count = media_items.len(),
+            urls = ?media_items.iter().map(|i| &i.url).collect::<Vec<_>>(),
+            "Draining pending media for download"
+        );
+
+        let attachments = futures::future::join_all(
             media_items.iter().map(|item| self.media_cache.download_media_item(item, &self.run_id))
-        ).await
+        ).await;
+
+        for att in &attachments {
+            info!(
+                run_id = %self.run_id,
+                mime = %att.mime_type,
+                has_path = att.path.is_some(),
+                has_url = att.url.is_some(),
+                size = ?att.size,
+                "Media attachment ready"
+            );
+        }
+
+        attachments
     }
 
     /// Send media as a separate standalone message.
     async fn send_media_standalone(&self, attachments: Vec<crate::gateway::channel::Attachment>) {
         if attachments.is_empty() { return; }
+        let count = attachments.len();
+        info!(
+            run_id = %self.run_id,
+            channel = %self.route.channel_id,
+            count = count,
+            "Sending media standalone message"
+        );
         let message = OutboundMessage {
             conversation_id: self.route.conversation_id.clone(),
             text: String::new(),
@@ -325,8 +352,9 @@ impl ReplyEmitter {
             inline_keyboard: None,
             metadata: Default::default(),
         };
-        if let Err(e) = self.channel_registry.send(&self.route.channel_id, message).await {
-            warn!(error = %e, "Failed to send media standalone message");
+        match self.channel_registry.send(&self.route.channel_id, message).await {
+            Ok(_) => info!(run_id = %self.run_id, count = count, "Media standalone message sent successfully"),
+            Err(e) => warn!(error = %e, "Failed to send media standalone message"),
         }
     }
 
