@@ -76,6 +76,28 @@ pub struct GenerationProviderEntry {
     pub name: String,
     pub config: GenerationProviderConfig,
     pub is_default_for: Vec<GenerationType>,
+    /// The generation category this provider belongs to (returned by server).
+    /// Falls back to capabilities[0] for backward compatibility.
+    #[serde(default)]
+    pub generation_type: Option<String>,
+}
+
+impl GenerationProviderEntry {
+    /// Get the effective generation type, preferring the server-provided field
+    /// and falling back to capabilities[0] for backward compatibility.
+    pub fn effective_generation_type(&self) -> Option<GenerationType> {
+        if let Some(ref gt) = self.generation_type {
+            match gt.as_str() {
+                "image" => Some(GenerationType::Image),
+                "video" => Some(GenerationType::Video),
+                "audio" => Some(GenerationType::Audio),
+                "speech" => Some(GenerationType::Speech),
+                _ => self.config.capabilities.first().copied(),
+            }
+        } else {
+            self.config.capabilities.first().copied()
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -102,10 +124,12 @@ impl GenerationProvidersApi {
         state: &DashboardState,
         name: &str,
         config: GenerationProviderConfig,
+        generation_type: &str,
     ) -> Result<(), String> {
         let params = serde_json::json!({
             "name": name,
             "config": config,
+            "generation_type": generation_type,
         });
         state.rpc_call("generation_providers.create", params).await?;
         Ok(())

@@ -188,7 +188,7 @@ pub fn GenerationProvidersView() -> impl IntoView {
                                         let custom: Vec<_> = provider_list.into_iter()
                                             .filter(|p| {
                                                 !preset_ids.contains(&p.name)
-                                                    && p.config.capabilities.contains(&current_cat)
+                                                    && p.effective_generation_type() == Some(current_cat)
                                             })
                                             .collect();
                                         if custom.is_empty() {
@@ -301,6 +301,7 @@ pub fn GenerationProvidersView() -> impl IntoView {
                     if show_add_form.get() {
                         view! {
                             <AddCustomProviderPanel
+                                category=selected_category.get()
                                 on_added=move || {
                                     set_show_add_form.set(false);
                                     reload();
@@ -522,11 +523,9 @@ fn ProviderDetailView(
     let form_timeout = RwSignal::new(provider.config.timeout_seconds);
     let form_enabled = RwSignal::new(provider.config.enabled);
 
-    // Capability checkboxes
-    let cap_image = RwSignal::new(provider.config.capabilities.contains(&GenerationType::Image));
-    let cap_video = RwSignal::new(provider.config.capabilities.contains(&GenerationType::Video));
-    let cap_audio = RwSignal::new(provider.config.capabilities.contains(&GenerationType::Audio));
-    let cap_speech = RwSignal::new(provider.config.capabilities.contains(&GenerationType::Speech));
+    // Generation type is now determined by which typed map the provider belongs to
+    let effective_gen_type = provider.effective_generation_type().unwrap_or(GenerationType::Image);
+    let is_speech = effective_gen_type == GenerationType::Speech;
 
     // Voice configuration signals (for speech providers)
     let form_voice = RwSignal::new(provider.config.defaults.voice.clone().unwrap_or_default());
@@ -538,7 +537,7 @@ fn ProviderDetailView(
 
     // Load voices if this is a speech provider
     let provider_name_voices = provider.name.clone();
-    if provider.config.capabilities.contains(&GenerationType::Speech) {
+    if is_speech {
         voices_loading.set(true);
         let name = provider_name_voices.clone();
         spawn_local(async move {
@@ -565,15 +564,6 @@ fn ProviderDetailView(
     let action_error = RwSignal::new(Option::<String>::None);
     let test_result = RwSignal::new(Option::<(bool, String)>::None);
     let save_success = RwSignal::new(false);
-
-    let build_capabilities = move || {
-        let mut caps = Vec::new();
-        if cap_image.get() { caps.push(GenerationType::Image); }
-        if cap_video.get() { caps.push(GenerationType::Video); }
-        if cap_audio.get() { caps.push(GenerationType::Audio); }
-        if cap_speech.get() { caps.push(GenerationType::Speech); }
-        caps
-    };
 
     // Pre-clone values captured by build_config closure
     let config_provider_type = provider.config.provider_type.clone();
@@ -615,7 +605,7 @@ fn ProviderDetailView(
                 },
                 enabled: form_enabled.get(),
                 color: config_color.clone(),
-                capabilities: build_capabilities(),
+                capabilities: vec![effective_gen_type],
                 timeout_seconds: form_timeout.get(),
                 verified: config_verified,
                 defaults,
@@ -727,7 +717,6 @@ fn ProviderDetailView(
         }
     });
 
-    let capabilities = provider.config.capabilities.clone();
     let is_preset = PresetProviders::all().iter().any(|p| p.id == provider_name);
 
     view! {
@@ -827,46 +816,9 @@ fn ProviderDetailView(
                 </div>
             </div>
 
-            // Capabilities card
-            <div class="bg-surface-raised border border-border rounded-xl p-4 space-y-3">
-                <h3 class="text-xs font-semibold text-text-tertiary uppercase tracking-wider">"CAPABILITIES"</h3>
-                <label class="flex items-center gap-3 cursor-pointer">
-                    <input type="checkbox"
-                        checked=move || cap_image.get()
-                        on:change=move |ev| cap_image.set(event_target_checked(&ev))
-                        class="w-4 h-4 rounded"
-                    />
-                    <span class="text-sm text-text-primary">{t!(i18n, settings.generation.image_generation)}</span>
-                </label>
-                <label class="flex items-center gap-3 cursor-pointer">
-                    <input type="checkbox"
-                        checked=move || cap_video.get()
-                        on:change=move |ev| cap_video.set(event_target_checked(&ev))
-                        class="w-4 h-4 rounded"
-                    />
-                    <span class="text-sm text-text-primary">{t!(i18n, settings.generation.video_generation)}</span>
-                </label>
-                <label class="flex items-center gap-3 cursor-pointer">
-                    <input type="checkbox"
-                        checked=move || cap_audio.get()
-                        on:change=move |ev| cap_audio.set(event_target_checked(&ev))
-                        class="w-4 h-4 rounded"
-                    />
-                    <span class="text-sm text-text-primary">{t!(i18n, settings.generation.audio_generation)}</span>
-                </label>
-                <label class="flex items-center gap-3 cursor-pointer">
-                    <input type="checkbox"
-                        checked=move || cap_speech.get()
-                        on:change=move |ev| cap_speech.set(event_target_checked(&ev))
-                        class="w-4 h-4 rounded"
-                    />
-                    <span class="text-sm text-text-primary">{t!(i18n, settings.generation.speech_synthesis)}</span>
-                </label>
-            </div>
-
-            // Voice Configuration card (only shown when speech capability is enabled)
+            // Voice Configuration card (only shown for speech providers)
             {move || {
-                if !cap_speech.get() {
+                if !is_speech {
                     return view! { <div></div> }.into_any();
                 }
 
@@ -1052,17 +1004,16 @@ fn ProviderDetailView(
                 </button>
             </div>
 
-            // Set as default buttons
-            <div class="bg-surface-raised border border-border rounded-xl p-4 space-y-3">
-                <h3 class="text-xs font-semibold text-text-tertiary uppercase tracking-wider">"SET AS DEFAULT FOR"</h3>
-                {capabilities.iter().map(|cap| {
-                    let gen_type = *cap;
-                    let is_default = is_default_for.contains(&gen_type);
-                    let set_default = handle_set_default.clone();
+            // Set as default button
+            {
+                let is_default = is_default_for.contains(&effective_gen_type);
+                let set_default = handle_set_default.clone();
 
-                    view! {
+                view! {
+                    <div class="bg-surface-raised border border-border rounded-xl p-4 space-y-3">
+                        <h3 class="text-xs font-semibold text-text-tertiary uppercase tracking-wider">"SET AS DEFAULT"</h3>
                         <button
-                            on:click=move |_| set_default(gen_type)
+                            on:click=move |_| set_default(effective_gen_type)
                             disabled=move || setting_default.get() || is_default
                             class=move || {
                                 let base = "w-full px-4 py-2.5 rounded-lg transition-colors font-medium text-sm";
@@ -1073,12 +1024,12 @@ fn ProviderDetailView(
                                 }
                             }
                         >
-                            {gen_type.display_name()}
+                            {effective_gen_type.display_name()}
                             {if is_default { format!(" {}", t_string!(i18n, settings.generation.current_suffix)) } else { String::new() }}
                         </button>
-                    }
-                }).collect_view()}
-            </div>
+                    </div>
+                }
+            }
 
             // Delete button
             {if !is_preset {
@@ -1124,6 +1075,7 @@ fn PresetSetupPanel(
     let provider_type = preset.provider_type.clone();
     let color = preset.color.clone();
     let capabilities = preset.capabilities.clone();
+    let gen_type_str = preset.capabilities.first().map(|g| g.as_str()).unwrap_or("image").to_string();
 
     let build_config = {
         let provider_type = provider_type.clone();
@@ -1191,6 +1143,7 @@ fn PresetSetupPanel(
 
     let handle_add = {
         let preset_id = preset_id.clone();
+        let gen_type_str = gen_type_str.clone();
         move |_| {
             if api_key.get().is_empty() {
                 set_error.set(Some("API Key is required".to_string()));
@@ -1200,9 +1153,10 @@ fn PresetSetupPanel(
             set_error.set(None);
             let config = build_config();
             let name = preset_id.clone();
+            let gt = gen_type_str.clone();
 
             spawn_local(async move {
-                match GenerationProvidersApi::create(&state, &name, config).await {
+                match GenerationProvidersApi::create(&state, &name, config, &gt).await {
                     Ok(_) => {
                         set_adding.set(false);
                         on_added();
@@ -1317,6 +1271,7 @@ fn PresetSetupPanel(
 
 #[component]
 fn AddCustomProviderPanel(
+    category: GenerationType,
     on_added: impl Fn() + 'static + Copy + Send,
     on_cancel: impl Fn() + 'static + Copy + Send,
 ) -> impl IntoView {
@@ -1325,45 +1280,23 @@ fn AddCustomProviderPanel(
 
     // Form state
     let name = RwSignal::new(String::new());
-    let provider_type = RwSignal::new(String::new());
+    // Auto-infer provider_type from category
+    let default_provider_type = match category {
+        GenerationType::Speech => "openai_tts",
+        GenerationType::Image => "openai",
+        _ => "openai_compat",
+    };
+    let provider_type = RwSignal::new(default_provider_type.to_string());
     let api_key = RwSignal::new(String::new());
     let base_url = RwSignal::new(String::new());
     let edit_url = RwSignal::new(String::new());
     let form_model = RwSignal::new(String::new());
     let timeout = RwSignal::new(60u64);
 
-    // Capability checkboxes — auto-set provider_type when capability changes
-    let cap_image = RwSignal::new(true);
-    let cap_video = RwSignal::new(false);
-    let cap_audio = RwSignal::new(false);
-    let cap_speech = RwSignal::new(false);
-
-    // Auto-infer provider_type from selected capabilities
-    let infer_provider_type = move || {
-        if cap_speech.get() {
-            provider_type.set("openai_tts".to_string());
-        } else if cap_image.get() {
-            provider_type.set("openai".to_string());
-        } else if cap_video.get() {
-            provider_type.set("openai_compat".to_string());
-        } else if cap_audio.get() {
-            provider_type.set("openai_compat".to_string());
-        }
-    };
-
     let (adding, set_adding) = signal(false);
     let (testing, set_testing) = signal(false);
     let (add_error, set_add_error) = signal(Option::<String>::None);
     let (test_result, set_test_result) = signal(Option::<(bool, String)>::None);
-
-    let build_capabilities = move || {
-        let mut caps = Vec::new();
-        if cap_image.get() { caps.push(GenerationType::Image); }
-        if cap_video.get() { caps.push(GenerationType::Video); }
-        if cap_audio.get() { caps.push(GenerationType::Audio); }
-        if cap_speech.get() { caps.push(GenerationType::Speech); }
-        caps
-    };
 
     let build_config = move || -> GenerationProviderConfig {
         GenerationProviderConfig {
@@ -1385,7 +1318,7 @@ fn AddCustomProviderPanel(
             models: if form_model.get().is_empty() { vec![] } else { form_model.get().split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect() },
             enabled: true,
             color: "#808080".to_string(),
-            capabilities: build_capabilities(),
+            capabilities: vec![category],
             timeout_seconds: timeout.get(),
             verified: false,
             defaults: Default::default(),
@@ -1417,6 +1350,7 @@ fn AddCustomProviderPanel(
         });
     };
 
+    let gen_type_str = category.as_str().to_string();
     let handle_add = move |_| {
         let n = name.get();
         if n.is_empty() {
@@ -1432,9 +1366,10 @@ fn AddCustomProviderPanel(
         set_add_error.set(None);
 
         let config = build_config();
+        let gt = gen_type_str.clone();
 
         spawn_local(async move {
-            match GenerationProvidersApi::create(&state, &n, config).await {
+            match GenerationProvidersApi::create(&state, &n, config, &gt).await {
                 Ok(_) => {
                     set_adding.set(false);
                     on_added();
@@ -1561,41 +1496,13 @@ fn AddCustomProviderPanel(
                 </div>
             </div>
 
-            // Capabilities
-            <div class="bg-surface-raised border border-border rounded-xl p-4 space-y-3">
-                <h3 class="text-xs font-semibold text-text-tertiary uppercase tracking-wider">"CAPABILITIES"</h3>
-                <label class="flex items-center gap-3 cursor-pointer">
-                    <input type="checkbox"
-                        checked=move || cap_image.get()
-                        on:change=move |ev| { cap_image.set(event_target_checked(&ev)); infer_provider_type(); }
-                        class="w-4 h-4 rounded"
-                    />
-                    <span class="text-sm text-text-primary">"🖼️ Image Generation"</span>
-                </label>
-                <label class="flex items-center gap-3 cursor-pointer">
-                    <input type="checkbox"
-                        checked=move || cap_video.get()
-                        on:change=move |ev| { cap_video.set(event_target_checked(&ev)); infer_provider_type(); }
-                        class="w-4 h-4 rounded"
-                    />
-                    <span class="text-sm text-text-primary">"🎬 Video Generation"</span>
-                </label>
-                <label class="flex items-center gap-3 cursor-pointer">
-                    <input type="checkbox"
-                        checked=move || cap_audio.get()
-                        on:change=move |ev| { cap_audio.set(event_target_checked(&ev)); infer_provider_type(); }
-                        class="w-4 h-4 rounded"
-                    />
-                    <span class="text-sm text-text-primary">"🎵 Audio Generation"</span>
-                </label>
-                <label class="flex items-center gap-3 cursor-pointer">
-                    <input type="checkbox"
-                        checked=move || cap_speech.get()
-                        on:change=move |ev| { cap_speech.set(event_target_checked(&ev)); infer_provider_type(); }
-                        class="w-4 h-4 rounded"
-                    />
-                    <span class="text-sm text-text-primary">"🗣️ Speech Synthesis"</span>
-                </label>
+            // Category indicator (read-only, determined by current tab)
+            <div class="bg-surface-raised border border-border rounded-xl p-4">
+                <h3 class="text-xs font-semibold text-text-tertiary uppercase tracking-wider mb-2">"CATEGORY"</h3>
+                <div class="flex items-center gap-2 text-sm text-text-primary">
+                    <span>{category.icon()}</span>
+                    <span>{category.display_name()}</span>
+                </div>
             </div>
 
             // Test result
