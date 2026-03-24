@@ -14,7 +14,6 @@
 //! - `ReplicateProvider` - Replicate API for Flux, SDXL, MusicGen, and more
 //! - `ElevenLabsProvider` - ElevenLabs high-quality Text-to-Speech
 //! - `MidjourneyProvider` - T8Star Midjourney API proxy for high-quality image generation
-//! - `T8StarVeoProvider` - T8Star Veo API proxy for video generation (Google Veo models)
 //!
 //! # Factory Function
 //!
@@ -44,7 +43,6 @@ pub mod openai_image;
 pub mod openai_tts;
 pub mod replicate;
 pub mod stability;
-pub mod t8star_veo;
 
 #[cfg(test)]
 mod tests;
@@ -59,4 +57,3 @@ pub use openai_image::OpenAiImageProvider;
 pub use openai_tts::OpenAiTtsProvider;
 pub use replicate::{ReplicateProvider, ReplicateProviderBuilder};
 pub use stability::StabilityImageProvider;
-pub use t8star_veo::{T8StarVeoProvider, T8StarVeoProviderBuilder};

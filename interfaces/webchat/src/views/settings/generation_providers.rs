@@ -1345,9 +1345,9 @@ fn AddCustomProviderPanel(
         } else if cap_image.get() {
             provider_type.set("openai".to_string());
         } else if cap_video.get() {
-            provider_type.set("t8star_veo".to_string());
+            provider_type.set("openai_compat".to_string());
         } else if cap_audio.get() {
-            provider_type.set("openai".to_string());
+            provider_type.set("openai_compat".to_string());
         }
     };
 

@@ -179,28 +179,10 @@ pub fn create_provider(
 
             Arc::new(builder.build())
         }
-        "t8star_veo" | "t8star-veo" => {
-            let base_url = config
-                .base_url
-                .clone()
-                .unwrap_or_else(|| "https://ai.t8star.cn".to_string());
-
-            let mut builder = T8StarVeoProvider::builder(&api_key, &base_url);
-
-            if let Some(model) = config.default_model() {
-                builder = builder.model(model);
-            }
-
-            if !config.color.is_empty() {
-                builder = builder.color(&config.color);
-            }
-
-            Arc::new(builder.build()?)
-        }
         other => {
             return Err(GenerationError::invalid_parameters(
                 format!(
-                    "Unknown provider type: '{}'. Supported: openai, openai_image, dalle, openai_tts, tts, openai_compat, stability, stability_image, sdxl, google, google_imagen, imagen, google_veo, veo, replicate, elevenlabs, midjourney, mj, t8star_veo",
+                    "Unknown provider type: '{}'. Supported: openai, openai_image, dalle, openai_tts, tts, openai_compat, stability, stability_image, sdxl, google, google_imagen, imagen, google_veo, veo, replicate, elevenlabs, midjourney, mj",
                     other
                 ),
                 Some("provider_type".to_string()),
