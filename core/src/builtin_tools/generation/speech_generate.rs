@@ -16,6 +16,7 @@ use crate::generation::{
 };
 use crate::builtin_tools::error::ToolError;
 use crate::tools::AlephTool;
+use crate::gateway::media::{MediaItem, detect_mime};
 
 /// Arguments for speech generation
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -45,6 +46,9 @@ pub struct SpeechGenerateArgs {
 pub struct SpeechGenerateOutput {
     /// Human-readable display text
     pub _display: String,
+
+    /// Media items for channel delivery
+    pub _media: Vec<MediaItem>,
 
     /// Location of the generated audio (URL, file path, or data URL)
     pub audio_location: String,
@@ -232,6 +236,12 @@ impl SpeechGenerateTool {
 
         Ok(SpeechGenerateOutput {
             _display: display,
+            _media: vec![MediaItem {
+                url: audio_location.clone(),
+                media_type: "audio".into(),
+                mime_type: Some(detect_mime(&audio_location, "audio")),
+                filename: None,
+            }],
             audio_location,
             location_type,
             text: args.text,
@@ -531,6 +541,7 @@ mod tests {
     fn test_output_serialization() {
         let output = SpeechGenerateOutput {
             _display: "🔊 语音已生成 (1.5s)\nhttps://example.com/audio.mp3".to_string(),
+            _media: vec![],
             audio_location: "https://example.com/audio.mp3".to_string(),
             location_type: "url".to_string(),
             text: "Hello world".to_string(),

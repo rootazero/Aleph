@@ -16,6 +16,7 @@ use crate::generation::{
 };
 use crate::builtin_tools::error::ToolError;
 use crate::tools::AlephTool;
+use crate::gateway::media::{MediaItem, detect_mime};
 
 /// Arguments for image generation
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -49,6 +50,9 @@ pub struct ImageGenerateArgs {
 pub struct ImageGenerateOutput {
     /// Human-readable display text (used by fast-path slash commands)
     pub _display: String,
+
+    /// Media items for channel delivery
+    pub _media: Vec<MediaItem>,
 
     /// Location of the generated image (URL or file path)
     pub image_location: String,
@@ -224,6 +228,12 @@ impl ImageGenerateTool {
 
         Ok(ImageGenerateOutput {
             _display: display,
+            _media: vec![MediaItem {
+                url: image_location.clone(),
+                media_type: "image".into(),
+                mime_type: Some(detect_mime(&image_location, "image")),
+                filename: None,
+            }],
             image_location,
             location_type,
             prompt: args.prompt,
@@ -409,6 +419,7 @@ mod tests {
     fn test_output_serialization() {
         let output = ImageGenerateOutput {
             _display: "🎨 图像已生成 (1.5s)\nhttps://example.com/image.png".to_string(),
+            _media: vec![],
             image_location: "https://example.com/image.png".to_string(),
             location_type: "url".to_string(),
             prompt: "Test prompt".to_string(),

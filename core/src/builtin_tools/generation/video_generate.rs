@@ -13,6 +13,7 @@ use crate::generation::{
 };
 use crate::builtin_tools::error::ToolError;
 use crate::tools::AlephTool;
+use crate::gateway::media::{MediaItem, detect_mime};
 
 /// Arguments for the video generation tool.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -30,6 +31,8 @@ pub struct VideoGenerateArgs {
 pub struct VideoGenerateOutput {
     /// Human-readable display text (used by fast-path slash commands)
     pub _display: String,
+    /// Media items for channel delivery
+    pub _media: Vec<MediaItem>,
     /// Location of the generated video (URL or local file path)
     pub video_location: String,
     /// Type of location: "url" or "file"
@@ -154,6 +157,12 @@ impl VideoGenerateTool {
 
         Ok(VideoGenerateOutput {
             _display: display,
+            _media: vec![MediaItem {
+                url: video_location.to_string(),
+                media_type: "video".into(),
+                mime_type: Some(detect_mime(&video_location, "video")),
+                filename: None,
+            }],
             video_location: video_location.to_string(),
             location_type: location_type.to_string(),
             prompt: args.prompt,

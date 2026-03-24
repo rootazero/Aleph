@@ -13,6 +13,7 @@ use crate::generation::{
 };
 use crate::builtin_tools::error::ToolError;
 use crate::tools::AlephTool;
+use crate::gateway::media::{MediaItem, detect_mime};
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct AudioGenerateArgs {
@@ -26,6 +27,8 @@ pub struct AudioGenerateArgs {
 pub struct AudioGenerateOutput {
     /// Human-readable display text
     pub _display: String,
+    /// Media items for channel delivery
+    pub _media: Vec<MediaItem>,
     pub audio_location: String,
     pub location_type: String,
     pub prompt: String,
@@ -125,6 +128,12 @@ impl AudioGenerateTool {
 
         Ok(AudioGenerateOutput {
             _display: display,
+            _media: vec![MediaItem {
+                url: audio_location.to_string(),
+                media_type: "audio".into(),
+                mime_type: Some(detect_mime(&audio_location, "audio")),
+                filename: None,
+            }],
             audio_location: audio_location.to_string(),
             location_type: location_type.to_string(),
             prompt: args.prompt,
