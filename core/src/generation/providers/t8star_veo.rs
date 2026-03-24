@@ -122,14 +122,23 @@ impl T8StarVeoProvider {
         T8StarVeoProviderBuilder::new(api_key, base_url)
     }
 
-    /// Get the submit URL for video generation
+    /// Get the submit URL for video generation.
+    ///
+    /// If the endpoint already contains `/videos/generations`, use it as-is.
+    /// Otherwise, append the standard path.
     fn submit_url(&self) -> String {
-        format!("{}/v2/videos/generations", self.endpoint)
+        let trimmed = self.endpoint.trim_end_matches('/');
+        if trimmed.contains("/videos/generations") {
+            trimmed.to_string()
+        } else {
+            format!("{}/v2/videos/generations", trimmed)
+        }
     }
 
     /// Get the task query URL
     fn task_url(&self, task_id: &str) -> String {
-        format!("{}/v2/videos/generations/{}", self.endpoint, task_id)
+        let base = self.submit_url();
+        format!("{}/{}", base, task_id)
     }
 
     /// Submit a video generation task
@@ -774,8 +783,21 @@ mod tests {
     // === URL generation tests ===
 
     #[test]
-    fn test_submit_url() {
+    fn test_submit_url_base_only() {
         let provider = T8StarVeoProviderBuilder::new("key", "https://ai.t8star.cn")
+            .build()
+            .unwrap();
+
+        assert_eq!(
+            provider.submit_url(),
+            "https://ai.t8star.cn/v2/videos/generations"
+        );
+    }
+
+    #[test]
+    fn test_submit_url_full_path() {
+        // When user provides full URL, don't double-append
+        let provider = T8StarVeoProviderBuilder::new("key", "https://ai.t8star.cn/v2/videos/generations")
             .build()
             .unwrap();
 
