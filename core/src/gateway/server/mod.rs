@@ -28,6 +28,7 @@ use super::lane::{LaneManager, LaneConfig};
 use super::event_scope::EventScopeGuard;
 use super::config::AuthMode;
 use crate::providers::protocols::ProtocolLoader;
+use crate::security::headers::SecurityHeadersLayer;
 use notify::RecommendedWatcher;
 use notify_debouncer_full::{Debouncer, FileIdMap};
 
@@ -303,7 +304,7 @@ impl GatewayServer {
             router = router.merge(a2a);
         }
 
-        router
+        router.layer(SecurityHeadersLayer::new())
     }
 
     /// Spawn background tasks for rate limiter pruning and tick heartbeat.
