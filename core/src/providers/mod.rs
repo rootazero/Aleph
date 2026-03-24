@@ -54,6 +54,7 @@ use std::pin::Pin;
 pub mod auth_profile_registry;
 pub mod auth_profiles;
 pub mod codex;
+pub mod responses;
 pub mod failover;
 pub mod gemini;
 pub mod mock;

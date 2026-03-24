@@ -5,7 +5,7 @@
 pub mod openai;
 pub mod anthropic;
 pub mod codex;
-mod codex_utils;
+pub(crate) mod codex_utils;
 pub mod gemini;
 pub mod definition;
 pub mod registry;
