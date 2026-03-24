@@ -30,8 +30,28 @@ pub struct Message {
     /// OpenAI API rejects tool messages without this field.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
+    /// Tool calls made by the assistant (role="assistant").
+    /// Required so that subsequent tool result messages can reference them.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<Vec<OpenAiToolCallOut>>,
     #[serde(flatten)]
     pub content: MessageContent,
+}
+
+/// Serializable tool call for assistant messages (outgoing to API)
+#[derive(Debug, Clone, Serialize)]
+pub struct OpenAiToolCallOut {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub call_type: String,
+    pub function: OpenAiFunctionCallOut,
+}
+
+/// Serializable function call details
+#[derive(Debug, Clone, Serialize)]
+pub struct OpenAiFunctionCallOut {
+    pub name: String,
+    pub arguments: String,
 }
 
 impl Message {
@@ -40,7 +60,18 @@ impl Message {
         Self {
             role: role.to_string(),
             tool_call_id: None,
+            tool_calls: None,
             content: MessageContent::Text { content },
+        }
+    }
+
+    /// Create an assistant message with tool calls
+    pub fn assistant_with_tool_calls(text: Option<String>, tool_calls: Vec<OpenAiToolCallOut>) -> Self {
+        Self {
+            role: "assistant".to_string(),
+            tool_call_id: None,
+            tool_calls: if tool_calls.is_empty() { None } else { Some(tool_calls) },
+            content: MessageContent::Text { content: text.unwrap_or_default() },
         }
     }
 
@@ -49,6 +80,7 @@ impl Message {
         Self {
             role: "tool".to_string(),
             tool_call_id: Some(tool_call_id),
+            tool_calls: None,
             content: MessageContent::Text { content },
         }
     }

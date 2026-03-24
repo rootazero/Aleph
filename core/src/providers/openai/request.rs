@@ -136,6 +136,7 @@ pub fn build_vision_request(
     messages.push(Message {
         role: "user".to_string(),
         tool_call_id: None,
+        tool_calls: None,
         content: MessageContent::Multimodal {
             content: content_blocks,
         },
@@ -200,6 +201,7 @@ pub fn build_multimodal_request(
     messages.push(Message {
         role: "user".to_string(),
         tool_call_id: None,
+        tool_calls: None,
         content: MessageContent::Multimodal {
             content: content_blocks,
         },

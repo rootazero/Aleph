@@ -138,6 +138,7 @@ impl OpenAiProtocol {
                         result.push(Message {
                             role: "user".to_string(),
                             tool_call_id: None,
+                            tool_calls: None,
                             content: MessageContent::Multimodal { content: blocks },
                         });
                     } else {
@@ -187,17 +188,25 @@ impl OpenAiProtocol {
                         .collect();
 
                     let msg_content = if text.is_empty() { None } else { Some(text) };
-                    let msg_tool_calls = if tool_calls.is_empty() {
-                        None
-                    } else {
-                        Some(tool_calls)
-                    };
 
-                    // We need to build the JSON manually for assistant messages with tool_calls
-                    // because the Message struct may not have tool_calls field
-                    result.push(Message::text("assistant", msg_content.unwrap_or_default()));
-                    // Note: tool_calls on assistant messages handled via json serialization override
-                    let _ = msg_tool_calls; // TODO: extend Message type if needed
+                    if tool_calls.is_empty() {
+                        result.push(Message::text("assistant", msg_content.unwrap_or_default()));
+                    } else {
+                        // Convert to serializable tool call format
+                        use crate::providers::openai::types::{OpenAiToolCallOut, OpenAiFunctionCallOut};
+                        let tc_out: Vec<OpenAiToolCallOut> = tool_calls
+                            .into_iter()
+                            .map(|tc| OpenAiToolCallOut {
+                                id: tc.id,
+                                call_type: "function".to_string(),
+                                function: OpenAiFunctionCallOut {
+                                    name: tc.function.name,
+                                    arguments: tc.function.arguments,
+                                },
+                            })
+                            .collect();
+                        result.push(Message::assistant_with_tool_calls(msg_content, tc_out));
+                    }
                 }
                 UnifiedMessage::ToolResult {
                     tool_call_id,
