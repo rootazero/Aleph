@@ -149,8 +149,10 @@ impl GenerationProvidersApi {
         api_key: Option<String>,
         base_url: Option<String>,
         model: Option<String>,
+        name: Option<&str>,
     ) -> Result<TestConnectionResult, String> {
         let params = serde_json::json!({
+            "name": name,
             "provider_type": provider_type,
             "api_key": api_key,
             "secret_name": Option::<String>::None,

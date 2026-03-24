@@ -653,11 +653,13 @@ fn ProviderDetailView(
 
     // Test connection handler
     let build_config_test = build_config.clone();
+    let provider_name_test = provider_name.clone();
     let handle_test = move |_| {
         testing.set(true);
         test_result.set(None);
         action_error.set(None);
         let config = build_config_test();
+        let name = provider_name_test.clone();
 
         spawn_local(async move {
             match GenerationProvidersApi::test_connection(
@@ -666,6 +668,7 @@ fn ProviderDetailView(
                 config.api_key,
                 config.base_url,
                 config.models.first().cloned(),
+                Some(&name),
             ).await {
                 Ok(result) => {
                     testing.set(false);
@@ -1171,6 +1174,7 @@ fn PresetSetupPanel(
                     if key.is_empty() { None } else { Some(key) },
                     if url.is_empty() { None } else { Some(url) },
                     if mdl.is_empty() { None } else { Some(mdl) },
+                    None, // New provider — no name yet
                 ).await {
                     Ok(result) => {
                         set_testing.set(false);
@@ -1400,7 +1404,7 @@ fn AddCustomProviderPanel(
         let mdl = config.models.first().cloned();
 
         spawn_local(async move {
-            match GenerationProvidersApi::test_connection(&state, &ptype, key, url, mdl).await {
+            match GenerationProvidersApi::test_connection(&state, &ptype, key, url, mdl, None).await {
                 Ok(result) => {
                     set_testing.set(false);
                     set_test_result.set(Some((result.success, result.message)));
