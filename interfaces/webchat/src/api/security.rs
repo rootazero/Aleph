@@ -11,6 +11,13 @@ pub struct SecurityConfig {
     pub require_auth: bool,
     pub enable_pairing: bool,
     pub allow_guest: bool,
+    /// Network access scope: "localhost" or "lan"
+    #[serde(default = "default_network_access")]
+    pub network_access: String,
+}
+
+fn default_network_access() -> String {
+    "localhost".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

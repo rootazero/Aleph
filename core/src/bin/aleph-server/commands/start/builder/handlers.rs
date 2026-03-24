@@ -588,8 +588,8 @@ pub(in crate::commands::start) fn register_config_handlers(
     register_handler!(server, "rerank_config.test", rerank_config::handle_test, config, shared_token_mgr);
 
     // Security config
-    register_handler!(server, "security_config.get", security_config::handle_get);
-    register_handler!(server, "security_config.update", security_config::handle_update, event_bus);
+    register_handler!(server, "security_config.get", security_config::handle_get, config_patcher);
+    register_handler!(server, "security_config.update", security_config::handle_update, config_patcher, event_bus);
     register_handler!(server, "security_config.list_devices", security_config::handle_list_devices, device_store);
     register_handler!(server, "security_config.revoke_device", security_config::handle_revoke_device, device_store, event_bus);
 

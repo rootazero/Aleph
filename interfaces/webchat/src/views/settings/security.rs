@@ -114,6 +114,7 @@ pub fn SecurityView() -> impl IntoView {
                                 })}
 
                                 <GatewaySecuritySettings config=config />
+                                <NetworkAccessSection config=config />
                                 <PIISection config=search_config />
                                 <PairedDevices devices=devices state=state />
 
@@ -198,6 +199,132 @@ fn GatewaySecuritySettings(
                 <p class="text-sm text-text-tertiary ml-6">
                     {t!(i18n, settings.security.allow_guest_desc)}
                 </p>
+            </div>
+        </div>
+    }
+}
+
+#[component]
+fn NetworkAccessSection(
+    config: RwSignal<Option<SecurityConfig>>,
+) -> impl IntoView {
+    let i18n = use_i18n();
+    let state = expect_context::<DashboardState>();
+    let save_success = RwSignal::new(false);
+    let save_error = RwSignal::new(Option::<String>::None);
+    let saving = RwSignal::new(false);
+    let needs_restart = RwSignal::new(false);
+
+    let save_network = move |_| {
+        if let Some(cfg) = config.get() {
+            saving.set(true);
+            save_error.set(None);
+            spawn_local(async move {
+                match SecurityConfigApi::update(&state, cfg).await {
+                    Ok(result) => {
+                        saving.set(false);
+                        // Check if server returned needs_restart
+                        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&serde_json::to_string(&result).unwrap_or_default()) {
+                            if v.get("needs_restart").and_then(|v| v.as_bool()).unwrap_or(false) {
+                                needs_restart.set(true);
+                            }
+                        }
+                        needs_restart.set(true);
+                        save_success.set(true);
+                        set_timeout(
+                            move || { save_success.set(false); },
+                            std::time::Duration::from_secs(5),
+                        );
+                    }
+                    Err(e) => {
+                        saving.set(false);
+                        save_error.set(Some(e));
+                    }
+                }
+            });
+        }
+    };
+
+    view! {
+        <div class="bg-surface-raised rounded-lg border border-border p-6">
+            <h2 class="text-lg font-semibold text-text-primary mb-4">{t!(i18n, settings.security.network_access)}</h2>
+
+            <div class="space-y-4">
+                <div>
+                    <label class="block text-sm font-medium text-text-secondary mb-2">
+                        {t!(i18n, settings.security.network_scope)}
+                    </label>
+                    <select
+                        on:change=move |ev| {
+                            if let Some(mut cfg) = config.get() {
+                                cfg.network_access = event_target_value(&ev);
+                                config.set(Some(cfg));
+                            }
+                        }
+                        class="w-full px-3 py-2 bg-surface-sunken border border-border rounded text-text-primary"
+                    >
+                        <option
+                            value="localhost"
+                            selected=move || config.get().map(|c| c.network_access == "localhost").unwrap_or(true)
+                        >
+                            {t!(i18n, settings.security.localhost_only)}
+                        </option>
+                        <option
+                            value="lan"
+                            selected=move || config.get().map(|c| c.network_access == "lan").unwrap_or(false)
+                        >
+                            {t!(i18n, settings.security.lan_access)}
+                        </option>
+                    </select>
+                    <p class="text-xs text-text-tertiary mt-1">
+                        {move || {
+                            let is_lan = config.get().map(|c| c.network_access == "lan").unwrap_or(false);
+                            if is_lan {
+                                t_string!(i18n, settings.security.lan_access_desc).to_string()
+                            } else {
+                                t_string!(i18n, settings.security.localhost_only_desc).to_string()
+                            }
+                        }}
+                    </p>
+                </div>
+
+                {move || {
+                    if needs_restart.get() {
+                        Some(view! {
+                            <div class="p-3 bg-warning-subtle border border-warning/20 rounded text-warning text-sm">
+                                {t!(i18n, settings.security.restart_required)}
+                            </div>
+                        })
+                    } else {
+                        None
+                    }
+                }}
+
+                {move || save_error.get().map(|e| view! {
+                    <div class="p-3 bg-danger-subtle border border-danger/20 rounded text-danger text-sm">
+                        {e}
+                    </div>
+                })}
+
+                {move || {
+                    if save_success.get() {
+                        Some(view! {
+                            <div class="p-3 bg-success-subtle border border-success/20 rounded text-success text-sm">
+                                {t!(i18n, common.saved)}
+                            </div>
+                        })
+                    } else {
+                        None
+                    }
+                }}
+
+                <button
+                    on:click=save_network
+                    disabled=move || saving.get()
+                    class="px-4 py-2 bg-primary text-white rounded hover:bg-primary-hover disabled:opacity-50"
+                >
+                    {move || if saving.get() { t_string!(i18n, common.saving).to_string() } else { t_string!(i18n, common.save).to_string() }}
+                </button>
             </div>
         </div>
     }

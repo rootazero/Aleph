@@ -117,6 +117,11 @@ impl ConfigPatcher {
         }
     }
 
+    /// Get the config file path.
+    pub fn config_path(&self) -> &std::path::Path {
+        &self.config_path
+    }
+
     /// Read the config file's mtime and store it for later conflict detection.
     pub async fn record_mtime(&self) {
         match std::fs::metadata(&self.config_path) {

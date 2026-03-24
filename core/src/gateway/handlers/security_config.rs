@@ -14,6 +14,50 @@ use serde_json::Value;
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INVALID_PARAMS, INTERNAL_ERROR};
 use crate::gateway::event_bus::{GatewayEventBus, GatewayEvent, ConfigChangedEvent};
 use crate::gateway::device_store::DeviceStore;
+use crate::config::patcher::ConfigPatcher;
+
+/// Read gateway.host from the config TOML file on disk.
+fn read_gateway_host_from_config(patcher: &ConfigPatcher) -> String {
+    // Read the config file as TOML and extract gateway.host
+    let config_path = patcher.config_path();
+    if let Ok(contents) = std::fs::read_to_string(config_path) {
+        if let Ok(table) = contents.parse::<toml::Table>() {
+            if let Some(gateway) = table.get("gateway").and_then(|v| v.as_table()) {
+                if let Some(host) = gateway.get("host").and_then(|v| v.as_str()) {
+                    return host.to_string();
+                }
+            }
+        }
+    }
+    "127.0.0.1".to_string() // default
+}
+
+/// Network access scope for gateway binding
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum NetworkAccess {
+    /// Localhost only (127.0.0.1) — most secure
+    Localhost,
+    /// LAN access (0.0.0.0) — accessible from local network
+    Lan,
+}
+
+impl NetworkAccess {
+    pub fn to_bind_address(&self) -> &str {
+        match self {
+            Self::Localhost => "127.0.0.1",
+            Self::Lan => "0.0.0.0",
+        }
+    }
+
+    pub fn from_bind_address(addr: &str) -> Self {
+        if addr == "0.0.0.0" || addr == "::" {
+            Self::Lan
+        } else {
+            Self::Localhost
+        }
+    }
+}
 
 /// Security configuration structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -24,6 +68,13 @@ pub struct SecurityConfig {
     pub enable_pairing: bool,
     /// Allow guest access
     pub allow_guest: bool,
+    /// Network access scope (localhost or lan)
+    #[serde(default = "default_network_access")]
+    pub network_access: NetworkAccess,
+}
+
+fn default_network_access() -> NetworkAccess {
+    NetworkAccess::Localhost
 }
 
 /// Device information
@@ -39,13 +90,16 @@ pub struct DeviceInfo {
 /// Handle security_config.get request
 pub async fn handle_get(
     request: JsonRpcRequest,
+    config_patcher: Arc<ConfigPatcher>,
 ) -> JsonRpcResponse {
-    // For now, return a simple security config
-    // In a real implementation, this would read from Gateway config
+    // Read gateway.host from config file to determine network access scope
+    let host = read_gateway_host_from_config(&config_patcher);
+
     let security_config = SecurityConfig {
         require_auth: false,
         enable_pairing: true,
         allow_guest: false,
+        network_access: NetworkAccess::from_bind_address(&host),
     };
 
     let result = serde_json::to_value(&security_config)
@@ -57,6 +111,7 @@ pub async fn handle_get(
 /// Handle security_config.update request
 pub async fn handle_update(
     request: JsonRpcRequest,
+    config_patcher: Arc<ConfigPatcher>,
     event_bus: Arc<GatewayEventBus>,
 ) -> JsonRpcResponse {
     // Parse params
@@ -65,23 +120,52 @@ pub async fn handle_update(
         None => return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Missing params"),
     };
 
-    let _security_config: SecurityConfig = match serde_json::from_value(params) {
+    let security_config: SecurityConfig = match serde_json::from_value(params) {
         Ok(c) => c,
         Err(e) => return JsonRpcResponse::error(request.id, INVALID_PARAMS, format!("Invalid security config: {}", e)),
     };
 
-    // TODO: In a real implementation, update Gateway config
-    // For now, just broadcast the event
+    // Check current host to determine if restart is needed
+    let current_host = read_gateway_host_from_config(&config_patcher);
+
+    let new_host = security_config.network_access.to_bind_address().to_string();
+    let needs_restart = current_host != new_host;
+
+    // Persist network_access via config.patch pipeline
+    if needs_restart {
+        use crate::config::patcher::PatchRequest;
+        let patch_req = PatchRequest {
+            path: "gateway".to_string(),
+            patch: serde_json::json!({ "host": new_host }),
+            secret_fields: Default::default(),
+            dry_run: false,
+            health_check: false,
+        };
+
+        if let Err(e) = config_patcher.apply(patch_req).await {
+            return JsonRpcResponse::error(
+                request.id,
+                INTERNAL_ERROR,
+                format!("Failed to save config: {}", e),
+            );
+        }
+    }
 
     // Broadcast event
     let event = GatewayEvent::ConfigChanged(ConfigChangedEvent {
         section: Some("security".to_string()),
-        value: serde_json::json!({ "action": "updated" }),
+        value: serde_json::json!({
+            "action": "updated",
+            "needs_restart": needs_restart,
+        }),
         timestamp: chrono::Utc::now().timestamp_millis(),
     });
     let _ = event_bus.publish_json(&event);
 
-    JsonRpcResponse::success(request.id, serde_json::json!({ "success": true }))
+    JsonRpcResponse::success(request.id, serde_json::json!({
+        "success": true,
+        "needs_restart": needs_restart,
+    }))
 }
 
 /// Handle security_config.list_devices request
