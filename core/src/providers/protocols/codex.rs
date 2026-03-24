@@ -220,7 +220,15 @@ impl CodexProtocol {
             reasoning: Self::build_reasoning(payload),
             tools,
             // Codex mode fields (per pi_agent_rust reference implementation)
-            tool_choice: Some("auto".to_string()),
+            tool_choice: payload.tool_choice.as_ref().map(|choice| {
+                use crate::providers::adapter::ToolChoice;
+                match choice {
+                    ToolChoice::Auto => "auto".to_string(),
+                    ToolChoice::Required => "required".to_string(),
+                    ToolChoice::None => "none".to_string(),
+                    ToolChoice::Specific(_) => "auto".to_string(),
+                }
+            }).or(Some("auto".to_string())),
             parallel_tool_calls: Some(true),
             text: Some(crate::providers::codex::types::TextConfig {
                 verbosity: "medium".to_string(),
