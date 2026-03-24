@@ -10,7 +10,7 @@ use crate::sync_primitives::Mutex;
 use tracing::{debug, info};
 
 /// Schema version for migrations
-const SCHEMA_VERSION: i32 = 6;
+const SCHEMA_VERSION: i32 = 7;
 
 /// Unified security storage backed by SQLite
 pub struct SecurityStore {
@@ -134,6 +134,18 @@ impl SecurityStore {
             if !has_column {
                 conn.execute_batch(SCHEMA_V6)?;
             }
+            drop(conn);
+        }
+
+        if version < 7 {
+            info!(
+                from = version,
+                to = 7,
+                "Migrating security schema to v7 (security audit log)"
+            );
+
+            let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+            conn.execute_batch(crate::security::audit::AUDIT_LOG_SCHEMA)?;
             drop(conn);
         }
 
