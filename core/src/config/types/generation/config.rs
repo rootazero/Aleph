@@ -77,6 +77,22 @@ pub struct GenerationConfig {
     /// Provider configurations
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub providers: HashMap<String, GenerationProviderConfig>,
+
+    /// Image generation providers (typed format — type determined by section name)
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub image_providers: HashMap<String, GenerationProviderConfig>,
+
+    /// Video generation providers (typed format)
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub video_providers: HashMap<String, GenerationProviderConfig>,
+
+    /// Speech generation providers (typed format — TTS/STT)
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub speech_providers: HashMap<String, GenerationProviderConfig>,
+
+    /// Audio/music generation providers (typed format)
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub audio_providers: HashMap<String, GenerationProviderConfig>,
 }
 
 fn default_auto_paste_threshold_mb() -> u32 {
@@ -103,6 +119,10 @@ impl Default for GenerationConfig {
             background_task_threshold_seconds: default_background_task_threshold_seconds(),
             smart_routing_enabled: default_smart_routing_enabled(),
             providers: HashMap::new(),
+            image_providers: HashMap::new(),
+            video_providers: HashMap::new(),
+            speech_providers: HashMap::new(),
+            audio_providers: HashMap::new(),
         }
     }
 }
@@ -123,30 +143,124 @@ impl GenerationConfig {
         }
     }
 
-    /// Get a provider config by name
+    /// Get a provider config by name (checks typed maps first, then legacy)
     pub fn get_provider(&self, name: &str) -> Option<&GenerationProviderConfig> {
-        self.providers.get(name)
+        self.image_providers
+            .get(name)
+            .or_else(|| self.video_providers.get(name))
+            .or_else(|| self.speech_providers.get(name))
+            .or_else(|| self.audio_providers.get(name))
+            .or_else(|| self.providers.get(name))
     }
 
-    /// Get all enabled providers
+    /// Get all enabled providers (typed maps + legacy, typed maps take priority)
     pub fn get_enabled_providers(&self) -> Vec<(&str, &GenerationProviderConfig)> {
-        self.providers
-            .iter()
-            .filter(|(_, config)| config.enabled)
-            .map(|(name, config)| (name.as_str(), config))
-            .collect()
+        let mut seen = std::collections::HashSet::new();
+        let mut result = Vec::new();
+
+        let typed_maps: &[&HashMap<String, GenerationProviderConfig>] = &[
+            &self.image_providers,
+            &self.video_providers,
+            &self.speech_providers,
+            &self.audio_providers,
+        ];
+
+        for map in typed_maps {
+            for (name, config) in *map {
+                if config.enabled {
+                    seen.insert(name.as_str());
+                    result.push((name.as_str(), config));
+                }
+            }
+        }
+
+        for (name, config) in &self.providers {
+            if config.enabled && !seen.contains(name.as_str()) {
+                result.push((name.as_str(), config));
+            }
+        }
+
+        result
     }
 
-    /// Get providers that support a specific generation type
+    /// Get providers that support a specific generation type.
+    ///
+    /// Typed provider maps take priority over legacy `providers` section.
     pub fn get_providers_for_type(
         &self,
         gen_type: GenerationType,
     ) -> Vec<(&str, &GenerationProviderConfig)> {
-        self.providers
+        let typed_map = match gen_type {
+            GenerationType::Image => &self.image_providers,
+            GenerationType::Video => &self.video_providers,
+            GenerationType::Speech => &self.speech_providers,
+            GenerationType::Audio => &self.audio_providers,
+        };
+
+        let mut result: Vec<(&str, &GenerationProviderConfig)> = typed_map
             .iter()
-            .filter(|(_, config)| config.enabled && config.capabilities.contains(&gen_type))
+            .filter(|(_, config)| config.enabled)
             .map(|(name, config)| (name.as_str(), config))
-            .collect()
+            .collect();
+
+        // Also include legacy providers that match this type and aren't shadowed
+        let typed_names: std::collections::HashSet<&String> = typed_map.keys().collect();
+        for (name, cfg) in &self.providers {
+            if typed_names.contains(name) {
+                continue;
+            }
+            if cfg.enabled && cfg.capabilities.contains(&gen_type) {
+                result.push((name.as_str(), cfg));
+            }
+        }
+
+        result
+    }
+
+    /// Merge all provider sources into a unified list with resolved type.
+    ///
+    /// New typed maps take priority over legacy `providers` section.
+    pub fn merged_providers(&self) -> Vec<(String, GenerationProviderConfig, GenerationType)> {
+        let mut result = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+
+        // New typed format first (priority)
+        for (name, cfg) in &self.image_providers {
+            seen.insert(name.clone());
+            let mut cfg = cfg.clone();
+            cfg.capabilities = vec![GenerationType::Image];
+            result.push((name.clone(), cfg, GenerationType::Image));
+        }
+        for (name, cfg) in &self.video_providers {
+            seen.insert(name.clone());
+            let mut cfg = cfg.clone();
+            cfg.capabilities = vec![GenerationType::Video];
+            result.push((name.clone(), cfg, GenerationType::Video));
+        }
+        for (name, cfg) in &self.speech_providers {
+            seen.insert(name.clone());
+            let mut cfg = cfg.clone();
+            cfg.capabilities = vec![GenerationType::Speech];
+            result.push((name.clone(), cfg, GenerationType::Speech));
+        }
+        for (name, cfg) in &self.audio_providers {
+            seen.insert(name.clone());
+            let mut cfg = cfg.clone();
+            cfg.capabilities = vec![GenerationType::Audio];
+            result.push((name.clone(), cfg, GenerationType::Audio));
+        }
+
+        // Legacy format: map by capabilities[0], skip if already seen
+        for (name, cfg) in &self.providers {
+            if seen.contains(name) {
+                continue;
+            }
+            if let Some(gen_type) = cfg.capabilities.first().copied() {
+                result.push((name.clone(), cfg.clone(), gen_type));
+            }
+        }
+
+        result
     }
 
     /// Validate the configuration
@@ -169,22 +283,49 @@ impl GenerationConfig {
         for (name, config) in &self.providers {
             config.validate(name)?;
         }
+        for (name, config) in &self.image_providers {
+            config.validate(name)?;
+        }
+        for (name, config) in &self.video_providers {
+            config.validate(name)?;
+        }
+        for (name, config) in &self.speech_providers {
+            config.validate(name)?;
+        }
+        for (name, config) in &self.audio_providers {
+            config.validate(name)?;
+        }
 
         Ok(())
     }
 
     fn validate_provider_reference(&self, provider: &str, field: &str) -> Result<(), String> {
-        match self.providers.get(provider) {
-            Some(config) if config.enabled => Ok(()),
-            Some(_) => Err(format!(
-                "generation.{} references disabled provider '{}'",
-                field, provider
-            )),
-            None => Err(format!(
-                "generation.{} references unknown provider '{}'",
-                field, provider
-            )),
+        // Check typed maps first, then legacy providers
+        let all_maps: &[&HashMap<String, GenerationProviderConfig>] = &[
+            &self.image_providers,
+            &self.video_providers,
+            &self.speech_providers,
+            &self.audio_providers,
+            &self.providers,
+        ];
+
+        for map in all_maps {
+            if let Some(config) = map.get(provider) {
+                return if config.enabled {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "generation.{} references disabled provider '{}'",
+                        field, provider
+                    ))
+                };
+            }
         }
+
+        Err(format!(
+            "generation.{} references unknown provider '{}'",
+            field, provider
+        ))
     }
 
     /// Resolve the output directory with fallback to workspace default.
