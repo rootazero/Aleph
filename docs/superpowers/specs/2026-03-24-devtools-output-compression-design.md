@@ -11,30 +11,53 @@ Current defenses are insufficient:
 
 ## Solution
 
-Add a tool output compressor (`tool_output/compressor.rs`) that runs at the point MCP tool results are written into conversation history (`loop_core.rs:546`). The compressor uses tool name pattern matching to apply type-specific compression strategies for DevTools tools.
+Add a tool output compressor (`tool_output/compressor.rs`) that runs at the point tool results are written into conversation history (`loop_core.rs`, between `output_text` construction and `messages.push()`). The compressor uses a hardcoded set of known DevTools tool names to apply type-specific compression strategies.
 
 Additionally, add 2 lines to BASE_BEHAVIOR prompt to guide the LLM toward more efficient DevTools usage.
 
 ## Architecture
 
 ```
-MCP tool returns result
+Tool execution returns result
     ↓
-serde_json::to_string(output)
+serde_json::to_string(output)  →  output_text
     ↓
 compress_tool_output(tool_name, output_text)   ← NEW
-    ↓ extract short name from MCP tool name
+    ↓ match tool_name against DEVTOOLS_TOOLS set
     ├─ "take_snapshot"         → snapshot_compressor()
     ├─ "take_screenshot"       → screenshot_compressor()
     ├─ "evaluate_script"       → script_compressor()
     ├─ "list_network_requests" → list_compressor(30)
     ├─ "list_console_messages" → list_compressor(50)
     ├─ "get_network_request"   → generic_truncate(8KB)
-    ├─ other devtools tool     → generic_truncate(10KB)
+    ├─ other known devtools    → generic_truncate(10KB)
     └─ non-devtools tool       → pass through (unchanged)
     ↓
 messages.push(UnifiedMessage::tool_result(...))
 ```
+
+Compression only applies to successful results (`is_error == false`). Error messages pass through unchanged.
+
+## Tool Name Identification
+
+In the agent loop (`loop_core.rs`), `tc.name` contains the **short tool name** as returned by the LLM (e.g., `take_snapshot`, not the long MCP prefix format). The `LoopTool` trait does not expose server/source metadata.
+
+**Strategy**: Use a hardcoded `HashSet` of known Chrome DevTools tool names. These names are defined by the Chrome DevTools Protocol and are stable:
+
+```rust
+const DEVTOOLS_TOOLS: &[&str] = &[
+    "take_snapshot", "take_screenshot", "navigate_page", "click",
+    "evaluate_script", "list_network_requests", "list_console_messages",
+    "get_network_request", "get_console_message", "new_page", "close_page",
+    "select_page", "list_pages", "hover", "fill", "fill_form", "type_text",
+    "press_key", "drag", "upload_file", "handle_dialog", "wait_for",
+    "emulate", "resize_page",
+];
+```
+
+Only tools in this set get DevTools-specific compression. All other tools pass through unchanged.
+
+**Why hardcoded**: Adding a `source()` method to the `LoopTool` trait would require modifying the trait and all implementors (high churn for minimal gain). The DevTools tool names are Protocol-defined constants that rarely change. If a new tool is added to the MCP server, the worst case is it gets no compression (same as today) until we add it to the set.
 
 ## Compression Strategies
 
@@ -70,21 +93,23 @@ POST https://example.com/submit → 302
 Keep last 50 messages. If truncated, prepend:
 `[... showing last 50 of N total console messages]`
 
-### Other DevTools tools (→ ≤10KB)
+### Other known DevTools tools (→ ≤10KB)
 
-Generic truncation at 10KB with notice.
+Generic truncation at 10KB with notice. Applies to: navigate_page, click, hover, fill, etc. These tools typically return small outputs but the cap protects against edge cases.
 
 ### Non-DevTools tools
 
 Pass through unchanged. Existing truncation.rs and tool_compactor handle these.
 
-## Tool Name Pattern Matching
+## Interaction with Existing Systems
 
-MCP tool names follow the pattern: `mcp__plugin_{server}_{namespace}__{tool_name}`
+**truncation.rs**: Independent. It handles builtin tool file overflow storage. MCP tools don't go through it. No interaction.
 
-Example: `mcp__plugin_chrome-devtools-mcp_chrome-devtools__take_snapshot`
+**tool_compactor.rs**: The compressor runs first (at write time), tool_compactor runs later (before each LLM call, on consumed results). Double-compression is harmless — if the compressor already shrunk the output, the compactor's `> 500 token` threshold won't trigger, making it a no-op.
 
-Extract short name: split on `__`, take the last segment. Match against known DevTools tool names. If the tool name contains `chrome-devtools` in the namespace portion, treat unrecognized tools as "other DevTools" (10KB truncation).
+**enforce_context_limit()**: Stays as last-resort safety net. With the compressor in place, it should rarely trigger for DevTools workflows.
+
+**wrap_external_content() (content sanitizer)**: MCP tool results may be wrapped with security boundary markers by `content_sanitizer::wrap_external_content()` before reaching the agent loop. The compressor receives the wrapped content. Compression strategies operate on the inner content — for `take_screenshot`, pattern-match the base64 prefix; for `take_snapshot`, scan the accessibility tree lines within the wrapper.
 
 ## File Changes
 
@@ -92,7 +117,7 @@ Extract short name: split on `__`, take the last segment. Match against known De
 |--------|------|--------|
 | Create | `core/src/tool_output/compressor.rs` | All compression logic + tests |
 | Modify | `core/src/tool_output/mod.rs` | Add `pub mod compressor;` |
-| Modify | `core/src/agent_loop/loop_core.rs:546` | Call `compress_tool_output()` before pushing tool result |
+| Modify | `core/src/agent_loop/loop_core.rs` | Call `compress_tool_output()` on successful results before pushing to messages |
 | Modify | `core/src/agent_loop/prompt_builder.rs` | Add 2 lines to BASE_BEHAVIOR |
 
 ## Prompt Change (BASE_BEHAVIOR)
@@ -108,11 +133,12 @@ Use evaluate_script with specific queries rather than dumping entire page conten
 - `truncation.rs` — independent responsibility (builtin tool file overflow)
 - `tool_compactor.rs` — independent responsibility (post-hoc history compression)
 - `enforce_context_limit()` — stays as last-resort safety net
+- `LoopTool` trait — no new methods added
 - MCP tool definitions or schemas — no changes to tool interfaces
 
 ## Testing
 
 - Unit tests for each compressor function (snapshot, screenshot, script, list, generic)
-- Unit test for tool name extraction from MCP naming pattern
-- Integration: verify compress_tool_output returns passthrough for non-DevTools tools
+- Unit test for `is_devtools_tool()` against known and unknown tool names
+- Integration: verify `compress_tool_output` returns passthrough for non-DevTools tools
 - Verify existing agent_loop tests still pass
