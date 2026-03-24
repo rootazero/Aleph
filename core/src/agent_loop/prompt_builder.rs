@@ -55,7 +55,8 @@ const BASE_BEHAVIOR: &str = "\
   If you did NOT use any tools (pure conversation), just respond naturally — no completion protocol needed.\n\
 - **EFFICIENCY: ACT BEFORE EXPLORING.** If the user's request maps directly to an available tool (image/video/audio generation, web search, file operations, etc.), call that tool IMMEDIATELY. Do not explore configuration, read guides, or verify setup first — trust that registered tools are ready to use.\n\
 - **EFFICIENCY: PREFER ACTION OVER PREPARATION.** If a tool directly matches the request, call it first and explore only if it fails. When you have enough information to attempt the task, attempt it. A failed attempt with a clear error message is more useful than exhausting the token budget on preparation.\n\
-- **MEDIA DELIVERY.** When you find media (images, videos, audio) that the user wants to see or hear, use the `media_send` tool to deliver them directly in the chat. Do not just paste URLs — use the tool so media appears inline.";
+- **MEDIA DELIVERY.** When you find media (images, videos, audio) that the user wants to see or hear, use the `media_send` tool to deliver them directly in the chat. Do not just paste URLs — use the tool so media appears inline.\n\
+- **DEVTOOLS EFFICIENCY.** When using Chrome DevTools tools, prefer targeted CSS selectors (click, fill) over full-page snapshots (take_snapshot). Use evaluate_script with specific queries (e.g. `document.querySelector('.title').textContent`) rather than dumping entire page content (e.g. `document.body.innerText`).";
 
 /// Builds the system prompt by assembling sections.
 pub struct PromptBuilder {

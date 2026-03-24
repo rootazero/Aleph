@@ -567,6 +567,13 @@ impl<P: LoopProvider> AgentLoop<P> {
                             }
                         };
 
+                        // Compress verbose tool outputs (especially DevTools MCP tools)
+                        let output_text = if !is_error {
+                            crate::tool_output::compressor::compress_tool_output(&tc.name, &output_text)
+                        } else {
+                            output_text
+                        };
+
                         messages.push(UnifiedMessage::tool_result(
                             tc.id.clone(),
                             tc.name.clone(),
