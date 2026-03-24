@@ -5,17 +5,14 @@
 
 use crate::config::ProviderConfig;
 use crate::error::{AlephError, Result};
-use crate::providers::adapter::{NativeToolCall, ProtocolAdapter, ProviderResponse, RequestPayload, StopReason};
-use crate::providers::message::{ContentBlock, UnifiedMessage};
-use crate::providers::codex::types::{
-    FunctionToolDef, InputItem, ReasoningConfig, ResponseResource, ResponsesRequest, StreamEvent,
-};
-use super::codex_utils::{extract_codex_account_id, ensure_properties_recursive};
+use crate::providers::adapter::{ProtocolAdapter, ProviderResponse, RequestPayload, StopReason};
+use crate::providers::codex::types::ResponsesRequest;
+use crate::providers::responses::shared;
+use super::codex_utils::extract_codex_account_id;
 use async_trait::async_trait;
 use futures::stream::BoxStream;
-use futures::TryStreamExt;
 use reqwest::Client;
-use tracing::{debug, error, warn};
+use tracing::{debug, error};
 
 const CODEX_ENDPOINT: &str = "/backend-api/codex/responses";
 
@@ -44,134 +41,6 @@ impl CodexProtocol {
         format!("{}{}", base_url, CODEX_ENDPOINT)
     }
 
-    /// Map Aleph ThinkLevel to Responses API reasoning config
-    fn build_reasoning(payload: &RequestPayload) -> Option<ReasoningConfig> {
-        use crate::agents::thinking::ThinkLevel;
-        match payload.think_level {
-            Some(ThinkLevel::Low) => Some(ReasoningConfig {
-                effort: Some("low".to_string()),
-                summary: Some("auto".to_string()),
-            }),
-            Some(ThinkLevel::Medium) => Some(ReasoningConfig {
-                effort: Some("medium".to_string()),
-                summary: Some("auto".to_string()),
-            }),
-            Some(ThinkLevel::High) => Some(ReasoningConfig {
-                effort: Some("high".to_string()),
-                summary: Some("auto".to_string()),
-            }),
-            _ => None,
-        }
-    }
-
-    /// Convert UnifiedMessages to Responses API InputItems
-    fn convert_messages(messages: &[UnifiedMessage]) -> Vec<InputItem> {
-        let mut items = Vec::new();
-        for msg in messages {
-            match msg {
-                UnifiedMessage::User { content } => {
-                    let has_images = content
-                        .iter()
-                        .any(|b| matches!(b, ContentBlock::Image { .. }));
-
-                    if has_images {
-                        // Multimodal: text + images via Responses API content array
-                        use crate::providers::codex::types::{InputContentPart, MessageContent};
-                        let parts: Vec<InputContentPart> = content
-                            .iter()
-                            .filter_map(|b| match b {
-                                ContentBlock::Text { text } => {
-                                    Some(InputContentPart::InputText { text: text.clone() })
-                                }
-                                ContentBlock::Image { data, mime_type } => {
-                                    Some(InputContentPart::InputImage {
-                                        image_url: format!("data:{};base64,{}", mime_type, data),
-                                    })
-                                }
-                                _ => None,
-                            })
-                            .collect();
-                        let image_count = parts.iter().filter(|p| matches!(p, InputContentPart::InputImage { .. })).count();
-                        items.push(InputItem::Message {
-                            role: "user".to_string(),
-                            content: MessageContent::Multimodal { content: parts },
-                        });
-
-                        tracing::info!(
-                            target: "multimodal",
-                            probe = "P6_provider",
-                            role = "user",
-                            content_type = "multimodal",
-                            image_count = image_count,
-                            "Codex multimodal message converted"
-                        );
-                    } else {
-                        // Text-only (existing behavior)
-                        let text = content
-                            .iter()
-                            .filter_map(|b| b.as_text())
-                            .collect::<Vec<_>>()
-                            .join("\n");
-                        {
-                            use crate::providers::codex::types::MessageContent;
-                            items.push(InputItem::Message {
-                                role: "user".to_string(),
-                                content: MessageContent::Text { content: text },
-                            });
-                        }
-                    }
-                }
-                UnifiedMessage::Assistant { content } => {
-                    let text: String = content
-                        .iter()
-                        .filter_map(|b| match b {
-                            ContentBlock::Text { text } => Some(text.as_str()),
-                            _ => None,
-                        })
-                        .collect::<Vec<_>>()
-                        .join("\n");
-                    if !text.is_empty() {
-                        items.push(InputItem::Message {
-                            role: "assistant".to_string(),
-                            content: crate::providers::codex::types::MessageContent::Text { content: text },
-                        });
-                    }
-                    for block in content {
-                        if let ContentBlock::ToolCall { id, name, arguments } = block {
-                            items.push(InputItem::FunctionCall {
-                                call_id: id.clone(),
-                                name: crate::providers::protocols::openai::sanitize_tool_name_pub(name),
-                                arguments: serde_json::to_string(arguments).unwrap_or_default(),
-                            });
-                        }
-                    }
-                }
-                UnifiedMessage::ToolResult {
-                    tool_call_id,
-                    content,
-                    ..
-                } => {
-                    let output = content
-                        .iter()
-                        .map(|b| match b {
-                            ContentBlock::Text { text } => text.clone(),
-                            ContentBlock::Json { value } => {
-                                serde_json::to_string(value).unwrap_or_default()
-                            }
-                            _ => String::new(),
-                        })
-                        .collect::<Vec<_>>()
-                        .join("\n");
-                    items.push(InputItem::FunctionCallOutput {
-                        call_id: tool_call_id.clone(),
-                        output,
-                    });
-                }
-            }
-        }
-        items
-    }
-
     /// Build a Responses API request from the unified payload
     ///
     /// Parses XML-tagged conversation history from the input string into
@@ -181,112 +50,31 @@ impl CodexProtocol {
         payload: &RequestPayload,
         model: &str,
     ) -> ResponsesRequest {
-        let input = Self::convert_messages(payload.messages);
-
-        // Convert tool definitions to Responses API format.
-        // Only clean schemars metadata — pass schema as-is to Codex.
-        // pi_agent_rust does the same: direct clone, no transformation.
-        let tools = payload.tools.map(|tool_defs| {
-            tool_defs
-                .iter()
-                .map(|td| {
-                    let mut params = td.parameters.clone();
-                    // Clean schemars metadata + ensure Codex compatibility
-                    if let Some(obj) = params.as_object_mut() {
-                        obj.remove("$schema");
-                        obj.remove("title");
-                    }
-                    // Codex requires every object schema to have "properties"
-                    ensure_properties_recursive(&mut params);
-                    let desc = td.description.trim();
-                    FunctionToolDef {
-                        tool_type: "function".to_string(),
-                        // Codex API requires names matching ^[a-zA-Z0-9_-]+$
-                        name: crate::providers::protocols::openai::sanitize_tool_name_pub(&td.name),
-                        description: if desc.is_empty() { None } else { Some(desc.to_string()) },
-                        parameters: params,
-                        strict: None, // No strict mode — let Codex handle schema naturally
-                    }
-                })
-                .collect()
-        });
+        let input = shared::convert_messages(payload.messages);
+        let tools = shared::build_tools(payload.tools);
+        let tool_choice = shared::map_tool_choice(payload.tool_choice.as_ref())
+            .or(Some("auto".to_string()));
 
         ResponsesRequest {
             model: model.to_string(),
             input,
             instructions: payload.system_prompt.map(|s| s.to_string()),
             stream: true,
-            store: false,
-            reasoning: Self::build_reasoning(payload),
+            store: Some(false),
+            reasoning: shared::build_reasoning(payload.think_level),
             tools,
             // Codex mode fields (per pi_agent_rust reference implementation)
-            tool_choice: payload.tool_choice.as_ref().map(|choice| {
-                use crate::providers::adapter::ToolChoice;
-                match choice {
-                    ToolChoice::Auto => "auto".to_string(),
-                    ToolChoice::Required => "required".to_string(),
-                    ToolChoice::None => "none".to_string(),
-                    ToolChoice::Specific(_) => "auto".to_string(),
-                }
-            }).or(Some("auto".to_string())),
+            tool_choice,
             parallel_tool_calls: Some(true),
-            text: Some(crate::providers::codex::types::TextConfig {
-                verbosity: "medium".to_string(),
-            }),
+            text: Some(
+                serde_json::to_value(crate::providers::codex::types::TextConfig {
+                    verbosity: "medium".to_string(),
+                })
+                .unwrap(),
+            ),
             max_output_tokens: payload.max_tokens,
             include: Some(vec!["reasoning.encrypted_content".to_string()]),
         }
-    }
-
-    /// Extract text content from a completed ResponseResource
-    fn extract_text(response: &ResponseResource) -> Option<String> {
-        let mut texts = Vec::new();
-        for item in &response.output {
-            if let crate::providers::codex::types::OutputItem::Message { content, .. } = item {
-                for part in content {
-                    if !part.text.is_empty() {
-                        texts.push(part.text.clone());
-                    }
-                }
-            }
-        }
-        if texts.is_empty() {
-            None
-        } else {
-            Some(texts.join(""))
-        }
-    }
-
-    /// Extract native tool calls from a completed ResponseResource
-    fn extract_tool_calls(response: &ResponseResource) -> Vec<NativeToolCall> {
-        let mut calls = Vec::new();
-        for item in &response.output {
-            if let crate::providers::codex::types::OutputItem::FunctionCall {
-                call_id,
-                name,
-                arguments,
-                ..
-            } = item
-            {
-                debug!("Codex function_call: name={} call_id={} arguments={}", name, call_id, arguments);
-                let args = serde_json::from_str(arguments)
-                    .unwrap_or_else(|_| serde_json::Value::String(arguments.clone()));
-                calls.push(NativeToolCall {
-                    id: call_id.clone(),
-                    name: crate::providers::protocols::openai::desanitize_tool_name_pub(name),
-                    arguments: args,
-                });
-            }
-        }
-        calls
-    }
-
-    /// Parse a single SSE data line into a StreamEvent
-    fn parse_sse_data(data: &str) -> Option<StreamEvent> {
-        if data == "[DONE]" {
-            return None;
-        }
-        serde_json::from_str(data).ok()
     }
 }
 
@@ -364,118 +152,7 @@ impl ProtocolAdapter for CodexProtocol {
             .await
             .map_err(|e| AlephError::provider(format!("Failed to read Codex response: {}", e)))?;
 
-        // Parse SSE events, looking for the Completed event with full response.
-        // Function call arguments arrive via delta events and must be accumulated
-        // separately, since the Completed event may have empty arguments.
-        let mut result = String::new();
-        let mut tool_calls: Vec<NativeToolCall> = Vec::new();
-        let mut is_incomplete = false;
-        let mut usage: Option<crate::providers::adapter::TokenUsage> = None;
-        // Accumulate function_call arguments by item_id
-        let mut fc_args: std::collections::HashMap<String, String> = std::collections::HashMap::new();
-        // Track function_call metadata (call_id, name) by item_id
-        let mut fc_meta: std::collections::HashMap<String, (String, String)> = std::collections::HashMap::new();
-
-        for line in text.lines() {
-            let data = if let Some(d) = line.strip_prefix("data: ") {
-                d
-            } else {
-                continue;
-            };
-            if let Some(event) = Self::parse_sse_data(data) {
-                match event {
-                    StreamEvent::TextDelta { delta, .. } => {
-                        result.push_str(&delta);
-                    }
-                    StreamEvent::OutputItemAdded {
-                        item: crate::providers::codex::types::OutputItem::FunctionCall {
-                            ref id, ref call_id, ref name, ref arguments,
-                        },
-                        ..
-                    } => {
-                        fc_meta.insert(id.clone(), (call_id.clone(), name.clone()));
-                        // OutputItemAdded may already contain partial arguments
-                        if !arguments.is_empty() {
-                            fc_args.entry(id.clone()).or_default().push_str(arguments);
-                        }
-                    }
-                    StreamEvent::FunctionCallArgumentsDelta {
-                        ref item_id,
-                        ref delta,
-                        ..
-                    } => {
-                        fc_args.entry(item_id.clone()).or_default().push_str(delta);
-                    }
-                    StreamEvent::FunctionCallArgumentsDone {
-                        ref item_id,
-                        ref arguments,
-                        ..
-                    } => {
-                        fc_args.insert(item_id.clone(), arguments.clone());
-                    }
-                    // OutputItemDone contains the FINAL complete arguments —
-                    // this is the most reliable source (used by pi_agent_rust)
-                    StreamEvent::OutputItemDone {
-                        item: crate::providers::codex::types::OutputItem::FunctionCall {
-                            ref id, ref call_id, ref name, ref arguments,
-                        },
-                        ..
-                    } => {
-                        fc_meta.insert(id.clone(), (call_id.clone(), name.clone()));
-                        if !arguments.is_empty() {
-                            fc_args.insert(id.clone(), arguments.clone());
-                        }
-                    }
-                    StreamEvent::Completed { ref response } => {
-                        // Detect truncation: status="incomplete" means output hit token limit
-                        is_incomplete = response.status == "incomplete";
-                        if is_incomplete {
-                            tracing::warn!(
-                                status = %response.status,
-                                "Codex response truncated (status=incomplete), output hit token limit"
-                            );
-                        }
-                        // Extract usage data
-                        usage = response.usage.as_ref().map(|u| crate::providers::adapter::TokenUsage {
-                            input_tokens: u.input_tokens,
-                            output_tokens: u.output_tokens,
-                            cache_read_tokens: None,
-                        });
-                        // Prefer extracting text from completed response for accuracy
-                        if let Some(full_text) = Self::extract_text(response) {
-                            result = full_text;
-                        }
-                        // Build tool_calls: use accumulated arguments, fallback to Completed response
-                        let completed_calls = Self::extract_tool_calls(response);
-                        if !fc_args.is_empty() {
-                            // Merge: use accumulated arguments over completed response's empty ones
-                            for (item_id, (call_id, name)) in &fc_meta {
-                                let args_str = fc_args.get(item_id).cloned().unwrap_or_default();
-                                let args = serde_json::from_str(&args_str)
-                                    .unwrap_or(serde_json::Value::String(args_str));
-                                debug!("Codex function_call: name={} call_id={} arguments={}", name, call_id, args);
-                                tool_calls.push(NativeToolCall {
-                                    id: call_id.clone(),
-                                    name: crate::providers::protocols::openai::desanitize_tool_name_pub(name),
-                                    arguments: args,
-                                });
-                            }
-                        } else {
-                            // No streaming args — use completed response directly
-                            tool_calls = completed_calls;
-                        }
-                    }
-                    StreamEvent::Failed { response } => {
-                        let msg = response
-                            .error
-                            .map(|e| format!("{}: {}", e.code, e.message))
-                            .unwrap_or_else(|| "Unknown error".to_string());
-                        return Err(AlephError::provider(format!("Codex request failed: {}", msg)));
-                    }
-                    _ => {}
-                }
-            }
-        }
+        let (result, tool_calls, is_incomplete, usage) = shared::parse_sse_body(&text)?;
 
         let stop_reason = if is_incomplete {
             StopReason::MaxTokens
@@ -518,60 +195,7 @@ impl ProtocolAdapter for CodexProtocol {
             )));
         }
 
-        // Buffer for incomplete SSE lines across chunks
-        let line_buf = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
-
-        let stream = response
-            .bytes_stream()
-            .map_err(|e| AlephError::network(format!("Stream error: {}", e)))
-            .try_filter_map(move |chunk| {
-                let buf = line_buf.clone();
-                async move {
-                    let text = std::str::from_utf8(&chunk)
-                        .map_err(|e| AlephError::provider(format!("UTF-8 error: {}", e)))?;
-
-                    let mut buf_guard = buf.lock().unwrap_or_else(|e| e.into_inner());
-                    buf_guard.push_str(text);
-
-                    let mut delta = String::new();
-
-                    // Process complete lines from buffer
-                    while let Some(newline_pos) = buf_guard.find('\n') {
-                        let line = buf_guard[..newline_pos].trim_end().to_string();
-                        buf_guard.drain(..=newline_pos);
-
-                        let data = if let Some(d) = line.strip_prefix("data: ") {
-                            d
-                        } else {
-                            continue;
-                        };
-
-                        if let Some(event) = Self::parse_sse_data(data) {
-                            match event {
-                                StreamEvent::TextDelta { delta: d, .. } => {
-                                    delta.push_str(&d);
-                                }
-                                StreamEvent::Failed { response } => {
-                                    let msg = response
-                                        .error
-                                        .map(|e| format!("{}: {}", e.code, e.message))
-                                        .unwrap_or_else(|| "Unknown error".to_string());
-                                    warn!(error = %msg, "Codex stream failed");
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-
-                    if delta.is_empty() {
-                        Ok(None)
-                    } else {
-                        Ok(Some(delta))
-                    }
-                }
-            });
-
-        Ok(Box::pin(stream))
+        shared::build_sse_stream(response)
     }
 
     fn name(&self) -> &'static str {
@@ -582,7 +206,8 @@ impl ProtocolAdapter for CodexProtocol {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::providers::codex::types::MessageContent;
+    use crate::providers::codex::types::{InputItem, MessageContent, StreamEvent};
+    use crate::providers::responses::shared;
 
     #[test]
     fn test_build_responses_request_basic() {
@@ -592,7 +217,7 @@ mod tests {
         let request = CodexProtocol::build_responses_request(&payload, "codex-mini-latest");
 
         assert_eq!(request.model, "codex-mini-latest");
-        assert!(!request.store);
+        assert_eq!(request.store, Some(false));
         assert!(request.stream);
         assert!(request.instructions.is_none());
         assert!(request.reasoning.is_none());
@@ -640,7 +265,7 @@ mod tests {
     #[test]
     fn test_parse_sse_data_text_delta() {
         let data = r#"{"type":"response.output_text.delta","delta":"Hello","output_index":0,"content_index":0}"#;
-        let event = CodexProtocol::parse_sse_data(data);
+        let event = shared::parse_sse_data(data);
         assert!(event.is_some());
         match event.unwrap() {
             StreamEvent::TextDelta { delta, .. } => assert_eq!(delta, "Hello"),
@@ -650,19 +275,19 @@ mod tests {
 
     #[test]
     fn test_parse_sse_data_done() {
-        let result = CodexProtocol::parse_sse_data("[DONE]");
+        let result = shared::parse_sse_data("[DONE]");
         assert!(result.is_none());
     }
 
     #[test]
     fn test_parse_sse_data_completed() {
         let data = r#"{"type":"response.completed","response":{"id":"resp_1","status":"completed","model":"codex-mini","output":[{"type":"message","id":"msg_1","role":"assistant","content":[{"type":"output_text","text":"Hello world"}]}]}}"#;
-        let event = CodexProtocol::parse_sse_data(data);
+        let event = shared::parse_sse_data(data);
         assert!(event.is_some());
         match event.unwrap() {
             StreamEvent::Completed { response } => {
                 assert_eq!(response.status, "completed");
-                let text = CodexProtocol::extract_text(&response);
+                let text = shared::extract_text(&response);
                 assert_eq!(text, Some("Hello world".to_string()));
             }
             other => panic!("Expected Completed, got {:?}", other),
@@ -671,14 +296,15 @@ mod tests {
 
     #[test]
     fn test_extract_text_from_response() {
+        use crate::providers::codex::types::{ContentPart, OutputItem, ResponseResource};
         let response = ResponseResource {
             id: "resp_1".to_string(),
             status: "completed".to_string(),
             model: "codex-mini".to_string(),
-            output: vec![crate::providers::codex::types::OutputItem::Message {
+            output: vec![OutputItem::Message {
                 id: "msg_1".to_string(),
                 role: "assistant".to_string(),
-                content: vec![crate::providers::codex::types::ContentPart {
+                content: vec![ContentPart {
                     part_type: "output_text".to_string(),
                     text: "Test output".to_string(),
                 }],
@@ -687,13 +313,14 @@ mod tests {
             error: None,
         };
         assert_eq!(
-            CodexProtocol::extract_text(&response),
+            shared::extract_text(&response),
             Some("Test output".to_string())
         );
     }
 
     #[test]
     fn test_extract_text_empty_output() {
+        use crate::providers::codex::types::ResponseResource;
         let response = ResponseResource {
             id: "resp_1".to_string(),
             status: "completed".to_string(),
@@ -702,7 +329,7 @@ mod tests {
             usage: None,
             error: None,
         };
-        assert_eq!(CodexProtocol::extract_text(&response), None);
+        assert_eq!(shared::extract_text(&response), None);
     }
 
     #[test]
@@ -755,7 +382,7 @@ mod tests {
     fn test_convert_s1_pure_text_user_message() {
         use crate::providers::message::UnifiedMessage;
         let msgs = [UnifiedMessage::user("hello")];
-        let items = CodexProtocol::convert_messages(&msgs);
+        let items = shared::convert_messages(&msgs);
 
         assert_eq!(items.len(), 1);
         assert_eq!(
@@ -775,7 +402,7 @@ mod tests {
             UnifiedMessage::assistant("Rust is a systems programming language."),
             UnifiedMessage::user("Tell me more."),
         ];
-        let items = CodexProtocol::convert_messages(&msgs);
+        let items = shared::convert_messages(&msgs);
 
         assert_eq!(items.len(), 3);
         match &items[0] {
@@ -816,7 +443,7 @@ mod tests {
                 },
             ],
         }];
-        let items = CodexProtocol::convert_messages(&msgs);
+        let items = shared::convert_messages(&msgs);
 
         assert_eq!(items.len(), 2);
         assert_eq!(
@@ -850,7 +477,7 @@ mod tests {
             "Found 5 results",
             false,
         )];
-        let items = CodexProtocol::convert_messages(&msgs);
+        let items = shared::convert_messages(&msgs);
 
         assert_eq!(items.len(), 1);
         assert_eq!(
@@ -877,7 +504,7 @@ mod tests {
             UnifiedMessage::tool_result("call_1", "search", "Tutorial list: ...", false),
             UnifiedMessage::assistant("Here are some Rust tutorials I found."),
         ];
-        let items = CodexProtocol::convert_messages(&msgs);
+        let items = shared::convert_messages(&msgs);
 
         // User(1) + FunctionCall(1) + FunctionCallOutput(1) + Assistant Message(1) = 4
         // Note: Assistant with only ToolCall has no text, so no Message emitted for it
@@ -937,7 +564,7 @@ mod tests {
                 },
             ],
         }];
-        let items = CodexProtocol::convert_messages(&msgs);
+        let items = shared::convert_messages(&msgs);
 
         // 1 Message (text) + 3 FunctionCalls = 4
         assert_eq!(items.len(), 4);
@@ -956,7 +583,7 @@ mod tests {
             "Permission denied",
             true, // is_error = true
         )];
-        let items = CodexProtocol::convert_messages(&msgs);
+        let items = shared::convert_messages(&msgs);
 
         assert_eq!(items.len(), 1);
         // convert_messages does not distinguish is_error — it just passes content through
@@ -979,7 +606,7 @@ mod tests {
             json_val.clone(),
             false,
         )];
-        let items = CodexProtocol::convert_messages(&msgs);
+        let items = shared::convert_messages(&msgs);
 
         assert_eq!(items.len(), 1);
         match &items[0] {
@@ -996,12 +623,12 @@ mod tests {
     fn test_convert_s9_completed_event_usage_extraction() {
         // Test that parse_sse_data + extract on a Completed event with usage works
         let data = r#"{"type":"response.completed","response":{"id":"resp_u","status":"completed","model":"codex-mini","output":[{"type":"message","id":"msg_1","role":"assistant","content":[{"type":"output_text","text":"done"}]}],"usage":{"input_tokens":10,"output_tokens":5,"total_tokens":15}}}"#;
-        let event = CodexProtocol::parse_sse_data(data).unwrap();
+        let event = shared::parse_sse_data(data).unwrap();
         match event {
             StreamEvent::Completed { response } => {
                 assert_eq!(response.status, "completed");
                 assert_eq!(
-                    CodexProtocol::extract_text(&response),
+                    shared::extract_text(&response),
                     Some("done".to_string())
                 );
                 let usage = response.usage.as_ref().expect("usage should be present");
@@ -1019,12 +646,12 @@ mod tests {
         // (the protocol maps incomplete → MaxTokens in parse_response, but we verify
         // the status field is correctly captured here)
         let data = r#"{"type":"response.completed","response":{"id":"resp_inc","status":"incomplete","model":"codex-mini","output":[{"type":"message","id":"msg_1","role":"assistant","content":[{"type":"output_text","text":"partial"}]}]}}"#;
-        let event = CodexProtocol::parse_sse_data(data).unwrap();
+        let event = shared::parse_sse_data(data).unwrap();
         match event {
             StreamEvent::Completed { response } => {
                 assert_eq!(response.status, "incomplete");
                 assert_eq!(
-                    CodexProtocol::extract_text(&response),
+                    shared::extract_text(&response),
                     Some("partial".to_string())
                 );
             }
