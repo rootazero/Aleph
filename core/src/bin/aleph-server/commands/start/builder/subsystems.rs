@@ -180,7 +180,7 @@ pub(in crate::commands::start) async fn initialize_channels(
     // Build slash commands once for all telegram instances (builtin tools only).
     // Namespace tools (e.g. "session_new", "agent_create") are grouped by prefix;
     // only the namespace itself (e.g. "/session") is registered as a slash command.
-    const NAMESPACES: &[&str] = &["session", "agent", "cron", "skill", "vault", "memory", "image"];
+    const NAMESPACES: &[&str] = &["session", "agent", "cron", "skill", "vault", "memory", "image", "video", "audio", "speech"];
 
     let slash_commands = if let Some(reg) = dispatch_registry {
         let tools = reg.list_builtin_tools().await;
@@ -212,6 +212,7 @@ pub(in crate::commands::start) async fn initialize_channels(
                 }
             }
         }
+
         commands
     } else {
         Vec::new()
