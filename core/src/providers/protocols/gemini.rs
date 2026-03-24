@@ -276,11 +276,28 @@ impl ProtocolAdapter for GeminiProtocol {
             url.push_str("&alt=sse");
         }
 
+        // Serialize to JSON value so we can add tool_config if needed
+        let mut body = serde_json::to_value(&request_body)
+            .map_err(|e| AlephError::provider(format!("Failed to serialize request: {}", e)))?;
+
+        // Add tool_config if tool_choice is specified
+        if let Some(ref choice) = payload.tool_choice {
+            use crate::providers::adapter::ToolChoice;
+            body["tool_config"] = match choice {
+                ToolChoice::Auto => serde_json::json!({"function_calling_config": {"mode": "AUTO"}}),
+                ToolChoice::Required => serde_json::json!({"function_calling_config": {"mode": "ANY"}}),
+                ToolChoice::Specific(name) => serde_json::json!({"function_calling_config": {
+                    "mode": "ANY", "allowed_function_names": [name]
+                }}),
+                ToolChoice::None => serde_json::json!({"function_calling_config": {"mode": "NONE"}}),
+            };
+        }
+
         Ok(self
             .client
             .post(&url)
             .header("Content-Type", "application/json")
-            .json(&request_body))
+            .json(&body))
     }
 
     async fn parse_response(&self, response: reqwest::Response) -> Result<ProviderResponse> {
@@ -339,8 +356,15 @@ impl ProtocolAdapter for GeminiProtocol {
             }
             if let Some(ref fc) = part.function_call {
                 provider_response.tool_calls.push(NativeToolCall {
-                    // Gemini does not assign tool call IDs; generate synthetic ones
-                    id: format!("gemini-fc-{}", index),
+                    // Gemini does not assign tool call IDs; generate stable synthetic ones
+                    id: {
+                        use std::hash::{Hash, Hasher};
+                        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                        fc.name.hash(&mut hasher);
+                        fc.args.to_string().hash(&mut hasher);
+                        index.hash(&mut hasher);
+                        format!("gemini-{:016x}", hasher.finish())
+                    },
                     name: fc.name.clone(),
                     arguments: fc.args.clone(),
                 });
@@ -364,6 +388,10 @@ impl ProtocolAdapter for GeminiProtocol {
 
     fn supports_native_tools(&self) -> bool {
         true
+    }
+
+    fn returns_tool_call_ids(&self) -> bool {
+        false
     }
 
     async fn parse_stream(
@@ -763,7 +791,7 @@ mod tests {
         assert_eq!(result.tool_calls.len(), 1);
         assert_eq!(result.tool_calls[0].name, "search");
         assert_eq!(result.tool_calls[0].arguments["query"], "Rust programming");
-        assert!(result.tool_calls[0].id.starts_with("gemini-fc-"));
+        assert!(result.tool_calls[0].id.starts_with("gemini-"));
         assert_eq!(result.stop_reason, StopReason::ToolUse);
     }
 
