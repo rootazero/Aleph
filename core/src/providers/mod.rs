@@ -22,6 +22,10 @@
 ///   - Supports: Google Gemini (all models)
 ///   - Configuration: Use presets (`gemini`, `google`)
 ///
+/// - **OpenAI Responses Protocol**: Handled by `HttpProvider` + `OpenAiResponsesProtocol` adapter
+///   - Supports: OpenAI /v1/responses API and compatible relay providers (OpenRouter, etc.)
+///   - Configuration: Use presets (e.g., `openrouter`) or set `protocol: "openai-responses"`
+///
 /// - **Native Protocols**: Have dedicated implementations
 ///   - `OllamaProvider` - Local Ollama models
 ///
@@ -127,6 +131,7 @@ pub fn create_mock_provider() -> Arc<dyn AiProvider> {
 /// - `"claude"` / `"anthropic"` - Anthropic Claude API (native)
 /// - `"gemini"` - Google Gemini API (native)
 /// - `"codex"` - Codex Responses API / ChatGPT subscription backend (via OAuth)
+/// - `"openai-responses"` - OpenAI Responses API (via HttpProvider), for OpenRouter etc.
 /// - `"ollama"` - Local Ollama models (native)
 pub fn create_provider(name: &str, mut config: ProviderConfig) -> Result<Arc<dyn AiProvider>> {
     // Initialize protocol registry if not already done
@@ -344,6 +349,25 @@ mod tests {
         let result = create_provider("test", config);
         assert!(result.is_err());
         assert!(matches!(result, Err(AlephError::InvalidConfig { .. })));
+    }
+
+    #[test]
+    fn test_create_openai_responses_provider() {
+        let mut config = ProviderConfig::test_config("gpt-4o");
+        config.protocol = Some("openai-responses".to_string());
+        config.base_url = Some("https://openrouter.ai/api".to_string());
+
+        let provider = create_provider("openrouter", config);
+        assert!(provider.is_ok(), "Should create openai-responses provider: {:?}", provider.err());
+        assert_eq!(provider.unwrap().name(), "openrouter");
+    }
+
+    #[test]
+    fn test_create_openrouter_via_preset() {
+        let config = ProviderConfig::test_config("openai/gpt-4o");
+        let provider = create_provider("openrouter", config);
+        assert!(provider.is_ok());
+        assert_eq!(provider.unwrap().name(), "openrouter");
     }
 
     #[test]

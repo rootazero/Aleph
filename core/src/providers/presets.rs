@@ -267,14 +267,14 @@ pub static PRESETS: Lazy<HashMap<&'static str, ProviderPreset>> = Lazy::new(|| {
         },
     );
 
-    // OpenRouter - Multi-model router
+    // OpenRouter - Multi-model router (uses Responses API)
     m.insert(
         "openrouter",
         ProviderPreset {
-            base_url: "https://openrouter.ai/api/v1",
-            protocol: "openai",
-            color: "#7c3aed",
-            default_model: "anthropic/claude-sonnet-4-5",
+            base_url: "https://openrouter.ai/api",
+            protocol: "openai-responses",
+            color: "#6467f2",
+            default_model: "openai/gpt-4o",
         },
     );
 
@@ -410,7 +410,7 @@ mod tests {
 
     #[test]
     fn test_presets_have_valid_protocol() {
-        let valid_protocols = ["openai", "anthropic", "gemini", "codex"];
+        let valid_protocols = ["openai", "openai-responses", "anthropic", "gemini", "codex"];
         for (name, preset) in PRESETS.iter() {
             assert!(
                 valid_protocols.contains(&preset.protocol),
@@ -454,6 +454,15 @@ mod tests {
     // =========================================================================
     // get_merged_preset tests
     // =========================================================================
+
+    #[test]
+    fn test_openrouter_preset_uses_responses() {
+        let preset = get_preset("openrouter");
+        assert!(preset.is_some());
+        let p = preset.unwrap();
+        assert_eq!(p.protocol, "openai-responses");
+        assert_eq!(p.base_url, "https://openrouter.ai/api");
+    }
 
     #[test]
     fn test_get_merged_preset_builtin_only() {
