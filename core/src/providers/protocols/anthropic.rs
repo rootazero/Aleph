@@ -7,22 +7,20 @@ use crate::config::ProviderConfig;
 use crate::dispatcher::DEFAULT_MAX_TOKENS;
 use crate::error::{AlephError, Result};
 use crate::providers::adapter::{
-    NativeToolCall, ProtocolAdapter, ProviderResponse, RequestPayload, StopReason,
-    TokenUsage,
+    ProtocolAdapter, RequestPayload, StopReason, TokenUsage,
 };
 use crate::providers::anthropic::{
-    AnthropicContentBlock, AnthropicTool, ContentBlock, ErrorResponse, ImageSource, Message,
-    MessageContent, MessagesRequest, MessagesResponse, SystemBlock, ThinkingBlock,
+    AnthropicTool, ContentBlock, ImageSource, Message,
+    MessageContent, MessagesRequest, SystemBlock, ThinkingBlock,
 };
 use crate::providers::delta::{IndexIdTracker, ProviderDelta};
 use crate::providers::message::UnifiedMessage;
 use async_trait::async_trait;
 use futures::stream::BoxStream;
-use futures::StreamExt;
-use futures::TryStreamExt as _;
+use futures::{StreamExt, TryStreamExt};
 use reqwest::Client;
 use std::collections::VecDeque;
-use tracing::{debug, error, warn};
+use tracing::{debug, warn};
 
 /// Anthropic API version header value
 const ANTHROPIC_VERSION: &str = "2023-06-01";
@@ -251,26 +249,6 @@ impl AnthropicProtocol {
         }
     }
 
-    /// Parse SSE line for streaming
-    fn parse_sse_line(line: &str) -> Option<String> {
-        if !line.starts_with("data: ") {
-            return None;
-        }
-
-        let data = &line[6..];
-        if data == "[DONE]" {
-            return None;
-        }
-
-        let parsed: serde_json::Value = serde_json::from_str(data).ok()?;
-
-        // Handle content_block_delta events
-        if parsed.get("type").and_then(|t| t.as_str()) == Some("content_block_delta") {
-            return parsed["delta"]["text"].as_str().map(|s| s.to_string());
-        }
-
-        None
-    }
 }
 
 #[async_trait]
@@ -379,124 +357,11 @@ impl ProtocolAdapter for AnthropicProtocol {
             .json(&body))
     }
 
-    async fn parse_response(&self, response: reqwest::Response) -> Result<ProviderResponse> {
-        let status = response.status();
-
-        if !status.is_success() {
-            let error_text = response.text().await.unwrap_or_default();
-
-            if let Ok(error_response) = serde_json::from_str::<ErrorResponse>(&error_text) {
-                let msg = error_response.error.message;
-                return match status.as_u16() {
-                    401 => Err(AlephError::authentication("Anthropic", &msg)),
-                    429 => Err(AlephError::rate_limit(format!("Anthropic: {}", msg))),
-                    _ => Err(AlephError::provider(format!("Anthropic error: {}", msg))),
-                };
-            }
-
-            return Err(AlephError::provider(format!(
-                "Anthropic error ({}): {}",
-                status, error_text
-            )));
-        }
-
-        let response_body: MessagesResponse = response.json().await.map_err(|e| {
-            error!(error = %e, "Failed to parse Anthropic response");
-            AlephError::provider(format!("Failed to parse response: {}", e))
-        })?;
-
-        let mut provider_response = ProviderResponse::default();
-
-        for block in &response_body.content {
-            match block {
-                AnthropicContentBlock::Text { text } => {
-                    // Append text (there may be multiple text blocks)
-                    match &mut provider_response.text {
-                        Some(existing) => {
-                            existing.push_str(text);
-                        }
-                        None => {
-                            provider_response.text = Some(text.clone());
-                        }
-                    }
-                }
-                AnthropicContentBlock::Thinking { thinking } => {
-                    provider_response.thinking = Some(thinking.clone());
-                }
-                AnthropicContentBlock::ToolUse { id, name, input } => {
-                    provider_response.tool_calls.push(NativeToolCall {
-                        id: id.clone(),
-                        name: name.clone(),
-                        arguments: input.clone(),
-                    });
-                }
-            }
-        }
-
-        provider_response.stop_reason = match response_body.stop_reason.as_deref() {
-            Some("end_turn") => StopReason::EndTurn,
-            Some("tool_use") => StopReason::ToolUse,
-            Some("max_tokens") => StopReason::MaxTokens,
-            _ => StopReason::Unknown,
-        };
-
-        if let Some(usage) = response_body.usage {
-            provider_response.usage = Some(TokenUsage {
-                input_tokens: usage.input_tokens,
-                output_tokens: usage.output_tokens,
-                cache_read_tokens: usage.cache_read_input_tokens,
-            });
-        }
-
-        Ok(provider_response)
-    }
-
     fn supports_native_tools(&self) -> bool {
         true
     }
 
-    async fn parse_stream(
-        &self,
-        response: reqwest::Response,
-    ) -> Result<BoxStream<'static, Result<String>>> {
-        let status = response.status();
-
-        if !status.is_success() {
-            let error_text = response.text().await.unwrap_or_default();
-            return Err(AlephError::provider(format!(
-                "Anthropic streaming error ({}): {}",
-                status, error_text
-            )));
-        }
-
-        let stream = response
-            .bytes_stream()
-            .map(move |chunk| {
-                let bytes = chunk.map_err(|e| AlephError::network(e.to_string()))?;
-                let text = String::from_utf8_lossy(&bytes);
-
-                let mut result = String::new();
-                for line in text.lines() {
-                    if let Some(content) = Self::parse_sse_line(line) {
-                        result.push_str(&content);
-                    }
-                }
-
-                Ok(result)
-            })
-            .filter(|r| {
-                let keep = match r {
-                    Ok(s) => !s.is_empty(),
-                    Err(_) => true,
-                };
-                std::future::ready(keep)
-            })
-            .boxed();
-
-        Ok(stream)
-    }
-
-    /// Real stream_deltas() implementation for Anthropic Messages streaming API.
+    /// Stream fine-grained delta events from the Anthropic Messages streaming API.
     ///
     /// Parses Anthropic SSE events and emits fine-grained [`ProviderDelta`] events.
     /// Uses the unfold+pending-queue pattern so that multi-delta events (e.g.
@@ -825,20 +690,6 @@ mod tests {
             AnthropicProtocol::map_think_level(&ThinkLevel::High),
             Some(20000)
         );
-    }
-
-    #[test]
-    fn test_parse_sse_content_block_delta() {
-        let line = r#"data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"Hello"}}"#;
-        let result = AnthropicProtocol::parse_sse_line(line);
-        assert_eq!(result, Some("Hello".to_string()));
-    }
-
-    #[test]
-    fn test_parse_sse_done() {
-        let line = "data: [DONE]";
-        let result = AnthropicProtocol::parse_sse_line(line);
-        assert_eq!(result, None);
     }
 
     #[test]

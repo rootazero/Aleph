@@ -7,7 +7,7 @@ use std::collections::HashMap;
 
 use crate::config::ProviderConfig;
 use crate::error::{AlephError, Result};
-use crate::providers::adapter::{ProtocolAdapter, ProviderResponse, RequestPayload, StopReason, TokenUsage};
+use crate::providers::adapter::{ProtocolAdapter, RequestPayload, StopReason, TokenUsage};
 use crate::providers::delta::ProviderDelta;
 use crate::providers::responses::shared;
 use crate::providers::responses::types::{ContextManagement, ResponsesRequest, StreamEvent, TextConfig};
@@ -15,7 +15,7 @@ use async_trait::async_trait;
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use reqwest::Client;
-use tracing::{debug, error, warn};
+use tracing::{debug, warn};
 
 // =============================================================================
 // ResponsesVariant
@@ -237,79 +237,7 @@ impl ProtocolAdapter for OpenAiResponsesProtocol {
         Ok(builder)
     }
 
-    async fn parse_response(&self, response: reqwest::Response) -> Result<ProviderResponse> {
-        let status = response.status();
-        if !status.is_success() {
-            let error_text = response.text().await.unwrap_or_default();
-            error!(status = %status, error = %error_text, "OpenAI Responses API error");
-            if status.as_u16() == 401 {
-                return Err(AlephError::provider(
-                    "OpenAI authentication failed — check your API key",
-                ));
-            }
-            if status.as_u16() == 429 {
-                return Err(AlephError::provider(
-                    "OpenAI rate limit reached — please try again later",
-                ));
-            }
-            return Err(AlephError::provider(format!(
-                "OpenAI Responses API error ({}): {}",
-                status, error_text
-            )));
-        }
-
-        let text = response
-            .text()
-            .await
-            .map_err(|e| AlephError::provider(format!("Failed to read OpenAI response: {}", e)))?;
-
-        let (result, tool_calls, is_incomplete, usage) = shared::parse_sse_body(&text)?;
-
-        let stop_reason = if is_incomplete {
-            StopReason::MaxTokens
-        } else if !tool_calls.is_empty() {
-            StopReason::ToolUse
-        } else {
-            StopReason::EndTurn
-        };
-
-        if !tool_calls.is_empty() {
-            Ok(ProviderResponse {
-                text: if result.is_empty() { None } else { Some(result) },
-                tool_calls,
-                stop_reason,
-                usage,
-                ..Default::default()
-            })
-        } else if result.is_empty() {
-            Err(AlephError::provider("Empty response from OpenAI Responses API"))
-        } else {
-            Ok(ProviderResponse {
-                text: Some(result),
-                stop_reason,
-                usage,
-                ..Default::default()
-            })
-        }
-    }
-
-    async fn parse_stream(
-        &self,
-        response: reqwest::Response,
-    ) -> Result<BoxStream<'static, Result<String>>> {
-        let status = response.status();
-        if !status.is_success() {
-            let error_text = response.text().await.unwrap_or_default();
-            return Err(AlephError::provider(format!(
-                "OpenAI Responses API error ({}): {}",
-                status, error_text
-            )));
-        }
-
-        shared::build_sse_stream(response)
-    }
-
-    /// Real stream_deltas() implementation for the Responses API.
+    /// Stream fine-grained delta events from the OpenAI Responses API SSE format.
     ///
     /// Uses a pending-queue unfold approach so that the `Completed` event (which
     /// produces both a `Usage` delta and a `Done` delta) can emit both without

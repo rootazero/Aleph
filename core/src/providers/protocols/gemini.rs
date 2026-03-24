@@ -7,12 +7,12 @@ use crate::config::ProviderConfig;
 use crate::dispatcher::DEFAULT_MAX_TOKENS;
 use crate::error::{AlephError, Result};
 use crate::providers::adapter::{
-    NativeToolCall, ProtocolAdapter, ProviderResponse, RequestPayload, StopReason, TokenUsage,
+    ProtocolAdapter, RequestPayload, StopReason, TokenUsage,
 };
 use crate::providers::delta::ProviderDelta;
 use crate::providers::gemini::{
     Content, GeminiFunctionDeclaration, GeminiToolConfig, GenerateContentRequest,
-    GenerateContentResponse, GenerationConfig, Part, ThinkingConfig,
+    GenerationConfig, Part, ThinkingConfig,
 };
 use crate::providers::message::UnifiedMessage;
 use async_trait::async_trait;
@@ -20,7 +20,7 @@ use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use reqwest::Client;
 use std::collections::VecDeque;
-use tracing::{debug, error};
+use tracing::debug;
 
 /// Google Gemini protocol adapter
 pub struct GeminiProtocol {
@@ -158,34 +158,6 @@ impl GeminiProtocol {
         }
     }
 
-    /// Parse SSE line for streaming
-    fn parse_sse_line(line: &str) -> Option<String> {
-        // Gemini SSE format: supports both "data: {json}" and plain JSON lines
-        if line.is_empty() || line.starts_with(':') {
-            return None;
-        }
-
-        // Extract JSON data (handle both "data: " prefix and plain JSON)
-        let json_str = line.strip_prefix("data: ").unwrap_or(line);
-
-        // Skip [DONE] marker
-        if json_str == "[DONE]" {
-            return None;
-        }
-
-        let parsed: serde_json::Value = serde_json::from_str(json_str).ok()?;
-
-        // Extract text from candidates[0].content.parts[0].text
-        parsed
-            .get("candidates")
-            .and_then(|c| c.get(0))
-            .and_then(|c| c.get("content"))
-            .and_then(|c| c.get("parts"))
-            .and_then(|p| p.get(0))
-            .and_then(|p| p.get("text"))
-            .and_then(|t| t.as_str())
-            .map(|s| s.to_string())
-    }
 }
 
 #[async_trait]
@@ -290,139 +262,8 @@ impl ProtocolAdapter for GeminiProtocol {
             .json(&body))
     }
 
-    async fn parse_response(&self, response: reqwest::Response) -> Result<ProviderResponse> {
-        let status = response.status();
-
-        if !status.is_success() {
-            let error_text = response.text().await.unwrap_or_default();
-            error!(status = %status, error = %error_text, "Gemini API error");
-
-            // Try to parse Gemini error response
-            if let Ok(error_response) = serde_json::from_str::<GenerateContentResponse>(&error_text)
-            {
-                if let Some(err) = error_response.error {
-                    let msg = err.message;
-                    return match status.as_u16() {
-                        401 | 403 => Err(AlephError::authentication("Gemini", &msg)),
-                        429 => Err(AlephError::rate_limit(format!("Gemini: {}", msg))),
-                        _ => Err(AlephError::provider(format!("Gemini error: {}", msg))),
-                    };
-                }
-            }
-
-            return Err(AlephError::provider(format!(
-                "Gemini error ({}): {}",
-                status, error_text
-            )));
-        }
-
-        let response_body: GenerateContentResponse = response.json().await.map_err(|e| {
-            error!(error = %e, "Failed to parse Gemini response");
-            AlephError::provider(format!("Failed to parse response: {}", e))
-        })?;
-
-        // Check for error in response
-        if let Some(err) = response_body.error {
-            return Err(AlephError::provider(format!(
-                "Gemini error: {}",
-                err.message
-            )));
-        }
-
-        let candidates = response_body
-            .candidates
-            .ok_or_else(|| AlephError::provider("No candidates in response"))?;
-        let candidate = candidates
-            .first()
-            .ok_or_else(|| AlephError::provider("No candidates in response"))?;
-
-        let mut provider_response = ProviderResponse::default();
-
-        // Iterate all parts: collect text and functionCall entries
-        let mut text_parts = Vec::new();
-        for (index, part) in candidate.content.parts.iter().enumerate() {
-            if let Some(ref text) = part.text {
-                text_parts.push(text.clone());
-            }
-            if let Some(ref fc) = part.function_call {
-                provider_response.tool_calls.push(NativeToolCall {
-                    // Gemini does not assign tool call IDs; generate stable synthetic ones
-                    id: {
-                        use std::hash::{Hash, Hasher};
-                        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-                        fc.name.hash(&mut hasher);
-                        fc.args.to_string().hash(&mut hasher);
-                        index.hash(&mut hasher);
-                        format!("gemini-{:016x}", hasher.finish())
-                    },
-                    name: fc.name.clone(),
-                    arguments: fc.args.clone(),
-                });
-            }
-        }
-
-        if !text_parts.is_empty() {
-            provider_response.text = Some(text_parts.join(""));
-        }
-
-        // Map Gemini finish reason to StopReason
-        provider_response.stop_reason = match candidate.finish_reason.as_deref() {
-            Some("STOP") => StopReason::EndTurn,
-            Some("FUNCTION_CALL") => StopReason::ToolUse,
-            Some("MAX_TOKENS") => StopReason::MaxTokens,
-            _ => StopReason::Unknown,
-        };
-
-        Ok(provider_response)
-    }
-
     fn supports_native_tools(&self) -> bool {
         true
-    }
-
-    fn returns_tool_call_ids(&self) -> bool {
-        false
-    }
-
-    async fn parse_stream(
-        &self,
-        response: reqwest::Response,
-    ) -> Result<BoxStream<'static, Result<String>>> {
-        let status = response.status();
-
-        if !status.is_success() {
-            let error_text = response.text().await.unwrap_or_default();
-            return Err(AlephError::provider(format!(
-                "Gemini streaming error ({}): {}",
-                status, error_text
-            )));
-        }
-
-        let stream = response
-            .bytes_stream()
-            .map(move |chunk| {
-                let bytes = chunk.map_err(|e| AlephError::network(e.to_string()))?;
-                let text = String::from_utf8_lossy(&bytes);
-
-                let mut result = String::new();
-                for line in text.lines() {
-                    if let Some(content) = Self::parse_sse_line(line) {
-                        result.push_str(&content);
-                    }
-                }
-
-                Ok(result)
-            })
-            .filter(|r| {
-                let keep = match r {
-                    Ok(s) => !s.is_empty(),
-                    Err(_) => true,
-                };
-                std::future::ready(keep)
-            })
-            .boxed();
-
-        Ok(stream)
     }
 
     /// Stream fine-grained [`ProviderDelta`] events from a Gemini SSE response.
@@ -697,6 +538,8 @@ fn parse_gemini_sse_chunk(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::providers::adapter::{NativeToolCall, ProviderResponse};
+    use crate::providers::gemini::GenerateContentResponse;
     use crate::providers::message::UnifiedMessage;
 
     #[test]
@@ -776,33 +619,6 @@ mod tests {
         } else {
             panic!("Expected text part");
         }
-    }
-
-    #[test]
-    fn test_parse_sse_line() {
-        // Valid SSE line with "data:" prefix
-        let line_with_prefix = r#"data: {"candidates":[{"content":{"parts":[{"text":"Hello"}]}}]}"#;
-        assert_eq!(
-            GeminiProtocol::parse_sse_line(line_with_prefix),
-            Some("Hello".to_string())
-        );
-
-        // Valid SSE line without prefix (plain JSON)
-        let line_plain = r#"{"candidates":[{"content":{"parts":[{"text":"World"}]}}]}"#;
-        assert_eq!(
-            GeminiProtocol::parse_sse_line(line_plain),
-            Some("World".to_string())
-        );
-
-        // [DONE] marker with prefix
-        let done_with_prefix = "data: [DONE]";
-        assert!(GeminiProtocol::parse_sse_line(done_with_prefix).is_none());
-
-        // Empty line
-        assert!(GeminiProtocol::parse_sse_line("").is_none());
-
-        // Comment line
-        assert!(GeminiProtocol::parse_sse_line(": keep-alive").is_none());
     }
 
     #[test]

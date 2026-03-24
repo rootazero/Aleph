@@ -111,10 +111,14 @@ impl<'a> RequestPayload<'a> {
     }
 }
 
-/// Protocol adapter trait for building requests and parsing responses
+/// Protocol adapter trait for building requests and streaming responses
 ///
 /// Each protocol (OpenAI, Anthropic, Gemini, etc.) implements this trait
 /// to handle protocol-specific serialization and deserialization.
+///
+/// All adapters are stream-first: `stream_deltas()` is the only required
+/// output path. Non-streaming and legacy `parse_response()` / `parse_stream()`
+/// paths have been removed.
 #[async_trait]
 pub trait ProtocolAdapter: Send + Sync {
     /// Build an HTTP request from the payload.
@@ -134,56 +138,26 @@ pub trait ProtocolAdapter: Send + Sync {
         config: &ProviderConfig,
     ) -> Result<reqwest::RequestBuilder>;
 
-    /// Parse a non-streaming response
-    ///
-    /// # Arguments
-    /// * `response` - The HTTP response from the API
-    ///
-    /// # Returns
-    /// A structured `ProviderResponse` containing text, tool calls, etc.
-    async fn parse_response(&self, response: reqwest::Response) -> Result<ProviderResponse>;
-
     /// Whether this protocol supports native tool_use
     ///
     /// Protocols that support native tool calling (e.g., Anthropic, OpenAI)
-    /// should override this to return `true` once their `parse_response()`
-    /// implementation can extract `NativeToolCall` from the response.
+    /// return `true` to enable tool extraction from delta streams.
     fn supports_native_tools(&self) -> bool {
         false
     }
 
-    /// Whether this protocol supports parallel tool calls in one response
-    fn supports_parallel_tools(&self) -> bool { true }
-    /// Whether this protocol returns tool call IDs (false for Gemini)
-    fn returns_tool_call_ids(&self) -> bool { true }
-    /// Whether this protocol supports tool_choice control
-    fn supports_tool_choice(&self) -> bool { true }
     /// Whether this protocol supports strict JSON schema mode
     fn supports_strict_schema(&self) -> bool { false }
 
-    /// Parse a streaming response (SSE)
+    /// Stream fine-grained delta events from an HTTP response.
     ///
-    /// # Arguments
-    /// * `response` - The HTTP response with chunked body
-    ///
-    /// # Returns
-    /// A stream of text chunks
-    async fn parse_stream(
-        &self,
-        response: reqwest::Response,
-    ) -> Result<BoxStream<'static, Result<String>>>;
-
-    /// Stream-first output path. Returns fine-grained delta events.
-    ///
-    /// Default implementation bridges via parse_response() for backward compatibility.
-    /// Each adapter should override this with a real streaming implementation.
+    /// All adapters must implement this method directly — there is no default
+    /// bridge implementation. Each adapter parses its own SSE/streaming format
+    /// and emits typed [`ProviderDelta`] events.
     async fn stream_deltas(
         &self,
         response: reqwest::Response,
-    ) -> Result<BoxStream<'static, Result<ProviderDelta>>> {
-        let provider_response = self.parse_response(response).await?;
-        Ok(crate::providers::delta::response_to_delta_stream_result(provider_response))
-    }
+    ) -> Result<BoxStream<'static, Result<ProviderDelta>>>;
 
     /// Get the protocol name for logging
     fn name(&self) -> &'static str;

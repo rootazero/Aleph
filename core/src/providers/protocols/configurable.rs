@@ -59,6 +59,56 @@ impl ConfigurableProtocol {
             renderer,
         })
     }
+
+    /// Parse a custom-mode response using the protocol's response mapping.
+    ///
+    /// Used by `stream_deltas()` to bridge custom protocols that cannot produce
+    /// fine-grained delta streams — reads the full body and wraps it as a
+    /// single-shot delta stream.
+    async fn parse_custom_response(&self, response: reqwest::Response) -> Result<ProviderResponse> {
+        let custom = self.definition.custom.as_ref().ok_or_else(|| {
+            AlephError::invalid_config(
+                "Protocol must either extend a base protocol or provide custom configuration",
+            )
+        })?;
+
+        debug!(
+            protocol = %self.definition.name,
+            "Parsing response using custom response mapping"
+        );
+
+        let body = response.text().await.map_err(|e| {
+            AlephError::provider(format!("Failed to read response body: {}", e))
+        })?;
+
+        let json: serde_json::Value = serde_json::from_str(&body).map_err(|e| {
+            AlephError::provider(format!(
+                "Failed to parse response as JSON: {}. Body: {}",
+                e, body
+            ))
+        })?;
+
+        // Check for error if error path is specified
+        if let Some(ref error_path) = custom.response_mapping.error {
+            if let Ok(error_msg) = extract_value(&json, error_path) {
+                if !error_msg.is_empty() && error_msg != "null" {
+                    return Err(AlephError::provider(format!(
+                        "Provider returned error: {}",
+                        error_msg
+                    )));
+                }
+            }
+        }
+
+        let content = extract_value(&json, &custom.response_mapping.content)?;
+
+        debug!(
+            content_len = content.len(),
+            "Successfully parsed custom protocol response"
+        );
+
+        Ok(ProviderResponse::text_only(content))
+    }
 }
 
 #[async_trait]
@@ -216,92 +266,6 @@ impl ProtocolAdapter for ConfigurableProtocol {
         ))
     }
 
-    async fn parse_response(&self, response: reqwest::Response) -> Result<ProviderResponse> {
-        // Minimal mode: delegate to base protocol
-        if let Some(ref base) = self.base_protocol {
-            debug!(
-                protocol = %self.definition.name,
-                base = %base.name(),
-                "Parsing response using base protocol"
-            );
-            return base.parse_response(response).await;
-        }
-
-        // Custom mode: parse using response mapping
-        if let Some(ref custom) = self.definition.custom {
-            debug!(
-                protocol = %self.definition.name,
-                "Parsing response using custom response mapping"
-            );
-
-            // Read response body as JSON
-            let body = response.text().await.map_err(|e| {
-                AlephError::provider(format!("Failed to read response body: {}", e))
-            })?;
-
-            let json: serde_json::Value = serde_json::from_str(&body).map_err(|e| {
-                AlephError::provider(format!(
-                    "Failed to parse response as JSON: {}. Body: {}",
-                    e, body
-                ))
-            })?;
-
-            // Check for error if error path is specified
-            if let Some(ref error_path) = custom.response_mapping.error {
-                if let Ok(error_msg) = extract_value(&json, error_path) {
-                    // If we successfully extracted an error message, return it as an error
-                    if !error_msg.is_empty() && error_msg != "null" {
-                        return Err(AlephError::provider(format!(
-                            "Provider returned error: {}",
-                            error_msg
-                        )));
-                    }
-                }
-                // If error extraction fails, it means no error field exists, which is fine
-            }
-
-            // Extract content using content path
-            let content = extract_value(&json, &custom.response_mapping.content)?;
-
-            debug!(
-                content_len = content.len(),
-                "Successfully parsed custom protocol response"
-            );
-
-            Ok(ProviderResponse::text_only(content))
-        } else {
-            Err(AlephError::invalid_config(
-                "Protocol must either extend a base protocol or provide custom configuration",
-            ))
-        }
-    }
-
-    async fn parse_stream(
-        &self,
-        response: reqwest::Response,
-    ) -> Result<BoxStream<'static, Result<String>>> {
-        // Minimal mode: delegate to base protocol
-        if let Some(ref base) = self.base_protocol {
-            debug!(
-                protocol = %self.definition.name,
-                base = %base.name(),
-                "Parsing stream using base protocol"
-            );
-            return base.parse_stream(response).await;
-        }
-
-        // Custom mode: streaming not yet implemented (complex feature, defer to later)
-        if self.definition.custom.is_some() {
-            return Err(AlephError::provider(
-                "Custom protocol streaming not yet implemented (deferred to future enhancement)",
-            ));
-        }
-
-        Err(AlephError::invalid_config(
-            "Protocol must either extend a base protocol or provide custom configuration",
-        ))
-    }
-
     async fn stream_deltas(
         &self,
         response: reqwest::Response,
@@ -317,13 +281,13 @@ impl ProtocolAdapter for ConfigurableProtocol {
         }
 
         // Custom mode: arbitrary API formats cannot produce fine-grained deltas.
-        // Bridge via parse_response() → response_to_delta_stream_result().
+        // Bridge via parse_custom_response() → response_to_delta_stream_result().
         if self.definition.custom.is_some() {
             debug!(
                 protocol = %self.definition.name,
-                "Streaming deltas via bridge (custom mode — parse_response wrapping)"
+                "Streaming deltas via bridge (custom mode — parse_custom_response wrapping)"
             );
-            let provider_response = self.parse_response(response).await?;
+            let provider_response = self.parse_custom_response(response).await?;
             return Ok(crate::providers::delta::response_to_delta_stream_result(provider_response));
         }
 

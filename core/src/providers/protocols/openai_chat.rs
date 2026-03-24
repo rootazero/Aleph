@@ -6,12 +6,11 @@
 use crate::config::ProviderConfig;
 use crate::error::{AlephError, Result};
 use crate::providers::adapter::{
-    NativeToolCall, ProtocolAdapter, ProviderResponse, RequestPayload, StopReason,
-    TokenUsage,
+    ProtocolAdapter, RequestPayload, StopReason, TokenUsage,
 };
 use crate::providers::delta::{IndexIdTracker, ProviderDelta};
 use crate::providers::openai::{
-    ChatCompletionResponse, ContentBlock as OaiContentBlock, ImageUrl, Message, MessageContent,
+    ContentBlock as OaiContentBlock, ImageUrl, Message, MessageContent,
     OpenAiFunction, OpenAiTool,
 };
 use crate::providers::message::UnifiedMessage;
@@ -22,7 +21,7 @@ use futures::TryStreamExt;
 use reqwest::Client;
 use serde_json::json;
 use std::collections::VecDeque;
-use tracing::{debug, error, warn};
+use tracing::{debug, warn};
 
 // ── Tool-name sanitization ──────────────────────────────────────────────
 //
@@ -30,16 +29,10 @@ use tracing::{debug, error, warn};
 // Aleph tool names now use underscores (e.g. "cron_manage"), but this
 // sanitizer is kept as a safety net for any external/plugin tool names.
 
-use super::openai_common::tools::{
-    sanitize_tool_name as sanitize_tool_name_pub,
-    desanitize_tool_name as desanitize_tool_name_pub,
-};
+use super::openai_common::tools::sanitize_tool_name as sanitize_tool_name_pub;
 
 /// Replace characters not in `[a-zA-Z0-9_-]` with underscores (internal alias).
 fn sanitize_tool_name(name: &str) -> String { sanitize_tool_name_pub(name) }
-
-/// Identity function — tool names now use underscores natively (internal alias).
-fn desanitize_tool_name(name: &str) -> String { desanitize_tool_name_pub(name) }
 
 /// OpenAI protocol adapter
 pub struct OpenAiProtocol {
@@ -234,20 +227,6 @@ impl OpenAiProtocol {
         }
     }
 
-    /// Parse a single SSE line and extract content
-    fn parse_sse_line(line: &str) -> Option<String> {
-        if !line.starts_with("data: ") {
-            return None;
-        }
-        let data = &line[6..];
-        if data == "[DONE]" {
-            return None;
-        }
-        let parsed: serde_json::Value = serde_json::from_str(data).ok()?;
-        parsed["choices"][0]["delta"]["content"]
-            .as_str()
-            .map(|s| s.to_string())
-    }
 }
 
 #[async_trait]
@@ -355,121 +334,7 @@ impl ProtocolAdapter for OpenAiProtocol {
             .json(&body))
     }
 
-    async fn parse_response(&self, response: reqwest::Response) -> Result<ProviderResponse> {
-        let status = response.status();
-
-        if !status.is_success() {
-            let error_text = response.text().await.unwrap_or_default();
-            error!(status = %status, error = %error_text, "OpenAI API error");
-            return Err(AlephError::provider(format!(
-                "API error ({}): {}",
-                status, error_text
-            )));
-        }
-
-        let completion: ChatCompletionResponse = response.json().await.map_err(|e| {
-            error!(error = %e, "Failed to parse OpenAI response");
-            AlephError::provider(format!("Failed to parse response: {}", e))
-        })?;
-
-        let choice = completion
-            .choices
-            .first()
-            .ok_or_else(|| AlephError::provider("No response choices"))?;
-
-        let mut provider_response = ProviderResponse::default();
-
-        // Extract text content (nullable when tool_calls present)
-        if let Some(ref content) = choice.message.content {
-            if !content.is_empty() {
-                provider_response.text = Some(content.clone());
-            }
-        }
-
-        // Extract tool calls
-        if let Some(ref tool_calls) = choice.message.tool_calls {
-            for tc in tool_calls {
-                let arguments: serde_json::Value =
-                    serde_json::from_str(&tc.function.arguments).unwrap_or_else(|e| {
-                        error!(
-                            tool = %tc.function.name,
-                            args = %tc.function.arguments,
-                            error = %e,
-                            "Failed to parse tool call arguments, using empty object"
-                        );
-                        serde_json::json!({
-                            "_raw_arguments": tc.function.arguments,
-                            "_parse_error": e.to_string()
-                        })
-                    });
-                provider_response.tool_calls.push(NativeToolCall {
-                    id: tc.id.clone(),
-                    // Pass through tool name (identity — underscore names are native now).
-                    name: desanitize_tool_name(&tc.function.name),
-                    arguments,
-                });
-            }
-        }
-
-        // Map finish_reason to StopReason
-        provider_response.stop_reason = match choice.finish_reason.as_deref() {
-            Some("stop") => StopReason::EndTurn,
-            Some("tool_calls") => StopReason::ToolUse,
-            Some("length") => StopReason::MaxTokens,
-            _ => StopReason::Unknown,
-        };
-
-        // Extract usage statistics
-        if let Some(ref usage) = completion.usage {
-            provider_response.usage = Some(TokenUsage {
-                input_tokens: usage.prompt_tokens,
-                output_tokens: usage.completion_tokens,
-                cache_read_tokens: None,
-            });
-        }
-
-        Ok(provider_response)
-    }
-
-    async fn parse_stream(
-        &self,
-        response: reqwest::Response,
-    ) -> Result<BoxStream<'static, Result<String>>> {
-        let status = response.status();
-
-        if !status.is_success() {
-            let error_text = response.text().await.unwrap_or_default();
-            return Err(AlephError::provider(format!(
-                "API error ({}): {}",
-                status, error_text
-            )));
-        }
-
-        let stream = response
-            .bytes_stream()
-            .map_err(|e| AlephError::network(format!("Stream error: {}", e)))
-            .try_filter_map(|chunk| async move {
-                let text = std::str::from_utf8(&chunk)
-                    .map_err(|e| AlephError::provider(format!("UTF-8 error: {}", e)))?;
-
-                let mut result = String::new();
-                for line in text.lines() {
-                    if let Some(content) = Self::parse_sse_line(line) {
-                        result.push_str(&content);
-                    }
-                }
-
-                if result.is_empty() {
-                    Ok(None)
-                } else {
-                    Ok(Some(result))
-                }
-            });
-
-        Ok(Box::pin(stream))
-    }
-
-    /// Real stream_deltas() implementation for OpenAI Chat Completions.
+    /// Stream fine-grained delta events from the OpenAI Chat Completions SSE format.
     ///
     /// Parses SSE events from the Chat Completions streaming format and emits
     /// fine-grained [`ProviderDelta`] events. Uses the unfold+pending-queue pattern
@@ -750,7 +615,7 @@ mod tests {
     use crate::config::ProviderConfig;
     use crate::providers::message::UnifiedMessage;
     use crate::providers::openai::{
-        OpenAiFunctionCall, OpenAiToolCall,
+        ChatCompletionResponse, OpenAiFunctionCall, OpenAiToolCall,
     };
 
     #[test]
@@ -809,23 +674,6 @@ mod tests {
             OpenAiProtocol::map_think_level(&ThinkLevel::XHigh),
             Some("high".to_string())
         );
-    }
-
-    #[test]
-    fn test_parse_sse_line() {
-        // Valid SSE line
-        let line = r#"data: {"choices":[{"delta":{"content":"Hello"}}]}"#;
-        assert_eq!(OpenAiProtocol::parse_sse_line(line), Some("Hello".to_string()));
-
-        // Done marker
-        let done = "data: [DONE]";
-        assert!(OpenAiProtocol::parse_sse_line(done).is_none());
-
-        // Empty line
-        assert!(OpenAiProtocol::parse_sse_line("").is_none());
-
-        // Non-data line
-        assert!(OpenAiProtocol::parse_sse_line("event: message").is_none());
     }
 
     #[test]
