@@ -191,8 +191,14 @@ pub(in crate::commands::start) async fn register_agent_handlers(
     // Build generation provider registry (independent of chat AI provider)
     let generation_registry = {
         let mut registry = GenerationProviderRegistry::new();
-        for (name, provider_cfg, gen_type) in app_config.generation.merged_providers() {
+        for (name, mut provider_cfg, gen_type) in app_config.generation.merged_providers() {
             if !provider_cfg.enabled { continue; }
+            // Resolve API key from vault if not in config
+            if provider_cfg.api_key.as_ref().map(|k| k.is_empty()).unwrap_or(true) {
+                if let Ok(Some(secret)) = shared_token_mgr.get_secret(&format!("gen:{}", name)) {
+                    provider_cfg.api_key = Some(secret.expose().to_string());
+                }
+            }
             if provider_cfg.api_key.as_ref().map(|k| k.is_empty()).unwrap_or(true) { continue; }
             match gen_providers::create_provider(&name, &provider_cfg, gen_type) {
                 Ok(provider) => {
