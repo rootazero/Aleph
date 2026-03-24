@@ -157,7 +157,7 @@ Keep this managed block so 'openspec update' can refresh the instructions.
 | `just build` | Release build (WASM + server) |
 | `just test-all` | All tests (core + desktop + proptest) |
 | `just clippy` | Lint |
-| `just release x.x.x` | **发版**: 自动生成 changelog + 更新 VERSION + 提交推送 + 触发 GitHub workflow |
+| `just release x.x.x` | **发版**: 更新 VERSION + 提交推送 + 触发 GitHub workflow（需先写 changelog） |
 
 ### 版本管理
 
@@ -165,7 +165,15 @@ Keep this managed block so 'openspec update' can refresh the instructions.
 - **禁止** 在代码中硬编码版本号，使用 `env!("ALEPH_VERSION")` 代替 `env!("CARGO_PKG_VERSION")`
 - Panel System Info、Gateway 版本、MCP/ACP 协议版本、CLI --version 全部从 VERSION 文件读取
 - GitHub workflow 也读取 VERSION 文件作为 release tag
-- 发版流程：`just release x.x.x` — 一键完成（changelog 生成 + 版本更新 + 推送 + 触发四平台构建）
+
+### 发版流程 (Release Process)
+
+**由 AI (Claude) 驱动的两步流程：**
+
+1. **AI 写版本日志** — 读取 git log，总结 10-20 条有价值的内容，分为 Added（新增功能）和 Fixed（修复）两个分类，写入 CHANGELOG.md
+2. **运行 `just release x.x.x`** — 自动完成：版本号更新 + 提交推送 + 触发四平台构建
+
+`just release` 会校验 CHANGELOG.md 中是否有对应版本的条目，没有则拒绝发布。GitHub Release 页面自动从 CHANGELOG.md 提取版本日志。
 
 ### Feature Flags
 

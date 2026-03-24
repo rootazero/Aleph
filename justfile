@@ -162,70 +162,19 @@ deps:
 
 # ─── Release ───
 
-# Create a new release: bump version, generate changelog, commit, push, trigger workflow
+# Release a new version: bump VERSION, commit, push, trigger workflow
+# CHANGELOG.md should be written by AI (Claude) BEFORE running this command.
 # Usage: just release 0.3.0
 release version:
     #!/usr/bin/env bash
     set -euo pipefail
     VERSION="{{version}}"
 
-    # Get previous version tag
-    PREV_TAG=$(git tag --sort=-v:refname | head -1 || echo "")
-
-    # Generate changelog from git log
-    echo "Generating changelog for v${VERSION}..."
-    if [ -n "$PREV_TAG" ]; then
-        COMMITS=$(git log "${PREV_TAG}..HEAD" --pretty=format:"- %s" --no-merges | grep -v "Co-Authored-By" || true)
-        RANGE="${PREV_TAG}..HEAD"
-    else
-        COMMITS=$(git log --pretty=format:"- %s" --no-merges -50 | grep -v "Co-Authored-By" || true)
-        RANGE="(all)"
-    fi
-
-    # Categorize commits
-    FEATURES=$(echo "$COMMITS" | grep -iE "^- (feat|add|new|desktop|core:.*add|core:.*implement)" || true)
-    FIXES=$(echo "$COMMITS" | grep -iE "^- (fix|bugfix|hotfix)" || true)
-    BUILD=$(echo "$COMMITS" | grep -iE "^- (build|ci|release|docs)" || true)
-    REFACTOR=$(echo "$COMMITS" | grep -iE "^- (refactor|clean|remove|phase)" || true)
-
-    # Build changelog entry to a temp file (avoids shell escaping issues)
-    ENTRY_FILE=$(mktemp)
-    echo "## [${VERSION}] - $(date +%Y-%m-%d)" > "$ENTRY_FILE"
-    echo "" >> "$ENTRY_FILE"
-    if [ -n "$FEATURES" ]; then
-        echo "### Added" >> "$ENTRY_FILE"
-        echo "$FEATURES" >> "$ENTRY_FILE"
-        echo "" >> "$ENTRY_FILE"
-    fi
-    if [ -n "$FIXES" ]; then
-        echo "### Fixed" >> "$ENTRY_FILE"
-        echo "$FIXES" >> "$ENTRY_FILE"
-        echo "" >> "$ENTRY_FILE"
-    fi
-    if [ -n "$REFACTOR" ]; then
-        echo "### Changed" >> "$ENTRY_FILE"
-        echo "$REFACTOR" >> "$ENTRY_FILE"
-        echo "" >> "$ENTRY_FILE"
-    fi
-    if [ -n "$BUILD" ]; then
-        echo "### Build" >> "$ENTRY_FILE"
-        echo "$BUILD" >> "$ENTRY_FILE"
-        echo "" >> "$ENTRY_FILE"
-    fi
-
-    # Insert entry into CHANGELOG.md after "## [Unreleased]" line
-    if [ -f CHANGELOG.md ]; then
-        TMPLOG=$(mktemp)
-        awk -v entry_file="$ENTRY_FILE" '
-            /^## \[Unreleased\]/ {
-                print; print "";
-                while ((getline line < entry_file) > 0) print line;
-                next
-            }
-            { print }
-        ' CHANGELOG.md > "$TMPLOG"
-        mv "$TMPLOG" CHANGELOG.md
-        rm -f "$ENTRY_FILE"
+    # Verify CHANGELOG.md has an entry for this version
+    if ! grep -q "## \[${VERSION}\]" CHANGELOG.md 2>/dev/null; then
+        echo "Error: No changelog entry found for [${VERSION}] in CHANGELOG.md"
+        echo "Write the changelog first, then run: just release ${VERSION}"
+        exit 1
     fi
 
     # Update VERSION file
