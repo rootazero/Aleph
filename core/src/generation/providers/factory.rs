@@ -1,8 +1,9 @@
 //! Factory function for creating generation providers from configuration.
 
 use super::*;
+use super::url_normalize::resolve_base_url;
 use crate::config::GenerationProviderConfig;
-use crate::generation::{GenerationError, GenerationProvider, GenerationResult};
+use crate::generation::{GenerationError, GenerationProvider, GenerationResult, GenerationType};
 use crate::sync_primitives::Arc;
 
 /// Create a generation provider from configuration
@@ -43,7 +44,7 @@ use crate::sync_primitives::Arc;
 ///     model: Some("dall-e-3".to_string()),
 ///     ..Default::default()
 /// };
-/// let provider = create_provider("dalle", &config)?;
+/// let provider = create_provider("dalle", &config, GenerationType::Image)?;
 ///
 /// // Create a TTS provider
 /// let tts_config = GenerationProviderConfig {
@@ -52,7 +53,7 @@ use crate::sync_primitives::Arc;
 ///     model: Some("tts-1-hd".to_string()),
 ///     ..Default::default()
 /// };
-/// let tts_provider = create_provider("tts", &tts_config)?;
+/// let tts_provider = create_provider("tts", &tts_config, GenerationType::Speech)?;
 ///
 /// // Create an OpenAI-compatible provider
 /// let compat_config = GenerationProviderConfig {
@@ -64,12 +65,15 @@ use crate::sync_primitives::Arc;
 ///     color: "#ff0000".to_string(),
 ///     ..Default::default()
 /// };
-/// let compat_provider = create_provider("my-service", &compat_config)?;
+/// let compat_provider = create_provider("my-service", &compat_config, GenerationType::Image)?;
 /// ```
 pub fn create_provider(
     name: &str,
     config: &GenerationProviderConfig,
+    _gen_type: GenerationType,
 ) -> GenerationResult<Arc<dyn GenerationProvider>> {
+    let resolved_url = config.base_url.as_deref().map(resolve_base_url);
+
     let api_key = config.api_key.clone().ok_or_else(|| {
         GenerationError::authentication(
             format!("API key is required for provider '{}'", name),
@@ -82,12 +86,14 @@ pub fn create_provider(
             api_key,
             config.base_url.clone(),
             config.default_model().map(|s| s.to_string()),
+            resolved_url,
         )),
         "openai_tts" | "tts" => Arc::new(OpenAiTtsProvider::new(
             api_key,
             config.base_url.clone(),
             config.default_model().map(|s| s.to_string()),
             config.defaults.voice.clone(),
+            resolved_url,
         )?),
         "openai_compat" => {
             let base_url = config.base_url.clone().ok_or_else(|| {

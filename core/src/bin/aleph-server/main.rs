@@ -55,24 +55,6 @@ mod daemon;
 mod commands;
 mod server_init;
 
-/// Extract base URL from a potentially full API endpoint URL.
-/// Strips versioned API paths (/v1/..., /v2/..., etc.)
-fn extract_base_url(url: &str) -> String {
-    let url = url.trim().trim_end_matches('/');
-    for (i, _) in url.match_indices("/v") {
-        let rest = &url[i + 2..];
-        if let Some(ch) = rest.chars().next() {
-            if ch.is_ascii_digit() {
-                let after_digit = &rest[1..];
-                if after_digit.is_empty() || after_digit.starts_with('/') {
-                    return url[..i].to_string();
-                }
-            }
-        }
-    }
-    url.to_string()
-}
-
 use clap::Parser;
 use cli::{Args, AuditAction, Command, DevicesAction, PairingAction, PluginAction, PluginsAction};
 

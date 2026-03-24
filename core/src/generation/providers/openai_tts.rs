@@ -24,7 +24,7 @@
 //! use alephcore::generation::{GenerationProvider, GenerationRequest, GenerationParams};
 //! use alephcore::generation::providers::OpenAiTtsProvider;
 //!
-//! let provider = OpenAiTtsProvider::new("sk-...", None, None, None)?;
+//! let provider = OpenAiTtsProvider::new("sk-...", None, None, None, None)?;
 //!
 //! let request = GenerationRequest::speech("Hello, how are you today?")
 //!     .with_params(GenerationParams::builder()
@@ -37,6 +37,7 @@
 //! // output.data contains the audio bytes
 //! ```
 
+use super::url_normalize::ResolvedUrl;
 use crate::generation::{
     GenerationData, GenerationError, GenerationMetadata, GenerationOutput, GenerationProvider,
     GenerationRequest, GenerationResult, GenerationType, VoiceInfo,
@@ -92,6 +93,7 @@ pub const AVAILABLE_FORMATS: [&str; 4] = ["mp3", "opus", "aac", "flac"];
 ///     None, // Use default endpoint
 ///     None, // Use default model (tts-1)
 ///     None, // Use default voice (alloy)
+///     None, // Use default URL resolution
 /// ).unwrap();
 ///
 /// assert_eq!(provider.name(), "openai-tts");
@@ -102,12 +104,14 @@ pub struct OpenAiTtsProvider {
     client: Client,
     /// OpenAI API key
     api_key: String,
-    /// API endpoint (e.g., "https://api.openai.com")
+    /// API endpoint — fully resolved speech URL
     endpoint: String,
     /// Model to use (e.g., "tts-1", "tts-1-hd")
     model: String,
     /// Default voice to use
     default_voice: String,
+    /// Resolved URL for deriving secondary endpoints (e.g., STT)
+    resolved: ResolvedUrl,
 }
 
 impl OpenAiTtsProvider {
@@ -131,7 +135,7 @@ impl OpenAiTtsProvider {
     /// use alephcore::generation::providers::OpenAiTtsProvider;
     ///
     /// // Default configuration
-    /// let provider = OpenAiTtsProvider::new("sk-xxx", None, None, None).unwrap();
+    /// let provider = OpenAiTtsProvider::new("sk-xxx", None, None, None, None).unwrap();
     ///
     /// // Custom voice
     /// let custom_provider = OpenAiTtsProvider::new(
@@ -139,6 +143,7 @@ impl OpenAiTtsProvider {
     ///     None,
     ///     Some("tts-1-hd".to_string()),
     ///     Some("nova".to_string()),
+    ///     None,
     /// ).unwrap();
     /// ```
     pub fn new<S: Into<String>>(
@@ -146,6 +151,7 @@ impl OpenAiTtsProvider {
         base_url: Option<String>,
         model: Option<String>,
         default_voice: Option<String>,
+        resolved_url: Option<ResolvedUrl>,
     ) -> GenerationResult<Self> {
         let api_key = api_key.into();
 
@@ -188,14 +194,12 @@ impl OpenAiTtsProvider {
             .build()
             .expect("Failed to build HTTP client");
 
-        // Normalize base URL: remove trailing slash and /v1 suffix to prevent duplicate /v1
-        // e.g., "https://api.example.com/v1" -> "https://api.example.com"
-        let endpoint = base_url
-            .unwrap_or_else(|| DEFAULT_ENDPOINT.to_string())
-            .trim_end_matches('/')
-            .trim_end_matches("/v1")
-            .trim_end_matches('/')
-            .to_string();
+        // Use pre-resolved URL if available, otherwise resolve from base_url
+        let resolved = resolved_url.unwrap_or_else(|| {
+            let url = base_url.unwrap_or_else(|| DEFAULT_ENDPOINT.to_string());
+            super::url_normalize::resolve_base_url(&url)
+        });
+        let endpoint = resolved.primary_endpoint(GenerationType::Speech);
 
         Ok(Self {
             client,
@@ -203,12 +207,19 @@ impl OpenAiTtsProvider {
             endpoint,
             model,
             default_voice: voice,
+            resolved,
         })
     }
 
     /// Get the full URL for the audio/speech endpoint
     fn speech_url(&self) -> String {
-        format!("{}/v1/audio/speech", self.endpoint)
+        self.endpoint.clone()
+    }
+
+    /// Get the STT (speech-to-text / transcription) endpoint URL.
+    /// Returns None for custom URLs or when secondary endpoint is unavailable.
+    pub fn stt_url(&self) -> Option<String> {
+        self.resolved.secondary_endpoint(GenerationType::Speech)
     }
 
     /// Build the API request body from a GenerationRequest
@@ -530,10 +541,10 @@ mod tests {
 
     #[test]
     fn test_new_with_defaults() {
-        let provider = OpenAiTtsProvider::new("sk-test-key", None, None, None).unwrap();
+        let provider = OpenAiTtsProvider::new("sk-test-key", None, None, None, None).unwrap();
 
         assert_eq!(provider.api_key, "sk-test-key");
-        assert_eq!(provider.endpoint, DEFAULT_ENDPOINT);
+        assert_eq!(provider.endpoint, format!("{}/v1/audio/speech", DEFAULT_ENDPOINT));
         assert_eq!(provider.model, DEFAULT_MODEL);
         assert_eq!(provider.default_voice, DEFAULT_VOICE);
     }
@@ -545,16 +556,17 @@ mod tests {
             Some("https://custom.openai.com".to_string()),
             None,
             None,
+            None,
         )
         .unwrap();
 
-        assert_eq!(provider.endpoint, "https://custom.openai.com");
+        assert_eq!(provider.endpoint, "https://custom.openai.com/v1/audio/speech");
     }
 
     #[test]
     fn test_new_with_custom_model() {
         let provider =
-            OpenAiTtsProvider::new("sk-test-key", None, Some("tts-1-hd".to_string()), None)
+            OpenAiTtsProvider::new("sk-test-key", None, Some("tts-1-hd".to_string()), None, None)
                 .unwrap();
 
         assert_eq!(provider.model, "tts-1-hd");
@@ -563,14 +575,14 @@ mod tests {
     #[test]
     fn test_new_with_custom_voice() {
         let provider =
-            OpenAiTtsProvider::new("sk-test-key", None, None, Some("nova".to_string())).unwrap();
+            OpenAiTtsProvider::new("sk-test-key", None, None, Some("nova".to_string()), None).unwrap();
 
         assert_eq!(provider.default_voice, "nova");
     }
 
     #[test]
     fn test_new_empty_api_key_fails() {
-        let result = OpenAiTtsProvider::new("", None, None, None);
+        let result = OpenAiTtsProvider::new("", None, None, None, None);
 
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -579,7 +591,7 @@ mod tests {
 
     #[test]
     fn test_new_whitespace_api_key_fails() {
-        let result = OpenAiTtsProvider::new("   ", None, None, None);
+        let result = OpenAiTtsProvider::new("   ", None, None, None, None);
 
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -589,7 +601,7 @@ mod tests {
     #[test]
     fn test_new_invalid_voice_fails() {
         let result =
-            OpenAiTtsProvider::new("sk-test-key", None, None, Some("invalid-voice".to_string()));
+            OpenAiTtsProvider::new("sk-test-key", None, None, Some("invalid-voice".to_string()), None);
 
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -602,7 +614,7 @@ mod tests {
     #[test]
     fn test_new_invalid_model_fails() {
         let result =
-            OpenAiTtsProvider::new("sk-test-key", None, Some("invalid-model".to_string()), None);
+            OpenAiTtsProvider::new("sk-test-key", None, Some("invalid-model".to_string()), None, None);
 
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -614,7 +626,7 @@ mod tests {
 
     #[test]
     fn test_speech_url() {
-        let provider = OpenAiTtsProvider::new("sk-test-key", None, None, None).unwrap();
+        let provider = OpenAiTtsProvider::new("sk-test-key", None, None, None, None).unwrap();
         assert_eq!(
             provider.speech_url(),
             "https://api.openai.com/v1/audio/speech"
@@ -623,6 +635,7 @@ mod tests {
         let custom_provider = OpenAiTtsProvider::new(
             "sk-test-key",
             Some("https://api.example.com".to_string()),
+            None,
             None,
             None,
         )
@@ -641,9 +654,10 @@ mod tests {
             Some("https://ai.t8star.cn/v1".to_string()),
             None,
             None,
+            None,
         )
         .unwrap();
-        assert_eq!(provider.endpoint, "https://ai.t8star.cn");
+        assert_eq!(provider.endpoint, "https://ai.t8star.cn/v1/audio/speech");
         assert_eq!(
             provider.speech_url(),
             "https://ai.t8star.cn/v1/audio/speech"
@@ -657,9 +671,9 @@ mod tests {
             Some("https://api.example.com/".to_string()),
             None,
             None,
+            None,
         )
         .unwrap();
-        assert_eq!(provider.endpoint, "https://api.example.com");
     }
 
     #[test]
@@ -669,22 +683,23 @@ mod tests {
             Some("https://api.example.com/v1/".to_string()),
             None,
             None,
+            None,
         )
         .unwrap();
-        assert_eq!(provider.endpoint, "https://api.example.com");
+        assert_eq!(provider.endpoint, "https://api.example.com/v1/audio/speech");
     }
 
     // === Trait implementation tests ===
 
     #[test]
     fn test_name() {
-        let provider = OpenAiTtsProvider::new("sk-test-key", None, None, None).unwrap();
+        let provider = OpenAiTtsProvider::new("sk-test-key", None, None, None, None).unwrap();
         assert_eq!(provider.name(), "openai-tts");
     }
 
     #[test]
     fn test_supported_types() {
-        let provider = OpenAiTtsProvider::new("sk-test-key", None, None, None).unwrap();
+        let provider = OpenAiTtsProvider::new("sk-test-key", None, None, None, None).unwrap();
         let types = provider.supported_types();
 
         assert_eq!(types.len(), 1);
@@ -693,7 +708,7 @@ mod tests {
 
     #[test]
     fn test_supports() {
-        let provider = OpenAiTtsProvider::new("sk-test-key", None, None, None).unwrap();
+        let provider = OpenAiTtsProvider::new("sk-test-key", None, None, None, None).unwrap();
 
         assert!(provider.supports(GenerationType::Speech));
         assert!(!provider.supports(GenerationType::Image));
@@ -703,17 +718,17 @@ mod tests {
 
     #[test]
     fn test_color() {
-        let provider = OpenAiTtsProvider::new("sk-test-key", None, None, None).unwrap();
+        let provider = OpenAiTtsProvider::new("sk-test-key", None, None, None, None).unwrap();
         assert_eq!(provider.color(), "#10a37f");
     }
 
     #[test]
     fn test_default_model() {
-        let provider = OpenAiTtsProvider::new("sk-test-key", None, None, None).unwrap();
+        let provider = OpenAiTtsProvider::new("sk-test-key", None, None, None, None).unwrap();
         assert_eq!(provider.default_model(), Some("tts-1"));
 
         let custom_provider =
-            OpenAiTtsProvider::new("sk-test-key", None, Some("tts-1-hd".to_string()), None)
+            OpenAiTtsProvider::new("sk-test-key", None, Some("tts-1-hd".to_string()), None, None)
                 .unwrap();
         assert_eq!(custom_provider.default_model(), Some("tts-1-hd"));
     }
@@ -771,7 +786,7 @@ mod tests {
 
     #[test]
     fn test_build_request_body_minimal() {
-        let provider = OpenAiTtsProvider::new("sk-test-key", None, None, None).unwrap();
+        let provider = OpenAiTtsProvider::new("sk-test-key", None, None, None, None).unwrap();
         let request = GenerationRequest::speech("Hello world");
 
         let body = provider.build_request_body(&request);
@@ -785,7 +800,7 @@ mod tests {
 
     #[test]
     fn test_build_request_body_with_params() {
-        let provider = OpenAiTtsProvider::new("sk-test-key", None, None, None).unwrap();
+        let provider = OpenAiTtsProvider::new("sk-test-key", None, None, None, None).unwrap();
         let request = GenerationRequest::speech("Hello world").with_params(
             GenerationParams::builder()
                 .model("tts-1-hd")
@@ -937,7 +952,7 @@ mod tests {
         use crate::sync_primitives::Arc;
 
         let provider: Arc<dyn GenerationProvider> =
-            Arc::new(OpenAiTtsProvider::new("sk-test", None, None, None).unwrap());
+            Arc::new(OpenAiTtsProvider::new("sk-test", None, None, None, None).unwrap());
 
         assert_eq!(provider.name(), "openai-tts");
         assert!(provider.supports(GenerationType::Speech));

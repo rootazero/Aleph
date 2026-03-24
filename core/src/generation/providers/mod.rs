@@ -30,7 +30,7 @@
 //!     ..Default::default()
 //! };
 //!
-//! let provider = create_provider("dalle", &config)?;
+//! let provider = create_provider("dalle", &config, alephcore::generation::GenerationType::Image)?;
 //! ```
 
 pub mod elevenlabs;

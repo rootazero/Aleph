@@ -15,7 +15,7 @@ fn test_create_openai_image_provider() {
         ..Default::default()
     };
 
-    let provider = create_provider("dalle", &config).unwrap();
+    let provider = create_provider("dalle", &config, GenerationType::Image).unwrap();
 
     assert_eq!(provider.name(), "openai-image");
     assert!(provider.supports(GenerationType::Image));
@@ -30,7 +30,7 @@ fn test_create_openai_image_provider_with_dalle_type() {
         ..Default::default()
     };
 
-    let provider = create_provider("dalle", &config).unwrap();
+    let provider = create_provider("dalle", &config, GenerationType::Image).unwrap();
 
     assert_eq!(provider.name(), "openai-image");
     assert!(provider.supports(GenerationType::Image));
@@ -44,7 +44,7 @@ fn test_create_openai_image_provider_with_openai_image_type() {
         ..Default::default()
     };
 
-    let provider = create_provider("dalle", &config).unwrap();
+    let provider = create_provider("dalle", &config, GenerationType::Image).unwrap();
 
     assert_eq!(provider.name(), "openai-image");
 }
@@ -62,7 +62,7 @@ fn test_create_openai_tts_provider() {
         ..Default::default()
     };
 
-    let provider = create_provider("tts", &config).unwrap();
+    let provider = create_provider("tts", &config, GenerationType::Speech).unwrap();
 
     assert_eq!(provider.name(), "openai-tts");
     assert!(provider.supports(GenerationType::Speech));
@@ -77,7 +77,7 @@ fn test_create_openai_tts_provider_with_tts_type() {
         ..Default::default()
     };
 
-    let provider = create_provider("tts", &config).unwrap();
+    let provider = create_provider("tts", &config, GenerationType::Speech).unwrap();
 
     assert_eq!(provider.name(), "openai-tts");
     assert!(provider.supports(GenerationType::Speech));
@@ -95,7 +95,7 @@ fn test_create_openai_compat_provider() {
         ..Default::default()
     };
 
-    let provider = create_provider("my-proxy", &config).unwrap();
+    let provider = create_provider("my-proxy", &config, GenerationType::Image).unwrap();
 
     assert_eq!(provider.name(), "my-proxy");
     assert_eq!(provider.color(), "#ff5500");
@@ -113,7 +113,7 @@ fn test_create_provider_missing_api_key() {
         ..Default::default()
     };
 
-    let result = create_provider("dalle", &config);
+    let result = create_provider("dalle", &config, GenerationType::Image);
 
     assert!(result.is_err());
     match result {
@@ -131,7 +131,7 @@ fn test_create_provider_unknown_type() {
         ..Default::default()
     };
 
-    let result = create_provider("test", &config);
+    let result = create_provider("test", &config, GenerationType::Image);
 
     assert!(result.is_err());
     match result {
@@ -157,7 +157,7 @@ fn test_create_compat_missing_base_url() {
         ..Default::default()
     };
 
-    let result = create_provider("my-proxy", &config);
+    let result = create_provider("my-proxy", &config, GenerationType::Image);
 
     assert!(result.is_err());
     match result {
@@ -183,7 +183,7 @@ fn test_create_compat_with_custom_base_url() {
         ..Default::default()
     };
 
-    let provider = create_provider("custom", &config).unwrap();
+    let provider = create_provider("custom", &config, GenerationType::Image).unwrap();
 
     // Provider should be created successfully
     assert_eq!(provider.name(), "custom");
@@ -199,7 +199,7 @@ fn test_create_openai_image_with_custom_base_url() {
         ..Default::default()
     };
 
-    let provider = create_provider("azure-dalle", &config).unwrap();
+    let provider = create_provider("azure-dalle", &config, GenerationType::Image).unwrap();
 
     assert_eq!(provider.name(), "openai-image");
     assert_eq!(provider.default_model(), Some("dall-e-3"));
@@ -217,7 +217,7 @@ fn test_create_tts_invalid_voice_fails() {
         ..Default::default()
     };
 
-    let result = create_provider("tts", &config);
+    let result = create_provider("tts", &config, GenerationType::Speech);
 
     assert!(result.is_err());
     match result {
@@ -238,7 +238,7 @@ fn test_provider_is_send_sync() {
         ..Default::default()
     };
 
-    let provider = create_provider("test", &config).unwrap();
+    let provider = create_provider("test", &config, GenerationType::Image).unwrap();
     assert_send_sync::<std::sync::Arc<dyn GenerationProvider>>();
 
     // Provider can be used across threads
@@ -256,7 +256,7 @@ fn test_create_stability_provider() {
         ..Default::default()
     };
 
-    let provider = create_provider("stability", &config).unwrap();
+    let provider = create_provider("stability", &config, GenerationType::Image).unwrap();
 
     assert_eq!(provider.name(), "stability-image");
     assert!(provider.supports(GenerationType::Image));
@@ -274,7 +274,7 @@ fn test_create_stability_provider_with_sdxl_type() {
         ..Default::default()
     };
 
-    let provider = create_provider("sdxl", &config).unwrap();
+    let provider = create_provider("sdxl", &config, GenerationType::Image).unwrap();
 
     assert_eq!(provider.name(), "stability-image");
     assert!(provider.supports(GenerationType::Image));
@@ -288,7 +288,7 @@ fn test_create_stability_provider_with_stability_image_type() {
         ..Default::default()
     };
 
-    let provider = create_provider("stability", &config).unwrap();
+    let provider = create_provider("stability", &config, GenerationType::Image).unwrap();
 
     assert_eq!(provider.name(), "stability-image");
 }
@@ -304,7 +304,7 @@ fn test_create_replicate_provider() {
         ..Default::default()
     };
 
-    let provider = create_provider("replicate", &config).unwrap();
+    let provider = create_provider("replicate", &config, GenerationType::Image).unwrap();
 
     assert_eq!(provider.name(), "replicate");
     assert!(provider.supports(GenerationType::Image));
@@ -334,7 +334,7 @@ fn test_create_replicate_provider_with_model_mappings() {
         ..Default::default()
     };
 
-    let provider = create_provider("replicate", &config).unwrap();
+    let provider = create_provider("replicate", &config, GenerationType::Image).unwrap();
 
     assert_eq!(provider.name(), "replicate");
 }
@@ -348,7 +348,7 @@ fn test_create_replicate_provider_with_custom_base_url() {
         ..Default::default()
     };
 
-    let provider = create_provider("replicate", &config).unwrap();
+    let provider = create_provider("replicate", &config, GenerationType::Image).unwrap();
 
     assert_eq!(provider.name(), "replicate");
 }
@@ -368,7 +368,7 @@ fn test_create_elevenlabs_provider() {
         ..Default::default()
     };
 
-    let provider = create_provider("elevenlabs", &config).unwrap();
+    let provider = create_provider("elevenlabs", &config, GenerationType::Speech).unwrap();
 
     assert_eq!(provider.name(), "elevenlabs");
     assert!(provider.supports(GenerationType::Speech));
@@ -383,7 +383,7 @@ fn test_create_elevenlabs_provider_default_model() {
         ..Default::default()
     };
 
-    let provider = create_provider("elevenlabs", &config).unwrap();
+    let provider = create_provider("elevenlabs", &config, GenerationType::Speech).unwrap();
 
     assert_eq!(provider.name(), "elevenlabs");
     assert!(provider.supports(GenerationType::Speech));
@@ -403,7 +403,7 @@ fn test_create_elevenlabs_provider_with_voice_id() {
         ..Default::default()
     };
 
-    let provider = create_provider("elevenlabs", &config).unwrap();
+    let provider = create_provider("elevenlabs", &config, GenerationType::Speech).unwrap();
 
     assert_eq!(provider.name(), "elevenlabs");
 }
@@ -419,7 +419,7 @@ fn test_create_google_imagen_provider() {
         ..Default::default()
     };
 
-    let provider = create_provider("google-imagen", &config).unwrap();
+    let provider = create_provider("google-imagen", &config, GenerationType::Image).unwrap();
 
     assert_eq!(provider.name(), "google-imagen");
     assert!(provider.supports(GenerationType::Image));
@@ -434,7 +434,7 @@ fn test_create_google_imagen_provider_with_imagen_type() {
         ..Default::default()
     };
 
-    let provider = create_provider("imagen", &config).unwrap();
+    let provider = create_provider("imagen", &config, GenerationType::Image).unwrap();
 
     assert_eq!(provider.name(), "google-imagen");
     assert!(provider.supports(GenerationType::Image));
@@ -448,7 +448,7 @@ fn test_create_google_imagen_provider_with_google_type() {
         ..Default::default()
     };
 
-    let provider = create_provider("google", &config).unwrap();
+    let provider = create_provider("google", &config, GenerationType::Image).unwrap();
 
     assert_eq!(provider.name(), "google-imagen");
 }
@@ -464,7 +464,7 @@ fn test_create_google_veo_provider() {
         ..Default::default()
     };
 
-    let provider = create_provider("google-veo", &config).unwrap();
+    let provider = create_provider("google-veo", &config, GenerationType::Video).unwrap();
 
     assert_eq!(provider.name(), "google-veo");
     assert!(provider.supports(GenerationType::Video));
@@ -479,7 +479,7 @@ fn test_create_google_veo_provider_with_veo_type() {
         ..Default::default()
     };
 
-    let provider = create_provider("veo", &config).unwrap();
+    let provider = create_provider("veo", &config, GenerationType::Video).unwrap();
 
     assert_eq!(provider.name(), "google-veo");
     assert!(provider.supports(GenerationType::Video));
@@ -494,7 +494,7 @@ fn test_create_google_veo_provider_veo3() {
         ..Default::default()
     };
 
-    let provider = create_provider("veo3", &config).unwrap();
+    let provider = create_provider("veo3", &config, GenerationType::Video).unwrap();
 
     assert_eq!(provider.name(), "google-veo");
     assert_eq!(provider.default_model(), Some("veo-3.1-generate-preview"));
@@ -510,7 +510,7 @@ fn test_create_midjourney_provider() {
         ..Default::default()
     };
 
-    let provider = create_provider("midjourney", &config).unwrap();
+    let provider = create_provider("midjourney", &config, GenerationType::Image).unwrap();
 
     assert_eq!(provider.name(), "midjourney");
     assert!(provider.supports(GenerationType::Image));
@@ -525,7 +525,7 @@ fn test_create_midjourney_provider_with_mj_type() {
         ..Default::default()
     };
 
-    let provider = create_provider("mj", &config).unwrap();
+    let provider = create_provider("mj", &config, GenerationType::Image).unwrap();
 
     assert_eq!(provider.name(), "midjourney");
     assert!(provider.supports(GenerationType::Image));
@@ -540,7 +540,7 @@ fn test_create_midjourney_provider_fast_mode() {
         ..Default::default()
     };
 
-    let provider = create_provider("midjourney", &config).unwrap();
+    let provider = create_provider("midjourney", &config, GenerationType::Image).unwrap();
 
     assert_eq!(provider.name(), "midjourney");
     assert!(provider.supports(GenerationType::Image));
@@ -555,7 +555,7 @@ fn test_create_midjourney_provider_relax_mode() {
         ..Default::default()
     };
 
-    let provider = create_provider("midjourney", &config).unwrap();
+    let provider = create_provider("midjourney", &config, GenerationType::Image).unwrap();
 
     assert_eq!(provider.name(), "midjourney");
     assert!(provider.supports(GenerationType::Image));
@@ -570,7 +570,7 @@ fn test_create_midjourney_provider_with_custom_endpoint() {
         ..Default::default()
     };
 
-    let provider = create_provider("midjourney", &config).unwrap();
+    let provider = create_provider("midjourney", &config, GenerationType::Image).unwrap();
 
     assert_eq!(provider.name(), "midjourney");
 }
@@ -584,7 +584,7 @@ fn test_create_midjourney_provider_with_color() {
         ..Default::default()
     };
 
-    let provider = create_provider("midjourney", &config).unwrap();
+    let provider = create_provider("midjourney", &config, GenerationType::Image).unwrap();
 
     assert_eq!(provider.name(), "midjourney");
     assert_eq!(provider.color(), "#FF0000");

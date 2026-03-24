@@ -168,6 +168,23 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // Execute the tool directly
         match self.tool_registry.execute_tool(tool_id, arguments).await {
             Ok(result) => {
+                // Extract _media from tool output and push to pending_media buffer
+                if let Some(media_val) = result.get("_media") {
+                    if let Ok(items) = serde_json::from_value::<Vec<crate::gateway::media::MediaItem>>(media_val.clone()) {
+                        if !items.is_empty() {
+                            info!(
+                                run_id = %run_id,
+                                tool = %tool_id,
+                                count = items.len(),
+                                "Fast-path: extracted _media from tool output"
+                            );
+                            let mut pending = request.pending_media.lock().unwrap_or_else(|e| e.into_inner());
+                            let remaining = crate::gateway::media::MAX_MEDIA_PER_RUN.saturating_sub(pending.len());
+                            pending.extend(items.into_iter().take(remaining));
+                        }
+                    }
+                }
+
                 let response = extract_tool_response(&result);
 
                 // Stream response
