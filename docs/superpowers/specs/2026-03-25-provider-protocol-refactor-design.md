@@ -553,3 +553,146 @@ Chat and Responses message formats differ significantly (`messages[]` vs `input[
 - **AiProvider trait**: `process()` signature unchanged
 - **AgentLoop external behavior**: `LoopRunResult` unchanged
 - **Protocol registry**: `"codex"` name preserved, maps to `OpenAiResponsesProtocol + ResponsesVariant::codex()`
+
+---
+
+## Section 8: Review Fixes — Critical & Important Issues
+
+Addressed from spec review feedback.
+
+### C1. ConfigurableProtocol and GeminiProtocol Migration
+
+Both implement `ProtocolAdapter` and must be updated for the new trait signature.
+
+**GeminiProtocol**: Straightforward — Gemini already has SSE-like streaming. Implement `stream_deltas()` with the same pattern as other adapters, mapping Gemini's `generateContent` stream events to `ProviderDelta`.
+
+**ConfigurableProtocol**: Two modes require different handling:
+- **Minimal mode** (delegates to base adapter): Trivially delegates `stream_deltas()` to `self.base.stream_deltas(response)`
+- **Custom mode** (template-rendered endpoints + JSONPath parsing): Cannot produce fine-grained deltas from arbitrary API formats. Solution: keep a `parse_custom_response()` internal method that produces a `ProviderResponse`, then wrap it via `response_to_delta_stream()` (the same test helper from Section 5). This is a one-shot "fake stream" — acceptable because custom protocols are inherently non-streaming.
+
+### C2. HttpProvider PII/Leak/Error Handling Preservation
+
+The Section 2 `HttpProvider` code was a simplified illustration. The actual implementation preserves all existing safety logic:
+
+```rust
+impl AiProvider for HttpProvider {
+    async fn process(&self, payload: RequestPayload<'_>) -> Result<ProviderResponse> {
+        // 1. PII filtering on outbound messages (PRESERVED)
+        let filtered_payload = self.filter_pii(payload)?;
+
+        // 2. Secret leak detection on outbound content (PRESERVED)
+        self.check_outbound_leaks(&filtered_payload)?;
+
+        // 3. Build request via adapter
+        let request = self.adapter.build_request(&filtered_payload, &self.config)?;
+
+        // 4. Send with timeout/network error mapping (PRESERVED)
+        let response = self.send_with_error_handling(request).await?;
+
+        // 5. Stream deltas and collect
+        let stream = self.adapter.stream_deltas(response).await?;
+        let mut collector = DeltaCollector::new();
+        pin_mut!(stream);
+        while let Some(delta) = stream.next().await {
+            collector.push(delta?);
+        }
+        let provider_response = collector.finish();
+
+        // 6. Secret leak detection on inbound response (PRESERVED)
+        self.check_inbound_leaks(&provider_response)?;
+
+        // 7. Response validation (PRESERVED)
+        provider_response.validate()?;
+
+        Ok(provider_response)
+    }
+}
+```
+
+### C3. AiProvider → LoopProvider Bridge
+
+The bridge struct that wraps `AiProvider` into `LoopProvider` needs to produce a `Stream<ProviderDelta>`. Two options:
+
+**Option chosen**: Add `fn stream_raw()` to `HttpProvider` (not to `AiProvider` trait) that exposes the raw delta stream WITH PII/leak filtering on outbound only (inbound leak check deferred to caller). The bridge calls `stream_raw()` directly:
+
+```rust
+impl LoopProvider for AiProviderBridge {
+    async fn stream(&self, messages: &[UnifiedMessage], system_prompt: &str, tools: &[ToolDefinition])
+        -> anyhow::Result<BoxStream<'static, anyhow::Result<ProviderDelta>>>
+    {
+        // For HttpProvider: use stream_raw() for real streaming
+        // For other AiProvider impls: fallback to process() + response_to_delta_stream()
+        if let Some(http) = self.provider.as_http_provider() {
+            let payload = build_payload(messages, system_prompt, tools);
+            return http.stream_raw(payload).await;
+        }
+
+        // Fallback: call process() and wrap
+        let response = self.provider.process(payload).await?;
+        Ok(response_to_delta_stream(response))
+    }
+}
+```
+
+This keeps `AiProvider::process()` unchanged (backward compatible) while enabling real streaming through the hot path.
+
+### I1. Removed Capability Flags
+
+Added to Section 7 "Methods Removed" table:
+
+| Method | Reason |
+|--------|--------|
+| `supports_parallel_tools()` | Only Gemini overrides to false; handled internally in Gemini adapter |
+| `returns_tool_call_ids()` | Only Gemini overrides to false; handled internally in Gemini adapter |
+| `supports_tool_choice()` | Default true everywhere; remove dead abstraction |
+
+### I2. `is_streaming` Parameter for ConfigurableProtocol
+
+`ConfigurableProtocol` custom mode uses `is_streaming` to choose between `endpoints.chat` and `endpoints.stream`. Since custom-mode protocols go through the `parse_custom_response()` fallback path (Section C1 above), they always use the non-streaming endpoint. The `build_request()` signature change is safe.
+
+If a custom protocol YAML defines a `stream` endpoint, it will be ignored in this refactor. This is acceptable — custom protocols are rare and can be updated later.
+
+### I3. ToolCallEnd Only for Tool-Use Blocks
+
+Clarification for Anthropic `stream_deltas()`: `content_block_stop` only emits `ToolCallEnd` when `block_ids.contains_key(index)`. Text and thinking blocks' `content_block_stop` events are silently consumed with no delta emitted.
+
+### I4. DeltaCollector JSON Parse Error Handling
+
+`DeltaCollector::finish()` uses `serde_json::from_str` with fallback:
+
+```rust
+fn finish_tool_calls(&self) -> Vec<NativeToolCall> {
+    self.tool_calls.iter().map(|(id, (name, args_str))| {
+        let arguments = serde_json::from_str(args_str)
+            .unwrap_or_else(|e| {
+                tracing::warn!(tool_id = %id, error = %e, "Malformed tool call arguments, using raw string");
+                Value::String(args_str.clone())
+            });
+        NativeToolCall { id: id.clone(), name: name.clone(), arguments }
+    }).collect()
+}
+```
+
+### I5. ProviderDelta::Error vs Result::Err Contract
+
+Clear distinction:
+
+- **`Result::Err`** in the stream: Infrastructure failures — HTTP disconnect, invalid SSE framing, UTF-8 decode error. These are unrecoverable; the stream is broken.
+- **`ProviderDelta::Error(msg)`**: Provider-level semantic errors — Anthropic `error` SSE event, OpenAI `response.failed` event within an otherwise valid stream. The stream may continue (e.g., error followed by retry), or the consumer may choose to abort.
+
+Updated `ProviderDelta::Error` doc comment accordingly.
+
+### S1. IndexIdTracker Location
+
+Moved from `openai_common::sse` to `providers/adapter.rs` alongside `ProviderDelta`. This is a protocol-neutral utility — both Anthropic and OpenAI Chat adapters depend on `adapter.rs` already, not on each other.
+
+### S3. Auto-Enable store/context_management Configurability
+
+Changed from URL-based auto-detection to `ProviderConfig`-driven:
+
+```rust
+// In ProviderConfig (or provider-level settings)
+pub enable_server_context: Option<bool>,  // None = auto (true for official OpenAI)
+```
+
+`is_openai_official()` only applies when `enable_server_context` is `None` (default). Users can explicitly set `false` to opt out.
