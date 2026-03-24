@@ -531,6 +531,8 @@ impl BuiltinToolRegistry {
             serde_json::to_value(schema_for!(crate::builtin_tools::scratchpad::ScratchpadArgs)).unwrap_or_default());
         reg(tools, "clawhub", crate::builtin_tools::clawhub::ClawHubTool::DESCRIPTION,
             serde_json::to_value(schema_for!(crate::builtin_tools::clawhub::ClawHubArgs)).unwrap_or_default());
+        reg(tools, "media_send", crate::builtin_tools::media_send::MediaSendTool::DESCRIPTION,
+            serde_json::to_value(schema_for!(crate::builtin_tools::media_send::MediaSendArgs)).unwrap_or_default());
     }
 
     /// Register metadata for optional tools (only when their dependencies are available)

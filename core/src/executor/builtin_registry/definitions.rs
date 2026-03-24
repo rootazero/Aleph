@@ -297,6 +297,12 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         description: "Manage channel pairing codes — generate new codes or list active ones for Telegram/other channels",
         requires_config: true, // Requires ChannelRegistry (deferred injection)
     },
+    // Media send tool — no dependencies, just passes URLs through to ReplyEmitter
+    BuiltinToolDefinition {
+        name: "media_send",
+        description: "Send media files (images, videos, audio) directly to the user in the chat",
+        requires_config: false,
+    },
     // voice_mode_set is a LLM tool only — NOT a slash command.
     // Use /voice on|off instead. Excluded from BUILTIN_TOOL_DEFINITIONS
     // to avoid appearing in command lists.
@@ -380,6 +386,7 @@ pub fn create_tool_boxed(
             })
         }
         "clawhub" => Some(Box::new(crate::builtin_tools::clawhub::ClawHubTool::new())),
+        "media_send" => Some(Box::new(crate::builtin_tools::media_send::MediaSendTool::new())),
         // Task/team coordination tools require CoordTaskStore + AgentMessageBus at runtime,
         // created dynamically in BuiltinToolRegistry::with_config().
         "task_create" | "task_update" | "task_list" | "task_wait"

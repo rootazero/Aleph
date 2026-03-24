@@ -73,6 +73,7 @@ pub mod team_manage;
 pub mod channel_manage;
 pub mod vault_store;
 pub mod voice_tools;
+pub mod media_send;
 
 pub use agent_manage::{
     AgentCreateArgs, AgentCreateOutput, AgentCreateTool, AgentDeleteArgs, AgentDeleteOutput,

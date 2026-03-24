@@ -548,6 +548,11 @@ impl ToolRegistry for BuiltinToolRegistry {
             // ClawHub tool
             "clawhub" => Box::pin(async move { self.clawhub_tool.call_json(arguments).await }),
 
+            // Media send tool — no dependencies, always available
+            "media_send" => Box::pin(async move {
+                crate::builtin_tools::media_send::MediaSendTool::new().call_json(arguments).await
+            }),
+
             // ACP delegate tools
             "claude_code" => Box::pin(async move {
                 let tool = self.claude_code_tool.as_ref().ok_or_else(|| {

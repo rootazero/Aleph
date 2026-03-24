@@ -36,7 +36,7 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
     ToolCategory {
         id: "content_gen",
         name: "内容生成",
-        tools: &["image_generate", "video_generate", "audio_generate", "speech_generate"],
+        tools: &["image_generate", "video_generate", "audio_generate", "speech_generate", "media_send"],
     },
     ToolCategory {
         id: "system_config",
