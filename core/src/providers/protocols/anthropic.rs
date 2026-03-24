@@ -319,13 +319,35 @@ impl ProtocolAdapter for AnthropicProtocol {
             "Building Anthropic request"
         );
 
+        // Serialize to JSON value so we can add tool_choice if needed
+        let mut body = serde_json::to_value(&request_body)
+            .map_err(|e| AlephError::provider(format!("Failed to serialize request: {}", e)))?;
+
+        // Add tool_choice if specified
+        if let Some(ref choice) = payload.tool_choice {
+            use crate::providers::adapter::ToolChoice;
+            match choice {
+                ToolChoice::Auto => { body["tool_choice"] = serde_json::json!({"type": "auto"}); }
+                ToolChoice::Required => { body["tool_choice"] = serde_json::json!({"type": "any"}); }
+                ToolChoice::Specific(name) => {
+                    body["tool_choice"] = serde_json::json!({"type": "tool", "name": name});
+                }
+                ToolChoice::None => {
+                    // Anthropic: remove tools array entirely to disable tool use
+                    if let Some(obj) = body.as_object_mut() {
+                        obj.remove("tools");
+                    }
+                }
+            }
+        }
+
         Ok(self
             .client
             .post(&endpoint)
             .header("x-api-key", api_key)
             .header("anthropic-version", ANTHROPIC_VERSION)
             .header("Content-Type", "application/json")
-            .json(&request_body))
+            .json(&body))
     }
 
     async fn parse_response(&self, response: reqwest::Response) -> Result<ProviderResponse> {
