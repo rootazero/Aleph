@@ -14,6 +14,19 @@ use serde_json::Value;
 
 use super::message::UnifiedMessage;
 
+/// Tool selection control for protocol adapters.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ToolChoice {
+    /// LLM decides whether to use tools (default)
+    Auto,
+    /// LLM MUST call at least one tool
+    Required,
+    /// LLM must call this specific tool by name
+    Specific(String),
+    /// Disable all tool use for this request
+    None,
+}
+
 /// Unified request payload for protocol adapters.
 ///
 /// Protocol adapters translate this into provider-specific request formats.
@@ -31,6 +44,8 @@ pub struct RequestPayload<'a> {
     pub temperature: Option<f32>,
     /// Per-request max_tokens override
     pub max_tokens: Option<u32>,
+    /// Tool selection control (auto/required/specific/none)
+    pub tool_choice: Option<ToolChoice>,
 }
 
 #[allow(clippy::derivable_impls)]
@@ -43,6 +58,7 @@ impl<'a> Default for RequestPayload<'a> {
             think_level: None,
             temperature: None,
             max_tokens: None,
+            tool_choice: None,
         }
     }
 }
@@ -83,6 +99,12 @@ impl<'a> RequestPayload<'a> {
     /// Set max_tokens
     pub fn with_max_tokens(mut self, max_tokens: Option<u32>) -> Self {
         self.max_tokens = max_tokens;
+        self
+    }
+
+    /// Set tool choice
+    pub fn with_tool_choice(mut self, choice: Option<ToolChoice>) -> Self {
+        self.tool_choice = choice;
         self
     }
 }
@@ -126,6 +148,15 @@ pub trait ProtocolAdapter: Send + Sync {
     fn supports_native_tools(&self) -> bool {
         false
     }
+
+    /// Whether this protocol supports parallel tool calls in one response
+    fn supports_parallel_tools(&self) -> bool { true }
+    /// Whether this protocol returns tool call IDs (false for Gemini)
+    fn returns_tool_call_ids(&self) -> bool { true }
+    /// Whether this protocol supports tool_choice control
+    fn supports_tool_choice(&self) -> bool { true }
+    /// Whether this protocol supports strict JSON schema mode
+    fn supports_strict_schema(&self) -> bool { false }
 
     /// Parse a streaming response (SSE)
     ///
@@ -308,6 +339,21 @@ mod tests {
         let payload = RequestPayload::new(&msgs)
             .with_tools(None);
         assert!(payload.tools.is_none());
+    }
+
+    #[test]
+    fn test_tool_choice_enum() {
+        assert_eq!(ToolChoice::Auto, ToolChoice::Auto);
+        assert_ne!(ToolChoice::Auto, ToolChoice::Required);
+        assert_eq!(ToolChoice::Specific("s".into()), ToolChoice::Specific("s".into()));
+    }
+
+    #[test]
+    fn test_payload_with_tool_choice() {
+        let msgs = [UnifiedMessage::user("test")];
+        let payload = RequestPayload::new(&msgs)
+            .with_tool_choice(Some(ToolChoice::Required));
+        assert_eq!(payload.tool_choice, Some(ToolChoice::Required));
     }
 
 }

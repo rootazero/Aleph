@@ -458,6 +458,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                                 think_level: None,
                                 temperature: Some(0.3),
                                 max_tokens: Some(30),
+                                tool_choice: None,
                             };
 
                             match topic_provider.process(payload).await {

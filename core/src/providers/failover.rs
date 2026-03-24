@@ -419,6 +419,7 @@ impl AiProvider for FailoverProvider {
                         think_level,
                         temperature,
                         max_tokens,
+                        tool_choice: None,
                     };
 
                     let start = Instant::now();
