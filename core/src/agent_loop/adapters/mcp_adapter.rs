@@ -8,6 +8,7 @@ use serde_json::Value;
 use std::sync::Arc;
 
 use super::super::tool::{LoopTool, ToolResult};
+use crate::security::content_sanitizer::{wrap_external_content, ContentSource};
 
 // =============================================================================
 // McpTransportTrait
@@ -73,7 +74,21 @@ impl<T: McpTransportTrait + 'static> LoopTool for McpToolAdapter<T> {
             .call_tool(&self.spec.server_name, &self.spec.name, input)
             .await
         {
-            Ok(output) => ToolResult::Success { output },
+            Ok(output) => {
+                // Wrap MCP tool output with external content boundary markers to guard
+                // against prompt injection from untrusted MCP server responses.
+                let raw = serde_json::to_string(&output).unwrap_or_default();
+                let wrapped = wrap_external_content(
+                    &raw,
+                    ContentSource::McpTool {
+                        server: self.spec.server_name.clone(),
+                        tool: self.spec.name.clone(),
+                    },
+                );
+                ToolResult::Success {
+                    output: Value::String(wrapped),
+                }
+            }
             Err(e) => ToolResult::Error {
                 error: e.to_string(),
                 retryable: true,

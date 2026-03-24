@@ -6,6 +6,7 @@ use async_trait::async_trait;
 use super::error::ToolError;
 use crate::config::WebFetchPolicy;
 use crate::error::Result;
+use crate::security::content_sanitizer::{wrap_external_content, ContentSource};
 use crate::security::ssrf::{validate_url, SsrfPolicy};
 use crate::tools::AlephTool;
 use reqwest::Client;
@@ -173,10 +174,17 @@ impl WebFetchTool {
         );
         notify_tool_result(Self::NAME, &result_summary, true);
 
+        // Wrap fetched content with external content boundary markers to guard
+        // against prompt injection embedded in web page content.
+        let wrapped_content = wrap_external_content(
+            &content,
+            ContentSource::WebFetch { url: args.url.clone() },
+        );
+
         Ok(WebFetchResult {
             url: args.url,
             title,
-            content,
+            content: wrapped_content,
         })
     }
 
