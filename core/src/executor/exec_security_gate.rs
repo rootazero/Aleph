@@ -15,6 +15,7 @@ use crate::exec::{
     analyze_shell_command, ApprovalDecision, ExecApprovalManager,
     ExecContext, RiskLevel, SecretMasker, SecurityKernel, decide_exec_approval,
 };
+use crate::exec::sanitize::has_invisible_chars;
 use crate::exec::config::{ExecAsk, ExecSecurity, ResolvedExecConfig};
 use crate::exec::manager::DEFAULT_APPROVAL_TIMEOUT_MS;
 use crate::exec::sandbox::SandboxManager;
@@ -93,6 +94,26 @@ impl ExecSecurityGate {
         };
 
         let risk = self.security_kernel.assess(&cmd);
+
+        // Escalate risk if invisible characters detected
+        let risk = if has_invisible_chars(&cmd) {
+            let escalated = match risk {
+                RiskLevel::Safe => RiskLevel::Caution,
+                RiskLevel::Caution => RiskLevel::Danger,
+                other => other, // Danger/Blocked unchanged
+            };
+            if escalated != risk {
+                warn!(
+                    cmd = %cmd,
+                    from = ?risk,
+                    to = ?escalated,
+                    "Risk escalated due to invisible Unicode characters"
+                );
+            }
+            escalated
+        } else {
+            risk
+        };
 
         match risk {
             RiskLevel::Blocked => {
@@ -488,6 +509,33 @@ mod tests {
         } else {
             panic!("Expected ToolResults");
         }
+    }
+
+    #[tokio::test]
+    async fn test_invisible_chars_escalate_risk() {
+        let manager = Arc::new(ExecApprovalManager::new());
+        let gate = ExecSecurityGate::new(manager, None);
+        let identity = make_identity();
+        // "ls -la" with ZWSP appended at end: still matches ^ls\s+ Safe pattern,
+        // then escalated Safe→Caution by invisible char detection. Caution is auto-allowed.
+        let args = json!({"cmd": "ls -la\u{200B}"});
+        let decision = gate.pre_execute_with_timeout("bash", &args, &identity, 100).await;
+        assert!(matches!(decision, PreExecDecision::Allow { .. }));
+    }
+
+    #[tokio::test]
+    async fn test_invisible_chars_escalate_caution_to_danger_timeout() {
+        let manager = Arc::new(ExecApprovalManager::new());
+        let gate = ExecSecurityGate::new(manager, None);
+        let identity = make_identity();
+        // "npm install" is Caution, invisible chars should escalate to Danger
+        // With 0ms timeout, Danger → Block
+        let args = json!({"cmd": "npm\u{200B} install"});
+        let decision = gate.pre_execute_with_timeout("bash", &args, &identity, 0).await;
+        assert!(
+            matches!(decision, PreExecDecision::Block { .. }),
+            "Expected Block (Caution→Danger→timeout), got {:?}", decision
+        );
     }
 
     #[test]
