@@ -334,6 +334,17 @@ impl ProtocolAdapter for OpenAiProtocol {
             })?;
         }
 
+        // Add tool_choice if specified
+        if let Some(ref choice) = payload.tool_choice {
+            use crate::providers::adapter::ToolChoice;
+            body["tool_choice"] = match choice {
+                ToolChoice::Auto => json!("auto"),
+                ToolChoice::Required => json!("required"),
+                ToolChoice::Specific(name) => json!({"type": "function", "function": {"name": name}}),
+                ToolChoice::None => json!("none"),
+            };
+        }
+
         // Validate API key
         let api_key = config
             .api_key
@@ -397,7 +408,10 @@ impl ProtocolAdapter for OpenAiProtocol {
                             error = %e,
                             "Failed to parse tool call arguments, using empty object"
                         );
-                        serde_json::Value::Object(Default::default())
+                        serde_json::json!({
+                            "_raw_arguments": tc.function.arguments,
+                            "_parse_error": e.to_string()
+                        })
                     });
                 provider_response.tool_calls.push(NativeToolCall {
                     id: tc.id.clone(),
@@ -467,6 +481,10 @@ impl ProtocolAdapter for OpenAiProtocol {
     }
 
     fn supports_native_tools(&self) -> bool {
+        true
+    }
+
+    fn supports_strict_schema(&self) -> bool {
         true
     }
 
