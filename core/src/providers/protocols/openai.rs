@@ -27,28 +27,16 @@ use tracing::{debug, error};
 // Aleph tool names now use underscores (e.g. "cron_manage"), but this
 // sanitizer is kept as a safety net for any external/plugin tool names.
 
-/// Replace characters not in `[a-zA-Z0-9_-]` with underscores.
+use super::openai_common::tools::{
+    sanitize_tool_name as sanitize_tool_name_pub,
+    desanitize_tool_name as desanitize_tool_name_pub,
+};
+
+/// Replace characters not in `[a-zA-Z0-9_-]` with underscores (internal alias).
 fn sanitize_tool_name(name: &str) -> String { sanitize_tool_name_pub(name) }
 
-/// Public version for cross-protocol use (Codex, etc.).
-pub fn sanitize_tool_name_pub(name: &str) -> String {
-    name.chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect()
-}
-
-/// Identity function — tool names now use underscores natively,
-/// so no reverse mapping is needed after sanitization.
-fn desanitize_tool_name(name: &str) -> String { name.to_string() }
-
-/// Public version for cross-protocol use.
-pub fn desanitize_tool_name_pub(name: &str) -> String { name.to_string() }
+/// Identity function — tool names now use underscores natively (internal alias).
+fn desanitize_tool_name(name: &str) -> String { desanitize_tool_name_pub(name) }
 
 /// OpenAI protocol adapter
 pub struct OpenAiProtocol {

@@ -1,8 +1,28 @@
-//! Utility functions for the Codex protocol adapter
+//! Shared tool utilities for OpenAI-compatible protocols.
 //!
-//! Standalone helpers that don't depend on the ProtocolAdapter trait:
-//! - JWT token parsing for account ID extraction
-//! - JSON schema normalization for Codex API compatibility
+//! These functions are used by both the standard OpenAI protocol and the Codex protocol.
+
+/// Replace characters not in `[a-zA-Z0-9_-]` with underscores.
+///
+/// OpenAI API requires tool names to match `^[a-zA-Z0-9_-]+$`.
+/// Kept as a safety net for external/plugin tool names.
+pub fn sanitize_tool_name(name: &str) -> String {
+    name.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+/// Identity function — tool names now use underscores natively,
+/// so no reverse mapping is needed after sanitization.
+pub fn desanitize_tool_name(name: &str) -> String {
+    name.to_string()
+}
 
 /// Extract codex account_id from a Codex OAuth JWT token.
 ///

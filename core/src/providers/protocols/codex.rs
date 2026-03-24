@@ -8,7 +8,7 @@ use crate::error::{AlephError, Result};
 use crate::providers::adapter::{ProtocolAdapter, ProviderResponse, RequestPayload, StopReason};
 use crate::providers::codex::types::ResponsesRequest;
 use crate::providers::responses::shared;
-use super::codex_utils::extract_codex_account_id;
+use super::openai_common::tools::extract_codex_account_id;
 use async_trait::async_trait;
 use futures::stream::BoxStream;
 use reqwest::Client;

@@ -15,8 +15,11 @@ use crate::dispatcher::ToolDefinition;
 use crate::error::{AlephError, Result};
 use crate::providers::adapter::{NativeToolCall, TokenUsage, ToolChoice};
 use crate::providers::message::{ContentBlock, UnifiedMessage};
-use crate::providers::protocols::codex_utils::ensure_properties_recursive;
-use crate::providers::protocols::openai::{desanitize_tool_name_pub, sanitize_tool_name_pub};
+use crate::providers::protocols::openai_common::tools::{
+    ensure_properties_recursive,
+    desanitize_tool_name as desanitize_tool_name_pub,
+    sanitize_tool_name as sanitize_tool_name_pub,
+};
 use crate::providers::responses::types::*;
 
 /// Convert UnifiedMessages to Responses API InputItems
