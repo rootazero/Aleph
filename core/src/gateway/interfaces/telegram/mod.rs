@@ -61,8 +61,8 @@ pub struct TelegramChannel {
     shutdown_tx: Option<oneshot::Sender<()>>,
     /// Teloxide bot instance
     bot: Option<Bot>,
-    /// Slash commands to register with Telegram Bot API (command, description)
-    slash_commands: Vec<(String, String)>,
+    /// ToolRegistry for building slash commands at startup
+    tool_registry: Option<Arc<crate::dispatcher::ToolRegistry>>,
     /// Active pairing codes (code → entry). Shared with handler closure.
     pairing_codes: Arc<RwLock<HashMap<String, PairingEntry>>>,
     /// Rate-limit map: user_id → last prompt time. Avoids spamming unauthorized users.
@@ -92,20 +92,17 @@ impl TelegramChannel {
             callback_rx: Some(callback_rx),
             shutdown_tx: None,
             bot: None,
-            slash_commands: Vec::new(),
+            tool_registry: None,
             pairing_codes: Arc::new(RwLock::new(HashMap::new())),
             pairing_prompt_times: Arc::new(RwLock::new(HashMap::new())),
             runtime_allowed_users: Arc::new(RwLock::new(Vec::new())),
         }
     }
 
-    /// Set slash commands to register with Telegram Bot API on startup.
-    ///
-    /// Each entry is (command_name, description). These are registered via
-    /// `set_my_commands` so users see a command menu when typing `/`.
-    pub fn with_slash_commands(mut self, commands: Vec<(String, String)>) -> Self {
-        self.slash_commands = commands;
-        self
+    /// Set the ToolRegistry so this channel can query builtin tools at startup
+    /// and register them as Telegram slash commands.
+    pub fn set_tool_registry(&mut self, registry: Arc<crate::dispatcher::ToolRegistry>) {
+        self.tool_registry = Some(registry);
     }
 
     /// Parse a conversation_id that may contain a forum topic suffix.
@@ -473,14 +470,32 @@ impl Channel for TelegramChannel {
             }
         }
 
-        // Register slash commands with Telegram Bot API
-        // This makes commands appear in the menu when users type "/"
-        if !self.slash_commands.is_empty() {
+        // Build slash commands from ToolRegistry (builtin tools only)
+        if let Some(ref registry) = self.tool_registry {
             use teloxide::types::BotCommand;
+
+            let tools = registry.list_builtin_tools().await;
+            let mut commands: Vec<(String, String)> = tools.iter()
+                .map(|t| (t.name.clone(), t.description.clone()))
+                .collect();
+
+            // Add shorthand aliases for generation tools
+            // These match slash_command.rs shorthand mappings
+            let aliases = [
+                ("image", "Generate an image from a text prompt"),
+                ("video", "Generate a video from a text prompt"),
+                ("audio", "Generate audio/music from a text prompt"),
+                ("speech", "Convert text to speech"),
+            ];
+            for (alias, desc) in aliases {
+                if !commands.iter().any(|(name, _)| name == alias) {
+                    commands.push((alias.to_string(), desc.to_string()));
+                }
+            }
 
             // Telegram limits: max 100 commands, command name max 32 chars,
             // lowercase a-z, 0-9, underscore only
-            let bot_commands: Vec<BotCommand> = self.slash_commands.iter()
+            let bot_commands: Vec<BotCommand> = commands.iter()
                 .take(100) // Telegram hard limit
                 .filter_map(|(name, desc)| {
                     // Normalize: lowercase, replace hyphens with underscores, strip invalid chars
@@ -504,7 +519,7 @@ impl Channel for TelegramChannel {
                 .collect();
 
             if !bot_commands.is_empty() {
-                // Clear old commands first, then set new ones (OpenClaw pattern)
+                // Clear old commands first, then set new ones
                 let _ = bot.delete_my_commands().await;
                 match bot.set_my_commands(bot_commands.clone()).await {
                     Ok(_) => {

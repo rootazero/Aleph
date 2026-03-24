@@ -167,7 +167,7 @@ pub(in crate::commands::start) async fn initialize_channels(
     server: &mut GatewayServer,
     app_config: &alephcore::Config,
     app_config_arc: &Arc<tokio::sync::RwLock<alephcore::Config>>,
-    dispatch_registry: Option<&alephcore::dispatcher::ToolRegistry>,
+    dispatch_registry: Option<Arc<alephcore::dispatcher::ToolRegistry>>,
     daemon: bool,
 ) -> Arc<ChannelRegistry> {
     use alephcore::gateway::handlers::channel::create_channel_from_config;
@@ -177,61 +177,10 @@ pub(in crate::commands::start) async fn initialize_channels(
     // Resolve all channel instances from app config
     let instances = app_config.resolved_channels();
 
-    // Build slash commands once for all telegram instances (builtin tools only).
-    // Namespace tools (e.g. "session_new", "agent_create") are grouped by prefix;
-    // only the namespace itself (e.g. "/session") is registered as a slash command.
-    const NAMESPACES: &[&str] = &["session", "agent", "cron", "skill", "vault", "memory"];
-
-    let slash_commands = if let Some(reg) = dispatch_registry {
-        let tools = reg.list_builtin_tools().await;
-        let mut seen = std::collections::HashSet::new();
-        let mut commands = Vec::new();
-        for t in &tools {
-            // Check if tool belongs to a known namespace (e.g. "session_new" → "session")
-            let ns = NAMESPACES.iter().find(|&&ns| {
-                t.name.starts_with(ns) && t.name.get(ns.len()..ns.len()+1) == Some("_")
-            });
-            if let Some(&prefix) = ns {
-                if seen.insert(prefix.to_string()) {
-                    // Collect child names for the description
-                    let children = reg.list_namespace_children(prefix).await;
-                    let child_names: Vec<String> = children.iter()
-                        .filter_map(|c| c.name.strip_prefix(&format!("{}_", prefix)).map(String::from))
-                        .collect();
-                    let desc = if child_names.is_empty() {
-                        t.description.clone()
-                    } else {
-                        format!("[{}] {}", child_names.join(", "), t.description.chars().take(50).collect::<String>())
-                    };
-                    commands.push((prefix.to_string(), desc));
-                }
-            } else {
-                // Independent tool: register directly
-                if seen.insert(t.name.clone()) {
-                    commands.push((t.name.clone(), t.description.clone()));
-                }
-            }
-        }
-
-        // Add shorthand aliases for generation tools
-        // These match slash_command.rs shorthand mappings
-        let aliases = [
-            ("image", "Generate an image from a text prompt"),
-            ("video", "Generate a video from a text prompt"),
-            ("audio", "Generate audio/music from a text prompt"),
-            ("speech", "Convert text to speech"),
-        ];
-        for (alias, desc) in aliases {
-            if !seen.contains(alias) {
-                seen.insert(alias.to_string());
-                commands.push((alias.to_string(), desc.to_string()));
-            }
-        }
-
-        commands
-    } else {
-        Vec::new()
-    };
+    // Cache ToolRegistry for Telegram channel recreation (channel.start RPC)
+    if let Some(ref reg) = dispatch_registry {
+        alephcore::gateway::handlers::channel::set_telegram_tool_registry(reg.clone());
+    }
 
     // Create and register all channel instances
     for inst in &instances {
@@ -252,11 +201,13 @@ pub(in crate::commands::start) async fn initialize_channels(
         }
 
         if let Some(mut channel) = create_channel_from_config(&inst.id, &inst.channel_type, inst.config.clone()) {
-            // Attach slash commands to telegram instances
+            // Pass ToolRegistry to telegram instances so they self-register slash commands
             if inst.channel_type == "telegram" {
                 if let Ok(tg_config) = serde_json::from_value::<TelegramConfig>(inst.config.clone()) {
-                    let tg_channel = TelegramChannel::new(&inst.id, tg_config)
-                        .with_slash_commands(slash_commands.clone());
+                    let mut tg_channel = TelegramChannel::new(&inst.id, tg_config);
+                    if let Some(ref reg) = dispatch_registry {
+                        tg_channel.set_tool_registry(reg.clone());
+                    }
                     channel = Box::new(tg_channel);
                 }
             }

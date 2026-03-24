@@ -15,21 +15,20 @@ use crate::gateway::channel::{ChannelId, ChannelInfo, ChannelStatus, OutboundMes
 use crate::gateway::channel_registry::ChannelRegistry;
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 
-/// Cached Telegram slash commands for channel recreation.
+/// Cached ToolRegistry for Telegram channel recreation.
 ///
 /// When `channel.start` RPC recreates a Telegram channel from config,
-/// it needs to re-attach slash commands. This static stores the commands
-/// set during initial startup via `set_telegram_slash_commands()`.
-static TELEGRAM_SLASH_COMMANDS: OnceLock<Vec<(String, String)>> = OnceLock::new();
+/// it needs to re-attach the ToolRegistry so slash commands are registered.
+static TELEGRAM_TOOL_REGISTRY: OnceLock<Arc<crate::dispatcher::ToolRegistry>> = OnceLock::new();
 
-/// Store Telegram slash commands for use when recreating the channel.
-pub fn set_telegram_slash_commands(commands: Vec<(String, String)>) {
-    let _ = TELEGRAM_SLASH_COMMANDS.set(commands);
+/// Store ToolRegistry for use when recreating Telegram channels.
+pub fn set_telegram_tool_registry(registry: Arc<crate::dispatcher::ToolRegistry>) {
+    let _ = TELEGRAM_TOOL_REGISTRY.set(registry);
 }
 
-/// Get cached Telegram slash commands.
-fn get_telegram_slash_commands() -> Vec<(String, String)> {
-    TELEGRAM_SLASH_COMMANDS.get().cloned().unwrap_or_default()
+/// Get cached ToolRegistry for Telegram channel recreation.
+fn get_telegram_tool_registry() -> Option<Arc<crate::dispatcher::ToolRegistry>> {
+    TELEGRAM_TOOL_REGISTRY.get().cloned()
 }
 
 /// Channel info for JSON response
@@ -246,15 +245,15 @@ pub async fn handle_start(
         }
 
         if let Some(mut new_channel) = create_channel_from_config(channel_id.as_str(), &channel_type, clean_config.clone()) {
-            // Re-attach slash commands for telegram channels
+            // Re-attach ToolRegistry for telegram channels so slash commands are registered
             if channel_type == "telegram" {
                 use crate::gateway::interfaces::telegram::{TelegramChannel, TelegramConfig};
                 if let Ok(tg_config) = serde_json::from_value::<TelegramConfig>(clean_config) {
-                    let slash_cmds = get_telegram_slash_commands();
-                    new_channel = Box::new(
-                        TelegramChannel::new(channel_id.as_str(), tg_config)
-                            .with_slash_commands(slash_cmds),
-                    );
+                    let mut tg_channel = TelegramChannel::new(channel_id.as_str(), tg_config);
+                    if let Some(reg) = get_telegram_tool_registry() {
+                        tg_channel.set_tool_registry(reg);
+                    }
+                    new_channel = Box::new(tg_channel);
                 }
             }
             // Replace old channel with freshly configured one
