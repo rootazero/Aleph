@@ -330,6 +330,8 @@ async fn when_execute_for_context(w: &mut AlephWorld) {
         session_key: test_ctx.session_key.clone(),
         timeout_secs: Some(5),
         metadata: std::collections::HashMap::new(),
+        attachments: Vec::new(),
+        pending_media: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
     };
 
     let result = adapter.execute(request, agent.unwrap(), emitter).await;

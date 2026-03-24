@@ -9,6 +9,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::sync_primitives::Arc;
 
+use crate::gateway::media::{MediaItem, PendingMedia, MAX_MEDIA_PER_RUN};
 use super::{ExecutionError, RunRequest, RunStatus};
 use crate::gateway::agent_instance::{AgentInstance, MessageRole};
 use crate::gateway::event_emitter::{DynEventEmitter, EventEmitter, StreamEvent};
@@ -188,7 +189,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         };
 
         // Create a streaming callback that emits events
-        let mut callback = StreamCallback::new(emitter.clone(), run_id.to_string());
+        let mut callback = StreamCallback::new(emitter.clone(), run_id.to_string(), request.pending_media.clone());
 
         // If attachments are present and a media processor is available,
         // process them into multimodal content blocks and use the
@@ -314,15 +315,17 @@ pub(super) struct StreamCallback<E: EventEmitter + Send + Sync + 'static> {
     run_id: String,
     seq: u64,
     chunk_index: u32,
+    pending_media: PendingMedia,
 }
 
 impl<E: EventEmitter + Send + Sync + 'static> StreamCallback<E> {
-    pub(super) fn new(emitter: Arc<E>, run_id: String) -> Self {
+    pub(super) fn new(emitter: Arc<E>, run_id: String, pending_media: PendingMedia) -> Self {
         Self {
             emitter,
             run_id,
             seq: 0,
             chunk_index: 0,
+            pending_media,
         }
     }
 }
@@ -392,6 +395,30 @@ impl<E: EventEmitter + Send + Sync + 'static> crate::agent_loop::LoopCallback
     }
 
     fn on_tool_done(&mut self, name: &str, result: &crate::agent_loop::ToolResult) {
+        // Extract _media from raw Value before serialization
+        match result {
+            crate::agent_loop::ToolResult::Success { output }
+            | crate::agent_loop::ToolResult::SuccessAndStopLoop { output } => {
+                if let Some(media_val) = output.get("_media") {
+                    if let Ok(items) = serde_json::from_value::<Vec<MediaItem>>(media_val.clone()) {
+                        let mut pending = self.pending_media.lock().unwrap_or_else(|e| e.into_inner());
+                        let remaining = MAX_MEDIA_PER_RUN.saturating_sub(pending.len());
+                        if remaining < items.len() {
+                            tracing::warn!(
+                                tool = %name,
+                                total = items.len(),
+                                accepted = remaining,
+                                "Media items exceed per-run limit, dropping excess"
+                            );
+                        }
+                        pending.extend(items.into_iter().take(remaining));
+                    }
+                }
+            }
+            _ => {}
+        }
+
+        // === Existing code below ===
         use crate::gateway::event_emitter::ToolResult as EmitterToolResult;
         self.seq += 1;
         let tool_result = match result {

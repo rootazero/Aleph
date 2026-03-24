@@ -88,6 +88,7 @@ async fn execute_cron_job(
         timeout_secs,
         metadata,
         attachments: Vec::new(),
+        pending_media: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
     };
 
     let emitter: Arc<dyn crate::gateway::event_emitter::EventEmitter + Send + Sync> =

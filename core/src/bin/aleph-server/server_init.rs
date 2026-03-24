@@ -182,6 +182,7 @@ where
         timeout_secs: None,
         metadata,
         attachments: Vec::new(),
+        pending_media: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
     };
 
     // Spawn execution task
@@ -383,6 +384,7 @@ where
         timeout_secs: None,
         metadata,
         attachments: Vec::new(),
+        pending_media: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
     };
 
     // Spawn execution task

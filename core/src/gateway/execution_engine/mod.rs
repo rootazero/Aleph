@@ -20,6 +20,7 @@ pub use engine::ExecutionEngine;
 pub use simple::SimpleExecutionEngine;
 
 use std::collections::HashMap;
+use crate::gateway::media::PendingMedia;
 use crate::sync_primitives::{AtomicU32, AtomicU64, Ordering};
 
 use tokio::sync::mpsc;
@@ -62,6 +63,8 @@ pub struct RunRequest {
     pub metadata: HashMap<String, String>,
     /// Attachments from inbound message (images, audio, documents)
     pub attachments: Vec<crate::gateway::channel::Attachment>,
+    /// Shared pending media buffer (for media attachment delivery)
+    pub pending_media: PendingMedia,
 }
 
 /// Run state

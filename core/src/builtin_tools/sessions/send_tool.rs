@@ -323,6 +323,7 @@ impl SessionsSendTool {
             },
             metadata: HashMap::new(),
             attachments: Vec::new(),
+            pending_media: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
         };
 
         // Get execution adapter
@@ -399,6 +400,7 @@ impl SessionsSendTool {
                                 timeout_secs: Some(args.timeout_seconds as u64),
                                 metadata: HashMap::new(),
                                 attachments: Vec::new(),
+                                pending_media: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
                             };
                             let continue_emitter: Arc<dyn crate::gateway::event_emitter::EventEmitter + Send + Sync> =
                                 Arc::new(NoOpEventEmitter::new());

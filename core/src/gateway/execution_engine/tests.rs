@@ -66,6 +66,7 @@ async fn test_simple_execution_engine_basic() {
         timeout_secs: None,
         metadata: HashMap::new(),
         attachments: Vec::new(),
+        pending_media: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
     };
 
     let result = engine.execute(request, agent, emitter.clone()).await;
@@ -106,6 +107,7 @@ async fn test_simple_execution_engine_run() {
         timeout_secs: Some(5),
         metadata: HashMap::new(),
         attachments: Vec::new(),
+        pending_media: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
     };
 
     // This should succeed and complete quickly

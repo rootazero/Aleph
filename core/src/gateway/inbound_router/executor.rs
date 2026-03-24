@@ -165,6 +165,7 @@ impl InboundMessageRouter {
             timeout_secs: None,
             metadata,
             attachments: ctx.message.attachments.clone(),
+            pending_media: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
         };
 
         if !request.attachments.is_empty() {

@@ -212,6 +212,7 @@ impl SessionScheduler {
             timeout_secs: None,
             metadata,
             attachments: ctx.message.attachments.clone(),
+            pending_media: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
         };
 
         info!(
@@ -428,6 +429,7 @@ async fn execute_next(
         timeout_secs: None,
         metadata,
         attachments: ctx.message.attachments.clone(),
+        pending_media: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
     };
 
     info!(

@@ -180,6 +180,7 @@ mod tests {
             timeout_secs: None,
             metadata: HashMap::new(),
             attachments: Vec::new(),
+            pending_media: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
         };
 
         let result = adapter.execute(request, agent, emitter).await;
