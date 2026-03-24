@@ -228,11 +228,20 @@ impl SpeechGenerateTool {
             "Speech generation completed"
         );
 
-        let display = format!(
-            "🔊 语音已生成 ({:.1}s)\n{}",
-            duration_ms as f64 / 1000.0,
-            audio_location
-        );
+        let display = if location_type == "data_url" {
+            format!(
+                "🔊 语音已生成 ({:.1}s) [{} format, {} bytes]",
+                duration_ms as f64 / 1000.0,
+                format,
+                size_bytes.unwrap_or(0)
+            )
+        } else {
+            format!(
+                "🔊 语音已生成 ({:.1}s)\n{}",
+                duration_ms as f64 / 1000.0,
+                audio_location
+            )
+        };
 
         Ok(SpeechGenerateOutput {
             _display: display,

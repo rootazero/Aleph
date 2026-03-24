@@ -302,6 +302,8 @@ impl ReplyEmitter {
 
     /// Drain pending media, download in parallel via MediaCache, return Attachments.
     async fn drain_and_send_media(&self) -> Vec<crate::gateway::channel::Attachment> {
+        let pending_count = self.pending_media.lock().unwrap_or_else(|e| e.into_inner()).len();
+        debug!(run_id = %self.run_id, pending_count = pending_count, "drain_and_send_media called");
         let media_items = std::mem::take(
             &mut *self.pending_media.lock().unwrap_or_else(|e| e.into_inner())
         );

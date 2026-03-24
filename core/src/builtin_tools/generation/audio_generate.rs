@@ -120,11 +120,15 @@ impl AudioGenerateTool {
         let result_summary = format!("音频生成完成 ({} ms, provider: {})", duration_ms, provider_name);
         notify_tool_result(Self::NAME, &result_summary, true);
 
-        let display = format!(
-            "🎵 音频已生成 ({:.1}s)\n{}",
-            duration_ms as f64 / 1000.0,
-            audio_location
-        );
+        let display = if location_type == "data_url" {
+            format!("🎵 音频已生成 ({:.1}s)", duration_ms as f64 / 1000.0)
+        } else {
+            format!(
+                "🎵 音频已生成 ({:.1}s)\n{}",
+                duration_ms as f64 / 1000.0,
+                audio_location
+            )
+        };
 
         Ok(AudioGenerateOutput {
             _display: display,

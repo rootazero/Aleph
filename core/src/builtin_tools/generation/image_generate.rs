@@ -220,11 +220,15 @@ impl ImageGenerateTool {
         );
         notify_tool_result(Self::NAME, &result_summary, true);
 
-        let display = format!(
-            "🎨 图像已生成 ({:.1}s)\n{}",
-            duration_ms as f64 / 1000.0,
-            image_location
-        );
+        let display = if location_type == "data_url" {
+            format!("🎨 图像已生成 ({:.1}s)", duration_ms as f64 / 1000.0)
+        } else {
+            format!(
+                "🎨 图像已生成 ({:.1}s)\n{}",
+                duration_ms as f64 / 1000.0,
+                image_location
+            )
+        };
 
         Ok(ImageGenerateOutput {
             _display: display,
