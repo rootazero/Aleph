@@ -28,6 +28,8 @@ pub struct VideoGenerateArgs {
 /// Output from the video generation tool.
 #[derive(Debug, Clone, Serialize)]
 pub struct VideoGenerateOutput {
+    /// Human-readable display text (used by fast-path slash commands)
+    pub _display: String,
     /// Location of the generated video (URL or local file path)
     pub video_location: String,
     /// Type of location: "url" or "file"
@@ -144,7 +146,14 @@ impl VideoGenerateTool {
         );
         notify_tool_result(Self::NAME, &result_summary, true);
 
+        let display = format!(
+            "🎬 视频已生成 ({:.1}s)\n{}",
+            duration_ms as f64 / 1000.0,
+            video_location
+        );
+
         Ok(VideoGenerateOutput {
+            _display: display,
             video_location: video_location.to_string(),
             location_type: location_type.to_string(),
             prompt: args.prompt,

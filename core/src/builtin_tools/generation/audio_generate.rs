@@ -24,6 +24,8 @@ pub struct AudioGenerateArgs {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct AudioGenerateOutput {
+    /// Human-readable display text
+    pub _display: String,
     pub audio_location: String,
     pub location_type: String,
     pub prompt: String,
@@ -115,7 +117,14 @@ impl AudioGenerateTool {
         let result_summary = format!("音频生成完成 ({} ms, provider: {})", duration_ms, provider_name);
         notify_tool_result(Self::NAME, &result_summary, true);
 
+        let display = format!(
+            "🎵 音频已生成 ({:.1}s)\n{}",
+            duration_ms as f64 / 1000.0,
+            audio_location
+        );
+
         Ok(AudioGenerateOutput {
+            _display: display,
             audio_location: audio_location.to_string(),
             location_type: location_type.to_string(),
             prompt: args.prompt,
