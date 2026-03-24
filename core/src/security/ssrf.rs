@@ -357,27 +357,14 @@ mod tests {
     #[test]
     fn test_blocks_ipv6_loopback() {
         let policy = default_policy();
-        // IPv6 loopback ::1
         let result = validate_url("http://[::1]/admin", &policy);
-        // Debug: print what url crate gives us
-        if let Ok(ref url) = Url::parse("http://[::1]/admin") {
-            eprintln!("DEBUG ipv6 loopback host_str={:?} host={:?}", url.host_str(), url.host());
-        }
-        eprintln!("DEBUG ipv6 loopback result={:?}", result);
         assert!(matches!(result, Err(SsrfError::BlockedAddress(_))));
     }
 
     #[test]
     fn test_blocks_ipv4_mapped_ipv6() {
         let policy = default_policy();
-        // ::ffff:127.0.0.1 maps to loopback
         let result = validate_url("http://[::ffff:127.0.0.1]/admin", &policy);
-        // Debug: print what url crate gives us
-        match Url::parse("http://[::ffff:127.0.0.1]/admin") {
-            Ok(ref url) => eprintln!("DEBUG ipv4-mapped host_str={:?} host={:?}", url.host_str(), url.host()),
-            Err(e) => eprintln!("DEBUG ipv4-mapped parse error: {}", e),
-        }
-        eprintln!("DEBUG ipv4-mapped result={:?}", result);
         assert!(matches!(result, Err(SsrfError::BlockedAddress(_))));
     }
 
