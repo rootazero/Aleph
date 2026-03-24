@@ -592,6 +592,17 @@ impl AlephError {
     pub fn channel_closed<S: Into<String>>(msg: S) -> Self {
         AlephError::ChannelClosed(msg.into())
     }
+
+    /// Whether this error is transient (worth retrying with another provider).
+    pub fn is_transient(&self) -> bool {
+        matches!(
+            self,
+            AlephError::RateLimitError { .. }
+                | AlephError::Timeout { .. }
+                | AlephError::NetworkError { .. }
+                | AlephError::ExecutionTimeout { .. }
+        )
+    }
 }
 
 /// Type alias for Results using AlephError
@@ -758,5 +769,31 @@ mod tests {
         let msg = err.user_friendly_message();
         assert!(msg.contains("Authentication"));
         assert!(msg.contains("API key"));
+    }
+}
+
+#[cfg(test)]
+mod transient_tests {
+    use super::*;
+
+    #[test]
+    fn test_transient_errors() {
+        assert!(AlephError::RateLimitError {
+            message: "429".into(), suggestion: None,
+        }.is_transient());
+        assert!(AlephError::Timeout { suggestion: None }.is_transient());
+        assert!(AlephError::NetworkError {
+            message: "connection refused".into(), suggestion: None,
+        }.is_transient());
+    }
+
+    #[test]
+    fn test_permanent_errors() {
+        assert!(!AlephError::AuthenticationError {
+            message: "invalid key".into(), provider: "openai".into(), suggestion: None,
+        }.is_transient());
+        assert!(!AlephError::ProviderError {
+            message: "bad request".into(), suggestion: None,
+        }.is_transient());
     }
 }
