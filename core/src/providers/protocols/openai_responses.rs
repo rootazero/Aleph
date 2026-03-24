@@ -70,6 +70,8 @@ impl OpenAiResponsesProtocol {
             text: None,
             max_output_tokens: payload.max_tokens,
             include: None,
+            previous_response_id: None,
+            context_management: None,
         }
     }
 }

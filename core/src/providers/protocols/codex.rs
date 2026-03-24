@@ -66,14 +66,14 @@ impl CodexProtocol {
             // Codex mode fields (per pi_agent_rust reference implementation)
             tool_choice,
             parallel_tool_calls: Some(true),
-            text: Some(
-                serde_json::to_value(crate::providers::codex::types::TextConfig {
-                    verbosity: "medium".to_string(),
-                })
-                .unwrap(),
-            ),
+            text: Some(crate::providers::responses::types::TextConfig {
+                format: None,
+                verbosity: Some("medium".into()),
+            }),
             max_output_tokens: payload.max_tokens,
             include: Some(vec!["reasoning.encrypted_content".to_string()]),
+            previous_response_id: None,
+            context_management: None,
         }
     }
 }

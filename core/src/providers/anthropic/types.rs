@@ -25,6 +25,9 @@ pub struct MessagesRequest {
     pub thinking: Option<ThinkingBlock>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tools: Option<Vec<AnthropicTool>>,
+    /// Service tier for priority or batch processing (e.g. "auto", "flex")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub service_tier: Option<String>,
 }
 
 /// System prompt block (array format for compatibility)

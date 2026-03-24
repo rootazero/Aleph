@@ -5,15 +5,7 @@
 // Re-export all shared Responses API types
 pub use crate::providers::responses::types::*;
 
-use serde::{Deserialize, Serialize};
-
-// ─── Codex-Specific Types ───────────────────────────────────────
-
-/// Text output verbosity configuration (Codex mode only)
-#[derive(Debug, Serialize)]
-pub struct TextConfig {
-    pub verbosity: String,
-}
+use serde::Deserialize;
 
 // ─── Security Types (used by security.rs) ─────────────────────
 

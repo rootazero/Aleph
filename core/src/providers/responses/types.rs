@@ -30,13 +30,19 @@ pub struct ResponsesRequest {
     pub parallel_tool_calls: Option<bool>,
     /// Text output configuration (protocol-specific)
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub text: Option<serde_json::Value>,
+    pub text: Option<TextConfig>,
     /// Maximum number of output tokens (prevents silent truncation)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_output_tokens: Option<u32>,
     /// Additional fields to include in response (e.g. reasoning.encrypted_content)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub include: Option<Vec<String>>,
+    /// Continue from a previous response (server-side conversation threading)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub previous_response_id: Option<String>,
+    /// Server-side context compaction (OpenAI official endpoints only)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_management: Option<ContextManagement>,
 }
 
 /// Function tool definition for the Responses API
@@ -123,6 +129,32 @@ pub struct ReasoningConfig {
     pub effort: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
+}
+
+/// Server-side context compaction (OpenAI official endpoints only)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContextManagement {
+    #[serde(rename = "type")]
+    pub mgmt_type: String,
+}
+
+/// Structured output config (replaces response_format in Responses API)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TextConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub format: Option<TextFormat>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verbosity: Option<String>,
+}
+
+/// Text output format variants
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum TextFormat {
+    #[serde(rename = "json_schema")]
+    JsonSchema { name: String, schema: serde_json::Value },
+    #[serde(rename = "json_object")]
+    JsonObject,
 }
 
 // ─── Response Types ──────────────────────────────────────────────

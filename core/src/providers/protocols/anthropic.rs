@@ -305,6 +305,7 @@ impl ProtocolAdapter for AnthropicProtocol {
             stream: if is_streaming { Some(true) } else { None },
             thinking,
             tools,
+            service_tier: None,
         };
 
         let api_key = config
