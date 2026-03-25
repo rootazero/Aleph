@@ -232,6 +232,52 @@ impl AuthProfileProviderRegistry {
         self.providers.read().unwrap_or_else(|e| e.into_inner()).len()
     }
 
+    /// Check all OAuth credentials and refresh any that are near expiry.
+    ///
+    /// Call this before `default_provider()` to ensure OAuth tokens are fresh.
+    /// This is a separate async method because `default_provider()` is sync
+    /// (required by the ProviderRegistry trait).
+    pub async fn try_refresh_all_oauth(&self) {
+        use crate::providers::auth_profiles::AuthProfileCredential;
+        use crate::providers::oauth_refresh;
+
+        let profiles_to_check: Vec<(String, super::OAuthCredential)> = {
+            let store = self.store.read().unwrap_or_else(|e| e.into_inner());
+            store.profiles.iter()
+                .filter_map(|(id, cred)| {
+                    if let AuthProfileCredential::OAuth(oauth) = cred {
+                        if oauth_refresh::needs_refresh(oauth) {
+                            return Some((id.clone(), oauth.clone()));
+                        }
+                    }
+                    None
+                })
+                .collect()
+        };
+
+        for (profile_id, oauth_cred) in profiles_to_check {
+            match oauth_refresh::refresh_token(&oauth_cred).await {
+                Ok(refreshed) => {
+                    info!(profile_id = %profile_id, "OAuth token refreshed successfully");
+                    let mut store = self.store.write().unwrap_or_else(|e| e.into_inner());
+                    store.upsert_profile(
+                        profile_id,
+                        AuthProfileCredential::OAuth(refreshed),
+                    );
+                    drop(store);
+                    self.refresh_providers();
+                }
+                Err(e) => {
+                    warn!(
+                        profile_id = %profile_id,
+                        error = %e,
+                        "OAuth token refresh failed, continuing with existing token"
+                    );
+                }
+            }
+        }
+    }
+
     /// Get a reference to the auth profile store
     pub fn store(&self) -> &Arc<RwLock<AuthProfileStore>> {
         &self.store

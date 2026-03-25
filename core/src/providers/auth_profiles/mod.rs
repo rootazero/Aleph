@@ -65,6 +65,8 @@ mod tests {
             refresh: Some("refresh-456".to_string()),
             expires: None,
             client_id: None,
+            client_secret: None,
+            token_endpoint: None,
             email: None,
         });
         assert_eq!(oauth.type_score(), 0);
@@ -316,6 +318,8 @@ mod tests {
                 refresh: None,
                 expires: None,
                 client_id: None,
+                client_secret: None,
+                token_endpoint: None,
                 email: None,
             }),
         );

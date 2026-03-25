@@ -76,6 +76,7 @@ pub mod http_provider;
 pub mod presets;
 pub mod protocols;
 pub mod delta;
+pub mod oauth_refresh;
 
 // Re-exports
 pub use auth_profile_registry::{AuthProfileProviderRegistry, AuthProfileRegistryConfig};

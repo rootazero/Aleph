@@ -37,6 +37,12 @@ pub struct OAuthCredential {
     pub expires: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub client_id: Option<String>,
+    /// OAuth client secret (stored in vault, not logged)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_secret: Option<String>,
+    /// Token endpoint URL for refresh (e.g., https://oauth2.googleapis.com/token)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token_endpoint: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub email: Option<String>,
 }
