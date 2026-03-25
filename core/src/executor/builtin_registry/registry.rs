@@ -85,6 +85,14 @@ pub struct BuiltinToolRegistry {
     pub(crate) session_set_topic_tool: Option<crate::builtin_tools::sessions::SessionSetTopicTool>,
     /// Cron management tool (optional - requires SharedCronService)
     pub(crate) cron_manage_tool: Option<crate::builtin_tools::cron_manage::CronManageTool>,
+    /// Heartbeat management tools (optional - require SharedHeartbeatService)
+    pub(crate) heartbeat_list_tool: Option<crate::builtin_tools::heartbeat_manage::HeartbeatListTool>,
+    pub(crate) heartbeat_create_tool: Option<crate::builtin_tools::heartbeat_manage::HeartbeatCreateTool>,
+    pub(crate) heartbeat_update_tool: Option<crate::builtin_tools::heartbeat_manage::HeartbeatUpdateTool>,
+    pub(crate) heartbeat_delete_tool: Option<crate::builtin_tools::heartbeat_manage::HeartbeatDeleteTool>,
+    pub(crate) heartbeat_toggle_tool: Option<crate::builtin_tools::heartbeat_manage::HeartbeatToggleTool>,
+    /// Heartbeat report tool — always available (used during L2 heartbeat execution)
+    pub(crate) heartbeat_report_tool: crate::builtin_tools::heartbeat_manage::HeartbeatReportTool,
     /// Agent management tools (optional - requires AgentRegistry + AgentEnvStore)
     pub(crate) agent_create_tool: Option<crate::builtin_tools::agent_manage::AgentCreateTool>,
 
@@ -454,6 +462,42 @@ impl ToolRegistry for BuiltinToolRegistry {
                     tool.call_json(arguments).await
                 })
             },
+
+            // Heartbeat management tools
+            "heartbeat_list" => Box::pin(async move {
+                let tool = self.heartbeat_list_tool.as_ref().ok_or_else(|| {
+                    AlephError::tool("heartbeat_list not available: heartbeat service not configured")
+                })?;
+                tool.call_json(arguments).await
+            }),
+            "heartbeat_create" => Box::pin(async move {
+                let tool = self.heartbeat_create_tool.as_ref().ok_or_else(|| {
+                    AlephError::tool("heartbeat_create not available: heartbeat service not configured")
+                })?;
+                tool.call_json(arguments).await
+            }),
+            "heartbeat_update" => Box::pin(async move {
+                let tool = self.heartbeat_update_tool.as_ref().ok_or_else(|| {
+                    AlephError::tool("heartbeat_update not available: heartbeat service not configured")
+                })?;
+                tool.call_json(arguments).await
+            }),
+            "heartbeat_delete" => Box::pin(async move {
+                let tool = self.heartbeat_delete_tool.as_ref().ok_or_else(|| {
+                    AlephError::tool("heartbeat_delete not available: heartbeat service not configured")
+                })?;
+                tool.call_json(arguments).await
+            }),
+            "heartbeat_toggle" => Box::pin(async move {
+                let tool = self.heartbeat_toggle_tool.as_ref().ok_or_else(|| {
+                    AlephError::tool("heartbeat_toggle not available: heartbeat service not configured")
+                })?;
+                tool.call_json(arguments).await
+            }),
+            // Heartbeat report tool — always available (used during L2 heartbeat execution)
+            "heartbeat_report" => Box::pin(async move {
+                self.heartbeat_report_tool.call_json(arguments).await
+            }),
 
             // Agent management tools — snapshot session context into arguments
             // to avoid race conditions from concurrent reads of the shared handle.

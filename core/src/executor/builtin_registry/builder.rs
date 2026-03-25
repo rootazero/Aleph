@@ -441,6 +441,22 @@ impl BuiltinToolRegistry {
             cron_manage_tool: config.cron_service.as_ref().map(|svc| {
                 crate::builtin_tools::cron_manage::CronManageTool::new(Arc::clone(svc))
             }),
+            heartbeat_list_tool: config.heartbeat_service.as_ref().map(|svc| {
+                crate::builtin_tools::heartbeat_manage::HeartbeatListTool::new(Arc::clone(svc))
+            }),
+            heartbeat_create_tool: config.heartbeat_service.as_ref().map(|svc| {
+                crate::builtin_tools::heartbeat_manage::HeartbeatCreateTool::new(Arc::clone(svc))
+            }),
+            heartbeat_update_tool: config.heartbeat_service.as_ref().map(|svc| {
+                crate::builtin_tools::heartbeat_manage::HeartbeatUpdateTool::new(Arc::clone(svc))
+            }),
+            heartbeat_delete_tool: config.heartbeat_service.as_ref().map(|svc| {
+                crate::builtin_tools::heartbeat_manage::HeartbeatDeleteTool::new(Arc::clone(svc))
+            }),
+            heartbeat_toggle_tool: config.heartbeat_service.as_ref().map(|svc| {
+                crate::builtin_tools::heartbeat_manage::HeartbeatToggleTool::new(Arc::clone(svc))
+            }),
+            heartbeat_report_tool: crate::builtin_tools::heartbeat_manage::HeartbeatReportTool,
             browser_open_tool,
             browser_click_tool,
             browser_type_tool,
@@ -642,6 +658,48 @@ impl BuiltinToolRegistry {
             let def = AlephTool::definition(&tmp_tool);
             reg(tools, "cron_manage", CronManageTool::DESCRIPTION, def.parameters.clone());
             info!("Registered cron.manage tool in BuiltinToolRegistry");
+        }
+
+        // Heartbeat management tools (require SharedHeartbeatService)
+        if let Some(ref hb_svc) = config.heartbeat_service {
+            use crate::builtin_tools::heartbeat_manage::{
+                HeartbeatListTool, HeartbeatCreateTool, HeartbeatUpdateTool,
+                HeartbeatDeleteTool, HeartbeatToggleTool, HeartbeatReportTool,
+            };
+            let list_tool = HeartbeatListTool::new(Arc::clone(hb_svc));
+            let def = AlephTool::definition(&list_tool);
+            reg(tools, "heartbeat_list", HeartbeatListTool::DESCRIPTION, def.parameters.clone());
+
+            let create_tool = HeartbeatCreateTool::new(Arc::clone(hb_svc));
+            let def = AlephTool::definition(&create_tool);
+            reg(tools, "heartbeat_create", HeartbeatCreateTool::DESCRIPTION, def.parameters.clone());
+
+            let update_tool = HeartbeatUpdateTool::new(Arc::clone(hb_svc));
+            let def = AlephTool::definition(&update_tool);
+            reg(tools, "heartbeat_update", HeartbeatUpdateTool::DESCRIPTION, def.parameters.clone());
+
+            let delete_tool = HeartbeatDeleteTool::new(Arc::clone(hb_svc));
+            let def = AlephTool::definition(&delete_tool);
+            reg(tools, "heartbeat_delete", HeartbeatDeleteTool::DESCRIPTION, def.parameters.clone());
+
+            let toggle_tool = HeartbeatToggleTool::new(Arc::clone(hb_svc));
+            let def = AlephTool::definition(&toggle_tool);
+            reg(tools, "heartbeat_toggle", HeartbeatToggleTool::DESCRIPTION, def.parameters.clone());
+
+            info!("Registered heartbeat management tools in BuiltinToolRegistry");
+
+            // heartbeat_report is always registered (L2 output tool — no service dependency)
+            let report_tool = HeartbeatReportTool;
+            let def = AlephTool::definition(&report_tool);
+            reg(tools, "heartbeat_report", HeartbeatReportTool::DESCRIPTION, def.parameters.clone());
+            info!("Registered heartbeat_report tool in BuiltinToolRegistry");
+        } else {
+            // Register heartbeat_report even without the heartbeat service
+            use crate::builtin_tools::heartbeat_manage::HeartbeatReportTool;
+            let report_tool = HeartbeatReportTool;
+            let def = AlephTool::definition(&report_tool);
+            reg(tools, "heartbeat_report", HeartbeatReportTool::DESCRIPTION, def.parameters.clone());
+            info!("Registered heartbeat_report tool (standalone) in BuiltinToolRegistry");
         }
 
         // Session tools (require SessionManager — from gateway_context or direct session_manager)

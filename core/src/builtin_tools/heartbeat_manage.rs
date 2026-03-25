@@ -1,0 +1,459 @@
+//! Heartbeat management tools — create, list, update, delete, and toggle monitoring tasks.
+//!
+//! Exposes the heartbeat service CRUD API as LLM-callable tools, letting users manage
+//! periodic monitoring tasks through natural language (R8 LLM Sovereignty).
+//!
+//! Also provides `heartbeat_report`, the L2 output tool used during heartbeat execution
+//! for the agent to report its findings.
+
+use async_trait::async_trait;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+use tracing::info;
+
+use crate::error::Result;
+use crate::tasks::heartbeat::{SharedHeartbeatService, config::{HeartbeatTask, HeartbeatTaskView, ProbeConfig, TriggerCondition}};
+use crate::tasks::heartbeat::service::ops::HeartbeatTaskUpdates;
+use crate::tasks::shared::clock::SystemClock;
+use crate::tools::AlephTool;
+
+// =============================================================================
+// Heartbeat List Tool
+// =============================================================================
+
+/// Arguments for heartbeat_list — no parameters required
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+pub struct HeartbeatListArgs {}
+
+/// Output from heartbeat_list
+#[derive(Debug, Clone, Serialize)]
+pub struct HeartbeatListOutput {
+    /// Human-readable status message
+    pub message: String,
+    /// All heartbeat tasks
+    pub tasks: Vec<HeartbeatTaskView>,
+}
+
+/// Tool for listing all heartbeat monitoring tasks.
+#[derive(Clone)]
+pub struct HeartbeatListTool {
+    service: SharedHeartbeatService,
+}
+
+impl HeartbeatListTool {
+    pub fn new(service: SharedHeartbeatService) -> Self {
+        Self { service }
+    }
+}
+
+#[async_trait]
+impl AlephTool for HeartbeatListTool {
+    const NAME: &'static str = "heartbeat_list";
+    const DESCRIPTION: &'static str =
+        "List all heartbeat monitoring tasks with their status, schedule, and last probe results. \
+         Use this to see what monitoring checks are configured.";
+
+    type Args = HeartbeatListArgs;
+    type Output = HeartbeatListOutput;
+
+    async fn call(&self, _args: Self::Args) -> Result<Self::Output> {
+        let service = self.service.lock().await;
+        let tasks = service.list_tasks().await;
+        let count = tasks.len();
+        Ok(HeartbeatListOutput {
+            message: format!("共 {} 个心跳监控任务", count),
+            tasks,
+        })
+    }
+}
+
+// =============================================================================
+// Heartbeat Create Tool
+// =============================================================================
+
+/// Trigger condition variants for LLM input
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TriggerConditionInput {
+    /// Always trigger L2 analysis on every probe
+    Always,
+    /// Trigger if the probe output is non-empty
+    NonEmpty,
+    /// Trigger if the probe output has changed since last run
+    Changed,
+    /// Trigger if the numeric output is greater than the given value
+    GreaterThan { threshold: f64 },
+    /// Trigger if the probe output contains the given substring
+    Contains { text: String },
+}
+
+impl From<TriggerConditionInput> for TriggerCondition {
+    fn from(input: TriggerConditionInput) -> Self {
+        match input {
+            TriggerConditionInput::Always => TriggerCondition::Always,
+            TriggerConditionInput::NonEmpty => TriggerCondition::NonEmpty,
+            TriggerConditionInput::Changed => TriggerCondition::Changed,
+            TriggerConditionInput::GreaterThan { threshold } => TriggerCondition::GreaterThan(threshold),
+            TriggerConditionInput::Contains { text } => TriggerCondition::Contains(text),
+        }
+    }
+}
+
+/// Arguments for heartbeat_create
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+pub struct HeartbeatCreateArgs {
+    /// Human-readable name for this monitoring task
+    pub name: String,
+    /// Probe tool to call for L1 monitoring (e.g. "gmail.unread_count")
+    pub probe_tool_name: String,
+    /// How often to run the probe, in milliseconds (e.g. 300000 for 5 minutes)
+    pub interval_ms: u64,
+    /// Condition that triggers L2 agent analysis (default: always)
+    #[serde(default)]
+    pub probe_trigger_condition: Option<TriggerConditionInput>,
+    /// Agent that handles L2 analysis when triggered (default: "main")
+    #[serde(default)]
+    pub agent_id: Option<String>,
+    /// Optional parameters to pass to the probe tool
+    #[serde(default)]
+    pub probe_tool_params: Option<serde_json::Value>,
+}
+
+/// Output from heartbeat_create
+#[derive(Debug, Clone, Serialize)]
+pub struct HeartbeatCreateOutput {
+    /// Human-readable status message
+    pub message: String,
+    /// Created task ID
+    pub task_id: String,
+}
+
+/// Tool for creating a new heartbeat monitoring task.
+#[derive(Clone)]
+pub struct HeartbeatCreateTool {
+    service: SharedHeartbeatService,
+}
+
+impl HeartbeatCreateTool {
+    pub fn new(service: SharedHeartbeatService) -> Self {
+        Self { service }
+    }
+}
+
+#[async_trait]
+impl AlephTool for HeartbeatCreateTool {
+    const NAME: &'static str = "heartbeat_create";
+    const DESCRIPTION: &'static str =
+        "Create a new heartbeat monitoring task. Use this when the user wants to periodically \
+         check something — e.g., 'monitor my Gmail every 5 minutes', 'alert me when the server \
+         CPU exceeds 80%', 'check if new papers are published daily'.";
+
+    type Args = HeartbeatCreateArgs;
+    type Output = HeartbeatCreateOutput;
+
+    fn examples(&self) -> Option<Vec<String>> {
+        Some(vec![
+            r#"heartbeat_create(name="Gmail 未读检查", probe_tool_name="gmail_unread_count", interval_ms=300000, probe_trigger_condition={"greater_than":{"threshold":0}})"#.to_string(),
+            r#"heartbeat_create(name="服务器监控", probe_tool_name="server_health_check", interval_ms=60000, probe_trigger_condition={"contains":{"text":"error"}})"#.to_string(),
+        ])
+    }
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output> {
+        let trigger_condition = args.probe_trigger_condition
+            .map(TriggerCondition::from)
+            .unwrap_or(TriggerCondition::Always);
+
+        let probe = ProbeConfig {
+            tool_name: args.probe_tool_name,
+            tool_params: args.probe_tool_params,
+            trigger_condition,
+        };
+
+        let agent_id = args.agent_id.unwrap_or_else(|| "main".to_string());
+        let task = HeartbeatTask::new(args.name.clone(), agent_id, args.interval_ms, probe);
+
+        let service = self.service.lock().await;
+        let clock = SystemClock;
+        let id = service.add_task(task, &clock).await;
+
+        info!(task_id = %id, name = %args.name, "Heartbeat task created via tool");
+
+        Ok(HeartbeatCreateOutput {
+            message: format!("心跳监控任务 '{}' 已创建 (ID: {})", args.name, id),
+            task_id: id,
+        })
+    }
+}
+
+// =============================================================================
+// Heartbeat Update Tool
+// =============================================================================
+
+/// Arguments for heartbeat_update
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+pub struct HeartbeatUpdateArgs {
+    /// Task ID to update (required)
+    pub id: String,
+    /// New name (optional)
+    #[serde(default)]
+    pub name: Option<String>,
+    /// New agent ID (optional)
+    #[serde(default)]
+    pub agent_id: Option<String>,
+    /// New interval in milliseconds (optional)
+    #[serde(default)]
+    pub interval_ms: Option<u64>,
+    /// Enable or disable the task (optional)
+    #[serde(default)]
+    pub enabled: Option<bool>,
+}
+
+/// Output from heartbeat_update
+#[derive(Debug, Clone, Serialize)]
+pub struct HeartbeatUpdateOutput {
+    /// Human-readable status message
+    pub message: String,
+    /// Updated task ID
+    pub task_id: String,
+}
+
+/// Tool for updating an existing heartbeat monitoring task.
+#[derive(Clone)]
+pub struct HeartbeatUpdateTool {
+    service: SharedHeartbeatService,
+}
+
+impl HeartbeatUpdateTool {
+    pub fn new(service: SharedHeartbeatService) -> Self {
+        Self { service }
+    }
+}
+
+#[async_trait]
+impl AlephTool for HeartbeatUpdateTool {
+    const NAME: &'static str = "heartbeat_update";
+    const DESCRIPTION: &'static str =
+        "Update an existing heartbeat monitoring task. Use heartbeat_list to find the task ID first.";
+
+    type Args = HeartbeatUpdateArgs;
+    type Output = HeartbeatUpdateOutput;
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output> {
+        let updates = HeartbeatTaskUpdates {
+            name: args.name,
+            agent_id: args.agent_id,
+            interval_ms: args.interval_ms,
+            enabled: args.enabled,
+            ..Default::default()
+        };
+
+        let service = self.service.lock().await;
+        let clock = SystemClock;
+        service
+            .update_task(&args.id, updates, &clock)
+            .await
+            .map_err(|e| crate::error::AlephError::tool(format!("Failed to update heartbeat task: {}", e)))?;
+
+        info!(task_id = %args.id, "Heartbeat task updated via tool");
+
+        Ok(HeartbeatUpdateOutput {
+            message: format!("心跳监控任务 {} 已更新", args.id),
+            task_id: args.id,
+        })
+    }
+}
+
+// =============================================================================
+// Heartbeat Delete Tool
+// =============================================================================
+
+/// Arguments for heartbeat_delete
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+pub struct HeartbeatDeleteArgs {
+    /// Task ID to delete (required)
+    pub id: String,
+}
+
+/// Output from heartbeat_delete
+#[derive(Debug, Clone, Serialize)]
+pub struct HeartbeatDeleteOutput {
+    /// Human-readable status message
+    pub message: String,
+    /// Deleted task ID
+    pub task_id: String,
+}
+
+/// Tool for deleting a heartbeat monitoring task.
+#[derive(Clone)]
+pub struct HeartbeatDeleteTool {
+    service: SharedHeartbeatService,
+}
+
+impl HeartbeatDeleteTool {
+    pub fn new(service: SharedHeartbeatService) -> Self {
+        Self { service }
+    }
+}
+
+#[async_trait]
+impl AlephTool for HeartbeatDeleteTool {
+    const NAME: &'static str = "heartbeat_delete";
+    const DESCRIPTION: &'static str =
+        "Delete a heartbeat monitoring task permanently. Use heartbeat_list to find the task ID first.";
+
+    type Args = HeartbeatDeleteArgs;
+    type Output = HeartbeatDeleteOutput;
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output> {
+        let service = self.service.lock().await;
+        service
+            .delete_task(&args.id)
+            .await
+            .map_err(|e| crate::error::AlephError::tool(format!("Failed to delete heartbeat task: {}", e)))?;
+
+        info!(task_id = %args.id, "Heartbeat task deleted via tool");
+
+        Ok(HeartbeatDeleteOutput {
+            message: format!("心跳监控任务 {} 已删除", args.id),
+            task_id: args.id,
+        })
+    }
+}
+
+// =============================================================================
+// Heartbeat Toggle Tool
+// =============================================================================
+
+/// Arguments for heartbeat_toggle
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+pub struct HeartbeatToggleArgs {
+    /// Task ID to toggle (required)
+    pub id: String,
+}
+
+/// Output from heartbeat_toggle
+#[derive(Debug, Clone, Serialize)]
+pub struct HeartbeatToggleOutput {
+    /// Human-readable status message
+    pub message: String,
+    /// Task ID
+    pub task_id: String,
+    /// New enabled state
+    pub enabled: bool,
+}
+
+/// Tool for toggling a heartbeat monitoring task's enabled state.
+#[derive(Clone)]
+pub struct HeartbeatToggleTool {
+    service: SharedHeartbeatService,
+}
+
+impl HeartbeatToggleTool {
+    pub fn new(service: SharedHeartbeatService) -> Self {
+        Self { service }
+    }
+}
+
+#[async_trait]
+impl AlephTool for HeartbeatToggleTool {
+    const NAME: &'static str = "heartbeat_toggle";
+    const DESCRIPTION: &'static str =
+        "Enable or disable a heartbeat monitoring task. Use heartbeat_list to find the task ID first.";
+
+    type Args = HeartbeatToggleArgs;
+    type Output = HeartbeatToggleOutput;
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output> {
+        let service = self.service.lock().await;
+        let clock = SystemClock;
+        let enabled = service
+            .toggle_task(&args.id, &clock)
+            .await
+            .map_err(|e| crate::error::AlephError::tool(format!("Failed to toggle heartbeat task: {}", e)))?;
+
+        let state_str = if enabled { "启用" } else { "禁用" };
+        Ok(HeartbeatToggleOutput {
+            message: format!("心跳监控任务 {} 已{}", args.id, state_str),
+            task_id: args.id,
+            enabled,
+        })
+    }
+}
+
+// =============================================================================
+// Heartbeat Report Tool (L2 output tool)
+// =============================================================================
+
+/// Action for heartbeat_report
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum HeartbeatReportAction {
+    /// No action needed — findings are routine or below threshold
+    Silent,
+    /// Notify the user with the given message
+    Notify,
+}
+
+/// Arguments for heartbeat_report
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+pub struct HeartbeatReportArgs {
+    /// Action to take: "silent" (no notification) or "notify" (send message to user)
+    pub action: HeartbeatReportAction,
+    /// Message to send to the user (required when action = "notify")
+    #[serde(default)]
+    pub message: Option<String>,
+}
+
+/// Output from heartbeat_report
+#[derive(Debug, Clone, Serialize)]
+pub struct HeartbeatReportOutput {
+    /// The action taken
+    pub action: String,
+    /// Message content (if notify)
+    pub message: String,
+    /// Whether the report was acknowledged
+    pub acknowledged: bool,
+}
+
+/// Tool for L2 heartbeat execution — agent reports its findings via this tool.
+///
+/// This is the designated "output gate" for heartbeat L2 agents. The agent
+/// calls this at the end of analysis to declare either "nothing to report"
+/// (silent) or "notify the user" with a message.
+#[derive(Clone, Default)]
+pub struct HeartbeatReportTool;
+
+#[async_trait]
+impl AlephTool for HeartbeatReportTool {
+    const NAME: &'static str = "heartbeat_report";
+    const DESCRIPTION: &'static str =
+        "Report the results of a heartbeat monitoring analysis. Call this at the end of your analysis \
+         to declare the outcome: use action='silent' if nothing notable was found, or action='notify' \
+         with a message to alert the user about findings that require attention.";
+
+    type Args = HeartbeatReportArgs;
+    type Output = HeartbeatReportOutput;
+
+    fn examples(&self) -> Option<Vec<String>> {
+        Some(vec![
+            r#"heartbeat_report(action="silent")"#.to_string(),
+            r#"heartbeat_report(action="notify", message="您有 3 封未读邮件，其中 1 封来自重要联系人。")"#.to_string(),
+        ])
+    }
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output> {
+        let (action_str, message) = match args.action {
+            HeartbeatReportAction::Silent => ("silent".to_string(), String::new()),
+            HeartbeatReportAction::Notify => {
+                let msg = args.message.unwrap_or_default();
+                ("notify".to_string(), msg)
+            }
+        };
+
+        Ok(HeartbeatReportOutput {
+            action: action_str,
+            message,
+            acknowledged: true,
+        })
+    }
+}

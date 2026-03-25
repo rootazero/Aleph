@@ -69,6 +69,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
     agent_manager: Arc<alephcore::AgentManager>,
     acp_manager: Option<Arc<alephcore::acp::manager::AcpHarnessManager>>,
     cron_service: Option<alephcore::tasks::cron::SharedCronService>,
+    heartbeat_service: Option<alephcore::tasks::heartbeat::SharedHeartbeatService>,
     daemon: bool,
     shared_token_mgr: Arc<alephcore::gateway::security::SharedTokenManager>,
 ) -> AgentHandlersResult {
@@ -402,6 +403,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             extension_manager: extension_manager.clone(),
             acp_manager: acp_manager.clone(),
             cron_service: cron_service.clone(),
+            heartbeat_service: heartbeat_service.clone(),
             generation_registry: Some(generation_registry.clone()),
             tool_context: Some(alephcore::tools::new_tool_context_handle()),
             session_manager: Some(session_manager.clone()),

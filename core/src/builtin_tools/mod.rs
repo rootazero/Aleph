@@ -65,6 +65,7 @@ pub mod vision;
 pub mod escalate_task;
 pub mod acp_tools;
 pub mod cron_manage;
+pub mod heartbeat_manage;
 pub mod clawhub;
 pub mod config_guide;
 pub mod self_manage;
@@ -125,6 +126,14 @@ pub use acp_tools::{
     AcpSwitchArgs, AcpSwitchOutput, AcpSwitchTool,
 };
 pub use cron_manage::{CronAction, CronManageArgs, CronManageOutput, CronManageTool};
+pub use heartbeat_manage::{
+    HeartbeatListArgs, HeartbeatListOutput, HeartbeatListTool,
+    HeartbeatCreateArgs, HeartbeatCreateOutput, HeartbeatCreateTool,
+    HeartbeatUpdateArgs, HeartbeatUpdateOutput, HeartbeatUpdateTool,
+    HeartbeatDeleteArgs, HeartbeatDeleteOutput, HeartbeatDeleteTool,
+    HeartbeatToggleArgs, HeartbeatToggleOutput, HeartbeatToggleTool,
+    HeartbeatReportAction, HeartbeatReportArgs, HeartbeatReportOutput, HeartbeatReportTool,
+};
 pub use clawhub::{ClawHubAction, ClawHubArgs, ClawHubOutput, ClawHubTool};
 pub use config_guide::{GuideTopic, ReadConfigGuideArgs, ReadConfigGuideOutput, ReadConfigGuideTool};
 pub use self_manage::{SelfManageArgs, SelfManageOutput, SelfManageTool};

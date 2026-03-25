@@ -157,6 +157,38 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         description: "Manage scheduled tasks — create, list, delete, enable/disable cron jobs",
         requires_config: true, // Requires SharedCronService
     },
+    // Heartbeat management tools — require SharedHeartbeatService
+    BuiltinToolDefinition {
+        name: "heartbeat_list",
+        description: "List all heartbeat monitoring tasks",
+        requires_config: true, // Requires SharedHeartbeatService
+    },
+    BuiltinToolDefinition {
+        name: "heartbeat_create",
+        description: "Create a new heartbeat monitoring task",
+        requires_config: true, // Requires SharedHeartbeatService
+    },
+    BuiltinToolDefinition {
+        name: "heartbeat_update",
+        description: "Update an existing heartbeat monitoring task",
+        requires_config: true, // Requires SharedHeartbeatService
+    },
+    BuiltinToolDefinition {
+        name: "heartbeat_delete",
+        description: "Delete a heartbeat monitoring task",
+        requires_config: true, // Requires SharedHeartbeatService
+    },
+    BuiltinToolDefinition {
+        name: "heartbeat_toggle",
+        description: "Enable or disable a heartbeat monitoring task",
+        requires_config: true, // Requires SharedHeartbeatService
+    },
+    // Heartbeat report tool — always available, used during L2 heartbeat execution
+    BuiltinToolDefinition {
+        name: "heartbeat_report",
+        description: "Report results of a heartbeat monitoring analysis (silent or notify user)",
+        requires_config: false,
+    },
     BuiltinToolDefinition {
         name: "agent_create",
         description: "Create a new agent with an isolated workspace and register it for use",
@@ -381,6 +413,11 @@ pub fn create_tool_boxed(
         "session_rename" => None,
         // Cron management tool requires SharedCronService at runtime
         "cron_manage" => None,
+        // Heartbeat management tools require SharedHeartbeatService at runtime
+        "heartbeat_list" | "heartbeat_create" | "heartbeat_update"
+        | "heartbeat_delete" | "heartbeat_toggle" => None,
+        // Heartbeat report tool — always available (no dependencies)
+        "heartbeat_report" => Some(Box::new(crate::builtin_tools::heartbeat_manage::HeartbeatReportTool)),
         // Agent management tools require agent_registry + workspace_manager + session_context,
         // created dynamically in BuiltinToolRegistry::with_config().
         "agent_create" | "agent_list" | "agent_delete" => None,

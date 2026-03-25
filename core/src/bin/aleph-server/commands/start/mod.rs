@@ -511,7 +511,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         &mut server, session_manager.clone(), event_bus.clone(),
         router.clone(), &full_config, &*app_config.read().await, app_config.clone(), &memory_db,
         workspace_manager.clone(), agent_manager.clone(), acp_manager.clone(),
-        cron_service.clone(), args.daemon,
+        cron_service.clone(), heartbeat_service.clone(), args.daemon,
         auth_bundle.auth_ctx.shared_token_mgr.clone(),
     ).await;
 

@@ -57,6 +57,9 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
             "browser_select",
             "browser_evaluate",
             "browser_fill_form",
+            "browser_press_key",
+            "browser_wait_for",
+            "browser_console",
             "browser_profile",
         ],
     },
@@ -99,6 +102,18 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
         id: "automation",
         name: "自动化",
         tools: &["cron_manage", "clawhub"],
+    },
+    ToolCategory {
+        id: "heartbeat",
+        name: "心跳监控",
+        tools: &[
+            "heartbeat_list",
+            "heartbeat_create",
+            "heartbeat_update",
+            "heartbeat_delete",
+            "heartbeat_toggle",
+            "heartbeat_report",
+        ],
     },
 ];
 
