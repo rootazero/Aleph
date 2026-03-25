@@ -10,8 +10,8 @@ use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-// V2 field types from aleph_plugin_toml module
-use super::aleph_plugin_toml::{
+// V2 field types from toml_types module
+use super::toml_types::{
     CapabilitiesSection, ChannelSection, CommandSection, HookSection, HttpRouteSection,
     PermissionsSection, PromptSection, ProviderSection, ServiceSection, ToolSection,
 };
@@ -78,6 +78,20 @@ pub enum PluginPermission {
     /// Environment variable access
     Env,
 
+    /// Shell command execution (required for CliCommand registration)
+    Shell,
+
+    /// Background service registration
+    Background,
+
+    /// HTTP route registration
+    #[serde(rename = "http-routes")]
+    HttpRoutes,
+
+    /// Gateway RPC method registration
+    #[serde(rename = "gateway-rpc")]
+    GatewayRpc,
+
     /// Custom/extension-specific permission
     #[serde(untagged)]
     Custom(String),
@@ -91,6 +105,10 @@ impl std::fmt::Display for PluginPermission {
             PluginPermission::FilesystemWrite => write!(f, "filesystem:write"),
             PluginPermission::Filesystem => write!(f, "filesystem"),
             PluginPermission::Env => write!(f, "env"),
+            PluginPermission::Shell => write!(f, "shell"),
+            PluginPermission::Background => write!(f, "background"),
+            PluginPermission::HttpRoutes => write!(f, "http-routes"),
+            PluginPermission::GatewayRpc => write!(f, "gateway-rpc"),
             PluginPermission::Custom(s) => write!(f, "{}", s),
         }
     }
@@ -475,13 +493,13 @@ mod tests {
         let manifest = PluginManifest::new(
             "my-plugin".to_string(),
             "My Plugin".to_string(),
-            PluginKind::NodeJs,
+            PluginKind::Mcp,
             PathBuf::from("dist/index.js"),
         );
 
         assert_eq!(manifest.id, "my-plugin");
         assert_eq!(manifest.name, "My Plugin");
-        assert_eq!(manifest.kind, PluginKind::NodeJs);
+        assert_eq!(manifest.kind, PluginKind::Mcp);
         assert_eq!(manifest.entry, PathBuf::from("dist/index.js"));
         assert!(manifest.root_dir.as_os_str().is_empty());
     }
@@ -504,7 +522,7 @@ mod tests {
         let manifest = PluginManifest::new(
             "my-plugin".to_string(),
             "My Plugin".to_string(),
-            PluginKind::NodeJs,
+            PluginKind::Mcp,
             PathBuf::from("dist/index.js"),
         )
         .with_root_dir(PathBuf::from("/plugins/my-plugin"));
@@ -520,7 +538,7 @@ mod tests {
         let manifest = PluginManifest::new(
             "my-plugin".to_string(),
             "My Plugin".to_string(),
-            PluginKind::NodeJs,
+            PluginKind::Mcp,
             PathBuf::from("/absolute/path/index.js"),
         )
         .with_root_dir(PathBuf::from("/plugins/my-plugin"));
@@ -537,7 +555,7 @@ mod tests {
         let manifest = PluginManifest::new(
             "evil-plugin".to_string(),
             "Evil Plugin".to_string(),
-            PluginKind::NodeJs,
+            PluginKind::Mcp,
             PathBuf::from("../../etc/passwd"),
         )
         .with_root_dir(PathBuf::from("/plugins/evil-plugin"));

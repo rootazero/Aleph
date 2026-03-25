@@ -10,7 +10,7 @@ use serde::Deserialize;
 use serde_json::Value as JsonValue;
 
 use crate::extension::error::{ExtensionError, ExtensionResult};
-use crate::extension::manifest::aleph_plugin::{sanitize_plugin_id, validate_plugin_id};
+use crate::extension::manifest::{sanitize_plugin_id, validate_plugin_id};
 use crate::extension::manifest::types::{AlephExtensions, AlephRuntime, AuthorInfo, PluginManifest};
 use crate::extension::types::PluginKind;
 
@@ -126,7 +126,7 @@ impl CcPluginRepository {
 fn runtime_to_kind(runtime: &str) -> PluginKind {
     match runtime {
         "wasm" => PluginKind::Wasm,
-        "mcp" => PluginKind::NodeJs,
+        "mcp" => PluginKind::Mcp,
         "static" => PluginKind::Static,
         _ => PluginKind::Static,
     }
@@ -135,7 +135,6 @@ fn runtime_to_kind(runtime: &str) -> PluginKind {
 fn default_entry_for_kind(kind: PluginKind) -> String {
     match kind {
         PluginKind::Wasm => "plugin.wasm".to_string(),
-        PluginKind::NodeJs => "index.js".to_string(),
         PluginKind::Mcp => ".mcp.json".to_string(),
         PluginKind::Static => ".".to_string(),
     }
@@ -198,7 +197,7 @@ pub fn parse_cc_plugin_json_content(
             .permissions
             .as_ref()
             .map(|p| {
-                use crate::extension::manifest::aleph_plugin_toml::convert_permissions;
+                use crate::extension::manifest::toml_types::convert_permissions;
                 convert_permissions(p)
             })
             .unwrap_or_default();
@@ -265,6 +264,77 @@ pub async fn parse_cc_plugin_json(dir: &Path) -> ExtensionResult<PluginManifest>
     let json_path = dir.join(CC_PLUGIN_JSON);
     let content = tokio::fs::read_to_string(&json_path).await?;
     parse_cc_plugin_json_content(&content, dir)
+}
+
+// =============================================================================
+// ManifestAdapter implementation
+// =============================================================================
+
+use super::adapter::{AdapterOutput, ManifestAdapter};
+use super::parsers;
+use crate::extension::capability::{CapabilitySource, SourceFormat};
+use crate::extension::types::PluginOrigin;
+
+/// ManifestAdapter for `.claude-plugin/plugin.json` format.
+///
+/// Priority 90 — JSON is tried after TOML.
+pub struct ClaudeCodeJsonAdapter;
+
+impl ManifestAdapter for ClaudeCodeJsonAdapter {
+    fn detect(&self, plugin_dir: &Path) -> bool {
+        plugin_dir.join(CC_PLUGIN_JSON).exists()
+    }
+
+    fn parse(&self, plugin_dir: &Path) -> anyhow::Result<AdapterOutput> {
+        let manifest = parse_cc_plugin_json_sync(plugin_dir)
+            .map_err(|e| anyhow::anyhow!("CC JSON parse error: {}", e))?;
+
+        let plugin_id = manifest.id.clone();
+        let mut capabilities = Vec::new();
+
+        // Re-parse the raw JSON to get component paths
+        let json_path = plugin_dir.join(CC_PLUGIN_JSON);
+        let content = std::fs::read_to_string(&json_path)?;
+        let raw: CcPluginJson = serde_json::from_str(&content)
+            .map_err(|e| anyhow::anyhow!("JSON re-parse error: {}", e))?;
+
+        // Parse skills
+        let skills_rel = raw.skills.as_deref().unwrap_or("skills");
+        capabilities.extend(parsers::parse_skills_dir(plugin_dir, skills_rel, &plugin_id)?);
+
+        // Parse agents
+        let agents_rel = raw.agents.as_deref().unwrap_or("agents");
+        capabilities.extend(parsers::parse_agents_dir(plugin_dir, agents_rel, &plugin_id)?);
+
+        // Parse hooks
+        let hooks_rel = raw.hooks.as_deref().unwrap_or("hooks/hooks.json");
+        capabilities.extend(parsers::parse_hooks_file(plugin_dir, hooks_rel, &plugin_id)?);
+
+        // Parse MCP servers
+        let mcp_rel = raw.mcp_servers.as_deref().unwrap_or(".mcp.json");
+        capabilities.extend(parsers::parse_mcp_config_file(plugin_dir, mcp_rel, &plugin_id)?);
+
+        Ok(AdapterOutput {
+            plugin_id: plugin_id.clone(),
+            name: Some(manifest.name),
+            version: manifest.version,
+            description: manifest.description,
+            capabilities,
+            source: CapabilitySource {
+                plugin_id,
+                origin: PluginOrigin::Global,
+                format: SourceFormat::ClaudeCode,
+            },
+        })
+    }
+
+    fn format_name(&self) -> &str {
+        "Claude Code (JSON)"
+    }
+
+    fn priority(&self) -> i32 {
+        90
+    }
 }
 
 // =============================================================================
@@ -402,8 +472,8 @@ mod tests {
             "aleph": {"runtime": "mcp"}
         }"#;
         let manifest = parse_cc_plugin_json_content(content, &test_dir()).unwrap();
-        assert_eq!(manifest.kind, PluginKind::NodeJs);
-        assert_eq!(manifest.entry, PathBuf::from("index.js"));
+        assert_eq!(manifest.kind, PluginKind::Mcp);
+        assert_eq!(manifest.entry, PathBuf::from(".mcp.json"));
     }
 
     #[test]
@@ -429,7 +499,7 @@ mod tests {
             }
         }"#;
         let manifest = parse_cc_plugin_json_content(content, &test_dir()).unwrap();
-        assert_eq!(manifest.kind, PluginKind::NodeJs);
+        assert_eq!(manifest.kind, PluginKind::Mcp);
 
         let ext = manifest.aleph_extensions.unwrap();
         assert_eq!(ext.channels.len(), 1);

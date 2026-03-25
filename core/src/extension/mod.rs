@@ -28,15 +28,20 @@ pub mod config;
 pub mod discovery;
 pub mod hooks;
 pub mod marketplace;
-mod plugin_loader;
+mod loader;
 pub mod runtime;
 pub mod scope;
 pub mod sync_api;
 pub mod validation;
 
+pub mod capability;
+pub mod registrar;
+
 mod channel_manager;
 mod error;
 mod http_handler;
+// DEPRECATED: content_loader will be replaced by AdapterRegistry in a future pass.
+// Kept for backward compat with gateway handlers and CLI plugin commands.
 mod content_loader;
 pub mod mcp_config;
 pub mod manifest;
@@ -57,7 +62,7 @@ pub use error::*;
 pub use http_handler::{match_path, PluginHttpHandler};
 pub use content_loader::*;
 pub use manifest::*;
-pub use plugin_loader::PluginLoader;
+pub use loader::PluginLoader;
 pub use provider_adapter::PluginProviderAdapter;
 pub use registry::*;
 pub use service_manager::ServiceManager;
@@ -76,9 +81,12 @@ pub use discovery::{discover_all, DiscoveryConfig as PluginDiscoveryConfig, Plug
 pub use manifest::PluginManifest;
 pub use registry::{HookRegistration, PluginRegistry, ToolRegistration};
 pub use types::{PluginKind, PluginOrigin, PluginRecord, PluginStatus};
+pub use capability::{CapabilityDeclaration, CapabilitySource, SourceFormat, Tier};
+pub use registrar::CapabilityApi;
 
 use crate::discovery::{DiscoveryConfig, DiscoveryManager};
-use hooks::{HookExecutor};
+use hooks::HookExecutor;
+use manifest::adapter::AdapterRegistry;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use crate::sync_primitives::Arc;
@@ -104,9 +112,6 @@ pub struct ExtensionConfig {
     /// Discovery configuration
     pub discovery: DiscoveryConfig,
 
-    /// Whether to enable Node.js plugin runtime
-    pub enable_node_runtime: bool,
-
     /// Whether to auto-load extensions on startup
     pub auto_load: bool,
 }
@@ -115,7 +120,6 @@ impl Default for ExtensionConfig {
     fn default() -> Self {
         Self {
             discovery: DiscoveryConfig::default(),
-            enable_node_runtime: true,
             auto_load: true,
         }
     }
@@ -156,6 +160,9 @@ pub struct ExtensionManager {
     /// Service lifecycle manager
     service_manager: Arc<RwLock<ServiceManager>>,
 
+    /// Adapter registry for capability-driven manifest parsing
+    adapter_registry: AdapterRegistry,
+
     /// Skill System v2 (independent bounded context)
     skill_system: crate::skill::SkillSystem,
 }
@@ -173,6 +180,7 @@ impl ExtensionManager {
         let plugin_loader = Arc::new(RwLock::new(PluginLoader::new()));
         let plugin_registry = Arc::new(RwLock::new(PluginRegistry::new()));
         let service_manager = Arc::new(RwLock::new(ServiceManager::new()));
+        let adapter_registry = AdapterRegistry::with_defaults();
 
         Ok(Self {
             discovery,
@@ -186,6 +194,7 @@ impl ExtensionManager {
             plugin_loader,
             plugin_registry,
             service_manager,
+            adapter_registry,
             skill_system: crate::skill::SkillSystem::new(),
         })
     }
@@ -337,6 +346,54 @@ impl ExtensionManager {
     /// Check if extensions have been loaded
     pub async fn is_loaded(&self) -> bool {
         self.cache_state.read().await.loaded
+    }
+
+    /// Get a reference to the adapter registry for capability-driven parsing.
+    pub fn adapter_registry(&self) -> &AdapterRegistry {
+        &self.adapter_registry
+    }
+
+    /// Hot-reload a single plugin by ID.
+    ///
+    /// Unregisters all existing capabilities, re-parses the manifest from disk,
+    /// and re-registers all capabilities declared in the updated manifest.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the plugin is not found, the manifest cannot be parsed,
+    /// or capability registration fails (e.g. missing permissions).
+    pub async fn reload_plugin(&self, plugin_id: &str) -> anyhow::Result<()> {
+        // Find root dir from existing record
+        let root_dir = {
+            let registry = self.plugin_registry.read().await;
+            registry
+                .get_plugin(plugin_id)
+                .map(|p| p.root_dir.clone())
+                .ok_or_else(|| anyhow::anyhow!("Plugin not found: {}", plugin_id))?
+        };
+
+        // Re-parse manifest via adapter registry
+        let output = self.adapter_registry.parse_dir(&root_dir)?;
+
+        // Get permissions from the legacy manifest (best-effort; empty if not parseable)
+        let permissions = manifest::parse_manifest_from_dir_sync(&root_dir)
+            .map(|m| m.permissions)
+            .unwrap_or_default();
+
+        // Build updated plugin record
+        let record = PluginRecord::from_adapter_output(&output, root_dir);
+
+        // Atomically unregister old capabilities and register new ones
+        let mut registry = self.plugin_registry.write().await;
+        let mut api = registrar::CapabilityApi::new(
+            &mut registry,
+            output.plugin_id.clone(),
+            permissions,
+        );
+        api.reload(record, output.capabilities)?;
+
+        tracing::info!(plugin = plugin_id, "Plugin hot-reloaded successfully");
+        Ok(())
     }
 }
 

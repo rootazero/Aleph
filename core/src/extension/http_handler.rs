@@ -40,7 +40,7 @@ use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
 
 use super::error::{ExtensionError, ExtensionResult};
-use super::plugin_loader::PluginLoader;
+use super::loader::PluginLoader;
 use super::registry::HttpRouteRegistration;
 use super::types::{HttpRequest, HttpResponse};
 

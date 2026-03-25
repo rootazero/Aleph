@@ -58,7 +58,7 @@ use chrono::Utc;
 use tracing::{debug, error, info, warn};
 
 use super::error::{ExtensionError, ExtensionResult};
-use super::plugin_loader::PluginLoader;
+use super::loader::PluginLoader;
 use super::registry::ServiceRegistration;
 use super::types::{ServiceInfo, ServiceResult, ServiceState};
 

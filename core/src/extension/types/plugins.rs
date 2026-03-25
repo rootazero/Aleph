@@ -114,8 +114,6 @@ impl PluginOrigin {
 pub enum PluginKind {
     /// WebAssembly plugin (.wasm)
     Wasm,
-    /// Node.js plugin (package.json)
-    NodeJs,
     /// MCP server plugin (.mcp.json) — uses Aleph's MCP client system
     Mcp,
     /// Static content plugin (markdown files)
@@ -133,7 +131,6 @@ impl PluginKind {
 
         match (filename, ext) {
             (_, Some("wasm")) => Some(PluginKind::Wasm),
-            ("package.json", _) => Some(PluginKind::NodeJs),
             (".mcp.json", _) => Some(PluginKind::Mcp),
             ("aleph.plugin.json", _) => Some(PluginKind::Wasm),
             ("SKILL.md" | "COMMAND.md" | "AGENT.md", _) => Some(PluginKind::Static),
@@ -292,6 +289,58 @@ impl PluginRecord {
             provider_ids: Vec::new(),
             gateway_methods: Vec::new(),
             service_ids: Vec::new(),
+        }
+    }
+
+    /// Create a PluginRecord from an AdapterOutput.
+    ///
+    /// Populates metadata from the adapter output and derives tool/hook counts
+    /// from the declared capabilities.
+    pub fn from_adapter_output(
+        output: &crate::extension::manifest::adapter::AdapterOutput,
+        root_dir: PathBuf,
+    ) -> Self {
+        use crate::extension::capability::CapabilityDeclaration;
+
+        let mut tool_names = Vec::new();
+        let mut hook_count = 0;
+        let mut channel_ids = Vec::new();
+        let mut provider_ids = Vec::new();
+        let mut service_ids = Vec::new();
+
+        for cap in &output.capabilities {
+            match cap {
+                CapabilityDeclaration::Tool(t) => tool_names.push(t.name.clone()),
+                CapabilityDeclaration::Hook(_) => hook_count += 1,
+                CapabilityDeclaration::Channel(c) => channel_ids.push(c.id.clone()),
+                CapabilityDeclaration::Provider(p) => provider_ids.push(p.id.clone()),
+                CapabilityDeclaration::Service(s) => service_ids.push(s.id.clone()),
+                CapabilityDeclaration::Skill(_)
+                | CapabilityDeclaration::Command(_)
+                | CapabilityDeclaration::Agent(_)
+                | CapabilityDeclaration::McpServer(_)
+                | CapabilityDeclaration::GatewayMethod(_)
+                | CapabilityDeclaration::HttpRoute(_)
+                | CapabilityDeclaration::Cli(_) => {}
+            }
+        }
+
+        Self {
+            id: output.plugin_id.clone(),
+            name: output.name.clone().unwrap_or_else(|| output.plugin_id.clone()),
+            version: output.version.clone(),
+            description: output.description.clone(),
+            kind: PluginKind::Static, // default; caller can override
+            origin: output.source.origin,
+            status: PluginStatus::Loaded,
+            error: None,
+            root_dir,
+            tool_names,
+            hook_count,
+            channel_ids,
+            provider_ids,
+            gateway_methods: Vec::new(),
+            service_ids,
         }
     }
 
