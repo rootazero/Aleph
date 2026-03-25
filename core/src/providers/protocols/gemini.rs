@@ -14,6 +14,7 @@ use crate::providers::gemini::{
     Content, GeminiFunctionDeclaration, GeminiToolConfig, GenerateContentRequest,
     GenerationConfig, Part, ThinkingConfig,
 };
+use crate::providers::gemini::schema::clean_schema_for_gemini;
 use crate::providers::message::UnifiedMessage;
 use async_trait::async_trait;
 use futures::stream::BoxStream;
@@ -107,6 +108,7 @@ impl GeminiProtocol {
                     });
                 }
                 UnifiedMessage::ToolResult {
+                    tool_call_id,
                     tool_name,
                     content,
                     ..
@@ -128,7 +130,7 @@ impl GeminiProtocol {
                             function_response: crate::providers::gemini::GeminiFunctionResponse {
                                 name: tool_name.clone(),
                                 response: serde_json::json!({ "result": output }),
-                                id: None,
+                                id: Some(tool_call_id.clone()),
                             },
                         }],
                     });
@@ -148,15 +150,43 @@ impl GeminiProtocol {
         })
     }
 
-    /// Map ThinkLevel to thinkingBudget
-    fn map_think_level(level: &ThinkLevel) -> Option<u32> {
-        match level {
-            ThinkLevel::Off => None,
-            ThinkLevel::Minimal => Some(500),
-            ThinkLevel::Low => Some(1000),
-            ThinkLevel::Medium => Some(2000),
-            ThinkLevel::High => Some(4000),
-            ThinkLevel::XHigh => Some(8000),
+    /// Map ThinkLevel to Gemini ThinkingConfig.
+    ///
+    /// - Gemini 2.5 models → `thinkingBudget` (integer)
+    /// - All others (Gemini 3+) → `thinkingLevel` (enum)
+    fn map_think_level(level: &ThinkLevel, model: &str) -> Option<ThinkingConfig> {
+        if *level == ThinkLevel::Off {
+            return None;
+        }
+        // Gemini 2.5 models use thinkingBudget; all others use thinkingLevel
+        let use_budget = model.contains("gemini-2.5");
+        if use_budget {
+            let budget = match level {
+                ThinkLevel::Minimal => 500,
+                ThinkLevel::Low => 1000,
+                ThinkLevel::Medium => 2000,
+                ThinkLevel::High => 4000,
+                ThinkLevel::XHigh => 8000,
+                ThinkLevel::Off => unreachable!(),
+            };
+            Some(ThinkingConfig {
+                thinking_budget: Some(budget),
+                thinking_level: None,
+                include_thoughts: Some(true),
+            })
+        } else {
+            let level_str = match level {
+                ThinkLevel::Minimal => "MINIMAL",
+                ThinkLevel::Low => "LOW",
+                ThinkLevel::Medium => "MEDIUM",
+                ThinkLevel::High | ThinkLevel::XHigh => "HIGH",
+                ThinkLevel::Off => unreachable!(),
+            };
+            Some(ThinkingConfig {
+                thinking_budget: None,
+                thinking_level: Some(level_str.into()),
+                include_thoughts: Some(true),
+            })
         }
     }
 
@@ -177,12 +207,7 @@ impl ProtocolAdapter for GeminiProtocol {
         let thinking_config = payload
             .think_level
             .as_ref()
-            .and_then(Self::map_think_level)
-            .map(|budget| ThinkingConfig {
-                thinking_budget: Some(budget as i32),
-                thinking_level: None,
-                include_thoughts: None,
-            });
+            .and_then(|level| Self::map_think_level(level, config.default_model()));
 
         // Per-request overrides provider config
         let generation_config = GenerationConfig {
@@ -198,13 +223,9 @@ impl ProtocolAdapter for GeminiProtocol {
             let declarations: Vec<GeminiFunctionDeclaration> = tool_defs
                 .iter()
                 .map(|td| {
-                    // Ensure parameters has "type" field — required by strict
-                    // backends; keeps parity with Anthropic/OpenAI adapters.
                     let mut params = td.parameters.clone();
-                    if let Some(obj) = params.as_object_mut() {
-                        obj.entry("type")
-                            .or_insert_with(|| serde_json::json!("object"));
-                    }
+                    // Sanitize schema for Gemini's restricted OpenAPI subset
+                    clean_schema_for_gemini(&mut params);
                     GeminiFunctionDeclaration {
                         name: td.name.clone(),
                         description: td.description.clone(),
@@ -274,8 +295,8 @@ impl ProtocolAdapter for GeminiProtocol {
     ///
     /// Gemini streams complete function calls per chunk (not incremental args), so
     /// each `functionCall` part yields `ToolCallStart + ToolCallArgDelta + ToolCallEnd`
-    /// in one shot. Synthetic call IDs are generated as `gemini_fc_{counter}` because
-    /// the Gemini API does not assign tool call IDs.
+    /// in one shot. Native call IDs are used when present (Gemini 3+); synthetic
+    /// IDs (`gemini_fc_{counter}`) are generated as fallback.
     async fn stream_deltas(
         &self,
         response: reqwest::Response,
@@ -404,15 +425,9 @@ impl ProtocolAdapter for GeminiProtocol {
 
 /// Parse one Gemini SSE data JSON chunk and push [`ProviderDelta`] events into `out`.
 ///
-/// Gemini SSE chunk format:
-/// ```json
-/// {"candidates":[{"content":{"parts":[{"text":"Hello"}]},"finishReason":"STOP"}],
-///  "usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":5}}
-/// ```
-///
-/// Since Gemini delivers **complete** function calls (not incremental arg fragments),
-/// each `functionCall` part immediately emits `ToolCallStart + ToolCallArgDelta + ToolCallEnd`.
-/// Synthetic IDs are generated as `gemini_fc_{counter}` (Gemini has no real IDs).
+/// - Text parts with `thought: true` emit `ThinkingDelta` instead of `TextDelta`
+/// - Function calls prefer native `id` field (Gemini 3+), fallback to synthetic `gemini_fc_{n}`
+/// - Usage includes `thoughtsTokenCount` when available
 fn parse_gemini_sse_chunk(
     data: &str,
     fc_counter: &mut u64,
@@ -445,7 +460,14 @@ fn parse_gemini_sse_chunk(
                 // Text delta
                 if let Some(text) = part.get("text").and_then(|t| t.as_str()) {
                     if !text.is_empty() {
-                        out.push_back(Ok(ProviderDelta::TextDelta(text.to_string())));
+                        let is_thought = part.get("thought")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false);
+                        if is_thought {
+                            out.push_back(Ok(ProviderDelta::ThinkingDelta(text.to_string())));
+                        } else {
+                            out.push_back(Ok(ProviderDelta::TextDelta(text.to_string())));
+                        }
                     }
                 }
 
@@ -459,9 +481,15 @@ fn parse_gemini_sse_chunk(
                     let args = fc.get("args").cloned().unwrap_or(serde_json::Value::Null);
                     let args_str = args.to_string();
 
-                    // Generate synthetic ID (Gemini provides no call IDs)
-                    let id = format!("gemini_fc_{}", *fc_counter);
-                    *fc_counter += 1;
+                    // Prefer native ID (Gemini 3+), fallback to synthetic
+                    let id = fc.get("id")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| {
+                            let synthetic = format!("gemini_fc_{}", *fc_counter);
+                            *fc_counter += 1;
+                            synthetic
+                        });
 
                     out.push_back(Ok(ProviderDelta::ToolCallStart {
                         id: id.clone(),
@@ -528,7 +556,10 @@ fn parse_gemini_sse_chunk(
             input_tokens: input,
             output_tokens: output,
             cache_read_tokens: None,
-            thinking_tokens: None,
+            thinking_tokens: usage
+                .get("thoughtsTokenCount")
+                .and_then(|v| v.as_u64())
+                .map(|v| v as u32),
         }));
 
         if let Some(pos) = done_pos {
@@ -570,28 +601,89 @@ mod tests {
     }
 
     #[test]
-    fn test_map_think_level() {
-        assert_eq!(GeminiProtocol::map_think_level(&ThinkLevel::Off), None);
-        assert_eq!(
-            GeminiProtocol::map_think_level(&ThinkLevel::Minimal),
-            Some(500)
-        );
-        assert_eq!(
-            GeminiProtocol::map_think_level(&ThinkLevel::Low),
-            Some(1000)
-        );
-        assert_eq!(
-            GeminiProtocol::map_think_level(&ThinkLevel::Medium),
-            Some(2000)
-        );
-        assert_eq!(
-            GeminiProtocol::map_think_level(&ThinkLevel::High),
-            Some(4000)
-        );
-        assert_eq!(
-            GeminiProtocol::map_think_level(&ThinkLevel::XHigh),
-            Some(8000)
-        );
+    fn test_map_think_level_budget_mode() {
+        let result = GeminiProtocol::map_think_level(&ThinkLevel::Medium, "gemini-2.5-flash");
+        let config = result.unwrap();
+        assert_eq!(config.thinking_budget, Some(2000));
+        assert!(config.thinking_level.is_none());
+        assert_eq!(config.include_thoughts, Some(true));
+    }
+
+    #[test]
+    fn test_map_think_level_level_mode() {
+        let result = GeminiProtocol::map_think_level(&ThinkLevel::High, "gemini-3-pro");
+        let config = result.unwrap();
+        assert!(config.thinking_budget.is_none());
+        assert_eq!(config.thinking_level.as_deref(), Some("HIGH"));
+    }
+
+    #[test]
+    fn test_map_think_level_off() {
+        assert!(GeminiProtocol::map_think_level(&ThinkLevel::Off, "gemini-3-pro").is_none());
+    }
+
+    #[test]
+    fn test_map_think_level_xhigh_caps_to_high() {
+        let result = GeminiProtocol::map_think_level(&ThinkLevel::XHigh, "gemini-3-pro");
+        assert_eq!(result.unwrap().thinking_level.as_deref(), Some("HIGH"));
+    }
+
+    #[test]
+    fn test_parse_sse_thought_marker() {
+        let mut out = VecDeque::new();
+        let mut fc = 0u64;
+        let data = r#"{"candidates":[{"content":{"parts":[{"text":"thinking...","thought":true},{"text":"answer"}]},"finishReason":"STOP"}]}"#;
+        parse_gemini_sse_chunk(data, &mut fc, &mut out);
+
+        assert!(matches!(out.pop_front().unwrap(), Ok(ProviderDelta::ThinkingDelta(t)) if t == "thinking..."));
+        assert!(matches!(out.pop_front().unwrap(), Ok(ProviderDelta::TextDelta(t)) if t == "answer"));
+    }
+
+    #[test]
+    fn test_parse_sse_native_tool_id() {
+        let mut out = VecDeque::new();
+        let mut fc = 0u64;
+        let data = r#"{"candidates":[{"content":{"parts":[{"functionCall":{"name":"search","id":"native_123","args":{"q":"rust"}}}]},"finishReason":"FUNCTION_CALL"}]}"#;
+        parse_gemini_sse_chunk(data, &mut fc, &mut out);
+
+        match out.pop_front().unwrap() {
+            Ok(ProviderDelta::ToolCallStart { id, name }) => {
+                assert_eq!(id, "native_123");
+                assert_eq!(name, "search");
+            }
+            other => panic!("Expected ToolCallStart, got {:?}", other),
+        }
+        assert_eq!(fc, 0); // Counter should NOT have incremented
+    }
+
+    #[test]
+    fn test_parse_sse_synthetic_tool_id_fallback() {
+        let mut out = VecDeque::new();
+        let mut fc = 0u64;
+        let data = r#"{"candidates":[{"content":{"parts":[{"functionCall":{"name":"search","args":{"q":"rust"}}}]},"finishReason":"FUNCTION_CALL"}]}"#;
+        parse_gemini_sse_chunk(data, &mut fc, &mut out);
+
+        match out.pop_front().unwrap() {
+            Ok(ProviderDelta::ToolCallStart { id, .. }) => {
+                assert_eq!(id, "gemini_fc_0");
+            }
+            other => panic!("Expected ToolCallStart, got {:?}", other),
+        }
+        assert_eq!(fc, 1);
+    }
+
+    #[test]
+    fn test_parse_sse_thinking_tokens_in_usage() {
+        let mut out = VecDeque::new();
+        let mut fc = 0u64;
+        let data = r#"{"candidates":[{"content":{"parts":[{"text":"done"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":5,"thoughtsTokenCount":100}}"#;
+        parse_gemini_sse_chunk(data, &mut fc, &mut out);
+
+        let usage = out.iter().find_map(|d| match d {
+            Ok(ProviderDelta::Usage(u)) => Some(u.clone()),
+            _ => None,
+        }).expect("Usage event not found");
+        assert_eq!(usage.thinking_tokens, Some(100));
     }
 
     #[test]
