@@ -84,7 +84,6 @@ pub use registrar::CapabilityApi;
 use crate::discovery::{DiscoveryConfig, DiscoveryManager};
 use hooks::HookExecutor;
 use manifest::adapter::AdapterRegistry;
-use std::collections::HashMap;
 use std::path::PathBuf;
 use crate::sync_primitives::Arc;
 use std::time::Instant;
@@ -130,15 +129,6 @@ pub struct ExtensionManager {
     /// Config manager (aleph.jsonc)
     config_manager: ConfigManager,
 
-    /// Loaded skills by qualified name
-    skills: Arc<RwLock<HashMap<String, ExtensionSkill>>>,
-
-    /// Loaded commands by name
-    commands: Arc<RwLock<HashMap<String, ExtensionCommand>>>,
-
-    /// Loaded agents by qualified name
-    agents: Arc<RwLock<HashMap<String, ExtensionAgent>>>,
-
     /// Hook executor
     hook_executor: Arc<RwLock<HookExecutor>>,
 
@@ -178,9 +168,6 @@ impl ExtensionManager {
         Ok(Self {
             discovery,
             config_manager,
-            skills: Arc::new(RwLock::new(HashMap::new())),
-            commands: Arc::new(RwLock::new(HashMap::new())),
-            agents: Arc::new(RwLock::new(HashMap::new())),
             hook_executor,
             cache_state,
             plugin_loader,
@@ -200,73 +187,68 @@ impl ExtensionManager {
 
     /// Load all extensions.
     pub async fn load_all(&self) -> ExtensionResult<LoadSummary> {
-        let load_result = legacy_loader::load_all(&self.discovery).await?;
+        let mut summary = LoadSummary::default();
 
-        // Store loaded skills
-        {
-            let mut skills = self.skills.write().await;
-            for skill in load_result.skills {
-                let name = skill.qualified_name();
-                skills.insert(name, skill);
-            }
-        }
+        // Collect all plugin directories from discovery
+        let plugin_dirs = self.collect_plugin_dirs()?;
 
-        // Store loaded commands
+        // Clear and rebuild registry
+        let mut mcp_configs: Vec<(String, McpServerConfig)> = Vec::new();
         {
-            let mut commands = self.commands.write().await;
-            for cmd in load_result.commands {
-                let name = cmd.qualified_name();
-                commands.insert(name, cmd);
-            }
-        }
+            let mut registry = self.plugin_registry.write().await;
+            registry.clear();
 
-        // Store loaded agents
-        {
-            let mut agents = self.agents.write().await;
-            for agent in load_result.agents {
-                let name = agent.qualified_name();
-                agents.insert(name, agent);
-            }
-        }
+            for (dir_path, _origin) in &plugin_dirs {
+                match self.adapter_registry.parse_dir(dir_path) {
+                    Ok(output) => {
+                        // Collect MCP configs (no-op in CapabilityApi dispatch)
+                        for cap in &output.capabilities {
+                            if let crate::extension::capability::CapabilityDeclaration::McpServer(mcp) = cap {
+                                let server_name = output.plugin_id.clone();
+                                mcp_configs.push((server_name, mcp.clone()));
+                            }
+                        }
 
-        // Register hooks
-        {
-            let mut executor = self.hook_executor.write().await;
-            for hook in load_result.hooks {
-                executor.add_hook(hook);
-            }
-        }
+                        // Build plugin record from adapter output
+                        let record = PluginRecord::from_adapter_output(&output, dir_path.clone());
+                        let plugin_id = output.plugin_id.clone();
+                        registry.register_plugin(record);
 
-        // Discover and register plugins from ~/.aleph/plugins/
-        {
-            let scanner = &self.discovery;
-            if let Ok(discovered) = scanner.discover_plugins() {
-                let mut registry = self.plugin_registry.write().await;
-                for dp in discovered {
-                    if registry.get_plugin(&dp.name).is_some() {
-                        continue;
+                        // Register all capabilities via CapabilityApi
+                        let mut api = registrar::CapabilityApi::new(
+                            &mut registry,
+                            plugin_id.clone(),
+                            output.permissions,
+                        );
+                        for cap in output.capabilities {
+                            if let Err(e) = api.register_capability(cap) {
+                                tracing::debug!(
+                                    "Failed to register capability for plugin {}: {}",
+                                    plugin_id, e
+                                );
+                            }
+                        }
+
+                        summary.plugins_loaded += 1;
                     }
-                    match crate::extension::manifest::parse_manifest_from_dir_sync(&dp.path) {
-                        Ok(manifest) => {
-                            let mut record = PluginRecord::new(
-                                manifest.id.clone(),
-                                manifest.name.clone(),
-                                manifest.kind,
-                                PluginOrigin::Global,
-                            );
-                            record.version = manifest.version.clone();
-                            record.description = manifest.description.clone();
-                            record.root_dir = dp.path.clone();
-                            record.hook_count = manifest.hooks_v2.as_ref().map_or(0, |h| h.len());
-                            registry.register_plugin(record);
-                        }
-                        Err(e) => {
-                            tracing::debug!("Skipping plugin at {:?}: {}", dp.path, e);
-                        }
+                    Err(e) => {
+                        tracing::debug!(
+                            "Failed to parse plugin dir {:?}: {}",
+                            dir_path, e
+                        );
+                        summary.errors.push(format!("{}: {}", dir_path.display(), e));
                     }
                 }
             }
+
+            // Count loaded skills/commands/agents from registry
+            summary.skills_loaded = registry.list_skills().len();
+            summary.agents_loaded = registry.list_agents().len();
+            summary.hooks_loaded = registry.list_hooks().len();
         }
+
+        // Sync hooks from registry to HookExecutor
+        self.sync_hooks_from_registry().await;
 
         // Initialize SkillSystem with discovered skill directories
         let mut skill_dirs: Vec<PathBuf> = Vec::new();
@@ -290,7 +272,15 @@ impl ExtensionManager {
         cache.loaded = true;
         cache.loaded_at = Some(Instant::now());
 
-        Ok(load_result.summary)
+        tracing::info!(
+            "Extension loading complete: {} skills, {} agents, {} plugins, {} hooks",
+            summary.skills_loaded,
+            summary.agents_loaded,
+            summary.plugins_loaded,
+            summary.hooks_loaded,
+        );
+
+        Ok(summary)
     }
 
     /// Ensure extensions are loaded (lazy-loading entry point).
@@ -327,12 +317,91 @@ impl ExtensionManager {
             state.loaded_at = None;
         }
 
-        self.skills.write().await.clear();
-        self.commands.write().await.clear();
-        self.agents.write().await.clear();
+        // Reset hook executor (registry.clear() is called inside load_all)
         *self.hook_executor.write().await = HookExecutor::empty();
 
         self.load_all().await
+    }
+
+    /// Collect all plugin directories from discovery, deduplicating by canonical path.
+    fn collect_plugin_dirs(&self) -> ExtensionResult<Vec<(PathBuf, PluginOrigin)>> {
+        use std::collections::HashSet;
+
+        let mut seen = HashSet::new();
+        let mut result = Vec::new();
+
+        // Skill directories → treat each as a plugin dir
+        if let Ok(dirs) = self.discovery.discover_skill_dirs() {
+            for d in dirs {
+                let canonical = d.path.canonicalize().unwrap_or_else(|_| d.path.clone());
+                if seen.insert(canonical) {
+                    result.push((d.path, PluginOrigin::Global));
+                }
+            }
+        }
+
+        // Command directories
+        if let Ok(dirs) = self.discovery.discover_command_dirs() {
+            for d in dirs {
+                let canonical = d.path.canonicalize().unwrap_or_else(|_| d.path.clone());
+                if seen.insert(canonical) {
+                    result.push((d.path, PluginOrigin::Global));
+                }
+            }
+        }
+
+        // Agent directories
+        if let Ok(dirs) = self.discovery.discover_agent_dirs() {
+            for d in dirs {
+                let canonical = d.path.canonicalize().unwrap_or_else(|_| d.path.clone());
+                if seen.insert(canonical) {
+                    result.push((d.path, PluginOrigin::Global));
+                }
+            }
+        }
+
+        // Plugin directories (legacy .claude-plugin format)
+        if let Ok(dirs) = self.discovery.discover_plugins() {
+            for d in dirs {
+                let canonical = d.path.canonicalize().unwrap_or_else(|_| d.path.clone());
+                if seen.insert(canonical) {
+                    result.push((d.path, PluginOrigin::Global));
+                }
+            }
+        }
+
+        Ok(result)
+    }
+
+    /// Sync hooks from PluginRegistry to HookExecutor.
+    ///
+    /// Reads HookRegistration entries from the registry and converts them
+    /// to HookConfig entries that HookExecutor understands.
+    async fn sync_hooks_from_registry(&self) {
+        let registry = self.plugin_registry.read().await;
+        let hook_regs = registry.list_hooks();
+
+        let mut executor = self.hook_executor.write().await;
+        // HookExecutor was already reset (via load_all's clear path or reload).
+        // Convert HookRegistration → HookConfig for the executor.
+        for hr in hook_regs {
+            let hook_config = HookConfig {
+                event: hr.event,
+                kind: HookKind::default(),
+                priority: match hr.priority {
+                    i if i <= -1000 => HookPriority::System,
+                    i if i <= -100 => HookPriority::High,
+                    i if i >= 100 => HookPriority::Low,
+                    _ => HookPriority::Normal,
+                },
+                matcher: None,
+                actions: vec![],
+                plugin_name: hr.plugin_id.clone(),
+                plugin_root: PathBuf::new(),
+                handler: Some(hr.handler.clone()),
+            };
+            executor.add_hook(hook_config);
+        }
     }
 
     /// Check if extensions have been loaded
