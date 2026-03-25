@@ -104,11 +104,13 @@ Default implementation returns NotImplemented. Linux/Windows/NativeScreen don't 
 1. SCShareableContent::getCurrentWithCompletionHandler
    → enumerate displays, pick primary (or matching region)
 
-2. SCContentFilter::initWithDisplay_excludingApplications
-   → filter to target display, exclude Aleph's own windows
+2. SCContentFilter::initWithDisplay_excludingApplications_exceptingWindows
+   → filter to target display (3 params: display, apps to exclude, windows to except)
 
 3. SCStreamConfiguration
-   → width/height from display, fps, showsCursor=true, capturesAudio
+   → width/height in PIXELS (display points × scale factor for Retina)
+   → setMinimumFrameInterval(CMTime { value: 1, timescale: fps })
+   → showsCursor=true, capturesAudio
 
 4. SCStream::initWithFilter_configuration_delegate
    → delegate = custom Rust class implementing SCStreamOutput protocol
@@ -122,31 +124,40 @@ Default implementation returns NotImplemented. Linux/Windows/NativeScreen don't 
 
 ### SCStreamOutput Delegate
 
-Use `objc2::declare_class!` to create a Rust class implementing the `SCStreamOutput` protocol:
+Use `objc2::define_class!` (objc2 0.6 syntax, NOT the old `declare_class!`) to create a Rust class implementing the `SCStreamOutput` protocol:
 
 ```rust
-declare_class!(
-    struct StreamDelegate {
-        video_tx: IvarDrop<Box<mpsc::Sender<CMSampleBuffer>>, "_video_tx">,
-        audio_tx: IvarDrop<Box<mpsc::Sender<CMSampleBuffer>>, "_audio_tx">,
-    }
+struct StreamDelegateIvars {
+    video_tx: std::sync::mpsc::Sender<Vec<u8>>,  // extracted pixel data, NOT raw CMSampleBuffer
+    audio_tx: std::sync::mpsc::Sender<Vec<u8>>,  // extracted audio data
+}
 
-    unsafe impl ClassType for StreamDelegate {
-        type Super = NSObject;
-    }
+define_class!(
+    #[unsafe(super(NSObject))]
+    #[name = "AlephStreamDelegate"]
+    #[ivars = StreamDelegateIvars]
+    struct StreamDelegate;
 
-    // stream:didOutputSampleBuffer:ofType:
-    unsafe impl StreamDelegate {
-        #[method(stream:didOutputSampleBuffer:ofType:)]
-        fn did_output_sample_buffer(&self, stream: &SCStream, buffer: &CMSampleBuffer, output_type: SCStreamOutputType) {
-            match output_type {
-                SCStreamOutputType::Screen => { let _ = self.video_tx.send(buffer.retain()); }
-                SCStreamOutputType::Audio => { let _ = self.audio_tx.send(buffer.retain()); }
-            }
+    unsafe impl SCStreamOutput for StreamDelegate {
+        #[unsafe(method(stream:didOutputSampleBuffer:ofType:))]
+        fn did_output_sample_buffer(
+            &self,
+            _stream: &SCStream,
+            buffer: &CMSampleBuffer,
+            output_type: SCStreamOutputType,
+        ) {
+            // Extract data from CMSampleBuffer in-callback
+            // (CMSampleBuffer is a CF type — cannot .retain() like NSObject)
+            // Use CMSampleBufferGetDataBuffer or CVPixelBuffer extraction
+            // Send extracted bytes over channel
         }
     }
 );
 ```
+
+**Critical notes:**
+- `CMSampleBuffer` is a CoreFoundation type, NOT an NSObject — cannot use `.retain()`. Must extract pixel/audio data in the delegate callback and send the extracted data over the channel.
+- Callbacks require a dispatch queue — pass one via `addStreamOutput_type_sampleHandlerQueue_error`. Use `dispatch_queue_create` or the global concurrent queue.
 
 ### Recording Thread
 
@@ -156,15 +167,19 @@ The entire recording runs in `spawn_blocking`:
 1. Create delegate with channels
 2. Get shareable content (block2 + channel)
 3. Build filter + config
-4. Create SCStream
-5. Add stream output (delegate)
-6. Start capture (block2 + channel)
-7. Spawn writer thread: loop recv video/audio buffers, write to AVAssetWriter
-8. Sleep for duration
-9. Stop capture (block2 + channel)
-10. Finalize AVAssetWriter
-11. Return file path
+4. Create SCStream with a dispatch queue for callbacks
+5. Add stream output (delegate, type, sampleHandlerQueue)
+6. Start capture (block2 + channel, recv_timeout 10s)
+7. Writer loop: recv buffers from channel
+   a. On first buffer: startWriting() + startSessionAtSourceTime(firstSampleTime)
+   b. Check readyForMoreMediaData before each appendSampleBuffer
+   c. Continue until duration elapsed
+8. Stop capture (block2 + channel, recv_timeout 10s)
+9. Finalize: finishWritingWithCompletionHandler (block2 + channel, recv_timeout 10s)
+10. Return file path
 ```
+
+**Cancellation:** If the process is interrupted, the Drop guard on the writer should call `cancelWriting()` to clean up the partial file.
 
 ### Output File
 
@@ -182,8 +197,8 @@ AVAssetWriter → outputURL (temp MP4 path), fileType: .mp4
 Video Input:
   AVAssetWriterInput(mediaType: .video, outputSettings: [
     AVVideoCodecKey: .h264,
-    AVVideoWidthKey: width,
-    AVVideoHeightKey: height,
+    AVVideoWidthKey: pixel_width,   // display points × scale factor
+    AVVideoHeightKey: pixel_height,
   ])
   expectsMediaDataInRealTime = true
 
@@ -195,6 +210,15 @@ Audio Input (optional):
   ])
   expectsMediaDataInRealTime = true
 ```
+
+**Writer lifecycle:**
+1. `startWriting()` — before first buffer
+2. `startSessionAtSourceTime(firstSamplePresentationTime)` — REQUIRED before appendSampleBuffer
+3. Loop: check `readyForMoreMediaData` → `appendSampleBuffer` (drop frame if not ready)
+4. `finishWritingWithCompletionHandler` — async, needs block2 + channel pattern
+5. On error/cancellation: `cancelWriting()` + delete partial file
+
+**Tip:** Consider using `assetWriterInputWithMediaType_outputSettings_sourceFormatHint` with the CMFormatDescription from the first sample buffer — simplifies settings and avoids hardcoding dimensions.
 
 ## Dependencies
 
