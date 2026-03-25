@@ -325,6 +325,7 @@ impl ManifestAdapter for ClaudeCodeJsonAdapter {
                 origin: PluginOrigin::Global,
                 format: SourceFormat::ClaudeCode,
             },
+            permissions: vec![],
         })
     }
 

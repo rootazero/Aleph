@@ -150,6 +150,15 @@ pub fn parse_skills_dir(
         return Ok(Vec::new());
     }
 
+    // Security: verify the resolved directory is inside the base path
+    if !is_path_inside(base, &dir) {
+        warn!(
+            "Skills directory {:?} escapes plugin root {:?}, skipping",
+            dir, base
+        );
+        return Ok(Vec::new());
+    }
+
     let mut caps = Vec::new();
     let entries = std::fs::read_dir(&dir)
         .with_context(|| format!("Failed to read skills dir: {}", dir.display()))?;
@@ -233,6 +242,15 @@ pub fn parse_commands_dir(
         return Ok(Vec::new());
     }
 
+    // Security: verify the resolved directory is inside the base path
+    if !is_path_inside(base, &dir) {
+        warn!(
+            "Commands directory {:?} escapes plugin root {:?}, skipping",
+            dir, base
+        );
+        return Ok(Vec::new());
+    }
+
     let mut caps = Vec::new();
     let entries = std::fs::read_dir(&dir)
         .with_context(|| format!("Failed to read commands dir: {}", dir.display()))?;
@@ -312,6 +330,15 @@ pub fn parse_agents_dir(
 ) -> Result<Vec<CapabilityDeclaration>> {
     let dir = base.join(rel_path);
     if !dir.exists() || !dir.is_dir() {
+        return Ok(Vec::new());
+    }
+
+    // Security: verify the resolved directory is inside the base path
+    if !is_path_inside(base, &dir) {
+        warn!(
+            "Agents directory {:?} escapes plugin root {:?}, skipping",
+            dir, base
+        );
         return Ok(Vec::new());
     }
 
@@ -458,7 +485,7 @@ pub fn parse_mcp_config_file(
     let plugin_root = base.to_string_lossy();
     let mut caps = Vec::new();
 
-    for (_server_name, entry) in config.mcp_servers {
+    for (server_name, entry) in config.mcp_servers {
         let command = substitute_vars(&entry.command, &plugin_root);
         let args: Vec<String> = entry
             .args
@@ -470,6 +497,16 @@ pub fn parse_mcp_config_file(
             .iter()
             .map(|(k, v)| (k.clone(), substitute_vars(v, &plugin_root)))
             .collect();
+
+        // Security: check if command path (when absolute) is inside plugin root
+        let cmd_path = Path::new(&command);
+        if cmd_path.is_absolute() && !is_path_inside(base, cmd_path) {
+            warn!(
+                "MCP server '{}' command {:?} escapes plugin root {:?}, skipping",
+                server_name, command, base
+            );
+            continue;
+        }
 
         caps.push(CapabilityDeclaration::McpServer(McpServerConfig {
             command,
@@ -484,6 +521,17 @@ pub fn parse_mcp_config_file(
 // ============================================================================
 // Helpers
 // ============================================================================
+
+/// Fail-closed path containment check.
+///
+/// Returns `true` only if `target` resolves to a path inside `root`.
+/// If either path cannot be canonicalized (e.g., does not exist), returns `false`.
+pub(crate) fn is_path_inside(root: &Path, target: &Path) -> bool {
+    match (root.canonicalize(), target.canonicalize()) {
+        (Ok(root), Ok(target)) => target.starts_with(&root),
+        _ => false,
+    }
+}
 
 /// Check if a path is a hidden entry (starts with '.')
 fn is_hidden(path: &Path) -> bool {
@@ -756,5 +804,51 @@ mod tests {
             "/tmp/x"
         );
         assert_eq!(substitute_vars("plain", "/root"), "plain");
+    }
+
+    #[test]
+    fn test_is_path_inside_contained() {
+        let dir = tempdir().unwrap();
+        let child = dir.path().join("subdir");
+        fs::create_dir_all(&child).unwrap();
+
+        assert!(is_path_inside(dir.path(), &child));
+    }
+
+    #[test]
+    fn test_is_path_inside_same_dir() {
+        let dir = tempdir().unwrap();
+        assert!(is_path_inside(dir.path(), dir.path()));
+    }
+
+    #[test]
+    fn test_is_path_inside_outside() {
+        let dir1 = tempdir().unwrap();
+        let dir2 = tempdir().unwrap();
+
+        assert!(!is_path_inside(dir1.path(), dir2.path()));
+    }
+
+    #[test]
+    fn test_is_path_inside_nonexistent() {
+        let dir = tempdir().unwrap();
+        let nonexistent = dir.path().join("does-not-exist");
+
+        // Nonexistent target cannot be canonicalized → false
+        assert!(!is_path_inside(dir.path(), &nonexistent));
+    }
+
+    #[test]
+    fn test_is_path_inside_symlink_escape() {
+        let dir = tempdir().unwrap();
+        let outside = tempdir().unwrap();
+        let link_path = dir.path().join("escape-link");
+
+        // Create symlink pointing outside
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(outside.path(), &link_path).unwrap();
+            assert!(!is_path_inside(dir.path(), &link_path));
+        }
     }
 }

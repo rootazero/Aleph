@@ -351,14 +351,15 @@ impl ManifestAdapter for ClaudeCodeTomlAdapter {
         Ok(AdapterOutput {
             plugin_id: plugin_id.clone(),
             name: Some(manifest.name),
-            version: manifest.version,
-            description: manifest.description,
+            version: manifest.version.clone(),
+            description: manifest.description.clone(),
             capabilities,
             source: CapabilitySource {
                 plugin_id,
                 origin: PluginOrigin::Global,
                 format: SourceFormat::ClaudeCode,
             },
+            permissions: manifest.permissions,
         })
     }
 
