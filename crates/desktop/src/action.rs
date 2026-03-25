@@ -192,24 +192,27 @@ pub fn scroll(direction: &str, amount: i32) -> Result<()> {
 pub fn launch_app(app_name: &str) -> Result<()> {
     #[cfg(target_os = "macos")]
     {
-        // Try bundle ID first (e.g., "com.apple.Safari"), then fall back to app name
-        let (flag, name) = if app_name.contains('.') {
-            ("-b", app_name)
+        use objc2_app_kit::NSWorkspace;
+        use objc2_foundation::{NSString, NSURL};
+
+        let ws = NSWorkspace::sharedWorkspace();
+        let ns_name = NSString::from_str(app_name);
+
+        #[allow(deprecated)]
+        let url = if app_name.contains('.') {
+            ws.URLForApplicationWithBundleIdentifier(&ns_name)
         } else {
-            ("-a", app_name)
+            ws.fullPathForApplication(&ns_name).map(|p| NSURL::fileURLWithPath(&p))
         };
 
-        let output = std::process::Command::new("open")
-            .args([flag, name])
-            .output()
-            .map_err(|e| DesktopError::InputFailed(format!("Failed to launch app: {e}")))?;
+        let url = url.ok_or_else(|| {
+            DesktopError::InputFailed(format!("Application '{}' not found", app_name))
+        })?;
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
+        if !ws.openURL(&url) {
             return Err(DesktopError::InputFailed(format!(
-                "Failed to launch '{}': {}",
-                app_name,
-                stderr.trim()
+                "Failed to launch '{}'",
+                app_name
             )));
         }
 
@@ -279,6 +282,11 @@ pub fn launch_app(app_name: &str) -> Result<()> {
 /// - [`DesktopError::WindowFailed`] if the platform command fails.
 /// - [`DesktopError::NotImplemented`] on platforms without an implementation.
 pub fn window_list() -> Result<Vec<WindowInfo>> {
+    #[cfg(target_os = "macos")]
+    {
+        macos_window_list()
+    }
+
     #[cfg(target_os = "linux")]
     {
         linux_window_list()
@@ -286,13 +294,12 @@ pub fn window_list() -> Result<Vec<WindowInfo>> {
 
     #[cfg(target_os = "windows")]
     {
-        // TODO: Port EnumWindows implementation from desktop bridge
         Err(DesktopError::NotImplemented(
             "window_list not yet implemented for Windows in aleph-desktop crate".into(),
         ))
     }
 
-    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     {
         Err(DesktopError::NotImplemented(
             "window_list not implemented on this platform".into(),
@@ -310,6 +317,11 @@ pub fn window_list() -> Result<Vec<WindowInfo>> {
 /// - [`DesktopError::WindowFailed`] if the platform command fails.
 /// - [`DesktopError::NotImplemented`] on platforms without an implementation.
 pub fn focus_window(window_id: u64) -> Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        macos_focus_window(window_id)
+    }
+
     #[cfg(target_os = "linux")]
     {
         linux_focus_window(window_id)
@@ -317,19 +329,119 @@ pub fn focus_window(window_id: u64) -> Result<()> {
 
     #[cfg(target_os = "windows")]
     {
-        // TODO: Port SetForegroundWindow implementation from desktop bridge
         let _ = window_id;
         Err(DesktopError::NotImplemented(
             "focus_window not yet implemented for Windows in aleph-desktop crate".into(),
         ))
     }
 
-    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     {
         let _ = window_id;
         Err(DesktopError::NotImplemented(
             "focus_window not implemented on this platform".into(),
         ))
+    }
+}
+
+// ── macOS window management helpers ──────────────────────────────
+
+#[cfg(target_os = "macos")]
+fn macos_window_list() -> Result<Vec<WindowInfo>> {
+    use core_foundation::base::TCFType;
+    use core_foundation::number::CFNumber;
+    use core_foundation::string::CFString;
+    use core_graphics::window::{
+        copy_window_info, kCGNullWindowID, kCGWindowListExcludeDesktopElements,
+        kCGWindowListOptionOnScreenOnly, kCGWindowLayer, kCGWindowName, kCGWindowNumber,
+        kCGWindowOwnerName, kCGWindowOwnerPID,
+    };
+
+    let options = kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements;
+    let list = match copy_window_info(options, kCGNullWindowID) {
+        Some(l) => l,
+        None => return Ok(Vec::new()),
+    };
+
+    let mut windows = Vec::new();
+    let values = list.get_all_values();
+
+    for ptr in &values {
+        let entry: core_foundation::dictionary::CFDictionary<CFString, core_foundation::base::CFType> = unsafe {
+            TCFType::wrap_under_get_rule(*ptr as core_foundation::dictionary::CFDictionaryRef)
+        };
+
+        let get_str = |key: core_foundation::string::CFStringRef| -> String {
+            unsafe {
+                let key_cf = CFString::wrap_under_get_rule(key);
+                entry
+                    .find(&key_cf)
+                    .and_then(|v| v.downcast::<CFString>())
+                    .map(|s| s.to_string())
+                    .unwrap_or_default()
+            }
+        };
+
+        let get_i64 = |key: core_foundation::string::CFStringRef| -> i64 {
+            unsafe {
+                let key_cf = CFString::wrap_under_get_rule(key);
+                entry
+                    .find(&key_cf)
+                    .and_then(|v| v.downcast::<CFNumber>())
+                    .and_then(|n| n.to_i64())
+                    .unwrap_or(0)
+            }
+        };
+
+        let title = unsafe { get_str(kCGWindowName) };
+        let layer = unsafe { get_i64(kCGWindowLayer) };
+
+        // Skip windows with empty title and non-zero layer (menu extras, etc.)
+        if title.is_empty() && layer != 0 {
+            continue;
+        }
+
+        let id = unsafe { get_i64(kCGWindowNumber) } as u64;
+        let owner = unsafe { get_str(kCGWindowOwnerName) };
+        let pid = unsafe { get_i64(kCGWindowOwnerPID) } as u64;
+
+        windows.push(WindowInfo {
+            id,
+            title,
+            owner,
+            pid,
+        });
+    }
+
+    info!(count = windows.len(), "Window list retrieved (macOS)");
+    Ok(windows)
+}
+
+#[cfg(target_os = "macos")]
+fn macos_focus_window(window_id: u64) -> Result<()> {
+    // Find the PID for this window by scanning the window list
+    let windows = macos_window_list()?;
+    let window = windows.iter().find(|w| w.id == window_id).ok_or_else(|| {
+        DesktopError::WindowFailed(format!("No window found with id {}", window_id))
+    })?;
+
+    let pid = window.pid as i32;
+
+    use objc2_app_kit::{NSApplicationActivationOptions, NSRunningApplication};
+    let app = NSRunningApplication::runningApplicationWithProcessIdentifier(pid);
+    match app {
+        Some(app) => {
+            #[allow(deprecated)] // ActivateIgnoringOtherApps deprecated in macOS 14 but still functional
+            app.activateWithOptions(
+                NSApplicationActivationOptions::ActivateIgnoringOtherApps,
+            );
+            info!(window_id, pid, "Window focused (macOS)");
+            Ok(())
+        }
+        None => Err(DesktopError::WindowFailed(format!(
+            "No application found with PID {}",
+            pid
+        ))),
     }
 }
 
