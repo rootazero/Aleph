@@ -88,7 +88,7 @@ impl DeltaSink for StreamingDeltaSink {
 ### Design Decisions
 
 - **Location in gateway layer** — depends on `EventEmitter` (a gateway concept), not in providers
-- **`let _ =` on emit** — broadcast channel full → drop is acceptable; Typewriter throttle controls flow
+- **`let _ =` on emit** — broadcast channel full → drop is acceptable; built-in throttle controls flow
 - **`chunk_index` never resets** — monotonically increases across all Think rounds within a run; client uses it for ordering
 - **`Done` always emits final empty chunk** — even when there was no text (tool-call-only response); client ignores empty final chunks
 - **Direct await, no spawn** — `DeltaSink::on_delta()` is async; emit is microsecond-level channel publish; no backpressure concern
@@ -199,3 +199,118 @@ agent_loop.run_with_history(&input, &mut callback).await
 - **Frontend/Panel** — already handles `stream.response_chunk` events
 - **Session persistence** — still happens in ExecutionEngine after loop completes
 - **Tool events** — `on_tool_start` / `on_tool_done` callbacks unchanged
+
+---
+
+## Section 7: Review Fixes
+
+Addressed from spec review feedback.
+
+### Fix 1: System-generated truncation notice must not be silenced
+
+`loop_core.rs:495` calls `callback.on_text(notice)` with a system-generated truncation warning (⚠️ 输出因 token 限制被截断). This text was never streamed via DeltaSink and must NOT be silenced.
+
+**Solution**: `on_text()` silencing is conditional, not blanket. The `StreamCallback` tracks whether DeltaSink has emitted any text for the current Think round via a `streamed_text: bool` flag (set to true when `StreamingDeltaSink` emits at least one `TextDelta`).
+
+```rust
+fn on_text(&mut self, text: &str) {
+    if self.streaming_active && self.streamed_text {
+        // DeltaSink already delivered this text token-by-token.
+        // Reset flag for next Think round.
+        self.streamed_text = false;
+        return;
+    }
+    // System-generated notice or non-streamed text: emit normally
+    // ... existing ResponseChunk emission ...
+}
+```
+
+To coordinate, `StreamingDeltaSink` needs to signal the callback. Implementation: use a shared `Arc<AtomicBool>` between `StreamingDeltaSink` and `StreamCallback`:
+
+```rust
+pub struct StreamingDeltaSink {
+    run_id: String,
+    emitter: Arc<dyn EventEmitter + Send + Sync>,
+    chunk_index: AtomicU32,
+    has_emitted_text: Arc<AtomicBool>,  // shared with StreamCallback
+}
+
+// In on_delta(TextDelta):
+self.has_emitted_text.store(true, Ordering::Release);
+
+// StreamCallback reads:
+fn on_text(&mut self, text: &str) {
+    if self.streaming_active && self.has_emitted_text.swap(false, Ordering::Acquire) {
+        return; // Already streamed, skip
+    }
+    // Emit normally (system notice or fallback)
+}
+```
+
+This way truncation notices and other system-generated `on_text()` calls are always delivered.
+
+### Fix 2: Token-level throttling in StreamingDeltaSink
+
+`emit_response_chunk()` goes through the `EventEmitter` trait, which does NOT throttle. The 150ms Typewriter throttle lives in `GatewayEventEmitter::emit_response_chunk_throttled()`, a concrete method not on the trait.
+
+**Solution**: Add throttle logic directly in `StreamingDeltaSink`. Simple approach using `Instant` + buffer:
+
+```rust
+pub struct StreamingDeltaSink {
+    // ... existing fields ...
+    last_emit: Mutex<Instant>,
+    buffer: Mutex<String>,
+}
+
+const THROTTLE_MS: u64 = 100; // slightly less than Typewriter's 150ms
+
+async fn on_delta(&self, delta: &ProviderDelta) {
+    match delta {
+        ProviderDelta::TextDelta(text) => {
+            let mut buf = self.buffer.lock().await;
+            buf.push_str(text);
+
+            let mut last = self.last_emit.lock().await;
+            let elapsed = last.elapsed().as_millis() as u64;
+
+            if elapsed >= THROTTLE_MS {
+                // Flush buffer
+                let content = std::mem::take(&mut *buf);
+                drop(buf);
+                *last = Instant::now();
+                drop(last);
+
+                let idx = self.chunk_index.fetch_add(1, Ordering::Relaxed);
+                let _ = self.emitter.emit_response_chunk(&self.run_id, &content, idx, false).await;
+                self.has_emitted_text.store(true, Ordering::Release);
+            }
+            // Within throttle window: buffer accumulates, flushed on next delta or Done
+        }
+        ProviderDelta::Done(_) => {
+            // Flush remaining buffer
+            let mut buf = self.buffer.lock().await;
+            let remaining = std::mem::take(&mut *buf);
+            drop(buf);
+
+            if !remaining.is_empty() {
+                let idx = self.chunk_index.fetch_add(1, Ordering::Relaxed);
+                let _ = self.emitter.emit_response_chunk(&self.run_id, &remaining, idx, false).await;
+                self.has_emitted_text.store(true, Ordering::Release);
+            }
+
+            // Emit final marker
+            let idx = self.chunk_index.fetch_add(1, Ordering::Relaxed);
+            let _ = self.emitter.emit_response_chunk(&self.run_id, "", idx, true).await;
+        }
+        _ => {}
+    }
+}
+```
+
+**Use `tokio::sync::Mutex`** (not `std::sync::Mutex`) since this is in an async context.
+
+### Fix 3: Multiple `is_final: true` per run
+
+The spec's edge case table already documents this. The existing frontend (`interfaces/webchat/`) handles `stream.response_chunk` by appending content to the current message. An `is_final: true` with empty content is benign — it signals "this round done" but the `stream.run_complete` event signals "entire run done". No code change needed; adding explicit documentation for frontend developers:
+
+**Convention**: `is_final: true` on `ResponseChunk` means "this LLM output segment is complete". Multiple segments may exist in a single run (tool calls between them). `stream.run_complete` means "entire agent run finished".
