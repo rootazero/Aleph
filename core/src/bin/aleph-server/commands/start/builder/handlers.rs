@@ -806,3 +806,27 @@ pub(in crate::commands::start) fn register_cron_handlers(
         println!();
     }
 }
+
+// ─── register_heartbeat_handlers ────────────────────────────────────────────
+
+pub(in crate::commands::start) fn register_heartbeat_handlers(
+    server: &mut GatewayServer,
+    heartbeat_service: &alephcore::tasks::heartbeat::SharedHeartbeatService,
+    daemon: bool,
+) {
+    use alephcore::gateway::handlers::heartbeat;
+
+    register_handler!(server, "heartbeat.list", heartbeat::handle_list, heartbeat_service);
+    register_handler!(server, "heartbeat.get", heartbeat::handle_get, heartbeat_service);
+    register_handler!(server, "heartbeat.create", heartbeat::handle_create, heartbeat_service);
+    register_handler!(server, "heartbeat.update", heartbeat::handle_update, heartbeat_service);
+    register_handler!(server, "heartbeat.delete", heartbeat::handle_delete, heartbeat_service);
+    register_handler!(server, "heartbeat.toggle", heartbeat::handle_toggle, heartbeat_service);
+    register_handler!(server, "heartbeat.wake", heartbeat::handle_wake, heartbeat_service);
+    register_handler!(server, "heartbeat.runs", heartbeat::handle_runs, heartbeat_service);
+
+    if !daemon {
+        println!("Heartbeat service: enabled (RPC handlers registered)");
+        println!();
+    }
+}

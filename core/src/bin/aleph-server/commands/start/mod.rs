@@ -22,6 +22,8 @@ use alephcore::tasks::cron::{CronService, SharedCronService};
 use alephcore::tasks::cron::executor::build_cron_executor_fn;
 use alephcore::tasks::cron::service::timer::run_timer_loop;
 use alephcore::tasks::cron::service::catchup::run_startup_catchup;
+use alephcore::tasks::heartbeat::{HeartbeatService, SharedHeartbeatService};
+use alephcore::tasks::heartbeat::store::HeartbeatStore;
 use alephcore::group_chat::{GroupChatExecutor, GroupChatOrchestrator};
 use alephcore::ProviderRegistry as _; // trait needed for .default_provider()
 
@@ -471,6 +473,40 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         }
     };
 
+    // Initialize HeartbeatService from app config
+    let heartbeat_service: Option<SharedHeartbeatService> = {
+        let app_cfg = app_config.read().await;
+        let hb_config = app_cfg.heartbeat.clone();
+        drop(app_cfg);
+
+        if hb_config.enabled {
+            let data_dir = alephcore::utils::paths::get_data_dir()
+                .unwrap_or_else(|_| std::env::temp_dir().join("aleph_data"));
+            let hb_db_path = data_dir.join("heartbeat.db");
+
+            match HeartbeatStore::open(&hb_db_path) {
+                Ok(store) => {
+                    let svc = HeartbeatService::new(store, hb_config);
+                    let shared: SharedHeartbeatService = Arc::new(tokio::sync::Mutex::new(svc));
+                    register_heartbeat_handlers(&mut server, &shared, args.daemon);
+                    Some(shared)
+                }
+                Err(e) => {
+                    if !args.daemon {
+                        eprintln!("Warning: Failed to initialize heartbeat service: {}. Heartbeat disabled.", e);
+                    }
+                    None
+                }
+            }
+        } else {
+            if !args.daemon {
+                println!("Heartbeat service: disabled");
+                println!();
+            }
+            None
+        }
+    };
+
     let agent_result = register_agent_handlers(
         &mut server, session_manager.clone(), event_bus.clone(),
         router.clone(), &full_config, &*app_config.read().await, app_config.clone(), &memory_db,
@@ -818,8 +854,13 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     let shutdown_rx = setup_graceful_shutdown(args);
     server.run_until_shutdown(shutdown_rx).await?;
 
-    // Graceful shutdown: stop desktop bridge, ACP harnesses, and mDNS
+    // Graceful shutdown: stop desktop bridge, heartbeat, ACP harnesses, and mDNS
     bridge_manager.stop().await;
+
+    if let Some(ref hb_svc) = heartbeat_service {
+        let svc = hb_svc.lock().await;
+        svc.request_shutdown();
+    }
 
     if let Some(ref manager) = acp_manager {
         manager.shutdown_all().await;
