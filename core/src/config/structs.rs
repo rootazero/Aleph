@@ -4,6 +4,7 @@
 
 use crate::config::types::*;
 use crate::tasks::cron::CronConfig;
+use crate::tasks::heartbeat::config::HeartbeatConfig;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -107,6 +108,9 @@ pub struct Config {
     /// Cron job scheduling configuration
     #[serde(default)]
     pub cron: CronConfig,
+    /// Heartbeat monitoring configuration
+    #[serde(default)]
+    pub heartbeat: HeartbeatConfig,
     /// Preset persona definitions for group chat
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub personas: Vec<PersonaConfig>,
@@ -317,6 +321,7 @@ impl Default for Config {
             task_routing: TaskRoutingConfig::default(),
             group_chat: GroupChatConfig::default(),
             cron: CronConfig::default(),
+            heartbeat: HeartbeatConfig::default(),
             personas: Vec::new(),
             evolution: EvolutionConfig::default(),
             media: MediaConfig::default(),
