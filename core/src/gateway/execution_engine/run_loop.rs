@@ -12,6 +12,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use crate::sync_primitives::Arc;
 
 use crate::gateway::media::{MediaItem, PendingMedia, MAX_MEDIA_PER_RUN};
+use crate::gateway::streaming_sink::StreamingDeltaSink;
 use super::{ExecutionError, RunRequest, RunStatus};
 use crate::gateway::agent_instance::{AgentInstance, MessageRole};
 use crate::gateway::event_emitter::{DynEventEmitter, EventEmitter, StreamEvent};
@@ -167,6 +168,14 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             }
         });
 
+        // Real-time streaming: ProviderDelta → EventEmitter
+        let has_emitted_text = Arc::new(AtomicBool::new(false));
+        let streaming_sink = StreamingDeltaSink::new(
+            run_id.to_string(),
+            emitter.clone() as Arc<dyn crate::gateway::event_emitter::EventEmitter + Send + Sync>,
+            has_emitted_text.clone(),
+        );
+
         // Create and run the agent loop
         let agent_loop = AgentLoop::new(
             bridge,
@@ -175,6 +184,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             safety,
             loop_config,
         )
+        .with_delta_sink(Box::new(streaming_sink))
         .with_tool_compactor_config(tool_compactor_config);
 
         // Load conversation history from session (for multi-turn context)
@@ -191,14 +201,14 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         };
 
         // Create a streaming callback that emits events.
-        // streaming_active will be set to true in Task 3 when DeltaSink is wired up.
-        let has_emitted_text = Arc::new(AtomicBool::new(false));
+        // streaming_active = true: DeltaSink handles real-time token delivery;
+        // StreamCallback deduplicates via has_emitted_text to avoid double-sending.
         let mut callback = StreamCallback::new(
             emitter.clone(),
             run_id.to_string(),
             request.pending_media.clone(),
-            false,                     // streaming_active — will be true in Task 3
-            has_emitted_text.clone(),
+            true,                      // streaming_active — DeltaSink handles text delivery
+            has_emitted_text,          // shared with StreamingDeltaSink (last use, no clone)
         );
 
         // If attachments are present and a media processor is available,
