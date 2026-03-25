@@ -35,8 +35,6 @@ fn find_safe_cut_point(messages: &[UnifiedMessage], initial_cut: usize) -> usize
     while cut > 0 {
         if messages[cut].is_tool_result() {
             cut -= 1;
-        } else if messages[cut].is_assistant() && messages[cut].has_tool_calls() {
-            break;
         } else {
             break;
         }
