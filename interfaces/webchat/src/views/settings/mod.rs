@@ -16,6 +16,7 @@ pub mod policies;
 pub mod acp_harnesses;
 pub mod auth;
 pub mod channels;
+pub mod execution;
 
 pub use providers::ProvidersView;
 pub use routing_rules::RoutingRulesView;
@@ -34,6 +35,7 @@ pub use clawhub::ClawHubView;
 pub use policies::PoliciesView;
 pub use acp_harnesses::AcpHarnessesView;
 pub use auth::AuthView;
+pub use execution::ExecutionView;
 pub use channels::ChannelsOverview;
 pub use channels::ChannelPlatformPage;
 

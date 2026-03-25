@@ -40,6 +40,7 @@ pub enum SettingsTab {
     RoutingRules,
     Security,
     Auth,
+    Execution,
 }
 
 impl SettingsTab {
@@ -67,6 +68,7 @@ impl SettingsTab {
             Self::RoutingRules => "/settings/routing",
             Self::Security => "/settings/security",
             Self::Auth => "/settings/auth",
+            Self::Execution => "/settings/execution",
         }
     }
 
@@ -94,6 +96,7 @@ impl SettingsTab {
             Self::RoutingRules => t_string!(i18n, settings.tabs.routing_rules).to_string(),
             Self::Security => t_string!(i18n, settings.tabs.security).to_string(),
             Self::Auth => t_string!(i18n, settings.tabs.auth).to_string(),
+            Self::Execution => "Execution".to_string(),
         }
     }
 
@@ -121,6 +124,7 @@ impl SettingsTab {
             Self::RoutingRules => r#"<polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>"#,
             Self::Security => r#"<rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>"#,
             Self::Auth => r#"<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>"#,
+            Self::Execution => r#"<path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>"#,
         }
     }
 }
@@ -184,6 +188,7 @@ pub const SETTINGS_GROUPS: &[SettingsGroup] = &[
             SettingsTab::RoutingRules,
             SettingsTab::Security,
             SettingsTab::Auth,
+            SettingsTab::Execution,
         ],
     },
 ];
