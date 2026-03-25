@@ -316,14 +316,31 @@ fn component_marker_file(component_name: &str) -> Option<&'static str> {
 
 /// Check if a directory contains a valid plugin manifest.
 ///
-/// Supports: `.claude-plugin/plugin.toml` (preferred), `.claude-plugin/plugin.json`,
-/// `aleph.plugin.toml` (deprecated), `aleph.plugin.json` (deprecated)
+/// Supports all adapter-recognized formats:
+/// - Claude Code: `.claude-plugin/plugin.toml`, `.claude-plugin/plugin.json`
+/// - Codex CLI: `.codex-plugin/plugin.json`
+/// - Cursor IDE: `.cursor-plugin/plugin.json`, `.cursorrules`, `.cursor/rules/`
+/// - Legacy: `aleph.plugin.toml`, `aleph.plugin.json`
+/// - Auto-discover: `skills/`, `commands/`, `agents/`, `hooks/`, `.mcp.json`
 fn has_plugin_manifest(path: &Path) -> bool {
     let cc_dir = path.join(PLUGIN_MANIFEST_DIR);
+    // Claude Code
     cc_dir.join("plugin.toml").exists()
         || cc_dir.join(PLUGIN_MANIFEST_FILE).exists()
+        // Codex CLI
+        || path.join(".codex-plugin/plugin.json").exists()
+        // Cursor IDE
+        || path.join(".cursor-plugin/plugin.json").exists()
+        || path.join(".cursorrules").exists()
+        || path.join(".cursor/rules").is_dir()
+        // Legacy
         || path.join("aleph.plugin.toml").exists()
         || path.join("aleph.plugin.json").exists()
+        // Auto-discover (bare component directories)
+        || path.join("skills").is_dir()
+        || path.join("commands").is_dir()
+        || path.join("agents").is_dir()
+        || path.join(".mcp.json").exists()
 }
 
 #[cfg(test)]
