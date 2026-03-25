@@ -18,6 +18,10 @@ pub enum AuditEventType {
     InjectionPatternDetected,
     EnvInjectionDetected,
     PathTraversalBlocked,
+    PairingAttempt,
+    PairingBruteForce,
+    PermissionDenied,
+    GuestSessionCreated,
 }
 
 impl fmt::Display for AuditEventType {
@@ -32,6 +36,10 @@ impl fmt::Display for AuditEventType {
             Self::InjectionPatternDetected => "injection_pattern",
             Self::EnvInjectionDetected => "env_injection",
             Self::PathTraversalBlocked => "path_traversal_blocked",
+            Self::PairingAttempt => "pairing_attempt",
+            Self::PairingBruteForce => "pairing_brute_force",
+            Self::PermissionDenied => "permission_denied",
+            Self::GuestSessionCreated => "guest_session_created",
         };
         write!(f, "{}", s)
     }
