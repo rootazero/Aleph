@@ -889,6 +889,7 @@ mod tests {
                 input_tokens: 10,
                 output_tokens: 5,
                 cache_read_tokens: None,
+                thinking_tokens: None,
             }),
         }]);
 
@@ -920,6 +921,7 @@ mod tests {
                     input_tokens: 20,
                     output_tokens: 10,
                     cache_read_tokens: None,
+                thinking_tokens: None,
                 }),
             },
             ProviderResponse {
@@ -931,6 +933,7 @@ mod tests {
                     input_tokens: 30,
                     output_tokens: 5,
                     cache_read_tokens: None,
+                thinking_tokens: None,
                 }),
             },
         ]);
@@ -964,6 +967,7 @@ mod tests {
                     input_tokens: 5,
                     output_tokens: 5,
                     cache_read_tokens: None,
+                thinking_tokens: None,
                 }),
             })
             .collect();
@@ -1067,6 +1071,7 @@ mod tests {
                         input_tokens: 10,
                         output_tokens: 5,
                         cache_read_tokens: None,
+                thinking_tokens: None,
                     }),
                 },
                 // Turn 2: call tool B (echo again with different input)
@@ -1083,6 +1088,7 @@ mod tests {
                         input_tokens: 15,
                         output_tokens: 5,
                         cache_read_tokens: None,
+                thinking_tokens: None,
                     }),
                 },
                 // Turn 3: final text
@@ -1095,6 +1101,7 @@ mod tests {
                         input_tokens: 20,
                         output_tokens: 5,
                         cache_read_tokens: None,
+                thinking_tokens: None,
                     }),
                 },
             ],
@@ -1397,6 +1404,7 @@ mod tests {
                     input_tokens: 100,
                     output_tokens: 4096,
                     cache_read_tokens: None,
+                thinking_tokens: None,
                 }),
             },
             ProviderResponse {
@@ -1593,6 +1601,7 @@ mod tests {
                     input_tokens: 20,
                     output_tokens: 10,
                     cache_read_tokens: None,
+                thinking_tokens: None,
                 }),
             },
             // Turn 2: another tool call consuming 30 more (total: 60, over budget of 50)
@@ -1609,6 +1618,7 @@ mod tests {
                     input_tokens: 20,
                     output_tokens: 10,
                     cache_read_tokens: None,
+                thinking_tokens: None,
                 }),
             },
             // Turn 3: should not be reached

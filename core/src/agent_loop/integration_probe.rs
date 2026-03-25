@@ -199,6 +199,7 @@ mod tests {
                         input_tokens: 10,
                         output_tokens: 5,
                         cache_read_tokens: None,
+                thinking_tokens: None,
                     }),
                 },
                 // Turn 2: final text
@@ -211,6 +212,7 @@ mod tests {
                         input_tokens: 20,
                         output_tokens: 5,
                         cache_read_tokens: None,
+                thinking_tokens: None,
                     }),
                 },
             ],
