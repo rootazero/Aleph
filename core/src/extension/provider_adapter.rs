@@ -44,7 +44,7 @@
 use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
 
-use super::plugin_loader::PluginLoader;
+use super::loader::PluginLoader;
 use super::registry::ProviderRegistration;
 use super::types::{ProviderChatRequest, ProviderChatResponse};
 use super::ExtensionResult;

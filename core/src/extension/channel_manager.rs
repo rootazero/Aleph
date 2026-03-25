@@ -50,7 +50,7 @@
 use std::collections::HashMap;
 use tokio::sync::mpsc;
 
-use super::plugin_loader::PluginLoader;
+use super::loader::PluginLoader;
 use super::registry::ChannelRegistration;
 use super::types::{ChannelInfo, ChannelMessage, ChannelSendRequest, ChannelState};
 use super::{ExtensionError, ExtensionResult};
