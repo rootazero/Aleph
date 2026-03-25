@@ -222,7 +222,7 @@ Already-covered functions (no migration needed): `load_skill_internal`, `load_ho
 
 ```rust
 pub struct SkillRegistration {
-    // Existing fields
+    // Existing fields (from SkillRegistration)
     pub name: String,
     pub description: String,
     pub content: String,
@@ -232,16 +232,16 @@ pub struct SkillRegistration {
     pub plugin_id: String,
     // From ExtensionSkill — required for skill execution and filtering
     pub skill_type: SkillType,                    // SkillType enum (Skill, Command, Agent)
-    pub emoji: Option<String>,
     pub source_path: Option<PathBuf>,
     pub scope: PromptScope,                       // System, Tool, Standalone, Disabled
     pub bound_tool: Option<String>,               // Tool this skill is bound to
     pub disable_model_invocation: bool,
-    pub cli_wrapper: bool,
-    pub source: Option<String>,                   // Discovery source identifier
+    pub source: Option<DiscoverySource>,           // Discovery source (enum, not String)
     pub plugin_name: Option<String>,              // Owning plugin name
 }
 ```
+
+Note: `emoji` and `cli_wrapper` do NOT exist on `ExtensionSkill` and are omitted. `source` uses `DiscoverySource` enum (not `String`). `triggers` and `allowed_tools` are SkillRegistration-native fields not from ExtensionSkill.
 
 Methods migrated from `ExtensionSkill` to `SkillRegistration`:
 - `is_auto_invocable()` — checks scope and triggers
@@ -255,7 +255,7 @@ Methods migrated from `ExtensionSkill` to `SkillRegistration`:
 pub struct AgentRegistration {
     // Existing fields
     pub name: String,
-    pub description: String,
+    pub description: Option<String>,              // Option<String> to match ExtensionAgent
     pub content: String,
     pub model: Option<String>,
     pub plugin_id: String,
@@ -266,15 +266,17 @@ pub struct AgentRegistration {
     pub temperature: Option<f32>,
     pub top_p: Option<f32>,
     pub steps: Option<u32>,
-    pub tools: Vec<String>,                       // Allowed tools for this agent
-    pub permission: Option<String>,
-    pub options: HashMap<String, String>,
+    pub tools: Option<HashMap<String, bool>>,     // Per-tool allow/deny map
+    pub permission: Option<HashMap<String, PermissionRule>>,  // Per-permission rules
+    pub options: HashMap<String, serde_json::Value>,          // Arbitrary options (Value not String)
     pub system_prompt: Option<String>,            // Separate from content
     pub source_path: Option<PathBuf>,
-    pub source: Option<String>,
+    pub source: Option<DiscoverySource>,
     pub plugin_name: Option<String>,
 }
 ```
+
+Types matched exactly to `ExtensionAgent` in `types/agents.rs`: `tools` is `Option<HashMap<String, bool>>`, `permission` is `Option<HashMap<String, PermissionRule>>`, `options` is `HashMap<String, Value>`, `description` is `Option<String>`.
 
 Methods migrated from `ExtensionAgent`:
 - `is_primary()` / `is_subagent()` — mode-based filtering
