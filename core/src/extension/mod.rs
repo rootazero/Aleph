@@ -40,6 +40,8 @@ pub mod registrar;
 mod channel_manager;
 mod error;
 mod http_handler;
+// DEPRECATED: content_loader will be replaced by AdapterRegistry in a future pass.
+// Kept for backward compat with gateway handlers and CLI plugin commands.
 mod content_loader;
 pub mod mcp_config;
 pub mod manifest;
@@ -83,7 +85,8 @@ pub use capability::{CapabilityDeclaration, CapabilitySource, SourceFormat, Tier
 pub use registrar::CapabilityApi;
 
 use crate::discovery::{DiscoveryConfig, DiscoveryManager};
-use hooks::{HookExecutor};
+use hooks::HookExecutor;
+use manifest::adapter::AdapterRegistry;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use crate::sync_primitives::Arc;
@@ -157,6 +160,9 @@ pub struct ExtensionManager {
     /// Service lifecycle manager
     service_manager: Arc<RwLock<ServiceManager>>,
 
+    /// Adapter registry for capability-driven manifest parsing
+    adapter_registry: AdapterRegistry,
+
     /// Skill System v2 (independent bounded context)
     skill_system: crate::skill::SkillSystem,
 }
@@ -174,6 +180,7 @@ impl ExtensionManager {
         let plugin_loader = Arc::new(RwLock::new(PluginLoader::new()));
         let plugin_registry = Arc::new(RwLock::new(PluginRegistry::new()));
         let service_manager = Arc::new(RwLock::new(ServiceManager::new()));
+        let adapter_registry = AdapterRegistry::with_defaults();
 
         Ok(Self {
             discovery,
@@ -187,6 +194,7 @@ impl ExtensionManager {
             plugin_loader,
             plugin_registry,
             service_manager,
+            adapter_registry,
             skill_system: crate::skill::SkillSystem::new(),
         })
     }
@@ -338,6 +346,11 @@ impl ExtensionManager {
     /// Check if extensions have been loaded
     pub async fn is_loaded(&self) -> bool {
         self.cache_state.read().await.loaded
+    }
+
+    /// Get a reference to the adapter registry for capability-driven parsing.
+    pub fn adapter_registry(&self) -> &AdapterRegistry {
+        &self.adapter_registry
     }
 }
 

@@ -172,7 +172,7 @@ entry = "SKILL.md"
 [plugin]
 id = "test"
 name = "Test"
-kind = "nodejs"
+kind = "mcp"
 entry = "dist/index.js"
 "#,
         )

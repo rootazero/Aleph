@@ -173,12 +173,14 @@ mod tests {
         let plugin_dir = dir.path().join("my-plugin");
         fs::create_dir(&plugin_dir).unwrap();
         fs::write(
-            plugin_dir.join("aleph.plugin.json"),
-            r#"{
-            "id": "my-plugin",
-            "name": "My Plugin",
-            "entry": "plugin.wasm"
-        }"#,
+            plugin_dir.join("aleph.plugin.toml"),
+            r#"
+[plugin]
+id = "my-plugin"
+name = "My Plugin"
+kind = "wasm"
+entry = "plugin.wasm"
+"#,
         )
         .unwrap();
 
