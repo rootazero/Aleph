@@ -385,7 +385,7 @@ mod tests {
                 status: adapter_mode,
             }),
             delivery: Arc::new(DeliveryEngine::new()),
-            dedup: Arc::new(DedupEngine::new(DedupConfig::default())),
+            dedup: Arc::new(DedupEngine::noop(DedupConfig::default())),
         })
     }
 

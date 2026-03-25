@@ -11,6 +11,7 @@ use rusqlite::{params, Connection};
 use tracing::{info, warn};
 
 use crate::tasks::heartbeat::config::HeartbeatTask;
+use crate::tasks::heartbeat::dedup;
 use crate::tasks::heartbeat::history;
 
 // ── HeartbeatStore ───────────────────────────────────────────────────────────
@@ -45,6 +46,7 @@ impl HeartbeatStore {
 
         init_schema(&conn)?;
         history::init_schema(&conn)?;
+        dedup::init_dedup_schema(&conn)?;
 
         let tasks = load_all_tasks(&conn)?;
         info!(count = tasks.len(), path = %path.display(), "Heartbeat store loaded");
@@ -63,6 +65,7 @@ impl HeartbeatStore {
 
         init_schema(&conn)?;
         history::init_schema(&conn)?;
+        dedup::init_dedup_schema(&conn)?;
 
         Ok(Self {
             conn,

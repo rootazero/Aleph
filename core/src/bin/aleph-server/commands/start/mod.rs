@@ -720,7 +720,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         {
             use alephcore::tasks::heartbeat::probe::DefaultProbeExecutor;
             use alephcore::tasks::heartbeat::executor::DefaultHeartbeatAdapter;
-            use alephcore::tasks::heartbeat::dedup::DedupEngine;
+            use alephcore::tasks::heartbeat::dedup::{DedupEngine, init_dedup_schema};
             use alephcore::tasks::heartbeat::service::timer::{TickContext, run_heartbeat_loop};
             use alephcore::tasks::shared::delivery::DeliveryEngine;
 
@@ -733,6 +733,33 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 guard.wake_queue().clone()
             };
 
+            // Open a dedicated connection for the DedupEngine (separate from the HeartbeatStore
+            // connection to avoid lock contention). Falls back to a no-op engine on failure.
+            let dedup_engine: Arc<DedupEngine> = {
+                let data_dir = alephcore::utils::paths::get_data_dir()
+                    .unwrap_or_else(|_| std::env::temp_dir().join("aleph_data"));
+                let hb_db_path = data_dir.join("heartbeat.db");
+                match rusqlite::Connection::open(&hb_db_path) {
+                    Ok(conn) => {
+                        // Schema should already exist (created by HeartbeatStore::open above),
+                        // but we call init here defensively.
+                        let _ = init_dedup_schema(&conn);
+                        let dedup_conn = Arc::new(tokio::sync::Mutex::new(conn));
+                        Arc::new(DedupEngine::new(
+                            hb_state.config.dedup.clone(),
+                            dedup_conn,
+                            agent_result.embedder.clone(),
+                        ))
+                    }
+                    Err(e) => {
+                        if !args.daemon {
+                            eprintln!("Warning: DedupEngine could not open heartbeat DB ({e}), dedup disabled.");
+                        }
+                        Arc::new(DedupEngine::noop(hb_state.config.dedup.clone()))
+                    }
+                }
+            };
+
             let tick_ctx = Arc::new(TickContext {
                 probe_executor: Arc::new(DefaultProbeExecutor::new(Arc::clone(tool_reg))),
                 adapter: Arc::new(DefaultHeartbeatAdapter::new(
@@ -740,7 +767,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                     Arc::clone(registry),
                 )),
                 delivery: Arc::new(DeliveryEngine::new()),
-                dedup: Arc::new(DedupEngine::new(hb_state.config.dedup.clone())),
+                dedup: dedup_engine,
             });
 
             tokio::spawn(async move {
