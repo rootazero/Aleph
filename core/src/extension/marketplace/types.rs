@@ -33,6 +33,9 @@ pub struct MarketplacePluginEntry {
     pub description: Option<String>,
     #[serde(default)]
     pub version: Option<String>,
+    /// SHA-256 hash of the plugin archive (hex-encoded)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sha256: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
