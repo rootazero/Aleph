@@ -153,6 +153,7 @@ Actions (support ref OR x/y targeting):
 - launch_app: Launch by bundle_id
 - window_list: List open windows
 - focus_window: Bring window to front
+- screen_record: Record screen as MP4. Optional: duration (secs, default 5), fps (default 30), with_audio (default false)
 
 Canvas:
 - canvas_show/canvas_hide/canvas_update: HTML overlay with A2UI patches.

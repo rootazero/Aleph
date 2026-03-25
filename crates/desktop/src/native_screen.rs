@@ -102,6 +102,25 @@ impl ScreenCapability for NativeScreen {
             .await
             .map_err(|e| DesktopError::InputFailed(format!("task join error: {e}")))?
     }
+
+    async fn screen_record(
+        &self,
+        config: crate::screen_types::ScreenRecordConfig,
+    ) -> Result<crate::screen_types::ScreenRecordResult> {
+        #[cfg(target_os = "macos")]
+        {
+            tokio::task::spawn_blocking(move || perception::screen_record(&config))
+                .await
+                .map_err(|e| DesktopError::ScreenCapture(format!("task join error: {e}")))?
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = config;
+            Err(DesktopError::NotImplemented(
+                "screen recording not available on this platform".into(),
+            ))
+        }
+    }
 }
 
 #[cfg(test)]

@@ -116,6 +116,18 @@ pub struct DesktopArgs {
     /// Include non-interactive elements in snapshot refs.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub include_non_interactive: Option<bool>,
+
+    /// Recording duration in seconds (for screen_record, default: 5.0).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration: Option<f64>,
+
+    /// Frames per second (for screen_record, default: 30).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fps: Option<u32>,
+
+    /// Include system audio (for screen_record, default: false).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub with_audio: Option<bool>,
 }
 
 /// Output from desktop operations.

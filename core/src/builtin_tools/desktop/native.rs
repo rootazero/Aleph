@@ -633,6 +633,26 @@ impl super::DesktopTool {
                     })),
                 }
             }
+            "screen_record" => {
+                let config = aleph_desktop::screen_types::ScreenRecordConfig {
+                    duration_secs: args.duration.unwrap_or(5.0),
+                    fps: args.fps.unwrap_or(30),
+                    with_audio: args.with_audio.unwrap_or(false),
+                    region: None,
+                };
+                match screen.screen_record(config).await {
+                    Ok(result) => Ok(Some(DesktopOutput {
+                        success: true,
+                        data: Some(serde_json::to_value(&result).unwrap_or_default()),
+                        message: None,
+                    })),
+                    Err(e) => Ok(Some(DesktopOutput {
+                        success: false,
+                        data: None,
+                        message: Some(format!("Screen recording error: {e}")),
+                    })),
+                }
+            }
             // Actions not handled via ScreenCapability: snapshot, ax_tree,
             // double_click, drag, hover, paste, canvas_*, ref-based actions
             // — fall through to legacy native path or IPC bridge.
