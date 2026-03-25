@@ -3,9 +3,12 @@
 //! Executes tool probes and evaluates trigger conditions to determine
 //! whether L2 agent analysis should be triggered.
 
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use serde_json::Value;
 
+use crate::executor::{BuiltinToolRegistry, ToolRegistry};
 use crate::tasks::heartbeat::config::{ProbeConfig, TriggerCondition};
 
 // ── ProbeResult ──────────────────────────────────────────────────────────────
@@ -29,6 +32,30 @@ pub struct ProbeResult {
 #[async_trait]
 pub trait ProbeExecutor: Send + Sync {
     async fn execute(&self, tool_name: &str, params: Option<&Value>) -> Result<Value, String>;
+}
+
+// ── DefaultProbeExecutor ─────────────────────────────────────────────────────
+
+/// Production probe executor that calls tools via BuiltinToolRegistry.
+pub struct DefaultProbeExecutor {
+    registry: Arc<BuiltinToolRegistry>,
+}
+
+impl DefaultProbeExecutor {
+    pub fn new(registry: Arc<BuiltinToolRegistry>) -> Self {
+        Self { registry }
+    }
+}
+
+#[async_trait]
+impl ProbeExecutor for DefaultProbeExecutor {
+    async fn execute(&self, tool_name: &str, params: Option<&Value>) -> Result<Value, String> {
+        let arguments = params.cloned().unwrap_or(serde_json::json!({}));
+        let result: crate::error::Result<Value> = self.registry
+            .execute_tool(tool_name, arguments)
+            .await;
+        result.map_err(|e| format!("Probe tool '{}' failed: {}", tool_name, e))
+    }
 }
 
 // ── evaluate_trigger ─────────────────────────────────────────────────────────

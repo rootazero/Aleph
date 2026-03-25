@@ -47,6 +47,8 @@ pub(in crate::commands::start) struct AgentHandlersResult {
     pub channel_registry_cell: Option<Arc<tokio::sync::OnceCell<Arc<alephcore::gateway::channel_registry::ChannelRegistry>>>>,
     /// Generation provider registry for TTS voice output
     pub generation_registry: Option<Arc<std::sync::RwLock<alephcore::generation::GenerationProviderRegistry>>>,
+    /// Builtin tool registry (for heartbeat probe executor)
+    pub tool_registry: Option<Arc<BuiltinToolRegistry>>,
 }
 
 /// Register agent.run / agent.status / agent.cancel / chat.* handlers.
@@ -80,6 +82,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
     let mut compression_out: Option<std::sync::Arc<alephcore::memory::compression::CompressionService>> = None;
     let mut multi_reg: Option<Arc<alephcore::MultiProviderRegistry>> = None;
     let mut channel_reg_cell: Option<Arc<tokio::sync::OnceCell<Arc<alephcore::gateway::channel_registry::ChannelRegistry>>>> = None;
+    let mut tool_reg_out: Option<Arc<BuiltinToolRegistry>> = None;
 
     // Create coord task store (SQLite-backed task/team coordination for swarm tools).
     // Created unconditionally so it is available regardless of AI provider availability.
@@ -483,6 +486,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         channel_reg_cell = Some(tool_registry.channel_registry_cell());
 
         let tool_registry = Arc::new(tool_registry);
+        let tool_registry_for_heartbeat = tool_registry.clone();
 
         // Build task router from config
         let task_router: Option<Arc<dyn alephcore::routing::TaskRouter>> = if app_config.task_routing.enabled {
@@ -774,6 +778,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         let engine_arc: Arc<dyn alephcore::gateway::ExecutionAdapter> = engine;
         exec_adapter = Some(engine_arc.clone());
         agent_reg = Some(agent_registry.clone());
+        tool_reg_out = Some(tool_registry_for_heartbeat);
 
         // activity.stats — returns active agent run count + coord task count
         {
@@ -1084,5 +1089,6 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         multi_registry: multi_reg,
         channel_registry_cell: channel_reg_cell,
         generation_registry: Some(generation_registry),
+        tool_registry: tool_reg_out,
     }
 }

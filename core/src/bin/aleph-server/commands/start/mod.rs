@@ -713,6 +713,48 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         }
     }
 
+    // Spawn heartbeat timer loop (after agent handlers, so AgentRegistry is populated)
+    if let Some(ref hb_svc) = heartbeat_service {
+        if let (Some(ref exec_adapter), Some(ref registry), Some(ref tool_reg)) =
+            (&agent_result.execution_adapter, &agent_result.agent_registry, &agent_result.tool_registry)
+        {
+            use alephcore::tasks::heartbeat::probe::DefaultProbeExecutor;
+            use alephcore::tasks::heartbeat::executor::DefaultHeartbeatAdapter;
+            use alephcore::tasks::heartbeat::dedup::DedupEngine;
+            use alephcore::tasks::heartbeat::service::timer::{TickContext, run_heartbeat_loop};
+            use alephcore::tasks::shared::delivery::DeliveryEngine;
+
+            let hb_state = {
+                let guard = hb_svc.lock().await;
+                guard.state().clone()
+            };
+            let hb_wake = {
+                let guard = hb_svc.lock().await;
+                guard.wake_queue().clone()
+            };
+
+            let tick_ctx = Arc::new(TickContext {
+                probe_executor: Arc::new(DefaultProbeExecutor::new(Arc::clone(tool_reg))),
+                adapter: Arc::new(DefaultHeartbeatAdapter::new(
+                    Arc::clone(exec_adapter),
+                    Arc::clone(registry),
+                )),
+                delivery: Arc::new(DeliveryEngine::new()),
+                dedup: Arc::new(DedupEngine::new(hb_state.config.dedup.clone())),
+            });
+
+            tokio::spawn(async move {
+                run_heartbeat_loop(hb_state, hb_wake, tick_ctx).await;
+            });
+
+            if !args.daemon {
+                println!("Heartbeat timer loop: started");
+            }
+        } else if !args.daemon {
+            println!("Heartbeat timer loop: skipped (no execution adapter)");
+        }
+    }
+
     // Initialize GroupChat Orchestrator + Executor
     // (shared_orch and gc_executor are kept alive for both RPC handlers and InboundMessageRouter)
     let (shared_orch, gc_executor) = {
