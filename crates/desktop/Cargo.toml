@@ -65,3 +65,5 @@ objc2-vision = { version = "0.3", features = [
 objc2-app-kit = { version = "0.3", features = ["NSRunningApplication", "NSWorkspace"] }
 core-graphics = "0.25"
 core-foundation = "0.10"
+objc2-screen-capture-kit = "0.3"
+dispatch2 = "0.3"

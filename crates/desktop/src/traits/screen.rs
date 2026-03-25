@@ -2,6 +2,7 @@
 
 use async_trait::async_trait;
 
+use crate::screen_types::{ScreenRecordConfig, ScreenRecordResult};
 use crate::{MouseButton, OcrResult, Result, ScreenRegion, Screenshot, WindowInfo};
 
 /// Screen perception and input automation.
@@ -43,4 +44,12 @@ pub trait ScreenCapability: Send + Sync {
 
     /// Launch an application by name or bundle ID.
     async fn launch_app(&self, app_name: &str) -> Result<()>;
+
+    /// Record the screen for a specified duration, output as MP4.
+    async fn screen_record(&self, config: ScreenRecordConfig) -> Result<ScreenRecordResult> {
+        let _ = config;
+        Err(crate::DesktopError::NotImplemented(
+            "screen recording not available on this platform".into(),
+        ))
+    }
 }
