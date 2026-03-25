@@ -8,7 +8,7 @@ use crate::world::{AlephWorld, ExtensionContext};
 use alephcore::extension::{
     manifest::{
         parse_aleph_plugin_content, parse_aleph_plugin_toml_content, parse_manifest_from_dir_sync,
-        FilesystemPermission,
+        FilesystemAccess, FilesystemPermission,
     },
     match_path, ChannelRegistration, CliRegistration, CommandRegistration, DiagnosticLevel,
     DirectCommandResult, ExtensionConfig, ExtensionError, ExtensionManager,
@@ -1589,9 +1589,9 @@ async fn then_manifest_has_permission(w: &mut AlephWorld, permission: String) {
     } else {
         match permission.as_str() {
             "Network" => PluginPermission::Network,
-            "Filesystem" => PluginPermission::Filesystem,
-            "FilesystemRead" => PluginPermission::FilesystemRead,
-            "FilesystemWrite" => PluginPermission::FilesystemWrite,
+            "Filesystem" => PluginPermission::Filesystem(FilesystemAccess::Full),
+            "FilesystemRead" => PluginPermission::Filesystem(FilesystemAccess::Read),
+            "FilesystemWrite" => PluginPermission::Filesystem(FilesystemAccess::Write),
             "Env" => PluginPermission::Env,
             _ => panic!("Unknown permission: {}", permission),
         }
@@ -1614,9 +1614,9 @@ async fn then_manifest_not_have_permission(w: &mut AlephWorld, permission: Strin
     } else {
         match permission.as_str() {
             "Network" => PluginPermission::Network,
-            "Filesystem" => PluginPermission::Filesystem,
-            "FilesystemRead" => PluginPermission::FilesystemRead,
-            "FilesystemWrite" => PluginPermission::FilesystemWrite,
+            "Filesystem" => PluginPermission::Filesystem(FilesystemAccess::Full),
+            "FilesystemRead" => PluginPermission::Filesystem(FilesystemAccess::Read),
+            "FilesystemWrite" => PluginPermission::Filesystem(FilesystemAccess::Write),
             "Env" => PluginPermission::Env,
             _ => panic!("Unknown permission: {}", permission),
         }

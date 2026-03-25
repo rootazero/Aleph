@@ -22,7 +22,7 @@ use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 use std::path::Path;
 
-use super::types::PluginPermission;
+use super::types::{FilesystemAccess, PluginPermission};
 
 // =============================================================================
 // Constants
@@ -436,12 +436,12 @@ pub fn convert_permissions(perms: &PermissionsSection) -> Vec<PluginPermission> 
         permissions.push(PluginPermission::Network);
     }
     match &perms.filesystem {
-        FilesystemPermission::Bool(true) => permissions.push(PluginPermission::Filesystem),
+        FilesystemPermission::Bool(true) => permissions.push(PluginPermission::Filesystem(FilesystemAccess::Full)),
         FilesystemPermission::Bool(false) => {}
         FilesystemPermission::Level(level) => match level.as_str() {
-            "read" => permissions.push(PluginPermission::FilesystemRead),
-            "write" => permissions.push(PluginPermission::FilesystemWrite),
-            "full" => permissions.push(PluginPermission::Filesystem),
+            "read" => permissions.push(PluginPermission::Filesystem(FilesystemAccess::Read)),
+            "write" => permissions.push(PluginPermission::Filesystem(FilesystemAccess::Write)),
+            "full" => permissions.push(PluginPermission::Filesystem(FilesystemAccess::Full)),
             _ => {}
         },
     }

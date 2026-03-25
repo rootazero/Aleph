@@ -29,7 +29,8 @@ pub use cc_plugin_toml::{
     parse_cc_plugin_toml, parse_cc_plugin_toml_content, parse_cc_plugin_toml_sync, CC_PLUGIN_TOML,
 };
 pub use types::{
-    AlephExtensions, AlephRuntime, AuthorInfo, ConfigUiHint, PluginManifest, PluginPermission,
+    AlephExtensions, AlephRuntime, AuthorInfo, ConfigUiHint, FilesystemAccess, PluginManifest,
+    PluginPermission,
 };
 
 // Re-export legacy types for backward compatibility with loader

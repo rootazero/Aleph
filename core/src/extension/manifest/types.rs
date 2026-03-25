@@ -54,26 +54,29 @@ pub struct ConfigUiHint {
 // Plugin Permissions
 // =============================================================================
 
+/// Filesystem access level for plugin permissions
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FilesystemAccess {
+    /// Read-only filesystem access
+    Read,
+    /// Write filesystem access (implies read)
+    Write,
+    /// Full filesystem access (read + write)
+    Full,
+}
+
 /// Plugin permission types
 ///
 /// Permissions control what system resources a plugin can access.
 /// Plugins must declare required permissions in their manifest.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum PluginPermission {
     /// Network access (HTTP, WebSocket, etc.)
     Network,
 
-    /// Read-only filesystem access
-    #[serde(rename = "filesystem:read")]
-    FilesystemRead,
-
-    /// Write filesystem access (implies read)
-    #[serde(rename = "filesystem:write")]
-    FilesystemWrite,
-
-    /// Full filesystem access (legacy, equivalent to read+write)
-    Filesystem,
+    /// Filesystem access with a specific level
+    Filesystem(FilesystemAccess),
 
     /// Environment variable access
     Env,
@@ -85,15 +88,12 @@ pub enum PluginPermission {
     Background,
 
     /// HTTP route registration
-    #[serde(rename = "http-routes")]
     HttpRoutes,
 
     /// Gateway RPC method registration
-    #[serde(rename = "gateway-rpc")]
     GatewayRpc,
 
     /// Custom/extension-specific permission
-    #[serde(untagged)]
     Custom(String),
 }
 
@@ -101,15 +101,49 @@ impl std::fmt::Display for PluginPermission {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             PluginPermission::Network => write!(f, "network"),
-            PluginPermission::FilesystemRead => write!(f, "filesystem:read"),
-            PluginPermission::FilesystemWrite => write!(f, "filesystem:write"),
-            PluginPermission::Filesystem => write!(f, "filesystem"),
+            PluginPermission::Filesystem(FilesystemAccess::Read) => write!(f, "filesystem:read"),
+            PluginPermission::Filesystem(FilesystemAccess::Write) => write!(f, "filesystem:write"),
+            PluginPermission::Filesystem(FilesystemAccess::Full) => write!(f, "filesystem"),
             PluginPermission::Env => write!(f, "env"),
             PluginPermission::Shell => write!(f, "shell"),
             PluginPermission::Background => write!(f, "background"),
             PluginPermission::HttpRoutes => write!(f, "http-routes"),
             PluginPermission::GatewayRpc => write!(f, "gateway-rpc"),
             PluginPermission::Custom(s) => write!(f, "{}", s),
+        }
+    }
+}
+
+// Custom serde: serialize as the Display string, deserialize from it.
+// This maintains backward compat with "filesystem:read", "filesystem:write", "filesystem".
+
+impl Serialize for PluginPermission {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.to_string())
+    }
+}
+
+impl<'de> Deserialize<'de> for PluginPermission {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(deserializer)?;
+        Ok(PluginPermission::from_str(&s))
+    }
+}
+
+impl PluginPermission {
+    /// Parse a permission string into a PluginPermission
+    fn from_str(s: &str) -> Self {
+        match s {
+            "network" => PluginPermission::Network,
+            "filesystem:read" => PluginPermission::Filesystem(FilesystemAccess::Read),
+            "filesystem:write" => PluginPermission::Filesystem(FilesystemAccess::Write),
+            "filesystem" => PluginPermission::Filesystem(FilesystemAccess::Full),
+            "env" => PluginPermission::Env,
+            "shell" => PluginPermission::Shell,
+            "background" => PluginPermission::Background,
+            "http-routes" => PluginPermission::HttpRoutes,
+            "gateway-rpc" => PluginPermission::GatewayRpc,
+            other => PluginPermission::Custom(other.to_string()),
         }
     }
 }
@@ -473,14 +507,14 @@ mod tests {
     fn test_plugin_permission_display() {
         assert_eq!(PluginPermission::Network.to_string(), "network");
         assert_eq!(
-            PluginPermission::FilesystemRead.to_string(),
+            PluginPermission::Filesystem(FilesystemAccess::Read).to_string(),
             "filesystem:read"
         );
         assert_eq!(
-            PluginPermission::FilesystemWrite.to_string(),
+            PluginPermission::Filesystem(FilesystemAccess::Write).to_string(),
             "filesystem:write"
         );
-        assert_eq!(PluginPermission::Filesystem.to_string(), "filesystem");
+        assert_eq!(PluginPermission::Filesystem(FilesystemAccess::Full).to_string(), "filesystem");
         assert_eq!(PluginPermission::Env.to_string(), "env");
         assert_eq!(
             PluginPermission::Custom("custom:perm".to_string()).to_string(),
@@ -578,7 +612,7 @@ mod tests {
         // Serialize
         let perms = vec![
             PluginPermission::Network,
-            PluginPermission::FilesystemRead,
+            PluginPermission::Filesystem(FilesystemAccess::Read),
             PluginPermission::Custom("my:perm".to_string()),
         ];
         let json = serde_json::to_string(&perms).unwrap();
@@ -587,7 +621,7 @@ mod tests {
         let parsed: Vec<PluginPermission> = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.len(), 3);
         assert_eq!(parsed[0], PluginPermission::Network);
-        assert_eq!(parsed[1], PluginPermission::FilesystemRead);
+        assert_eq!(parsed[1], PluginPermission::Filesystem(FilesystemAccess::Read));
         assert_eq!(parsed[2], PluginPermission::Custom("my:perm".to_string()));
     }
 }
