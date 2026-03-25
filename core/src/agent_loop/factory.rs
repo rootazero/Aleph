@@ -135,7 +135,6 @@ mod tests {
         let config = LoopConfig {
             max_iterations: 5,
             token_budget: 10000,
-            timeout_secs: 30,
         };
 
         let loop_instance = LoopFactory::build(provider, vec![], None, config);
@@ -158,7 +157,6 @@ mod tests {
         let config = LoopConfig {
             max_iterations: 10,
             token_budget: 50000,
-            timeout_secs: 60,
         };
 
         let loop_instance = LoopFactory::build(provider, tools, None, config);
@@ -187,7 +185,6 @@ mod tests {
         let config = LoopConfig {
             max_iterations: 10,
             token_budget: 50000,
-            timeout_secs: 60,
         };
 
         let _loop_instance = LoopFactory::build(provider, vec![], Some(&soul), config);
@@ -214,7 +211,6 @@ mod tests {
         let config = LoopConfig {
             max_iterations: 10,
             token_budget: 50000,
-            timeout_secs: 60,
         };
 
         let loop_instance =

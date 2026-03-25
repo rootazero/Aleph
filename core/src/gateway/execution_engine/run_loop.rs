@@ -148,14 +148,10 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
 
         // Config from agent
         let max_loops = agent.config().max_loops as usize;
-        let timeout_secs = request
-            .timeout_secs
-            .unwrap_or(self.config.default_timeout_secs);
         let token_budget = agent.config().max_tokens.unwrap_or(500_000);
         let loop_config = LoopConfig {
             max_iterations: max_loops,
             token_budget,
-            timeout_secs,
         };
 
         // Build optional ToolCompactorConfig from session compactor settings

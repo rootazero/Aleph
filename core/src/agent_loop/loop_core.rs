@@ -8,12 +8,10 @@
 //! - The provider returns text with `EndTurn` (task complete)
 //! - `max_iterations` is reached
 //! - Token budget is exhausted
-//! - Timeout expires
 
 use async_trait::async_trait;
 use futures::StreamExt;
 use serde_json::Value;
-use std::time::Instant;
 
 use super::prompt_builder::{PromptBuilder, ToolInfo};
 use super::safety::{SafetyError, SafetyGuard, ToolCall as SafetyToolCall};
@@ -163,15 +161,13 @@ pub struct ToolCompactorConfig {
 pub struct LoopConfig {
     pub max_iterations: usize,
     pub token_budget: usize,
-    pub timeout_secs: u64,
 }
 
 impl Default for LoopConfig {
     fn default() -> Self {
         Self {
-            max_iterations: 25,
+            max_iterations: 200,
             token_budget: 100_000,
-            timeout_secs: 300,
         }
     }
 }
@@ -331,16 +327,8 @@ impl<P: LoopProvider> AgentLoop<P> {
         const MAX_CONSECUTIVE_ERRORS: usize = 10;
         const MAX_COMPLETION_NUDGES: usize = 3;
 
-        let start = Instant::now();
-
         // === THE LOOP ===
         while iterations < self.config.max_iterations {
-            // Check timeout
-            if start.elapsed().as_secs() >= self.config.timeout_secs {
-                hit_limit = true;
-                break;
-            }
-
             iterations += 1;
 
             // Compact tool results if context exceeds threshold
@@ -873,7 +861,6 @@ mod tests {
             LoopConfig {
                 max_iterations: 10,
                 token_budget: 100_000,
-                timeout_secs: 60,
             },
         )
     }
@@ -985,7 +972,6 @@ mod tests {
             LoopConfig {
                 max_iterations: 5,
                 token_budget: 100_000,
-                timeout_secs: 60,
             },
         );
 
@@ -1032,7 +1018,6 @@ mod tests {
             LoopConfig {
                 max_iterations: 10,
                 token_budget: 100_000,
-                timeout_secs: 60,
             },
         );
 
@@ -1118,7 +1103,6 @@ mod tests {
             LoopConfig {
                 max_iterations: 10,
                 token_budget: 100_000,
-                timeout_secs: 60,
             },
         );
 
@@ -1221,7 +1205,6 @@ mod tests {
             LoopConfig {
                 max_iterations: 25,
                 token_budget: 100_000,
-                timeout_secs: 60,
             },
         );
 
@@ -1315,7 +1298,6 @@ mod tests {
             LoopConfig {
                 max_iterations: 25,
                 token_budget: 100_000,
-                timeout_secs: 60,
             },
         );
 
@@ -1369,7 +1351,6 @@ mod tests {
             LoopConfig {
                 max_iterations: 10,
                 token_budget: 100_000,
-                timeout_secs: 60,
             },
         );
 
@@ -1533,7 +1514,6 @@ mod tests {
             LoopConfig {
                 max_iterations: 10,
                 token_budget: 100_000,
-                timeout_secs: 60,
             },
         );
 
@@ -1643,7 +1623,6 @@ mod tests {
             LoopConfig {
                 max_iterations: 10,
                 token_budget: 50,
-                timeout_secs: 60,
             },
         );
 
@@ -1698,7 +1677,6 @@ mod tests {
             LoopConfig {
                 max_iterations: 10,
                 token_budget: 100_000,
-                timeout_secs: 60,
             },
         );
 
@@ -1783,7 +1761,6 @@ mod tests {
             LoopConfig {
                 max_iterations: 10,
                 token_budget: 100_000,
-                timeout_secs: 60,
             },
         );
 
@@ -1877,7 +1854,6 @@ mod tests {
             LoopConfig {
                 max_iterations: 10,
                 token_budget: 100_000,
-                timeout_secs: 60,
             },
         );
 
@@ -1931,7 +1907,6 @@ mod tests {
             LoopConfig {
                 max_iterations: 25,
                 token_budget: 100_000,
-                timeout_secs: 60,
             },
         );
 
@@ -1991,7 +1966,6 @@ mod tests {
             LoopConfig {
                 max_iterations: 10,
                 token_budget: 100_000,
-                timeout_secs: 60,
             },
         );
 

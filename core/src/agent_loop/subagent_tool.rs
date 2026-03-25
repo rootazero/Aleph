@@ -132,7 +132,6 @@ impl LoopTool for SubagentTool {
         let config = LoopConfig {
             max_iterations: 25,
             token_budget: 100_000,
-            timeout_secs,
         };
 
         // 3. Create and run the agent loop
