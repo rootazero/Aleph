@@ -538,6 +538,7 @@ pub(in crate::commands::start) fn register_config_handlers(
     use alephcore::gateway::handlers::behavior_config;
     use alephcore::gateway::handlers::generation_config;
     use alephcore::gateway::handlers::search_config;
+    use alephcore::gateway::handlers::execution_config;
 
     // Config CRUD
     register_handler!(server, "config.get", handle_get_full_config, config);
@@ -640,6 +641,10 @@ pub(in crate::commands::start) fn register_config_handlers(
     register_handler!(server, "search_config.update", search_config::handle_update, config, event_bus, shared_token_mgr);
     register_handler!(server, "search_config.test", search_config::handle_test, config, shared_token_mgr);
     register_handler!(server, "search_config.deleteBackend", search_config::handle_delete_backend, config, event_bus, shared_token_mgr);
+
+    // Execution config
+    register_handler!(server, "execution_config.get", execution_config::handle_get, config);
+    register_handler!(server, "execution_config.update", execution_config::handle_update, config, event_bus);
 
     // ACP harness config (only if ACP manager is available)
     if let Some(ref acp) = acp_manager {
