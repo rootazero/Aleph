@@ -7,6 +7,8 @@
 use async_trait::async_trait;
 use tracing::{debug, error, info, warn};
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use crate::sync_primitives::Arc;
 
 use crate::gateway::media::{MediaItem, PendingMedia, MAX_MEDIA_PER_RUN};
@@ -188,8 +190,16 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             build_loop_history(&agent, &request.session_key, &request.input).await
         };
 
-        // Create a streaming callback that emits events
-        let mut callback = StreamCallback::new(emitter.clone(), run_id.to_string(), request.pending_media.clone());
+        // Create a streaming callback that emits events.
+        // streaming_active will be set to true in Task 3 when DeltaSink is wired up.
+        let has_emitted_text = Arc::new(AtomicBool::new(false));
+        let mut callback = StreamCallback::new(
+            emitter.clone(),
+            run_id.to_string(),
+            request.pending_media.clone(),
+            false,                     // streaming_active — will be true in Task 3
+            has_emitted_text.clone(),
+        );
 
         // If attachments are present and a media processor is available,
         // process them into multimodal content blocks and use the
@@ -316,16 +326,30 @@ pub(super) struct StreamCallback<E: EventEmitter + Send + Sync + 'static> {
     seq: u64,
     chunk_index: u32,
     pending_media: PendingMedia,
+    /// True when a StreamingDeltaSink is active for this run.
+    /// When true, text tokens that were already delivered via DeltaSink are skipped.
+    streaming_active: bool,
+    /// Shared flag set by StreamingDeltaSink after each token delivery.
+    /// StreamCallback swaps it to false and skips the duplicate on_text call.
+    has_emitted_text: Arc<AtomicBool>,
 }
 
 impl<E: EventEmitter + Send + Sync + 'static> StreamCallback<E> {
-    pub(super) fn new(emitter: Arc<E>, run_id: String, pending_media: PendingMedia) -> Self {
+    pub(super) fn new(
+        emitter: Arc<E>,
+        run_id: String,
+        pending_media: PendingMedia,
+        streaming_active: bool,
+        has_emitted_text: Arc<AtomicBool>,
+    ) -> Self {
         Self {
             emitter,
             run_id,
             seq: 0,
             chunk_index: 0,
             pending_media,
+            streaming_active,
+            has_emitted_text,
         }
     }
 }
@@ -334,6 +358,13 @@ impl<E: EventEmitter + Send + Sync + 'static> crate::agent_loop::LoopCallback
     for StreamCallback<E>
 {
     fn on_text(&mut self, text: &str) {
+        // If streaming is active and DeltaSink already delivered this text token-by-token,
+        // skip to avoid duplication. System-generated notices (truncation warning at
+        // loop_core.rs:495) were never sent through DeltaSink, so has_emitted_text
+        // will be false for them — they pass through normally.
+        if self.streaming_active && self.has_emitted_text.swap(false, Ordering::Acquire) {
+            return;
+        }
         self.seq += 1;
         let chunk_index = self.chunk_index;
         self.chunk_index += 1;
@@ -357,6 +388,10 @@ impl<E: EventEmitter + Send + Sync + 'static> crate::agent_loop::LoopCallback
     }
 
     fn on_intermediate_text(&mut self, text: &str) {
+        // Same deduplication guard as on_text — skip tokens already delivered by DeltaSink.
+        if self.streaming_active && self.has_emitted_text.swap(false, Ordering::Acquire) {
+            return;
+        }
         self.seq += 1;
         let chunk_index = self.chunk_index;
         self.chunk_index += 1;
