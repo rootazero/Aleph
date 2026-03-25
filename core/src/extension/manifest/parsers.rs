@@ -519,6 +519,90 @@ pub fn parse_mcp_config_file(
 }
 
 // ============================================================================
+// V2 Prompt parsers (migrated from legacy_loader)
+// ============================================================================
+
+/// Parse a v2 prompt configuration into a `CapabilityDeclaration::Skill`.
+///
+/// Reads the file specified in `prompt_section.file` relative to `base`,
+/// and produces a skill with the appropriate `PromptScope`.
+pub fn parse_v2_prompt(
+    base: &Path,
+    prompt_section: &crate::extension::manifest::PromptSection,
+    plugin_id: &str,
+) -> Result<CapabilityDeclaration> {
+    use crate::extension::types::PromptScope;
+
+    let file_path = base.join(&prompt_section.file);
+    let content = std::fs::read_to_string(&file_path)
+        .with_context(|| format!("Failed to read v2 prompt file: {}", file_path.display()))?;
+
+    let scope = match prompt_section.scope.as_str() {
+        "system" => PromptScope::System,
+        "tool" => PromptScope::Tool,
+        "standalone" => PromptScope::Standalone,
+        "disabled" => PromptScope::Disabled,
+        _ => PromptScope::System,
+    };
+
+    Ok(CapabilityDeclaration::Skill(SkillRegistration {
+        name: format!("{}-prompt", plugin_id),
+        description: format!("V2 prompt for plugin {}", plugin_id),
+        content,
+        scope,
+        plugin_id: plugin_id.to_string(),
+        ..Default::default()
+    }))
+}
+
+/// Parse v2 tool instruction files into `CapabilityDeclaration::Skill` values.
+///
+/// For each tool with an `instruction_file`, reads the file and produces a skill
+/// with `PromptScope::Tool` and `bound_tool` set to the tool name.
+pub fn parse_v2_tool_prompts(
+    base: &Path,
+    tools: &[crate::extension::manifest::ToolSection],
+    plugin_id: &str,
+) -> Result<Vec<CapabilityDeclaration>> {
+    use crate::extension::types::PromptScope;
+
+    let mut caps = Vec::new();
+
+    for tool in tools {
+        let instruction_file = match &tool.instruction_file {
+            Some(f) => f,
+            None => continue,
+        };
+
+        let file_path = base.join(instruction_file);
+        match std::fs::read_to_string(&file_path) {
+            Ok(content) => {
+                caps.push(CapabilityDeclaration::Skill(SkillRegistration {
+                    name: format!("{}-tool-prompt", tool.name),
+                    description: tool
+                        .description
+                        .clone()
+                        .unwrap_or_else(|| format!("Tool prompt for {}", tool.name)),
+                    content,
+                    scope: PromptScope::Tool,
+                    bound_tool: Some(tool.name.clone()),
+                    plugin_id: plugin_id.to_string(),
+                    ..Default::default()
+                }));
+            }
+            Err(e) => {
+                warn!(
+                    "Failed to read tool instruction file {:?} for tool '{}': {}",
+                    file_path, tool.name, e
+                );
+            }
+        }
+    }
+
+    Ok(caps)
+}
+
+// ============================================================================
 // Helpers
 // ============================================================================
 
@@ -849,6 +933,107 @@ mod tests {
         {
             std::os::unix::fs::symlink(outside.path(), &link_path).unwrap();
             assert!(!is_path_inside(dir.path(), &link_path));
+        }
+    }
+
+    #[test]
+    fn test_parse_v2_prompt() {
+        use crate::extension::manifest::PromptSection;
+        use crate::extension::types::PromptScope;
+
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("prompt.md"), "You are a helpful assistant.").unwrap();
+
+        let section = PromptSection {
+            file: "prompt.md".to_string(),
+            scope: "system".to_string(),
+        };
+
+        let cap = parse_v2_prompt(dir.path(), &section, "test-plugin").unwrap();
+        match cap {
+            CapabilityDeclaration::Skill(s) => {
+                assert_eq!(s.name, "test-plugin-prompt");
+                assert_eq!(s.content, "You are a helpful assistant.");
+                assert_eq!(s.scope, PromptScope::System);
+                assert_eq!(s.plugin_id, "test-plugin");
+            }
+            other => panic!("Expected Skill, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_v2_prompt_tool_scope() {
+        use crate::extension::manifest::PromptSection;
+        use crate::extension::types::PromptScope;
+
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("tool-prompt.md"), "Use this tool carefully.").unwrap();
+
+        let section = PromptSection {
+            file: "tool-prompt.md".to_string(),
+            scope: "tool".to_string(),
+        };
+
+        let cap = parse_v2_prompt(dir.path(), &section, "p").unwrap();
+        match cap {
+            CapabilityDeclaration::Skill(s) => {
+                assert_eq!(s.scope, PromptScope::Tool);
+            }
+            other => panic!("Expected Skill, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_v2_prompt_missing_file() {
+        use crate::extension::manifest::PromptSection;
+
+        let dir = tempdir().unwrap();
+        let section = PromptSection {
+            file: "nonexistent.md".to_string(),
+            scope: "system".to_string(),
+        };
+
+        let result = parse_v2_prompt(dir.path(), &section, "p");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_v2_tool_prompts() {
+        use crate::extension::manifest::ToolSection;
+        use crate::extension::types::PromptScope;
+
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("bash-guide.md"), "Be careful with bash.").unwrap();
+
+        let tools = vec![
+            ToolSection {
+                name: "bash".to_string(),
+                description: Some("Bash tool".to_string()),
+                handler: None,
+                instruction_file: Some("bash-guide.md".to_string()),
+                parameters: None,
+            },
+            ToolSection {
+                name: "read".to_string(),
+                description: None,
+                handler: None,
+                instruction_file: None, // no instruction file
+                parameters: None,
+            },
+        ];
+
+        let caps = parse_v2_tool_prompts(dir.path(), &tools, "p").unwrap();
+        assert_eq!(caps.len(), 1);
+
+        match &caps[0] {
+            CapabilityDeclaration::Skill(s) => {
+                assert_eq!(s.name, "bash-tool-prompt");
+                assert_eq!(s.content, "Be careful with bash.");
+                assert_eq!(s.scope, PromptScope::Tool);
+                assert_eq!(s.bound_tool, Some("bash".to_string()));
+                assert_eq!(s.description, "Bash tool");
+            }
+            other => panic!("Expected Skill, got {:?}", other),
         }
     }
 }
