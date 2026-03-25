@@ -175,6 +175,12 @@ pub enum SourceFormat {
     AlephToml,
     /// .claude/plugin.json (Claude Code compat)
     ClaudeCode,
+    /// .codex-plugin/plugin.json (Codex CLI compat)
+    Codex,
+    /// .cursor-plugin/plugin.json or .cursorrules (Cursor IDE compat)
+    Cursor,
+    /// Auto-discovered from well-known directory structure
+    AutoDiscovered,
     /// Dynamic registration via MCP/WASM runtime
     Runtime,
 }

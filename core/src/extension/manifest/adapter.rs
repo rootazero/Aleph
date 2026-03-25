@@ -60,12 +60,19 @@ impl AdapterRegistry {
 
     /// Create a registry with default adapters.
     ///
-    /// Includes Claude Code TOML (priority 100) and JSON (priority 90) adapters.
-    /// Codex, Cursor, and AutoDiscover adapters will be added in Task 5.
+    /// Registered adapters (by descending priority):
+    /// - Claude Code TOML (100)
+    /// - Claude Code JSON (90)
+    /// - Codex CLI (80)
+    /// - Cursor IDE (70)
+    /// - Auto-discover (-100)
     pub fn with_defaults() -> Self {
         let mut registry = Self::new();
         registry.register(Box::new(super::cc_plugin_toml::ClaudeCodeTomlAdapter));
         registry.register(Box::new(super::cc_plugin_json::ClaudeCodeJsonAdapter));
+        registry.register(Box::new(super::adapters::codex::CodexAdapter));
+        registry.register(Box::new(super::adapters::cursor::CursorAdapter));
+        registry.register(Box::new(super::adapters::auto_discover::AutoDiscoverAdapter));
         registry
     }
 
