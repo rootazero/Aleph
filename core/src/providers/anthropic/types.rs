@@ -28,6 +28,9 @@ pub struct MessagesRequest {
     /// Service tier for priority or batch processing (e.g. "auto", "flex")
     #[serde(skip_serializing_if = "Option::is_none")]
     pub service_tier: Option<String>,
+    /// Output configuration (effort level, structured output format)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_config: Option<OutputConfig>,
 }
 
 /// System prompt block (array format for compatibility)
@@ -61,12 +64,29 @@ impl SystemBlock {
     }
 }
 
-/// Extended thinking configuration
+/// Extended thinking configuration.
+///
+/// - `thinking_type`: "enabled" | "disabled" | "adaptive"
+/// - `budget_tokens`: Required for "enabled", optional for "adaptive"
+/// - `display`: "summarized" (default) | "omitted"
 #[derive(Debug, Serialize)]
 pub struct ThinkingBlock {
     #[serde(rename = "type")]
     pub thinking_type: String,
-    pub budget_tokens: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub budget_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display: Option<String>,
+}
+
+/// Output configuration for controlling response quality and format.
+///
+/// Not yet wired to RequestPayload — forward-looking type definition.
+#[derive(Debug, Serialize)]
+pub struct OutputConfig {
+    /// Output effort level: "low", "medium", "high", "max"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
 }
 
 /// Message structure

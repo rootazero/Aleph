@@ -272,7 +272,8 @@ impl ProtocolAdapter for AnthropicProtocol {
             .and_then(Self::map_think_level)
             .map(|budget| ThinkingBlock {
                 thinking_type: "enabled".to_string(),
-                budget_tokens: budget,
+                budget_tokens: Some(budget),
+                display: None,
             });
 
         // Convert tool definitions to Anthropic format
@@ -312,6 +313,7 @@ impl ProtocolAdapter for AnthropicProtocol {
             thinking,
             tools,
             service_tier: None,
+            output_config: None,
         };
 
         let api_key = config
@@ -990,6 +992,34 @@ mod tests {
         assert_eq!(content[1]["source"]["type"], "base64");
         assert_eq!(content[1]["source"]["media_type"], "image/png");
         assert_eq!(content[1]["source"]["data"], "aGVsbG8=");
+    }
+
+    #[test]
+    fn test_thinking_block_enabled_serialization() {
+        use crate::providers::anthropic::types::ThinkingBlock;
+        let block = ThinkingBlock {
+            thinking_type: "enabled".to_string(),
+            budget_tokens: Some(10000),
+            display: None,
+        };
+        let json = serde_json::to_value(&block).unwrap();
+        assert_eq!(json["type"], "enabled");
+        assert_eq!(json["budget_tokens"], 10000);
+        assert!(json.get("display").is_none());
+    }
+
+    #[test]
+    fn test_thinking_block_adaptive_serialization() {
+        use crate::providers::anthropic::types::ThinkingBlock;
+        let block = ThinkingBlock {
+            thinking_type: "adaptive".to_string(),
+            budget_tokens: None,
+            display: Some("summarized".to_string()),
+        };
+        let json = serde_json::to_value(&block).unwrap();
+        assert_eq!(json["type"], "adaptive");
+        assert!(json.get("budget_tokens").is_none());
+        assert_eq!(json["display"], "summarized");
     }
 }
 
