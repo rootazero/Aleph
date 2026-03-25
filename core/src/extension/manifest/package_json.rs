@@ -203,7 +203,7 @@ pub fn parse_package_json_content(content: &str, path: &Path) -> ExtensionResult
         .unwrap_or_else(|| "index.js".to_string());
 
     // Determine plugin kind
-    let kind = aleph.kind.unwrap_or(PluginKind::NodeJs);
+    let kind = aleph.kind.unwrap_or(PluginKind::Mcp);
 
     // Build manifest
     let manifest = PluginManifest {
@@ -281,7 +281,7 @@ mod tests {
         assert_eq!(manifest.version, Some("1.0.0".to_string()));
         assert_eq!(manifest.description, Some("A test plugin".to_string()));
         assert_eq!(manifest.entry, PathBuf::from("dist/index.js"));
-        assert_eq!(manifest.kind, PluginKind::NodeJs);
+        assert_eq!(manifest.kind, PluginKind::Mcp);
     }
 
     #[test]

@@ -109,9 +109,6 @@ pub struct ExtensionConfig {
     /// Discovery configuration
     pub discovery: DiscoveryConfig,
 
-    /// Whether to enable Node.js plugin runtime
-    pub enable_node_runtime: bool,
-
     /// Whether to auto-load extensions on startup
     pub auto_load: bool,
 }
@@ -120,7 +117,6 @@ impl Default for ExtensionConfig {
     fn default() -> Self {
         Self {
             discovery: DiscoveryConfig::default(),
-            enable_node_runtime: true,
             auto_load: true,
         }
     }

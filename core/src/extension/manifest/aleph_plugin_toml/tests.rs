@@ -187,7 +187,7 @@ kind = "nodejs"
     let manifest =
         parse_aleph_plugin_toml_content(content, Path::new("/test/plugin")).unwrap();
 
-    assert_eq!(manifest.kind, PluginKind::NodeJs);
+    assert_eq!(manifest.kind, PluginKind::Mcp);
     assert_eq!(manifest.entry, PathBuf::from("index.js")); // default for nodejs
 }
 

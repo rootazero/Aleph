@@ -704,7 +704,7 @@ pub async fn handle_execute_command(request: JsonRpcRequest) -> JsonRpcResponse 
 /// # Returns
 /// - `pluginId`: ID of the loaded plugin
 /// - `name`: Human-readable name
-/// - `kind`: Plugin kind (NodeJs, Wasm, Static)
+/// - `kind`: Plugin kind (Mcp, Wasm, Static)
 ///
 /// # Errors
 /// - `INTERNAL_ERROR`: Extension manager not initialized or loading failed

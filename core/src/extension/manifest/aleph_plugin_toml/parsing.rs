@@ -80,7 +80,7 @@ pub fn parse_aleph_plugin_toml_content(
     // Determine entry point based on kind
     let entry = toml.plugin.entry.unwrap_or_else(|| match kind {
         PluginKind::Wasm => "plugin.wasm".to_string(),
-        PluginKind::NodeJs => "index.js".to_string(),
+        PluginKind::Mcp => "index.js".to_string(),
         PluginKind::Mcp => ".mcp.json".to_string(),
         PluginKind::Static => ".".to_string(),
     });

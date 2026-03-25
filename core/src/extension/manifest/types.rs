@@ -493,13 +493,13 @@ mod tests {
         let manifest = PluginManifest::new(
             "my-plugin".to_string(),
             "My Plugin".to_string(),
-            PluginKind::NodeJs,
+            PluginKind::Mcp,
             PathBuf::from("dist/index.js"),
         );
 
         assert_eq!(manifest.id, "my-plugin");
         assert_eq!(manifest.name, "My Plugin");
-        assert_eq!(manifest.kind, PluginKind::NodeJs);
+        assert_eq!(manifest.kind, PluginKind::Mcp);
         assert_eq!(manifest.entry, PathBuf::from("dist/index.js"));
         assert!(manifest.root_dir.as_os_str().is_empty());
     }
@@ -522,7 +522,7 @@ mod tests {
         let manifest = PluginManifest::new(
             "my-plugin".to_string(),
             "My Plugin".to_string(),
-            PluginKind::NodeJs,
+            PluginKind::Mcp,
             PathBuf::from("dist/index.js"),
         )
         .with_root_dir(PathBuf::from("/plugins/my-plugin"));
@@ -538,7 +538,7 @@ mod tests {
         let manifest = PluginManifest::new(
             "my-plugin".to_string(),
             "My Plugin".to_string(),
-            PluginKind::NodeJs,
+            PluginKind::Mcp,
             PathBuf::from("/absolute/path/index.js"),
         )
         .with_root_dir(PathBuf::from("/plugins/my-plugin"));
@@ -555,7 +555,7 @@ mod tests {
         let manifest = PluginManifest::new(
             "evil-plugin".to_string(),
             "Evil Plugin".to_string(),
-            PluginKind::NodeJs,
+            PluginKind::Mcp,
             PathBuf::from("../../etc/passwd"),
         )
         .with_root_dir(PathBuf::from("/plugins/evil-plugin"));

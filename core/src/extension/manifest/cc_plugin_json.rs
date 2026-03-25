@@ -126,7 +126,7 @@ impl CcPluginRepository {
 fn runtime_to_kind(runtime: &str) -> PluginKind {
     match runtime {
         "wasm" => PluginKind::Wasm,
-        "mcp" => PluginKind::NodeJs,
+        "mcp" => PluginKind::Mcp,
         "static" => PluginKind::Static,
         _ => PluginKind::Static,
     }
@@ -135,7 +135,7 @@ fn runtime_to_kind(runtime: &str) -> PluginKind {
 fn default_entry_for_kind(kind: PluginKind) -> String {
     match kind {
         PluginKind::Wasm => "plugin.wasm".to_string(),
-        PluginKind::NodeJs => "index.js".to_string(),
+        PluginKind::Mcp => "index.js".to_string(),
         PluginKind::Mcp => ".mcp.json".to_string(),
         PluginKind::Static => ".".to_string(),
     }
@@ -473,7 +473,7 @@ mod tests {
             "aleph": {"runtime": "mcp"}
         }"#;
         let manifest = parse_cc_plugin_json_content(content, &test_dir()).unwrap();
-        assert_eq!(manifest.kind, PluginKind::NodeJs);
+        assert_eq!(manifest.kind, PluginKind::Mcp);
         assert_eq!(manifest.entry, PathBuf::from("index.js"));
     }
 
@@ -500,7 +500,7 @@ mod tests {
             }
         }"#;
         let manifest = parse_cc_plugin_json_content(content, &test_dir()).unwrap();
-        assert_eq!(manifest.kind, PluginKind::NodeJs);
+        assert_eq!(manifest.kind, PluginKind::Mcp);
 
         let ext = manifest.aleph_extensions.unwrap();
         assert_eq!(ext.channels.len(), 1);

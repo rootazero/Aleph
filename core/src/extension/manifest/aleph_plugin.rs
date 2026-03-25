@@ -251,7 +251,7 @@ pub fn parse_aleph_plugin_content(content: &str, path: &Path) -> ExtensionResult
     // Determine entry point based on kind
     let entry = plugin.entry.unwrap_or_else(|| match kind {
         PluginKind::Wasm => "plugin.wasm".to_string(),
-        PluginKind::NodeJs => "index.js".to_string(),
+        PluginKind::Mcp => "index.js".to_string(),
         PluginKind::Mcp => ".mcp.json".to_string(),
         PluginKind::Static => ".".to_string(),
     });
@@ -473,7 +473,7 @@ mod tests {
         let manifest =
             parse_aleph_plugin_content(content, Path::new("/test/aleph.plugin.json")).unwrap();
 
-        assert_eq!(manifest.kind, PluginKind::NodeJs);
+        assert_eq!(manifest.kind, PluginKind::Mcp);
         assert_eq!(manifest.entry, PathBuf::from("index.js"));
     }
 
