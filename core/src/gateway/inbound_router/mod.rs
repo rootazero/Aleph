@@ -32,6 +32,7 @@ use super::routing_config::RoutingConfig;
 use super::agent_env::AgentEnvStore;
 use crate::command::CommandParser;
 use crate::group_chat::GroupChatExecutor;
+use crate::routing::config::{RouteBinding, SessionConfig};
 
 use command_handler::{serialize_intent_result, strip_bot_mention};
 use dedup::InboundDedupTracker;
@@ -77,6 +78,12 @@ pub struct InboundMessageRouter {
     pub(super) execution_adapter: Option<Arc<dyn ExecutionAdapter>>,
     /// Workspace manager for channel-level active agent lookup
     pub(super) workspace_manager: Option<Arc<AgentEnvStore>>,
+    /// Route bindings for multi-tier agent resolution (peer → guild → channel → default)
+    pub(super) route_bindings: Vec<RouteBinding>,
+    /// Session configuration (dm_scope, identity_links)
+    pub(super) route_session_config: SessionConfig,
+    /// Default agent ID when no binding matches
+    pub(super) default_agent_id: String,
     /// Inbound message deduplication tracker
     dedup_tracker: Mutex<InboundDedupTracker>,
     /// Group chat orchestrator
@@ -119,6 +126,9 @@ impl InboundMessageRouter {
             agent_registry: None,
             execution_adapter: None,
             workspace_manager: None,
+            route_bindings: Vec::new(),
+            route_session_config: SessionConfig::default(),
+            default_agent_id: "main".to_string(),
             dedup_tracker: Mutex::new(InboundDedupTracker::new()),
             group_chat_orch: None,
             group_chat_executor: None,
@@ -151,6 +161,19 @@ impl InboundMessageRouter {
     /// Set the workspace manager for channel-level active agent lookup
     pub fn with_workspace_manager(mut self, manager: Arc<AgentEnvStore>) -> Self {
         self.workspace_manager = Some(manager);
+        self
+    }
+
+    /// Set route bindings for multi-tier agent resolution
+    pub fn with_route_bindings(
+        mut self,
+        bindings: Vec<RouteBinding>,
+        session_config: SessionConfig,
+        default_agent: impl Into<String>,
+    ) -> Self {
+        self.route_bindings = bindings;
+        self.route_session_config = session_config;
+        self.default_agent_id = default_agent.into();
         self
     }
 
@@ -267,21 +290,9 @@ impl InboundMessageRouter {
             msg.text.chars().take(50).collect::<String>()
         );
 
-        // Resolve agent ID from 1:1 channel binding (single-tier)
-        let agent_id = match self.resolve_agent_id_async(channel_id).await {
-            Some(id) => id,
-            None => {
-                // Unbound channel — send fixed message
-                let reply = OutboundMessage::text(
-                    msg.conversation_id.as_str(),
-                    "此频道未绑定 Agent，请在 Panel 中配置",
-                );
-                if let Err(e) = self.channel_registry.send(&msg.channel_id, reply).await {
-                    error!("[Router] Failed to send unbound-channel message: {}", e);
-                }
-                return Ok(());
-            }
-        };
+        // Resolve agent ID via multi-tier route bindings with fallback
+        let agent_id = self.resolve_agent_id_async(&msg).await
+            .unwrap_or_else(|| self.default_agent_id.clone());
 
         // Check link access control
         if let Some(ref registry) = self.agent_registry {

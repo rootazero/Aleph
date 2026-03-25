@@ -16,18 +16,65 @@ use crate::gateway::interfaces::imessage::normalize_phone;
 use super::normalize_phone;
 
 impl InboundMessageRouter {
-    /// Resolve agent ID from channel binding (single-tier).
+    /// Resolve agent ID using multi-tier route bindings with workspace fallback.
     ///
-    /// Looks up the 1:1 channel-agent binding. Returns None if unbound.
-    pub(super) async fn resolve_agent_id_async(&self, channel: &str) -> Option<String> {
+    /// Priority: resolve_route(bindings) → workspace_manager → default_agent_id
+    pub(super) async fn resolve_agent_id_async(
+        &self,
+        msg: &InboundMessage,
+    ) -> Option<String> {
+        // Tier 1: Try hierarchical route bindings (if configured)
+        if !self.route_bindings.is_empty() {
+            use crate::routing::{resolve_route, RouteInput, RoutePeer, RoutePeerKind};
+
+            let peer = if msg.is_group {
+                Some(RoutePeer {
+                    kind: RoutePeerKind::Group,
+                    id: msg.conversation_id.as_str().to_string(),
+                })
+            } else {
+                Some(RoutePeer {
+                    kind: RoutePeerKind::Dm,
+                    id: msg.sender_id.as_str().to_string(),
+                })
+            };
+
+            let input = RouteInput {
+                channel: msg.channel_id.as_str().to_string(),
+                account_id: None, // TODO: multi-account support
+                peer,
+                guild_id: None, // Channels that support guilds set this in InboundMessage metadata
+                team_id: None,
+            };
+
+            let resolved = resolve_route(
+                &self.route_bindings,
+                &self.route_session_config,
+                &self.default_agent_id,
+                &input,
+            );
+
+            debug!(
+                "Route resolved: channel='{}' → agent='{}' (matched_by={:?})",
+                msg.channel_id.as_str(),
+                resolved.agent_id,
+                resolved.matched_by,
+            );
+            return Some(resolved.agent_id);
+        }
+
+        // Tier 2: Fallback to workspace_manager (backward compat for zero-config)
+        let channel = msg.channel_id.as_str();
         if let Some(ref manager) = self.workspace_manager {
             if let Ok(Some(agent_id)) = manager.get_active_agent(channel) {
-                debug!("Channel '{}' bound to agent '{}'", channel, agent_id);
+                debug!("Channel '{}' bound to agent '{}' via workspace", channel, agent_id);
                 return Some(agent_id);
             }
         }
-        debug!("Channel '{}' has no agent binding", channel);
-        None
+
+        // Tier 3: Default agent
+        debug!("Channel '{}' using default agent '{}'", msg.channel_id.as_str(), self.default_agent_id);
+        Some(self.default_agent_id.clone())
     }
 
     /// Build InboundContext from message with pre-resolved agent ID
