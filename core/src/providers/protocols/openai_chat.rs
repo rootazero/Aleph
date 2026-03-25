@@ -573,6 +573,7 @@ fn parse_chat_sse_event(
             input_tokens: input,
             output_tokens: output,
             cache_read_tokens: None,
+            thinking_tokens: None,
         })));
     }
 

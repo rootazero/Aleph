@@ -247,6 +247,8 @@ pub struct TokenUsage {
     pub input_tokens: u32,
     pub output_tokens: u32,
     pub cache_read_tokens: Option<u32>,
+    /// Thinking/reasoning tokens consumed (Gemini `thoughtsTokenCount`)
+    pub thinking_tokens: Option<u32>,
 }
 
 #[cfg(test)]

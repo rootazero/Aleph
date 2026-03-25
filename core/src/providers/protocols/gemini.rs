@@ -524,6 +524,7 @@ fn parse_gemini_sse_chunk(
             input_tokens: input,
             output_tokens: output,
             cache_read_tokens: None,
+            thinking_tokens: None,
         }));
 
         if let Some(pos) = done_pos {

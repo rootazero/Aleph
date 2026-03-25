@@ -436,6 +436,7 @@ fn parse_sse_event_multi(
                     input_tokens: u.input_tokens,
                     output_tokens: u.output_tokens,
                     cache_read_tokens: None,
+                    thinking_tokens: None,
                 })));
             }
             out.push_back(Ok(ProviderDelta::Done(stop_reason)));

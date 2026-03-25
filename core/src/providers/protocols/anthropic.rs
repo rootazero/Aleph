@@ -621,6 +621,7 @@ pub fn parse_anthropic_sse_event(
                     input_tokens: 0, // input usage is in message_start, not message_delta
                     output_tokens: output,
                     cache_read_tokens: cache_read,
+                    thinking_tokens: None,
                 })));
             }
 
