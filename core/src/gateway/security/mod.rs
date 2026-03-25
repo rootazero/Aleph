@@ -16,6 +16,7 @@
 //!     SecurityStore (SQLite)
 //! ```
 
+pub mod brute_force;
 pub mod crypto;
 pub mod device;
 pub mod activity_log;
@@ -47,4 +48,5 @@ pub use pairing::{PairingError, PairingManager, PairingRequest};
 pub use policy_engine::{PermissionResult, PolicyEngine};
 pub use shared_token::{SharedTokenError, SharedTokenManager};
 pub use store::{DeviceRow, DeviceUpsertData, PairingRequestData, PairingRequestRow, SecurityStore, TokenRow};
+pub use brute_force::BruteForceDetector;
 pub use token::{SignedToken, TokenError, TokenManager, TokenValidation};

@@ -56,6 +56,48 @@ pub fn install_plugin_from_cache(
     Ok(dest)
 }
 
+/// Verify the SHA-256 hash of a directory by hashing all files recursively.
+/// Returns Ok(()) if hash matches or if expected_hash is None (no verification).
+pub fn verify_plugin_integrity(
+    source_path: &Path,
+    expected_hash: Option<&str>,
+) -> Result<(), String> {
+    let Some(expected) = expected_hash else {
+        return Ok(()); // No hash to verify
+    };
+
+    use sha2::{Sha256, Digest};
+
+    let mut hasher = Sha256::new();
+
+    // Collect and sort files for deterministic ordering
+    let mut files: Vec<_> = walkdir::WalkDir::new(source_path)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_file())
+        .filter(|e| !e.path().components().any(|c| c.as_os_str() == ".git"))
+        .collect();
+    files.sort_by(|a, b| a.path().cmp(b.path()));
+
+    for entry in files {
+        let relative = entry.path().strip_prefix(source_path).unwrap_or(entry.path());
+        hasher.update(relative.to_string_lossy().as_bytes());
+        let content = std::fs::read(entry.path())
+            .map_err(|e| format!("Failed to read {}: {}", entry.path().display(), e))?;
+        hasher.update(&content);
+    }
+
+    let actual = format!("{:x}", hasher.finalize());
+    if actual != expected {
+        return Err(format!(
+            "Plugin integrity check failed: expected {}, got {}",
+            expected, actual
+        ));
+    }
+
+    Ok(())
+}
+
 // =============================================================================
 // Internal helpers
 // =============================================================================
@@ -175,6 +217,39 @@ mod tests {
         assert!(result.is_err());
         let msg = result.unwrap_err();
         assert!(msg.contains("already installed"), "got: {msg}");
+    }
+
+    #[test]
+    fn test_verify_plugin_integrity_no_hash() {
+        let tmp = TempDir::new().unwrap();
+        // No expected hash → always passes
+        assert!(verify_plugin_integrity(tmp.path(), None).is_ok());
+    }
+
+    #[test]
+    fn test_verify_plugin_integrity_match() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(tmp.path().join("hello.txt"), "world").unwrap();
+
+        // Compute the expected hash by running the same logic
+        use sha2::{Sha256, Digest};
+        let mut hasher = Sha256::new();
+        hasher.update(b"hello.txt");
+        hasher.update(b"world");
+        let expected = format!("{:x}", hasher.finalize());
+
+        assert!(verify_plugin_integrity(tmp.path(), Some(&expected)).is_ok());
+    }
+
+    #[test]
+    fn test_verify_plugin_integrity_mismatch() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(tmp.path().join("hello.txt"), "world").unwrap();
+
+        let result = verify_plugin_integrity(tmp.path(), Some("bad_hash"));
+        assert!(result.is_err());
+        let msg = result.unwrap_err();
+        assert!(msg.contains("integrity check failed"), "got: {msg}");
     }
 
     #[test]
