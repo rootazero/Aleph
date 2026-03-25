@@ -202,6 +202,7 @@ impl HandlerRegistry {
         registry.register("plugin.disable", plugins::handle_disable);
         registry.register("plugin.load", plugins::handle_load);
         registry.register("plugin.unload", plugins::handle_unload);
+        registry.register("plugin.reload", plugins::handle_reload);
         registry.register("plugin.callTool", plugins::handle_call_tool);
         registry.register("plugin.executeCommand", plugins::handle_execute_command);
 

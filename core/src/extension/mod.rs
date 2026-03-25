@@ -352,6 +352,49 @@ impl ExtensionManager {
     pub fn adapter_registry(&self) -> &AdapterRegistry {
         &self.adapter_registry
     }
+
+    /// Hot-reload a single plugin by ID.
+    ///
+    /// Unregisters all existing capabilities, re-parses the manifest from disk,
+    /// and re-registers all capabilities declared in the updated manifest.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the plugin is not found, the manifest cannot be parsed,
+    /// or capability registration fails (e.g. missing permissions).
+    pub async fn reload_plugin(&self, plugin_id: &str) -> anyhow::Result<()> {
+        // Find root dir from existing record
+        let root_dir = {
+            let registry = self.plugin_registry.read().await;
+            registry
+                .get_plugin(plugin_id)
+                .map(|p| p.root_dir.clone())
+                .ok_or_else(|| anyhow::anyhow!("Plugin not found: {}", plugin_id))?
+        };
+
+        // Re-parse manifest via adapter registry
+        let output = self.adapter_registry.parse_dir(&root_dir)?;
+
+        // Get permissions from the legacy manifest (best-effort; empty if not parseable)
+        let permissions = manifest::parse_manifest_from_dir_sync(&root_dir)
+            .map(|m| m.permissions)
+            .unwrap_or_default();
+
+        // Build updated plugin record
+        let record = PluginRecord::from_adapter_output(&output, root_dir);
+
+        // Atomically unregister old capabilities and register new ones
+        let mut registry = self.plugin_registry.write().await;
+        let mut api = registrar::CapabilityApi::new(
+            &mut registry,
+            output.plugin_id.clone(),
+            permissions,
+        );
+        api.reload(record, output.capabilities)?;
+
+        tracing::info!(plugin = plugin_id, "Plugin hot-reloaded successfully");
+        Ok(())
+    }
 }
 
 // =============================================================================

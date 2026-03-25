@@ -113,6 +113,14 @@ pub struct UnloadPluginParams {
     pub plugin_id: String,
 }
 
+/// Parameters for plugin.reload
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReloadPluginParams {
+    /// ID of the plugin to hot-reload
+    pub plugin_id: String,
+}
+
 // ============================================================================
 // Marketplace Parameters
 // ============================================================================
