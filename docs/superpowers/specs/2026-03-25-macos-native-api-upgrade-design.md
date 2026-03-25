@@ -99,8 +99,8 @@ NSPasteboard.generalPasteboard()
 └── Write text: clearContents() + setString:forType:
 ```
 
-- NSPasteboard is thread-safe (unlike NSView), safe to call from spawn_blocking
-- Image read: prefer PNG type, fallback TIFF → convert to PNG then base64
+- NSPasteboard is generally safe to use from background threads in practice, though Apple docs recommend main-thread for AppKit objects. In headless server mode (no NSApplication run loop), this is not a concern.
+- Image read: prefer PNG type, fallback TIFF → convert to PNG via `image` crate (already in `desktop/Cargo.toml`) then base64
 - Existing `ClipboardContent` type has `has_image` and `image_base64` fields — now populated correctly
 
 ### workspace.rs — NSWorkspace + NSRunningApplication
@@ -120,6 +120,7 @@ NSWorkspace.sharedWorkspace()
 - No Accessibility permission needed (unlike osascript System Events)
 - Launch by name: use `NSWorkspace.fullPathForApplication(name)` → NSURL → open
 - Launch by bundle ID: use `urlForApplication(withBundleIdentifier:)` → open
+- **Quit by name vs bundle ID:** scan `runningApplications` matching either `localizedName` (case-insensitive) or `bundleIdentifier`; call `terminate()` on first match. If no match found, return `InputFailed`.
 
 ### notification.rs — UNUserNotificationCenter
 
@@ -184,13 +185,16 @@ Window list:
   ├── kCGWindowOwnerName → owner
   └── kCGWindowOwnerPID → pid
 
-Window focus:
-  pid → NSRunningApplication(withProcessIdentifier:)
-  → activateWithOptions(.activateIgnoringOtherApps)
+Window focus (window_id: u64):
+  1. Scan CGWindowListCopyWindowInfo to find entry where kCGWindowNumber == window_id
+  2. Extract kCGWindowOwnerPID from that entry
+  3. NSRunningApplication(withProcessIdentifier: pid)
+  4. activateWithOptions(.activateIgnoringOtherApps)
 ```
 
 - Uses `core-graphics` crate for CGWindowList (C-level API)
 - Uses `objc2-app-kit` for NSRunningApplication activate
+- `focus_window` requires a CGWindowNumber → PID lookup step (scan window list for matching ID)
 - Filter out windows with empty title and non-zero layer (menu bar items, etc.)
 - `action.rs` macOS `launch_app` branch also replaced with NSWorkspace (~10 lines, independent impl to avoid circular crate dependency)
 
@@ -229,7 +233,7 @@ objc2-vision = { version = "0.3", features = [
     "VNImageRequestHandler",
 ] }
 objc2-app-kit = { version = "0.3", features = ["NSRunningApplication"] }
-core-graphics = "0.24"
+core-graphics = "0.25"
 ```
 
 ## Error Handling
@@ -304,6 +308,19 @@ Detection runs once on first call, cached via `OnceLock`. The fallback is invisi
 - `test_window_list_has_finder` — verify Finder appears in window list
 
 All tests gated with `#[cfg(target_os = "macos")]`.
+
+## Platform Requirements
+
+- **Minimum macOS version:** 10.14 (Mojave) — required by `UNUserNotificationCenter`
+- Vision framework (`VNRecognizeTextRequest`): macOS 10.15+
+- In practice, Aleph targets macOS 13+ (Ventura), so all APIs are available
+
+## Async Adaptation Detail
+
+- `MacOSSystem` struct retains zero state (notification method cache is module-level `static OnceLock`)
+- "Execute directly" means synchronous objc2 code inside an `async fn` body — no `spawn_blocking` wrapper
+- This applies to: clipboard, workspace (launch/quit/list), sysinfo
+- `spawn_blocking` used for: Vision OCR, CGWindowListCopyWindowInfo (heavier operations)
 
 ## Non-Goals
 
