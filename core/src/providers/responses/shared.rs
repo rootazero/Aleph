@@ -135,11 +135,11 @@ pub fn build_reasoning(think_level: Option<ThinkLevel>) -> Option<ReasoningConfi
             effort: Some("medium".to_string()),
             summary: Some("auto".to_string()),
         }),
-        Some(ThinkLevel::High) => Some(ReasoningConfig {
+        Some(ThinkLevel::High) | Some(ThinkLevel::XHigh) => Some(ReasoningConfig {
             effort: Some("high".to_string()),
             summary: Some("auto".to_string()),
         }),
-        _ => None,
+        _ => None, // Off, Minimal → no reasoning config
     }
 }
 
@@ -530,6 +530,24 @@ mod tests {
             Some("auto".to_string())
         );
         assert_eq!(map_tool_choice(None), None);
+    }
+
+    #[test]
+    fn test_build_reasoning_xhigh_maps_to_high() {
+        let result = build_reasoning(Some(ThinkLevel::XHigh));
+        assert_eq!(result.as_ref().unwrap().effort.as_deref(), Some("high"));
+    }
+
+    #[test]
+    fn test_build_reasoning_minimal_maps_to_none() {
+        assert!(build_reasoning(Some(ThinkLevel::Minimal)).is_none());
+    }
+
+    #[test]
+    fn test_parse_sse_reasoning_delta() {
+        let data = r#"{"type":"response.reasoning_summary_text.delta","delta":"thinking step","item_id":"rs_1","output_index":0}"#;
+        let event = parse_sse_data(data);
+        assert!(matches!(event, Some(StreamEvent::ReasoningSummaryTextDelta { delta, .. }) if delta == "thinking step"));
     }
 
     // ─── build_tools tests ──────────────────────────────────────────

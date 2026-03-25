@@ -302,6 +302,36 @@ pub enum StreamEvent {
         arguments: String,
     },
 
+    /// Reasoning summary part added (o-series models)
+    #[serde(rename = "response.reasoning_summary_part.added")]
+    ReasoningSummaryPartAdded {
+        item_id: String,
+        output_index: usize,
+    },
+
+    /// Reasoning summary text delta (streaming thinking content)
+    #[serde(rename = "response.reasoning_summary_text.delta")]
+    ReasoningSummaryTextDelta {
+        delta: String,
+        item_id: String,
+        output_index: usize,
+    },
+
+    /// Reasoning summary text complete
+    #[serde(rename = "response.reasoning_summary_text.done")]
+    ReasoningSummaryTextDone {
+        text: String,
+        item_id: String,
+        output_index: usize,
+    },
+
+    /// Reasoning summary part complete
+    #[serde(rename = "response.reasoning_summary_part.done")]
+    ReasoningSummaryPartDone {
+        item_id: String,
+        output_index: usize,
+    },
+
     #[serde(rename = "response.completed")]
     Completed { response: ResponseResource },
 

@@ -159,7 +159,13 @@ impl OpenAiResponsesProtocol {
             parallel_tool_calls: Some(true),
             text: variant.text.clone(),
             max_output_tokens: payload.max_tokens,
-            include: variant.include.clone(),
+            include: variant.include.clone().or_else(|| {
+                if official {
+                    Some(vec!["reasoning.encrypted_content".into()])
+                } else {
+                    None
+                }
+            }),
             previous_response_id: None,
             context_management,
         }
@@ -451,6 +457,10 @@ fn parse_sse_event_multi(
             out.push_back(Ok(ProviderDelta::Error(msg)));
         }
 
+        StreamEvent::ReasoningSummaryTextDelta { delta, .. } => {
+            out.push_back(Ok(ProviderDelta::ThinkingDelta(delta)));
+        }
+
         _ => {}
     }
 }
@@ -550,7 +560,8 @@ mod tests {
         assert_eq!(request.store, Some(true));
         assert!(request.context_management.is_some());
         assert!(request.text.is_none());
-        assert!(request.include.is_none());
+        // Official endpoint: include defaults to reasoning.encrypted_content
+        assert!(request.include.is_some());
         assert!(request.instructions.is_none());
         assert!(request.reasoning.is_none());
         assert_eq!(request.input.len(), 1);
@@ -1077,5 +1088,37 @@ mod tests {
         assert!(!deltas.is_empty());
         let done = deltas.last().unwrap();
         assert!(matches!(done, ProviderDelta::Done(StopReason::MaxTokens)));
+    }
+
+    // ─── include default tests ────────────────────────────────────────────
+
+    #[test]
+    fn test_include_default_for_official_endpoint() {
+        use crate::providers::message::UnifiedMessage;
+        let msgs = [UnifiedMessage::user("hello")];
+        let payload = RequestPayload::new(&msgs);
+        let variant = ResponsesVariant::default();
+        let config = ProviderConfig::test_config("o3-mini");
+
+        let request = OpenAiResponsesProtocol::build_responses_request(
+            &payload, "o3-mini", &variant, &config,
+        );
+        assert!(request.include.is_some());
+        assert!(request.include.unwrap().contains(&"reasoning.encrypted_content".to_string()));
+    }
+
+    #[test]
+    fn test_include_none_for_third_party() {
+        use crate::providers::message::UnifiedMessage;
+        let msgs = [UnifiedMessage::user("hello")];
+        let payload = RequestPayload::new(&msgs);
+        let variant = ResponsesVariant::default();
+        let mut config = ProviderConfig::test_config("o3-mini");
+        config.base_url = Some("https://openrouter.ai/api/v1".to_string());
+
+        let request = OpenAiResponsesProtocol::build_responses_request(
+            &payload, "o3-mini", &variant, &config,
+        );
+        assert!(request.include.is_none());
     }
 }
