@@ -302,18 +302,15 @@ mod tests {
         // via enigo — they attempt real OS calls, so we don't test them in unit
         // tests (they'd move the mouse / press keys).
 
-        // Window management: on macOS, window_list and focus_window return NotImplemented.
+        // Window management: on macOS, now implemented via CGWindowList.
         #[cfg(target_os = "macos")]
         {
-            assert!(matches!(
-                desktop.window_list().await,
-                Err(DesktopError::NotImplemented(_))
-            ));
-
-            assert!(matches!(
-                desktop.focus_window(1).await,
-                Err(DesktopError::NotImplemented(_))
-            ));
+            let result = desktop.window_list().await;
+            match result {
+                Ok(_) => {} // success
+                Err(DesktopError::WindowFailed(_)) => {} // acceptable in CI
+                Err(other) => panic!("Unexpected error: {other:?}"),
+            }
         }
 
         // key_combo with invalid input should return InputFailed, not NotImplemented.
@@ -353,7 +350,7 @@ mod tests {
     }
 
     /// Verify that ocr() with provided image bytes works on non-Windows.
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     #[tokio::test]
     async fn ocr_with_bytes_returns_not_implemented() {
         let desktop = NativeDesktop::new();

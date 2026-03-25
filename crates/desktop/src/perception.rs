@@ -109,13 +109,126 @@ pub fn perform_ocr(png_bytes: &[u8]) -> Result<OcrResult> {
         windows_ocr(png_bytes)
     }
 
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
+    {
+        macos_ocr(png_bytes)
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
         let _ = png_bytes;
         Err(DesktopError::NotImplemented(
-            "OCR not implemented on this platform (macOS OCR is in the native Swift app)".into(),
+            "OCR not implemented on this platform".into(),
         ))
     }
+}
+
+// ── macOS Vision OCR ────────────────────────────────────────────
+
+#[cfg(target_os = "macos")]
+fn macos_ocr(png_bytes: &[u8]) -> Result<OcrResult> {
+    use crate::{BoundingBox, OcrLine};
+    use objc2::AnyThread;
+    use objc2_foundation::{NSArray, NSData, NSDictionary, NSString};
+    use objc2_vision::{
+        VNImageRequestHandler, VNRecognizeTextRequest, VNRequest,
+        VNRequestTextRecognitionLevel,
+    };
+
+    // 1. Create NSData from PNG bytes
+    let ns_data = NSData::with_bytes(png_bytes);
+
+    // Decode image dimensions from PNG header for bounding box conversion
+    let (img_width, img_height) = png_dimensions(png_bytes).unwrap_or((1.0, 1.0));
+
+    // 2. Create and configure text recognition request
+    let request = VNRecognizeTextRequest::new();
+    request.setRecognitionLevel(VNRequestTextRecognitionLevel::Accurate);
+    request.setUsesLanguageCorrection(true);
+
+    let languages = NSArray::from_retained_slice(&[
+        NSString::from_str("zh-Hans"),
+        NSString::from_str("en-US"),
+    ]);
+    request.setRecognitionLanguages(&languages);
+
+    // 3. Create image handler from data and perform request
+    let empty_opts: objc2::rc::Retained<NSDictionary<objc2_vision::VNImageOption, objc2::runtime::AnyObject>> =
+        NSDictionary::new();
+    let handler = VNImageRequestHandler::initWithData_options(
+        VNImageRequestHandler::alloc(),
+        &ns_data,
+        &empty_opts,
+    );
+
+    // VNRecognizeTextRequest inherits from VNRequest — use ProtocolObject or direct cast
+    let requests: objc2::rc::Retained<NSArray<VNRequest>> = unsafe {
+        let ptr = objc2::rc::Retained::into_raw(objc2::rc::Retained::clone(&request));
+        let vn_req = objc2::rc::Retained::from_raw(ptr as *mut VNRequest).unwrap();
+        NSArray::from_retained_slice(&[vn_req])
+    };
+
+    handler
+        .performRequests_error(&requests)
+        .map_err(|e| DesktopError::OcrFailed(format!("Vision performRequests failed: {e}")))?;
+
+    // 4. Extract results
+    let mut lines = Vec::new();
+    let mut full_text = String::new();
+
+    if let Some(observations) = request.results() {
+        for obs in observations.iter() {
+            let candidates = obs.topCandidates(1);
+            if candidates.count() == 0 {
+                continue;
+            }
+            let candidate = candidates.objectAtIndex(0);
+
+            let text = candidate.string().to_string();
+            let confidence = candidate.confidence() as f64;
+
+            // Get bounding box (normalized 0-1, origin bottom-left)
+            let bbox = unsafe { obs.boundingBox() };
+
+            // Convert from Vision coordinates (bottom-left origin) to
+            // screen coordinates (top-left origin)
+            let bounding_box = BoundingBox {
+                x: bbox.origin.x * img_width,
+                y: (1.0 - bbox.origin.y - bbox.size.height) * img_height,
+                w: bbox.size.width * img_width,
+                h: bbox.size.height * img_height,
+            };
+
+            if !full_text.is_empty() {
+                full_text.push('\n');
+            }
+            full_text.push_str(&text);
+
+            lines.push(OcrLine {
+                text,
+                bounding_box: Some(bounding_box),
+                confidence: Some(confidence),
+            });
+        }
+    }
+
+    Ok(OcrResult { full_text, lines })
+}
+
+/// Extract width/height from PNG header (IHDR chunk).
+#[cfg(target_os = "macos")]
+fn png_dimensions(png_bytes: &[u8]) -> Option<(f64, f64)> {
+    // PNG: 8 bytes signature, then IHDR chunk: 4 len + 4 "IHDR" + 4 width + 4 height
+    if png_bytes.len() < 24 {
+        return None;
+    }
+    // Verify PNG signature
+    if &png_bytes[..8] != b"\x89PNG\r\n\x1a\n" {
+        return None;
+    }
+    let width = u32::from_be_bytes([png_bytes[16], png_bytes[17], png_bytes[18], png_bytes[19]]);
+    let height = u32::from_be_bytes([png_bytes[20], png_bytes[21], png_bytes[22], png_bytes[23]]);
+    Some((width as f64, height as f64))
 }
 
 // ── Windows WinRT OCR ───────────────────────────────────────────
@@ -281,8 +394,8 @@ fn windows_ocr(png_bytes: &[u8]) -> Result<OcrResult> {
 mod tests {
     use super::*;
 
-    /// On non-Windows platforms, `perform_ocr` should return `NotImplemented`.
-    #[cfg(not(target_os = "windows"))]
+    /// On non-Windows/macOS platforms, `perform_ocr` should return `NotImplemented`.
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     #[test]
     fn test_ocr_not_implemented_on_non_windows() {
         let dummy_png = b"fake png data";
