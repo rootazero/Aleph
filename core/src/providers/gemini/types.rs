@@ -46,13 +46,13 @@ pub struct GeminiFunctionDeclaration {
 }
 
 /// Function call in a Gemini response part
-///
-/// Gemini does not assign a unique ID to function calls, so
-/// the caller must generate synthetic IDs.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GeminiFunctionCall {
     pub name: String,
     pub args: Value,
+    /// Native tool call ID (Gemini 3+ models). Absent on older models.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
 }
 
 /// Content structure for Gemini API (messages)
@@ -88,6 +88,9 @@ pub enum Part {
 pub struct GeminiFunctionResponse {
     pub name: String,
     pub response: serde_json::Value,
+    /// Pass back the tool call ID when available
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
 }
 
 /// Inline data for images
@@ -117,12 +120,22 @@ pub struct GenerationConfig {
     pub thinking_config: Option<ThinkingConfig>,
 }
 
-/// Thinking configuration for Gemini (experimental feature)
+/// Thinking configuration for Gemini.
+///
+/// - Gemini 2.5 models use `thinking_budget` (integer token count, -1=dynamic)
+/// - Gemini 3+ models use `thinking_level` (enum: MINIMAL/LOW/MEDIUM/HIGH)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ThinkingConfig {
-    /// Budget for thinking tokens
-    pub thinking_budget: Option<u32>,
+    /// Token budget for thinking (Gemini 2.5). -1 = dynamic.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking_budget: Option<i32>,
+    /// Thinking level enum (Gemini 3+): "MINIMAL", "LOW", "MEDIUM", "HIGH"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking_level: Option<String>,
+    /// Whether to include thought content in response
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub include_thoughts: Option<bool>,
 }
 
 /// Response from Gemini generateContent API
@@ -157,6 +170,9 @@ pub struct ResponsePart {
     /// Text content (present for text parts)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
+    /// Whether this text part is a thinking/reasoning trace
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thought: Option<bool>,
     /// Function call (present for tool-use parts)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub function_call: Option<GeminiFunctionCall>,
@@ -241,6 +257,8 @@ mod tests {
             top_k: Some(40),
             thinking_config: Some(ThinkingConfig {
                 thinking_budget: Some(1000),
+                thinking_level: None,
+                include_thoughts: None,
             }),
         };
 
@@ -361,5 +379,66 @@ mod tests {
         let response: GenerateContentResponse = serde_json::from_str(json).unwrap();
         let candidate = &response.candidates.unwrap()[0];
         assert_eq!(candidate.finish_reason.as_deref(), Some("STOP"));
+    }
+
+    #[test]
+    fn test_thinking_config_level_mode() {
+        let config = GenerationConfig {
+            max_output_tokens: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            thinking_config: Some(ThinkingConfig {
+                thinking_budget: None,
+                thinking_level: Some("HIGH".to_string()),
+                include_thoughts: Some(true),
+            }),
+        };
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(json.contains("thinkingLevel"));
+        assert!(json.contains("HIGH"));
+        assert!(json.contains("includeThoughts"));
+        assert!(!json.contains("thinkingBudget"));
+    }
+
+    #[test]
+    fn test_deserialize_response_with_thought_marker() {
+        let json = r#"{
+            "candidates": [{
+                "content": {
+                    "parts": [
+                        {"text": "Let me think...", "thought": true},
+                        {"text": "The answer is 42"}
+                    ]
+                },
+                "finishReason": "STOP"
+            }]
+        }"#;
+        let response: GenerateContentResponse = serde_json::from_str(json).unwrap();
+        let parts = &response.candidates.unwrap()[0].content.parts;
+        assert_eq!(parts[0].thought, Some(true));
+        assert_eq!(parts[1].thought, None);
+    }
+
+    #[test]
+    fn test_deserialize_function_call_with_id() {
+        let json = r#"{
+            "candidates": [{
+                "content": {
+                    "parts": [{
+                        "functionCall": {
+                            "name": "search",
+                            "id": "abc123",
+                            "args": {"query": "rust"}
+                        }
+                    }]
+                },
+                "finishReason": "FUNCTION_CALL"
+            }]
+        }"#;
+        let response: GenerateContentResponse = serde_json::from_str(json).unwrap();
+        let candidates = response.candidates.unwrap();
+        let fc = candidates[0].content.parts[0].function_call.as_ref().unwrap();
+        assert_eq!(fc.id.as_deref(), Some("abc123"));
     }
 }

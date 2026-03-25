@@ -89,6 +89,7 @@ impl GeminiProtocol {
                                     function_call: crate::providers::gemini::GeminiFunctionCall {
                                         name: name.clone(),
                                         args: arguments.clone(),
+                                        id: None,
                                     },
                                 });
                             }
@@ -127,6 +128,7 @@ impl GeminiProtocol {
                             function_response: crate::providers::gemini::GeminiFunctionResponse {
                                 name: tool_name.clone(),
                                 response: serde_json::json!({ "result": output }),
+                                id: None,
                             },
                         }],
                     });
@@ -177,7 +179,9 @@ impl ProtocolAdapter for GeminiProtocol {
             .as_ref()
             .and_then(Self::map_think_level)
             .map(|budget| ThinkingConfig {
-                thinking_budget: Some(budget),
+                thinking_budget: Some(budget as i32),
+                thinking_level: None,
+                include_thoughts: None,
             });
 
         // Per-request overrides provider config
