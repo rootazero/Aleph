@@ -214,6 +214,7 @@ fn parse_single_skill(
         allowed_tools: fm.allowed_tools.unwrap_or_default(),
         category: fm.category,
         plugin_id: plugin_id.to_string(),
+        ..Default::default()
     }))
 }
 
@@ -369,10 +370,11 @@ fn parse_single_agent(
 
     Ok(CapabilityDeclaration::Agent(AgentRegistration {
         name: fm.name.unwrap_or_else(|| default_name.to_string()),
-        description: fm.description.unwrap_or_default(),
+        description: fm.description.map(|d| if d.is_empty() { None } else { Some(d) }).unwrap_or(None),
         content: body,
         model: fm.model,
         plugin_id: plugin_id.to_string(),
+        ..Default::default()
     }))
 }
 
@@ -593,7 +595,7 @@ mod tests {
         match &caps[0] {
             CapabilityDeclaration::Agent(a) => {
                 assert_eq!(a.name, "coder");
-                assert_eq!(a.description, "Coding assistant");
+                assert_eq!(a.description, Some("Coding assistant".to_string()));
                 assert_eq!(a.model, Some("claude-sonnet-4".to_string()));
                 assert_eq!(a.content, "You are a coder.");
             }
@@ -618,7 +620,7 @@ mod tests {
         match &caps[0] {
             CapabilityDeclaration::Agent(a) => {
                 assert_eq!(a.name, "reviewer"); // from directory name
-                assert_eq!(a.description, "Code reviewer");
+                assert_eq!(a.description, Some("Code reviewer".to_string()));
             }
             other => panic!("Expected Agent, got {:?}", other),
         }

@@ -3,11 +3,9 @@
 //! This module contains types for defining and configuring extension agents,
 //! including agent modes, permission rules, and frontmatter parsing.
 
-use crate::discovery::DiscoverySource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
 
 // =============================================================================
 // Agent Types
@@ -45,88 +43,11 @@ pub enum PermissionAction {
     Ask,
 }
 
-/// Extension agent definition
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ExtensionAgent {
-    /// Agent name
-    pub name: String,
-
-    /// Plugin name (if from a plugin)
-    pub plugin_name: Option<String>,
-
-    /// Agent mode
-    #[serde(default)]
-    pub mode: AgentMode,
-
-    /// Description
-    #[serde(default)]
-    pub description: Option<String>,
-
-    /// Whether to hide from UI
-    #[serde(default)]
-    pub hidden: bool,
-
-    /// UI color (hex format)
-    #[serde(default)]
-    pub color: Option<String>,
-
-    /// Model specification (provider/model)
-    #[serde(default)]
-    pub model: Option<String>,
-
-    /// Temperature
-    #[serde(default)]
-    pub temperature: Option<f32>,
-
-    /// Top P
-    #[serde(default)]
-    pub top_p: Option<f32>,
-
-    /// Maximum iteration steps
-    #[serde(default)]
-    pub steps: Option<u32>,
-
-    /// Tool permissions
-    #[serde(default)]
-    pub tools: Option<HashMap<String, bool>>,
-
-    /// Permission rules
-    #[serde(default)]
-    pub permission: Option<HashMap<String, PermissionRule>>,
-
-    /// Provider-specific options
-    #[serde(default)]
-    pub options: HashMap<String, serde_json::Value>,
-
-    /// System prompt (markdown body)
-    pub system_prompt: String,
-
-    /// Source path
-    pub source_path: PathBuf,
-
-    /// Discovery source
-    pub source: DiscoverySource,
-}
-
-impl ExtensionAgent {
-    /// Get the fully qualified name
-    pub fn qualified_name(&self) -> String {
-        match &self.plugin_name {
-            Some(plugin) => format!("{}:{}", plugin, self.name),
-            None => self.name.clone(),
-        }
-    }
-
-    /// Check if agent is a primary agent
-    pub fn is_primary(&self) -> bool {
-        matches!(self.mode, AgentMode::Primary | AgentMode::All)
-    }
-
-    /// Check if agent can be used as a sub-agent
-    pub fn is_subagent(&self) -> bool {
-        matches!(self.mode, AgentMode::Subagent | AgentMode::All)
-    }
-}
+/// Extension agent definition (unified with AgentRegistration).
+///
+/// This is now a type alias for `AgentRegistration`, which contains all fields
+/// needed for both plugin-registered and filesystem-discovered agents.
+pub type ExtensionAgent = crate::extension::AgentRegistration;
 
 // =============================================================================
 // Frontmatter Types

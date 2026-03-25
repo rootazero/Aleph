@@ -259,6 +259,7 @@ mod tests {
             bound_tool: None,
             source_path: PathBuf::from("/test/skill/SKILL.md"),
             source: DiscoverySource::AlephGlobal,
+            ..Default::default()
         }
     }
 

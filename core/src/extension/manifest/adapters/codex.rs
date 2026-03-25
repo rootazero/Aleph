@@ -62,6 +62,7 @@ impl ManifestAdapter for CodexAdapter {
                 allowed_tools: vec![],
                 category: Some("instructions".to_string()),
                 plugin_id: plugin_id.clone(),
+                ..Default::default()
             }));
         }
 

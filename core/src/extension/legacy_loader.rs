@@ -184,6 +184,7 @@ async fn load_skill_internal(
         bound_tool: frontmatter.bound_tool,
         source_path: path.to_path_buf(),
         source: determine_source(path),
+        ..Default::default()
     };
 
     trace!("Loaded skill: {:?}", skill.qualified_name());
@@ -244,9 +245,10 @@ async fn load_agent_internal(
         tools: frontmatter.tools,
         permission: frontmatter.permission,
         options: frontmatter.options.unwrap_or_default(),
-        system_prompt: body,
+        content: body,
         source_path: path.to_path_buf(),
         source: determine_source(path),
+        ..Default::default()
     };
 
     trace!("Loaded agent: {:?}", agent.qualified_name());

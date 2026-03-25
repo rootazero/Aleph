@@ -98,6 +98,7 @@ impl ManifestAdapter for CursorAdapter {
                     allowed_tools: vec![],
                     category: Some("rules".to_string()),
                     plugin_id: plugin_id.clone(),
+                    ..Default::default()
                 }));
             }
         }
@@ -124,6 +125,7 @@ impl ManifestAdapter for CursorAdapter {
                                 allowed_tools: vec![],
                                 category: Some("rules".to_string()),
                                 plugin_id: plugin_id.clone(),
+                                ..Default::default()
                             }));
                         }
                     }
