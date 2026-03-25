@@ -42,7 +42,7 @@ impl Default for ExecutionEngineConfig {
     fn default() -> Self {
         Self {
             max_concurrent_runs: 5,
-            default_timeout_secs: 900,
+            default_timeout_secs: 172_800,
             enable_tracing: true,
         }
     }

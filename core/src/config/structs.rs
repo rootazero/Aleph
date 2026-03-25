@@ -146,6 +146,9 @@ pub struct Config {
     /// ACP (Agent Communication Protocol) harness configuration
     #[serde(default)]
     pub acp: AcpConfig,
+    /// Execution engine configuration (timeout, iteration limits)
+    #[serde(default)]
+    pub execution: ExecutionConfig,
     /// Agent definitions for multi-agent configuration
     /// Defines available agents, their workspaces, profiles, and capabilities
     #[serde(default)]
@@ -326,6 +329,7 @@ impl Default for Config {
             channels: HashMap::new(),
             a2a: crate::a2a::config::A2AConfig::default(),
             acp: AcpConfig::default(),
+            execution: ExecutionConfig::default(),
             agents: AgentsConfig::default(),
             bindings: Vec::new(),
             plugin_marketplaces: HashMap::new(),

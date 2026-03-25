@@ -41,6 +41,8 @@ pub struct AgentInstanceConfig {
     pub allowed_links: Option<Vec<String>>,
     /// Per-agent tool permission overrides
     pub tool_permissions: Option<crate::config::types::policies::ToolPermissionsConfig>,
+    /// Optional per-agent timeout override (seconds). None = use global default.
+    pub timeout_secs: Option<u64>,
 }
 
 impl Default for AgentInstanceConfig {
@@ -63,6 +65,7 @@ impl Default for AgentInstanceConfig {
                 .join(".aleph/agents/main"),
             allowed_links: None,
             tool_permissions: None,
+            timeout_secs: None,
         }
     }
 }
@@ -73,6 +76,11 @@ impl AgentInstanceConfig {
         self.tool_permissions
             .clone()
             .unwrap_or_default()
+    }
+
+    /// Return the agent's timeout override, if set.
+    pub fn timeout_secs(&self) -> Option<u64> {
+        self.timeout_secs
     }
 
     /// Create from a resolved agent definition.
@@ -96,6 +104,7 @@ impl AgentInstanceConfig {
             agent_dir: agent.agent_dir.clone(),
             allowed_links: agent.allowed_links.clone(),
             tool_permissions: agent.tool_permissions.clone(),
+            timeout_secs: None,
         }
     }
 }

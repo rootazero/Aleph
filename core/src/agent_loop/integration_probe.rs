@@ -168,7 +168,6 @@ mod tests {
             LoopConfig {
                 max_iterations: 10,
                 token_budget: 100_000,
-                timeout_secs: 60,
             },
         )
     }

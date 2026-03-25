@@ -8,12 +8,10 @@
 //! - The provider returns text with `EndTurn` (task complete)
 //! - `max_iterations` is reached
 //! - Token budget is exhausted
-//! - Timeout expires
 
 use async_trait::async_trait;
 use futures::StreamExt;
 use serde_json::Value;
-use std::time::Instant;
 
 use super::prompt_builder::{PromptBuilder, ToolInfo};
 use super::safety::{SafetyError, SafetyGuard, ToolCall as SafetyToolCall};
@@ -27,6 +25,40 @@ use futures::stream::BoxStream;
 // Context limit enforcement
 // =============================================================================
 
+const TRUNCATION_NOTICE: &str =
+    "[SYSTEM] Earlier conversation history and memory context were truncated \
+     to fit the model's context window. Continue based on the remaining context.";
+
+/// Find a safe cut point that doesn't split ToolCall/ToolResult pairs.
+fn find_safe_cut_point(messages: &[UnifiedMessage], initial_cut: usize) -> usize {
+    let mut cut = initial_cut;
+    while cut > 0 {
+        if messages[cut].is_tool_result() {
+            cut -= 1;
+        } else {
+            break;
+        }
+    }
+    cut
+}
+
+/// Remove the oldest complete conversation round after the truncation notice.
+fn remove_oldest_complete_round(messages: &mut Vec<UnifiedMessage>) {
+    if messages.len() <= 2 {
+        return;
+    }
+
+    if messages[1].is_assistant() && messages[1].has_tool_calls() {
+        let mut end = 2;
+        while end < messages.len() && messages[end].is_tool_result() {
+            end += 1;
+        }
+        messages.drain(1..end);
+    } else {
+        messages.remove(1);
+    }
+}
+
 /// Hard safety net: truncate message history if total estimated tokens exceed budget.
 ///
 /// This runs after the soft compactor and is the last line of defense before
@@ -34,6 +66,7 @@ use futures::stream::BoxStream;
 /// messages (session summaries, old turns) while keeping the fresh tail.
 ///
 /// **Philosophy**: keep the agent running > preserve history.
+/// **Invariant**: never orphans ToolCall/ToolResult pairs.
 fn enforce_context_limit(
     messages: &mut Vec<UnifiedMessage>,
     system_prompt: &str,
@@ -46,7 +79,6 @@ fn enforce_context_limit(
         estimate_tokens, estimate_total_tokens,
     };
 
-    // Estimate overhead from system prompt + tool definitions (JSON schemas)
     let prompt_tokens = estimate_tokens(system_prompt, ratio);
     let tool_tokens: usize = tool_defs
         .iter()
@@ -57,61 +89,41 @@ fn enforce_context_limit(
         })
         .sum();
     let overhead = prompt_tokens + tool_tokens;
-
-    // Budget available for messages
     let msg_budget = token_budget.saturating_sub(overhead);
     let msg_tokens = estimate_total_tokens(messages, ratio);
 
     if msg_tokens <= msg_budget {
-        return; // Within budget, nothing to do
+        return;
     }
 
     tracing::warn!(
         target: "agent_loop",
-        msg_tokens = msg_tokens,
-        msg_budget = msg_budget,
-        overhead = overhead,
+        msg_tokens, msg_budget, overhead,
         total = msg_tokens + overhead,
         budget = token_budget,
         "Context exceeds budget after compaction — enforcing hard limit"
     );
 
-    // Keep at most fresh_tail_count messages from the end.
-    // If even that is too big, progressively reduce.
-    let tail_start = if messages.len() > fresh_tail_count {
-        messages.len() - fresh_tail_count
-    } else {
-        0
-    };
+    // Phase 1: Find safe cut point at round boundary
+    let tail_start = messages.len().saturating_sub(fresh_tail_count);
+    let cut = find_safe_cut_point(messages, tail_start);
 
-    // Drain everything before the tail
-    if tail_start > 0 {
-        messages.drain(0..tail_start);
-
-        // Inject truncation notice so the LLM knows context was lost
-        messages.insert(
-            0,
-            UnifiedMessage::user(
-                "[SYSTEM] Earlier conversation history and memory context were truncated \
-                 to fit the model's context window. Continue based on the remaining context."
-                    .to_string(),
-            ),
-        );
+    if cut > 0 {
+        messages.drain(0..cut);
+        messages.insert(0, UnifiedMessage::user(TRUNCATION_NOTICE));
     }
 
-    // If still over budget (individual messages are huge), trim from front
-    // one-by-one, always keeping at least 2 messages (notice + last user msg)
+    // Phase 2: If still over budget, remove oldest complete rounds one by one
     while messages.len() > 2 && estimate_total_tokens(messages, ratio) > msg_budget {
-        messages.remove(1); // Remove oldest after the notice
+        remove_oldest_complete_round(messages);
     }
 
     let final_tokens = estimate_total_tokens(messages, ratio);
     tracing::warn!(
         target: "agent_loop",
         remaining_messages = messages.len(),
-        final_tokens = final_tokens,
-        msg_budget = msg_budget,
-        "Context limit enforced"
+        final_tokens, msg_budget,
+        "Context limit enforced (pair-aware)"
     );
 }
 
@@ -163,15 +175,13 @@ pub struct ToolCompactorConfig {
 pub struct LoopConfig {
     pub max_iterations: usize,
     pub token_budget: usize,
-    pub timeout_secs: u64,
 }
 
 impl Default for LoopConfig {
     fn default() -> Self {
         Self {
-            max_iterations: 25,
+            max_iterations: 200,
             token_budget: 100_000,
-            timeout_secs: 300,
         }
     }
 }
@@ -331,16 +341,8 @@ impl<P: LoopProvider> AgentLoop<P> {
         const MAX_CONSECUTIVE_ERRORS: usize = 10;
         const MAX_COMPLETION_NUDGES: usize = 3;
 
-        let start = Instant::now();
-
         // === THE LOOP ===
         while iterations < self.config.max_iterations {
-            // Check timeout
-            if start.elapsed().as_secs() >= self.config.timeout_secs {
-                hit_limit = true;
-                break;
-            }
-
             iterations += 1;
 
             // Compact tool results if context exceeds threshold
@@ -873,7 +875,6 @@ mod tests {
             LoopConfig {
                 max_iterations: 10,
                 token_budget: 100_000,
-                timeout_secs: 60,
             },
         )
     }
@@ -985,7 +986,6 @@ mod tests {
             LoopConfig {
                 max_iterations: 5,
                 token_budget: 100_000,
-                timeout_secs: 60,
             },
         );
 
@@ -1032,7 +1032,6 @@ mod tests {
             LoopConfig {
                 max_iterations: 10,
                 token_budget: 100_000,
-                timeout_secs: 60,
             },
         );
 
@@ -1118,7 +1117,6 @@ mod tests {
             LoopConfig {
                 max_iterations: 10,
                 token_budget: 100_000,
-                timeout_secs: 60,
             },
         );
 
@@ -1221,7 +1219,6 @@ mod tests {
             LoopConfig {
                 max_iterations: 25,
                 token_budget: 100_000,
-                timeout_secs: 60,
             },
         );
 
@@ -1315,7 +1312,6 @@ mod tests {
             LoopConfig {
                 max_iterations: 25,
                 token_budget: 100_000,
-                timeout_secs: 60,
             },
         );
 
@@ -1369,7 +1365,6 @@ mod tests {
             LoopConfig {
                 max_iterations: 10,
                 token_budget: 100_000,
-                timeout_secs: 60,
             },
         );
 
@@ -1533,7 +1528,6 @@ mod tests {
             LoopConfig {
                 max_iterations: 10,
                 token_budget: 100_000,
-                timeout_secs: 60,
             },
         );
 
@@ -1643,7 +1637,6 @@ mod tests {
             LoopConfig {
                 max_iterations: 10,
                 token_budget: 50,
-                timeout_secs: 60,
             },
         );
 
@@ -1698,7 +1691,6 @@ mod tests {
             LoopConfig {
                 max_iterations: 10,
                 token_budget: 100_000,
-                timeout_secs: 60,
             },
         );
 
@@ -1783,7 +1775,6 @@ mod tests {
             LoopConfig {
                 max_iterations: 10,
                 token_budget: 100_000,
-                timeout_secs: 60,
             },
         );
 
@@ -1877,7 +1868,6 @@ mod tests {
             LoopConfig {
                 max_iterations: 10,
                 token_budget: 100_000,
-                timeout_secs: 60,
             },
         );
 
@@ -1931,7 +1921,6 @@ mod tests {
             LoopConfig {
                 max_iterations: 25,
                 token_budget: 100_000,
-                timeout_secs: 60,
             },
         );
 
@@ -1991,7 +1980,6 @@ mod tests {
             LoopConfig {
                 max_iterations: 10,
                 token_budget: 100_000,
-                timeout_secs: 60,
             },
         );
 
@@ -2235,5 +2223,102 @@ mod tests {
         enforce_context_limit(&mut msgs, "sys", &[], 10_000, 6, 3.5);
         // Should keep at least 2 (notice + something) or the original 2
         assert!(msgs.len() >= 2, "should keep at least 2 messages");
+    }
+
+    // =========================================================================
+    // Pair-aware truncation helpers
+    // =========================================================================
+
+    /// Test helper: create an Assistant message with tool calls
+    fn assistant_with_tool_calls(text: &str, calls: Vec<(&str, &str, Value)>) -> UnifiedMessage {
+        let mut content = vec![ContentBlock::Text { text: text.to_string() }];
+        for (id, name, args) in calls {
+            content.push(ContentBlock::ToolCall {
+                id: id.to_string(),
+                name: name.to_string(),
+                arguments: args,
+            });
+        }
+        UnifiedMessage::Assistant { content }
+    }
+
+    // --- find_safe_cut_point ---
+
+    #[test]
+    fn test_safe_cut_at_user_message() {
+        let msgs = vec![
+            UnifiedMessage::user("old"),
+            UnifiedMessage::user("recent"),
+            UnifiedMessage::assistant("reply"),
+        ];
+        assert_eq!(find_safe_cut_point(&msgs, 1), 1);
+    }
+
+    #[test]
+    fn test_safe_cut_skips_tool_result() {
+        let msgs = vec![
+            UnifiedMessage::user("query"),
+            assistant_with_tool_calls("thinking", vec![("tc1", "search", json!({}))]),
+            UnifiedMessage::tool_result("tc1", "search", "results", false),
+            UnifiedMessage::assistant("done"),
+            UnifiedMessage::user("followup"),
+        ];
+        // initial_cut = 2 lands on ToolResult → walk back to 1 (Assistant with tool calls) → break
+        assert_eq!(find_safe_cut_point(&msgs, 2), 1);
+    }
+
+    #[test]
+    fn test_safe_cut_at_plain_assistant() {
+        let msgs = vec![
+            UnifiedMessage::user("hi"),
+            UnifiedMessage::assistant("hello"),
+            UnifiedMessage::user("bye"),
+        ];
+        assert_eq!(find_safe_cut_point(&msgs, 2), 2);
+    }
+
+    #[test]
+    fn test_safe_cut_at_zero() {
+        let msgs = vec![
+            UnifiedMessage::tool_result("tc1", "t", "o", false),
+            UnifiedMessage::assistant("done"),
+        ];
+        assert_eq!(find_safe_cut_point(&msgs, 0), 0);
+    }
+
+    // --- remove_oldest_complete_round ---
+
+    #[test]
+    fn test_remove_round_user_message() {
+        let mut msgs = vec![
+            UnifiedMessage::user("[SYSTEM] Truncated"),
+            UnifiedMessage::user("old question"),
+            UnifiedMessage::assistant("answer"),
+        ];
+        remove_oldest_complete_round(&mut msgs);
+        assert_eq!(msgs.len(), 2);
+        assert!(msgs[1].is_assistant());
+    }
+
+    #[test]
+    fn test_remove_round_tool_group() {
+        let mut msgs = vec![
+            UnifiedMessage::user("[SYSTEM] Truncated"),
+            assistant_with_tool_calls("", vec![("tc1", "s", json!({}))]),
+            UnifiedMessage::tool_result("tc1", "s", "out", false),
+            UnifiedMessage::user("next"),
+        ];
+        remove_oldest_complete_round(&mut msgs);
+        assert_eq!(msgs.len(), 2); // notice + user("next")
+    }
+
+    #[test]
+    fn test_remove_round_preserves_minimum() {
+        let mut msgs = vec![
+            UnifiedMessage::user("[SYSTEM] Truncated"),
+            UnifiedMessage::user("last"),
+        ];
+        remove_oldest_complete_round(&mut msgs);
+        assert_eq!(msgs.len(), 2);
     }
 }

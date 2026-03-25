@@ -540,7 +540,10 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         // Clone provider registry for topic generation before it's moved into engine
         let topic_provider_registry = provider_registry.clone();
 
-        let engine_config = ExecutionEngineConfig::default();
+        let engine_config = ExecutionEngineConfig {
+            default_timeout_secs: app_config.execution.default_timeout_secs,
+            ..Default::default()
+        };
         let mut engine = ExecutionEngine::new(
             engine_config,
             provider_registry,

@@ -98,6 +98,7 @@ pub mod daemon_control;
 pub mod discord_panel;
 pub mod oauth;
 pub mod acp_config;
+pub mod execution_config;
 pub mod arena;
 
 pub use approval_bridge::{parse_session_target, get_forward_targets, ForwardMode};

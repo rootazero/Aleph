@@ -26,7 +26,7 @@ pub struct OrchestratorGuards {
     #[serde(default = "default_max_tokens")]
     pub max_tokens: u64,
 
-    /// Timeout in seconds (default: 600 = 10 minutes)
+    /// Timeout in seconds (default: 172800 = 48 hours)
     #[serde(default = "default_timeout_seconds")]
     pub timeout_seconds: u64,
 
@@ -45,7 +45,7 @@ fn default_max_tokens() -> u64 {
     100_000
 }
 fn default_timeout_seconds() -> u64 {
-    600
+    172_800
 }
 fn default_no_progress_threshold() -> u32 {
     2
@@ -96,7 +96,7 @@ mod tests {
         assert_eq!(config.guards.max_rounds, 12);
         assert_eq!(config.guards.max_tool_calls, 30);
         assert_eq!(config.guards.max_tokens, 100_000);
-        assert_eq!(config.guards.timeout_seconds, 600);
+        assert_eq!(config.guards.timeout_seconds, 172_800);
         assert_eq!(config.guards.no_progress_threshold, 2);
     }
 
