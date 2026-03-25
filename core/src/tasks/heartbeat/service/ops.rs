@@ -1,0 +1,295 @@
+//! CRUD operations and schedule recomputation for heartbeat tasks.
+//!
+//! Read operations (`list_tasks`, `get_task`) have ZERO side effects.
+//! Write operations (`add_task`, `update_task`, `toggle_task`, `delete_task`)
+//! modify the store and recompute next due times as needed.
+
+use crate::tasks::heartbeat::config::{
+    DedupConfig, HeartbeatTask, HeartbeatTaskView, ProbeConfig,
+    error_backoff_ms,
+};
+use crate::tasks::heartbeat::store::HeartbeatStore;
+use crate::tasks::shared::clock::Clock;
+use crate::tasks::shared::delivery::DeliveryConfig;
+
+// ── Schedule computation ─────────────────────────────────────────────
+
+/// Compute next_due_ms for a task based on interval and error backoff.
+///
+/// Returns `None` if the task is disabled.
+pub fn compute_next_due(task: &HeartbeatTask, now_ms: i64) -> Option<i64> {
+    if !task.enabled {
+        return None;
+    }
+    let base = now_ms + task.interval_ms as i64;
+    let backoff = error_backoff_ms(task.state.consecutive_errors) as i64;
+    Some(base + backoff)
+}
+
+/// Recompute next_due_ms for a task using the given clock.
+pub fn recompute_schedule<C: Clock>(task: &mut HeartbeatTask, clock: &C) {
+    task.state.next_due_ms = compute_next_due(task, clock.now_ms());
+}
+
+// ── Read operations (ZERO side effects) ──────────────────────────────
+
+/// List all tasks as read-only views. No side effects.
+pub fn list_tasks(store: &HeartbeatStore) -> Vec<HeartbeatTaskView> {
+    store.tasks().iter().map(HeartbeatTaskView::from).collect()
+}
+
+/// Get a single task as a read-only view. No side effects.
+pub fn get_task(store: &HeartbeatStore, id: &str) -> Option<HeartbeatTaskView> {
+    store.get_task(id).map(HeartbeatTaskView::from)
+}
+
+// ── Write operations ─────────────────────────────────────────────────
+
+/// Partial update fields for a heartbeat task.
+#[derive(Debug, Default)]
+pub struct HeartbeatTaskUpdates {
+    pub name: Option<String>,
+    pub agent_id: Option<String>,
+    pub interval_ms: Option<u64>,
+    pub enabled: Option<bool>,
+    pub probe: Option<ProbeConfig>,
+    pub delivery_config: Option<Option<DeliveryConfig>>,
+    pub dedup: Option<DedupConfig>,
+}
+
+/// Add a new task to the store. Sets state defaults and computes next due time.
+/// Returns the task ID.
+pub fn add_task<C: Clock>(store: &mut HeartbeatStore, mut task: HeartbeatTask, clock: &C) -> String {
+    let now = clock.now_ms();
+    task.created_at = now;
+    task.updated_at = now;
+    task.state.consecutive_errors = 0;
+
+    recompute_schedule(&mut task, clock);
+    let id = task.id.clone();
+    store.add_task(task);
+    id
+}
+
+/// Apply partial updates to an existing task. Recomputes next due time.
+pub fn update_task<C: Clock>(
+    store: &mut HeartbeatStore,
+    id: &str,
+    updates: HeartbeatTaskUpdates,
+    clock: &C,
+) -> Result<(), String> {
+    let task = store
+        .get_task_mut(id)
+        .ok_or_else(|| format!("task not found: {id}"))?;
+
+    if let Some(name) = updates.name {
+        task.name = name;
+    }
+    if let Some(agent_id) = updates.agent_id {
+        task.agent_id = agent_id;
+    }
+    if let Some(interval_ms) = updates.interval_ms {
+        task.interval_ms = interval_ms;
+    }
+    if let Some(enabled) = updates.enabled {
+        task.enabled = enabled;
+    }
+    if let Some(probe) = updates.probe {
+        task.probe = probe;
+    }
+    if let Some(delivery_config) = updates.delivery_config {
+        task.delivery_config = delivery_config;
+    }
+    if let Some(dedup) = updates.dedup {
+        task.dedup = dedup;
+    }
+
+    task.updated_at = clock.now_ms();
+    recompute_schedule(task, clock);
+    Ok(())
+}
+
+/// Toggle a task's enabled state. Recomputes next due if enabling.
+/// Returns the new enabled state.
+pub fn toggle_task<C: Clock>(
+    store: &mut HeartbeatStore,
+    id: &str,
+    clock: &C,
+) -> Result<bool, String> {
+    let task = store
+        .get_task_mut(id)
+        .ok_or_else(|| format!("task not found: {id}"))?;
+
+    task.enabled = !task.enabled;
+    task.updated_at = clock.now_ms();
+
+    if task.enabled {
+        recompute_schedule(task, clock);
+    } else {
+        task.state.next_due_ms = None;
+    }
+
+    Ok(task.enabled)
+}
+
+/// Delete a task by ID.
+pub fn delete_task(store: &mut HeartbeatStore, id: &str) -> Result<(), String> {
+    store
+        .remove_task(id)
+        .ok_or_else(|| format!("task not found: {id}"))?;
+    Ok(())
+}
+
+// ── Tests ────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tasks::heartbeat::config::{ProbeConfig, TriggerCondition};
+    use crate::tasks::shared::clock::testing::FakeClock;
+
+    fn make_test_task(id: &str) -> HeartbeatTask {
+        let mut task = HeartbeatTask::new(
+            id.to_string(),
+            "main".to_string(),
+            60_000,
+            ProbeConfig {
+                tool_name: "test.probe".to_string(),
+                tool_params: None,
+                trigger_condition: TriggerCondition::Always,
+            },
+        );
+        task.id = id.to_string();
+        task
+    }
+
+    fn make_store() -> HeartbeatStore {
+        HeartbeatStore::open_in_memory().unwrap()
+    }
+
+    #[test]
+    fn list_tasks_zero_side_effects() {
+        let mut store = make_store();
+        let mut task = make_test_task("past-due");
+        task.state.next_due_ms = Some(150_000);
+        store.add_task(task);
+
+        let views = list_tasks(&store);
+        assert_eq!(views.len(), 1);
+        assert_eq!(views[0].state.next_due_ms, Some(150_000));
+
+        // Store unchanged
+        let original = store.get_task("past-due").unwrap();
+        assert_eq!(original.state.next_due_ms, Some(150_000));
+    }
+
+    #[test]
+    fn get_task_zero_side_effects() {
+        let mut store = make_store();
+        let mut task = make_test_task("t1");
+        task.state.next_due_ms = Some(150_000);
+        store.add_task(task);
+
+        let view = get_task(&store, "t1").unwrap();
+        assert_eq!(view.state.next_due_ms, Some(150_000));
+    }
+
+    #[test]
+    fn add_task_computes_next_due() {
+        let mut store = make_store();
+        let clock = FakeClock::new(1_000_000);
+
+        let task = make_test_task("new-task");
+        let id = add_task(&mut store, task, &clock);
+
+        let stored = store.get_task(&id).unwrap();
+        assert!(stored.state.next_due_ms.is_some());
+        // next_due = now + interval_ms = 1_000_000 + 60_000
+        assert_eq!(stored.state.next_due_ms, Some(1_060_000));
+    }
+
+    #[test]
+    fn update_task_applies_changes() {
+        let mut store = make_store();
+        let clock = FakeClock::new(1_000_000);
+
+        let task = make_test_task("updatable");
+        add_task(&mut store, task, &clock);
+
+        let updates = HeartbeatTaskUpdates {
+            name: Some("Updated Name".to_string()),
+            interval_ms: Some(120_000),
+            ..Default::default()
+        };
+        update_task(&mut store, "updatable", updates, &clock).unwrap();
+
+        let updated = store.get_task("updatable").unwrap();
+        assert_eq!(updated.name, "Updated Name");
+        assert_eq!(updated.interval_ms, 120_000);
+        // next_due recomputed: 1_000_000 + 120_000
+        assert_eq!(updated.state.next_due_ms, Some(1_120_000));
+    }
+
+    #[test]
+    fn toggle_task_flips_enabled() {
+        let mut store = make_store();
+        let clock = FakeClock::new(1_000_000);
+
+        let task = make_test_task("togglable");
+        add_task(&mut store, task, &clock);
+
+        // Disable
+        let new_state = toggle_task(&mut store, "togglable", &clock).unwrap();
+        assert!(!new_state);
+        let t = store.get_task("togglable").unwrap();
+        assert!(t.state.next_due_ms.is_none());
+
+        // Re-enable
+        let new_state = toggle_task(&mut store, "togglable", &clock).unwrap();
+        assert!(new_state);
+        let t = store.get_task("togglable").unwrap();
+        assert!(t.state.next_due_ms.is_some());
+    }
+
+    #[test]
+    fn delete_task_removes() {
+        let mut store = make_store();
+        let clock = FakeClock::new(1_000_000);
+
+        let task = make_test_task("deletable");
+        add_task(&mut store, task, &clock);
+        assert_eq!(store.task_count(), 1);
+
+        delete_task(&mut store, "deletable").unwrap();
+        assert_eq!(store.task_count(), 0);
+    }
+
+    #[test]
+    fn delete_nonexistent_returns_error() {
+        let mut store = make_store();
+        assert!(delete_task(&mut store, "nonexistent").is_err());
+    }
+
+    #[test]
+    fn update_nonexistent_returns_error() {
+        let mut store = make_store();
+        let clock = FakeClock::new(1_000_000);
+        assert!(update_task(&mut store, "nonexistent", HeartbeatTaskUpdates::default(), &clock).is_err());
+    }
+
+    #[test]
+    fn compute_next_due_disabled_returns_none() {
+        let mut task = make_test_task("disabled");
+        task.enabled = false;
+        assert!(compute_next_due(&task, 1_000_000).is_none());
+    }
+
+    #[test]
+    fn compute_next_due_with_backoff() {
+        let mut task = make_test_task("errored");
+        task.state.consecutive_errors = 2;
+        // interval=60_000 + backoff for 2 errors = 60_000
+        let next = compute_next_due(&task, 1_000_000).unwrap();
+        assert_eq!(next, 1_000_000 + 60_000 + 60_000);
+    }
+}
