@@ -10,7 +10,7 @@ use crate::sync_primitives::Mutex;
 use tracing::{debug, info};
 
 /// Schema version for migrations
-const SCHEMA_VERSION: i32 = 7;
+const SCHEMA_VERSION: i32 = 8;
 
 /// Unified security storage backed by SQLite
 pub struct SecurityStore {
@@ -146,6 +146,18 @@ impl SecurityStore {
 
             let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
             conn.execute_batch(crate::security::audit::AUDIT_LOG_SCHEMA)?;
+            drop(conn);
+        }
+
+        if version < 8 {
+            info!(
+                from = version,
+                to = 8,
+                "Migrating security schema to v8 (channel policies)"
+            );
+
+            let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+            conn.execute_batch(SCHEMA_V8)?;
             drop(conn);
         }
 
@@ -704,6 +716,41 @@ impl SecurityStore {
 
         Ok(senders)
     }
+
+    // ========== Channel Policy Operations ==========
+
+    /// Get DM policy for a channel. Returns None if not persisted (use config default).
+    pub fn get_channel_dm_policy(&self, channel_id: &str) -> SqliteResult<Option<(String, Option<String>)>> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let mut stmt = conn.prepare(
+            "SELECT policy, allowlist FROM channel_policies WHERE channel_id = ?1 AND policy_type = 'dm'"
+        )?;
+        let result = stmt.query_row(params![channel_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+        });
+        match result {
+            Ok(row) => Ok(Some(row)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Set DM policy for a channel.
+    pub fn set_channel_dm_policy(
+        &self,
+        channel_id: &str,
+        policy: &str,
+        allowlist: Option<&str>,
+    ) -> SqliteResult<()> {
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let now = current_timestamp_ms();
+        conn.execute(
+            "INSERT OR REPLACE INTO channel_policies (channel_id, policy_type, policy, allowlist, updated_at)
+             VALUES (?1, 'dm', ?2, ?3, ?4)",
+            params![channel_id, policy, allowlist, now],
+        )?;
+        Ok(())
+    }
 }
 
 // ========== Parameter Structs ==========
@@ -965,6 +1012,19 @@ const SCHEMA_V6: &str = r#"
 ALTER TABLE shared_token ADD COLUMN plaintext_token TEXT;
 "#;
 
+/// Schema v8 SQL — channel policies persistence
+const SCHEMA_V8: &str = r#"
+CREATE TABLE IF NOT EXISTS channel_policies (
+    channel_id  TEXT NOT NULL,
+    policy_type TEXT NOT NULL,
+    policy      TEXT NOT NULL,
+    allowlist   TEXT,
+    updated_at  INTEGER NOT NULL,
+    PRIMARY KEY (channel_id, policy_type)
+);
+CREATE INDEX IF NOT EXISTS idx_channel_policies_channel ON channel_policies(channel_id);
+"#;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1069,6 +1129,31 @@ mod tests {
         // Delete
         assert!(store.delete_pairing_request("A3B7K9M2").unwrap());
         assert!(store.get_pairing_request("A3B7K9M2").unwrap().is_none());
+    }
+
+    #[test]
+    fn test_channel_dm_policy_crud() {
+        let store = SecurityStore::in_memory().unwrap();
+
+        // No policy initially
+        assert!(store.get_channel_dm_policy("telegram").unwrap().is_none());
+
+        // Set policy
+        store.set_channel_dm_policy("telegram", "pairing", None).unwrap();
+        let (policy, allowlist) = store.get_channel_dm_policy("telegram").unwrap().unwrap();
+        assert_eq!(policy, "pairing");
+        assert!(allowlist.is_none());
+
+        // Set with allowlist
+        store.set_channel_dm_policy("discord", "allowlist", Some("[\"user1\",\"user2\"]")).unwrap();
+        let (policy, allowlist) = store.get_channel_dm_policy("discord").unwrap().unwrap();
+        assert_eq!(policy, "allowlist");
+        assert_eq!(allowlist.unwrap(), "[\"user1\",\"user2\"]");
+
+        // Update existing
+        store.set_channel_dm_policy("telegram", "open", None).unwrap();
+        let (policy, _) = store.get_channel_dm_policy("telegram").unwrap().unwrap();
+        assert_eq!(policy, "open");
     }
 
     #[test]
