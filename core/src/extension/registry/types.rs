@@ -202,6 +202,44 @@ pub struct PluginDiagnostic {
 }
 
 // ============================================================================
+// Skill & Agent Registration Types (added for capability-driven architecture)
+// ============================================================================
+
+/// Skill registration for plugins to expose prompt-based skills
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillRegistration {
+    /// Unique skill name
+    pub name: String,
+    /// Human-readable description of the skill
+    pub description: String,
+    /// Skill prompt content (Markdown)
+    pub content: String,
+    /// Trigger phrases that activate this skill
+    pub triggers: Vec<String>,
+    /// Tools this skill is allowed to use
+    pub allowed_tools: Vec<String>,
+    /// Optional category for grouping
+    pub category: Option<String>,
+    /// ID of the plugin that registered this skill
+    pub plugin_id: String,
+}
+
+/// Agent registration for plugins to expose agent definitions
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentRegistration {
+    /// Unique agent name
+    pub name: String,
+    /// Human-readable description of the agent
+    pub description: String,
+    /// Agent system prompt content
+    pub content: String,
+    /// Optional model override
+    pub model: Option<String>,
+    /// ID of the plugin that registered this agent
+    pub plugin_id: String,
+}
+
+// ============================================================================
 // Tests
 // ============================================================================
 
@@ -412,5 +450,66 @@ mod tests {
         };
         assert_eq!(diagnostic.level, DiagnosticLevel::Error);
         assert!(diagnostic.message.contains("database"));
+    }
+
+    #[test]
+    fn test_skill_registration() {
+        let skill = SkillRegistration {
+            name: "web-search".to_string(),
+            description: "Search the web".to_string(),
+            content: "You are a web search assistant.".to_string(),
+            triggers: vec!["search".to_string(), "find".to_string()],
+            allowed_tools: vec!["web_search".to_string()],
+            category: Some("research".to_string()),
+            plugin_id: "search-plugin".to_string(),
+        };
+        assert_eq!(skill.name, "web-search");
+        assert_eq!(skill.triggers.len(), 2);
+        assert_eq!(skill.category, Some("research".to_string()));
+    }
+
+    #[test]
+    fn test_agent_registration() {
+        let agent = AgentRegistration {
+            name: "coder".to_string(),
+            description: "A coding assistant agent".to_string(),
+            content: "You are a coding expert.".to_string(),
+            model: Some("claude-sonnet-4".to_string()),
+            plugin_id: "coder-plugin".to_string(),
+        };
+        assert_eq!(agent.name, "coder");
+        assert_eq!(agent.model, Some("claude-sonnet-4".to_string()));
+    }
+
+    #[test]
+    fn test_skill_registration_serialization() {
+        let skill = SkillRegistration {
+            name: "test-skill".to_string(),
+            description: "A test skill".to_string(),
+            content: "prompt content".to_string(),
+            triggers: vec!["trigger1".to_string()],
+            allowed_tools: vec![],
+            category: None,
+            plugin_id: "test-plugin".to_string(),
+        };
+        let json = serde_json::to_string(&skill).unwrap();
+        let roundtrip: SkillRegistration = serde_json::from_str(&json).unwrap();
+        assert_eq!(roundtrip.name, "test-skill");
+        assert!(roundtrip.category.is_none());
+    }
+
+    #[test]
+    fn test_agent_registration_serialization() {
+        let agent = AgentRegistration {
+            name: "test-agent".to_string(),
+            description: "A test agent".to_string(),
+            content: "system prompt".to_string(),
+            model: None,
+            plugin_id: "test-plugin".to_string(),
+        };
+        let json = serde_json::to_string(&agent).unwrap();
+        let roundtrip: AgentRegistration = serde_json::from_str(&json).unwrap();
+        assert_eq!(roundtrip.name, "test-agent");
+        assert!(roundtrip.model.is_none());
     }
 }

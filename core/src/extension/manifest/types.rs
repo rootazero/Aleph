@@ -78,6 +78,20 @@ pub enum PluginPermission {
     /// Environment variable access
     Env,
 
+    /// Shell command execution (required for CliCommand registration)
+    Shell,
+
+    /// Background service registration
+    Background,
+
+    /// HTTP route registration
+    #[serde(rename = "http-routes")]
+    HttpRoutes,
+
+    /// Gateway RPC method registration
+    #[serde(rename = "gateway-rpc")]
+    GatewayRpc,
+
     /// Custom/extension-specific permission
     #[serde(untagged)]
     Custom(String),
@@ -91,6 +105,10 @@ impl std::fmt::Display for PluginPermission {
             PluginPermission::FilesystemWrite => write!(f, "filesystem:write"),
             PluginPermission::Filesystem => write!(f, "filesystem"),
             PluginPermission::Env => write!(f, "env"),
+            PluginPermission::Shell => write!(f, "shell"),
+            PluginPermission::Background => write!(f, "background"),
+            PluginPermission::HttpRoutes => write!(f, "http-routes"),
+            PluginPermission::GatewayRpc => write!(f, "gateway-rpc"),
             PluginPermission::Custom(s) => write!(f, "{}", s),
         }
     }

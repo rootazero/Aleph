@@ -34,6 +34,8 @@ pub mod scope;
 pub mod sync_api;
 pub mod validation;
 
+pub mod capability;
+
 mod channel_manager;
 mod error;
 mod http_handler;
@@ -76,6 +78,7 @@ pub use discovery::{discover_all, DiscoveryConfig as PluginDiscoveryConfig, Plug
 pub use manifest::PluginManifest;
 pub use registry::{HookRegistration, PluginRegistry, ToolRegistration};
 pub use types::{PluginKind, PluginOrigin, PluginRecord, PluginStatus};
+pub use capability::{CapabilityDeclaration, CapabilitySource, SourceFormat, Tier};
 
 use crate::discovery::{DiscoveryConfig, DiscoveryManager};
 use hooks::{HookExecutor};

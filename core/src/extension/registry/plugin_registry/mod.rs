@@ -8,9 +8,10 @@
 use std::collections::HashMap;
 
 use super::types::{
-    ChannelRegistration, CliRegistration, CommandRegistration, GatewayMethodRegistration,
-    HookRegistration, HttpHandlerRegistration, HttpRouteRegistration, PluginDiagnostic,
-    ProviderRegistration, ServiceRegistration, ToolRegistration,
+    AgentRegistration, ChannelRegistration, CliRegistration, CommandRegistration,
+    GatewayMethodRegistration, HookRegistration, HttpHandlerRegistration, HttpRouteRegistration,
+    PluginDiagnostic, ProviderRegistration, ServiceRegistration, SkillRegistration,
+    ToolRegistration,
 };
 use crate::extension::types::{HookEvent, PluginRecord, PluginStatus};
 
@@ -57,6 +58,12 @@ pub struct PluginRegistry {
     /// Registered in-chat commands by name
     commands: HashMap<String, CommandRegistration>,
 
+    /// Registered skills by name
+    skills: HashMap<String, SkillRegistration>,
+
+    /// Registered agents by name
+    agents: HashMap<String, AgentRegistration>,
+
     /// Accumulated diagnostics from plugins
     diagnostics: Vec<PluginDiagnostic>,
 }
@@ -82,6 +89,8 @@ impl PluginRegistry {
         self.cli_commands.clear();
         self.services.clear();
         self.commands.clear();
+        self.skills.clear();
+        self.agents.clear();
         self.diagnostics.clear();
     }
 
@@ -427,6 +436,62 @@ impl PluginRegistry {
     }
 
     // =========================================================================
+    // Skill Registration
+    // =========================================================================
+
+    /// Register a skill.
+    ///
+    /// The skill is stored under both its namespaced key (`plugin_id:name`) and its
+    /// short name (`name`) for backward compatibility. First-come wins for the short key.
+    pub fn register_skill(&mut self, skill: SkillRegistration) {
+        let namespaced_key = format!("{}:{}", skill.plugin_id, skill.name);
+        let short_key = skill.name.clone();
+
+        // Register under short name for backward compat (first-come wins)
+        self.skills.entry(short_key).or_insert_with(|| skill.clone());
+        // Always register under namespaced key
+        self.skills.insert(namespaced_key, skill);
+    }
+
+    /// Get a skill by name.
+    pub fn get_skill(&self, name: &str) -> Option<&SkillRegistration> {
+        self.skills.get(name)
+    }
+
+    /// List all registered skills.
+    pub fn list_skills(&self) -> Vec<&SkillRegistration> {
+        self.skills.values().collect()
+    }
+
+    // =========================================================================
+    // Agent Registration
+    // =========================================================================
+
+    /// Register an agent.
+    ///
+    /// The agent is stored under both its namespaced key (`plugin_id:name`) and its
+    /// short name (`name`) for backward compatibility. First-come wins for the short key.
+    pub fn register_agent(&mut self, agent: AgentRegistration) {
+        let namespaced_key = format!("{}:{}", agent.plugin_id, agent.name);
+        let short_key = agent.name.clone();
+
+        // Register under short name for backward compat (first-come wins)
+        self.agents.entry(short_key).or_insert_with(|| agent.clone());
+        // Always register under namespaced key
+        self.agents.insert(namespaced_key, agent);
+    }
+
+    /// Get an agent by name.
+    pub fn get_agent(&self, name: &str) -> Option<&AgentRegistration> {
+        self.agents.get(name)
+    }
+
+    /// List all registered agents.
+    pub fn list_agents(&self) -> Vec<&AgentRegistration> {
+        self.agents.values().collect()
+    }
+
+    // =========================================================================
     // Diagnostics
     // =========================================================================
 
@@ -498,6 +563,12 @@ impl PluginRegistry {
         // Remove all in-chat commands from this plugin
         self.commands.retain(|_, c| c.plugin_id != plugin_id);
 
+        // Remove all skills from this plugin
+        self.skills.retain(|_, s| s.plugin_id != plugin_id);
+
+        // Remove all agents from this plugin
+        self.agents.retain(|_, a| a.plugin_id != plugin_id);
+
         // Remove all diagnostics from this plugin
         self.diagnostics
             .retain(|d| d.plugin_id.as_deref() != Some(plugin_id));
@@ -522,6 +593,8 @@ impl PluginRegistry {
             cli_commands: self.cli_commands.len(),
             services: self.services.len(),
             commands: self.commands.len(),
+            skills: self.skills.len(),
+            agents: self.agents.len(),
             diagnostics: self.diagnostics.len(),
         }
     }
@@ -542,5 +615,7 @@ pub struct RegistryStats {
     pub cli_commands: usize,
     pub services: usize,
     pub commands: usize,
+    pub skills: usize,
+    pub agents: usize,
     pub diagnostics: usize,
 }
