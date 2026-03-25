@@ -26,4 +26,13 @@ objc2-app-kit = { version = "0.3", features = [
 objc2-user-notifications = { version = "0.3", features = [
     "UNUserNotificationCenter", "UNNotificationContent",
     "UNNotificationRequest", "UNNotificationSound",
+    "UNNotificationSettings",
 ] }
+block2 = "0.6"
+objc2-av-foundation = { version = "0.3", features = [
+    "AVCaptureDevice", "AVMediaFormat",
+] }
+objc2-speech = { version = "0.3", features = [
+    "SFSpeechRecognizer",
+] }
+core-foundation = "0.10"
