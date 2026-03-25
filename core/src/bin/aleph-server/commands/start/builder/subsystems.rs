@@ -382,6 +382,23 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
         }
     }
 
+    // Wire route bindings for multi-tier agent resolution
+    if let Some(ref cfg_arc) = app_config {
+        let cfg = cfg_arc.read().await;
+        if !cfg.bindings.is_empty() {
+            let bindings = cfg.bindings.clone();
+            drop(cfg);
+            inbound_router = inbound_router.with_route_bindings(
+                bindings,
+                alephcore::routing::config::SessionConfig::default(),
+                alephcore::routing::DEFAULT_AGENT_ID,
+            );
+            if !daemon {
+                println!("  Inbound router: route bindings configured");
+            }
+        }
+    }
+
     // Wire app config for output_mode-aware reply emitters
     if let Some(cfg) = app_config {
         inbound_router = inbound_router.with_app_config(cfg);

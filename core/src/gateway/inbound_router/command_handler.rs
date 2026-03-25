@@ -71,6 +71,40 @@ pub(super) fn serialize_intent_result(result: &IntentResult) -> Option<String> {
 }
 
 impl InboundMessageRouter {
+    /// Handle /btw command: ephemeral sidebar conversation that doesn't affect context.
+    ///
+    /// Creates a SessionKey::Ephemeral so the question/answer is not persisted
+    /// to the current session history.
+    pub(super) async fn handle_btw(
+        &self,
+        msg: &InboundMessage,
+        agent_id: &str,
+        btw_text: &str,
+    ) -> Result<(), RoutingError> {
+        use crate::gateway::inbound_context::{InboundContext, ReplyRoute};
+
+        let reply_route = ReplyRoute::new(
+            msg.channel_id.clone(),
+            msg.conversation_id.clone(),
+        ).with_inbound_message_id(msg.id.clone());
+
+        // Use ephemeral session — no persistence, no context pollution
+        let session_key = SessionKey::ephemeral(agent_id);
+
+        // Create a modified message with just the btw text
+        let mut btw_msg = msg.clone();
+        btw_msg.text = btw_text.to_string();
+
+        let ctx = InboundContext::new(btw_msg, reply_route, session_key);
+
+        // Execute with btw metadata marker
+        let metadata = serde_json::json!({"btw": true}).to_string();
+        self.execute_for_context_with_metadata(&ctx, metadata).await?;
+
+        info!("[Router] /btw handled as ephemeral session for agent '{}'", agent_id);
+        Ok(())
+    }
+
     /// Handle /new command: close current session with topic, create new epoch
     pub(super) async fn handle_new_session(
         &self,

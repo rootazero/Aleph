@@ -216,6 +216,7 @@ async fn handle_connection(
                                                         device_id: state.device_id.clone(),
                                                         device_name: state.metadata.get("client_name").cloned().unwrap_or_else(|| "Unknown".to_string()),
                                                         platform: state.metadata.get("platform").cloned().unwrap_or_else(|| "unknown".to_string()),
+                                                        role: crate::gateway::presence::ConnectionRole::User,
                                                         connected_at: chrono::Utc::now(),
                                                         last_heartbeat: chrono::Utc::now(),
                                                     };
@@ -448,6 +449,7 @@ async fn handle_connection(
                                                             device_id: state.device_id.clone(),
                                                             device_name: state.metadata.get("client_name").cloned().unwrap_or_else(|| "Unknown".to_string()),
                                                             platform: state.metadata.get("platform").cloned().unwrap_or_else(|| "unknown".to_string()),
+                                                            role: crate::gateway::presence::ConnectionRole::User,
                                                             connected_at: chrono::Utc::now(),
                                                             last_heartbeat: chrono::Utc::now(),
                                                         };
