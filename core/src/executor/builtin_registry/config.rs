@@ -53,7 +53,7 @@ pub struct BuiltinToolConfig {
     /// ACP harness manager for delegate tools (claude_code, codex, gemini_cli, acp_switch)
     pub acp_manager: Option<Arc<AcpHarnessManager>>,
     /// Cron service for scheduled task management
-    pub cron_service: Option<crate::cron::SharedCronService>,
+    pub cron_service: Option<crate::tasks::cron::SharedCronService>,
     /// Tool context handle for workspace-scoped output paths
     pub tool_context: Option<crate::tools::ToolContextHandle>,
     /// Shared token manager for vault_store tool

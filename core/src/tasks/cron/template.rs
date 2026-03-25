@@ -2,8 +2,8 @@
 
 use std::sync::LazyLock;
 
-use crate::cron::clock::Clock;
-use crate::cron::config::{CronJob, JobRun};
+use crate::tasks::cron::clock::Clock;
+use crate::tasks::cron::config::{CronJob, JobRun};
 
 static ENV_RE: LazyLock<regex::Regex> =
     LazyLock::new(|| regex::Regex::new(r"\{\{env:(\w+)\}\}").unwrap());
@@ -59,8 +59,8 @@ pub fn render_template(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cron::clock::SystemClock;
-    use crate::cron::config::ScheduleKind;
+    use crate::tasks::cron::clock::SystemClock;
+    use crate::tasks::cron::config::ScheduleKind;
 
     fn make_job(name: &str) -> CronJob {
         CronJob::new(
@@ -139,7 +139,7 @@ mod tests {
 
     #[test]
     fn test_render_with_fake_clock() {
-        use crate::cron::clock::testing::FakeClock;
+        use crate::tasks::cron::clock::testing::FakeClock;
         // 2025-06-15T12:00:00Z
         let clock = FakeClock::new(1_750_003_200_000);
         let job = make_job("Test");

@@ -106,7 +106,7 @@ pub mod acp;
 pub mod gateway;
 pub mod group_chat;
 pub mod clawhub;
-pub mod cron;
+pub mod tasks;
 
 #[cfg(test)]
 mod tests;

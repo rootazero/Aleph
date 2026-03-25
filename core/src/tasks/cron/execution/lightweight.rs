@@ -1,5 +1,5 @@
-use crate::cron::clock::Clock;
-use crate::cron::config::{ExecutionResult, JobSnapshot, RunStatus};
+use crate::tasks::cron::clock::Clock;
+use crate::tasks::cron::config::{ExecutionResult, JobSnapshot, RunStatus};
 
 /// Execute a lightweight job. The actual event injection into the main session
 /// is wired by the service layer via a callback. This function produces the result structure.
@@ -21,8 +21,8 @@ pub fn execute_lightweight(snapshot: &JobSnapshot, clock: &dyn Clock) -> Executi
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cron::clock::testing::FakeClock;
-    use crate::cron::config::{DeliveryConfig, DeliveryMode, SessionTarget, TriggerSource};
+    use crate::tasks::cron::clock::testing::FakeClock;
+    use crate::tasks::cron::config::{DeliveryConfig, DeliveryMode, SessionTarget, TriggerSource};
 
     fn make_snapshot() -> JobSnapshot {
         JobSnapshot {

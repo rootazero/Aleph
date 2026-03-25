@@ -3,7 +3,7 @@
 //! This module defines the core configuration structures for Aleph.
 
 use crate::config::types::*;
-use crate::cron::CronConfig;
+use crate::tasks::cron::CronConfig;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

@@ -18,10 +18,10 @@ use alephcore::gateway::{
     SessionManager, SessionManagerConfig,
 };
 use alephcore::gateway::pairing_store::SqlitePairingStore;
-use alephcore::cron::{CronService, SharedCronService};
-use alephcore::cron::executor::build_cron_executor_fn;
-use alephcore::cron::service::timer::run_timer_loop;
-use alephcore::cron::service::catchup::run_startup_catchup;
+use alephcore::tasks::cron::{CronService, SharedCronService};
+use alephcore::tasks::cron::executor::build_cron_executor_fn;
+use alephcore::tasks::cron::service::timer::run_timer_loop;
+use alephcore::tasks::cron::service::catchup::run_startup_catchup;
 use alephcore::group_chat::{GroupChatExecutor, GroupChatOrchestrator};
 use alephcore::ProviderRegistry as _; // trait needed for .default_provider()
 

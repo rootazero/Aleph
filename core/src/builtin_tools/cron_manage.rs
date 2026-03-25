@@ -10,7 +10,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
-use crate::cron::{CronJob, CronJobView, ScheduleKind, SharedCronService};
+use crate::tasks::cron::{CronJob, CronJobView, ScheduleKind, SharedCronService};
 use crate::error::Result;
 use crate::tools::AlephTool;
 

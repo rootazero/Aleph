@@ -14,8 +14,8 @@ use std::path::PathBuf;
 use rusqlite::{params, Connection, OptionalExtension};
 use tracing::{info, warn};
 
-use crate::cron::config::CronJob;
-use crate::cron::history::{self, CronRunRecord};
+use crate::tasks::cron::config::CronJob;
+use crate::tasks::cron::history::{self, CronRunRecord};
 
 /// Current schema version
 const CURRENT_VERSION: u32 = 1;
@@ -290,7 +290,7 @@ pub struct CronStoreFile {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cron::config::ScheduleKind;
+    use crate::tasks::cron::config::ScheduleKind;
     use tempfile::TempDir;
 
     fn make_test_job(name: &str) -> CronJob {

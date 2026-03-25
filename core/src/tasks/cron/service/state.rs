@@ -5,9 +5,9 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use crate::cron::clock::Clock;
-use crate::cron::config::CronConfig;
-use crate::cron::store::CronStore;
+use crate::tasks::cron::clock::Clock;
+use crate::tasks::cron::config::CronConfig;
+use crate::tasks::cron::store::CronStore;
 
 /// Runtime state for the cron service.
 ///
@@ -61,7 +61,7 @@ impl<C: Clock> ServiceState<C> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cron::clock::testing::FakeClock;
+    use crate::tasks::cron::clock::testing::FakeClock;
     use tempfile::TempDir;
 
     fn make_state() -> ServiceState<FakeClock> {

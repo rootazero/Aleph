@@ -277,9 +277,9 @@ mod tests {
 #[cfg(test)]
 mod regression_tests {
     use super::*;
-    use crate::cron::clock::testing::FakeClock;
-    use crate::cron::config::{CronJob, ScheduleKind};
-    use crate::cron::service::ops::{recompute_next_run_maintenance, recompute_next_run_full};
+    use crate::tasks::cron::clock::testing::FakeClock;
+    use crate::tasks::cron::config::{CronJob, ScheduleKind};
+    use crate::tasks::cron::service::ops::{recompute_next_run_maintenance, recompute_next_run_full};
 
     fn make_test_job() -> CronJob {
         let mut job = CronJob::new(

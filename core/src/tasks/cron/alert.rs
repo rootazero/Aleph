@@ -1,4 +1,4 @@
-use crate::cron::config::{CronJob, FailureAlertConfig};
+use crate::tasks::cron::config::{CronJob, FailureAlertConfig};
 
 /// Check if a failure alert should be sent. Returns alert message if conditions met.
 pub fn should_send_alert(
@@ -26,7 +26,7 @@ pub fn should_send_alert(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cron::config::{DeliveryTargetConfig, FailureAlertConfig, ScheduleKind};
+    use crate::tasks::cron::config::{DeliveryTargetConfig, FailureAlertConfig, ScheduleKind};
 
     fn make_test_job(id: &str) -> CronJob {
         let mut job = CronJob::new(

@@ -5,7 +5,7 @@
 
 use std::collections::HashSet;
 
-use crate::cron::store::CronStore;
+use crate::tasks::cron::store::CronStore;
 
 /// Detect if adding a chain link would create a cycle.
 ///
@@ -57,8 +57,8 @@ pub fn trigger_chain_job(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cron::config::{CronJob, ScheduleKind};
-    use crate::cron::store::CronStore;
+    use crate::tasks::cron::config::{CronJob, ScheduleKind};
+    use crate::tasks::cron::store::CronStore;
     use tempfile::TempDir;
 
     fn make_store() -> CronStore {

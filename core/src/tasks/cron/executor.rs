@@ -6,10 +6,10 @@ use std::collections::HashMap;
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
-use crate::cron::config::{
+use crate::tasks::cron::config::{
     DeliveryStatus, ErrorReason, ExecutionResult, JobSnapshot, RunStatus, SessionTarget,
 };
-use crate::cron::service::timer::JobExecutorFn;
+use crate::tasks::cron::service::timer::JobExecutorFn;
 use crate::gateway::agent_instance::AgentRegistry;
 use crate::gateway::event_emitter::NoOpEventEmitter;
 use crate::gateway::execution_adapter::ExecutionAdapter;
@@ -197,7 +197,7 @@ fn make_error_result(started_at: i64, error: String, reason: ErrorReason) -> Exe
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cron::config::{SessionTarget, TriggerSource};
+    use crate::tasks::cron::config::{SessionTarget, TriggerSource};
 
     fn make_test_snapshot() -> JobSnapshot {
         JobSnapshot {

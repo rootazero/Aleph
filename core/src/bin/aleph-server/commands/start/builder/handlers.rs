@@ -786,7 +786,7 @@ pub(in crate::commands::start) fn register_agents_handlers(
 
 pub(in crate::commands::start) fn register_cron_handlers(
     server: &mut GatewayServer,
-    cron_service: &alephcore::cron::SharedCronService,
+    cron_service: &alephcore::tasks::cron::SharedCronService,
     daemon: bool,
 ) {
     use alephcore::gateway::handlers::cron;

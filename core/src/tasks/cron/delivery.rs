@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use std::collections::HashMap;
 use crate::sync_primitives::Arc;
 
-use crate::cron::config::{
+use crate::tasks::cron::config::{
     CronJob, DeliveryConfig, DeliveryMode, DeliveryOutcome, DeliveryStatus, DeliveryTargetConfig,
     JobRun,
 };
@@ -147,7 +147,7 @@ pub fn should_skip_delivery(agent_already_sent: bool, mode: &DeliveryMode) -> De
 mod tests {
     use super::*;
     use super::should_skip_delivery;
-    use crate::cron::config::*;
+    use crate::tasks::cron::config::*;
     use crate::sync_primitives::{AtomicU32, Ordering};
 
     /// Test delivery target that records calls

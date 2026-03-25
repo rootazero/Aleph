@@ -4,8 +4,8 @@
 
 use async_trait::async_trait;
 
-use crate::cron::config::{CronJob, DeliveryOutcome, DeliveryTargetConfig, JobRun};
-use crate::cron::delivery::{DeliveryError, DeliveryTarget};
+use crate::tasks::cron::config::{CronJob, DeliveryOutcome, DeliveryTargetConfig, JobRun};
+use crate::tasks::cron::delivery::{DeliveryError, DeliveryTarget};
 
 pub struct WebhookTarget {
     client: reqwest::Client,

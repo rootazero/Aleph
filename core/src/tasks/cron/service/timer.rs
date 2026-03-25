@@ -11,10 +11,10 @@ use std::sync::Arc;
 
 use tracing::{debug, error, info};
 
-use crate::cron::clock::Clock;
-use crate::cron::config::{ExecutionResult, JobSnapshot, SessionTarget};
-use crate::cron::service::concurrency::{phase1_mark_due_jobs, phase3_writeback};
-use crate::cron::service::state::ServiceState;
+use crate::tasks::cron::clock::Clock;
+use crate::tasks::cron::config::{ExecutionResult, JobSnapshot, SessionTarget};
+use crate::tasks::cron::service::concurrency::{phase1_mark_due_jobs, phase3_writeback};
+use crate::tasks::cron::service::state::ServiceState;
 
 /// Executor function type: takes a snapshot and returns an execution result.
 pub type JobExecutorFn = Arc<
@@ -181,7 +181,7 @@ pub async fn run_worker_pool(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cron::config::{RunStatus, TriggerSource};
+    use crate::tasks::cron::config::{RunStatus, TriggerSource};
 
     fn mock_executor(status: RunStatus) -> JobExecutorFn {
         Arc::new(move |snapshot: JobSnapshot| {

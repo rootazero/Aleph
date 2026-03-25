@@ -11,10 +11,10 @@ use std::sync::Arc;
 
 use tracing::warn;
 
-use crate::cron::clock::Clock;
-use crate::cron::config::{ExecutionResult, JobSnapshot, RunStatus, TriggerSource};
-use crate::cron::history::CronRunRecord;
-use crate::cron::store::CronStore;
+use crate::tasks::cron::clock::Clock;
+use crate::tasks::cron::config::{ExecutionResult, JobSnapshot, RunStatus, TriggerSource};
+use crate::tasks::cron::history::CronRunRecord;
+use crate::tasks::cron::store::CronStore;
 
 use super::ops::recompute_next_run_maintenance;
 
@@ -208,9 +208,9 @@ pub async fn phase3_writeback<C: Clock>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cron::clock::testing::FakeClock;
-    use crate::cron::config::{CronJob, RunStatus, ScheduleKind};
-    use crate::cron::service::ops::add_job;
+    use crate::tasks::cron::clock::testing::FakeClock;
+    use crate::tasks::cron::config::{CronJob, RunStatus, ScheduleKind};
+    use crate::tasks::cron::service::ops::add_job;
     use tempfile::TempDir;
 
     fn make_test_job(id: &str) -> CronJob {

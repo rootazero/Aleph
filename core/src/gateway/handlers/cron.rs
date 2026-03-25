@@ -10,12 +10,12 @@
 use serde_json::{json, Value};
 
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
-use crate::cron::clock::Clock;
-use crate::cron::{
+use crate::tasks::cron::clock::Clock;
+use crate::tasks::cron::{
     CronJob, CronJobView, ScheduleKind, SharedCronService,
     SessionTarget,
 };
-use crate::cron::service::ops::CronJobUpdates;
+use crate::tasks::cron::service::ops::CronJobUpdates;
 
 // ============================================================================
 // Helper functions

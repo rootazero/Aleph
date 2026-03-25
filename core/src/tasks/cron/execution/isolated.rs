@@ -1,4 +1,4 @@
-use crate::cron::config::ErrorReason;
+use crate::tasks::cron::config::ErrorReason;
 
 /// Classify an error as transient or permanent for retry decisions.
 pub fn classify_error(error: &str) -> ErrorReason {

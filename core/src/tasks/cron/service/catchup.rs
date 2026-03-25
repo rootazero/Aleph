@@ -4,9 +4,9 @@ use std::sync::Arc;
 
 use tracing::info;
 
-use crate::cron::clock::Clock;
-use crate::cron::service::ops::recompute_next_run_full;
-use crate::cron::store::CronStore;
+use crate::tasks::cron::clock::Clock;
+use crate::tasks::cron::service::ops::recompute_next_run_full;
+use crate::tasks::cron::store::CronStore;
 
 /// Summary of what the catchup pass did.
 #[derive(Debug, Default)]
@@ -125,9 +125,9 @@ pub async fn run_startup_catchup<C: Clock>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cron::clock::testing::FakeClock;
-    use crate::cron::config::{CronJob, ScheduleKind};
-    use crate::cron::service::ops::add_job;
+    use crate::tasks::cron::clock::testing::FakeClock;
+    use crate::tasks::cron::config::{CronJob, ScheduleKind};
+    use crate::tasks::cron::service::ops::add_job;
     use tempfile::TempDir;
 
     fn make_test_job(id: &str) -> CronJob {

@@ -66,7 +66,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
     workspace_manager: Option<Arc<alephcore::gateway::AgentEnvStore>>,
     agent_manager: Arc<alephcore::AgentManager>,
     acp_manager: Option<Arc<alephcore::acp::manager::AcpHarnessManager>>,
-    cron_service: Option<alephcore::cron::SharedCronService>,
+    cron_service: Option<alephcore::tasks::cron::SharedCronService>,
     daemon: bool,
     shared_token_mgr: Arc<alephcore::gateway::security::SharedTokenManager>,
 ) -> AgentHandlersResult {
