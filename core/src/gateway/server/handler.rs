@@ -311,23 +311,105 @@ async fn handle_connection(
                                         let resp = handle_events_list(req.clone(), &conn_id, ctx.subscription_manager.clone()).await;
                                         serde_json::to_string(&resp).unwrap_or_default()
                                     } else {
-                                        // --- Lane concurrency control ---
+                                        // --- Idempotency + Lane concurrency control ---
                                         debug!("RPC dispatch: method={}", req.method);
-                                        let lane_result = ctx.lane_manager.acquire(&req.method).await;
-                                        let response = match lane_result {
-                                            Ok(_permit) => {
-                                                let resp = process_request(&text, &ctx.handlers).await;
-                                                // permit drops here, releasing the lane slot
-                                                resp
-                                            }
-                                            Err(_) => {
-                                                serde_json::to_string(&JsonRpcResponse::error(
-                                                    req.id.clone(),
+
+                                        // Extract idempotency_key from params (optional)
+                                        let idempotency_key = req.params
+                                            .as_ref()
+                                            .and_then(|p| p.get("idempotency_key"))
+                                            .and_then(|v| v.as_str())
+                                            .map(String::from);
+
+                                        let lane = crate::gateway::lane::Lane::for_method(&req.method);
+
+                                        // Helper closure: standard lane dispatch (no idempotency)
+                                        let do_lane_dispatch = |text: String, handlers: Arc<HandlerRegistry>, lm: Arc<LaneManager>, method: String, req_id: Option<serde_json::Value>| async move {
+                                            let lane_result = lm.acquire(&method).await;
+                                            match lane_result {
+                                                Ok(_permit) => process_request(&text, &handlers).await,
+                                                Err(_) => serde_json::to_string(&JsonRpcResponse::error(
+                                                    req_id,
                                                     INTERNAL_ERROR,
                                                     "Service congested, try again later",
                                                 )).unwrap_or_default()
                                             }
                                         };
+
+                                        // Check idempotency guard (only for non-Query lanes with a key)
+                                        let response = if let Some(ref key) = idempotency_key {
+                                            if lane.needs_idempotency() {
+                                                use crate::gateway::idempotency::AcquireResult;
+                                                match ctx.idempotency_guard.try_acquire(key) {
+                                                    AcquireResult::Cached(cached) => {
+                                                        debug!("Idempotency hit: key={}", key);
+                                                        let resp = JsonRpcResponse::success(req.id.clone(), cached);
+                                                        serde_json::to_string(&resp).unwrap_or_default()
+                                                    }
+                                                    AcquireResult::Waiting(mut rx) => {
+                                                        debug!("Idempotency: awaiting in-flight key={}", key);
+                                                        let result = tokio::time::timeout(
+                                                            std::time::Duration::from_secs(30),
+                                                            async {
+                                                                let _ = rx.changed().await;
+                                                                rx.borrow().clone()
+                                                            }
+                                                        ).await;
+                                                        match result {
+                                                            Ok(Some(val)) => {
+                                                                let resp = JsonRpcResponse::success(req.id.clone(), val);
+                                                                serde_json::to_string(&resp).unwrap_or_default()
+                                                            }
+                                                            _ => {
+                                                                serde_json::to_string(&JsonRpcResponse::error(
+                                                                    req.id.clone(),
+                                                                    INTERNAL_ERROR,
+                                                                    "Request timed out waiting for in-flight duplicate",
+                                                                )).unwrap_or_default()
+                                                            }
+                                                        }
+                                                    }
+                                                    AcquireResult::Proceed(slot) => {
+                                                        // First request — slot auto-discards on panic (RAII)
+                                                        let lane_result = ctx.lane_manager.acquire(&req.method).await;
+                                                        match lane_result {
+                                                            Ok(_permit) => {
+                                                                let resp = process_request(&text, &ctx.handlers).await;
+                                                                if let Ok(parsed) = serde_json::from_str::<JsonRpcResponse>(&resp) {
+                                                                    if parsed.is_success() {
+                                                                        if let Some(result) = parsed.result {
+                                                                            slot.complete(result);
+                                                                        } else {
+                                                                            slot.discard();
+                                                                        }
+                                                                    } else {
+                                                                        slot.discard(); // Error — let next request retry
+                                                                    }
+                                                                } else {
+                                                                    slot.discard();
+                                                                }
+                                                                resp
+                                                            }
+                                                            Err(_) => {
+                                                                slot.discard();
+                                                                serde_json::to_string(&JsonRpcResponse::error(
+                                                                    req.id.clone(),
+                                                                    INTERNAL_ERROR,
+                                                                    "Service congested, try again later",
+                                                                )).unwrap_or_default()
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            } else {
+                                                // Query lane — skip idempotency
+                                                do_lane_dispatch(text.to_string(), ctx.handlers.clone(), ctx.lane_manager.clone(), req.method.clone(), req.id.clone()).await
+                                            }
+                                        } else {
+                                            // No idempotency key — standard lane dispatch
+                                            do_lane_dispatch(text.to_string(), ctx.handlers.clone(), ctx.lane_manager.clone(), req.method.clone(), req.id.clone()).await
+                                        };
+                                        // --- End idempotency + lane block ---
 
                                         // Extract guest_session_id from connect response
                                         if req.method == "connect" {
