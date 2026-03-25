@@ -124,17 +124,19 @@ struct OllamaError {
 }
 
 /// Response from Ollama /api/tags endpoint
-#[cfg(test)]
 #[derive(Debug, Deserialize)]
 pub(crate) struct TagsResponse {
     pub(crate) models: Vec<OllamaModelInfo>,
 }
 
 /// Model info from Ollama tags
-#[cfg(test)]
 #[derive(Debug, Deserialize)]
 pub(crate) struct OllamaModelInfo {
     pub(crate) name: String,
+    #[serde(default)]
+    pub(crate) size: Option<u64>,
+    #[serde(default)]
+    pub(crate) modified_at: Option<String>,
 }
 
 impl OllamaProvider {
@@ -342,6 +344,40 @@ impl AiProvider for OllamaProvider {
 
     fn color(&self) -> &str {
         &self.color
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::providers::model_discovery::ModelDiscovery for OllamaProvider {
+    fn provider_name(&self) -> &str {
+        &self.name
+    }
+
+    async fn discover_models(&self) -> anyhow::Result<Vec<crate::providers::model_discovery::DiscoveredModel>> {
+        use crate::providers::model_discovery::DiscoveredModel;
+
+        // Derive base URL from the /api/generate endpoint
+        let base_url = self.endpoint.trim_end_matches("/api/generate");
+        let url = format!("{}/api/tags", base_url);
+
+        let resp: TagsResponse = self
+            .client
+            .get(&url)
+            .send()
+            .await?
+            .json()
+            .await?;
+
+        Ok(resp
+            .models
+            .into_iter()
+            .map(|m| DiscoveredModel {
+                id: m.name.clone(),
+                display_name: Some(m.name),
+                size_bytes: m.size,
+                modified_at: m.modified_at,
+            })
+            .collect())
     }
 }
 
