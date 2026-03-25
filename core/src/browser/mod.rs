@@ -14,6 +14,7 @@ pub mod network_policy;
 pub mod profile;
 pub mod runtime;
 pub mod snapshot;
+pub mod snapshot_format;
 pub mod types;
 
 pub use backend::BrowserBackend;
@@ -26,9 +27,10 @@ pub use error::BrowserError;
 pub use managed_backend::ManagedBackend;
 pub use runtime::BrowserRuntime;
 pub use snapshot::{resolve_ref_to_point, take_aria_snapshot};
+pub use snapshot_format::{format_snapshot, SnapshotFormatOptions, SnapshotFormatResult};
 pub use types::{
-    ActionTarget, AriaElement, AriaSnapshot, BrowserConfig, ElementRect, LaunchMode,
-    ScreenshotOpts, ScreenshotResult, ScrollDirection, StorageKind, TabId, TabInfo,
+    ActionTarget, AriaElement, AriaSnapshot, BrowserConfig, ConsoleMessage, ElementRect,
+    LaunchMode, ScreenshotOpts, ScreenshotResult, ScrollDirection, StorageKind, TabId, TabInfo,
 };
 
 #[cfg(test)]

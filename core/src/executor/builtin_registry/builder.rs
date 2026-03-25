@@ -14,6 +14,7 @@ use crate::builtin_tools::browser_tools::{
     BrowserOpenTool, BrowserClickTool, BrowserTypeTool, BrowserScreenshotTool,
     BrowserSnapshotTool, BrowserNavigateTool, BrowserTabsTool, BrowserSelectTool,
     BrowserEvaluateTool, BrowserFillFormTool, BrowserProfileTool,
+    BrowserPressKeyTool, BrowserWaitForTool, BrowserConsoleTool,
 };
 use crate::builtin_tools::meta_tools::{ListToolsTool, GetToolSchemaTool};
 use crate::builtin_tools::skill_reader::{ListSkillsTool as SkillListTool, ReadSkillTool as SkillReadTool};
@@ -106,6 +107,9 @@ impl BuiltinToolRegistry {
         let browser_select_tool = BrowserSelectTool::new(Arc::clone(&browser_profile_manager));
         let browser_evaluate_tool = BrowserEvaluateTool::new(Arc::clone(&browser_profile_manager));
         let browser_fill_form_tool = BrowserFillFormTool::new(Arc::clone(&browser_profile_manager));
+        let browser_press_key_tool = BrowserPressKeyTool::new(Arc::clone(&browser_profile_manager));
+        let browser_wait_for_tool = BrowserWaitForTool::new(Arc::clone(&browser_profile_manager));
+        let browser_console_tool = BrowserConsoleTool::new(Arc::clone(&browser_profile_manager));
         let browser_profile_tool = BrowserProfileTool::new(browser_profile_manager);
 
         // Create memory tools if backend and embedder are provided
@@ -172,6 +176,9 @@ impl BuiltinToolRegistry {
                 browser_select_tool.definition(),
                 browser_evaluate_tool.definition(),
                 browser_fill_form_tool.definition(),
+                browser_press_key_tool.definition(),
+                browser_wait_for_tool.definition(),
+                browser_console_tool.definition(),
                 browser_profile_tool.definition(),
             ];
             for td in &browser_tool_defs {
@@ -185,7 +192,7 @@ impl BuiltinToolRegistry {
                 tools.insert(td.name.clone(), ut);
             }
         }
-        info!("Registered browser tools (11 tools) in BuiltinToolRegistry");
+        info!("Registered browser tools (14 tools) in BuiltinToolRegistry");
 
         info!("Registered skill.list, skill.read, and read_config_guide tools in BuiltinToolRegistry");
 
@@ -444,6 +451,9 @@ impl BuiltinToolRegistry {
             browser_select_tool,
             browser_evaluate_tool,
             browser_fill_form_tool,
+            browser_press_key_tool,
+            browser_wait_for_tool,
+            browser_console_tool,
             browser_profile_tool,
             agent_create_tool,
             agent_list_tool,

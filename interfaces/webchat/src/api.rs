@@ -25,9 +25,11 @@ pub mod search;
 pub mod security;
 pub mod settings;
 pub mod system;
+pub mod browser;
 pub mod workspace;
 
 // Re-export all public types for backward compatibility (crate::api::Foo)
+pub use browser::*;
 pub use acp::*;
 pub use agent_config::*;
 pub use agent_run::*;

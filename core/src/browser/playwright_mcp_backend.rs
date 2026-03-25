@@ -9,8 +9,8 @@ use super::backend::BrowserBackend;
 use super::error::BrowserError;
 use super::playwright_mcp::PlaywrightMcpDriver;
 use super::types::{
-    ActionTarget, AriaElement, AriaSnapshot, ScreenshotOpts, ScreenshotResult, ScrollDirection,
-    TabId, TabInfo,
+    ActionTarget, AriaElement, AriaSnapshot, ConsoleMessage, ScreenshotOpts, ScreenshotResult,
+    ScrollDirection, TabId, TabInfo,
 };
 
 pub struct PlaywrightMcpBackend {
@@ -299,6 +299,34 @@ impl BrowserBackend for PlaywrightMcpBackend {
         }
         self.call("browser_select", args).await?;
         Ok(())
+    }
+
+    async fn press_key(&self, _tab_id: &str, key: &str) -> Result<(), BrowserError> {
+        self.call("browser_press_key", json!({ "key": key })).await?;
+        Ok(())
+    }
+
+    async fn wait_for_text(&self, _tab_id: &str, text: &str, timeout_ms: u64) -> Result<bool, BrowserError> {
+        self.call("browser_wait_for_text", json!({ "text": text, "timeout": timeout_ms })).await?;
+        Ok(true)
+    }
+
+    async fn console_messages(&self, _tab_id: &str) -> Result<Vec<ConsoleMessage>, BrowserError> {
+        let result = self.call("browser_console_messages", json!({})).await?;
+        let text = Self::extract_text(&result);
+        // Parse "[level] message" lines
+        Ok(text.lines().filter_map(|line| {
+            let line = line.trim();
+            if line.is_empty() { return None; }
+            if line.starts_with('[') {
+                if let Some(end) = line.find(']') {
+                    let level = line.get(1..end).unwrap_or("log").to_lowercase();
+                    let msg = line.get(end + 1..).unwrap_or("").trim().to_string();
+                    return Some(ConsoleMessage { level, text: msg });
+                }
+            }
+            Some(ConsoleMessage { level: "log".to_string(), text: line.to_string() })
+        }).collect())
     }
 }
 

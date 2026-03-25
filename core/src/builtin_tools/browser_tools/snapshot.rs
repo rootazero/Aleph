@@ -4,14 +4,13 @@ use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::browser::backend::BrowserBackend;
-use crate::browser::chrome_mcp_backend::ChromeMcpBackend;
-use crate::browser::playwright_mcp_backend::PlaywrightMcpBackend;
 use crate::browser::manager::ProfileManager;
-use crate::browser::profile::BrowserDriver;
+use crate::browser::snapshot_format::{format_snapshot, SnapshotFormatOptions};
 use crate::error::Result;
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
+
+fn default_true() -> bool { true }
 
 /// Arguments for the browser_snapshot tool.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -19,13 +18,23 @@ pub struct BrowserSnapshotArgs {
     /// Browser profile name (default: "default").
     #[serde(default = "crate::builtin_tools::browser_tools::default_profile")]
     pub profile: String,
+    /// Only include interactive elements (buttons, inputs, links).
+    #[serde(default)]
+    pub interactive_only: bool,
+    /// Skip unnamed structural elements (default: true).
+    #[serde(default = "default_true")]
+    pub compact: bool,
+    /// Maximum output characters (default: 30000). Set higher for complex pages.
+    pub max_chars: Option<usize>,
 }
 
 /// Output from the browser_snapshot tool.
 #[derive(Debug, Serialize)]
 pub struct BrowserSnapshotOutput {
     pub success: bool,
-    pub aria_tree: Option<String>,
+    pub snapshot: Option<String>,
+    pub truncated: bool,
+    pub ref_count: usize,
     pub message: Option<String>,
 }
 
@@ -50,78 +59,40 @@ impl AlephTool for BrowserSnapshotTool {
     type Output = BrowserSnapshotOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
-        self.manager.record_activity(&args.profile);
+        let opts = SnapshotFormatOptions {
+            interactive_only: args.interactive_only,
+            compact: args.compact,
+            max_chars: args.max_chars.or(Some(30_000)),
+            max_depth: None,
+        };
 
-        let driver = self.manager.get_driver(&args.profile);
-        match driver {
-            Some(BrowserDriver::ExistingSession) => {
-                let chrome_mcp = self.manager.get_chrome_mcp_driver();
-                let backend = ChromeMcpBackend::new(chrome_mcp, args.profile.clone());
-                let tab_id = match super::get_active_tab(&backend).await {
-                    Ok(id) => id,
-                    Err(e) => {
-                        return Ok(BrowserSnapshotOutput {
-                            success: false,
-                            aria_tree: None,
-                            message: Some(format!("{e}")),
-                        });
-                    }
-                };
-
-                match backend.snapshot(&tab_id).await {
-                    Ok(snap) => {
-                        let json_str = serde_json::to_string(&snap)
-                            .unwrap_or_else(|_| "{}".to_string());
-                        Ok(BrowserSnapshotOutput {
-                            success: true,
-                            aria_tree: Some(json_str),
-                            message: Some(format!(
-                                "Snapshot captured in profile '{}'",
-                                args.profile
-                            )),
-                        })
-                    }
-                    Err(e) => Ok(BrowserSnapshotOutput {
-                        success: false,
-                        aria_tree: None,
-                        message: Some(format!("Snapshot failed: {e}")),
-                    }),
+        match super::make_backend_and_tab(&self.manager, &args.profile).await {
+            Ok((backend, tab_id)) => match backend.snapshot(&tab_id).await {
+                Ok(snap) => {
+                    let formatted = format_snapshot(&snap, &opts);
+                    Ok(BrowserSnapshotOutput {
+                        success: true,
+                        snapshot: Some(formatted.text),
+                        truncated: formatted.truncated,
+                        ref_count: formatted.ref_count,
+                        message: Some(format!("Snapshot captured in profile '{}'", args.profile)),
+                    })
                 }
-            }
-            Some(BrowserDriver::Managed) | None => {
-                let playwright = self.manager.get_playwright_mcp_driver();
-                let backend = PlaywrightMcpBackend::new(playwright, args.profile.clone());
-                let tab_id = match super::get_active_tab(&backend).await {
-                    Ok(id) => id,
-                    Err(e) => {
-                        return Ok(BrowserSnapshotOutput {
-                            success: false,
-                            aria_tree: None,
-                            message: Some(format!("{e}")),
-                        });
-                    }
-                };
-
-                match backend.snapshot(&tab_id).await {
-                    Ok(snap) => {
-                        let json_str = serde_json::to_string(&snap)
-                            .unwrap_or_else(|_| "{}".to_string());
-                        Ok(BrowserSnapshotOutput {
-                            success: true,
-                            aria_tree: Some(json_str),
-                            message: Some(format!(
-                                "Snapshot captured in profile '{}' (headless)",
-                                args.profile
-                            )),
-                        })
-                    }
-                    Err(e) => Ok(BrowserSnapshotOutput {
-                        success: false,
-                        aria_tree: None,
-                        message: Some(format!("Snapshot failed: {e}")),
-                    }),
-                }
-            }
+                Err(e) => Ok(BrowserSnapshotOutput {
+                    success: false,
+                    snapshot: None,
+                    truncated: false,
+                    ref_count: 0,
+                    message: Some(format!("Snapshot failed: {e}")),
+                }),
+            },
+            Err(e) => Ok(BrowserSnapshotOutput {
+                success: false,
+                snapshot: None,
+                truncated: false,
+                ref_count: 0,
+                message: Some(format!("{e}")),
+            }),
         }
     }
 }
@@ -132,7 +103,7 @@ mod tests {
     use crate::browser::profile::BrowserSystemConfig;
 
     #[tokio::test]
-    async fn test_snapshot_returns_aria_tree() {
+    async fn test_snapshot_returns_snapshot() {
         let config = BrowserSystemConfig::default();
         let manager = Arc::new(ProfileManager::new(config));
         let tool = BrowserSnapshotTool::new(manager);
@@ -140,12 +111,15 @@ mod tests {
         let result = tool
             .call(BrowserSnapshotArgs {
                 profile: "default".into(),
+                interactive_only: false,
+                compact: true,
+                max_chars: None,
             })
             .await
             .unwrap();
 
         // Without a running browser, tools degrade gracefully
         assert!(!result.success);
-        assert!(result.message.is_some()); // Error message present
+        assert!(result.message.is_some());
     }
 }

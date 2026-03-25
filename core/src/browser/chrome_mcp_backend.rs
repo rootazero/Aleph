@@ -10,7 +10,8 @@ use super::chrome_mcp::ChromeMcpDriver;
 use super::chrome_mcp_snapshot::convert_chrome_mcp_snapshot;
 use super::error::BrowserError;
 use super::types::{
-    ActionTarget, AriaSnapshot, ScreenshotOpts, ScreenshotResult, ScrollDirection, TabId, TabInfo,
+    ActionTarget, AriaSnapshot, ConsoleMessage, ScreenshotOpts, ScreenshotResult, ScrollDirection,
+    TabId, TabInfo,
 };
 
 pub struct ChromeMcpBackend {
@@ -285,4 +286,58 @@ impl BrowserBackend for ChromeMcpBackend {
     ) -> Result<(), BrowserError> {
         self.fill(tab_id, target, value).await
     }
+
+    async fn press_key(&self, tab_id: &str, key: &str) -> Result<(), BrowserError> {
+        self.select_page(tab_id).await?;
+        self.call("press_key", json!({ "key": key })).await?;
+        Ok(())
+    }
+
+    async fn wait_for_text(&self, tab_id: &str, text: &str, timeout_ms: u64) -> Result<bool, BrowserError> {
+        self.select_page(tab_id).await?;
+        self.call("wait_for", json!({ "text": text, "timeout": timeout_ms })).await?;
+        Ok(true)
+    }
+
+    async fn console_messages(&self, tab_id: &str) -> Result<Vec<ConsoleMessage>, BrowserError> {
+        self.select_page(tab_id).await?;
+        let result = self.call("list_console_messages", json!({})).await?;
+        let text = Self::extract_text(&result);
+        Ok(parse_console_messages(&text))
+    }
+
+    async fn fill_form(&self, tab_id: &str, fields: &[(ActionTarget, String)]) -> Result<usize, BrowserError> {
+        if fields.is_empty() {
+            return Ok(0);
+        }
+        self.select_page(tab_id).await?;
+        let form_fields: Vec<_> = fields.iter().filter_map(|(target, value)| {
+            let uid = Self::extract_element_ref(target).ok()?;
+            Some(json!({ "uid": uid, "value": value }))
+        }).collect();
+        if form_fields.is_empty() {
+            return Err(BrowserError::ActionFailed("No valid ref_id targets for fill_form".into()));
+        }
+        self.call("fill_form", json!({ "fields": form_fields })).await?;
+        Ok(form_fields.len())
+    }
+}
+
+/// Parse console messages from Chrome DevTools MCP text output.
+/// Console output format: "[level] message" per line.
+fn parse_console_messages(text: &str) -> Vec<ConsoleMessage> {
+    text.lines().filter_map(|line| {
+        let line = line.trim();
+        if line.is_empty() { return None; }
+        // Try to extract [level] prefix
+        if line.starts_with('[') {
+            if let Some(end) = line.find(']') {
+                let level = line.get(1..end).unwrap_or("log").to_lowercase();
+                let msg = line.get(end + 1..).unwrap_or("").trim().to_string();
+                return Some(ConsoleMessage { level, text: msg });
+            }
+        }
+        // Fallback: treat as log
+        Some(ConsoleMessage { level: "log".to_string(), text: line.to_string() })
+    }).collect()
 }

@@ -4,11 +4,7 @@ use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::browser::backend::BrowserBackend;
-use crate::browser::chrome_mcp_backend::ChromeMcpBackend;
-use crate::browser::playwright_mcp_backend::PlaywrightMcpBackend;
 use crate::browser::manager::ProfileManager;
-use crate::browser::profile::BrowserDriver;
 use crate::browser::types::ActionTarget;
 use crate::error::{AlephError, Result};
 use crate::sync_primitives::Arc;
@@ -51,6 +47,20 @@ impl BrowserClickTool {
     }
 }
 
+fn resolve_target(args: &BrowserClickArgs) -> std::result::Result<ActionTarget, AlephError> {
+    if let Some(ref sel) = args.selector {
+        Ok(ActionTarget::Selector { css: sel.clone() })
+    } else if let Some(ref rid) = args.ref_id {
+        Ok(ActionTarget::Ref { ref_id: rid.clone() })
+    } else if let (Some(x), Some(y)) = (args.x, args.y) {
+        Ok(ActionTarget::Coordinates { x, y })
+    } else {
+        Err(AlephError::invalid_input(
+            "browser_click requires at least one targeting method: selector, ref_id, or x/y coordinates",
+        ))
+    }
+}
+
 #[async_trait]
 impl AlephTool for BrowserClickTool {
     const NAME: &'static str = "browser_click";
@@ -60,110 +70,22 @@ impl AlephTool for BrowserClickTool {
     type Output = BrowserClickOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
-        // Validate: at least one targeting method must be provided
-        let has_selector = args.selector.is_some();
-        let has_ref_id = args.ref_id.is_some();
-        let has_coords = args.x.is_some() && args.y.is_some();
-
-        if !has_selector && !has_ref_id && !has_coords {
-            return Err(AlephError::invalid_input(
-                "browser_click requires at least one targeting method: selector, ref_id, or x/y coordinates",
-            ));
-        }
-
-        self.manager.record_activity(&args.profile);
-
-        // Build a description of what was clicked
-        let target_desc = if let Some(ref sel) = args.selector {
-            format!("selector '{}'", sel)
-        } else if let Some(ref rid) = args.ref_id {
-            format!("ref_id '{}'", rid)
-        } else {
-            format!("coordinates ({}, {})", args.x.unwrap(), args.y.unwrap())
-        };
-
-        let driver = self.manager.get_driver(&args.profile);
-        match driver {
-            Some(BrowserDriver::ExistingSession) => {
-                let chrome_mcp = self.manager.get_chrome_mcp_driver();
-                let backend = ChromeMcpBackend::new(chrome_mcp, args.profile.clone());
-                let tab_id = match super::get_active_tab(&backend).await {
-                    Ok(id) => id,
-                    Err(e) => {
-                        return Ok(BrowserClickOutput {
-                            success: false,
-                            message: Some(format!("{e}")),
-                        });
-                    }
-                };
-
-                let target = if let Some(ref sel) = args.selector {
-                    ActionTarget::Selector { css: sel.clone() }
-                } else if let Some(ref rid) = args.ref_id {
-                    ActionTarget::Ref {
-                        ref_id: rid.clone(),
-                    }
-                } else {
-                    ActionTarget::Coordinates {
-                        x: args.x.unwrap(),
-                        y: args.y.unwrap(),
-                    }
-                };
-
-                match backend.click(&tab_id, target).await {
-                    Ok(()) => Ok(BrowserClickOutput {
-                        success: true,
-                        message: Some(format!(
-                            "Clicked {} in profile '{}'",
-                            target_desc, args.profile
-                        )),
-                    }),
-                    Err(e) => Ok(BrowserClickOutput {
-                        success: false,
-                        message: Some(format!("Click failed: {e}")),
-                    }),
-                }
-            }
-            Some(BrowserDriver::Managed) | None => {
-                let playwright = self.manager.get_playwright_mcp_driver();
-                let backend = PlaywrightMcpBackend::new(playwright, args.profile.clone());
-                let tab_id = match super::get_active_tab(&backend).await {
-                    Ok(id) => id,
-                    Err(e) => {
-                        return Ok(BrowserClickOutput {
-                            success: false,
-                            message: Some(format!("{e}")),
-                        });
-                    }
-                };
-
-                let target = if let Some(ref sel) = args.selector {
-                    ActionTarget::Selector { css: sel.clone() }
-                } else if let Some(ref rid) = args.ref_id {
-                    ActionTarget::Ref {
-                        ref_id: rid.clone(),
-                    }
-                } else {
-                    ActionTarget::Coordinates {
-                        x: args.x.unwrap(),
-                        y: args.y.unwrap(),
-                    }
-                };
-
-                match backend.click(&tab_id, target).await {
-                    Ok(()) => Ok(BrowserClickOutput {
-                        success: true,
-                        message: Some(format!(
-                            "Clicked {} in profile '{}' (headless)",
-                            target_desc, args.profile
-                        )),
-                    }),
-                    Err(e) => Ok(BrowserClickOutput {
-                        success: false,
-                        message: Some(format!("Click failed: {e}")),
-                    }),
-                }
-            }
+        let target = resolve_target(&args)?;
+        match super::make_backend_and_tab(&self.manager, &args.profile).await {
+            Ok((backend, tab_id)) => match backend.click(&tab_id, target).await {
+                Ok(()) => Ok(BrowserClickOutput {
+                    success: true,
+                    message: Some(format!("Clicked in profile '{}'", args.profile)),
+                }),
+                Err(e) => Ok(BrowserClickOutput {
+                    success: false,
+                    message: Some(format!("Click failed: {e}")),
+                }),
+            },
+            Err(e) => Ok(BrowserClickOutput {
+                success: false,
+                message: Some(format!("{e}")),
+            }),
         }
     }
 }
@@ -192,7 +114,7 @@ mod tests {
 
         // Without a running browser, tools degrade gracefully
         assert!(!result.success);
-        assert!(result.message.is_some()); // Error message present
+        assert!(result.message.is_some());
     }
 
     #[tokio::test]
@@ -214,7 +136,7 @@ mod tests {
 
         // Without a running browser, tools degrade gracefully
         assert!(!result.success);
-        assert!(result.message.is_some()); // Error message present
+        assert!(result.message.is_some());
     }
 
     #[tokio::test]
@@ -255,6 +177,6 @@ mod tests {
 
         // Without a running browser, tools degrade gracefully
         assert!(!result.success);
-        assert!(result.message.is_some()); // Error message present
+        assert!(result.message.is_some());
     }
 }

@@ -16,6 +16,37 @@ use crate::gateway::event_bus::{GatewayEventBus, GatewayEvent, ConfigChangedEven
 use crate::gateway::device_store::DeviceStore;
 use crate::config::patcher::ConfigPatcher;
 
+/// Write gateway.host to the config TOML file on disk.
+fn write_gateway_host_to_config(path: &std::path::Path, host: &str) -> Result<(), String> {
+    let contents = std::fs::read_to_string(path)
+        .map_err(|e| format!("Failed to read config: {e}"))?;
+    let mut doc: toml::Table = toml::from_str(&contents)
+        .map_err(|e| format!("Failed to parse config: {e}"))?;
+
+    // Create or update [gateway] section
+    let gateway = doc
+        .entry("gateway".to_string())
+        .or_insert_with(|| toml::Value::Table(toml::Table::new()));
+    if let toml::Value::Table(t) = gateway {
+        t.insert("host".to_string(), toml::Value::String(host.to_string()));
+    }
+
+    let new_contents = toml::to_string_pretty(&doc)
+        .map_err(|e| format!("Failed to serialize config: {e}"))?;
+
+    // Atomic write
+    let temp_path = path.with_extension("tmp");
+    std::fs::write(&temp_path, &new_contents)
+        .map_err(|e| format!("Failed to write temp: {e}"))?;
+    std::fs::rename(&temp_path, path)
+        .map_err(|e| {
+            let _ = std::fs::remove_file(&temp_path);
+            format!("Failed to rename: {e}")
+        })?;
+
+    Ok(())
+}
+
 /// Read gateway.host from the config TOML file on disk.
 fn read_gateway_host_from_config(patcher: &ConfigPatcher) -> String {
     // Read the config file as TOML and extract gateway.host
@@ -131,18 +162,11 @@ pub async fn handle_update(
     let new_host = security_config.network_access.to_bind_address().to_string();
     let needs_restart = current_host != new_host;
 
-    // Persist network_access via config.patch pipeline
+    // Persist gateway.host directly to TOML (cannot use ConfigPatcher because
+    // Config struct has no `gateway` field — the patcher would discard it).
     if needs_restart {
-        use crate::config::patcher::PatchRequest;
-        let patch_req = PatchRequest {
-            path: "gateway".to_string(),
-            patch: serde_json::json!({ "host": new_host }),
-            secret_fields: Default::default(),
-            dry_run: false,
-            health_check: false,
-        };
-
-        if let Err(e) = config_patcher.apply(patch_req).await {
+        let config_path = crate::config::Config::default_path();
+        if let Err(e) = write_gateway_host_to_config(&config_path, &new_host) {
             return JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,

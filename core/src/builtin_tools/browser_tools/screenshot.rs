@@ -4,11 +4,7 @@ use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::browser::backend::BrowserBackend;
-use crate::browser::chrome_mcp_backend::ChromeMcpBackend;
-use crate::browser::playwright_mcp_backend::PlaywrightMcpBackend;
 use crate::browser::manager::ProfileManager;
-use crate::browser::profile::BrowserDriver;
 use crate::browser::types::ScreenshotOpts;
 use crate::error::Result;
 use crate::sync_primitives::Arc;
@@ -23,8 +19,6 @@ pub struct BrowserScreenshotArgs {
     /// Capture the full page (default: false, captures viewport only).
     #[serde(default)]
     pub full_page: bool,
-    /// CSS selector to screenshot a specific element.
-    pub selector: Option<String>,
 }
 
 /// Output from the browser_screenshot tool.
@@ -35,7 +29,7 @@ pub struct BrowserScreenshotOutput {
     pub message: Option<String>,
 }
 
-/// Captures a screenshot of the current page or a specific element.
+/// Captures a screenshot of the current page.
 #[derive(Clone)]
 pub struct BrowserScreenshotTool {
     manager: Arc<ProfileManager>,
@@ -50,42 +44,22 @@ impl BrowserScreenshotTool {
 #[async_trait]
 impl AlephTool for BrowserScreenshotTool {
     const NAME: &'static str = "browser_screenshot";
-    const DESCRIPTION: &'static str = "Take a screenshot of the current browser page or a specific element";
+    const DESCRIPTION: &'static str = "Take a screenshot of the current browser page";
     type Args = BrowserScreenshotArgs;
     type Output = BrowserScreenshotOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
-        self.manager.record_activity(&args.profile);
-
-        let driver = self.manager.get_driver(&args.profile);
-        match driver {
-            Some(BrowserDriver::ExistingSession) => {
-                let chrome_mcp = self.manager.get_chrome_mcp_driver();
-                let backend = ChromeMcpBackend::new(chrome_mcp, args.profile.clone());
-                let tab_id = match super::get_active_tab(&backend).await {
-                    Ok(id) => id,
-                    Err(e) => {
-                        return Ok(BrowserScreenshotOutput {
-                            success: false,
-                            image_base64: None,
-                            message: Some(format!("{e}")),
-                        });
-                    }
-                };
-
+        match super::make_backend_and_tab(&self.manager, &args.profile).await {
+            Ok((backend, tab_id)) => {
                 let opts = ScreenshotOpts {
                     full_page: args.full_page,
                     ..Default::default()
                 };
-
                 match backend.screenshot(&tab_id, opts).await {
                     Ok(result) => Ok(BrowserScreenshotOutput {
                         success: true,
                         image_base64: Some(result.data_base64),
-                        message: Some(format!(
-                            "Screenshot captured in profile '{}'",
-                            args.profile
-                        )),
+                        message: Some(format!("Screenshot captured in profile '{}'", args.profile)),
                     }),
                     Err(e) => Ok(BrowserScreenshotOutput {
                         success: false,
@@ -94,41 +68,11 @@ impl AlephTool for BrowserScreenshotTool {
                     }),
                 }
             }
-            Some(BrowserDriver::Managed) | None => {
-                let playwright = self.manager.get_playwright_mcp_driver();
-                let backend = PlaywrightMcpBackend::new(playwright, args.profile.clone());
-                let tab_id = match super::get_active_tab(&backend).await {
-                    Ok(id) => id,
-                    Err(e) => {
-                        return Ok(BrowserScreenshotOutput {
-                            success: false,
-                            image_base64: None,
-                            message: Some(format!("{e}")),
-                        });
-                    }
-                };
-
-                let opts = ScreenshotOpts {
-                    full_page: args.full_page,
-                    ..Default::default()
-                };
-
-                match backend.screenshot(&tab_id, opts).await {
-                    Ok(result) => Ok(BrowserScreenshotOutput {
-                        success: true,
-                        image_base64: Some(result.data_base64),
-                        message: Some(format!(
-                            "Screenshot captured in profile '{}' (headless)",
-                            args.profile
-                        )),
-                    }),
-                    Err(e) => Ok(BrowserScreenshotOutput {
-                        success: false,
-                        image_base64: None,
-                        message: Some(format!("Screenshot failed: {e}")),
-                    }),
-                }
-            }
+            Err(e) => Ok(BrowserScreenshotOutput {
+                success: false,
+                image_base64: None,
+                message: Some(format!("{e}")),
+            }),
         }
     }
 }
@@ -148,18 +92,17 @@ mod tests {
             .call(BrowserScreenshotArgs {
                 profile: "default".into(),
                 full_page: false,
-                selector: None,
             })
             .await
             .unwrap();
 
         // Without a running browser, tools degrade gracefully
         assert!(!result.success);
-        assert!(result.message.is_some()); // Error message present
+        assert!(result.message.is_some());
     }
 
     #[tokio::test]
-    async fn test_screenshot_with_selector() {
+    async fn test_screenshot_full_page() {
         let config = BrowserSystemConfig::default();
         let manager = Arc::new(ProfileManager::new(config));
         let tool = BrowserScreenshotTool::new(manager);
@@ -167,14 +110,13 @@ mod tests {
         let result = tool
             .call(BrowserScreenshotArgs {
                 profile: "default".into(),
-                full_page: false,
-                selector: Some("#main-content".into()),
+                full_page: true,
             })
             .await
             .unwrap();
 
         // Without a running browser, tools degrade gracefully
         assert!(!result.success);
-        assert!(result.message.is_some()); // Error message present
+        assert!(result.message.is_some());
     }
 }

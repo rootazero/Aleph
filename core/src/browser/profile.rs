@@ -143,7 +143,10 @@ fn default_mcp_command() -> String {
 }
 
 fn default_mcp_args() -> Vec<String> {
-    vec!["@playwright/mcp".to_string()]
+    vec![
+        "@playwright/mcp@latest".to_string(),
+        "--headless".to_string(),
+    ]
 }
 
 impl Default for PlaywrightMcpConfig {
@@ -325,7 +328,7 @@ args = ["./mcp-server.js"]
         let config = PlaywrightMcpConfig::default();
         assert!(config.enabled);
         assert_eq!(config.command, "npx");
-        assert_eq!(config.args, vec!["@playwright/mcp"]);
+        assert_eq!(config.args, vec!["@playwright/mcp@latest", "--headless"]);
     }
 
     #[test]

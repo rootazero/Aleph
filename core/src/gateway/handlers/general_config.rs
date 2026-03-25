@@ -56,10 +56,12 @@ pub async fn handle_update(
         }
     };
 
-    // Update config
+    // Update config — preserve browser sub-section (managed by browser_config handler)
     {
         let mut cfg = config.write().await;
+        let preserved_browser = cfg.general.browser.clone();
         cfg.general = new_general.clone();
+        cfg.general.browser = preserved_browser;
 
         // Save to file
         if let Err(e) = cfg.save_incremental(&["general"]) {

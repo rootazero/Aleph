@@ -4,11 +4,7 @@ use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::browser::backend::BrowserBackend;
-use crate::browser::chrome_mcp_backend::ChromeMcpBackend;
-use crate::browser::playwright_mcp_backend::PlaywrightMcpBackend;
 use crate::browser::manager::ProfileManager;
-use crate::browser::profile::BrowserDriver;
 use crate::browser::types::ActionTarget;
 use crate::error::Result;
 use crate::sync_primitives::Arc;
@@ -65,118 +61,45 @@ impl AlephTool for BrowserFillFormTool {
     type Output = BrowserFillFormOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
-        self.manager.record_activity(&args.profile);
-
-        let driver = self.manager.get_driver(&args.profile);
-        match driver {
-            Some(BrowserDriver::ExistingSession) => {
-                let chrome_mcp = self.manager.get_chrome_mcp_driver();
-                let backend = ChromeMcpBackend::new(chrome_mcp, args.profile.clone());
-                let tab_id = match super::get_active_tab(&backend).await {
-                    Ok(id) => id,
-                    Err(e) => {
-                        return Ok(BrowserFillFormOutput {
-                            success: false,
-                            filled_count: 0,
-                            message: Some(format!("{e}")),
-                        });
-                    }
-                };
-
-                let mut filled = 0;
-                for field in &args.fields {
-                    let target = if let Some(ref ref_id) = field.ref_id {
-                        ActionTarget::Ref { ref_id: ref_id.clone() }
-                    } else if let Some(ref css) = field.selector {
-                        ActionTarget::Selector { css: css.clone() }
-                    } else {
-                        return Ok(BrowserFillFormOutput {
-                            success: false,
-                            filled_count: filled,
-                            message: Some("Each field must have either 'selector' or 'ref_id'".into()),
-                        });
-                    };
-                    let field_name = field.ref_id.as_deref()
-                        .or(field.selector.as_deref())
-                        .unwrap_or("unknown");
-                    match backend.fill(&tab_id, target, &field.value).await {
-                        Ok(()) => filled += 1,
-                        Err(e) => {
-                            return Ok(BrowserFillFormOutput {
-                                success: false,
-                                filled_count: filled,
-                                message: Some(format!(
-                                    "Failed on field '{}': {e}",
-                                    field_name
-                                )),
-                            });
-                        }
-                    }
-                }
-
-                Ok(BrowserFillFormOutput {
-                    success: true,
-                    filled_count: filled,
-                    message: Some(format!(
-                        "Filled {} field(s) in profile '{}'",
-                        filled, args.profile
-                    )),
-                })
+        let (backend, tab_id) = match super::make_backend_and_tab(&self.manager, &args.profile).await {
+            Ok(pair) => pair,
+            Err(e) => {
+                return Ok(BrowserFillFormOutput {
+                    success: false,
+                    filled_count: 0,
+                    message: Some(format!("{e}")),
+                });
             }
-            Some(BrowserDriver::Managed) | None => {
-                let playwright = self.manager.get_playwright_mcp_driver();
-                let backend = PlaywrightMcpBackend::new(playwright, args.profile.clone());
-                let tab_id = match super::get_active_tab(&backend).await {
-                    Ok(id) => id,
-                    Err(e) => {
-                        return Ok(BrowserFillFormOutput {
-                            success: false,
-                            filled_count: 0,
-                            message: Some(format!("{e}")),
-                        });
-                    }
-                };
+        };
 
-                let mut filled = 0;
-                for field in &args.fields {
-                    let target = if let Some(ref ref_id) = field.ref_id {
-                        ActionTarget::Ref { ref_id: ref_id.clone() }
-                    } else if let Some(ref css) = field.selector {
-                        ActionTarget::Selector { css: css.clone() }
-                    } else {
-                        return Ok(BrowserFillFormOutput {
-                            success: false,
-                            filled_count: filled,
-                            message: Some("Each field must have either 'selector' or 'ref_id'".into()),
-                        });
-                    };
-                    let field_name = field.ref_id.as_deref()
-                        .or(field.selector.as_deref())
-                        .unwrap_or("unknown");
-                    match backend.fill(&tab_id, target, &field.value).await {
-                        Ok(()) => filled += 1,
-                        Err(e) => {
-                            return Ok(BrowserFillFormOutput {
-                                success: false,
-                                filled_count: filled,
-                                message: Some(format!(
-                                    "Failed on field '{}': {e}",
-                                    field_name
-                                )),
-                            });
-                        }
-                    }
-                }
+        // Build (ActionTarget, value) pairs for the batch fill_form method
+        let mut targets = Vec::with_capacity(args.fields.len());
+        for field in &args.fields {
+            let target = if let Some(ref ref_id) = field.ref_id {
+                ActionTarget::Ref { ref_id: ref_id.clone() }
+            } else if let Some(ref css) = field.selector {
+                ActionTarget::Selector { css: css.clone() }
+            } else {
+                return Ok(BrowserFillFormOutput {
+                    success: false,
+                    filled_count: 0,
+                    message: Some("Each field must have either 'selector' or 'ref_id'".into()),
+                });
+            };
+            targets.push((target, field.value.clone()));
+        }
 
-                Ok(BrowserFillFormOutput {
-                    success: true,
-                    filled_count: filled,
-                    message: Some(format!(
-                        "Filled {} field(s) in profile '{}' (headless)",
-                        filled, args.profile
-                    )),
-                })
-            }
+        match backend.fill_form(&tab_id, &targets).await {
+            Ok(filled) => Ok(BrowserFillFormOutput {
+                success: true,
+                filled_count: filled,
+                message: Some(format!("Filled {} field(s) in profile '{}'", filled, args.profile)),
+            }),
+            Err(e) => Ok(BrowserFillFormOutput {
+                success: false,
+                filled_count: 0,
+                message: Some(format!("Fill form failed: {e}")),
+            }),
         }
     }
 }
@@ -213,7 +136,7 @@ mod tests {
 
         // Without a running browser, tools degrade gracefully
         assert!(!result.success);
-        assert!(result.message.is_some()); // Error message present
+        assert!(result.message.is_some());
     }
 
     #[tokio::test]
@@ -233,6 +156,6 @@ mod tests {
         // Without a running browser, tools degrade gracefully
         // Empty fields: get_active_tab fails, returns success: false
         assert!(!result.success);
-        assert!(result.message.is_some()); // Error message present
+        assert!(result.message.is_some());
     }
 }

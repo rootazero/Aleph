@@ -146,6 +146,9 @@ fn SettingsRouter() -> impl IntoView {
             "/settings/generation-providers" => view! { <GenerationProvidersView /> }.into_any(),
             "/settings/memory" => view! { <MemoryView /> }.into_any(),
 
+            // Browser
+            "/settings/browser" => view! { <BrowserView /> }.into_any(),
+
             // Extensions
             "/settings/routing" => view! { <RoutingRulesView /> }.into_any(),
             "/settings/mcp" => view! { <McpView /> }.into_any(),

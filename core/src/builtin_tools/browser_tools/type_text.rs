@@ -6,11 +6,7 @@ use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::browser::backend::BrowserBackend;
-use crate::browser::chrome_mcp_backend::ChromeMcpBackend;
-use crate::browser::playwright_mcp_backend::PlaywrightMcpBackend;
 use crate::browser::manager::ProfileManager;
-use crate::browser::profile::BrowserDriver;
 use crate::browser::types::ActionTarget;
 use crate::error::Result;
 use crate::sync_primitives::Arc;
@@ -58,102 +54,32 @@ impl AlephTool for BrowserTypeTool {
     type Output = BrowserTypeOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
-        self.manager.record_activity(&args.profile);
-
-        // Build a description of the target
-        let target_desc = if let Some(ref sel) = args.selector {
-            format!("selector '{}'", sel)
+        let target = if let Some(ref sel) = args.selector {
+            ActionTarget::Selector { css: sel.clone() }
         } else if let Some(ref rid) = args.ref_id {
-            format!("ref_id '{}'", rid)
+            ActionTarget::Ref { ref_id: rid.clone() }
         } else {
-            "focused element".to_string()
+            ActionTarget::Ref { ref_id: "focused".into() }
         };
 
-        let driver = self.manager.get_driver(&args.profile);
-        match driver {
-            Some(BrowserDriver::ExistingSession) => {
-                let chrome_mcp = self.manager.get_chrome_mcp_driver();
-                let backend = ChromeMcpBackend::new(chrome_mcp, args.profile.clone());
-                let tab_id = match super::get_active_tab(&backend).await {
-                    Ok(id) => id,
-                    Err(e) => {
-                        return Ok(BrowserTypeOutput {
-                            success: false,
-                            message: Some(format!("{e}")),
-                        });
-                    }
-                };
-
-                let target = if let Some(ref sel) = args.selector {
-                    ActionTarget::Selector { css: sel.clone() }
-                } else if let Some(ref rid) = args.ref_id {
-                    ActionTarget::Ref {
-                        ref_id: rid.clone(),
-                    }
-                } else {
-                    // Use a placeholder ref for focused element
-                    ActionTarget::Ref {
-                        ref_id: "focused".into(),
-                    }
-                };
-
-                match backend.type_text(&tab_id, target, &args.text).await {
-                    Ok(()) => Ok(BrowserTypeOutput {
-                        success: true,
-                        message: Some(format!(
-                            "Typed {} chars into {} in profile '{}'",
-                            args.text.len(),
-                            target_desc,
-                            args.profile
-                        )),
-                    }),
-                    Err(e) => Ok(BrowserTypeOutput {
-                        success: false,
-                        message: Some(format!("Type failed: {e}")),
-                    }),
-                }
-            }
-            Some(BrowserDriver::Managed) | None => {
-                let playwright = self.manager.get_playwright_mcp_driver();
-                let backend = PlaywrightMcpBackend::new(playwright, args.profile.clone());
-                let tab_id = match super::get_active_tab(&backend).await {
-                    Ok(id) => id,
-                    Err(e) => {
-                        return Ok(BrowserTypeOutput {
-                            success: false,
-                            message: Some(format!("{e}")),
-                        });
-                    }
-                };
-
-                let target = if let Some(ref sel) = args.selector {
-                    ActionTarget::Selector { css: sel.clone() }
-                } else if let Some(ref rid) = args.ref_id {
-                    ActionTarget::Ref {
-                        ref_id: rid.clone(),
-                    }
-                } else {
-                    ActionTarget::Ref {
-                        ref_id: "focused".into(),
-                    }
-                };
-
-                match backend.type_text(&tab_id, target, &args.text).await {
-                    Ok(()) => Ok(BrowserTypeOutput {
-                        success: true,
-                        message: Some(format!(
-                            "Typed {} chars into {} in profile '{}' (headless)",
-                            args.text.len(),
-                            target_desc,
-                            args.profile
-                        )),
-                    }),
-                    Err(e) => Ok(BrowserTypeOutput {
-                        success: false,
-                        message: Some(format!("Type failed: {e}")),
-                    }),
-                }
-            }
+        match super::make_backend_and_tab(&self.manager, &args.profile).await {
+            Ok((backend, tab_id)) => match backend.type_text(&tab_id, target, &args.text).await {
+                Ok(()) => Ok(BrowserTypeOutput {
+                    success: true,
+                    message: Some(format!(
+                        "Typed {} chars in profile '{}'",
+                        args.text.len(), args.profile
+                    )),
+                }),
+                Err(e) => Ok(BrowserTypeOutput {
+                    success: false,
+                    message: Some(format!("Type failed: {e}")),
+                }),
+            },
+            Err(e) => Ok(BrowserTypeOutput {
+                success: false,
+                message: Some(format!("{e}")),
+            }),
         }
     }
 }
@@ -181,7 +107,7 @@ mod tests {
 
         // Without a running browser, tools degrade gracefully
         assert!(!result.success);
-        assert!(result.message.is_some()); // Error message present
+        assert!(result.message.is_some());
     }
 
     #[tokio::test]
@@ -202,7 +128,7 @@ mod tests {
 
         // Without a running browser, tools degrade gracefully
         assert!(!result.success);
-        assert!(result.message.is_some()); // Error message present
+        assert!(result.message.is_some());
     }
 
     #[tokio::test]
@@ -223,6 +149,6 @@ mod tests {
 
         // Without a running browser, tools degrade gracefully
         assert!(!result.success);
-        assert!(result.message.is_some()); // Error message present
+        assert!(result.message.is_some());
     }
 }

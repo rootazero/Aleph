@@ -15,9 +15,11 @@ pub mod clawhub;
 pub mod policies;
 pub mod acp_harnesses;
 pub mod auth;
+pub mod browser;
 pub mod channels;
 pub mod execution;
 
+pub use browser::BrowserView;
 pub use providers::ProvidersView;
 pub use routing_rules::RoutingRulesView;
 pub use mcp::McpView;

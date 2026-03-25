@@ -6,8 +6,6 @@ use serde_json::json;
 use crate::context::DashboardState;
 use crate::i18n::*;
 
-const OFFICIAL_SKILLS_URL: &str = "https://github.com/rootazero/AlephSkills";
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SkillInfo {
     pub id: String,
@@ -65,7 +63,6 @@ pub fn SkillsView() -> impl IntoView {
     let loading = RwSignal::new(true);
     let error = RwSignal::new(Option::<String>::None);
     let show_install_dialog = RwSignal::new(false);
-    let installing_official = RwSignal::new(false);
 
     // Derived signals for filtering by ecosystem
     let aleph_skills = Memo::new(move |_| {
@@ -86,24 +83,6 @@ pub fn SkillsView() -> impl IntoView {
             loading.set(false);
         }
     });
-
-    // Install official skills handler
-    let install_official = move |_| {
-        installing_official.set(true);
-        error.set(None);
-        spawn_local(async move {
-            match state.rpc_call("markdown_skills.install", json!({ "url": OFFICIAL_SKILLS_URL, "flatten": true })).await {
-                Ok(_) => {
-                    installing_official.set(false);
-                    load_skills(state, skills, loading, error);
-                }
-                Err(e) => {
-                    error.set(Some(format!("Failed to install official skills: {}", e)));
-                    installing_official.set(false);
-                }
-            }
-        });
-    };
 
     view! {
         <div class="flex-1 p-6 overflow-y-auto bg-surface">
@@ -126,13 +105,6 @@ pub fn SkillsView() -> impl IntoView {
                             }
                         >
                             {t!(i18n, settings.skills.refresh)}
-                        </button>
-                        <button
-                            class="px-3 py-1.5 bg-surface-sunken text-text-secondary rounded hover:bg-surface-sunken text-sm disabled:opacity-50"
-                            disabled=move || installing_official.get()
-                            on:click=install_official
-                        >
-                            {move || if installing_official.get() { t_string!(i18n, settings.skills.installing_official).to_string() } else { t_string!(i18n, settings.skills.install_official).to_string() }}
                         </button>
                         <button
                             class="px-3 py-1.5 bg-primary text-white rounded hover:bg-primary-hover text-sm"

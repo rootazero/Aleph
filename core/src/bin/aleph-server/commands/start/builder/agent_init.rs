@@ -406,6 +406,9 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             memory_similarity_threshold: Some(app_config.memory.similarity_threshold),
             coord_task_store: coord_store.clone(),
             agent_message_bus: agent_message_bus.clone(),
+            browser_profile_manager: Some(std::sync::Arc::new(
+                alephcore::browser::manager::ProfileManager::new(app_config.general.browser.clone()),
+            )),
             ..Default::default()
         };
         let mut tool_registry = BuiltinToolRegistry::with_config(tool_config).await;

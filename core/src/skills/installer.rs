@@ -1,9 +1,11 @@
 //! Skills Installer - downloads and installs skills from GitHub/ZIP.
 //!
 //! Supports multiple installation methods:
-//! - Official skills from anthropics/skills repository
 //! - Third-party skills from any GitHub repository
 //! - Local ZIP file upload
+//!
+//! Note: Aleph official skills (rootazero/Aleph-skills) are managed by
+//! `updater.rs`, not this installer. They auto-sync on startup via git.
 
 use crate::error::{AlephError, Result};
 use crate::skills::types::{PackageManager, SkillRequirements};
@@ -26,15 +28,6 @@ impl SkillsInstaller {
     /// * `skills_dir` - Path to the skills directory
     pub fn new(skills_dir: PathBuf) -> Self {
         Self { skills_dir }
-    }
-
-    /// Install official skills from anthropics/skills repository
-    ///
-    /// Downloads the official skills repository ZIP and extracts valid skills.
-    pub async fn install_official_skills(&self) -> Result<Vec<String>> {
-        info!("Installing official skills from anthropics/skills");
-        let url = "https://github.com/anthropics/skills/archive/refs/heads/main.zip";
-        self.install_from_github_zip(url).await
     }
 
     /// Install skill from GitHub repository URL

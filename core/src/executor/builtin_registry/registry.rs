@@ -101,6 +101,9 @@ pub struct BuiltinToolRegistry {
     pub(crate) browser_select_tool: crate::builtin_tools::browser_tools::BrowserSelectTool,
     pub(crate) browser_evaluate_tool: crate::builtin_tools::browser_tools::BrowserEvaluateTool,
     pub(crate) browser_fill_form_tool: crate::builtin_tools::browser_tools::BrowserFillFormTool,
+    pub(crate) browser_press_key_tool: crate::builtin_tools::browser_tools::BrowserPressKeyTool,
+    pub(crate) browser_wait_for_tool: crate::builtin_tools::browser_tools::BrowserWaitForTool,
+    pub(crate) browser_console_tool: crate::builtin_tools::browser_tools::BrowserConsoleTool,
     pub(crate) browser_profile_tool: crate::builtin_tools::browser_tools::BrowserProfileTool,
     /// Shared session key handle for memory_search scope=current_session
     pub(super) memory_session_key_handle: Option<Arc<RwLock<String>>>,
@@ -383,6 +386,9 @@ impl ToolRegistry for BuiltinToolRegistry {
             "browser_select" => Box::pin(async move { self.browser_select_tool.call_json(arguments).await }),
             "browser_evaluate" => Box::pin(async move { self.browser_evaluate_tool.call_json(arguments).await }),
             "browser_fill_form" => Box::pin(async move { self.browser_fill_form_tool.call_json(arguments).await }),
+            "browser_press_key" => Box::pin(async move { self.browser_press_key_tool.call_json(arguments).await }),
+            "browser_wait_for" => Box::pin(async move { self.browser_wait_for_tool.call_json(arguments).await }),
+            "browser_console" => Box::pin(async move { self.browser_console_tool.call_json(arguments).await }),
             "browser_profile" => Box::pin(async move { self.browser_profile_tool.call_json(arguments).await }),
 
             // Session new tool — inject session key from session context

@@ -4,11 +4,7 @@ use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::browser::backend::BrowserBackend;
-use crate::browser::chrome_mcp_backend::ChromeMcpBackend;
-use crate::browser::playwright_mcp_backend::PlaywrightMcpBackend;
 use crate::browser::manager::ProfileManager;
-use crate::browser::profile::BrowserDriver;
 use crate::error::Result;
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
@@ -52,72 +48,27 @@ impl AlephTool for BrowserEvaluateTool {
     type Output = BrowserEvaluateOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
-        self.manager.record_activity(&args.profile);
-
-        let driver = self.manager.get_driver(&args.profile);
-        match driver {
-            Some(BrowserDriver::ExistingSession) => {
-                let chrome_mcp = self.manager.get_chrome_mcp_driver();
-                let backend = ChromeMcpBackend::new(chrome_mcp, args.profile.clone());
-                let tab_id = match super::get_active_tab(&backend).await {
-                    Ok(id) => id,
-                    Err(e) => {
-                        return Ok(BrowserEvaluateOutput {
-                            success: false,
-                            result: None,
-                            message: Some(format!("{e}")),
-                        });
-                    }
-                };
-
-                match backend.evaluate(&tab_id, &args.script).await {
-                    Ok(value) => Ok(BrowserEvaluateOutput {
-                        success: true,
-                        result: Some(value),
-                        message: Some(format!(
-                            "Evaluated {} chars of JS in profile '{}'",
-                            args.script.len(),
-                            args.profile
-                        )),
-                    }),
-                    Err(e) => Ok(BrowserEvaluateOutput {
-                        success: false,
-                        result: None,
-                        message: Some(format!("Evaluate failed: {e}")),
-                    }),
-                }
-            }
-            Some(BrowserDriver::Managed) | None => {
-                let playwright = self.manager.get_playwright_mcp_driver();
-                let backend = PlaywrightMcpBackend::new(playwright, args.profile.clone());
-                let tab_id = match super::get_active_tab(&backend).await {
-                    Ok(id) => id,
-                    Err(e) => {
-                        return Ok(BrowserEvaluateOutput {
-                            success: false,
-                            result: None,
-                            message: Some(format!("{e}")),
-                        });
-                    }
-                };
-
-                match backend.evaluate(&tab_id, &args.script).await {
-                    Ok(value) => Ok(BrowserEvaluateOutput {
-                        success: true,
-                        result: Some(value),
-                        message: Some(format!(
-                            "Evaluated {} chars of JS in profile '{}' (headless)",
-                            args.script.len(),
-                            args.profile
-                        )),
-                    }),
-                    Err(e) => Ok(BrowserEvaluateOutput {
-                        success: false,
-                        result: None,
-                        message: Some(format!("Evaluate failed: {e}")),
-                    }),
-                }
-            }
+        match super::make_backend_and_tab(&self.manager, &args.profile).await {
+            Ok((backend, tab_id)) => match backend.evaluate(&tab_id, &args.script).await {
+                Ok(value) => Ok(BrowserEvaluateOutput {
+                    success: true,
+                    result: Some(value),
+                    message: Some(format!(
+                        "Evaluated {} chars of JS in profile '{}'",
+                        args.script.len(), args.profile
+                    )),
+                }),
+                Err(e) => Ok(BrowserEvaluateOutput {
+                    success: false,
+                    result: None,
+                    message: Some(format!("Evaluate failed: {e}")),
+                }),
+            },
+            Err(e) => Ok(BrowserEvaluateOutput {
+                success: false,
+                result: None,
+                message: Some(format!("{e}")),
+            }),
         }
     }
 }
@@ -143,7 +94,7 @@ mod tests {
 
         // Without a running browser, tools degrade gracefully
         assert!(!result.success);
-        assert!(result.message.is_some()); // Error message present
+        assert!(result.message.is_some());
     }
 
     #[tokio::test]
@@ -162,6 +113,6 @@ mod tests {
 
         // Without a running browser, tools degrade gracefully
         assert!(!result.success);
-        assert!(result.message.is_some()); // Error message present
+        assert!(result.message.is_some());
     }
 }

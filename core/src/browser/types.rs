@@ -1,3 +1,6 @@
+use std::collections::HashSet;
+use std::sync::OnceLock;
+
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -209,4 +212,48 @@ pub struct ScreenshotResult {
 pub enum StorageKind {
     Local,
     Session,
+}
+
+/// A browser console message.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ConsoleMessage {
+    /// Message level: "log", "warn", "error", "debug", "info".
+    pub level: String,
+    /// Message text.
+    pub text: String,
+}
+
+/// Roles representing user-interactive elements (always get a ref in snapshots).
+pub fn interactive_roles() -> &'static HashSet<&'static str> {
+    static ROLES: OnceLock<HashSet<&str>> = OnceLock::new();
+    ROLES.get_or_init(|| {
+        [
+            "button", "checkbox", "combobox", "link", "listbox", "menuitem",
+            "menuitemcheckbox", "menuitemradio", "option", "radio", "searchbox",
+            "slider", "spinbutton", "switch", "tab", "textbox", "treeitem",
+        ].into_iter().collect()
+    })
+}
+
+/// Roles carrying meaningful content (get a ref when named).
+pub fn content_roles() -> &'static HashSet<&'static str> {
+    static ROLES: OnceLock<HashSet<&str>> = OnceLock::new();
+    ROLES.get_or_init(|| {
+        [
+            "article", "cell", "columnheader", "gridcell", "heading", "listitem",
+            "main", "navigation", "region", "rowheader",
+        ].into_iter().collect()
+    })
+}
+
+/// Structural/container roles — typically skipped in compact mode.
+pub fn structural_roles() -> &'static HashSet<&'static str> {
+    static ROLES: OnceLock<HashSet<&str>> = OnceLock::new();
+    ROLES.get_or_init(|| {
+        [
+            "application", "directory", "document", "generic", "grid", "group",
+            "ignored", "list", "menu", "menubar", "none", "presentation", "row",
+            "rowgroup", "table", "tablist", "toolbar", "tree", "treegrid",
+        ].into_iter().collect()
+    })
 }

@@ -4,13 +4,9 @@ use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::browser::backend::BrowserBackend;
-use crate::browser::chrome_mcp_backend::ChromeMcpBackend;
-use crate::browser::playwright_mcp_backend::PlaywrightMcpBackend;
 use crate::browser::manager::ProfileManager;
-use crate::browser::profile::BrowserDriver;
 use crate::browser::types::ActionTarget;
-use crate::error::Result;
+use crate::error::{AlephError, Result};
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
 
@@ -21,7 +17,9 @@ pub struct BrowserSelectArgs {
     #[serde(default = "crate::builtin_tools::browser_tools::default_profile")]
     pub profile: String,
     /// CSS selector of the dropdown/select element.
-    pub selector: String,
+    pub selector: Option<String>,
+    /// Accessibility ref_id from a previous snapshot.
+    pub ref_id: Option<String>,
     /// Value to select from the dropdown.
     pub value: String,
 }
@@ -48,77 +46,37 @@ impl BrowserSelectTool {
 #[async_trait]
 impl AlephTool for BrowserSelectTool {
     const NAME: &'static str = "browser_select";
-    const DESCRIPTION: &'static str = "Select an option from a dropdown/select element";
+    const DESCRIPTION: &'static str =
+        "Select an option from a dropdown/select element by CSS selector or ref_id";
     type Args = BrowserSelectArgs;
     type Output = BrowserSelectOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
-        self.manager.record_activity(&args.profile);
+        let target = if let Some(ref rid) = args.ref_id {
+            ActionTarget::Ref { ref_id: rid.clone() }
+        } else if let Some(ref css) = args.selector {
+            ActionTarget::Selector { css: css.clone() }
+        } else {
+            return Err(AlephError::invalid_input(
+                "browser_select requires either 'selector' or 'ref_id'",
+            ));
+        };
 
-        let driver = self.manager.get_driver(&args.profile);
-        match driver {
-            Some(BrowserDriver::ExistingSession) => {
-                let chrome_mcp = self.manager.get_chrome_mcp_driver();
-                let backend = ChromeMcpBackend::new(chrome_mcp, args.profile.clone());
-                let tab_id = match super::get_active_tab(&backend).await {
-                    Ok(id) => id,
-                    Err(e) => {
-                        return Ok(BrowserSelectOutput {
-                            success: false,
-                            message: Some(format!("{e}")),
-                        });
-                    }
-                };
-
-                let target = ActionTarget::Selector {
-                    css: args.selector.clone(),
-                };
-
-                match backend.select(&tab_id, target, &args.value).await {
-                    Ok(()) => Ok(BrowserSelectOutput {
-                        success: true,
-                        message: Some(format!(
-                            "Selected '{}' in '{}' in profile '{}'",
-                            args.value, args.selector, args.profile
-                        )),
-                    }),
-                    Err(e) => Ok(BrowserSelectOutput {
-                        success: false,
-                        message: Some(format!("Select failed: {e}")),
-                    }),
-                }
-            }
-            Some(BrowserDriver::Managed) | None => {
-                let playwright = self.manager.get_playwright_mcp_driver();
-                let backend = PlaywrightMcpBackend::new(playwright, args.profile.clone());
-                let tab_id = match super::get_active_tab(&backend).await {
-                    Ok(id) => id,
-                    Err(e) => {
-                        return Ok(BrowserSelectOutput {
-                            success: false,
-                            message: Some(format!("{e}")),
-                        });
-                    }
-                };
-
-                let target = ActionTarget::Selector {
-                    css: args.selector.clone(),
-                };
-
-                match backend.select(&tab_id, target, &args.value).await {
-                    Ok(()) => Ok(BrowserSelectOutput {
-                        success: true,
-                        message: Some(format!(
-                            "Selected '{}' in '{}' in profile '{}' (headless)",
-                            args.value, args.selector, args.profile
-                        )),
-                    }),
-                    Err(e) => Ok(BrowserSelectOutput {
-                        success: false,
-                        message: Some(format!("Select failed: {e}")),
-                    }),
-                }
-            }
+        match super::make_backend_and_tab(&self.manager, &args.profile).await {
+            Ok((backend, tab_id)) => match backend.select(&tab_id, target, &args.value).await {
+                Ok(()) => Ok(BrowserSelectOutput {
+                    success: true,
+                    message: Some(format!("Selected '{}'", args.value)),
+                }),
+                Err(e) => Ok(BrowserSelectOutput {
+                    success: false,
+                    message: Some(format!("Select failed: {e}")),
+                }),
+            },
+            Err(e) => Ok(BrowserSelectOutput {
+                success: false,
+                message: Some(format!("{e}")),
+            }),
         }
     }
 }
@@ -129,7 +87,7 @@ mod tests {
     use crate::browser::profile::BrowserSystemConfig;
 
     #[tokio::test]
-    async fn test_select_option() {
+    async fn test_select_with_selector() {
         let config = BrowserSystemConfig::default();
         let manager = Arc::new(ProfileManager::new(config));
         let tool = BrowserSelectTool::new(manager);
@@ -137,14 +95,50 @@ mod tests {
         let result = tool
             .call(BrowserSelectArgs {
                 profile: "default".into(),
-                selector: "select#country".into(),
+                selector: Some("select#country".into()),
+                ref_id: None,
                 value: "us".into(),
             })
             .await
             .unwrap();
 
-        // Without a running browser, tools degrade gracefully
-        assert!(!result.success);
-        assert!(result.message.is_some()); // Error message present
+        assert!(!result.success); // No browser running
+    }
+
+    #[tokio::test]
+    async fn test_select_with_ref_id() {
+        let config = BrowserSystemConfig::default();
+        let manager = Arc::new(ProfileManager::new(config));
+        let tool = BrowserSelectTool::new(manager);
+
+        let result = tool
+            .call(BrowserSelectArgs {
+                profile: "default".into(),
+                selector: None,
+                ref_id: Some("combobox[0]".into()),
+                value: "us".into(),
+            })
+            .await
+            .unwrap();
+
+        assert!(!result.success); // No browser running
+    }
+
+    #[tokio::test]
+    async fn test_select_no_target_fails() {
+        let config = BrowserSystemConfig::default();
+        let manager = Arc::new(ProfileManager::new(config));
+        let tool = BrowserSelectTool::new(manager);
+
+        let result = tool
+            .call(BrowserSelectArgs {
+                profile: "default".into(),
+                selector: None,
+                ref_id: None,
+                value: "us".into(),
+            })
+            .await;
+
+        assert!(result.is_err());
     }
 }

@@ -4,11 +4,7 @@ use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::browser::backend::BrowserBackend;
-use crate::browser::chrome_mcp_backend::ChromeMcpBackend;
-use crate::browser::playwright_mcp_backend::PlaywrightMcpBackend;
 use crate::browser::manager::ProfileManager;
-use crate::browser::profile::BrowserDriver;
 use crate::error::Result;
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
@@ -46,12 +42,12 @@ impl BrowserOpenTool {
 #[async_trait]
 impl AlephTool for BrowserOpenTool {
     const NAME: &'static str = "browser_open";
-    const DESCRIPTION: &'static str = "Open a URL in a browser (headless by default, use profile=\"user\" for visible Chrome). This is the primary tool for visiting web pages — do NOT use the desktop tool to open browsers.";
+    const DESCRIPTION: &'static str = "Open a URL in a headless browser. Default profile is fast and invisible. Only use profile=\"user\" when the user explicitly asks to use their Chrome browser with logged-in sessions.";
     type Args = BrowserOpenArgs;
     type Output = BrowserOpenOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
-        // SSRF check
+        // SSRF check before creating backend
         if let Err(violation) = self.manager.check_url(&args.url) {
             return Ok(BrowserOpenOutput {
                 success: false,
@@ -60,46 +56,18 @@ impl AlephTool for BrowserOpenTool {
             });
         }
 
-        self.manager.record_activity(&args.profile);
-
-        let driver = self.manager.get_driver(&args.profile);
-        tracing::debug!(profile = %args.profile, driver = ?driver, "browser_open: driver selected");
-        match driver {
-            Some(BrowserDriver::ExistingSession) => {
-                let chrome_mcp = self.manager.get_chrome_mcp_driver();
-                let backend = ChromeMcpBackend::new(chrome_mcp, args.profile.clone());
-                match backend.open_tab(&args.url).await {
-                    Ok(tab_id) => Ok(BrowserOpenOutput {
-                        success: true,
-                        tab_id: Some(tab_id),
-                        message: Some(format!("Opened {} in profile '{}'", args.url, args.profile)),
-                    }),
-                    Err(e) => Ok(BrowserOpenOutput {
-                        success: false,
-                        tab_id: None,
-                        message: Some(format!("Failed to open tab: {e}")),
-                    }),
-                }
-            }
-            Some(BrowserDriver::Managed) | None => {
-                let playwright = self.manager.get_playwright_mcp_driver();
-                let backend = PlaywrightMcpBackend::new(playwright, args.profile.clone());
-                match backend.open_tab(&args.url).await {
-                    Ok(tab_id) => Ok(BrowserOpenOutput {
-                        success: true,
-                        tab_id: Some(tab_id),
-                        message: Some(format!(
-                            "Opened {} in profile '{}' (headless)",
-                            args.url, args.profile
-                        )),
-                    }),
-                    Err(e) => Ok(BrowserOpenOutput {
-                        success: false,
-                        tab_id: None,
-                        message: Some(format!("Failed to open tab: {e}")),
-                    }),
-                }
-            }
+        let backend = super::make_backend(&self.manager, &args.profile);
+        match backend.open_tab(&args.url).await {
+            Ok(tab_id) => Ok(BrowserOpenOutput {
+                success: true,
+                tab_id: Some(tab_id),
+                message: Some(format!("Opened {} in profile '{}'", args.url, args.profile)),
+            }),
+            Err(e) => Ok(BrowserOpenOutput {
+                success: false,
+                tab_id: None,
+                message: Some(format!("Failed to open tab: {e}")),
+            }),
         }
     }
 }
@@ -204,7 +172,7 @@ mod tests {
             .unwrap();
         // Without a running browser, tools degrade gracefully
         assert!(!result.success);
-        assert!(result.message.is_some()); // Error message present
+        assert!(result.message.is_some());
     }
 
     #[tokio::test]
@@ -231,7 +199,7 @@ mod tests {
             .unwrap();
         // Without a running browser, tools degrade gracefully
         assert!(!result.success);
-        assert!(result.message.is_some()); // Error message present
+        assert!(result.message.is_some());
 
         // Should block non-allowed domain
         let result = tool
@@ -261,6 +229,6 @@ mod tests {
 
         // Without a running browser, tools degrade gracefully
         assert!(!result.success);
-        assert!(result.message.is_some()); // Error message present
+        assert!(result.message.is_some());
     }
 }

@@ -49,6 +49,7 @@ pub mod agent;
 pub mod agent_config;
 pub mod agents;
 pub mod general_config;
+pub mod browser_config;
 pub mod behavior_config;
 pub mod generation_config;
 pub mod search_config;

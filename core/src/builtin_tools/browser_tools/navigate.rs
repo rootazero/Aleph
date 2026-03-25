@@ -4,11 +4,7 @@ use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::browser::backend::BrowserBackend;
-use crate::browser::chrome_mcp_backend::ChromeMcpBackend;
-use crate::browser::playwright_mcp_backend::PlaywrightMcpBackend;
 use crate::browser::manager::ProfileManager;
-use crate::browser::profile::BrowserDriver;
 use crate::error::Result;
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
@@ -63,82 +59,26 @@ impl AlephTool for BrowserNavigateTool {
     type Output = BrowserNavigateOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
-        self.manager.record_activity(&args.profile);
-
-        let action_desc = match args.action {
-            NavigateAction::Back => "back",
-            NavigateAction::Forward => "forward",
-            NavigateAction::Refresh => "refresh",
+        let js = match args.action {
+            NavigateAction::Back => "history.back()",
+            NavigateAction::Forward => "history.forward()",
+            NavigateAction::Refresh => "location.reload()",
         };
-
-        let driver = self.manager.get_driver(&args.profile);
-        match driver {
-            Some(BrowserDriver::ExistingSession) => {
-                let chrome_mcp = self.manager.get_chrome_mcp_driver();
-                let backend = ChromeMcpBackend::new(chrome_mcp, args.profile.clone());
-                let tab_id = match super::get_active_tab(&backend).await {
-                    Ok(id) => id,
-                    Err(e) => {
-                        return Ok(BrowserNavigateOutput {
-                            success: false,
-                            message: Some(format!("{e}")),
-                        });
-                    }
-                };
-
-                let js = match args.action {
-                    NavigateAction::Back => "history.back()",
-                    NavigateAction::Forward => "history.forward()",
-                    NavigateAction::Refresh => "location.reload()",
-                };
-
-                match backend.evaluate(&tab_id, js).await {
-                    Ok(_) => Ok(BrowserNavigateOutput {
-                        success: true,
-                        message: Some(format!(
-                            "Navigated {} in profile '{}'",
-                            action_desc, args.profile
-                        )),
-                    }),
-                    Err(e) => Ok(BrowserNavigateOutput {
-                        success: false,
-                        message: Some(format!("Navigation failed: {e}")),
-                    }),
-                }
-            }
-            Some(BrowserDriver::Managed) | None => {
-                let playwright = self.manager.get_playwright_mcp_driver();
-                let backend = PlaywrightMcpBackend::new(playwright, args.profile.clone());
-                let tab_id = match super::get_active_tab(&backend).await {
-                    Ok(id) => id,
-                    Err(e) => {
-                        return Ok(BrowserNavigateOutput {
-                            success: false,
-                            message: Some(format!("{e}")),
-                        });
-                    }
-                };
-
-                let js = match args.action {
-                    NavigateAction::Back => "history.back()",
-                    NavigateAction::Forward => "history.forward()",
-                    NavigateAction::Refresh => "location.reload()",
-                };
-
-                match backend.evaluate(&tab_id, js).await {
-                    Ok(_) => Ok(BrowserNavigateOutput {
-                        success: true,
-                        message: Some(format!(
-                            "Navigated {} in profile '{}' (headless)",
-                            action_desc, args.profile
-                        )),
-                    }),
-                    Err(e) => Ok(BrowserNavigateOutput {
-                        success: false,
-                        message: Some(format!("Navigation failed: {e}")),
-                    }),
-                }
-            }
+        match super::make_backend_and_tab(&self.manager, &args.profile).await {
+            Ok((backend, tab_id)) => match backend.evaluate(&tab_id, js).await {
+                Ok(_) => Ok(BrowserNavigateOutput {
+                    success: true,
+                    message: Some(format!("Navigated {:?} in profile '{}'", args.action, args.profile)),
+                }),
+                Err(e) => Ok(BrowserNavigateOutput {
+                    success: false,
+                    message: Some(format!("Navigation failed: {e}")),
+                }),
+            },
+            Err(e) => Ok(BrowserNavigateOutput {
+                success: false,
+                message: Some(format!("{e}")),
+            }),
         }
     }
 }
@@ -164,7 +104,7 @@ mod tests {
 
         // Without a running browser, tools degrade gracefully
         assert!(!result.success);
-        assert!(result.message.is_some()); // Error message present
+        assert!(result.message.is_some());
     }
 
     #[tokio::test]
@@ -183,7 +123,7 @@ mod tests {
 
         // Without a running browser, tools degrade gracefully
         assert!(!result.success);
-        assert!(result.message.is_some()); // Error message present
+        assert!(result.message.is_some());
     }
 
     #[tokio::test]
@@ -202,6 +142,6 @@ mod tests {
 
         // Without a running browser, tools degrade gracefully
         assert!(!result.success);
-        assert!(result.message.is_some()); // Error message present
+        assert!(result.message.is_some());
     }
 }

@@ -18,7 +18,6 @@ use crate::mcp::{ExternalServerConfig, McpClient};
 /// A running Chrome DevTools MCP session.
 struct ChromeMcpSession {
     client: McpClient,
-    pid: u32,
 }
 
 /// Manages Chrome DevTools MCP sessions with lazy creation and profile-keyed caching.
@@ -83,13 +82,11 @@ impl ChromeMcpDriver {
 
     /// Ensure a session exists for the given profile, creating one if needed.
     async fn ensure_session(&self, profile_name: &str) -> Result<(), BrowserError> {
-        // Fast path: check if session already exists and is alive
+        // Fast path: check if session already exists
         {
             let sessions = self.sessions.read().await;
-            if let Some(session) = sessions.get(profile_name) {
-                if Self::is_process_alive(session.pid) {
-                    return Ok(());
-                }
+            if sessions.contains_key(profile_name) {
+                return Ok(());
             }
         }
 
@@ -97,11 +94,8 @@ impl ChromeMcpDriver {
         let mut sessions = self.sessions.write().await;
 
         // Double-check after acquiring write lock
-        if let Some(session) = sessions.get(profile_name) {
-            if Self::is_process_alive(session.pid) {
-                return Ok(());
-            }
-            sessions.remove(profile_name);
+        if sessions.contains_key(profile_name) {
+            return Ok(());
         }
 
         let session = self.create_session(profile_name).await?;
@@ -133,7 +127,7 @@ impl ChromeMcpDriver {
                      Any local process can access browser data (cookies, passwords) via the debug port. \
                      This is Chrome's standard debugging interface (same as DevTools)."
                 );
-                Ok(ChromeMcpSession { client, pid: 0 })
+                Ok(ChromeMcpSession { client })
             }
             Err(e) => {
                 tracing::info!(
@@ -164,7 +158,6 @@ impl ChromeMcpDriver {
 
                 Ok(ChromeMcpSession {
                     client: retry_client,
-                    pid: 0,
                 })
             }
         }
@@ -198,23 +191,6 @@ impl ChromeMcpDriver {
 
         tokio::time::sleep(Duration::from_secs(2)).await;
         Ok(())
-    }
-
-    /// Check if a chrome-devtools-mcp process is still alive by PID.
-    fn is_process_alive(pid: u32) -> bool {
-        if pid == 0 {
-            return true; // PID not tracked, assume alive
-        }
-        #[cfg(unix)]
-        {
-            // SAFETY: kill(pid, 0) only checks process existence, sends no signal.
-            // pid as i32 is safe because valid PIDs fit in i32 on all Unix platforms.
-            unsafe { libc::kill(pid as i32, 0) == 0 }
-        }
-        #[cfg(not(unix))]
-        {
-            true
-        }
     }
 
     /// Check if a Chrome browser process is running on the system.
@@ -267,23 +243,6 @@ mod tests {
         let driver = ChromeMcpDriver::new(config);
         let sessions = driver.sessions.try_read().unwrap();
         assert!(sessions.is_empty());
-    }
-
-    #[test]
-    fn test_is_process_alive_zero_pid() {
-        assert!(ChromeMcpDriver::is_process_alive(0));
-    }
-
-    #[test]
-    fn test_is_process_alive_current_process() {
-        let pid = std::process::id();
-        assert!(ChromeMcpDriver::is_process_alive(pid));
-    }
-
-    #[test]
-    fn test_is_process_alive_dead_pid() {
-        #[cfg(unix)]
-        assert!(!ChromeMcpDriver::is_process_alive(999999));
     }
 }
 
