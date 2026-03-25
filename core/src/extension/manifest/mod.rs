@@ -33,6 +33,7 @@ mod auto_discover;
 pub mod cc_plugin_json;
 pub mod cc_plugin_toml;
 mod package_json;
+pub mod parsers;
 mod types;
 
 pub use aleph_plugin::{

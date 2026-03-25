@@ -302,6 +302,77 @@ pub async fn parse_cc_plugin_toml(dir: &Path) -> ExtensionResult<PluginManifest>
 }
 
 // =============================================================================
+// ManifestAdapter implementation
+// =============================================================================
+
+use super::adapter::{AdapterOutput, ManifestAdapter};
+use super::parsers;
+use crate::extension::capability::{CapabilitySource, SourceFormat};
+use crate::extension::types::PluginOrigin;
+
+/// ManifestAdapter for `.claude-plugin/plugin.toml` format.
+///
+/// Priority 100 (highest among CC adapters) — TOML is preferred over JSON.
+pub struct ClaudeCodeTomlAdapter;
+
+impl ManifestAdapter for ClaudeCodeTomlAdapter {
+    fn detect(&self, plugin_dir: &Path) -> bool {
+        plugin_dir.join(CC_PLUGIN_TOML).exists()
+    }
+
+    fn parse(&self, plugin_dir: &Path) -> anyhow::Result<AdapterOutput> {
+        let manifest = parse_cc_plugin_toml_sync(plugin_dir)
+            .map_err(|e| anyhow::anyhow!("CC TOML parse error: {}", e))?;
+
+        let plugin_id = manifest.id.clone();
+        let mut capabilities = Vec::new();
+
+        // Read component paths from the raw TOML to get skills/agents/hooks/mcp paths
+        let toml_path = plugin_dir.join(CC_PLUGIN_TOML);
+        let content = std::fs::read_to_string(&toml_path)?;
+        let raw: CcPluginToml = toml::from_str(&content)
+            .map_err(|e| anyhow::anyhow!("TOML re-parse error: {}", e))?;
+
+        // Parse skills
+        let skills_rel = raw.skills.as_deref().unwrap_or("skills");
+        capabilities.extend(parsers::parse_skills_dir(plugin_dir, skills_rel, &plugin_id)?);
+
+        // Parse agents
+        let agents_rel = raw.agents.as_deref().unwrap_or("agents");
+        capabilities.extend(parsers::parse_agents_dir(plugin_dir, agents_rel, &plugin_id)?);
+
+        // Parse hooks
+        let hooks_rel = raw.hooks.as_deref().unwrap_or("hooks/hooks.json");
+        capabilities.extend(parsers::parse_hooks_file(plugin_dir, hooks_rel, &plugin_id)?);
+
+        // Parse MCP servers
+        let mcp_rel = raw.mcp_servers.as_deref().unwrap_or(".mcp.json");
+        capabilities.extend(parsers::parse_mcp_config_file(plugin_dir, mcp_rel, &plugin_id)?);
+
+        Ok(AdapterOutput {
+            plugin_id: plugin_id.clone(),
+            name: Some(manifest.name),
+            version: manifest.version,
+            description: manifest.description,
+            capabilities,
+            source: CapabilitySource {
+                plugin_id,
+                origin: PluginOrigin::Global,
+                format: SourceFormat::ClaudeCode,
+            },
+        })
+    }
+
+    fn format_name(&self) -> &str {
+        "Claude Code (TOML)"
+    }
+
+    fn priority(&self) -> i32 {
+        100
+    }
+}
+
+// =============================================================================
 // Tests
 // =============================================================================
 
