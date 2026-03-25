@@ -37,6 +37,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         request: &RunRequest,
         agent: Arc<AgentInstance>,
         emitter: Arc<E>,
+        deadline: Arc<tokio::sync::Mutex<tokio::time::Instant>>,
     ) -> Result<String, ExecutionError> {
         use crate::agent_loop::{
             AgentLoop, PromptBuilder, SafetyGuard, LoopConfig,
@@ -184,6 +185,8 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         .with_tool_compactor_config(tool_compactor_config);
 
         // Load conversation history from session (for multi-turn context)
+        // Compression time excluded from agent's timeout budget
+        let before_compress = tokio::time::Instant::now();
         let mut history = if let Some(ref sc) = self.session_compactor {
             sc.prepare_history(
                 &agent,
@@ -195,6 +198,10 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         } else {
             build_loop_history(&agent, &request.session_key, &request.input).await
         };
+        let compress_elapsed = before_compress.elapsed();
+        if !compress_elapsed.is_zero() {
+            *deadline.lock().await += compress_elapsed;
+        }
 
         // Create a streaming callback that emits events.
         // streaming_active = true: DeltaSink handles real-time token delivery;
