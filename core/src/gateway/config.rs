@@ -231,6 +231,7 @@ impl AgentConfig {
                 .join(format!(".aleph/agents/{}", agent_id)),
             allowed_links: None,
             tool_permissions: None,
+            timeout_secs: None,
         }
     }
 }

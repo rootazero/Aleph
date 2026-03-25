@@ -348,6 +348,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         let active_runs = self.active_runs.clone();
         let timeout_secs = request
             .timeout_secs
+            .or(agent.config().timeout_secs())
             .unwrap_or(self.config.default_timeout_secs);
 
         let result = tokio::select! {
