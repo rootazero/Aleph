@@ -17,10 +17,10 @@
 //!          │                   │                   │
 //!          └───────────────────┼───────────────────┘
 //!                              │
-//!          ┌───────────────────┴───────────────────┐
-//!          ▼                                       ▼
-//!     HookExecutor                        LegacyLoader
-//!     (unified hooks)                  (Markdown parsing)
+//!                              │
+//!                              ▼
+//!                        HookExecutor
+//!                       (unified hooks)
 //! ```
 
 pub mod component_id;
@@ -40,7 +40,6 @@ pub mod registrar;
 mod channel_manager;
 mod error;
 mod http_handler;
-mod legacy_loader;
 pub mod mcp_config;
 pub mod manifest;
 mod plugin_ops;
