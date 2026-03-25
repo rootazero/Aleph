@@ -155,7 +155,7 @@ impl PermissionCapability for MacOSPermission {
 check: CGPreflightScreenCaptureAccess() → true=Granted, false=NotDetermined/Denied
 request: CGRequestScreenCaptureAccess() → opens System Settings, re-check status
 ```
-Note: `CGPreflightScreenCaptureAccess` cannot distinguish NotDetermined from Denied. Both return `false`. After `CGRequestScreenCaptureAccess` is called once, subsequent `false` means Denied.
+Note: `CGPreflightScreenCaptureAccess` cannot distinguish NotDetermined from Denied. Both return `false`. **Decision:** map `false` to `NotDetermined` as the conservative default — this sets `can_request: true`, encouraging the LLM to try requesting. After the user explicitly denies in System Settings, the next `request()` call will open System Settings again (harmless). No internal state tracking needed.
 
 #### Camera / Microphone (objc2-av-foundation + block2)
 ```
@@ -187,7 +187,7 @@ check: UNUserNotificationCenter.getNotificationSettings() → block with UNNotif
   → .authorizationStatus: .authorized=Granted, .denied=Denied, .notDetermined=NotDetermined
 request: UNUserNotificationCenter.requestAuthorization(options: [.alert, .sound]) → block with (Bool, Error?)
 ```
-Note: Requires bundle ID. If no bundle ID, return Unknown status (graceful degradation).
+Note: Requires bundle ID. **Detection strategy:** Before calling any UNUserNotificationCenter API, check `NSBundle::mainBundle().bundleIdentifier()`. If `None` (CLI mode without .app bundle), skip the UNCenter call entirely and return `PermissionInfo { status: Unknown, can_request: false }` with no error. This avoids cryptic ObjC failures. When Aleph ships as a bundled .app, the check will automatically start working.
 
 ### block2 Usage Pattern
 
@@ -201,7 +201,9 @@ let block = RcBlock::new(move |granted: Bool| {
     let _ = tx.send(granted.as_bool());
 });
 // Call the API with &block
-// Wait: rx.recv() or rx.recv_timeout()
+// Wait with timeout to prevent permanent thread hang if callback never fires
+let result = rx.recv_timeout(Duration::from_secs(10))
+    .map_err(|_| DesktopError::NotAvailable("permission request timed out".into()))?;
 ```
 
 This converts async ObjC callbacks to synchronous Rust, then wrapped in `spawn_blocking`.
@@ -277,7 +279,7 @@ objc2-speech = { version = "0.3", features = [
 ] }
 ```
 
-Note: `objc2-user-notifications` already present. `core-graphics` already available via desktop crate for CGPreflight/CGRequest FFI.
+Note: `objc2-user-notifications` already present but needs additional feature `UNNotificationSettings` for `getNotificationSettings()`. Also needs `block2` feature for completion handlers. `core-graphics` already available via desktop crate for CGPreflight/CGRequest FFI.
 
 ### C FFI declarations needed
 
