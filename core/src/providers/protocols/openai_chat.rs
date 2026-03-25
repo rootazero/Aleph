@@ -362,8 +362,9 @@ impl ProtocolAdapter for OpenAiProtocol {
         /// Per-iteration mutable state carried through unfold
         struct State {
             bytes: futures::stream::BoxStream<'static, Result<axum::body::Bytes>>,
-            /// Incomplete SSE line buffer (handles chunk boundaries)
-            line_buf: String,
+            /// Incomplete SSE byte buffer (bytes, not String — HTTP chunks may
+            /// split multi-byte UTF-8 characters at arbitrary boundaries)
+            line_buf: Vec<u8>,
             /// Maps tool call stream index → call id (from first chunk with `id` field)
             index_tracker: IndexIdTracker,
             /// Pending deltas queued from multi-delta events (e.g. finish_reason chunk)
@@ -374,7 +375,7 @@ impl ProtocolAdapter for OpenAiProtocol {
 
         let state = State {
             bytes: byte_stream,
-            line_buf: String::new(),
+            line_buf: Vec::new(),
             index_tracker: IndexIdTracker::new(),
             pending: VecDeque::new(),
             done: false,
@@ -391,10 +392,16 @@ impl ProtocolAdapter for OpenAiProtocol {
                     return None;
                 }
 
-                // Try to parse a complete SSE line from the buffer
-                if let Some(pos) = state.line_buf.find('\n') {
-                    let line = state.line_buf[..pos].trim_end().to_string();
+                // Try to parse a complete SSE line from the byte buffer.
+                // Complete lines (up to \n) are safe to decode as UTF-8 since
+                // SSE data lines are always complete JSON terminated by newline.
+                if let Some(pos) = state.line_buf.iter().position(|&b| b == b'\n') {
+                    let line_bytes = state.line_buf[..pos].to_vec();
                     state.line_buf.drain(..=pos);
+
+                    let line = String::from_utf8(line_bytes)
+                        .unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned());
+                    let line = line.trim_end();
 
                     if let Some(data) = line.strip_prefix("data: ") {
                         if data != "[DONE]" {
@@ -419,8 +426,9 @@ impl ProtocolAdapter for OpenAiProtocol {
                 match state.bytes.next().await {
                     None => {
                         // HTTP stream ended — flush any remaining partial line
-                        let remaining = state.line_buf.trim().to_string();
-                        state.line_buf.clear();
+                        let remaining = String::from_utf8(std::mem::take(&mut state.line_buf))
+                            .unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned());
+                        let remaining = remaining.trim();
                         if !remaining.is_empty() {
                             if let Some(data) = remaining.strip_prefix("data: ") {
                                 if data != "[DONE]" {
@@ -443,16 +451,9 @@ impl ProtocolAdapter for OpenAiProtocol {
                         return Some((Err(e), state));
                     }
                     Some(Ok(chunk)) => {
-                        match std::str::from_utf8(&chunk) {
-                            Ok(text) => state.line_buf.push_str(text),
-                            Err(e) => {
-                                state.done = true;
-                                return Some((
-                                    Err(AlephError::provider(format!("UTF-8 error: {}", e))),
-                                    state,
-                                ));
-                            }
-                        }
+                        // Append raw bytes — no UTF-8 conversion here.
+                        // Conversion happens per-line when a \n is found.
+                        state.line_buf.extend_from_slice(&chunk);
                         // Loop to try parsing again with the new data
                     }
                 }
