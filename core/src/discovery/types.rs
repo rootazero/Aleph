@@ -4,9 +4,10 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 /// Source of a discovered component
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 pub enum DiscoverySource {
     /// Aleph native global (~/.aleph/)
+    #[default]
     AlephGlobal,
     /// Claude Code global (~/.claude/)
     ClaudeGlobal,

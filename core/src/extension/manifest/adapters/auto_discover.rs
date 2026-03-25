@@ -38,8 +38,9 @@ impl ManifestAdapter for AutoDiscoverAdapter {
                 caps.extend(s);
             }
         }
+        // Commands are merged into skills following OpenClaw convention
         if dir.join("commands").is_dir() {
-            if let Ok(c) = parsers::parse_commands_dir(dir, "commands", &plugin_id) {
+            if let Ok(c) = parsers::parse_skills_dir(dir, "commands", &plugin_id) {
                 caps.extend(c);
             }
         }
@@ -74,6 +75,7 @@ impl ManifestAdapter for AutoDiscoverAdapter {
                 origin: PluginOrigin::Global,
                 format: SourceFormat::AutoDiscovered,
             },
+            permissions: vec![],
         })
     }
 

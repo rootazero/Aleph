@@ -62,7 +62,33 @@ impl ManifestAdapter for CodexAdapter {
                 allowed_tools: vec![],
                 category: Some("instructions".to_string()),
                 plugin_id: plugin_id.clone(),
+                ..Default::default()
             }));
+        }
+
+        // Scan default directories when manifest fields are absent
+        if json.get("skills").is_none() && dir.join("skills").is_dir() {
+            if let Ok(skills) = parsers::parse_skills_dir(dir, "skills", &plugin_id) {
+                caps.extend(skills);
+            }
+        }
+        if json.get("hooks").is_none() {
+            let hooks_json = dir.join("hooks").join("hooks.json");
+            if hooks_json.exists() {
+                if let Ok(hooks) = parsers::parse_hooks_file(dir, "hooks/hooks.json", &plugin_id) {
+                    caps.extend(hooks);
+                }
+            }
+        }
+        if json.get("mcpServers").is_none() && dir.join(".mcp.json").exists() {
+            if let Ok(mcp) = parsers::parse_mcp_config_file(dir, ".mcp.json", &plugin_id) {
+                caps.extend(mcp);
+            }
+        }
+
+        // Handle Codex `apps` field: log and add metadata note
+        if let Some(apps) = json.get("apps") {
+            tracing::debug!(plugin_id = %plugin_id, "Codex plugin has 'apps' field: {:?}", apps);
         }
 
         Ok(AdapterOutput {
@@ -78,13 +104,20 @@ impl ManifestAdapter for CodexAdapter {
             description: json
                 .get("description")
                 .and_then(|v| v.as_str())
-                .map(String::from),
+                .map(|d| {
+                    if json.get("apps").is_some() {
+                        format!("{} [has Codex apps]", d)
+                    } else {
+                        d.to_string()
+                    }
+                }),
             capabilities: caps,
             source: CapabilitySource {
                 plugin_id,
                 origin: PluginOrigin::Global,
                 format: SourceFormat::Codex,
             },
+            permissions: vec![],
         })
     }
 

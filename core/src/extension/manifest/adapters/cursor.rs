@@ -56,8 +56,9 @@ impl ManifestAdapter for CursorAdapter {
                         caps.extend(s);
                     }
                 }
+                // Commands are merged into skills following OpenClaw convention
                 if let Some(commands) = json.get("commands").and_then(|v| v.as_str()) {
-                    if let Ok(c) = parsers::parse_commands_dir(dir, commands, &plugin_id) {
+                    if let Ok(c) = parsers::parse_skills_dir(dir, commands, &plugin_id) {
                         caps.extend(c);
                     }
                 }
@@ -86,6 +87,37 @@ impl ManifestAdapter for CursorAdapter {
             }
         }
 
+        // Scan default directories when not specified in manifest
+        if dir.join("skills").is_dir() {
+            if let Ok(s) = parsers::parse_skills_dir(dir, "skills", &plugin_id) {
+                caps.extend(s);
+            }
+        }
+        // .cursor/commands/ → skills (commands as skills)
+        if dir.join(".cursor/commands").is_dir() {
+            if let Ok(s) = parsers::parse_skills_dir(dir, ".cursor/commands", &plugin_id) {
+                caps.extend(s);
+            }
+        }
+        // .cursor/agents/ → agents
+        if dir.join(".cursor/agents").is_dir() {
+            if let Ok(a) = parsers::parse_agents_dir(dir, ".cursor/agents", &plugin_id) {
+                caps.extend(a);
+            }
+        }
+        // .cursor/hooks.json → hooks
+        if dir.join(".cursor/hooks.json").exists() {
+            if let Ok(h) = parsers::parse_hooks_file(dir, ".cursor/hooks.json", &plugin_id) {
+                caps.extend(h);
+            }
+        }
+        // .mcp.json → MCP servers
+        if dir.join(".mcp.json").exists() {
+            if let Ok(m) = parsers::parse_mcp_config_file(dir, ".mcp.json", &plugin_id) {
+                caps.extend(m);
+            }
+        }
+
         // .cursorrules file → single skill
         let cursorrules_path = dir.join(".cursorrules");
         if cursorrules_path.exists() {
@@ -98,6 +130,7 @@ impl ManifestAdapter for CursorAdapter {
                     allowed_tools: vec![],
                     category: Some("rules".to_string()),
                     plugin_id: plugin_id.clone(),
+                    ..Default::default()
                 }));
             }
         }
@@ -124,6 +157,7 @@ impl ManifestAdapter for CursorAdapter {
                                 allowed_tools: vec![],
                                 category: Some("rules".to_string()),
                                 plugin_id: plugin_id.clone(),
+                                ..Default::default()
                             }));
                         }
                     }
@@ -142,6 +176,7 @@ impl ManifestAdapter for CursorAdapter {
                 origin: PluginOrigin::Global,
                 format: SourceFormat::Cursor,
             },
+            permissions: vec![],
         })
     }
 

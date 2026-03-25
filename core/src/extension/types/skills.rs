@@ -101,92 +101,20 @@ impl DirectCommandResult {
 // =============================================================================
 
 /// Skill type (command vs skill)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 pub enum SkillType {
     /// Command (from commands/ directory) - user-triggered via /command
     Command,
     /// Skill (from skills/ directory) - can be auto-invoked by LLM
+    #[default]
     Skill,
 }
 
-/// Extension skill definition
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ExtensionSkill {
-    /// Skill name (from directory name or frontmatter)
-    pub name: String,
-
-    /// Plugin name (if from a plugin)
-    pub plugin_name: Option<String>,
-
-    /// Skill type
-    pub skill_type: SkillType,
-
-    /// Description (from frontmatter)
-    pub description: String,
-
-    /// Skill content (markdown body after frontmatter)
-    pub content: String,
-
-    /// Whether to disable automatic model invocation
-    pub disable_model_invocation: bool,
-
-    /// V2: Prompt injection scope
-    #[serde(default)]
-    pub scope: PromptScope,
-
-    /// V2: Bound tool name (for Tool scope)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub bound_tool: Option<String>,
-
-    /// Source path
-    pub source_path: PathBuf,
-
-    /// Discovery source
-    pub source: DiscoverySource,
-}
-
-impl ExtensionSkill {
-    /// Get the fully qualified name (plugin:skill or just skill)
-    pub fn qualified_name(&self) -> String {
-        match &self.plugin_name {
-            Some(plugin) => format!("{}:{}", plugin, self.name),
-            None => self.name.clone(),
-        }
-    }
-
-    /// Check if this skill can be auto-invoked by the model
-    pub fn is_auto_invocable(&self) -> bool {
-        !self.disable_model_invocation && self.skill_type == SkillType::Skill
-    }
-
-    /// Substitute $ARGUMENTS placeholder
-    pub fn with_arguments(&self, arguments: &str) -> String {
-        self.content.replace("$ARGUMENTS", arguments)
-    }
-
-    /// Convert to SkillInfo for compatibility with ToolRegistry
-    ///
-    /// This allows ExtensionSkill to be registered with the existing
-    /// tool registration system.
-    pub fn to_skill_info(&self) -> crate::skills::SkillInfo {
-        crate::skills::SkillInfo {
-            id: self.qualified_name(),
-            name: self.name.clone(),
-            description: self.description.clone(),
-            triggers: Vec::new(), // ExtensionSkill doesn't track triggers
-            allowed_tools: Vec::new(), // ExtensionSkill doesn't track allowed tools
-            ecosystem: "aleph".to_string(),
-        }
-    }
-
-    /// Get the base directory for this skill (for file references)
-    pub fn base_dir(&self) -> PathBuf {
-        self.source_path
-            .parent()
-            .map(|p| p.to_path_buf())
-            .unwrap_or_else(|| PathBuf::from("."))
-    }
-}
+/// Extension skill definition (unified with SkillRegistration).
+///
+/// This is now a type alias for `SkillRegistration`, which contains all fields
+/// needed for both plugin-registered and filesystem-discovered skills.
+pub type ExtensionSkill = crate::extension::SkillRegistration;
 
 // =============================================================================
 // Command Types (alias for user-triggered skills)

@@ -8,6 +8,7 @@ use std::path::Path;
 use anyhow::{anyhow, Result};
 
 use crate::extension::capability::{CapabilityDeclaration, CapabilitySource};
+use crate::extension::manifest::PluginPermission;
 
 /// Output from a manifest adapter parse operation.
 #[derive(Debug)]
@@ -24,6 +25,8 @@ pub struct AdapterOutput {
     pub capabilities: Vec<CapabilityDeclaration>,
     /// Where this plugin was discovered
     pub source: CapabilitySource,
+    /// Permissions required by this plugin
+    pub permissions: Vec<PluginPermission>,
 }
 
 /// Trait for parsing plugin directories into capability declarations.
@@ -141,6 +144,7 @@ mod tests {
                     origin: PluginOrigin::Global,
                     format: SourceFormat::AlephToml,
                 },
+                permissions: vec![],
             })
         }
 

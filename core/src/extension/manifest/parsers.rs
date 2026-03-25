@@ -150,6 +150,15 @@ pub fn parse_skills_dir(
         return Ok(Vec::new());
     }
 
+    // Security: verify the resolved directory is inside the base path
+    if !is_path_inside(base, &dir) {
+        warn!(
+            "Skills directory {:?} escapes plugin root {:?}, skipping",
+            dir, base
+        );
+        return Ok(Vec::new());
+    }
+
     let mut caps = Vec::new();
     let entries = std::fs::read_dir(&dir)
         .with_context(|| format!("Failed to read skills dir: {}", dir.display()))?;
@@ -214,6 +223,7 @@ fn parse_single_skill(
         allowed_tools: fm.allowed_tools.unwrap_or_default(),
         category: fm.category,
         plugin_id: plugin_id.to_string(),
+        ..Default::default()
     }))
 }
 
@@ -229,6 +239,15 @@ pub fn parse_commands_dir(
 ) -> Result<Vec<CapabilityDeclaration>> {
     let dir = base.join(rel_path);
     if !dir.exists() || !dir.is_dir() {
+        return Ok(Vec::new());
+    }
+
+    // Security: verify the resolved directory is inside the base path
+    if !is_path_inside(base, &dir) {
+        warn!(
+            "Commands directory {:?} escapes plugin root {:?}, skipping",
+            dir, base
+        );
         return Ok(Vec::new());
     }
 
@@ -314,6 +333,15 @@ pub fn parse_agents_dir(
         return Ok(Vec::new());
     }
 
+    // Security: verify the resolved directory is inside the base path
+    if !is_path_inside(base, &dir) {
+        warn!(
+            "Agents directory {:?} escapes plugin root {:?}, skipping",
+            dir, base
+        );
+        return Ok(Vec::new());
+    }
+
     let mut caps = Vec::new();
     let entries = std::fs::read_dir(&dir)
         .with_context(|| format!("Failed to read agents dir: {}", dir.display()))?;
@@ -369,10 +397,11 @@ fn parse_single_agent(
 
     Ok(CapabilityDeclaration::Agent(AgentRegistration {
         name: fm.name.unwrap_or_else(|| default_name.to_string()),
-        description: fm.description.unwrap_or_default(),
+        description: fm.description.map(|d| if d.is_empty() { None } else { Some(d) }).unwrap_or(None),
         content: body,
         model: fm.model,
         plugin_id: plugin_id.to_string(),
+        ..Default::default()
     }))
 }
 
@@ -456,7 +485,7 @@ pub fn parse_mcp_config_file(
     let plugin_root = base.to_string_lossy();
     let mut caps = Vec::new();
 
-    for (_server_name, entry) in config.mcp_servers {
+    for (server_name, entry) in config.mcp_servers {
         let command = substitute_vars(&entry.command, &plugin_root);
         let args: Vec<String> = entry
             .args
@@ -469,6 +498,16 @@ pub fn parse_mcp_config_file(
             .map(|(k, v)| (k.clone(), substitute_vars(v, &plugin_root)))
             .collect();
 
+        // Security: check if command path (when absolute) is inside plugin root
+        let cmd_path = Path::new(&command);
+        if cmd_path.is_absolute() && !is_path_inside(base, cmd_path) {
+            warn!(
+                "MCP server '{}' command {:?} escapes plugin root {:?}, skipping",
+                server_name, command, base
+            );
+            continue;
+        }
+
         caps.push(CapabilityDeclaration::McpServer(McpServerConfig {
             command,
             args,
@@ -480,8 +519,103 @@ pub fn parse_mcp_config_file(
 }
 
 // ============================================================================
+// V2 Prompt parsers (migrated from legacy_loader)
+// ============================================================================
+
+/// Parse a v2 prompt configuration into a `CapabilityDeclaration::Skill`.
+///
+/// Reads the file specified in `prompt_section.file` relative to `base`,
+/// and produces a skill with the appropriate `PromptScope`.
+pub fn parse_v2_prompt(
+    base: &Path,
+    prompt_section: &crate::extension::manifest::PromptSection,
+    plugin_id: &str,
+) -> Result<CapabilityDeclaration> {
+    use crate::extension::types::PromptScope;
+
+    let file_path = base.join(&prompt_section.file);
+    let content = std::fs::read_to_string(&file_path)
+        .with_context(|| format!("Failed to read v2 prompt file: {}", file_path.display()))?;
+
+    let scope = match prompt_section.scope.as_str() {
+        "system" => PromptScope::System,
+        "tool" => PromptScope::Tool,
+        "standalone" => PromptScope::Standalone,
+        "disabled" => PromptScope::Disabled,
+        _ => PromptScope::System,
+    };
+
+    Ok(CapabilityDeclaration::Skill(SkillRegistration {
+        name: format!("{}-prompt", plugin_id),
+        description: format!("V2 prompt for plugin {}", plugin_id),
+        content,
+        scope,
+        plugin_id: plugin_id.to_string(),
+        ..Default::default()
+    }))
+}
+
+/// Parse v2 tool instruction files into `CapabilityDeclaration::Skill` values.
+///
+/// For each tool with an `instruction_file`, reads the file and produces a skill
+/// with `PromptScope::Tool` and `bound_tool` set to the tool name.
+pub fn parse_v2_tool_prompts(
+    base: &Path,
+    tools: &[crate::extension::manifest::ToolSection],
+    plugin_id: &str,
+) -> Result<Vec<CapabilityDeclaration>> {
+    use crate::extension::types::PromptScope;
+
+    let mut caps = Vec::new();
+
+    for tool in tools {
+        let instruction_file = match &tool.instruction_file {
+            Some(f) => f,
+            None => continue,
+        };
+
+        let file_path = base.join(instruction_file);
+        match std::fs::read_to_string(&file_path) {
+            Ok(content) => {
+                caps.push(CapabilityDeclaration::Skill(SkillRegistration {
+                    name: format!("{}-tool-prompt", tool.name),
+                    description: tool
+                        .description
+                        .clone()
+                        .unwrap_or_else(|| format!("Tool prompt for {}", tool.name)),
+                    content,
+                    scope: PromptScope::Tool,
+                    bound_tool: Some(tool.name.clone()),
+                    plugin_id: plugin_id.to_string(),
+                    ..Default::default()
+                }));
+            }
+            Err(e) => {
+                warn!(
+                    "Failed to read tool instruction file {:?} for tool '{}': {}",
+                    file_path, tool.name, e
+                );
+            }
+        }
+    }
+
+    Ok(caps)
+}
+
+// ============================================================================
 // Helpers
 // ============================================================================
+
+/// Fail-closed path containment check.
+///
+/// Returns `true` only if `target` resolves to a path inside `root`.
+/// If either path cannot be canonicalized (e.g., does not exist), returns `false`.
+pub(crate) fn is_path_inside(root: &Path, target: &Path) -> bool {
+    match (root.canonicalize(), target.canonicalize()) {
+        (Ok(root), Ok(target)) => target.starts_with(&root),
+        _ => false,
+    }
+}
 
 /// Check if a path is a hidden entry (starts with '.')
 fn is_hidden(path: &Path) -> bool {
@@ -593,7 +727,7 @@ mod tests {
         match &caps[0] {
             CapabilityDeclaration::Agent(a) => {
                 assert_eq!(a.name, "coder");
-                assert_eq!(a.description, "Coding assistant");
+                assert_eq!(a.description, Some("Coding assistant".to_string()));
                 assert_eq!(a.model, Some("claude-sonnet-4".to_string()));
                 assert_eq!(a.content, "You are a coder.");
             }
@@ -618,7 +752,7 @@ mod tests {
         match &caps[0] {
             CapabilityDeclaration::Agent(a) => {
                 assert_eq!(a.name, "reviewer"); // from directory name
-                assert_eq!(a.description, "Code reviewer");
+                assert_eq!(a.description, Some("Code reviewer".to_string()));
             }
             other => panic!("Expected Agent, got {:?}", other),
         }
@@ -754,5 +888,152 @@ mod tests {
             "/tmp/x"
         );
         assert_eq!(substitute_vars("plain", "/root"), "plain");
+    }
+
+    #[test]
+    fn test_is_path_inside_contained() {
+        let dir = tempdir().unwrap();
+        let child = dir.path().join("subdir");
+        fs::create_dir_all(&child).unwrap();
+
+        assert!(is_path_inside(dir.path(), &child));
+    }
+
+    #[test]
+    fn test_is_path_inside_same_dir() {
+        let dir = tempdir().unwrap();
+        assert!(is_path_inside(dir.path(), dir.path()));
+    }
+
+    #[test]
+    fn test_is_path_inside_outside() {
+        let dir1 = tempdir().unwrap();
+        let dir2 = tempdir().unwrap();
+
+        assert!(!is_path_inside(dir1.path(), dir2.path()));
+    }
+
+    #[test]
+    fn test_is_path_inside_nonexistent() {
+        let dir = tempdir().unwrap();
+        let nonexistent = dir.path().join("does-not-exist");
+
+        // Nonexistent target cannot be canonicalized → false
+        assert!(!is_path_inside(dir.path(), &nonexistent));
+    }
+
+    #[test]
+    fn test_is_path_inside_symlink_escape() {
+        let dir = tempdir().unwrap();
+        let outside = tempdir().unwrap();
+        let link_path = dir.path().join("escape-link");
+
+        // Create symlink pointing outside
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(outside.path(), &link_path).unwrap();
+            assert!(!is_path_inside(dir.path(), &link_path));
+        }
+    }
+
+    #[test]
+    fn test_parse_v2_prompt() {
+        use crate::extension::manifest::PromptSection;
+        use crate::extension::types::PromptScope;
+
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("prompt.md"), "You are a helpful assistant.").unwrap();
+
+        let section = PromptSection {
+            file: "prompt.md".to_string(),
+            scope: "system".to_string(),
+        };
+
+        let cap = parse_v2_prompt(dir.path(), &section, "test-plugin").unwrap();
+        match cap {
+            CapabilityDeclaration::Skill(s) => {
+                assert_eq!(s.name, "test-plugin-prompt");
+                assert_eq!(s.content, "You are a helpful assistant.");
+                assert_eq!(s.scope, PromptScope::System);
+                assert_eq!(s.plugin_id, "test-plugin");
+            }
+            other => panic!("Expected Skill, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_v2_prompt_tool_scope() {
+        use crate::extension::manifest::PromptSection;
+        use crate::extension::types::PromptScope;
+
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("tool-prompt.md"), "Use this tool carefully.").unwrap();
+
+        let section = PromptSection {
+            file: "tool-prompt.md".to_string(),
+            scope: "tool".to_string(),
+        };
+
+        let cap = parse_v2_prompt(dir.path(), &section, "p").unwrap();
+        match cap {
+            CapabilityDeclaration::Skill(s) => {
+                assert_eq!(s.scope, PromptScope::Tool);
+            }
+            other => panic!("Expected Skill, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_v2_prompt_missing_file() {
+        use crate::extension::manifest::PromptSection;
+
+        let dir = tempdir().unwrap();
+        let section = PromptSection {
+            file: "nonexistent.md".to_string(),
+            scope: "system".to_string(),
+        };
+
+        let result = parse_v2_prompt(dir.path(), &section, "p");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_v2_tool_prompts() {
+        use crate::extension::manifest::ToolSection;
+        use crate::extension::types::PromptScope;
+
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("bash-guide.md"), "Be careful with bash.").unwrap();
+
+        let tools = vec![
+            ToolSection {
+                name: "bash".to_string(),
+                description: Some("Bash tool".to_string()),
+                handler: None,
+                instruction_file: Some("bash-guide.md".to_string()),
+                parameters: None,
+            },
+            ToolSection {
+                name: "read".to_string(),
+                description: None,
+                handler: None,
+                instruction_file: None, // no instruction file
+                parameters: None,
+            },
+        ];
+
+        let caps = parse_v2_tool_prompts(dir.path(), &tools, "p").unwrap();
+        assert_eq!(caps.len(), 1);
+
+        match &caps[0] {
+            CapabilityDeclaration::Skill(s) => {
+                assert_eq!(s.name, "bash-tool-prompt");
+                assert_eq!(s.content, "Be careful with bash.");
+                assert_eq!(s.scope, PromptScope::Tool);
+                assert_eq!(s.bound_tool, Some("bash".to_string()));
+                assert_eq!(s.description, "Bash tool");
+            }
+            other => panic!("Expected Skill, got {:?}", other),
+        }
     }
 }

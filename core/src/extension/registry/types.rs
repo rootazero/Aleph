@@ -10,6 +10,8 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
+use std::collections::HashMap;
+use std::path::PathBuf;
 
 /// JSON Schema type alias for tool parameter definitions
 pub type JsonSchema = JsonValue;
@@ -205,38 +207,208 @@ pub struct PluginDiagnostic {
 // Skill & Agent Registration Types (added for capability-driven architecture)
 // ============================================================================
 
-/// Skill registration for plugins to expose prompt-based skills
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Skill registration for plugins to expose prompt-based skills.
+///
+/// This is the unified type for both plugin-registered skills (via `CapabilityApi`)
+/// and filesystem-discovered skills (via legacy loader). `ExtensionSkill` is a type
+/// alias for this struct.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SkillRegistration {
     /// Unique skill name
     pub name: String,
+
+    /// Plugin name (if from a plugin, used for qualified_name)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin_name: Option<String>,
+
+    /// Skill type (command vs skill)
+    #[serde(default)]
+    pub skill_type: crate::extension::types::SkillType,
+
     /// Human-readable description of the skill
     pub description: String,
+
     /// Skill prompt content (Markdown)
     pub content: String,
+
+    /// Whether to disable automatic model invocation
+    #[serde(default)]
+    pub disable_model_invocation: bool,
+
+    /// Prompt injection scope
+    #[serde(default)]
+    pub scope: crate::extension::types::PromptScope,
+
+    /// Bound tool name (for Tool scope)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bound_tool: Option<String>,
+
     /// Trigger phrases that activate this skill
+    #[serde(default)]
     pub triggers: Vec<String>,
+
     /// Tools this skill is allowed to use
+    #[serde(default)]
     pub allowed_tools: Vec<String>,
+
     /// Optional category for grouping
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub category: Option<String>,
-    /// ID of the plugin that registered this skill
+
+    /// Source path on disk (empty for runtime-registered skills)
+    #[serde(default)]
+    pub source_path: PathBuf,
+
+    /// Discovery source
+    #[serde(default)]
+    pub source: crate::discovery::DiscoverySource,
+
+    /// ID of the plugin that registered this skill (plugin API path)
+    #[serde(default)]
     pub plugin_id: String,
 }
 
-/// Agent registration for plugins to expose agent definitions
-#[derive(Debug, Clone, Serialize, Deserialize)]
+impl SkillRegistration {
+    /// Get the fully qualified name (plugin:skill or just skill)
+    pub fn qualified_name(&self) -> String {
+        match &self.plugin_name {
+            Some(plugin) => format!("{}:{}", plugin, self.name),
+            None => self.name.clone(),
+        }
+    }
+
+    /// Check if this skill can be auto-invoked by the model
+    pub fn is_auto_invocable(&self) -> bool {
+        !self.disable_model_invocation
+            && self.skill_type == crate::extension::types::SkillType::Skill
+    }
+
+    /// Substitute $ARGUMENTS placeholder
+    pub fn with_arguments(&self, arguments: &str) -> String {
+        self.content.replace("$ARGUMENTS", arguments)
+    }
+
+    /// Convert to SkillInfo for compatibility with ToolRegistry
+    pub fn to_skill_info(&self) -> crate::skills::SkillInfo {
+        crate::skills::SkillInfo {
+            id: self.qualified_name(),
+            name: self.name.clone(),
+            description: self.description.clone(),
+            triggers: self.triggers.clone(),
+            allowed_tools: self.allowed_tools.clone(),
+            ecosystem: "aleph".to_string(),
+        }
+    }
+
+    /// Get the base directory for this skill (for file references)
+    pub fn base_dir(&self) -> PathBuf {
+        self.source_path
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| PathBuf::from("."))
+    }
+}
+
+/// Agent registration for plugins to expose agent definitions.
+///
+/// This is the unified type for both plugin-registered agents (via `CapabilityApi`)
+/// and filesystem-discovered agents (via legacy loader). `ExtensionAgent` is a type
+/// alias for this struct.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AgentRegistration {
     /// Unique agent name
     pub name: String,
+
+    /// Plugin name (if from a plugin)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin_name: Option<String>,
+
+    /// Agent mode
+    #[serde(default)]
+    pub mode: crate::extension::types::AgentMode,
+
     /// Human-readable description of the agent
-    pub description: String,
-    /// Agent system prompt content
-    pub content: String,
+    #[serde(default)]
+    pub description: Option<String>,
+
+    /// Whether to hide from UI
+    #[serde(default)]
+    pub hidden: bool,
+
+    /// UI color (hex format)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+
     /// Optional model override
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
-    /// ID of the plugin that registered this agent
+
+    /// Temperature
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f32>,
+
+    /// Top P
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top_p: Option<f32>,
+
+    /// Maximum iteration steps
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub steps: Option<u32>,
+
+    /// Tool permissions
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools: Option<HashMap<String, bool>>,
+
+    /// Permission rules
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission: Option<HashMap<String, crate::extension::types::PermissionRule>>,
+
+    /// Provider-specific options
+    #[serde(default)]
+    pub options: HashMap<String, serde_json::Value>,
+
+    /// Agent system prompt content (markdown body)
+    pub content: String,
+
+    /// Source path on disk (empty for runtime-registered agents)
+    #[serde(default)]
+    pub source_path: PathBuf,
+
+    /// Discovery source
+    #[serde(default)]
+    pub source: crate::discovery::DiscoverySource,
+
+    /// ID of the plugin that registered this agent (plugin API path)
+    #[serde(default)]
     pub plugin_id: String,
+}
+
+impl AgentRegistration {
+    /// Get the fully qualified name
+    pub fn qualified_name(&self) -> String {
+        match &self.plugin_name {
+            Some(plugin) => format!("{}:{}", plugin, self.name),
+            None => self.name.clone(),
+        }
+    }
+
+    /// Check if agent is a primary agent
+    pub fn is_primary(&self) -> bool {
+        matches!(
+            self.mode,
+            crate::extension::types::AgentMode::Primary
+                | crate::extension::types::AgentMode::All
+        )
+    }
+
+    /// Check if agent can be used as a sub-agent
+    pub fn is_subagent(&self) -> bool {
+        matches!(
+            self.mode,
+            crate::extension::types::AgentMode::Subagent
+                | crate::extension::types::AgentMode::All
+        )
+    }
 }
 
 // ============================================================================
@@ -462,6 +634,7 @@ mod tests {
             allowed_tools: vec!["web_search".to_string()],
             category: Some("research".to_string()),
             plugin_id: "search-plugin".to_string(),
+            ..Default::default()
         };
         assert_eq!(skill.name, "web-search");
         assert_eq!(skill.triggers.len(), 2);
@@ -472,10 +645,11 @@ mod tests {
     fn test_agent_registration() {
         let agent = AgentRegistration {
             name: "coder".to_string(),
-            description: "A coding assistant agent".to_string(),
+            description: Some("A coding assistant agent".to_string()),
             content: "You are a coding expert.".to_string(),
             model: Some("claude-sonnet-4".to_string()),
             plugin_id: "coder-plugin".to_string(),
+            ..Default::default()
         };
         assert_eq!(agent.name, "coder");
         assert_eq!(agent.model, Some("claude-sonnet-4".to_string()));
@@ -488,9 +662,9 @@ mod tests {
             description: "A test skill".to_string(),
             content: "prompt content".to_string(),
             triggers: vec!["trigger1".to_string()],
-            allowed_tools: vec![],
             category: None,
             plugin_id: "test-plugin".to_string(),
+            ..Default::default()
         };
         let json = serde_json::to_string(&skill).unwrap();
         let roundtrip: SkillRegistration = serde_json::from_str(&json).unwrap();
@@ -502,10 +676,11 @@ mod tests {
     fn test_agent_registration_serialization() {
         let agent = AgentRegistration {
             name: "test-agent".to_string(),
-            description: "A test agent".to_string(),
+            description: Some("A test agent".to_string()),
             content: "system prompt".to_string(),
             model: None,
             plugin_id: "test-plugin".to_string(),
+            ..Default::default()
         };
         let json = serde_json::to_string(&agent).unwrap();
         let roundtrip: AgentRegistration = serde_json::from_str(&json).unwrap();

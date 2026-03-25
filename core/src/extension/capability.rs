@@ -209,19 +209,18 @@ mod tests {
             description: "A test skill".to_string(),
             content: "You are a test skill.".to_string(),
             triggers: vec!["test".to_string()],
-            allowed_tools: vec![],
-            category: None,
             plugin_id: "test-plugin".to_string(),
+            ..Default::default()
         }
     }
 
     fn make_agent() -> AgentDeclaration {
         AgentRegistration {
             name: "test-agent".to_string(),
-            description: "A test agent".to_string(),
+            description: Some("A test agent".to_string()),
             content: "You are a test agent.".to_string(),
-            model: None,
             plugin_id: "test-plugin".to_string(),
+            ..Default::default()
         }
     }
 

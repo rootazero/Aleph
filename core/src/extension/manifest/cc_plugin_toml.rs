@@ -348,17 +348,34 @@ impl ManifestAdapter for ClaudeCodeTomlAdapter {
         let mcp_rel = raw.mcp_servers.as_deref().unwrap_or(".mcp.json");
         capabilities.extend(parsers::parse_mcp_config_file(plugin_dir, mcp_rel, &plugin_id)?);
 
+        // Parse v2 prompt configuration from manifest (if present)
+        if let Some(ref prompt) = manifest.prompt_v2 {
+            match parsers::parse_v2_prompt(plugin_dir, prompt, &plugin_id) {
+                Ok(cap) => capabilities.push(cap),
+                Err(e) => tracing::debug!("Failed to parse v2 prompt for {}: {}", plugin_id, e),
+            }
+        }
+
+        // Parse v2 tool instruction files (if present)
+        if let Some(ref tools) = manifest.tools_v2 {
+            match parsers::parse_v2_tool_prompts(plugin_dir, tools, &plugin_id) {
+                Ok(caps) => capabilities.extend(caps),
+                Err(e) => tracing::debug!("Failed to parse v2 tool prompts for {}: {}", plugin_id, e),
+            }
+        }
+
         Ok(AdapterOutput {
             plugin_id: plugin_id.clone(),
             name: Some(manifest.name),
-            version: manifest.version,
-            description: manifest.description,
+            version: manifest.version.clone(),
+            description: manifest.description.clone(),
             capabilities,
             source: CapabilitySource {
                 plugin_id,
                 origin: PluginOrigin::Global,
                 format: SourceFormat::ClaudeCode,
             },
+            permissions: manifest.permissions,
         })
     }
 

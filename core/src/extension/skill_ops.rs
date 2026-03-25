@@ -13,15 +13,15 @@ impl ExtensionManager {
 
     /// Get all skills (from enabled sources)
     pub async fn get_all_skills(&self) -> Vec<ExtensionSkill> {
-        self.skills.read().await.values().cloned().collect()
+        let reg = self.plugin_registry.read().await;
+        reg.list_skills().into_iter().cloned().collect()
     }
 
     /// Get auto-invocable skills (for LLM prompt injection)
     pub async fn get_auto_invocable_skills(&self) -> Vec<ExtensionSkill> {
-        self.skills
-            .read()
-            .await
-            .values()
+        let reg = self.plugin_registry.read().await;
+        reg.list_skills()
+            .into_iter()
             .filter(|s| s.is_auto_invocable())
             .cloned()
             .collect()
@@ -29,35 +29,47 @@ impl ExtensionManager {
 
     /// Get all commands
     pub async fn get_all_commands(&self) -> Vec<ExtensionCommand> {
-        self.commands.read().await.values().cloned().collect()
+        // Commands are now stored as skills with SkillType::Command in the registry
+        let reg = self.plugin_registry.read().await;
+        reg.list_skills()
+            .into_iter()
+            .filter(|s| s.skill_type == SkillType::Command)
+            .cloned()
+            .collect()
     }
 
     /// Get all agents
     pub async fn get_all_agents(&self) -> Vec<ExtensionAgent> {
-        self.agents.read().await.values().cloned().collect()
+        let reg = self.plugin_registry.read().await;
+        reg.list_agents().into_iter().cloned().collect()
     }
 
     /// Get a specific skill by qualified name
     pub async fn get_skill(&self, qualified_name: &str) -> Option<ExtensionSkill> {
-        self.skills.read().await.get(qualified_name).cloned()
+        let reg = self.plugin_registry.read().await;
+        reg.get_skill(qualified_name).cloned()
     }
 
     /// Get a specific command by name
     pub async fn get_command(&self, name: &str) -> Option<ExtensionCommand> {
-        self.commands.read().await.get(name).cloned()
+        // Try as skill with Command type
+        let reg = self.plugin_registry.read().await;
+        reg.get_skill(name)
+            .filter(|s| s.skill_type == SkillType::Command)
+            .cloned()
     }
 
     /// Get a specific agent by name
     pub async fn get_agent(&self, name: &str) -> Option<ExtensionAgent> {
-        self.agents.read().await.get(name).cloned()
+        let reg = self.plugin_registry.read().await;
+        reg.get_agent(name).cloned()
     }
 
     /// Get all primary agents (can be selected by user)
     pub async fn get_primary_agents(&self) -> Vec<ExtensionAgent> {
-        self.agents
-            .read()
-            .await
-            .values()
+        let reg = self.plugin_registry.read().await;
+        reg.list_agents()
+            .into_iter()
             .filter(|a| a.is_primary() && !a.hidden)
             .cloned()
             .collect()
@@ -65,10 +77,9 @@ impl ExtensionManager {
 
     /// Get all sub-agents (can be delegated to)
     pub async fn get_sub_agents(&self) -> Vec<ExtensionAgent> {
-        self.agents
-            .read()
-            .await
-            .values()
+        let reg = self.plugin_registry.read().await;
+        reg.list_agents()
+            .into_iter()
             .filter(|a| a.is_subagent())
             .cloned()
             .collect()
