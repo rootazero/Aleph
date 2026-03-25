@@ -452,6 +452,14 @@ impl InboundMessageRouter {
             }
         }
 
+        // /btw sidebar: ephemeral question without affecting context
+        if ctx.message.text.trim().starts_with("/btw ") || ctx.message.text.trim().starts_with("/btw\n") {
+            let btw_text = ctx.message.text.trim().strip_prefix("/btw").unwrap_or("").trim();
+            if !btw_text.is_empty() {
+                return self.handle_btw(&msg, &agent_id, btw_text).await;
+            }
+        }
+
         // Unified slash command interception
         if ctx.message.text.trim().starts_with('/') {
             let slash_text = strip_bot_mention(ctx.message.text.trim());
