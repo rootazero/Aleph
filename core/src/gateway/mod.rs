@@ -87,6 +87,7 @@ pub mod tailscale;
 pub mod openai_api;
 pub mod voice;
 pub mod media;
+pub mod streaming_sink;
 pub use server::GatewayServer;
 pub use protocol::{JsonRpcRequest, JsonRpcResponse, JsonRpcError};
 pub use event_bus::GatewayEventBus;
