@@ -65,6 +65,7 @@ Actions:
 - clipboard_read: Read current clipboard content
 - clipboard_write: Write text to clipboard. Required: body
 - system_info: Get system information (OS, hostname, architecture, username)
+- user_idle_time: Seconds since last keyboard/mouse input
 
 Examples:
 {"action":"launch_app","app_name":"Safari"}
@@ -73,7 +74,8 @@ Examples:
 {"action":"send_notification","title":"Reminder","body":"Meeting in 5 minutes"}
 {"action":"clipboard_read"}
 {"action":"clipboard_write","body":"Hello, world!"}
-{"action":"system_info"}"#;
+{"action":"system_info"}
+{"action":"user_idle_time"}"#;
 
     type Args = SystemArgs;
     type Output = SystemOutput;
@@ -245,6 +247,19 @@ Examples:
                 Ok(info) => Ok(SystemOutput {
                     success: true,
                     data: Some(serde_json::to_value(info).unwrap_or_default()),
+                    message: None,
+                }),
+                Err(e) => Ok(SystemOutput {
+                    success: false,
+                    data: None,
+                    message: Some(e.to_string()),
+                }),
+            },
+
+            "user_idle_time" => match sys.user_idle_seconds().await {
+                Ok(seconds) => Ok(SystemOutput {
+                    success: true,
+                    data: Some(serde_json::json!({ "idle_seconds": seconds })),
                     message: None,
                 }),
                 Err(e) => Ok(SystemOutput {

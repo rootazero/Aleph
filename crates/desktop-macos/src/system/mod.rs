@@ -56,4 +56,29 @@ impl SystemCapability for MacOSSystem {
     async fn system_info(&self) -> Result<SystemInfo> {
         sysinfo::system_info()
     }
+
+    async fn user_idle_seconds(&self) -> Result<f64> {
+        Ok(user_idle_seconds())
+    }
+}
+
+/// Seconds since last keyboard/mouse event via CGEventSource.
+fn user_idle_seconds() -> f64 {
+    extern "C" {
+        // CGEventSourceSecondsSinceLastEventType(stateID: CGEventSourceStateID, eventType: CGEventType) -> CFTimeInterval
+        fn CGEventSourceSecondsSinceLastEventType(
+            state_id: i32,
+            event_type: u32,
+        ) -> f64;
+    }
+
+    // kCGEventSourceStateCombinedSessionState = 0, kCGAnyInputEventType = ~0u (0xFFFFFFFF)
+    let seconds = unsafe { CGEventSourceSecondsSinceLastEventType(0, 0xFFFFFFFF) };
+
+    // Guard against NaN/Infinity (edge case on machines without input devices)
+    if seconds.is_nan() || seconds.is_infinite() {
+        0.0
+    } else {
+        seconds
+    }
 }

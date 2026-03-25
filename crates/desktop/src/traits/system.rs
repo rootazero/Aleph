@@ -28,4 +28,12 @@ pub trait SystemCapability: Send + Sync {
 
     /// Get high-level system information.
     async fn system_info(&self) -> Result<SystemInfo>;
+
+    /// Seconds since last user input (keyboard/mouse).
+    /// Returns `NotImplemented` on platforms without idle detection.
+    async fn user_idle_seconds(&self) -> Result<f64> {
+        Err(crate::DesktopError::NotImplemented(
+            "user_idle_seconds not available on this platform".into(),
+        ))
+    }
 }
