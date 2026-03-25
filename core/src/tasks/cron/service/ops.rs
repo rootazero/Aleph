@@ -4,9 +4,9 @@
 //! Write operations (`add_job`, `update_job`, `toggle_job`, `delete_job`)
 //! modify the store and recompute next run times as needed.
 
-use crate::tasks::cron::clock::Clock;
+use crate::tasks::shared::clock::Clock;
 use crate::tasks::cron::config::{CronJob, CronJobView, ScheduleKind};
-use crate::tasks::cron::schedule::{apply_min_gap, compute_next_cron, compute_next_every, resolve_anchor};
+use crate::tasks::shared::schedule::{apply_min_gap, compute_next_cron, compute_next_every, resolve_anchor};
 use crate::tasks::cron::stagger::compute_staggered_next;
 use crate::tasks::cron::store::CronStore;
 
@@ -204,7 +204,7 @@ pub fn delete_job(store: &mut CronStore, id: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tasks::cron::clock::testing::FakeClock;
+    use crate::tasks::shared::clock::testing::FakeClock;
     use tempfile::TempDir;
 
     fn make_test_job(id: &str) -> CronJob {

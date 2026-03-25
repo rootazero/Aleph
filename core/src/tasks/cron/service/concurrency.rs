@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use tracing::warn;
 
-use crate::tasks::cron::clock::Clock;
+use crate::tasks::shared::clock::Clock;
 use crate::tasks::cron::config::{ExecutionResult, JobSnapshot, RunStatus, TriggerSource};
 use crate::tasks::cron::history::CronRunRecord;
 use crate::tasks::cron::store::CronStore;
@@ -208,7 +208,7 @@ pub async fn phase3_writeback<C: Clock>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tasks::cron::clock::testing::FakeClock;
+    use crate::tasks::shared::clock::testing::FakeClock;
     use crate::tasks::cron::config::{CronJob, RunStatus, ScheduleKind};
     use crate::tasks::cron::service::ops::add_job;
     use tempfile::TempDir;

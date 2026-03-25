@@ -4,8 +4,9 @@
 
 use async_trait::async_trait;
 
-use crate::tasks::cron::config::{CronJob, DeliveryOutcome, DeliveryTargetConfig, JobRun};
-use crate::tasks::cron::delivery::{DeliveryError, DeliveryTarget};
+use crate::tasks::shared::delivery::{
+    DeliveryError, DeliveryOutcome, DeliveryPayload, DeliveryTarget, DeliveryTargetConfig,
+};
 
 pub struct WebhookTarget {
     client: reqwest::Client,
@@ -37,8 +38,7 @@ impl DeliveryTarget for WebhookTarget {
 
     async fn deliver(
         &self,
-        job: &CronJob,
-        run: &JobRun,
+        payload: &DeliveryPayload,
         config: &DeliveryTargetConfig,
     ) -> Result<DeliveryOutcome, DeliveryError> {
         let (url, method, headers) = match config {
@@ -50,15 +50,13 @@ impl DeliveryTarget for WebhookTarget {
             _ => return Err(DeliveryError::InvalidConfig("Expected Webhook config".into())),
         };
 
-        let payload = serde_json::json!({
-            "job_id": job.id,
-            "job_name": job.name,
-            "status": run.status.to_string(),
-            "response": run.response,
-            "error": run.error,
-            "duration_ms": run.duration_ms,
-            "started_at": run.started_at,
-            "ended_at": run.ended_at,
+        let body = serde_json::json!({
+            "source_type": payload.source_type,
+            "task_name": payload.task_name,
+            "agent_id": payload.agent_id,
+            "output": payload.output,
+            "channel_id": payload.channel_id,
+            "metadata": payload.metadata,
         });
 
         let method = method.as_deref().unwrap_or("POST");
@@ -69,7 +67,7 @@ impl DeliveryTarget for WebhookTarget {
 
         request = request
             .header("Content-Type", "application/json")
-            .json(&payload);
+            .json(&body);
 
         // Add custom headers
         if let Some(hdrs) = headers {

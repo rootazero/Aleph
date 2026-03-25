@@ -29,18 +29,20 @@
 
 pub mod alert;
 pub mod chain;
-pub mod clock;
 pub mod config;
-pub mod delivery;
 pub mod executor;
 pub mod execution;
 pub mod history;
-pub mod schedule;
 pub mod service;
 pub mod stagger;
 pub mod store;
 pub mod template;
 pub mod webhook_target;
+
+// Re-export shared infrastructure for backward compatibility
+pub use crate::tasks::shared::clock;
+pub use crate::tasks::shared::schedule;
+pub use crate::tasks::shared::delivery;
 
 // ── Re-exports ──────────────────────────────────────────────────────
 
@@ -49,7 +51,7 @@ pub use config::{
     DeliveryStatus, DeliveryTargetConfig, ErrorReason, ExecutionResult, FailureAlertConfig,
     JobRun, JobSnapshot, JobStateV2, RunStatus, ScheduleKind, SessionTarget, TriggerSource,
 };
-pub use delivery::{DeliveryEngine, DeliveryTarget};
+pub use crate::tasks::shared::delivery::{DeliveryEngine, DeliveryPayload, DeliveryTarget};
 
 use crate::sync_primitives::Arc;
 use clock::{Clock, SystemClock};

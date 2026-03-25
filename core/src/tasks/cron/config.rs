@@ -52,7 +52,7 @@ fn default_true() -> bool {
 }
 
 fn default_db_path() -> String {
-    "~/.aleph/data/cron.db".to_string()
+    "~/.aleph/data/tasks.db".to_string()
 }
 
 fn default_check_interval() -> u64 {
@@ -189,18 +189,6 @@ impl std::fmt::Display for RunStatus {
 pub enum ErrorReason {
     Transient(String),
     Permanent(String),
-}
-
-// ── DeliveryStatus ──────────────────────────────────────────────────────
-
-/// Whether results were delivered to the user
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum DeliveryStatus {
-    Delivered,
-    NotDelivered,
-    AlreadySentByAgent,
-    NotRequested,
 }
 
 // ── SessionTarget ───────────────────────────────────────────────────────
@@ -413,6 +401,20 @@ impl CronJob {
     pub fn timeout_ms(&self) -> i64 {
         300_000
     }
+
+    /// Construct a generic `DeliveryPayload` from this job and its output.
+    ///
+    /// Used when handing off results to the shared delivery pipeline.
+    pub fn to_delivery_payload(&self, output: String) -> crate::tasks::shared::delivery::DeliveryPayload {
+        crate::tasks::shared::delivery::DeliveryPayload {
+            source_type: "cron".to_string(),
+            task_name: self.name.clone(),
+            agent_id: self.agent_id.clone(),
+            output,
+            channel_id: self.source_channel_id.clone(),
+            metadata: serde_json::Value::Null,
+        }
+    }
 }
 
 // ── JobSnapshot ─────────────────────────────────────────────────────────
@@ -495,56 +497,11 @@ impl From<&CronJob> for CronJobView {
 }
 
 // ── Delivery types ──────────────────────────────────────────────────────
+// Re-exported from shared::delivery to avoid breaking existing consumers.
 
-/// Configuration for delivering job results
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DeliveryConfig {
-    pub mode: DeliveryMode,
-    pub targets: Vec<DeliveryTargetConfig>,
-    #[serde(default)]
-    pub fallback_target: Option<DeliveryTargetConfig>,
-}
-
-/// Delivery mode
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum DeliveryMode {
-    None,
-    Primary,
-    Broadcast,
-}
-
-/// Delivery target configuration
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(tag = "kind")]
-pub enum DeliveryTargetConfig {
-    Gateway {
-        channel: String,
-        chat_id: String,
-        #[serde(default)]
-        format: Option<String>,
-    },
-    Memory {
-        #[serde(default)]
-        tags: Vec<String>,
-        #[serde(default)]
-        importance: Option<f32>,
-    },
-    Webhook {
-        url: String,
-        #[serde(default)]
-        method: Option<String>,
-        #[serde(default)]
-        headers: Option<std::collections::HashMap<String, String>>,
-    },
-}
-
-/// Outcome of a delivery attempt
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct DeliveryOutcome {
-    pub target_kind: String,
-    pub success: bool,
-    pub message: Option<String>,
-}
+pub use crate::tasks::shared::delivery::{
+    DeliveryConfig, DeliveryMode, DeliveryOutcome, DeliveryStatus, DeliveryTargetConfig,
+};
 
 // ── JobRun ──────────────────────────────────────────────────────────────
 

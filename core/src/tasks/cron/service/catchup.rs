@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use tracing::info;
 
-use crate::tasks::cron::clock::Clock;
+use crate::tasks::shared::clock::Clock;
 use crate::tasks::cron::service::ops::recompute_next_run_full;
 use crate::tasks::cron::store::CronStore;
 
@@ -125,7 +125,7 @@ pub async fn run_startup_catchup<C: Clock>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tasks::cron::clock::testing::FakeClock;
+    use crate::tasks::shared::clock::testing::FakeClock;
     use crate::tasks::cron::config::{CronJob, ScheduleKind};
     use crate::tasks::cron::service::ops::add_job;
     use tempfile::TempDir;

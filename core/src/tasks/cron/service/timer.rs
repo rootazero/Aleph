@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use tracing::{debug, error, info};
 
-use crate::tasks::cron::clock::Clock;
+use crate::tasks::shared::clock::Clock;
 use crate::tasks::cron::config::{ExecutionResult, JobSnapshot, SessionTarget};
 use crate::tasks::cron::service::concurrency::{phase1_mark_due_jobs, phase3_writeback};
 use crate::tasks::cron::service::state::ServiceState;
