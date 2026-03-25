@@ -186,6 +186,12 @@ impl SessionCompactor {
                 .collect();
         }
 
+        // Short session: skip LanceDB query when there's nothing to compress
+        let raw_messages = agent.get_history(session_key, None).await;
+        if raw_messages.len() <= self.config.fresh_tail_count {
+            return raw_messages.iter().map(session_message_to_unified).collect();
+        }
+
         let session_id = session_key.to_key_string();
         let path_prefix = format!("aleph://session/{}/", session_id);
 
@@ -224,7 +230,6 @@ impl SessionCompactor {
         });
 
         // Step 2: fetch fresh tail from in-memory session store
-        let raw_messages = agent.get_history(session_key, None).await;
         let tail_start = if raw_messages.len() > self.config.fresh_tail_count {
             raw_messages.len() - self.config.fresh_tail_count
         } else {
