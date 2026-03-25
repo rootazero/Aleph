@@ -10,6 +10,26 @@ use dashmap::DashMap;
 use serde::Serialize;
 use std::sync::Arc;
 
+/// Connection role for presence classification.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ConnectionRole {
+    /// Panel UI or CLI user
+    User,
+    /// Mobile device bridge (nodes)
+    Node,
+    /// External webhook connection
+    Webhook,
+    /// Messaging channel (Telegram, Discord, etc.)
+    Channel,
+}
+
+impl Default for ConnectionRole {
+    fn default() -> Self {
+        Self::User
+    }
+}
+
 /// A single connected client's presence information.
 #[derive(Debug, Clone, Serialize)]
 pub struct PresenceEntry {
@@ -21,6 +41,9 @@ pub struct PresenceEntry {
     pub device_name: String,
     /// Platform string (e.g. "macos", "ios", "web", "cli")
     pub platform: String,
+    /// Connection role (user, node, webhook, channel)
+    #[serde(default)]
+    pub role: ConnectionRole,
     /// When the connection was established
     pub connected_at: DateTime<Utc>,
     /// Last heartbeat received from this connection
@@ -101,6 +124,7 @@ mod tests {
             device_id: None,
             device_name: device_name.to_string(),
             platform: platform.to_string(),
+            role: ConnectionRole::User,
             connected_at: now,
             last_heartbeat: now,
         }

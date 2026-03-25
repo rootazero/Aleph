@@ -81,6 +81,7 @@ mod tests {
                 device_id: None,
                 device_name: "MacBook Pro".to_string(),
                 platform: "macos".to_string(),
+                role: crate::gateway::presence::ConnectionRole::User,
                 connected_at: now,
                 last_heartbeat: now,
             }],
