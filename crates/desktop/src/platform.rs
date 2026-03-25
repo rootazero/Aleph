@@ -1,6 +1,6 @@
 //! Platform aggregator trait.
 
-use crate::traits::{AutomationCapability, PimCapability, ScreenCapability, SystemCapability};
+use crate::traits::{AutomationCapability, PermissionCapability, PimCapability, ScreenCapability, SystemCapability};
 
 /// Aggregator that provides access to all desktop capabilities on a given platform.
 ///
@@ -32,4 +32,7 @@ pub trait DesktopPlatform: Send + Sync {
 
     /// Automation scripting and Shortcuts, if available.
     fn automation(&self) -> Option<&dyn AutomationCapability>;
+
+    /// TCC permission detection and request, if available.
+    fn permission(&self) -> Option<&dyn PermissionCapability>;
 }

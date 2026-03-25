@@ -1,7 +1,7 @@
 //! Windows platform implementation for Aleph desktop capabilities.
 
 use aleph_desktop::traits::{
-    AutomationCapability, PimCapability, ScreenCapability, SystemCapability,
+    AutomationCapability, PermissionCapability, PimCapability, ScreenCapability, SystemCapability,
 };
 use aleph_desktop::NativeScreen;
 use aleph_desktop::DesktopPlatform;
@@ -46,6 +46,10 @@ impl DesktopPlatform for WindowsPlatform {
     fn automation(&self) -> Option<&dyn AutomationCapability> {
         None
     }
+
+    fn permission(&self) -> Option<&dyn PermissionCapability> {
+        None
+    }
 }
 
 #[cfg(test)]
@@ -65,5 +69,6 @@ mod tests {
         assert!(platform.pim().is_none());
         assert!(platform.system().is_none());
         assert!(platform.automation().is_none());
+        assert!(platform.permission().is_none());
     }
 }

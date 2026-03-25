@@ -5,7 +5,7 @@ mod pim;
 mod system;
 
 use aleph_desktop::traits::{
-    AutomationCapability, PimCapability, ScreenCapability, SystemCapability,
+    AutomationCapability, PermissionCapability, PimCapability, ScreenCapability, SystemCapability,
 };
 use aleph_desktop::NativeScreen;
 use aleph_desktop::DesktopPlatform;
@@ -59,6 +59,10 @@ impl DesktopPlatform for MacOSPlatform {
 
     fn automation(&self) -> Option<&dyn AutomationCapability> {
         Some(&self.automation)
+    }
+
+    fn permission(&self) -> Option<&dyn PermissionCapability> {
+        None // TODO: wire MacOSPermission in Task 3
     }
 }
 

@@ -1,7 +1,7 @@
 //! Linux platform implementation for Aleph desktop capabilities.
 
 use aleph_desktop::traits::{
-    AutomationCapability, PimCapability, ScreenCapability, SystemCapability,
+    AutomationCapability, PermissionCapability, PimCapability, ScreenCapability, SystemCapability,
 };
 use aleph_desktop::NativeScreen;
 use aleph_desktop::DesktopPlatform;
@@ -44,6 +44,10 @@ impl DesktopPlatform for LinuxPlatform {
     }
 
     fn automation(&self) -> Option<&dyn AutomationCapability> {
+        None
+    }
+
+    fn permission(&self) -> Option<&dyn PermissionCapability> {
         None
     }
 }

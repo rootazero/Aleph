@@ -23,6 +23,7 @@ pub mod bridge;
 pub mod error;
 pub mod native_screen;
 pub mod perception;
+pub mod permission_types;
 pub mod pim_types;
 pub mod platform;
 pub mod system_types;
@@ -33,7 +34,7 @@ pub use native_screen::NativeScreen;
 
 // Re-export new capability traits.
 pub use platform::DesktopPlatform;
-pub use traits::{AutomationCapability, PimCapability, ScreenCapability, SystemCapability};
+pub use traits::{AutomationCapability, PermissionCapability, PimCapability, ScreenCapability, SystemCapability};
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
