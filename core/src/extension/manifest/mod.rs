@@ -25,6 +25,8 @@
 //! println!("Plugin: {} v{:?}", manifest.id, manifest.version);
 //! ```
 
+pub mod adapter;
+pub mod adapters;
 mod aleph_plugin;
 mod aleph_plugin_toml;
 mod auto_discover;
