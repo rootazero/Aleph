@@ -61,6 +61,9 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         }
 
         // Get provider
+        // TODO(P3): Use call_with_fallback() from thinker::fallback when the registry
+        // has fallbacks configured. This requires making AiProviderBridge registry-aware
+        // so it can retry with fallback providers on transient errors.
         let provider = self.provider_registry.default_provider();
         let bridge = AiProviderBridge::new(provider);
 

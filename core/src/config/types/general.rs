@@ -44,6 +44,11 @@ pub struct GeneralConfig {
     /// Browser system configuration (profiles, SSRF policy, Playwright MCP).
     #[serde(default)]
     pub browser: crate::browser::profile::BrowserSystemConfig,
+    /// Global fallback provider chain.
+    /// When the default provider fails with a transient error (rate limit, timeout),
+    /// these providers are tried in order. Names must match keys in [providers].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fallback_providers: Vec<String>,
 }
 
 /// Legacy default hotkey - kept for backward compatibility with old config files

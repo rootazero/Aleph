@@ -315,6 +315,21 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         }
     };
 
+    // Wire global fallback provider chain from config
+    if let Some(ref registry) = multi_reg {
+        let fallbacks = &app_config.general.fallback_providers;
+        if !fallbacks.is_empty() {
+            registry.set_fallbacks(fallbacks.clone());
+            tracing::info!(
+                chain = ?fallbacks,
+                "Fallback provider chain configured"
+            );
+            if !daemon {
+                println!("  Fallback chain: {:?}", fallbacks);
+            }
+        }
+    }
+
     // Shared cell for deferred CommandParser injection into chat.send handler.
     // Created here (outer scope) so both the if-branch (chat.send registration)
     // and the dispatch_registry block (parser creation) can access it.
