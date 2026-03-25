@@ -35,6 +35,7 @@ pub mod sync_api;
 pub mod validation;
 
 pub mod capability;
+pub mod registrar;
 
 mod channel_manager;
 mod error;
@@ -79,6 +80,7 @@ pub use manifest::PluginManifest;
 pub use registry::{HookRegistration, PluginRegistry, ToolRegistration};
 pub use types::{PluginKind, PluginOrigin, PluginRecord, PluginStatus};
 pub use capability::{CapabilityDeclaration, CapabilitySource, SourceFormat, Tier};
+pub use registrar::CapabilityApi;
 
 use crate::discovery::{DiscoveryConfig, DiscoveryManager};
 use hooks::{HookExecutor};
