@@ -9,7 +9,8 @@ use crate::sync_primitives::Arc;
 
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 use crate::gateway::handlers::parse_params;
-use crate::extension::{ContentLoader, ExtensionManager};
+use crate::extension::ExtensionManager;
+use crate::extension::manifest::adapter::AdapterRegistry;
 
 use super::types::*;
 
@@ -335,11 +336,21 @@ pub async fn handle_install(request: JsonRpcRequest) -> JsonRpcResponse {
 
     match git2::Repository::clone(&params.url, &dest_path) {
         Ok(_) => {
-            // Load the installed plugin to get info
-            let loader = ContentLoader::new();
-            match loader.load_plugin(&dest_path).await {
-                Ok(plugin) => {
-                    let info = PluginInfoJson::from(plugin.info());
+            // Validate the installed plugin via AdapterRegistry
+            let registry = AdapterRegistry::with_defaults();
+            match registry.parse_dir(&dest_path) {
+                Ok(output) => {
+                    let info = PluginInfoJson {
+                        name: output.name.unwrap_or_else(|| output.plugin_id.clone()),
+                        version: output.version.unwrap_or_default(),
+                        description: output.description.unwrap_or_default(),
+                        enabled: true,
+                        path: dest_path.to_string_lossy().to_string(),
+                        skills_count: output.capabilities.len() as u32,
+                        agents_count: 0,
+                        hooks_count: 0,
+                        mcp_servers_count: 0,
+                    };
                     JsonRpcResponse::success(request.id, json!({ "plugin": info }))
                 }
                 Err(e) => {

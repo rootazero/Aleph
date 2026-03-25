@@ -19,8 +19,8 @@
 //!                              │
 //!          ┌───────────────────┴───────────────────┐
 //!          ▼                                       ▼
-//!     HookExecutor                          ContentLoader
-//!     (unified hooks)                    (Markdown parsing)
+//!     HookExecutor                        LegacyLoader
+//!     (unified hooks)                  (Markdown parsing)
 //! ```
 
 pub mod component_id;
@@ -40,9 +40,7 @@ pub mod registrar;
 mod channel_manager;
 mod error;
 mod http_handler;
-// DEPRECATED: content_loader will be replaced by AdapterRegistry in a future pass.
-// Kept for backward compat with gateway handlers and CLI plugin commands.
-mod content_loader;
+mod legacy_loader;
 pub mod mcp_config;
 pub mod manifest;
 mod plugin_ops;
@@ -60,7 +58,6 @@ pub use component_id::ComponentId;
 pub use channel_manager::{ChannelHandle, ChannelManager};
 pub use error::*;
 pub use http_handler::{match_path, PluginHttpHandler};
-pub use content_loader::*;
 pub use manifest::*;
 pub use loader::PluginLoader;
 pub use provider_adapter::PluginProviderAdapter;
@@ -142,9 +139,6 @@ pub struct ExtensionManager {
     /// Loaded agents by qualified name
     agents: Arc<RwLock<HashMap<String, ExtensionAgent>>>,
 
-    /// Component loader
-    loader: ContentLoader,
-
     /// Hook executor
     hook_executor: Arc<RwLock<HookExecutor>>,
 
@@ -174,7 +168,6 @@ impl ExtensionManager {
     pub async fn new(config: ExtensionConfig) -> ExtensionResult<Self> {
         let discovery = DiscoveryManager::new(config.discovery.clone())?;
         let config_manager = ConfigManager::new(&discovery).await?;
-        let loader = ContentLoader::new();
         let hook_executor = Arc::new(RwLock::new(HookExecutor::empty()));
         let cache_state = Arc::new(RwLock::new(CacheState::default()));
         let plugin_loader = Arc::new(RwLock::new(PluginLoader::new()));
@@ -188,7 +181,6 @@ impl ExtensionManager {
             skills: Arc::new(RwLock::new(HashMap::new())),
             commands: Arc::new(RwLock::new(HashMap::new())),
             agents: Arc::new(RwLock::new(HashMap::new())),
-            loader,
             hook_executor,
             cache_state,
             plugin_loader,
@@ -208,7 +200,7 @@ impl ExtensionManager {
 
     /// Load all extensions.
     pub async fn load_all(&self) -> ExtensionResult<LoadSummary> {
-        let load_result = self.loader.load_all(&self.discovery).await?;
+        let load_result = legacy_loader::load_all(&self.discovery).await?;
 
         // Store loaded skills
         {

@@ -45,7 +45,8 @@ pub async fn handle_plugins_list() -> Result<(), Box<dyn std::error::Error>> {
 
 /// Handle plugins install command
 pub async fn handle_plugins_install(url: &str) -> Result<(), Box<dyn std::error::Error>> {
-    use alephcore::extension::{default_plugins_dir, ContentLoader};
+    use alephcore::extension::default_plugins_dir;
+    use alephcore::extension::manifest::adapter::AdapterRegistry;
 
     println!("Installing plugin from {}...", url);
 
@@ -75,21 +76,21 @@ pub async fn handle_plugins_install(url: &str) -> Result<(), Box<dyn std::error:
         Ok(_) => {
             println!("Repository cloned successfully.");
 
-            // Try to load the plugin to verify it's valid
-            let loader = ContentLoader::new();
-
-            match loader.load_plugin(&dest_path).await {
-                Ok(plugin) => {
-                    let info = plugin.info();
+            // Validate the installed plugin via AdapterRegistry
+            let registry = AdapterRegistry::with_defaults();
+            match registry.parse_dir(&dest_path) {
+                Ok(output) => {
+                    let name = output.name.unwrap_or_else(|| output.plugin_id.clone());
+                    let version = output.version.unwrap_or_else(|| "-".to_string());
+                    let description = output.description.unwrap_or_else(|| "-".to_string());
+                    let capabilities_count = output.capabilities.len();
                     println!();
                     println!("Plugin installed successfully!");
-                    println!("  Name:        {}", info.name);
-                    println!("  Version:     {}", info.version.unwrap_or_else(|| "-".to_string()));
-                    println!("  Description: {}", info.description.unwrap_or_else(|| "-".to_string()));
+                    println!("  Name:        {}", name);
+                    println!("  Version:     {}", version);
+                    println!("  Description: {}", description);
                     println!("  Path:        {}", dest_path.display());
-                    println!("  Skills:      {}", info.skills_count);
-                    println!("  Agents:      {}", info.agents_count);
-                    println!("  Hooks:       {}", info.hooks_count);
+                    println!("  Capabilities: {}", capabilities_count);
                 }
                 Err(e) => {
                     // Cleanup on failure
