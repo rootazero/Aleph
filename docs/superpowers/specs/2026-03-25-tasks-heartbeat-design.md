@@ -17,6 +17,8 @@ Aleph 现有 `cron/` 模块提供完整的定时任务能力（Cron 表达式、
 | 去重策略 | 语义 embedding 去重 | 复用已有 embedding provider，捕获语义等价变体 |
 | HEARTBEAT.md 定位 | 纯 prompt 内容层 | 职责分离：心跳任务管 When+Whether，HEARTBEAT.md 管 What |
 | 模块命名 | `tasks/` (cron + heartbeat + shared) | 语义清晰，cron API 向后兼容 |
+| L2 输出协议 | 结构化工具调用（`heartbeat_report` tool） | R9(工具即一切)：比魔法字符串更健壮 |
+| 心跳管理 | 暴露为 LLM Tool | R9(工具即一切)：用户可通过自然语言管理心跳任务 |
 
 ## Module Structure
 
@@ -27,7 +29,7 @@ core/src/tasks/
 │   ├── mod.rs
 │   ├── store.rs                     # TaskDatabase: unified SQLite connection
 │   ├── history.rs                   # Shared cleanup logic
-│   ├── delivery.rs                  # DeliveryEngine + DeliveryTarget trait
+│   ├── delivery.rs                  # DeliveryEngine + DeliveryTarget trait (generalized payload)
 │   ├── clock.rs                     # Clock trait (SystemClock, FakeClock)
 │   └── schedule.rs                  # Pure scheduling computation functions
 ├── cron/                            # Scheduled tasks (migrated from cron/)
@@ -74,7 +76,7 @@ pub struct HeartbeatTask {
     pub name: String,
     pub agent_id: String,                    // Target agent (reads its HEARTBEAT.md)
     pub enabled: bool,
-    pub interval_ms: i64,                    // Heartbeat interval (e.g. 300_000 = 5min)
+    pub interval_ms: u64,                    // Heartbeat interval (e.g. 300_000 = 5min)
     pub probe: ProbeConfig,                  // L1 probe configuration
     pub delivery_config: Option<DeliveryConfig>,  // Reuse cron delivery
     pub dedup: DedupConfig,                  // Per-task dedup settings
@@ -107,6 +109,7 @@ pub enum TriggerCondition {
 ```rust
 pub struct HeartbeatState {
     pub next_due_ms: Option<i64>,
+    pub running_at_ms: Option<i64>,          // Set during execution, prevents concurrent same-task runs
     pub last_probe_at_ms: Option<i64>,
     pub last_probe_result: Option<String>,   // For Changed condition
     pub last_l2_at_ms: Option<i64>,
@@ -117,11 +120,27 @@ pub struct HeartbeatState {
 }
 ```
 
+### Error Backoff
+
+Consecutive probe errors trigger exponential backoff to prevent hammering broken tools:
+
+```rust
+// Backoff schedule (reuse cron's pattern)
+const BACKOFF_MS: [u64; 5] = [30_000, 60_000, 300_000, 900_000, 3_600_000];
+
+fn error_backoff_ms(consecutive_errors: u32) -> u64 {
+    let idx = (consecutive_errors.saturating_sub(1) as usize).min(BACKOFF_MS.len() - 1);
+    BACKOFF_MS[idx]
+}
+```
+
+When `consecutive_errors > 0`, `next_due_ms` is delayed by `error_backoff_ms()` on top of the normal interval. Errors reset to 0 on any successful probe (L1 triggered or not).
+
 ### DedupConfig
 
 ```rust
 pub struct DedupConfig {
-    pub window_ms: i64,              // Time window (default 86_400_000 = 24h)
+    pub window_ms: u64,              // Time window (default 86_400_000 = 24h)
     pub similarity_threshold: f32,   // Cosine similarity threshold (default 0.85)
     pub max_history: usize,          // Max records per task (default 10)
 }
@@ -169,21 +188,37 @@ Timer tick (every 10s) + Wake events via tokio::select!
 ```rust
 // tasks/heartbeat/probe.rs
 
+/// Trait for executing probe tool calls without LLM involvement.
+/// Abstracts over builtin tools (direct ToolRegistry call) and MCP tools
+/// (requires MCP client session). Implementations injected at startup.
+pub trait ProbeExecutor: Send + Sync {
+    async fn execute(
+        &self,
+        tool_name: &str,
+        params: Option<&serde_json::Value>,
+    ) -> Result<serde_json::Value>;
+}
+
 pub struct ProbeResult {
     pub raw_value: serde_json::Value,
     pub triggered: bool,
     pub duration_ms: i64,
 }
 
-/// Execute probe: direct Tool call, bypasses LLM entirely
+/// Execute probe: direct Tool call via ProbeExecutor, bypasses LLM entirely.
+/// The ProbeExecutor handles both builtin tools (via ToolRegistry) and
+/// MCP tools (via MCP client with a lightweight session context).
 pub async fn execute_probe(
     probe: &ProbeConfig,
-    tool_registry: &ToolRegistry,
+    executor: &dyn ProbeExecutor,
     last_probe_result: Option<&str>,
 ) -> Result<ProbeResult>;
 ```
 
-L1 directly calls tools via ToolRegistry. This is Aleph's core advantage over OpenClaw — Rust's ToolRegistry provides complete tool invocation infrastructure; L1 simply reuses it.
+**ProbeExecutor trait** resolves the gap between ToolRegistry (metadata-only) and actual tool execution:
+- **Builtin tools**: Call directly via `ToolRegistry::execute_tool()`
+- **MCP tools**: Require an MCP client session. The `ProbeExecutor` implementation holds a lightweight, shared MCP connection pool — no full Agent session needed, just enough to invoke a single tool call.
+- This trait follows P4 (Dependency Inversion): heartbeat code depends on the abstraction, not the concrete execution path.
 
 ### L2 Execution
 
@@ -205,7 +240,23 @@ pub async fn execute_heartbeat_l2(
 ) -> Result<HeartbeatL2Result>;
 ```
 
-L2 prompt injects probe result summary: "Heartbeat probe detected change: {probe_summary}. Process per HEARTBEAT.md." The agent's HEARTBEAT.md content is already in its system prompt via IdentityFilesLayer.
+**L2 Output Protocol**: Instead of parsing magic strings (`ALEPH_HEARTBEAT_OK`), L2 provides a `heartbeat_report` tool that the agent calls to report its findings:
+
+```rust
+// Registered as a builtin tool available during heartbeat L2 execution
+// Tool schema:
+// {
+//   "name": "heartbeat_report",
+//   "parameters": {
+//     "action": "silent" | "notify",
+//     "message": "string (required if action=notify)"
+//   }
+// }
+```
+
+This is more robust than string matching (LLMs may wrap tokens in markdown or add punctuation) and aligns with R9 (Everything is a Tool). Existing protocol tokens (`ALEPH_HEARTBEAT_OK`, `ALEPH_NEEDS_ATTENTION`) remain as fallback for backward compatibility.
+
+L2 prompt injects probe result summary: "Heartbeat probe detected change: {probe_summary}. Use the `heartbeat_report` tool to report your findings." The agent's HEARTBEAT.md content is already in its system prompt via IdentityFilesLayer.
 
 ### L1 Capability Boundary
 
@@ -269,6 +320,8 @@ Design points:
 - **Per-task isolation** — different tasks maintain independent history windows
 - **SQLite BLOB storage** — embedding vectors serialized as `Vec<f32>` → `&[u8]`, no vector DB needed
 - **Dual eviction** — time window (24h default) + count limit (10 per task), whichever is stricter
+- **Lock discipline** — DB lock is acquired only for read/write operations, never held during embedding API calls. Pattern: read history from DB → release lock → compute embedding → reacquire lock → write result
+- **Model tracking** — each dedup record stores the embedding model name. On provider change (different model = different dimensions), mismatched records are skipped during comparison and gradually evicted
 
 ## Persistence
 
@@ -312,23 +365,52 @@ CREATE TABLE heartbeat_dedup (
     task_id TEXT NOT NULL,
     output_text TEXT NOT NULL,
     embedding BLOB NOT NULL,
+    model TEXT NOT NULL,             -- Embedding model name for compatibility checks
     created_at INTEGER NOT NULL
 );
 CREATE INDEX idx_heartbeat_dedup_task_id ON heartbeat_dedup(task_id);
 ```
 
+### Connection Management
+
+Both CronStore and HeartbeatStore share a single `TaskDatabase` instance (wrapped in `Arc<tokio::sync::Mutex<TaskDatabase>>`), which holds one `rusqlite::Connection`. This avoids dual-connection write contention and the need to reason about WAL-mode concurrent writer guarantees.
+
+```rust
+// tasks/shared/store.rs
+pub struct TaskDatabase {
+    conn: rusqlite::Connection,  // Single connection, WAL mode, 5s busy_timeout
+}
+
+// Both services receive Arc<tokio::sync::Mutex<TaskDatabase>>
+// Lock is held only during DB operations, never across async boundaries
+```
+
 ### Migration Strategy
 
 ```rust
-fn migrate_cron_db_if_needed(old_path: &Path, new_path: &Path) {
-    if old_path.exists() && !new_path.exists() {
-        std::fs::rename(old_path, new_path).ok();  // cron.db → tasks.db
+fn migrate_task_db(old_cron_path: &Path, new_path: &Path) -> Result<()> {
+    // 1. If tasks.db already exists, just ensure heartbeat tables exist
+    if new_path.exists() {
+        let conn = Connection::open(new_path)?;
+        create_heartbeat_tables_if_not_exist(&conn)?;
+        return Ok(());
     }
-    // CREATE TABLE IF NOT EXISTS for heartbeat tables
+
+    // 2. If cron.db exists, rename it to tasks.db
+    if old_cron_path.exists() {
+        std::fs::rename(old_cron_path, new_path)
+            .or_else(|_| std::fs::copy(old_cron_path, new_path).map(|_| ()))?;
+        // copy fallback handles cross-filesystem moves
+    }
+
+    // 3. Open (or create fresh) tasks.db, ensure all tables exist
+    let conn = Connection::open(new_path)?;
+    create_all_tables_if_not_exist(&conn)?;  // cron + heartbeat tables
+    Ok(())
 }
 ```
 
-Zero data loss. Existing cron data preserved as-is.
+Idempotent: safe to run on every startup. Handles partial previous migrations, cross-filesystem moves, and fresh installs.
 
 ## Timer Loop & Concurrency
 
@@ -348,7 +430,7 @@ Zero data loss. Existing cron data preserved as-is.
 pub async fn run_heartbeat_loop(
     state: Arc<HeartbeatServiceState>,
     wake_queue: Arc<WakeQueue>,
-    tool_registry: Arc<ToolRegistry>,
+    probe_executor: Arc<dyn ProbeExecutor>,
     execution_adapter: Arc<dyn ExecutionAdapter>,
     delivery_engine: Arc<DeliveryEngine>,
     dedup: Arc<DedupEngine>,
@@ -359,28 +441,48 @@ pub async fn run_heartbeat_loop(
             _ = wake_queue.notified() => {},
         }
         if state.is_shutdown() { break; }
-        if state.is_running() { continue; }
-        state.set_running(true);
+
+        // Atomic compare_exchange prevents TOCTOU race on re-entrancy guard
+        if state.running.compare_exchange(
+            false, true, Ordering::AcqRel, Ordering::Relaxed
+        ).is_err() {
+            continue;
+        }
 
         let wake_requests = wake_queue.drain();
         let due_tasks = collect_due_tasks(&state, &wake_requests).await;
 
+        // Semaphore-bounded concurrent execution via for loop (not .map())
         let semaphore = Arc::new(Semaphore::new(state.config.max_concurrent));
-        let handles: Vec<_> = due_tasks.into_iter().map(|(task, wake_reason)| {
+        let mut handles = Vec::with_capacity(due_tasks.len());
+
+        for (task, wake_reason) in due_tasks {
             let permit = semaphore.clone().acquire_owned().await.unwrap();
-            tokio::spawn(async move {
-                let result = execute_heartbeat_tick(&task, wake_reason, ...).await;
+            let ctx = TickContext {
+                probe_executor: probe_executor.clone(),
+                adapter: execution_adapter.clone(),
+                delivery: delivery_engine.clone(),
+                dedup: dedup.clone(),
+            };
+            handles.push(tokio::spawn(async move {
+                let result = execute_heartbeat_tick(&task, wake_reason, &ctx).await;
                 drop(permit);
                 (task.id.clone(), result)
-            })
-        }).collect();
+            }));
+        }
 
         let results = join_all(handles).await;
         writeback_results(&state, results).await;
-        state.set_running(false);
+
+        state.running.store(false, Ordering::Release);
     }
 }
 ```
+
+**Concurrency invariants**:
+- **Re-entrancy**: `AtomicBool::compare_exchange` (not separate check-then-set) eliminates TOCTOU race
+- **Per-task exclusion**: `collect_due_tasks()` skips tasks where `state.running_at_ms.is_some()` — a task already in-flight cannot be re-scheduled. This also protects `TriggerCondition::Changed` from stale `last_probe_result` reads.
+- **Shutdown drain**: When `is_shutdown()` is set, the loop breaks. In-flight tasks continue to completion (bounded by `job_timeout_secs`). The caller awaits the spawned `JoinHandle` with a deadline before force-cancelling.
 
 ## Gateway RPC
 
@@ -398,6 +500,20 @@ New `heartbeat.*` methods parallel to `cron.*`:
 | `heartbeat.runs` | Query execution history |
 
 Cron RPC methods remain unchanged for backward compatibility.
+
+### LLM Tool Registration (R9)
+
+Heartbeat CRUD operations are also registered as LLM-callable tools in the ToolRegistry, so users can manage heartbeats via natural language:
+
+| Tool | Description |
+|------|-------------|
+| `heartbeat_create` | Create a new heartbeat task |
+| `heartbeat_list` | List all heartbeat tasks |
+| `heartbeat_update` | Update a heartbeat task |
+| `heartbeat_delete` | Delete a heartbeat task |
+| `heartbeat_toggle` | Enable/disable a heartbeat task |
+
+This follows the same pattern as existing cron management tools and aligns with R9 (Everything is a Tool): "对话即管理面板".
 
 ## UI Redesign
 
@@ -430,23 +546,29 @@ Each record shows the full L1→L2 flow: timestamp, L1 result (triggered/skipped
 ```rust
 // start/mod.rs
 
-// 1. Migrate DB: cron.db → tasks.db
+// 1. Migrate & open unified DB
 let task_db_path = data_dir.join("tasks.db");
-migrate_cron_db_if_needed(&old_cron_db_path, &task_db_path);
+let old_cron_db_path = data_dir.join("cron.db");
+migrate_task_db(&old_cron_db_path, &task_db_path)?;
+let task_db = Arc::new(tokio::sync::Mutex::new(TaskDatabase::open(&task_db_path)?));
 
-// 2. CronService (points to new DB, logic unchanged)
-let cron_service = CronService::new(cron_config, task_db_path.clone()).await?;
+// 2. CronService (shared DB handle, logic unchanged)
+let cron_service = CronService::new(cron_config, task_db.clone()).await?;
 
-// 3. HeartbeatService (new)
+// 3. HeartbeatService (shared DB handle + new dependencies)
+let probe_executor = Arc::new(DefaultProbeExecutor::new(
+    tool_registry.clone(), mcp_client_pool.clone(),
+));
 let heartbeat_service = HeartbeatService::new(
-    heartbeat_config, task_db_path,
-    tool_registry.clone(), execution_adapter.clone(),
+    heartbeat_config, task_db.clone(),
+    probe_executor, execution_adapter.clone(),
     delivery_engine.clone(), embedding_provider.clone(),
 ).await?;
 
 // 4. Two independent timer loops
-tokio::spawn(cron_service.run_timer_loop());
-tokio::spawn(heartbeat_service.run_heartbeat_loop());
+let cron_handle = tokio::spawn(cron_service.run_timer_loop());
+let heartbeat_handle = tokio::spawn(heartbeat_service.run_heartbeat_loop());
+// Handles stored for graceful shutdown coordination
 ```
 
 ## Configuration
@@ -487,6 +609,41 @@ max_history = 10
 | All `use crate::cron::` → `use crate::tasks::cron::` | Batch replace |
 
 Principle: move > copy > create. No stale paths left behind. `git mv` preserves history.
+
+## Shared Delivery Generalization
+
+When moving `delivery.rs` to `shared/`, the `DeliveryTarget` trait must be generalized. The current trait takes `&CronJob` + `&JobRun` — cron-specific types. The new trait accepts a generic `DeliveryPayload`:
+
+```rust
+// tasks/shared/delivery.rs
+
+pub struct DeliveryPayload {
+    pub source_type: &'static str,       // "cron" or "heartbeat"
+    pub task_name: String,
+    pub agent_id: String,
+    pub output: String,
+    pub channel_id: Option<String>,
+    pub metadata: serde_json::Value,     // Type-specific extra data
+}
+
+#[async_trait]
+pub trait DeliveryTarget: Send + Sync {
+    async fn deliver(&self, payload: &DeliveryPayload, config: &DeliveryConfig)
+        -> Result<DeliveryOutcome>;
+}
+```
+
+CronJob and HeartbeatTask each implement a `fn to_delivery_payload(&self, output: &str) -> DeliveryPayload` method.
+
+## Shutdown Coordination
+
+Graceful shutdown sequence:
+
+1. Set `shutdown` flag on both CronService and HeartbeatService
+2. Timer loops stop scheduling new tasks
+3. Await in-flight tasks with a deadline (`job_timeout_secs + 5s` grace period)
+4. After deadline, cancel remaining tasks via `JoinHandle::abort()`
+5. Final `persist()` call to flush any dirty state to SQLite
 
 ## Advantages Over OpenClaw
 
