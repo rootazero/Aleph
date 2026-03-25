@@ -11,10 +11,11 @@ use serde::Serialize;
 use std::sync::Arc;
 
 /// Connection role for presence classification.
-#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum ConnectionRole {
     /// Panel UI or CLI user
+    #[default]
     User,
     /// Mobile device bridge (nodes)
     Node,
@@ -22,12 +23,6 @@ pub enum ConnectionRole {
     Webhook,
     /// Messaging channel (Telegram, Discord, etc.)
     Channel,
-}
-
-impl Default for ConnectionRole {
-    fn default() -> Self {
-        Self::User
-    }
 }
 
 /// A single connected client's presence information.
