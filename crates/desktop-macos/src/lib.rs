@@ -1,6 +1,7 @@
 //! macOS platform implementation for Aleph desktop capabilities.
 
 mod automation;
+mod permission;
 mod pim;
 mod system;
 
@@ -11,6 +12,7 @@ use aleph_desktop::NativeScreen;
 use aleph_desktop::DesktopPlatform;
 
 use automation::MacOSAutomation;
+use permission::MacOSPermission;
 use pim::MacOSPim;
 use system::MacOSSystem;
 
@@ -18,6 +20,7 @@ use system::MacOSSystem;
 pub struct MacOSPlatform {
     screen: NativeScreen,
     automation: MacOSAutomation,
+    permission: MacOSPermission,
     pim: MacOSPim,
     system: MacOSSystem,
 }
@@ -28,6 +31,7 @@ impl MacOSPlatform {
         Self {
             screen: NativeScreen::new(),
             automation: MacOSAutomation::new(),
+            permission: MacOSPermission::new(),
             pim: MacOSPim::new(),
             system: MacOSSystem::new(),
         }
@@ -62,7 +66,7 @@ impl DesktopPlatform for MacOSPlatform {
     }
 
     fn permission(&self) -> Option<&dyn PermissionCapability> {
-        None // TODO: wire MacOSPermission in Task 3
+        Some(&self.permission)
     }
 }
 
