@@ -34,58 +34,95 @@ ExtensionManager::load_all()
 
 ```
 ExtensionManager::load_all()
-  → discovery.discover_all()              // existing, returns PluginCandidate list
-  → for each candidate:
-      adapter_registry.parse_dir(path)    // existing, returns AdapterOutput
+  → collect plugin directories from discovery   // NEW: unified scan
+    (discover_skill_dirs + discover_command_dirs + discover_agent_dirs + discover_plugins
+     → deduplicate by path → Vec<(PathBuf, PluginOrigin)>)
+  → for each plugin_dir:
+      adapter_registry.parse_dir(path)           // existing, returns AdapterOutput
       → PluginRecord::from_adapter_output()
-      → CapabilityApi::register_capability()  // writes to PluginRegistry
-  → extract hooks from PluginRegistry → inject into HookExecutor
-  → extract McpServer declarations → inject into PluginLoader (MCP startup)
-  → skill_system loads v2 prompt skills (independent path, not via adapter)
+      → CapabilityApi::register_capability()     // writes to PluginRegistry
+  → sync_hooks_from_registry()                   // NEW: extract hooks → HookExecutor
+  → sync_mcp_from_registry()                     // NEW: extract MCP → PluginLoader
+  → skill_system loads v2 prompt skills          // independent path, not via adapter
+```
+
+#### New methods required
+
+The following methods do NOT currently exist and must be implemented:
+
+1. **`collect_plugin_dirs(&self) -> Vec<(PathBuf, PluginOrigin)>`** — NEW method on ExtensionManager. Calls existing discovery methods (`discover_skill_dirs()`, `discover_command_dirs()`, `discover_agent_dirs()`, `discover_plugins()`), collects all unique root directories, deduplicates by canonical path. Returns `(path, origin)` pairs.
+
+2. **`sync_hooks_from_registry(&self, registry: &PluginRegistry)`** — NEW method. Iterates `registry.list_hooks()`, converts `HookRegistration` to `HookConfig`, injects into `self.hook_executor`.
+
+3. **`sync_mcp_from_registry(&self, registry: &PluginRegistry)`** — NEW method. Iterates registry for McpServer capabilities (via plugin records), schedules MCP server startup via `self.loader`.
+
+4. **`LoadSummary::add_error(&mut self, path: &Path, error: anyhow::Error)`** — NEW method. Pushes formatted error string to `self.errors: Vec<String>`.
+
+#### Permissions handling
+
+`CapabilitySource` currently has no `permissions` field (only `plugin_id`, `origin`, `format`). Permissions must come from the adapter:
+
+**Option chosen**: Add `permissions: Vec<PluginPermission>` field to `AdapterOutput` (not to `CapabilitySource`). Each adapter extracts permissions from the manifest's `[aleph.permissions]` section if present, or returns empty vec (default P0+P1 access). The CC TOML adapter already parses `[aleph]` — it can extract permissions. Other adapters (Codex, Cursor, AutoDiscover) always return empty permissions.
+
+```rust
+pub struct AdapterOutput {
+    pub plugin_id: String,
+    pub name: Option<String>,
+    pub version: Option<String>,
+    pub description: Option<String>,
+    pub capabilities: Vec<CapabilityDeclaration>,
+    pub source: CapabilitySource,
+    pub permissions: Vec<PluginPermission>,  // NEW
+}
 ```
 
 #### Bridge code
 
 ```rust
 pub async fn load_all(&self) -> ExtensionResult<LoadSummary> {
-    let discovered = self.discovery.discover_all()?;
+    let plugin_dirs = self.collect_plugin_dirs()?;
     let mut summary = LoadSummary::default();
 
     let mut registry = self.plugin_registry.write().await;
     registry.clear();
 
-    for candidate in discovered.active_plugins() {
-        match self.adapter_registry.parse_dir(candidate.path()) {
+    for (dir_path, origin) in &plugin_dirs {
+        match self.adapter_registry.parse_dir(dir_path) {
             Ok(output) => {
-                let mut record = PluginRecord::from_adapter_output(&output, candidate.path().to_owned());
-                record.origin = candidate.origin();
+                let mut record = PluginRecord::from_adapter_output(&output, dir_path.clone());
+                record.origin = origin.clone();
                 registry.register_plugin(record);
 
-                let permissions = output.source.permissions.clone();
-                let mut api = CapabilityApi::new(&mut registry, &output.plugin_id, &permissions);
+                let plugin_id = output.plugin_id.clone();
+                let permissions = output.permissions.clone();
+                let mut api = CapabilityApi::new(
+                    &mut registry,
+                    plugin_id,
+                    permissions,
+                );
                 for cap in output.capabilities {
                     if let Err(e) = api.register_capability(cap) {
-                        tracing::warn!(plugin = %output.plugin_id, error = %e, "Failed to register capability");
+                        tracing::warn!(plugin = %output.plugin_id, error = %e, "Capability registration failed");
                     }
                 }
                 summary.plugins_loaded += 1;
             }
             Err(e) => {
-                tracing::warn!(path = %candidate.path().display(), error = %e, "Failed to parse plugin");
-                summary.add_error(candidate.path(), e);
+                tracing::warn!(path = %dir_path.display(), error = %e, "Failed to parse plugin");
+                summary.errors.push(format!("{}: {}", dir_path.display(), e));
             }
         }
     }
 
-    // Extract hooks from PluginRegistry → inject into HookExecutor
-    self.sync_hooks_from_registry(&registry).await;
-
-    // Extract MCP servers → schedule startup
-    self.sync_mcp_from_registry(&registry).await;
+    // Sync hooks and MCP from PluginRegistry to executors
+    self.sync_hooks_from_registry(&registry);
+    self.sync_mcp_from_registry(&registry);
 
     Ok(summary)
 }
 ```
+
+Note: `CapabilityApi::new()` takes owned values (`String`, `Vec<PluginPermission>`), not references. The `record.origin` is set from the discovery origin (which knows Config vs Workspace vs Global vs Bundled priority) rather than from `AdapterOutput.source.origin` — discovery is the authoritative source of origin.
 
 #### v2_prompt migration
 
@@ -130,10 +167,13 @@ Current adapters partially cover these. This spec completes the coverage.
 Add `is_path_inside(root, target)` to `parsers.rs`:
 
 ```rust
+/// Fail-closed: returns false if either path cannot be canonicalized.
+/// This prevents symlink-based bypass attacks.
 fn is_path_inside(root: &Path, target: &Path) -> bool {
-    let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
-    let target = target.canonicalize().unwrap_or_else(|_| target.to_path_buf());
-    target.starts_with(&root)
+    match (root.canonicalize(), target.canonicalize()) {
+        (Ok(root), Ok(target)) => target.starts_with(&root),
+        _ => false,  // fail-closed: deny if paths can't be resolved
+    }
 }
 ```
 
@@ -178,11 +218,11 @@ Already-covered functions (no migration needed): `load_skill_internal`, `load_ho
 
 #### 3.3 Type unification
 
-`ExtensionSkill` and `SkillRegistration` are unified into a single type. `SkillRegistration` is extended with fields from `ExtensionSkill`:
+`ExtensionSkill` and `SkillRegistration` are unified into a single type. `SkillRegistration` is extended with ALL fields from `ExtensionSkill`:
 
 ```rust
 pub struct SkillRegistration {
-    // Existing
+    // Existing fields
     pub name: String,
     pub description: String,
     pub content: String,
@@ -190,25 +230,67 @@ pub struct SkillRegistration {
     pub allowed_tools: Vec<String>,
     pub category: Option<String>,
     pub plugin_id: String,
-    // Added from ExtensionSkill
+    // From ExtensionSkill — required for skill execution and filtering
+    pub skill_type: SkillType,                    // SkillType enum (Skill, Command, Agent)
     pub emoji: Option<String>,
     pub source_path: Option<PathBuf>,
+    pub scope: PromptScope,                       // System, Tool, Standalone, Disabled
+    pub bound_tool: Option<String>,               // Tool this skill is bound to
     pub disable_model_invocation: bool,
     pub cli_wrapper: bool,
+    pub source: Option<String>,                   // Discovery source identifier
+    pub plugin_name: Option<String>,              // Owning plugin name
 }
 ```
 
-Same pattern for `AgentRegistration` — add `ExtensionAgent`'s extra fields.
+Methods migrated from `ExtensionSkill` to `SkillRegistration`:
+- `is_auto_invocable()` — checks scope and triggers
+- `qualified_name()` — returns `plugin_name:name` format
+- `to_skill_info()` — serialization for RPC responses
+- `base_dir()` — derives base directory from source_path
 
-After unification, `ExtensionSkill` and `ExtensionAgent` types in `types/skills.rs` and `types/agents.rs` become deprecated aliases or are deleted outright. All callers migrate to `SkillRegistration`/`AgentRegistration`.
+`AgentRegistration` similarly extended with ALL fields from `ExtensionAgent`:
 
-**Affected callers:**
-- `skill_ops.rs` — return types
-- `sync_api.rs` — return types
-- `skill_tool.rs` — skill execution reads
-- `template.rs` — template rendering
-- `agent_loop/prompt_builder.rs` — prompt construction
-- Gateway plugin handlers — serialization
+```rust
+pub struct AgentRegistration {
+    // Existing fields
+    pub name: String,
+    pub description: String,
+    pub content: String,
+    pub model: Option<String>,
+    pub plugin_id: String,
+    // From ExtensionAgent — required for agent routing and execution
+    pub mode: AgentMode,                          // Primary, Sub, Hidden
+    pub hidden: bool,
+    pub color: Option<String>,
+    pub temperature: Option<f32>,
+    pub top_p: Option<f32>,
+    pub steps: Option<u32>,
+    pub tools: Vec<String>,                       // Allowed tools for this agent
+    pub permission: Option<String>,
+    pub options: HashMap<String, String>,
+    pub system_prompt: Option<String>,            // Separate from content
+    pub source_path: Option<PathBuf>,
+    pub source: Option<String>,
+    pub plugin_name: Option<String>,
+}
+```
+
+Methods migrated from `ExtensionAgent`:
+- `is_primary()` / `is_subagent()` — mode-based filtering
+- `qualified_name()` — returns `plugin_name:name`
+- `to_agent_info()` — serialization for RPC responses
+
+After unification, `ExtensionSkill` in `types/skills.rs` and `ExtensionAgent` in `types/agents.rs` become `pub type` aliases pointing to the Registry types, then deleted in a subsequent cleanup pass.
+
+**Affected callers (complete list):**
+- `skill_ops.rs` — return types, `get_all_skills()`, `get_skill()`, `install_skill()`, `delete_skill()`
+- `sync_api.rs` — return types for sync wrappers
+- `skill_tool.rs` — `invoke_skill()` takes `&SkillRegistration`, accesses `source_path`, `base_dir()`, `qualified_name()`, `disable_model_invocation`
+- `template.rs` — template rendering, `source_path` access
+- `agent_loop/prompt_builder.rs` — prompt construction, reads `content`, `system_prompt`
+- Gateway plugin handlers — serialization to `PluginInfoJson`, `SkillInfoJson`
+- `mod.rs` — `ExtensionManager::reload()` method, clear + reload logic (must update alongside field removal)
 
 #### 3.4 ExtensionManager field removal
 
@@ -226,6 +308,8 @@ pub async fn get_all_skills(&self) -> Vec<SkillRegistration> {
     reg.list_skills().into_iter().cloned().collect()
 }
 ```
+
+`ExtensionManager::reload()` method (which clears `self.skills`, `self.commands`, `self.agents` before calling `load_all()`) must also be updated — after field removal, `reload()` only needs to call `load_all()` which handles `registry.clear()` internally.
 
 #### 3.5 manifest/mod.rs slimming
 
