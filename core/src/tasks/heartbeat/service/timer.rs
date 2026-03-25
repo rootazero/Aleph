@@ -18,6 +18,7 @@ use crate::tasks::heartbeat::dedup::DedupEngine;
 use crate::tasks::heartbeat::executor::{
     build_heartbeat_prompt, HeartbeatExecutionAdapter, HeartbeatL2Status,
 };
+use crate::tasks::heartbeat::history::HeartbeatRunRecord;
 use crate::tasks::heartbeat::probe::{execute_probe, ProbeExecutor};
 use crate::tasks::heartbeat::service::state::HeartbeatServiceState;
 use crate::tasks::heartbeat::wake::{WakeQueue, WakeRequest};
@@ -286,6 +287,18 @@ async fn writeback_results(
                 task.state.last_probe_result = Some(pr.clone());
             }
 
+            // Update L2 status
+            if let Some(ref l2_status) = tick_result.l2_status {
+                task.state.last_l2_at_ms = Some(now_ms);
+                task.state.last_l2_status = match l2_status.as_str() {
+                    "Silent" => Some(crate::tasks::cron::config::RunStatus::Ok),
+                    "Delivered" => Some(crate::tasks::cron::config::RunStatus::Ok),
+                    "Deduped" => Some(crate::tasks::cron::config::RunStatus::Skipped),
+                    "Error" => Some(crate::tasks::cron::config::RunStatus::Error),
+                    _ => None,
+                };
+            }
+
             let had_error = tick_result.error.is_some()
                 || tick_result.l2_status.as_deref() == Some("Error");
 
@@ -301,6 +314,25 @@ async fn writeback_results(
             let interval = task.interval_ms as i64;
             let backoff = error_backoff_ms(task.state.consecutive_errors) as i64;
             task.state.next_due_ms = Some(now_ms + interval + backoff);
+
+            // Write history record
+            let run_record = HeartbeatRunRecord {
+                id: uuid::Uuid::new_v4().to_string(),
+                task_id: task_id.clone(),
+                trigger_source: "Interval".to_string(),
+                l1_status: tick_result.l1_status.clone(),
+                l2_status: tick_result.l2_status.clone(),
+                started_at: now_ms - tick_result.l1_duration_ms - tick_result.l2_duration_ms.unwrap_or(0),
+                ended_at: Some(now_ms),
+                l1_duration_ms: Some(tick_result.l1_duration_ms),
+                l2_duration_ms: tick_result.l2_duration_ms,
+                error: tick_result.error.clone(),
+                delivery_status: tick_result.delivery_status.clone(),
+                created_at: now_ms,
+            };
+            if let Err(e) = store.insert_run(&run_record) {
+                error!(error = %e, "failed to insert heartbeat run record");
+            }
 
             store.mark_dirty();
         }
