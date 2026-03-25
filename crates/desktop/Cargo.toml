@@ -53,3 +53,14 @@ windows = { version = "0.58", features = [
     "Win32_UI_Accessibility",
     "Win32_System_Com",
 ] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", features = ["NSString", "NSArray", "NSData", "NSURL"] }
+objc2-vision = { version = "0.3", features = [
+    "VNRecognizeTextRequest", "VNObservation",
+    "VNRequestHandler", "VNRequest",
+] }
+objc2-app-kit = { version = "0.3", features = ["NSRunningApplication", "NSWorkspace"] }
+core-graphics = "0.25"
+core-foundation = "0.10"
