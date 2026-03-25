@@ -51,6 +51,12 @@ impl Lane {
             _ => Lane::Query,
         }
     }
+
+    /// Whether this lane's methods should be idempotency-guarded.
+    /// Query lane is read-only and doesn't need protection.
+    pub fn needs_idempotency(&self) -> bool {
+        !matches!(self, Lane::Query)
+    }
 }
 
 impl fmt::Display for Lane {
@@ -235,6 +241,14 @@ mod tests {
                 assert_eq!(lane, Lane::Execute);
             }
         }
+    }
+
+    #[test]
+    fn test_needs_idempotency() {
+        assert!(!Lane::Query.needs_idempotency());
+        assert!(Lane::Execute.needs_idempotency());
+        assert!(Lane::Mutate.needs_idempotency());
+        assert!(Lane::System.needs_idempotency());
     }
 
     #[tokio::test]
