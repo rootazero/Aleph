@@ -11,6 +11,7 @@ use crate::views::memory::Memory;
 use crate::views::chat::ChatView;
 use crate::views::cron::CronView;
 use crate::views::logs::Logs;
+use crate::views::tasks::TasksView;
 use crate::views::settings::*;
 // Layout components
 use crate::components::top_bar::TopBar;
@@ -119,6 +120,7 @@ fn DashboardRouter() -> impl IntoView {
             "/dashboard/trace" => view! { <AgentTrace /> }.into_any(),
             "/dashboard/memory" => view! { <Memory /> }.into_any(),
             "/dashboard/cron" => view! { <CronView /> }.into_any(),
+            "/dashboard/tasks" => view! { <TasksView /> }.into_any(),
             "/dashboard/logs" => view! { <Logs /> }.into_any(),
             // Not in dashboard mode — render nothing (div is hidden)
             _ => ().into_any(),

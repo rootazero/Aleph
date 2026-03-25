@@ -5,6 +5,7 @@
 pub mod agents;
 pub mod chat;
 pub mod cron;
+pub mod heartbeat;
 pub mod tool_permissions;
 
 // Split submodules

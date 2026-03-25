@@ -27,7 +27,7 @@ pub fn DashboardSidebar() -> impl IntoView {
                     <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3" />
                     <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5" />
                 </SidebarItem>
-                <SidebarItem href="/dashboard/cron" label=Signal::derive(move || t_string!(i18n, dashboard.sidebar.scheduled_tasks).to_string())>
+                <SidebarItem href="/dashboard/tasks" label=Signal::derive(move || t_string!(i18n, dashboard.sidebar.scheduled_tasks).to_string())>
                     <circle cx="12" cy="12" r="10" />
                     <polyline points="12 6 12 12 16 14" />
                 </SidebarItem>
