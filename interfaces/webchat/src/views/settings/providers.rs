@@ -995,10 +995,11 @@ fn ProviderDetailPanel(
                                                     class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
                                                 >
                                                     <option value="openai">{t!(i18n, settings.providers.protocol_openai)}</option>
+                                                    <option value="openai-responses">{t!(i18n, settings.providers.protocol_openai_responses)}</option>
                                                     <option value="anthropic">{t!(i18n, settings.providers.protocol_anthropic)}</option>
                                                     <option value="gemini">{t!(i18n, settings.providers.protocol_gemini)}</option>
                                                     <option value="ollama">{t!(i18n, settings.providers.protocol_ollama)}</option>
-                                                    <option value="chatgpt">{t!(i18n, settings.providers.protocol_chatgpt)}</option>
+                                                    <option value="codex">{t!(i18n, settings.providers.protocol_codex)}</option>
                                                 </select>
                                             </div>
 
