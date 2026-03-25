@@ -14,3 +14,17 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tracing = "0.1"
 hostname.workspace = true
+base64 = { workspace = true }
+image = { workspace = true }
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", features = [
+    "NSString", "NSArray", "NSDictionary", "NSProcessInfo", "NSURL",
+    "NSData", "NSEnumerator", "NSBundle",
+] }
+objc2-app-kit = { version = "0.3", features = [
+    "NSPasteboard", "NSWorkspace", "NSRunningApplication", "NSImage",
+] }
+objc2-user-notifications = { version = "0.3", features = [
+    "UNUserNotificationCenter", "UNNotificationContent",
+    "UNNotificationRequest", "UNNotificationSound",
+] }
