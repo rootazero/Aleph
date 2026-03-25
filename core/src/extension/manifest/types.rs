@@ -10,8 +10,8 @@ use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-// V2 field types from aleph_plugin_toml module
-use super::aleph_plugin_toml::{
+// V2 field types from toml_types module
+use super::toml_types::{
     CapabilitiesSection, ChannelSection, CommandSection, HookSection, HttpRouteSection,
     PermissionsSection, PromptSection, ProviderSection, ServiceSection, ToolSection,
 };

@@ -1,0 +1,535 @@
+//! TOML manifest types, parsing, and conversion
+//!
+//! This module consolidates all TOML-specific types and parsing from the
+//! former `aleph_plugin_toml/` directory into a single file.
+//!
+//! It provides:
+//! - `AlephPluginToml` and section structs for deserialization
+//! - WASM capability TOML types and conversion
+//! - `convert_permissions` for permission section handling
+//! - `parse_aleph_plugin_toml*` functions for aleph.plugin.toml parsing
+
+use crate::extension::error::{ExtensionError, ExtensionResult};
+use crate::extension::manifest::types::{AuthorInfo, ConfigUiHint, PluginManifest};
+use crate::extension::manifest::{sanitize_plugin_id, validate_plugin_id};
+use crate::extension::runtime::wasm::{
+    CredentialBinding, CredentialInject, EndpointPattern, HttpCapability, RateLimit,
+    SecretsCapability, ToolInvokeCapability, WasmCapabilities, WorkspaceCapability,
+};
+use crate::extension::types::PluginKind;
+use serde::{Deserialize, Serialize};
+use serde_json::Value as JsonValue;
+use std::collections::HashMap;
+use std::path::Path;
+
+use super::types::PluginPermission;
+
+// =============================================================================
+// Constants
+// =============================================================================
+
+/// TOML manifest filename
+pub const ALEPH_PLUGIN_TOML: &str = "aleph.plugin.toml";
+
+// =============================================================================
+// Root TOML Structure
+// =============================================================================
+
+/// Root structure for aleph.plugin.toml
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AlephPluginToml {
+    pub plugin: PluginSection,
+    #[serde(default)]
+    pub permissions: PermissionsSection,
+    #[serde(default)]
+    pub prompt: Option<PromptSection>,
+    #[serde(default)]
+    pub tools: Vec<ToolSection>,
+    #[serde(default)]
+    pub hooks: Vec<HookSection>,
+    #[serde(default)]
+    pub commands: Vec<CommandSection>,
+    #[serde(default)]
+    pub services: Vec<ServiceSection>,
+    #[serde(default)]
+    pub capabilities: CapabilitiesSection,
+    #[serde(default)]
+    pub channels: Vec<ChannelSection>,
+    #[serde(default)]
+    pub providers: Vec<ProviderSection>,
+    #[serde(default)]
+    pub http_routes: Vec<HttpRouteSection>,
+}
+
+// =============================================================================
+// Section Types
+// =============================================================================
+
+/// Plugin metadata section
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginSection {
+    pub id: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub version: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub kind: Option<PluginKind>,
+    #[serde(default)]
+    pub entry: Option<String>,
+    #[serde(default)]
+    pub author: Option<PluginAuthorToml>,
+    #[serde(default)]
+    pub config_schema: Option<JsonValue>,
+    #[serde(default)]
+    pub config_ui_hints: Option<HashMap<String, ConfigUiHint>>,
+    #[serde(default)]
+    pub homepage: Option<String>,
+    #[serde(default)]
+    pub repository: Option<String>,
+    #[serde(default)]
+    pub license: Option<String>,
+    #[serde(default)]
+    pub keywords: Option<Vec<String>>,
+    #[serde(default)]
+    pub extensions: Option<Vec<String>>,
+}
+
+/// Plugin author information (TOML format)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginAuthorToml {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub email: Option<String>,
+    #[serde(default)]
+    pub url: Option<String>,
+}
+
+impl From<PluginAuthorToml> for AuthorInfo {
+    fn from(author: PluginAuthorToml) -> Self {
+        AuthorInfo {
+            name: author.name,
+            email: author.email,
+            url: author.url,
+        }
+    }
+}
+
+/// Permissions section
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PermissionsSection {
+    #[serde(default)]
+    pub network: bool,
+    #[serde(default)]
+    pub filesystem: FilesystemPermission,
+    #[serde(default)]
+    pub env: bool,
+    #[serde(default)]
+    pub shell: bool,
+}
+
+/// Filesystem permission level
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum FilesystemPermission {
+    Bool(bool),
+    Level(String),
+}
+
+impl Default for FilesystemPermission {
+    fn default() -> Self {
+        FilesystemPermission::Bool(false)
+    }
+}
+
+impl FilesystemPermission {
+    pub fn can_read(&self) -> bool {
+        match self {
+            FilesystemPermission::Bool(true) => true,
+            FilesystemPermission::Bool(false) => false,
+            FilesystemPermission::Level(s) => matches!(s.as_str(), "read" | "write" | "full"),
+        }
+    }
+
+    pub fn can_write(&self) -> bool {
+        match self {
+            FilesystemPermission::Bool(true) => true,
+            FilesystemPermission::Bool(false) => false,
+            FilesystemPermission::Level(s) => matches!(s.as_str(), "write" | "full"),
+        }
+    }
+}
+
+/// System prompt section
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PromptSection {
+    pub file: String,
+    #[serde(default = "default_prompt_scope")]
+    pub scope: String,
+}
+
+fn default_prompt_scope() -> String {
+    "system".to_string()
+}
+
+/// Tool definition section
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolSection {
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub handler: Option<String>,
+    #[serde(default)]
+    pub instruction_file: Option<String>,
+    #[serde(default)]
+    pub parameters: Option<JsonValue>,
+}
+
+/// Hook definition section
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HookSection {
+    pub event: String,
+    #[serde(default = "default_hook_kind")]
+    pub kind: String,
+    #[serde(default)]
+    pub handler: Option<String>,
+    #[serde(default = "default_hook_priority")]
+    pub priority: String,
+    #[serde(default)]
+    pub filter: Option<String>,
+}
+
+fn default_hook_kind() -> String {
+    "observer".to_string()
+}
+
+fn default_hook_priority() -> String {
+    "normal".to_string()
+}
+
+/// Command definition section
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommandSection {
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub handler: Option<String>,
+    #[serde(default)]
+    pub prompt_file: Option<String>,
+}
+
+/// Service definition section
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServiceSection {
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub start_handler: Option<String>,
+    #[serde(default)]
+    pub stop_handler: Option<String>,
+}
+
+/// Advanced capabilities section
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CapabilitiesSection {
+    #[serde(default)]
+    pub dynamic_tools: bool,
+    #[serde(default)]
+    pub dynamic_hooks: bool,
+    #[serde(default)]
+    pub workspace: Option<WasmWorkspaceToml>,
+    #[serde(default)]
+    pub http: Option<WasmHttpToml>,
+    #[serde(default)]
+    pub tool_invoke: Option<WasmToolInvokeToml>,
+    #[serde(default)]
+    pub secrets: Option<WasmSecretsToml>,
+}
+
+/// Channel definition section
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChannelSection {
+    pub id: String,
+    pub label: String,
+    #[serde(default)]
+    pub handler: Option<String>,
+    #[serde(default)]
+    pub config_schema: Option<JsonValue>,
+}
+
+/// Provider definition section
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderSection {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub models: Vec<String>,
+    #[serde(default)]
+    pub handler: Option<String>,
+    #[serde(default)]
+    pub config_schema: Option<JsonValue>,
+}
+
+/// HTTP route definition section
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HttpRouteSection {
+    pub path: String,
+    #[serde(default)]
+    pub methods: Vec<String>,
+    pub handler: String,
+}
+
+// =============================================================================
+// WASM Capability TOML Types
+// =============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WasmWorkspaceToml {
+    #[serde(default)]
+    pub allowed_prefixes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WasmHttpToml {
+    #[serde(default)]
+    pub allowlist: Vec<WasmEndpointToml>,
+    #[serde(default)]
+    pub credentials: Vec<WasmCredentialToml>,
+    #[serde(default)]
+    pub rate_limit: Option<WasmRateLimitToml>,
+    #[serde(default = "default_http_timeout")]
+    pub timeout_secs: u64,
+    #[serde(default = "default_max_request_bytes")]
+    pub max_request_bytes: usize,
+    #[serde(default = "default_max_response_bytes")]
+    pub max_response_bytes: usize,
+}
+
+fn default_http_timeout() -> u64 { 30 }
+fn default_max_request_bytes() -> usize { 1_048_576 }
+fn default_max_response_bytes() -> usize { 10_485_760 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WasmEndpointToml {
+    pub host: String,
+    #[serde(default = "default_toml_path_prefix")]
+    pub path_prefix: String,
+    #[serde(default)]
+    pub methods: Vec<String>,
+}
+
+fn default_toml_path_prefix() -> String { "/".to_string() }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WasmCredentialToml {
+    pub secret_name: String,
+    pub inject: WasmCredentialInjectToml,
+    #[serde(default)]
+    pub host_patterns: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum WasmCredentialInjectToml {
+    Bearer,
+    Basic { username: String },
+    Header { name: String, #[serde(default)] prefix: Option<String> },
+    Query { param_name: String },
+    UrlPath { placeholder: String },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WasmRateLimitToml {
+    #[serde(default)]
+    pub requests_per_minute: u32,
+    #[serde(default)]
+    pub requests_per_hour: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WasmToolInvokeToml {
+    #[serde(default)]
+    pub aliases: HashMap<String, String>,
+    #[serde(default = "default_toml_max_per_execution")]
+    pub max_per_execution: u32,
+}
+
+fn default_toml_max_per_execution() -> u32 { 20 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WasmSecretsToml {
+    #[serde(default)]
+    pub allowed_patterns: Vec<String>,
+}
+
+// =============================================================================
+// WASM Capability Conversion
+// =============================================================================
+
+/// Convert TOML capabilities section to runtime WasmCapabilities
+pub fn convert_wasm_capabilities(caps: &CapabilitiesSection) -> Option<WasmCapabilities> {
+    if caps.workspace.is_none()
+        && caps.http.is_none()
+        && caps.tool_invoke.is_none()
+        && caps.secrets.is_none()
+    {
+        return None;
+    }
+
+    Some(WasmCapabilities {
+        workspace: caps.workspace.as_ref().map(|w| WorkspaceCapability {
+            allowed_prefixes: w.allowed_prefixes.clone(),
+        }),
+        http: caps.http.as_ref().map(|h| HttpCapability {
+            allowlist: h.allowlist.iter().map(|e| EndpointPattern {
+                host: e.host.clone(),
+                path_prefix: e.path_prefix.clone(),
+                methods: e.methods.clone(),
+            }).collect(),
+            credentials: h.credentials.iter().map(|c| CredentialBinding {
+                secret_name: c.secret_name.clone(),
+                inject: convert_credential_inject(&c.inject),
+                host_patterns: c.host_patterns.clone(),
+            }).collect(),
+            rate_limit: h.rate_limit.as_ref().map(|r| RateLimit {
+                requests_per_minute: r.requests_per_minute,
+                requests_per_hour: r.requests_per_hour,
+            }),
+            timeout_secs: h.timeout_secs,
+            max_request_bytes: h.max_request_bytes,
+            max_response_bytes: h.max_response_bytes,
+        }),
+        tool_invoke: caps.tool_invoke.as_ref().map(|t| ToolInvokeCapability {
+            aliases: t.aliases.clone(),
+            max_per_execution: t.max_per_execution,
+        }),
+        secrets: caps.secrets.as_ref().map(|s| SecretsCapability {
+            allowed_patterns: s.allowed_patterns.clone(),
+        }),
+    })
+}
+
+fn convert_credential_inject(inject: &WasmCredentialInjectToml) -> CredentialInject {
+    match inject {
+        WasmCredentialInjectToml::Bearer => CredentialInject::Bearer,
+        WasmCredentialInjectToml::Basic { username } => CredentialInject::Basic { username: username.clone() },
+        WasmCredentialInjectToml::Header { name, prefix } => CredentialInject::Header { name: name.clone(), prefix: prefix.clone() },
+        WasmCredentialInjectToml::Query { param_name } => CredentialInject::Query { param_name: param_name.clone() },
+        WasmCredentialInjectToml::UrlPath { placeholder } => CredentialInject::UrlPath { placeholder: placeholder.clone() },
+    }
+}
+
+// =============================================================================
+// Permission Conversion
+// =============================================================================
+
+/// Convert TOML permissions section to PluginPermission list
+pub fn convert_permissions(perms: &PermissionsSection) -> Vec<PluginPermission> {
+    let mut permissions = Vec::new();
+    if perms.network {
+        permissions.push(PluginPermission::Network);
+    }
+    match &perms.filesystem {
+        FilesystemPermission::Bool(true) => permissions.push(PluginPermission::Filesystem),
+        FilesystemPermission::Bool(false) => {}
+        FilesystemPermission::Level(level) => match level.as_str() {
+            "read" => permissions.push(PluginPermission::FilesystemRead),
+            "write" => permissions.push(PluginPermission::FilesystemWrite),
+            "full" => permissions.push(PluginPermission::Filesystem),
+            _ => {}
+        },
+    }
+    if perms.env {
+        permissions.push(PluginPermission::Env);
+    }
+    if perms.shell {
+        permissions.push(PluginPermission::Custom("shell".to_string()));
+    }
+    permissions
+}
+
+// =============================================================================
+// Parsing Functions
+// =============================================================================
+
+/// Parse an aleph.plugin.toml file into a PluginManifest (async)
+pub async fn parse_aleph_plugin_toml(dir: &Path) -> ExtensionResult<PluginManifest> {
+    let toml_path = dir.join(ALEPH_PLUGIN_TOML);
+    let content = tokio::fs::read_to_string(&toml_path).await?;
+    parse_aleph_plugin_toml_content(&content, dir)
+}
+
+/// Parse an aleph.plugin.toml file into a PluginManifest (sync)
+pub fn parse_aleph_plugin_toml_sync(dir: &Path) -> ExtensionResult<PluginManifest> {
+    let toml_path = dir.join(ALEPH_PLUGIN_TOML);
+    let content = std::fs::read_to_string(&toml_path)?;
+    parse_aleph_plugin_toml_content(&content, dir)
+}
+
+/// Parse TOML content into a PluginManifest
+pub fn parse_aleph_plugin_toml_content(
+    content: &str,
+    plugin_dir: &Path,
+) -> ExtensionResult<PluginManifest> {
+    let toml_path = plugin_dir.join(ALEPH_PLUGIN_TOML);
+
+    let toml: AlephPluginToml = toml::from_str(content)
+        .map_err(|e| ExtensionError::invalid_manifest(&toml_path, format!("TOML parse error: {}", e)))?;
+
+    let plugin_id = if toml.plugin.id.is_empty() {
+        return Err(ExtensionError::missing_field(&toml_path, "plugin.id"));
+    } else {
+        let sanitized = sanitize_plugin_id(&toml.plugin.id);
+        validate_plugin_id(&sanitized)
+            .map_err(|reason| ExtensionError::invalid_plugin_name(&toml.plugin.id, reason))?;
+        sanitized
+    };
+
+    let name = toml.plugin.name.unwrap_or_else(|| plugin_id.clone());
+    let kind = toml.plugin.kind.unwrap_or(PluginKind::Wasm);
+
+    let entry = toml.plugin.entry.unwrap_or_else(|| match kind {
+        PluginKind::Wasm => "plugin.wasm".to_string(),
+        PluginKind::Mcp => ".mcp.json".to_string(),
+        PluginKind::Static => ".".to_string(),
+    });
+
+    let permissions = convert_permissions(&toml.permissions);
+
+    Ok(PluginManifest {
+        id: plugin_id,
+        name,
+        version: toml.plugin.version,
+        description: toml.plugin.description,
+        kind,
+        entry: entry.into(),
+        root_dir: plugin_dir.to_path_buf(),
+        config_schema: toml.plugin.config_schema,
+        config_ui_hints: toml.plugin.config_ui_hints.unwrap_or_default(),
+        permissions,
+        author: toml.plugin.author.map(AuthorInfo::from),
+        homepage: toml.plugin.homepage,
+        repository: toml.plugin.repository,
+        license: toml.plugin.license,
+        keywords: toml.plugin.keywords.unwrap_or_default(),
+        extensions: toml.plugin.extensions.unwrap_or_default(),
+        tools_v2: if toml.tools.is_empty() { None } else { Some(toml.tools) },
+        hooks_v2: if toml.hooks.is_empty() { None } else { Some(toml.hooks) },
+        commands_v2: if toml.commands.is_empty() { None } else { Some(toml.commands) },
+        services_v2: if toml.services.is_empty() { None } else { Some(toml.services) },
+        prompt_v2: toml.prompt,
+        wasm_capabilities: convert_wasm_capabilities(&toml.capabilities),
+        wasm_resource_limits: None,
+        capabilities_v2: Some(toml.capabilities),
+        channels_v2: if toml.channels.is_empty() { None } else { Some(toml.channels) },
+        providers_v2: if toml.providers.is_empty() { None } else { Some(toml.providers) },
+        http_routes_v2: if toml.http_routes.is_empty() { None } else { Some(toml.http_routes) },
+        aleph_extensions: None,
+    })
+}

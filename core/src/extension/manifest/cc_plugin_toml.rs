@@ -9,8 +9,8 @@ use std::path::Path;
 use serde::Deserialize;
 
 use crate::extension::error::{ExtensionError, ExtensionResult};
-use crate::extension::manifest::aleph_plugin::{sanitize_plugin_id, validate_plugin_id};
-use crate::extension::manifest::aleph_plugin_toml::{
+use crate::extension::manifest::{sanitize_plugin_id, validate_plugin_id};
+use crate::extension::manifest::toml_types::{
     CapabilitiesSection, ChannelSection, PermissionsSection, ProviderSection, ServiceSection,
     convert_permissions,
 };
@@ -160,7 +160,6 @@ fn runtime_to_aleph_runtime(runtime: &str) -> AlephRuntime {
 fn default_entry_for_kind(kind: PluginKind) -> String {
     match kind {
         PluginKind::Wasm => "plugin.wasm".to_string(),
-        PluginKind::Mcp => "index.js".to_string(),
         PluginKind::Mcp => ".mcp.json".to_string(),
         PluginKind::Static => ".".to_string(),
     }

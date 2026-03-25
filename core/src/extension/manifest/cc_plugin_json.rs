@@ -10,7 +10,7 @@ use serde::Deserialize;
 use serde_json::Value as JsonValue;
 
 use crate::extension::error::{ExtensionError, ExtensionResult};
-use crate::extension::manifest::aleph_plugin::{sanitize_plugin_id, validate_plugin_id};
+use crate::extension::manifest::{sanitize_plugin_id, validate_plugin_id};
 use crate::extension::manifest::types::{AlephExtensions, AlephRuntime, AuthorInfo, PluginManifest};
 use crate::extension::types::PluginKind;
 
@@ -135,7 +135,6 @@ fn runtime_to_kind(runtime: &str) -> PluginKind {
 fn default_entry_for_kind(kind: PluginKind) -> String {
     match kind {
         PluginKind::Wasm => "plugin.wasm".to_string(),
-        PluginKind::Mcp => "index.js".to_string(),
         PluginKind::Mcp => ".mcp.json".to_string(),
         PluginKind::Static => ".".to_string(),
     }
@@ -198,7 +197,7 @@ pub fn parse_cc_plugin_json_content(
             .permissions
             .as_ref()
             .map(|p| {
-                use crate::extension::manifest::aleph_plugin_toml::convert_permissions;
+                use crate::extension::manifest::toml_types::convert_permissions;
                 convert_permissions(p)
             })
             .unwrap_or_default();
@@ -474,7 +473,7 @@ mod tests {
         }"#;
         let manifest = parse_cc_plugin_json_content(content, &test_dir()).unwrap();
         assert_eq!(manifest.kind, PluginKind::Mcp);
-        assert_eq!(manifest.entry, PathBuf::from("index.js"));
+        assert_eq!(manifest.entry, PathBuf::from(".mcp.json"));
     }
 
     #[test]
