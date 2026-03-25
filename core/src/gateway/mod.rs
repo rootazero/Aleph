@@ -72,6 +72,7 @@ pub mod execution_adapter;
 pub mod session_scheduler;
 pub mod inter_agent_policy;
 pub mod context;
+pub mod idempotency;
 pub mod lane;
 pub mod webhook_receiver;
 pub mod webhooks;

@@ -10,7 +10,7 @@ use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
-use tracing::{info, warn};
+use tracing::{info, warn, debug};
 use axum::{
     Router,
     routing::get,
@@ -92,6 +92,7 @@ pub struct GatewaySharedState {
     pub state_versions: Arc<StateVersionTracker>,
     pub rate_limiter: Arc<RateLimiter>,
     pub lane_manager: Arc<LaneManager>,
+    pub idempotency_guard: Arc<crate::gateway::idempotency::IdempotencyGuard>,
     pub event_scope_guard: Arc<EventScopeGuard>,
     pub audit_log: Option<crate::security::audit::SecurityAuditLog>,
 }
@@ -157,6 +158,8 @@ pub struct GatewayServer {
     pub rate_limiter: Arc<RateLimiter>,
     /// Lane-based concurrency control for RPC methods
     pub lane_manager: Arc<LaneManager>,
+    /// Idempotency guard for preventing duplicate RPC execution
+    pub idempotency_guard: Arc<crate::gateway::idempotency::IdempotencyGuard>,
     /// Permission-based event scope guard
     pub event_scope_guard: Arc<EventScopeGuard>,
     /// Server start time for uptime calculation
@@ -191,6 +194,9 @@ impl GatewayServer {
             state_versions: Arc::new(StateVersionTracker::new()),
             rate_limiter: Arc::new(RateLimiter::new(RateLimitConfig::default())),
             lane_manager: Arc::new(LaneManager::new(LaneConfig::default())),
+            idempotency_guard: Arc::new(crate::gateway::idempotency::IdempotencyGuard::new(
+                std::time::Duration::from_secs(300), // 5 minute TTL
+            )),
             event_scope_guard: Arc::new(EventScopeGuard::default_rules()),
             start_time: Instant::now(),
             a2a_state: None,
@@ -221,6 +227,9 @@ impl GatewayServer {
             state_versions: Arc::new(StateVersionTracker::new()),
             rate_limiter: Arc::new(RateLimiter::new(RateLimitConfig::default())),
             lane_manager: Arc::new(LaneManager::new(LaneConfig::default())),
+            idempotency_guard: Arc::new(crate::gateway::idempotency::IdempotencyGuard::new(
+                std::time::Duration::from_secs(300), // 5 minute TTL
+            )),
             event_scope_guard: Arc::new(EventScopeGuard::default_rules()),
             start_time: Instant::now(),
             a2a_state: None,
@@ -281,6 +290,7 @@ impl GatewayServer {
             state_versions: self.state_versions.clone(),
             rate_limiter: self.rate_limiter.clone(),
             lane_manager: self.lane_manager.clone(),
+            idempotency_guard: self.idempotency_guard.clone(),
             event_scope_guard: self.event_scope_guard.clone(),
             audit_log: None,
         });
@@ -321,6 +331,19 @@ impl GatewayServer {
             loop {
                 interval.tick().await;
                 rl.prune_stale(Duration::from_secs(300));
+            }
+        });
+
+        // Background: prune stale idempotency entries every 60s
+        let ig = self.idempotency_guard.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(60));
+            loop {
+                interval.tick().await;
+                let pruned = ig.prune();
+                if pruned > 0 {
+                    debug!("Pruned {} expired idempotency entries", pruned);
+                }
             }
         });
 

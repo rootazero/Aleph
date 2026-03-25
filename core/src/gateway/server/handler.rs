@@ -41,6 +41,7 @@ struct ConnectionContext {
     state_versions: Arc<StateVersionTracker>,
     rate_limiter: Arc<RateLimiter>,
     lane_manager: Arc<LaneManager>,
+    idempotency_guard: Arc<crate::gateway::idempotency::IdempotencyGuard>,
     event_scope_guard: Arc<EventScopeGuard>,
 }
 
@@ -69,6 +70,7 @@ pub(super) async fn ws_upgrade_handler(
             state_versions: state.state_versions.clone(),
             rate_limiter: state.rate_limiter.clone(),
             lane_manager: state.lane_manager.clone(),
+            idempotency_guard: state.idempotency_guard.clone(),
             event_scope_guard: state.event_scope_guard.clone(),
         };
         if let Err(e) = handle_connection(socket, peer_addr, ctx).await {
