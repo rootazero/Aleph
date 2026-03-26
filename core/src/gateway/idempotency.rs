@@ -38,15 +38,28 @@ pub struct IdempotencySlot {
 
 impl IdempotencySlot {
     /// Mark this slot as completed with a result. Consumes the guard.
+    ///
+    /// Uses entry().and_modify() for atomic InFlight→Complete transition,
+    /// preventing a TOCTOU race where a concurrent request could see
+    /// a vacant key between remove() and insert().
     pub fn complete(mut self, result: Value) {
         if let Some(cache) = self.guard.take() {
-            // Atomically remove InFlight and notify waiters, then insert Complete
-            if let Some((_, old)) = cache.remove(&self.key) {
-                if let CacheEntry::InFlight(tx) = old {
+            let key = self.key.clone();
+            let mut notified = false;
+
+            // Atomic transition: InFlight → Complete (notify waiters in-place)
+            cache.entry(key.clone()).and_modify(|entry| {
+                if let CacheEntry::InFlight(tx) = entry {
                     let _ = tx.send(Some(result.clone()));
+                    notified = true;
                 }
+                *entry = CacheEntry::Complete(result.clone(), Instant::now());
+            });
+
+            // If entry was already removed (e.g., expired by prune), insert fresh
+            if !notified {
+                cache.entry(key).or_insert(CacheEntry::Complete(result, Instant::now()));
             }
-            cache.insert(self.key.clone(), CacheEntry::Complete(result, Instant::now()));
         }
     }
 

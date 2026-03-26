@@ -4,10 +4,22 @@
 //! using the refresh_token grant.
 
 use anyhow::Result;
+use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{debug, info};
 
 use super::OAuthCredential;
+
+/// Shared HTTP client for OAuth token refresh (reuses connection pool).
+fn oauth_client() -> &'static reqwest::Client {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .unwrap_or_default()
+    })
+}
 
 /// Default refresh margin: refresh 5 minutes before expiry.
 const REFRESH_MARGIN_SECS: u64 = 300;
@@ -57,7 +69,7 @@ pub async fn refresh_token(cred: &OAuthCredential) -> Result<OAuthCredential> {
             )
         })?;
 
-    let client = reqwest::Client::new();
+    let client = oauth_client();
     let mut form: Vec<(&str, &str)> = vec![
         ("grant_type", "refresh_token"),
         ("refresh_token", refresh_token),

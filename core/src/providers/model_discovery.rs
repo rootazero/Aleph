@@ -5,8 +5,8 @@
 
 use async_trait::async_trait;
 use serde::Serialize;
-use std::sync::Mutex;
 use std::time::{Duration, Instant};
+use tokio::sync::RwLock;
 
 /// A model discovered at runtime from a provider's API.
 #[derive(Debug, Clone, Serialize)]
@@ -29,9 +29,10 @@ pub trait ModelDiscovery: Send + Sync {
 
 /// Cached model discovery wrapper.
 /// Caches results for a configurable duration to avoid frequent API calls.
+/// Uses `tokio::sync::RwLock` for async-safe shared reads when cache is warm.
 pub struct CachedDiscovery {
     inner: Box<dyn ModelDiscovery>,
-    cache: Mutex<Option<(Vec<DiscoveredModel>, Instant)>>,
+    cache: RwLock<Option<(Vec<DiscoveredModel>, Instant)>>,
     ttl: Duration,
 }
 
@@ -39,15 +40,15 @@ impl CachedDiscovery {
     pub fn new(inner: Box<dyn ModelDiscovery>, ttl: Duration) -> Self {
         Self {
             inner,
-            cache: Mutex::new(None),
+            cache: RwLock::new(None),
             ttl,
         }
     }
 
     pub async fn discover(&self) -> anyhow::Result<Vec<DiscoveredModel>> {
-        // Check cache
+        // Check cache (shared read — no contention when warm)
         {
-            let cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
+            let cache = self.cache.read().await;
             if let Some((models, fetched_at)) = cache.as_ref() {
                 if fetched_at.elapsed() < self.ttl {
                     return Ok(models.clone());
@@ -58,9 +59,9 @@ impl CachedDiscovery {
         // Fetch fresh
         let models = self.inner.discover_models().await?;
 
-        // Update cache
+        // Update cache (exclusive write)
         {
-            let mut cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
+            let mut cache = self.cache.write().await;
             *cache = Some((models.clone(), Instant::now()));
         }
 

@@ -237,6 +237,21 @@ impl AuthProfileProviderRegistry {
     /// Call this before `default_provider()` to ensure OAuth tokens are fresh.
     /// This is a separate async method because `default_provider()` is sync
     /// (required by the ProviderRegistry trait).
+    ///
+    /// # Integration
+    ///
+    /// Wire this into the server startup as a background task:
+    /// ```rust,ignore
+    /// let registry = Arc::new(AuthProfileProviderRegistry::new(...));
+    /// let reg_clone = registry.clone();
+    /// tokio::spawn(async move {
+    ///     let mut interval = tokio::time::interval(Duration::from_secs(60));
+    ///     loop {
+    ///         interval.tick().await;
+    ///         reg_clone.try_refresh_all_oauth().await;
+    ///     }
+    /// });
+    /// ```
     pub async fn try_refresh_all_oauth(&self) {
         use crate::providers::auth_profiles::AuthProfileCredential;
         use crate::providers::oauth_refresh;

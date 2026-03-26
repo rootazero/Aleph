@@ -159,8 +159,10 @@ impl SecurityStore {
             let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
             conn.execute_batch(SCHEMA_V8)?;
             drop(conn);
+            self.set_schema_version(8)?;
         }
 
+        // Final safety: ensure version is at latest
         self.set_schema_version(SCHEMA_VERSION)?;
 
         info!("Security schema migration complete");
