@@ -1,24 +1,24 @@
-//! Claude Code harness adapter — oneshot mode.
+//! Claude Code harness adapter — oneshot and native ACP modes.
 //!
-//! Claude Code CLI does not support ACP protocol. Instead, we use:
-//! `claude --print --output-format json -p <prompt>`
+//! Oneshot mode: `claude --print --output-format json -p <prompt>`
+//! Native ACP mode: `claude --acp` (persistent stdio session)
 //!
-//! This spawns a fresh process per prompt and returns structured JSON output.
+//! Default mode is Oneshot; NativeAcp can be selected via config.
 
 use async_trait::async_trait;
 use tokio::process::Command;
 use tracing::{debug, error};
 
 use crate::acp::harness::{AcpHarness, HarnessMode};
-use crate::acp::session::HarnessConfig;
+use crate::acp::session::{AcpSession, HarnessConfig};
 use crate::error::{AlephError, Result};
 
 const DEFAULT_EXECUTABLE: &str = "claude";
 
-/// ACP harness for Claude Code CLI (oneshot mode).
+/// ACP harness for Claude Code CLI (oneshot and native ACP modes).
 ///
-/// Each prompt spawns: `claude --print --output-format json -p "<prompt>"`
-/// The response is a JSON object with a `result` field containing the text.
+/// Oneshot: spawns `claude --print --output-format json -p "<prompt>"` per request.
+/// NativeAcp: spawns `claude --acp` as a persistent stdio session.
 pub struct ClaudeCodeHarness {
     executable: String,
     default_mode: HarnessMode,
@@ -104,5 +104,18 @@ impl AcpHarness for ClaudeCodeHarness {
 
         // Not JSON — return raw text
         Ok(stdout.to_string())
+    }
+
+    async fn spawn_session(&self, cwd: Option<&str>) -> Result<AcpSession> {
+        let config = HarnessConfig {
+            executable: self.executable.clone(),
+            args: vec!["--acp".to_string()],
+            cwd: cwd.map(String::from),
+            ..Default::default()
+        };
+        let timeout = config.timeout;
+        let mut session = AcpSession::spawn(self.id(), &config).await?;
+        session.initialize(timeout).await?;
+        Ok(session)
     }
 }
