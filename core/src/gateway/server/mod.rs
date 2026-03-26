@@ -16,7 +16,7 @@ use axum::{
     routing::get,
 };
 use super::control_plane::create_control_plane_router;
-use super::openai_api::routes::{openai_routes, OpenAiApiState};
+use super::openai_api::{openai_routes, OpenAiApiState};
 
 use super::event_bus::{GatewayEventBus, TopicEvent};
 use super::handlers::HandlerRegistry;
@@ -301,6 +301,14 @@ impl GatewayServer {
         let openai_state = Arc::new(OpenAiApiState {
             server_id: format!("aleph-{}", self.addr),
             api_token: None, // Auth handled by HTTP middleware layer
+            execution_adapter: None,
+            provider_map: Arc::new(HashMap::new()),
+            agent_registry: None,
+            provider_configs: Arc::new(Vec::new()),
+            created_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
         });
         let openai = openai_routes(openai_state);
 
