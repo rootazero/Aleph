@@ -87,32 +87,44 @@ impl ManifestAdapter for CursorAdapter {
             }
         }
 
-        // Scan default directories when not specified in manifest
-        if dir.join("skills").is_dir() {
+        // Scan default directories only when NOT already specified in manifest
+        let has_manifest = dir.join(".cursor-plugin/plugin.json").exists();
+        let json_ref = if has_manifest {
+            std::fs::read_to_string(dir.join(".cursor-plugin/plugin.json"))
+                .ok()
+                .and_then(|c| serde_json::from_str::<serde_json::Value>(&c).ok())
+        } else {
+            None
+        };
+        let json_has = |field: &str| -> bool {
+            json_ref.as_ref().and_then(|j| j.get(field)).is_some()
+        };
+
+        if !json_has("skills") && dir.join("skills").is_dir() {
             if let Ok(s) = parsers::parse_skills_dir(dir, "skills", &plugin_id) {
                 caps.extend(s);
             }
         }
         // .cursor/commands/ → skills (commands as skills)
-        if dir.join(".cursor/commands").is_dir() {
+        if !json_has("commands") && dir.join(".cursor/commands").is_dir() {
             if let Ok(s) = parsers::parse_skills_dir(dir, ".cursor/commands", &plugin_id) {
                 caps.extend(s);
             }
         }
         // .cursor/agents/ → agents
-        if dir.join(".cursor/agents").is_dir() {
+        if !json_has("agents") && !json_has("subagents") && dir.join(".cursor/agents").is_dir() {
             if let Ok(a) = parsers::parse_agents_dir(dir, ".cursor/agents", &plugin_id) {
                 caps.extend(a);
             }
         }
         // .cursor/hooks.json → hooks
-        if dir.join(".cursor/hooks.json").exists() {
+        if !json_has("hooks") && dir.join(".cursor/hooks.json").exists() {
             if let Ok(h) = parsers::parse_hooks_file(dir, ".cursor/hooks.json", &plugin_id) {
                 caps.extend(h);
             }
         }
         // .mcp.json → MCP servers
-        if dir.join(".mcp.json").exists() {
+        if !json_has("mcpServers") && dir.join(".mcp.json").exists() {
             if let Ok(m) = parsers::parse_mcp_config_file(dir, ".mcp.json", &plugin_id) {
                 caps.extend(m);
             }

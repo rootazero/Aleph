@@ -111,14 +111,16 @@ fn parse_frontmatter<T: serde::de::DeserializeOwned + Default>(content: &str) ->
         return Ok((T::default(), content.to_string()));
     }
 
-    let rest = &content[3..];
+    // Safe: "---" is ASCII so byte offset 3 is always a valid char boundary.
+    // Using .get() for defensive consistency per project UTF-8 convention.
+    let rest = content.get(3..).unwrap_or("");
     let end_pos = rest.find("\n---").or_else(|| rest.find("\r\n---"));
 
     match end_pos {
         Some(pos) => {
-            let fm_str = rest[..pos].trim();
+            let fm_str = rest.get(..pos).unwrap_or("").trim();
             let body_start = pos + 4; // skip "\n---"
-            let body = rest[body_start..].trim().to_string();
+            let body = rest.get(body_start..).unwrap_or("").trim().to_string();
 
             if fm_str.is_empty() {
                 return Ok((T::default(), body));

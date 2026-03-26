@@ -435,10 +435,8 @@ impl ExtensionManager {
         // Re-parse manifest via adapter registry
         let output = self.adapter_registry.parse_dir(&root_dir)?;
 
-        // Get permissions from the legacy manifest (best-effort; empty if not parseable)
-        let permissions = manifest::parse_manifest_from_dir_sync(&root_dir)
-            .map(|m| m.permissions)
-            .unwrap_or_default();
+        // Use permissions from adapter output (consistent with load_all path)
+        let permissions = output.permissions.clone();
 
         // Build updated plugin record
         let record = PluginRecord::from_adapter_output(&output, root_dir);

@@ -203,6 +203,15 @@ mod tests {
         })
     }
 
+    fn make_provider() -> CapabilityDeclaration {
+        CapabilityDeclaration::Provider(ProviderRegistration {
+            id: "test-provider".to_string(),
+            name: "Test Provider".to_string(),
+            models: vec!["model-1".to_string()],
+            plugin_id: "test-plugin".to_string(),
+        })
+    }
+
     fn make_http_route() -> CapabilityDeclaration {
         CapabilityDeclaration::HttpRoute(HttpRouteRegistration {
             path: "/api/test".to_string(),
@@ -275,12 +284,38 @@ mod tests {
             vec![], // no permissions — P1 doesn't check
         );
 
-        // Channel is P1 (Important) — no permission check
-        assert!(api.register_capability(make_channel()).is_ok());
-        assert!(api.registry().get_channel("test-channel").is_some());
+        // Provider is P2 but requires no permission (core AI concept)
+        assert!(api.register_capability(make_provider()).is_ok());
     }
 
     // ── P2 Channel fails without Network permission ──────────────────────
+
+    #[test]
+    fn test_p2_channel_fails_without_network_permission() {
+        let mut registry = make_registry_and_plugin();
+        let mut api = CapabilityApi::new(
+            &mut registry,
+            "test-plugin".to_string(),
+            vec![], // no permissions
+        );
+
+        // Channel is P2 (Pluggable) — needs Network permission
+        let result = api.register_capability(make_channel());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_p2_channel_succeeds_with_network_permission() {
+        let mut registry = make_registry_and_plugin();
+        let mut api = CapabilityApi::new(
+            &mut registry,
+            "test-plugin".to_string(),
+            vec![PluginPermission::Network],
+        );
+
+        assert!(api.register_capability(make_channel()).is_ok());
+        assert!(api.registry().get_channel("test-channel").is_some());
+    }
 
     #[test]
     fn test_p2_service_fails_without_background_permission() {
