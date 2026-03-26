@@ -22,8 +22,8 @@ pub struct AcpHarnessConfig {
     pub executable: Option<String>,
     #[serde(default)]
     pub args: Vec<String>,
-    #[serde(default)]
-    pub mode: String,
+    #[serde(default, alias = "mode")]
+    pub default_mode: String,
     #[serde(default)]
     pub output_format: serde_json::Value,
     #[serde(default)]
