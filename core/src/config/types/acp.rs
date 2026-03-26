@@ -22,29 +22,36 @@ pub struct AcpConfig {
     #[serde(default = "super::search::default_true")]
     pub enabled: bool,
 
-    /// Registered ACP harnesses keyed by name
-    #[serde(default)]
+    /// Registered ACP harnesses keyed by name.
+    /// Preset harnesses are always present; user entries are merged on top.
+    #[serde(default = "default_harnesses", deserialize_with = "deserialize_harnesses_with_presets")]
     pub harnesses: HashMap<String, AcpHarnessEntry>,
+}
+
+fn default_harnesses() -> HashMap<String, AcpHarnessEntry> {
+    AcpHarnessEntry::all_presets().into_iter().collect()
+}
+
+/// Deserialize harnesses and merge with presets (presets fill missing entries).
+fn deserialize_harnesses_with_presets<'de, D>(
+    deserializer: D,
+) -> std::result::Result<HashMap<String, AcpHarnessEntry>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let mut map: HashMap<String, AcpHarnessEntry> = HashMap::deserialize(deserializer)?;
+    // Fill in any missing presets
+    for (id, entry) in AcpHarnessEntry::all_presets() {
+        map.entry(id).or_insert(entry);
+    }
+    Ok(map)
 }
 
 impl Default for AcpConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            harnesses: HashMap::new(),
-        }
-    }
-}
-
-impl AcpConfig {
-    /// Ensure preset harnesses are present in the config.
-    ///
-    /// Called after loading config from disk. If `harnesses` is empty (no user
-    /// customization), populates with all preset defaults so they are visible
-    /// in Panel UI and persist correctly on save.
-    pub fn ensure_presets(&mut self) {
-        for (id, entry) in AcpHarnessEntry::all_presets() {
-            self.harnesses.entry(id).or_insert(entry);
+            harnesses: default_harnesses(),
         }
     }
 }
