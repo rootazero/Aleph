@@ -123,17 +123,23 @@ impl DeltaCollector {
             .tool_calls
             .into_iter()
             .map(|(id, name, raw_args)| {
-                let arguments = match serde_json::from_str::<Value>(&raw_args) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        warn!(
-                            tool_id = %id,
-                            tool_name = %name,
-                            error = %e,
-                            raw_args = %raw_args,
-                            "Malformed tool arguments — falling back to raw string value"
-                        );
-                        Value::String(raw_args)
+                // Empty input must be an empty object {}, not an empty string ""
+                // Anthropic API requires tool_use.input to be a valid dictionary
+                let arguments = if raw_args.is_empty() {
+                    Value::Object(serde_json::Map::new())
+                } else {
+                    match serde_json::from_str::<Value>(&raw_args) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            warn!(
+                                tool_id = %id,
+                                tool_name = %name,
+                                error = %e,
+                                raw_args = %raw_args,
+                                "Malformed tool arguments — falling back to raw string value"
+                            );
+                            Value::String(raw_args)
+                        }
                     }
                 };
                 NativeToolCall { id, name, arguments }

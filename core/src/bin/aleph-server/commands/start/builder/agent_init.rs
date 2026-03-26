@@ -512,6 +512,19 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             }
         }
 
+        // Merge dynamic tools (ACP delegates, etc.) that were registered in
+        // BuiltinToolRegistry but are not part of the static BUILTIN_TOOL_DEFINITIONS.
+        {
+            let dynamic = tool_registry.dynamic_tools();
+            let existing_names: std::collections::HashSet<String> =
+                tools.iter().map(|t| t.name.clone()).collect();
+            for dt in dynamic {
+                if !existing_names.contains(&dt.name) {
+                    tools.push(dt);
+                }
+            }
+        }
+
         {
             let plugin_tool_count = tools.iter().filter(|t| matches!(t.source, ToolSource::Plugin { .. })).count();
             let builtin_tool_count = tools.iter().filter(|t| matches!(t.source, ToolSource::Builtin)).count();

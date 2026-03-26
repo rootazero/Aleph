@@ -138,10 +138,16 @@ impl AnthropicProtocol {
                                     })
                                     .take(64)
                                     .collect();
+                                // Anthropic API requires input to be a dictionary, never a string
+                                let input = if arguments.is_object() {
+                                    arguments.clone()
+                                } else {
+                                    serde_json::json!({})
+                                };
                                 blocks.push(ContentBlock::ToolUse {
                                     id: sanitized_id,
                                     name: name.clone(),
-                                    input: arguments.clone(),
+                                    input,
                                 });
                             }
                             _ => {}
