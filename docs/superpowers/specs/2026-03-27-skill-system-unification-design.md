@@ -60,6 +60,8 @@ pub struct SkillManifest {
 - **Markdown skills**: `AlephSkillSpec` parsed → `SkillManifest` (OpenClaw compat field mapping) → `SkillRegistry`
 - **File skills**: Already `SkillManifest`, no change
 
+**Boot sequence dependency direction**: `ExtensionManager` is the caller. After it finishes loading plugins and converting `ExtensionSkill` → `SkillManifest`, it calls `skill_system.register_external(converted_manifests)` to push them into the unified registry. `SkillSystem` never pulls from `ExtensionManager` — the dependency is one-way: `ExtensionManager → SkillSystem`.
+
 ## Section 2: Unified SkillSystem + Config Persistence
 
 ### SkillSystem as the Only Facade
@@ -314,34 +316,38 @@ async fn bootstrap_if_needed(kind: &InstallKind) -> Result<()> {
 
 ### Vault Integration
 
+Note: `SharedTokenManager` methods are **synchronous** (`fn`, not `async fn`). `get_secret` returns `Result<Option<DecryptedSecret>>`, not `Result<String>`.
+
 ```rust
 // skill/config.rs
 impl SkillsConfig {
-    pub async fn store_api_key(&self, skill_id: &SkillId, value: &str, vault: &SharedTokenManager) {
-        vault.store_secret(&format!("skill:{}", skill_id), value).await;
+    pub fn store_api_key(&self, skill_id: &SkillId, value: &str, vault: &SharedTokenManager) {
+        let _ = vault.store_secret(&format!("skill:{}", skill_id), value);
     }
-    pub async fn has_api_key(&self, skill_id: &SkillId, vault: &SharedTokenManager) -> bool {
-        vault.get_secret(&format!("skill:{}", skill_id)).await.is_ok()
+    pub fn has_api_key(&self, skill_id: &SkillId, vault: &SharedTokenManager) -> bool {
+        matches!(vault.get_secret(&format!("skill:{}", skill_id)), Ok(Some(_)))
     }
-    pub async fn delete_api_key(&self, skill_id: &SkillId, vault: &SharedTokenManager) {
-        vault.delete_secret(&format!("skill:{}", skill_id)).await;
+    pub fn delete_api_key(&self, skill_id: &SkillId, vault: &SharedTokenManager) {
+        let _ = vault.delete_secret(&format!("skill:{}", skill_id));
     }
 }
 ```
 
 ### Runtime API Key Injection
 
-Before skill execution, if `primary_env` is set and Vault has the key:
+Before skill execution, if `primary_env` is set and Vault has the key, inject it into the **child process environment** via `Command::env()`, NOT via `std::env::set_var` (which is unsound in multi-threaded Rust since 1.66+).
 
 ```rust
+// In InstallExecutor / skill execution context
+let mut cmd = tokio::process::Command::new(command);
 if let Some(env_name) = &manifest.primary_env {
-    if let Ok(key) = vault.get_secret(&format!("skill:{}", manifest.id)).await {
-        std::env::set_var(env_name, &key);
+    if let Ok(Some(secret)) = vault.get_secret(&format!("skill:{}", manifest.id)) {
+        cmd.env(env_name, secret.value());
     }
 }
 ```
 
-Zero-intrusion: skill code reads `std::env::var("OPENAI_API_KEY")` as usual.
+This way each child process gets its own isolated environment. No data races, no cross-skill contamination.
 
 ## Section 6: Panel UI Redesign
 
