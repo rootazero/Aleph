@@ -1,6 +1,6 @@
 //! Platform aggregator trait.
 
-use crate::traits::{AutomationCapability, PermissionCapability, PimCapability, ScreenCapability, SystemCapability};
+use crate::traits::{AutomationCapability, MediaCapability, PermissionCapability, PimCapability, ScreenCapability, SystemCapability};
 
 /// Aggregator that provides access to all desktop capabilities on a given platform.
 ///
@@ -35,4 +35,7 @@ pub trait DesktopPlatform: Send + Sync {
 
     /// TCC permission detection and request, if available.
     fn permission(&self) -> Option<&dyn PermissionCapability>;
+
+    /// Media capture (camera, audio devices), if available.
+    fn media(&self) -> Option<&dyn MediaCapability>;
 }

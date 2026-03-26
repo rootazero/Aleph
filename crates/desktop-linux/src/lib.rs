@@ -1,7 +1,8 @@
 //! Linux platform implementation for Aleph desktop capabilities.
 
 use aleph_desktop::traits::{
-    AutomationCapability, PermissionCapability, PimCapability, ScreenCapability, SystemCapability,
+    AutomationCapability, MediaCapability, PermissionCapability, PimCapability, ScreenCapability,
+    SystemCapability,
 };
 use aleph_desktop::NativeScreen;
 use aleph_desktop::DesktopPlatform;
@@ -48,6 +49,10 @@ impl DesktopPlatform for LinuxPlatform {
     }
 
     fn permission(&self) -> Option<&dyn PermissionCapability> {
+        None
+    }
+
+    fn media(&self) -> Option<&dyn MediaCapability> {
         None
     }
 }

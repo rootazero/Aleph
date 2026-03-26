@@ -5,12 +5,14 @@
 //! behind the [`crate::DesktopPlatform`] aggregator.
 
 pub mod automation;
+pub mod media;
 pub mod permission;
 pub mod pim;
 pub mod screen;
 pub mod system;
 
 pub use automation::AutomationCapability;
+pub use media::MediaCapability;
 pub use permission::PermissionCapability;
 pub use pim::PimCapability;
 pub use screen::ScreenCapability;
