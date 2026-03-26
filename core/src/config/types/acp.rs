@@ -88,9 +88,9 @@ pub struct AcpHarnessEntry {
     #[serde(default)]
     pub args: Vec<String>,
 
-    /// Communication mode
-    #[serde(default)]
-    pub mode: HarnessModeSerde,
+    /// Default communication mode (LLM may override at call time)
+    #[serde(default, alias = "mode")]
+    pub default_mode: HarnessModeSerde,
 
     /// How to parse stdout output
     #[serde(default)]
@@ -128,7 +128,7 @@ impl Default for AcpHarnessEntry {
             display_name: String::new(),
             executable: None,
             args: Vec::new(),
-            mode: HarnessModeSerde::default(),
+            default_mode: HarnessModeSerde::default(),
             output_format: OutputFormatSerde::default(),
             env: HashMap::new(),
             cwd: None,
@@ -159,7 +159,7 @@ impl AcpHarnessEntry {
                 "--output-format".into(),
                 "json".into(),
             ],
-            mode: HarnessModeSerde::Oneshot,
+            default_mode: HarnessModeSerde::Oneshot,
             output_format: OutputFormatSerde::Json {
                 field: "result".into(),
             },
@@ -174,7 +174,7 @@ impl AcpHarnessEntry {
             display_name: "Codex".into(),
             executable: Some("codex".into()),
             args: vec!["exec".into()],
-            mode: HarnessModeSerde::Oneshot,
+            default_mode: HarnessModeSerde::Oneshot,
             output_format: OutputFormatSerde::PlainText,
             preset: Some(PRESET_CODEX.into()),
             ..Default::default()
@@ -187,7 +187,7 @@ impl AcpHarnessEntry {
             display_name: "Gemini".into(),
             executable: Some("gemini".into()),
             args: vec!["--acp".into()],
-            mode: HarnessModeSerde::NativeAcp,
+            default_mode: HarnessModeSerde::NativeAcp,
             output_format: OutputFormatSerde::PlainText,
             preset: Some(PRESET_GEMINI.into()),
             ..Default::default()
@@ -222,20 +222,20 @@ mod tests {
     fn test_preset_modes() {
         let claude_code = AcpHarnessEntry::preset_claude_code();
         assert_eq!(
-            claude_code.mode, HarnessModeSerde::Oneshot,
-            "Claude Code preset should have mode=Oneshot"
+            claude_code.default_mode, HarnessModeSerde::Oneshot,
+            "Claude Code preset should have default_mode=Oneshot"
         );
 
         let codex = AcpHarnessEntry::preset_codex();
         assert_eq!(
-            codex.mode, HarnessModeSerde::Oneshot,
-            "Codex preset should have mode=Oneshot"
+            codex.default_mode, HarnessModeSerde::Oneshot,
+            "Codex preset should have default_mode=Oneshot"
         );
 
         let gemini = AcpHarnessEntry::preset_gemini();
         assert_eq!(
-            gemini.mode, HarnessModeSerde::NativeAcp,
-            "Gemini preset should have mode=NativeAcp"
+            gemini.default_mode, HarnessModeSerde::NativeAcp,
+            "Gemini preset should have default_mode=NativeAcp"
         );
     }
 }

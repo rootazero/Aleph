@@ -49,7 +49,7 @@ impl AcpHarness for CustomHarness {
     }
 
     fn mode(&self) -> HarnessMode {
-        HarnessMode::from_serde(&self.config.mode)
+        HarnessMode::from_serde(&self.config.default_mode)
     }
 
     fn build_config(&self, cwd: Option<&str>) -> HarnessConfig {

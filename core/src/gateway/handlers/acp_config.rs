@@ -94,7 +94,7 @@ async fn build_harness_info(
         .harness_mode(id)
         .await
         .map(|m| format!("{:?}", m).to_lowercase())
-        .unwrap_or_else(|| format!("{:?}", entry.mode).to_lowercase());
+        .unwrap_or_else(|| format!("{:?}", entry.default_mode).to_lowercase());
 
     let executable = entry
         .executable
