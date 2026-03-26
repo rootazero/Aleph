@@ -1,112 +1,147 @@
 //! Markdown -> Platform format conversions.
+//!
+//! All converters share the same block-level parsing via `parse_markdown_blocks`
+//! (defined in helpers.rs). Each platform function only decides how to *render*
+//! the parsed blocks, keeping parsing logic universal.
 
 use super::helpers::*;
 
+// ---------------------------------------------------------------------------
+// Telegram HTML
+// ---------------------------------------------------------------------------
+
 /// Markdown -> Telegram HTML.
-///
-/// Handles fenced code blocks, bold, italic, inline code, and links.
 pub(super) fn markdown_to_telegram_html(text: &str) -> String {
-    // First pass: extract and convert fenced code blocks so inner content is not
-    // touched by inline formatting passes.
-    let mut result = String::with_capacity(text.len());
-    let mut rest = text;
+    let blocks = parse_markdown_blocks(text);
+    let mut out = String::with_capacity(text.len());
 
-    while let Some(fence_start) = rest.find("```") {
-        // Push everything before the fence through inline conversion.
-        let before = &rest[..fence_start];
-        result.push_str(&inline_md_to_telegram_html(before));
-
-        let after_fence = &rest[fence_start + 3..];
-
-        // Detect optional language tag (until newline).
-        let (lang, code_start) = if let Some(nl) = after_fence.find('\n') {
-            let tag = after_fence[..nl].trim();
-            if tag.is_empty() {
-                ("".to_string(), nl + 1)
-            } else {
-                (tag.to_string(), nl + 1)
+    for block in &blocks {
+        match block {
+            BlockElement::CodeBlock { lang, code } => {
+                if lang.is_empty() {
+                    out.push_str(&format!("<pre><code>{}</code></pre>", escape_html(code)));
+                } else {
+                    out.push_str(&format!(
+                        "<pre><code class=\"language-{lang}\">{}</code></pre>",
+                        escape_html(code)
+                    ));
+                }
             }
-        } else {
-            // No newline after opening fence -- treat entire remaining as code.
-            ("".to_string(), 0)
-        };
-
-        let code_body = &after_fence[code_start..];
-
-        if let Some(close) = code_body.find("```") {
-            let code = &code_body[..close];
-            if lang.is_empty() {
-                result.push_str(&format!("<pre><code>{}</code></pre>", escape_html(code)));
-            } else {
-                result.push_str(&format!(
-                    "<pre><code class=\"language-{lang}\">{}</code></pre>",
-                    escape_html(code)
-                ));
+            BlockElement::Heading { text: h, .. } => {
+                ensure_newline(&mut out);
+                let formatted = telegram_inline(&escape_html(h));
+                out.push_str(&format!("<b>{formatted}</b>"));
+                out.push('\n');
             }
-            rest = &code_body[close + 3..];
-        } else {
-            // Unclosed fence -- render remainder as code block.
-            let code = code_body;
-            if lang.is_empty() {
-                result.push_str(&format!("<pre><code>{}</code></pre>", escape_html(code)));
-            } else {
-                result.push_str(&format!(
-                    "<pre><code class=\"language-{lang}\">{}</code></pre>",
-                    escape_html(code)
-                ));
+            BlockElement::HorizontalRule => {
+                ensure_newline(&mut out);
+                out.push_str("———\n");
             }
-            rest = "";
-            break;
+            BlockElement::Blockquote(lines) => {
+                ensure_newline(&mut out);
+                let inner = lines.join("\n");
+                let formatted = telegram_inline(&escape_html(&inner));
+                out.push_str(&format!("<blockquote>{formatted}</blockquote>"));
+                out.push('\n');
+            }
+            BlockElement::UnorderedListItem(item) => {
+                ensure_newline(&mut out);
+                let formatted = telegram_inline(&escape_html(item));
+                out.push_str(&format!("• {formatted}\n"));
+            }
+            BlockElement::Text(line) => {
+                if !out.is_empty() && !out.ends_with('\n') {
+                    out.push('\n');
+                }
+                out.push_str(&telegram_inline(&escape_html(line)));
+            }
         }
     }
 
-    // Remaining text (no more fences).
-    result.push_str(&inline_md_to_telegram_html(rest));
-    result
+    // Match trailing-newline behavior of the input.
+    trim_trailing_newline(&mut out, text);
+    out
 }
 
-/// Convert inline Markdown (bold, italic, code, links) to Telegram HTML.
-/// Does NOT handle fenced code blocks -- the caller strips those first.
-fn inline_md_to_telegram_html(text: &str) -> String {
-    // Escape HTML special characters FIRST, before any Markdown-to-HTML tag
-    // replacements. Markdown markers (**  *  `  []()) don't contain < > &, so
-    // escaping first is safe and prevents user text like "1 < 2" from breaking
-    // Telegram's HTML parser.
-    let mut s = escape_html(text);
-
-    // Bold: **text** -> <b>text</b>
+/// Apply Telegram-specific inline formatting (bold, italic, strikethrough,
+/// code, links) to already-HTML-escaped text.
+fn telegram_inline(s: &str) -> String {
+    let mut s = s.to_string();
     s = replace_paired_marker(&s, "**", "<b>", "</b>");
-
-    // Italic: *text* -> <i>text</i> (single asterisks not adjacent to another *)
     s = replace_single_asterisk_italic(&s, "<i>", "</i>");
-
-    // Inline code: `text` -> <code>text</code>
+    s = replace_paired_marker(&s, "~~", "<s>", "</s>");
     s = replace_paired_marker(&s, "`", "<code>", "</code>");
-
-    // Links: [text](url) -> <a href="url">text</a>
     s = replace_links(&s, |link_text, url| {
         format!("<a href=\"{url}\">{link_text}</a>")
     });
-
     s
 }
+
+// ---------------------------------------------------------------------------
+// Slack mrkdwn
+// ---------------------------------------------------------------------------
 
 /// Markdown -> Slack mrkdwn.
 pub(super) fn markdown_to_slack_mrkdwn(text: &str) -> String {
-    let mut s = text.to_string();
+    let blocks = parse_markdown_blocks(text);
+    let mut out = String::with_capacity(text.len());
 
+    for block in &blocks {
+        match block {
+            BlockElement::CodeBlock { lang, code } => {
+                // Slack supports ``` code blocks natively.
+                if lang.is_empty() {
+                    out.push_str(&format!("```\n{}```", code));
+                } else {
+                    // Slack ignores lang tag but we include it for readability.
+                    out.push_str(&format!("```\n{}```", code));
+                }
+            }
+            BlockElement::Heading { text: h, .. } => {
+                ensure_newline(&mut out);
+                let formatted = slack_inline(h);
+                out.push_str(&format!("*{formatted}*\n"));
+            }
+            BlockElement::HorizontalRule => {
+                ensure_newline(&mut out);
+                out.push_str("———\n");
+            }
+            BlockElement::Blockquote(lines) => {
+                ensure_newline(&mut out);
+                for line in lines {
+                    out.push_str(&format!("&gt; {}\n", slack_inline(line)));
+                }
+            }
+            BlockElement::UnorderedListItem(item) => {
+                ensure_newline(&mut out);
+                out.push_str(&format!("• {}\n", slack_inline(item)));
+            }
+            BlockElement::Text(line) => {
+                if !out.is_empty() && !out.ends_with('\n') {
+                    out.push('\n');
+                }
+                out.push_str(&slack_inline(line));
+            }
+        }
+    }
+
+    trim_trailing_newline(&mut out, text);
+    out
+}
+
+/// Slack-specific inline formatting.
+fn slack_inline(text: &str) -> String {
+    let mut s = text.to_string();
     // Bold: **text** -> *text*
     s = replace_paired_marker(&s, "**", "*", "*");
-
-    // Italic stays as *text* (Slack uses _italic_ but Markdown single * is
-    // already understood by Slack as bold, so we leave single * as-is for now;
-    // the bold conversion already consumed **).
-
     // Links: [text](url) -> <url|text>
     s = replace_links(&s, |link_text, url| format!("<{url}|{link_text}>"));
-
     s
 }
+
+// ---------------------------------------------------------------------------
+// Discord (mostly passthrough)
+// ---------------------------------------------------------------------------
 
 /// Markdown -> Discord (mostly passthrough, Discord understands standard MD).
 pub(super) fn markdown_to_discord(text: &str) -> String {
@@ -114,46 +149,142 @@ pub(super) fn markdown_to_discord(text: &str) -> String {
     text.to_string()
 }
 
+// ---------------------------------------------------------------------------
+// IRC mIRC control codes
+// ---------------------------------------------------------------------------
+
 /// Markdown -> IRC mIRC control codes.
 pub(super) fn markdown_to_irc(text: &str) -> String {
+    let blocks = parse_markdown_blocks(text);
+    let mut out = String::with_capacity(text.len());
+
+    for block in &blocks {
+        match block {
+            BlockElement::CodeBlock { code, .. } => {
+                // IRC has no code block formatting; just emit the code content.
+                out.push_str(code);
+            }
+            BlockElement::Heading { text: h, .. } => {
+                ensure_newline(&mut out);
+                let formatted = irc_inline(h);
+                // Bold heading in IRC
+                out.push_str(&format!("\x02{formatted}\x02\n"));
+            }
+            BlockElement::HorizontalRule => {
+                ensure_newline(&mut out);
+                out.push_str("---\n");
+            }
+            BlockElement::Blockquote(lines) => {
+                ensure_newline(&mut out);
+                for line in lines {
+                    out.push_str(&format!("| {}\n", irc_inline(line)));
+                }
+            }
+            BlockElement::UnorderedListItem(item) => {
+                ensure_newline(&mut out);
+                out.push_str(&format!("• {}\n", irc_inline(item)));
+            }
+            BlockElement::Text(line) => {
+                if !out.is_empty() && !out.ends_with('\n') {
+                    out.push('\n');
+                }
+                out.push_str(&irc_inline(line));
+            }
+        }
+    }
+
+    trim_trailing_newline(&mut out, text);
+    out
+}
+
+/// IRC-specific inline formatting.
+fn irc_inline(text: &str) -> String {
     let mut s = text.to_string();
-
-    // Fenced code blocks -> just the code content.
-    s = strip_fenced_code_blocks(&s);
-
     // Bold: **text** -> \x02text\x02
     s = replace_paired_marker(&s, "**", "\x02", "\x02");
-
     // Italic: *text* -> \x1Dtext\x1D
     s = replace_single_asterisk_italic(&s, "\x1D", "\x1D");
-
     // Inline code: strip backticks.
     s = s.replace('`', "");
-
     // Links: [text](url) -> text (url)
     s = replace_links(&s, |link_text, url| format!("{link_text} ({url})"));
-
     s
 }
 
+// ---------------------------------------------------------------------------
+// Plain text
+// ---------------------------------------------------------------------------
+
 /// Markdown -> Plain text (strip all formatting).
 pub(super) fn markdown_to_plain(text: &str) -> String {
+    let blocks = parse_markdown_blocks(text);
+    let mut out = String::with_capacity(text.len());
+
+    for block in &blocks {
+        match block {
+            BlockElement::CodeBlock { code, .. } => {
+                out.push_str(code);
+            }
+            BlockElement::Heading { text: h, .. } => {
+                ensure_newline(&mut out);
+                let formatted = plain_inline(h);
+                out.push_str(&format!("{formatted}\n"));
+            }
+            BlockElement::HorizontalRule => {
+                ensure_newline(&mut out);
+                out.push_str("---\n");
+            }
+            BlockElement::Blockquote(lines) => {
+                ensure_newline(&mut out);
+                for line in lines {
+                    out.push_str(&format!("  {}\n", plain_inline(line)));
+                }
+            }
+            BlockElement::UnorderedListItem(item) => {
+                ensure_newline(&mut out);
+                out.push_str(&format!("• {}\n", plain_inline(item)));
+            }
+            BlockElement::Text(line) => {
+                if !out.is_empty() && !out.ends_with('\n') {
+                    out.push('\n');
+                }
+                out.push_str(&plain_inline(line));
+            }
+        }
+    }
+
+    trim_trailing_newline(&mut out, text);
+    out
+}
+
+/// Plain-text inline: strip all formatting markers.
+fn plain_inline(text: &str) -> String {
     let mut s = text.to_string();
-
-    // Strip fenced code blocks -> just the code content.
-    s = strip_fenced_code_blocks(&s);
-
-    // Bold: remove **
     s = s.replace("**", "");
-
-    // Italic: remove single * (not adjacent to another *)
     s = strip_single_asterisk(&s);
-
-    // Inline code: remove backticks.
     s = s.replace('`', "");
-
-    // Links: [text](url) -> text (url)
     s = replace_links(&s, |link_text, url| format!("{link_text} ({url})"));
-
     s
+}
+
+// ---------------------------------------------------------------------------
+// Shared rendering helpers
+// ---------------------------------------------------------------------------
+
+/// Ensure the output ends with a newline (for block-level elements that need
+/// to start on their own line).
+fn ensure_newline(out: &mut String) {
+    if !out.is_empty() && !out.ends_with('\n') {
+        out.push('\n');
+    }
+}
+
+/// Match trailing-newline behavior: output should end with `\n` iff input does.
+fn trim_trailing_newline(out: &mut String, original: &str) {
+    if original.ends_with('\n') && !out.ends_with('\n') {
+        out.push('\n');
+    }
+    if !original.ends_with('\n') && out.ends_with('\n') {
+        out.truncate(out.trim_end_matches('\n').len());
+    }
 }

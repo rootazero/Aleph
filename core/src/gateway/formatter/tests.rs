@@ -89,6 +89,103 @@ fn test_html_escape_inline_text() {
 }
 
 // -----------------------------------------------------------------------
+// Telegram HTML: headings, horizontal rules, blockquotes, lists, strikethrough
+// -----------------------------------------------------------------------
+
+#[test]
+fn test_heading_h1_to_telegram_html() {
+    assert_eq!(
+        MessageFormatter::format("# Hello World", MarkupFormat::TelegramHtml),
+        "<b>Hello World</b>"
+    );
+}
+
+#[test]
+fn test_heading_h2_to_telegram_html() {
+    assert_eq!(
+        MessageFormatter::format("## Section Title", MarkupFormat::TelegramHtml),
+        "<b>Section Title</b>"
+    );
+}
+
+#[test]
+fn test_heading_h3_to_telegram_html() {
+    assert_eq!(
+        MessageFormatter::format("### Subsection", MarkupFormat::TelegramHtml),
+        "<b>Subsection</b>"
+    );
+}
+
+#[test]
+fn test_horizontal_rule_to_telegram_html() {
+    assert_eq!(
+        MessageFormatter::format("---", MarkupFormat::TelegramHtml),
+        "———"
+    );
+}
+
+#[test]
+fn test_horizontal_rule_asterisks_to_telegram_html() {
+    assert_eq!(
+        MessageFormatter::format("***", MarkupFormat::TelegramHtml),
+        "———"
+    );
+}
+
+#[test]
+fn test_blockquote_to_telegram_html() {
+    assert_eq!(
+        MessageFormatter::format("> quoted text", MarkupFormat::TelegramHtml),
+        "<blockquote>quoted text</blockquote>"
+    );
+}
+
+#[test]
+fn test_multiline_blockquote_to_telegram_html() {
+    let input = "> line one\n> line two";
+    assert_eq!(
+        MessageFormatter::format(input, MarkupFormat::TelegramHtml),
+        "<blockquote>line one\nline two</blockquote>"
+    );
+}
+
+#[test]
+fn test_unordered_list_to_telegram_html() {
+    let input = "- item one\n- item two";
+    assert_eq!(
+        MessageFormatter::format(input, MarkupFormat::TelegramHtml),
+        "• item one\n• item two"
+    );
+}
+
+#[test]
+fn test_strikethrough_to_telegram_html() {
+    assert_eq!(
+        MessageFormatter::format("~~deleted~~", MarkupFormat::TelegramHtml),
+        "<s>deleted</s>"
+    );
+}
+
+#[test]
+fn test_heading_with_inline_formatting() {
+    assert_eq!(
+        MessageFormatter::format("## **Bold** heading", MarkupFormat::TelegramHtml),
+        "<b><b>Bold</b> heading</b>"
+    );
+}
+
+#[test]
+fn test_mixed_blocks_to_telegram_html() {
+    let input = "# Title\n\nSome text\n\n- item 1\n- item 2\n\n---\n\n> quote";
+    let result = MessageFormatter::format(input, MarkupFormat::TelegramHtml);
+    assert!(result.contains("<b>Title</b>"), "heading: {}", result);
+    assert!(result.contains("Some text"), "text: {}", result);
+    assert!(result.contains("• item 1"), "list: {}", result);
+    assert!(result.contains("———"), "hr: {}", result);
+    assert!(result.contains("<blockquote>quote</blockquote>"), "quote: {}", result);
+}
+
+// -----------------------------------------------------------------------
 // Slack mrkdwn
 // -----------------------------------------------------------------------
 

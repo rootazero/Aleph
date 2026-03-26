@@ -149,38 +149,6 @@ pub(super) fn replace_links(text: &str, fmt_fn: impl Fn(&str, &str) -> String) -
     result
 }
 
-/// Strip fenced code block markers, keeping the code content.
-pub(super) fn strip_fenced_code_blocks(text: &str) -> String {
-    let mut result = String::with_capacity(text.len());
-    let mut rest = text;
-
-    while let Some(fence_start) = rest.find("```") {
-        result.push_str(&rest[..fence_start]);
-        let after_fence = &rest[fence_start + 3..];
-
-        // Skip language tag line.
-        let code_start = if let Some(nl) = after_fence.find('\n') {
-            nl + 1
-        } else {
-            0
-        };
-
-        let code_body = &after_fence[code_start..];
-
-        if let Some(close) = code_body.find("```") {
-            result.push_str(&code_body[..close]);
-            rest = &code_body[close + 3..];
-        } else {
-            result.push_str(code_body);
-            rest = "";
-            break;
-        }
-    }
-
-    result.push_str(rest);
-    result
-}
-
 /// Escape HTML special characters.
 pub(super) fn escape_html(text: &str) -> String {
     text.replace('&', "&amp;")
@@ -304,6 +272,184 @@ pub(super) fn replace_html_links(html: &str) -> String {
     }
 
     result
+}
+
+// ---------------------------------------------------------------------------
+// Block-level Markdown parsing (shared across all platform converters)
+// ---------------------------------------------------------------------------
+
+/// A block-level element parsed from standard Markdown.
+///
+/// Platform converters consume these to produce channel-specific output.
+#[derive(Debug, PartialEq)]
+pub(super) enum BlockElement<'a> {
+    /// Fenced code block with optional language tag.
+    CodeBlock { lang: &'a str, code: &'a str },
+    /// Heading (level 1-6).
+    Heading { level: u8, text: &'a str },
+    /// Horizontal rule (`---`, `***`, `___`).
+    HorizontalRule,
+    /// One or more consecutive blockquote lines.
+    Blockquote(Vec<&'a str>),
+    /// Unordered list item (`- text` or `* text`).
+    UnorderedListItem(&'a str),
+    /// Regular text line (may contain inline formatting).
+    Text(&'a str),
+}
+
+/// Parse Markdown text into a sequence of block-level elements.
+///
+/// Code blocks are extracted first (they span multiple lines and their inner
+/// content must not be interpreted). The remaining text is split into lines
+/// and classified into headings, horizontal rules, blockquotes, list items,
+/// or plain text.
+pub(super) fn parse_markdown_blocks(text: &str) -> Vec<BlockElement<'_>> {
+    let mut blocks = Vec::new();
+
+    // First pass: split on fenced code blocks.
+    let mut rest = text;
+    while let Some(fence_start) = rest.find("```") {
+        let before = &rest[..fence_start];
+        if !before.is_empty() {
+            parse_line_blocks(before, &mut blocks);
+        }
+
+        let after_fence = &rest[fence_start + 3..];
+
+        // Detect optional language tag (until newline).
+        let (lang, code_start) = if let Some(nl) = after_fence.find('\n') {
+            let tag = after_fence[..nl].trim();
+            (tag, nl + 1)
+        } else {
+            ("", 0)
+        };
+
+        let code_body = &after_fence[code_start..];
+
+        if let Some(close) = code_body.find("```") {
+            let code = &code_body[..close];
+            blocks.push(BlockElement::CodeBlock { lang, code });
+            rest = &code_body[close + 3..];
+        } else {
+            // Unclosed fence — treat remainder as code block.
+            blocks.push(BlockElement::CodeBlock { lang, code: code_body });
+            rest = "";
+            break;
+        }
+    }
+
+    // Remaining text after all code blocks.
+    if !rest.is_empty() {
+        parse_line_blocks(rest, &mut blocks);
+    }
+
+    blocks
+}
+
+/// Classify individual lines into block elements (everything except code blocks).
+fn parse_line_blocks<'a>(text: &'a str, out: &mut Vec<BlockElement<'a>>) {
+    let lines: Vec<&str> = text.lines().collect();
+    let mut i = 0;
+
+    while i < lines.len() {
+        let line = lines[i];
+        let trimmed = line.trim();
+
+        // Empty line → preserve as empty text
+        if trimmed.is_empty() {
+            out.push(BlockElement::Text(line));
+            i += 1;
+            continue;
+        }
+
+        // Horizontal rule: ---, ***, ___  (3+ repeating chars, possibly spaces)
+        if is_horizontal_rule(trimmed) {
+            out.push(BlockElement::HorizontalRule);
+            i += 1;
+            continue;
+        }
+
+        // Heading: # text
+        if let Some((level, heading_text)) = parse_heading(trimmed) {
+            out.push(BlockElement::Heading { level, text: heading_text });
+            i += 1;
+            continue;
+        }
+
+        // Blockquote: > text (collect consecutive lines)
+        if parse_blockquote_line(trimmed).is_some() {
+            let mut quote_lines = Vec::new();
+            while i < lines.len() {
+                if let Some(inner) = parse_blockquote_line(lines[i].trim()) {
+                    quote_lines.push(inner);
+                    i += 1;
+                } else {
+                    break;
+                }
+            }
+            out.push(BlockElement::Blockquote(quote_lines));
+            continue;
+        }
+
+        // Unordered list item: - text or * text
+        if let Some(item_text) = parse_list_item(trimmed) {
+            out.push(BlockElement::UnorderedListItem(item_text));
+            i += 1;
+            continue;
+        }
+
+        // Regular text line
+        out.push(BlockElement::Text(line));
+        i += 1;
+    }
+}
+
+/// Check if a trimmed line is a Markdown horizontal rule.
+pub(super) fn is_horizontal_rule(trimmed: &str) -> bool {
+    if trimmed.len() < 3 {
+        return false;
+    }
+    let chars: Vec<char> = trimmed.chars().filter(|c| *c != ' ').collect();
+    if chars.len() < 3 {
+        return false;
+    }
+    let first = chars[0];
+    (first == '-' || first == '*' || first == '_') && chars.iter().all(|c| *c == first)
+}
+
+/// Parse a heading line, returning (level, text) if it is one.
+pub(super) fn parse_heading(trimmed: &str) -> Option<(u8, &str)> {
+    // Count leading '#' characters
+    let hashes = trimmed.bytes().take_while(|&b| b == b'#').count();
+    if hashes == 0 || hashes > 6 {
+        return None;
+    }
+    // Must be followed by a space
+    let rest = &trimmed[hashes..];
+    if !rest.starts_with(' ') {
+        return None;
+    }
+    Some((hashes as u8, rest[1..].trim()))
+}
+
+/// Parse a blockquote line. Returns the inner text (after `> `), or `""` for bare `>`.
+pub(super) fn parse_blockquote_line(trimmed: &str) -> Option<&str> {
+    if trimmed.starts_with("> ") {
+        Some(&trimmed[2..])
+    } else if trimmed == ">" {
+        Some("")
+    } else {
+        None
+    }
+}
+
+/// Parse an unordered list item. Returns the item text after `- ` or `* `.
+pub(super) fn parse_list_item(trimmed: &str) -> Option<&str> {
+    if (trimmed.starts_with("- ") || trimmed.starts_with("* ")) && trimmed.len() > 2 {
+        Some(&trimmed[2..])
+    } else {
+        None
+    }
 }
 
 /// Replace Slack-style `<url|text>` links with `[text](url)`.
