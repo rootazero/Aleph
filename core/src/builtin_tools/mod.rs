@@ -76,6 +76,7 @@ pub mod channel_manage;
 pub mod vault_store;
 pub mod voice_tools;
 pub mod media_send;
+pub mod team;
 
 pub use agent_manage::{
     AgentCreateArgs, AgentCreateOutput, AgentCreateTool, AgentDeleteArgs, AgentDeleteOutput,
@@ -144,6 +145,10 @@ pub use task_manage::{TaskCreateTool, TaskListTool, TaskUpdateTool, TaskWaitTool
 pub use channel_manage::{ChannelPairingArgs, ChannelPairingOutput, ChannelPairingTool, PairingAction};
 pub use vault_store::{VaultAction, VaultStoreArgs, VaultStoreOutput, VaultStoreTool};
 pub use voice_tools::{VoiceModeSetArgs, VoiceModeSetOutput, VoiceModeSetTool};
+pub use team::{
+    CreateAgentSpec, EnrolledMember, MemberSpec, TeamCreateArgs, TeamCreateOutput, TeamCreateTool,
+    TeamDisbandArgs, TeamDisbandOutput, TeamDisbandTool,
+};
 
 
 // Message tool re-exports

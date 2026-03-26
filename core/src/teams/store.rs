@@ -10,7 +10,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use tokio::sync::Mutex;
 
 use super::types::{
-    NewTeam, NewTeamTask, Team, TeamMember, TeamStatus, TeamSummary, TeamTask,
+    NewTeam, NewTeamMember, NewTeamTask, Team, TeamMember, TeamStatus, TeamSummary, TeamTask,
     TeamTaskStatus,
 };
 use crate::error::AlephError;
@@ -51,6 +51,9 @@ pub trait TeamStore: Send + Sync {
 
     /// Permanently delete a team. Only disbanded teams may be deleted.
     async fn delete_team(&self, id: &str) -> crate::error::Result<()>;
+
+    /// Add a member to an existing team.
+    async fn add_member(&self, input: NewTeamMember) -> crate::error::Result<TeamMember>;
 
     /// Return all members of a team.
     async fn get_members(&self, team_id: &str) -> crate::error::Result<Vec<TeamMember>>;
@@ -324,6 +327,27 @@ impl TeamStore for SqliteTeamStore {
         conn.execute("DELETE FROM teams WHERE id = ?1", params![id])
             .map_err(db_err)?;
         Ok(())
+    }
+
+    async fn add_member(&self, input: NewTeamMember) -> crate::error::Result<TeamMember> {
+        let conn = self.conn.lock().await;
+        let now = now_epoch();
+
+        conn.execute(
+            r#"
+            INSERT OR REPLACE INTO team_members (team_id, agent_id, role, joined_at)
+            VALUES (?1, ?2, ?3, ?4)
+            "#,
+            params![input.team_id, input.agent_id, input.role, now],
+        )
+        .map_err(db_err)?;
+
+        Ok(TeamMember {
+            team_id: input.team_id,
+            agent_id: input.agent_id,
+            role: input.role,
+            joined_at: now,
+        })
     }
 
     async fn get_members(&self, team_id: &str) -> crate::error::Result<Vec<TeamMember>> {
