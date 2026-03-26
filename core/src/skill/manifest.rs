@@ -76,6 +76,12 @@ struct RawFrontmatter {
     eligibility: Option<RawEligibility>,
     #[serde(default)]
     install: Option<Vec<RawInstallSpec>>,
+    #[serde(default)]
+    primary_env: Option<String>,
+    #[serde(default)]
+    homepage: Option<String>,
+    #[serde(default)]
+    emoji: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -218,6 +224,17 @@ pub fn parse_skill_content(
             })
             .collect();
         manifest.set_install_specs(specs);
+    }
+
+    // Metadata fields
+    if let Some(env) = raw.primary_env {
+        manifest.set_primary_env(env);
+    }
+    if let Some(url) = raw.homepage {
+        manifest.set_homepage(url);
+    }
+    if let Some(emoji) = raw.emoji {
+        manifest.set_emoji(emoji);
     }
 
     Ok(manifest)
@@ -390,5 +407,36 @@ description: No bound tool
 Content."#;
         let manifest = parse_skill_content(content, SkillSource::Bundled).unwrap();
         assert!(manifest.bound_tool().is_none());
+    }
+
+    #[test]
+    fn parse_metadata_fields() {
+        let content = r#"---
+name: Web Search
+description: Searches the web
+primary-env: SERPAPI_KEY
+homepage: https://serpapi.com
+emoji: "🌐"
+---
+Search instructions."#;
+
+        let manifest = parse_skill_content(content, SkillSource::Bundled).unwrap();
+        assert_eq!(manifest.primary_env(), Some("SERPAPI_KEY"));
+        assert_eq!(manifest.homepage(), Some("https://serpapi.com"));
+        assert_eq!(manifest.emoji(), Some("🌐"));
+    }
+
+    #[test]
+    fn parse_metadata_fields_absent() {
+        let content = r#"---
+name: Simple Skill
+description: No metadata
+---
+Content."#;
+
+        let manifest = parse_skill_content(content, SkillSource::Bundled).unwrap();
+        assert!(manifest.primary_env().is_none());
+        assert!(manifest.homepage().is_none());
+        assert!(manifest.emoji().is_none());
     }
 }
