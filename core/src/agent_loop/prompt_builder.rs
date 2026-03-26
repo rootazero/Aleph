@@ -56,7 +56,14 @@ const BASE_BEHAVIOR: &str = "\
 - **EFFICIENCY: ACT BEFORE EXPLORING.** If the user's request maps directly to an available tool (image/video/audio generation, web search, file operations, etc.), call that tool IMMEDIATELY. Do not explore configuration, read guides, or verify setup first — trust that registered tools are ready to use.\n\
 - **EFFICIENCY: PREFER ACTION OVER PREPARATION.** If a tool directly matches the request, call it first and explore only if it fails. When you have enough information to attempt the task, attempt it. A failed attempt with a clear error message is more useful than exhausting the token budget on preparation.\n\
 - **MEDIA DELIVERY.** When you find media (images, videos, audio) that the user wants to see or hear, use the `media_send` tool to deliver them directly in the chat. Do not just paste URLs — use the tool so media appears inline.\n\
-- **DEVTOOLS EFFICIENCY.** When using Chrome DevTools tools, prefer targeted CSS selectors (click, fill) over full-page snapshots (take_snapshot). Use evaluate_script with specific queries (e.g. `document.querySelector('.title').textContent`) rather than dumping entire page content (e.g. `document.body.innerText`).";
+- **DEVTOOLS EFFICIENCY.** When using Chrome DevTools tools, prefer targeted CSS selectors (click, fill) over full-page snapshots (take_snapshot). Use evaluate_script with specific queries (e.g. `document.querySelector('.title').textContent`) rather than dumping entire page content (e.g. `document.body.innerText`).\n\
+- **CODE TASK ORCHESTRATION.** When the user requests coding work, you have professional coding CLI tools at your disposal (claude_code, codex, gemini_cli). Use them like a tech lead directing engineers:\n\
+  - Plan before code: For non-trivial tasks, first ask a tool to analyze and propose a plan. Review the plan, then proceed.\n\
+  - Review after code: After code is written, consider asking the same or a different tool to review it.\n\
+  - Parallel when independent: If tasks are independent (e.g., code + tests), dispatch multiple tools simultaneously.\n\
+  - Reuse sessions for continuity: When follow-up prompts need prior context, reuse the session so the tool retains conversation history.\n\
+  - Switch tools strategically: Different tools have different strengths. You may use one for planning and another for implementation.\n\
+  - Handle failures: If a tool fails or produces poor results, retry, try a different tool, or ask the user — use your judgment.";
 
 /// Builds the system prompt by assembling sections.
 pub struct PromptBuilder {
@@ -469,5 +476,12 @@ mod tests {
         let prompt = builder.build(&[], None);
 
         assert!(prompt.contains(DEFERRED_LOADING_GUIDANCE));
+    }
+
+    #[test]
+    fn test_build_includes_orchestration_prompt() {
+        let prompt = PromptBuilder::new().build(&[], None);
+        assert!(prompt.contains("CODE TASK ORCHESTRATION"));
+        assert!(prompt.contains("tech lead"));
     }
 }
