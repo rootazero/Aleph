@@ -85,7 +85,7 @@ fn MessageList() -> impl IntoView {
         <div node_ref=scroll_ref class="flex-1 overflow-y-auto px-4 py-6 space-y-4">
             <For
                 each=move || chat.messages.get()
-                key=|msg| format!("{}:{}:{}:{}", msg.id, msg.content.len(), msg.is_streaming, msg.tool_calls.len())
+                key=|msg| format!("{}:{}:{}:{}:{}", msg.id, msg.content.len(), msg.is_streaming, msg.is_intermediate, msg.tool_calls.len())
                 children=move |msg| {
                     view! { <MessageBubble message=msg /> }
                 }
@@ -113,6 +113,8 @@ fn MessageBubble(message: ChatMessage) -> impl IntoView {
         "max-w-[80%] rounded-2xl px-4 py-3 bg-primary text-white"
     } else if has_error {
         "max-w-[80%] rounded-2xl px-4 py-3 bg-danger-subtle text-danger border border-danger/20"
+    } else if message.is_intermediate {
+        "max-w-[80%] rounded-2xl px-3 py-2 bg-surface-raised/60 text-text-secondary text-sm italic"
     } else {
         "max-w-[80%] rounded-2xl px-4 py-3 bg-surface-raised text-text-primary"
     };

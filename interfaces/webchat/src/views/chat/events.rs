@@ -53,7 +53,20 @@ pub fn subscribe_run_events(dashboard: &DashboardState, chat: ChatState) -> usiz
                 chat.update_tool(run_id, tool_id, "", status, duration);
             }
             "response_chunk" => {
-                if let Some(content) = data.get("content").and_then(|c| c.as_str()) {
+                let is_intermediate = data.get("is_intermediate")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+
+                if is_intermediate {
+                    // Append any remaining content first
+                    if let Some(content) = data.get("content").and_then(|c| c.as_str()) {
+                        if !content.is_empty() {
+                            chat.append_chunk(run_id, content);
+                        }
+                    }
+                    // Finalize accumulated text as intermediate message
+                    chat.finalize_intermediate(run_id);
+                } else if let Some(content) = data.get("content").and_then(|c| c.as_str()) {
                     chat.append_chunk(run_id, content);
                 }
             }

@@ -184,6 +184,7 @@ pub fn ChatSidebar() -> impl IntoView {
                             content: m.content,
                             tool_calls: vec![],
                             is_streaming: false,
+                            is_intermediate: false,
                             error: None,
                         })
                         .collect();
