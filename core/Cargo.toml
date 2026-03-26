@@ -160,6 +160,8 @@ plist = "1.7"
 sysinfo = "0.33"
 semver = "1"
 battery = "0.7"
+# Compile-time embedding of official skills/plugins
+include_dir = "0.7"
 
 # Gateway dependencies
 tokio-tungstenite = "0.26"
