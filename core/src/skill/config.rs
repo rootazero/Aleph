@@ -51,6 +51,7 @@ impl Default for SkillsConfig {
 }
 
 /// Update request for a single skill's config.
+#[derive(Debug)]
 pub enum SkillConfigUpdate {
     SetEnabled(bool),
     SetScope(PromptScope),

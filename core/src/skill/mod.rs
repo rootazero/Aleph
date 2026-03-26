@@ -671,4 +671,21 @@ Content."#,
         assert!(removed);
         assert_eq!(system.list_skills().await.len(), 0);
     }
+
+    #[tokio::test]
+    async fn remove_skill_rejects_bundled() {
+        use crate::domain::skill::SkillContent;
+        let system = SkillSystem::new();
+        let manifest = SkillManifest::new(
+            "test:bundled", "Bundled Skill", "desc",
+            SkillContent::new("c"), SkillSource::Bundled,
+        );
+        system.register_external(vec![manifest]).await;
+
+        let result = system.remove_skill(&SkillId::new("test:bundled")).await;
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::PermissionDenied);
+        // Skill should still be there
+        assert_eq!(system.list_skills().await.len(), 1);
+    }
 }
