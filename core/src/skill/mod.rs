@@ -22,7 +22,7 @@ pub use manifest::{parse_skill_content, parse_skill_file, SkillParseError};
 pub use prompt::build_skills_prompt_xml;
 pub use registry::SkillRegistry;
 pub use snapshot::SkillSnapshot;
-pub use status::SkillStatusReport;
+pub use status::{InstallOption, MissingRequirements, SkillStatusEntry, SkillStatusFilter};
 
 use std::path::{Path, PathBuf};
 use crate::sync_primitives::Arc;
@@ -198,15 +198,15 @@ impl SkillSystem {
             .collect()
     }
 
-    /// Build status reports for all registered skills.
-    pub async fn skill_status(&self) -> Vec<SkillStatusReport> {
+    /// Build status entries for all registered skills.
+    pub async fn skill_status(&self) -> Vec<SkillStatusEntry> {
         let registry = self.inner.registry.read().await;
         registry
             .list_all()
             .into_iter()
             .map(|m| {
                 let result = self.inner.eligibility.evaluate(m);
-                SkillStatusReport::from_manifest(m, result)
+                SkillStatusEntry::build(m, &result, None, false)
             })
             .collect()
     }
@@ -476,7 +476,7 @@ Content."#,
 
         let statuses = system.skill_status().await;
         assert_eq!(statuses.len(), 1);
-        assert!(statuses[0].is_eligible());
+        assert!(statuses[0].eligible);
     }
 
     #[test]

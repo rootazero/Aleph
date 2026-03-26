@@ -241,6 +241,19 @@ pub enum InstallKind {
 
 impl ValueObject for InstallKind {}
 
+impl InstallKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Brew => "brew",
+            Self::Apt => "apt",
+            Self::Npm => "npm",
+            Self::Uv => "uv",
+            Self::Go => "go",
+            Self::Download => "download",
+        }
+    }
+}
+
 /// A single dependency installation instruction.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InstallSpec {

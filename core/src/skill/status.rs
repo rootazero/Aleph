@@ -1,68 +1,129 @@
-//! Status reporting — provides a serializable view of skill eligibility
-//! for dashboards and diagnostic commands.
+//! Status reporting — rich, serializable view of skill status for Panel UI, CLI, and LLM Tools.
 
-use serde::ser::{Serialize, SerializeStruct, Serializer};
+use serde::{Serialize, Deserialize};
 
-use crate::domain::skill::{SkillId, SkillManifest, SkillSource};
+use crate::domain::skill::{InstallKind, PromptScope, SkillId, SkillManifest, SkillSource};
 use crate::domain::Entity;
-use crate::skill::eligibility::EligibilityResult;
+use crate::skill::config::SkillEntryConfig;
+use crate::skill::eligibility::{EligibilityResult, IneligibilityReason};
+use crate::skill::installer::filter_install_specs_for_current_os;
 
-/// A report combining a skill's identity with its evaluated eligibility result.
-#[derive(Debug, Clone)]
-pub struct SkillStatusReport {
-    /// The skill's unique identifier.
-    pub id: SkillId,
-    /// Human-readable skill name.
-    pub name: String,
-    /// Short description of the skill.
-    pub description: String,
-    /// Where the skill came from.
-    pub source: SkillSource,
-    /// The eligibility evaluation result.
-    pub result: EligibilityResult,
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InstallOption {
+    pub id: String,
+    pub kind: InstallKind,
+    pub label: String,
+    pub bins: Vec<String>,
 }
 
-impl SkillStatusReport {
-    /// Build a status report from a manifest and its eligibility result.
-    pub fn from_manifest(manifest: &SkillManifest, result: EligibilityResult) -> Self {
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MissingRequirements {
+    pub bins: Vec<String>,
+    pub env: Vec<String>,
+    pub config: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum SkillStatusFilter {
+    All,
+    Ready,
+    NeedsSetup,
+    Disabled,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SkillStatusEntry {
+    pub id: SkillId,
+    pub name: String,
+    pub description: String,
+    pub emoji: Option<String>,
+    pub source: SkillSource,
+    pub homepage: Option<String>,
+    pub eligible: bool,
+    pub disabled: bool,
+    pub missing: MissingRequirements,
+    pub install_options: Vec<InstallOption>,
+    pub primary_env: Option<String>,
+    pub api_key_set: bool,
+    pub scope: PromptScope,
+    pub user_invocable: bool,
+}
+
+impl SkillStatusEntry {
+    pub fn build(
+        manifest: &SkillManifest,
+        eligibility: &EligibilityResult,
+        entry_config: Option<&SkillEntryConfig>,
+        api_key_set: bool,
+    ) -> Self {
+        let disabled = entry_config
+            .and_then(|c| c.enabled)
+            .map(|e| !e)
+            .unwrap_or(false);
+
+        let scope = entry_config
+            .and_then(|c| c.scope_override.clone())
+            .unwrap_or_else(|| manifest.scope().clone());
+
+        let mut missing = MissingRequirements::default();
+        let eligible = match eligibility {
+            EligibilityResult::Eligible => true,
+            EligibilityResult::Ineligible(reasons) => {
+                for reason in reasons {
+                    match reason {
+                        IneligibilityReason::MissingBinary(bin) => missing.bins.push(bin.clone()),
+                        IneligibilityReason::MissingAnyBinary(bins) => missing.bins.extend(bins.iter().cloned()),
+                        IneligibilityReason::MissingEnv(env) => missing.env.push(env.clone()),
+                        IneligibilityReason::MissingConfig(cfg) => missing.config.push(cfg.clone()),
+                        _ => {}
+                    }
+                }
+                false
+            }
+        };
+
+        if let Some(env_name) = manifest.primary_env() {
+            if !api_key_set && !missing.env.contains(&env_name.to_string()) {
+                missing.env.push(env_name.to_string());
+            }
+        }
+
+        let install_options = filter_install_specs_for_current_os(manifest.install_specs())
+            .into_iter()
+            .map(|spec| InstallOption {
+                id: spec.id.clone(),
+                kind: spec.kind.clone(),
+                label: format!("Install {} ({})", spec.package, spec.kind.as_str()),
+                bins: spec.bins.clone(),
+            })
+            .collect();
+
         Self {
             id: manifest.id().clone(),
             name: manifest.name().to_string(),
             description: manifest.description().to_string(),
+            emoji: manifest.emoji().map(|s| s.to_string()),
             source: manifest.source().clone(),
-            result,
+            homepage: manifest.homepage().map(|s| s.to_string()),
+            eligible,
+            disabled,
+            missing,
+            install_options,
+            primary_env: manifest.primary_env().map(|s| s.to_string()),
+            api_key_set,
+            scope,
+            user_invocable: manifest.is_user_invocable(),
         }
     }
 
-    /// Whether the skill is eligible.
-    pub fn is_eligible(&self) -> bool {
-        self.result.is_eligible()
-    }
-}
-
-impl Serialize for SkillStatusReport {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let eligible = self.is_eligible();
-
-        // 5 fields normally, +1 if ineligible (for "reasons" array)
-        let field_count = if eligible { 5 } else { 6 };
-        let mut state = serializer.serialize_struct("SkillStatusReport", field_count)?;
-
-        state.serialize_field("id", self.id.as_str())?;
-        state.serialize_field("name", &self.name)?;
-        state.serialize_field("description", &self.description)?;
-        state.serialize_field("source", &format!("{:?}", self.source))?;
-        state.serialize_field("eligible", &eligible)?;
-
-        if !eligible {
-            if let EligibilityResult::Ineligible(reasons) = &self.result {
-                let reason_strings: Vec<String> =
-                    reasons.iter().map(|r| format!("{:?}", r)).collect();
-                state.serialize_field("reasons", &reason_strings)?;
-            }
+    pub fn matches_filter(&self, filter: SkillStatusFilter) -> bool {
+        match filter {
+            SkillStatusFilter::All => true,
+            SkillStatusFilter::Ready => self.eligible && !self.disabled,
+            SkillStatusFilter::NeedsSetup => !self.eligible && !self.disabled,
+            SkillStatusFilter::Disabled => self.disabled,
         }
-
-        state.end()
     }
 }
 
@@ -70,79 +131,60 @@ impl Serialize for SkillStatusReport {
 mod tests {
     use super::*;
     use crate::domain::skill::{SkillContent, SkillManifest, SkillSource};
-    use crate::skill::eligibility::IneligibilityReason;
 
     fn make_manifest(name: &str) -> SkillManifest {
-        SkillManifest::new(
-            name,
-            name,
-            format!("{} description", name),
-            SkillContent::new("content"),
-            SkillSource::Bundled,
-        )
+        SkillManifest::new(name, name, format!("{} desc", name), SkillContent::new("c"), SkillSource::Bundled)
     }
 
     #[test]
-    fn status_eligible() {
-        let manifest = make_manifest("git:commit");
-        let report = SkillStatusReport::from_manifest(&manifest, EligibilityResult::Eligible);
-
-        assert!(report.is_eligible());
-        assert_eq!(report.id.as_str(), "git:commit");
-        assert_eq!(report.name, "git:commit");
+    fn build_eligible_entry() {
+        let m = make_manifest("test:skill");
+        let e = SkillStatusEntry::build(&m, &EligibilityResult::Eligible, None, false);
+        assert!(e.eligible);
+        assert!(!e.disabled);
+        assert!(e.missing.bins.is_empty());
     }
 
     #[test]
-    fn status_ineligible() {
-        let manifest = make_manifest("docker:build");
-        let reasons = vec![
-            IneligibilityReason::MissingBinary("docker".to_string()),
-            IneligibilityReason::OsNotSupported(crate::domain::skill::Os::Windows),
-        ];
-        let report = SkillStatusReport::from_manifest(
-            &manifest,
-            EligibilityResult::Ineligible(reasons),
-        );
-
-        assert!(!report.is_eligible());
-        assert_eq!(report.id.as_str(), "docker:build");
+    fn build_ineligible_entry() {
+        let m = make_manifest("test:skill");
+        let reasons = vec![IneligibilityReason::MissingBinary("docker".into())];
+        let e = SkillStatusEntry::build(&m, &EligibilityResult::Ineligible(reasons), None, false);
+        assert!(!e.eligible);
+        assert_eq!(e.missing.bins, vec!["docker"]);
     }
 
     #[test]
-    fn serialization_eligible() {
-        let manifest = make_manifest("git:commit");
-        let report = SkillStatusReport::from_manifest(&manifest, EligibilityResult::Eligible);
-
-        let value = serde_json::to_value(&report).expect("serialization should succeed");
-
-        assert_eq!(value["id"], "git:commit");
-        assert_eq!(value["name"], "git:commit");
-        assert_eq!(value["eligible"], true);
-        // No "reasons" field for eligible skills
-        assert!(value.get("reasons").is_none());
+    fn disabled_by_config() {
+        let m = make_manifest("test:skill");
+        let cfg = SkillEntryConfig { enabled: Some(false), scope_override: None };
+        let e = SkillStatusEntry::build(&m, &EligibilityResult::Eligible, Some(&cfg), false);
+        assert!(e.disabled);
     }
 
     #[test]
-    fn serialization_ineligible() {
-        let manifest = make_manifest("docker:build");
-        let reasons = vec![
-            IneligibilityReason::MissingBinary("docker".to_string()),
-            IneligibilityReason::Disabled,
-        ];
-        let report = SkillStatusReport::from_manifest(
-            &manifest,
-            EligibilityResult::Ineligible(reasons),
-        );
+    fn missing_api_key_added_to_env() {
+        let mut m = make_manifest("test:skill");
+        m.set_primary_env("OPENAI_API_KEY".to_string());
+        let e = SkillStatusEntry::build(&m, &EligibilityResult::Eligible, None, false);
+        assert!(e.missing.env.contains(&"OPENAI_API_KEY".to_string()));
+    }
 
-        let value = serde_json::to_value(&report).expect("serialization should succeed");
+    #[test]
+    fn api_key_set_not_missing() {
+        let mut m = make_manifest("test:skill");
+        m.set_primary_env("OPENAI_API_KEY".to_string());
+        let e = SkillStatusEntry::build(&m, &EligibilityResult::Eligible, None, true);
+        assert!(!e.missing.env.contains(&"OPENAI_API_KEY".to_string()));
+    }
 
-        assert_eq!(value["id"], "docker:build");
-        assert_eq!(value["eligible"], false);
-
-        let reasons_arr = value["reasons"].as_array().expect("reasons should be an array");
-        assert_eq!(reasons_arr.len(), 2);
-        // Verify reasons contain debug-formatted strings
-        assert!(reasons_arr[0].as_str().unwrap().contains("MissingBinary"));
-        assert!(reasons_arr[1].as_str().unwrap().contains("Disabled"));
+    #[test]
+    fn filter_matching() {
+        let m = make_manifest("test:skill");
+        let ready = SkillStatusEntry::build(&m, &EligibilityResult::Eligible, None, false);
+        let needs = SkillStatusEntry::build(&m, &EligibilityResult::Ineligible(vec![IneligibilityReason::MissingBinary("x".into())]), None, false);
+        assert!(ready.matches_filter(SkillStatusFilter::Ready));
+        assert!(!ready.matches_filter(SkillStatusFilter::NeedsSetup));
+        assert!(needs.matches_filter(SkillStatusFilter::NeedsSetup));
     }
 }
