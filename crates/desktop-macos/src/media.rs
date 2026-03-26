@@ -278,11 +278,12 @@ async fn record_audio_with_ffmpeg(config: &AudioRecordConfig) -> Result<AudioRec
 
     // Record from default microphone using avfoundation
     // :0 = default audio input device (no video)
+    let out_path_str = out_path.to_string_lossy().into_owned();
     let args = [
         "-f", "avfoundation",
         "-i", ":0",
         "-t", &duration_str,
-        "-y", &out_path.to_string_lossy(),
+        "-y", &out_path_str,
     ];
 
     debug!(duration = config.duration_secs, "Recording audio via ffmpeg");
@@ -585,13 +586,14 @@ fn speech_to_text_blocking(
         },
     );
 
-    // Start recognition task (the returned task keeps recognition alive)
-    let _task = unsafe {
+    // Start recognition task — must stay alive until result received.
+    // DO NOT use `_task` (leading underscore) — it drops immediately!
+    let task = unsafe {
         recognizer.recognitionTaskWithRequest_resultHandler(&request, &handler)
     };
 
     // Wait for result with a 60-second timeout (Apple's speech recognition limit)
-    match rx.recv_timeout(Duration::from_secs(60)) {
+    let result = match rx.recv_timeout(Duration::from_secs(60)) {
         Ok(Ok(text)) => Ok(SpeechToTextResult {
             text,
             language: config.language.clone(),
@@ -602,7 +604,11 @@ fn speech_to_text_blocking(
         Err(_) => Err(aleph_desktop::DesktopError::BridgeFailed(
             "Speech recognition timed out after 60 seconds".into(),
         )),
-    }
+    };
+
+    // Explicitly drop task after result is received
+    drop(task);
+    result
 }
 
 // ---------------------------------------------------------------------------

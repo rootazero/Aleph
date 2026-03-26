@@ -164,7 +164,8 @@ fn macos_ocr(png_bytes: &[u8]) -> Result<OcrResult> {
     // VNRecognizeTextRequest inherits from VNRequest — use ProtocolObject or direct cast
     let requests: objc2::rc::Retained<NSArray<VNRequest>> = unsafe {
         let ptr = objc2::rc::Retained::into_raw(objc2::rc::Retained::clone(&request));
-        let vn_req = objc2::rc::Retained::from_raw(ptr as *mut VNRequest).unwrap();
+        let vn_req = objc2::rc::Retained::from_raw(ptr as *mut VNRequest)
+            .ok_or_else(|| DesktopError::OcrFailed("VNRequest cast produced null pointer".into()))?;
         NSArray::from_retained_slice(&[vn_req])
     };
 
@@ -233,6 +234,65 @@ fn png_dimensions(png_bytes: &[u8]) -> Option<(f64, f64)> {
 
 // ── macOS Screen Recording ─────────────────────────────────────
 
+// SCRecordingOutput delegate — defined at module scope to avoid ObjC
+// class re-registration panic on repeated calls.
+#[cfg(target_os = "macos")]
+mod sc_recording_delegate {
+    use objc2::DefinedClass;
+    use objc2_foundation::{NSError, NSObject, NSObjectProtocol};
+    use objc2_screen_capture_kit::{SCRecordingOutput, SCRecordingOutputDelegate};
+    use std::sync::{Arc, Condvar, Mutex};
+
+    pub struct SCRecordingDelegateIvars {
+        pub finished: Arc<(Mutex<bool>, Condvar)>,
+        pub error: Arc<Mutex<Option<String>>>,
+    }
+
+    objc2::define_class!(
+        #[unsafe(super(NSObject))]
+        #[ivars = SCRecordingDelegateIvars]
+        #[name = "AlephSCRecordingDelegate"]
+        pub struct SCRecordingDelegate;
+
+        unsafe impl SCRecordingOutputDelegate for SCRecordingDelegate {
+            #[unsafe(method(recordingOutputDidStartRecording:))]
+            fn _did_start(&self, _recording_output: &SCRecordingOutput) {
+                tracing::debug!("SCRecordingOutput: recording started");
+            }
+
+            #[unsafe(method(recordingOutput:didFailWithError:))]
+            fn _did_fail(&self, _recording_output: &SCRecordingOutput, error: &NSError) {
+                let msg = error.to_string();
+                tracing::error!("SCRecordingOutput: recording failed: {}", msg);
+                let ivars = self.ivars();
+                {
+                    let mut guard = ivars.error.lock().unwrap_or_else(|e| e.into_inner());
+                    *guard = Some(msg);
+                }
+                let (ref lock, ref cvar) = *ivars.finished;
+                let mut finished = lock.lock().unwrap_or_else(|e| e.into_inner());
+                *finished = true;
+                cvar.notify_all();
+            }
+
+            #[unsafe(method(recordingOutputDidFinishRecording:))]
+            fn _did_finish(&self, _recording_output: &SCRecordingOutput) {
+                tracing::debug!("SCRecordingOutput: recording finished");
+                let ivars = self.ivars();
+                let (ref lock, ref cvar) = *ivars.finished;
+                let mut finished = lock.lock().unwrap_or_else(|e| e.into_inner());
+                *finished = true;
+                cvar.notify_all();
+            }
+        }
+
+        unsafe impl NSObjectProtocol for SCRecordingDelegate {}
+    );
+}
+
+#[cfg(target_os = "macos")]
+use sc_recording_delegate::{SCRecordingDelegate, SCRecordingDelegateIvars};
+
 /// Record the primary display to an MP4 file.
 ///
 /// Uses a two-tier approach:
@@ -291,9 +351,9 @@ fn sc_recording_output_record(
     use block2::RcBlock;
     use objc2::rc::Retained;
     use objc2::runtime::ProtocolObject;
-    use objc2::{AnyThread, DefinedClass};
+    use objc2::AnyThread;
     use objc2_core_media::{CMTime, CMTimeFlags};
-    use objc2_foundation::{NSArray, NSError, NSObjectProtocol, NSURL};
+    use objc2_foundation::{NSArray, NSError, NSURL};
     use objc2_screen_capture_kit::{
         SCContentFilter, SCRecordingOutput, SCRecordingOutputConfiguration,
         SCRecordingOutputDelegate, SCShareableContent, SCStream, SCStreamConfiguration,
@@ -314,9 +374,10 @@ fn sc_recording_output_record(
                 };
                 let _ = content_tx.send(Err(msg));
             } else {
-                let retained = unsafe { Retained::retain(content) }
-                    .expect("SCShareableContent pointer should be valid");
-                let _ = content_tx.send(Ok(retained));
+                match unsafe { Retained::retain(content) } {
+                    Some(r) => { let _ = content_tx.send(Ok(r)); }
+                    None => { let _ = content_tx.send(Err("SCShareableContent retain returned None".into())); }
+                }
             }
         },
     );
@@ -383,70 +444,19 @@ fn sc_recording_output_record(
         recording_config.setOutputURL(&file_url);
     }
 
-    // 6. Define delegate class for recording lifecycle events
+    // 6. Construct delegate for recording lifecycle events
     use std::sync::{Arc, Condvar, Mutex};
 
-    // Shared state for the delegate
     let finished_signal = Arc::new((Mutex::new(false), Condvar::new()));
     let error_slot: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
 
-    // Define the delegate with ivars
-    struct RecordingDelegateIvars {
-        finished: Arc<(Mutex<bool>, Condvar)>,
-        error: Arc<Mutex<Option<String>>>,
-    }
-
-    objc2::define_class!(
-        #[unsafe(super(objc2_foundation::NSObject))]
-        #[ivars = RecordingDelegateIvars]
-        #[name = "AlephSCRecordingDelegate"]
-        struct RecordingDelegate;
-
-        unsafe impl SCRecordingOutputDelegate for RecordingDelegate {
-            #[unsafe(method(recordingOutputDidStartRecording:))]
-            fn _did_start(&self, _recording_output: &SCRecordingOutput) {
-                tracing::debug!("SCRecordingOutput: recording started");
-            }
-
-            #[unsafe(method(recordingOutput:didFailWithError:))]
-            fn _did_fail(&self, _recording_output: &SCRecordingOutput, error: &NSError) {
-                let msg = error.to_string();
-                tracing::error!("SCRecordingOutput: recording failed: {}", msg);
-                let ivars = self.ivars();
-                {
-                    let mut guard = ivars
-                        .error
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner());
-                    *guard = Some(msg);
-                }
-                let (ref lock, ref cvar) = *ivars.finished;
-                let mut finished = lock.lock().unwrap_or_else(|e| e.into_inner());
-                *finished = true;
-                cvar.notify_all();
-            }
-
-            #[unsafe(method(recordingOutputDidFinishRecording:))]
-            fn _did_finish(&self, _recording_output: &SCRecordingOutput) {
-                tracing::debug!("SCRecordingOutput: recording finished");
-                let ivars = self.ivars();
-                let (ref lock, ref cvar) = *ivars.finished;
-                let mut finished = lock.lock().unwrap_or_else(|e| e.into_inner());
-                *finished = true;
-                cvar.notify_all();
-            }
-        }
-
-        unsafe impl NSObjectProtocol for RecordingDelegate {}
-    );
-
-    // Construct delegate
-    let delegate_ivars = RecordingDelegateIvars {
+    // Construct delegate (class defined at module scope to avoid ObjC re-registration panic)
+    let delegate_ivars = SCRecordingDelegateIvars {
         finished: finished_signal.clone(),
         error: error_slot.clone(),
     };
-    let delegate: Retained<RecordingDelegate> = {
-        let alloc = RecordingDelegate::alloc().set_ivars(delegate_ivars);
+    let delegate: Retained<SCRecordingDelegate> = {
+        let alloc = SCRecordingDelegate::alloc().set_ivars(delegate_ivars);
         unsafe { objc2::msg_send![super(alloc), init] }
     };
 
