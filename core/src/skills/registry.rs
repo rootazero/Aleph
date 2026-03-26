@@ -343,10 +343,16 @@ impl SkillsRegistry {
                         let dir_str = skills_dir.to_string_lossy();
                         let ecosystem = if dir_str.contains("/.claude/") {
                             SkillEcosystem::Claude
-                        } else if dir_str.contains("skills-official") {
-                            SkillEcosystem::Official
                         } else {
-                            SkillEcosystem::Aleph
+                            // Check manifest to determine if this is an official skill
+                            let is_official = crate::bundled::manifest::SkillManifest::load(skills_dir)
+                                .map(|m| m.is_official(&skill_id))
+                                .unwrap_or(false);
+                            if is_official {
+                                SkillEcosystem::Official
+                            } else {
+                                SkillEcosystem::Aleph
+                            }
                         };
                         let meta = SkillMetadata {
                             id: skill_id.clone(),
