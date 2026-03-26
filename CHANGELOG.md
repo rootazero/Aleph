@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-03-26
+
+### Added
+- ACP Coding Orchestrator: Aleph can now act as a "tech lead", autonomously directing Claude Code, Codex, and Gemini CLI through multi-step coding workflows (plan → code → review)
+- All ACP harnesses support dual execution mode (oneshot + native_acp), switchable per call or via Panel config
+- Session pool with canonicalized SessionKey and extract-use-reinsert locking for concurrent ACP sessions
+- AcpChunkCallback for real-time streaming passthrough from native ACP harnesses
+- Tool args extended with `mode` and `reuse_session` parameters for LLM-driven orchestration
+- Coding orchestration strategy injected into system prompt (R10 compliance)
+- "外部代码 Agent" tool category in Panel for ACP tool grouping
+- ACP tools registered in BUILTIN_TOOL_DEFINITIONS for direct LLM visibility
+- Streaming phase 2: thinking/tool deltas, execution engine enhancements
+- Gateway i18n module for localized messages
+- Markdown-to-platform formatter rewrite with full test suite
+- Telegram polling resilience and message formatting improvements
+- Desktop MediaCapability: audio recording, screen capture, speech-to-text
+- macOS native APIs: OCR (Vision), window management, clipboard, sysinfo, global hotkey
+- TCC permission management tool for macOS privacy permissions
+- Team management tools (team_create, team_delegate, team_status, team_disband) with SQLite store
+- Heartbeat monitoring system with probe execution, dedup engine, and wake queue
+- Capability-driven plugin architecture with ManifestAdapter trait and multi-format support
+- Agent engine resilience: resettable deadline, pair-aware truncation, three-layer timeout cascade
+- Gateway evolution: IdempotencyGuard, ConnectionRole, CapabilityApi, execution config RPC
+- Provider protocol refactor: stream_deltas(), DeltaCollector, ProviderDelta foundation
+- OpenAI Responses API protocol support (/v1/responses)
+
+### Fixed
+- ACP preset mode defaults: Claude Code and Codex now correctly default to Oneshot (was NativeAcp)
+- Anthropic API tool_use.input empty parameter bug: empty input now serializes as `{}` instead of `""`
+- ACP tools now visible to LLM (were registered for execution but missing from tool list)
+- Panel ACP mode display: correctly reads runtime mode from server, not stale config field
+- ACP config persistence: preset harnesses auto-populate via serde deserializer, Panel changes persist
+- Panel config field name mismatch (mode → default_mode) for ACP harnesses
+- UTF-8 chunk boundary bug in all SSE stream parsers
+- Intermediate message delivery and agent reuse in team workflows
+
 ## [0.3.0] - 2026-03-24
 
 ### Added
