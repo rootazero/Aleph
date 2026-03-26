@@ -201,22 +201,6 @@ impl BuiltinToolRegistry {
         Arc::clone(&self.channel_registry_cell)
     }
 
-    /// Return all dynamically registered tools (ACP, plugin, etc.) that are
-    /// not part of the static `BUILTIN_TOOL_DEFINITIONS` array.
-    ///
-    /// These tools need to be merged into the LLM tool list so the model can
-    /// see and invoke them.
-    pub fn dynamic_tools(&self) -> Vec<crate::dispatcher::UnifiedTool> {
-        use crate::executor::BUILTIN_TOOL_DEFINITIONS;
-        let static_names: std::collections::HashSet<&str> =
-            BUILTIN_TOOL_DEFINITIONS.iter().map(|d| d.name).collect();
-        self.tools
-            .values()
-            .filter(|t| !static_names.contains(t.name.as_str()))
-            .cloned()
-            .collect()
-    }
-
     /// Get the parameter schema for a tool by name.
     ///
     /// Returns the schema if the tool exists in the internal registry and has

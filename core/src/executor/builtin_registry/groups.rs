@@ -104,6 +104,11 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
         tools: &["cron_manage", "clawhub"],
     },
     ToolCategory {
+        id: "acp",
+        name: "外部代码 Agent",
+        tools: &["claude_code", "codex", "gemini_cli", "acp_switch"],
+    },
+    ToolCategory {
         id: "heartbeat",
         name: "心跳监控",
         tools: &[

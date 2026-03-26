@@ -354,6 +354,29 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
     // voice_mode_set is a LLM tool only — NOT a slash command.
     // Use /voice on|off instead. Excluded from BUILTIN_TOOL_DEFINITIONS
     // to avoid appearing in command lists.
+
+    // ACP delegate tools — delegate coding tasks to external CLI agents.
+    // Require AcpHarnessManager; execution returns clear error if harness unavailable.
+    BuiltinToolDefinition {
+        name: "claude_code",
+        description: "Delegate a coding task to Claude Code CLI. Supports 'oneshot' (fresh process per prompt, default) and 'native_acp' (persistent session with context continuity). Set reuse_session for multi-step workflows.",
+        requires_config: true, // Requires AcpHarnessManager
+    },
+    BuiltinToolDefinition {
+        name: "codex",
+        description: "Delegate a coding task to OpenAI Codex CLI. Supports 'oneshot' (default) and 'native_acp' modes. Set reuse_session for multi-step continuity.",
+        requires_config: true,
+    },
+    BuiltinToolDefinition {
+        name: "gemini_cli",
+        description: "Delegate a task to Google Gemini CLI. Supports 'native_acp' (default, persistent session) and 'oneshot' modes. Set reuse_session for multi-step continuity.",
+        requires_config: true,
+    },
+    BuiltinToolDefinition {
+        name: "acp_switch",
+        description: "Switch to direct conversation with an external CLI agent (Claude Code, Codex, or Gemini), or switch back to Aleph.",
+        requires_config: true,
+    },
 ];
 
 /// Create a boxed tool instance by name
