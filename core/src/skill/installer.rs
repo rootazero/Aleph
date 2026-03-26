@@ -1,7 +1,9 @@
 //! Installer — converts `InstallSpec` values into executable shell commands
 //! and filters specs by the current operating system.
 
+use serde::Serialize;
 use crate::domain::skill::{InstallKind, InstallSpec};
+use crate::skill::config::InstallPreferences;
 use crate::skill::eligibility::current_os;
 
 /// Build a shell command string for the given install spec.
@@ -52,10 +54,113 @@ pub fn filter_install_specs_for_current_os(specs: &[InstallSpec]) -> Vec<&Instal
         .collect()
 }
 
+/// Result of a dependency installation execution.
+#[derive(Debug, Clone, Serialize)]
+pub struct InstallResult {
+    pub success: bool,
+    pub message: String,
+    pub stdout: String,
+    pub stderr: String,
+    pub exit_code: Option<i32>,
+}
+
+fn install_kind_rank(kind: &InstallKind, prefer_brew: bool) -> u8 {
+    if prefer_brew {
+        match kind {
+            InstallKind::Brew => 0,
+            InstallKind::Uv => 1,
+            InstallKind::Npm => 2,
+            InstallKind::Go => 3,
+            InstallKind::Apt => 4,
+            InstallKind::Download => 5,
+        }
+    } else {
+        match kind {
+            InstallKind::Uv => 0,
+            InstallKind::Npm => 1,
+            InstallKind::Brew => 2,
+            InstallKind::Go => 3,
+            InstallKind::Apt => 4,
+            InstallKind::Download => 5,
+        }
+    }
+}
+
+/// Select the best install spec for the current platform and preferences.
+pub fn select_best_install<'a>(
+    specs: &'a [InstallSpec],
+    prefs: &InstallPreferences,
+) -> Option<&'a InstallSpec> {
+    let mut candidates = filter_install_specs_for_current_os(specs);
+    candidates.sort_by_key(|spec| install_kind_rank(&spec.kind, prefs.prefer_brew));
+    candidates.into_iter().next()
+}
+
+/// Executes install commands with timeout and output capture.
+pub struct InstallExecutor;
+
+impl InstallExecutor {
+    pub async fn run(spec: &InstallSpec, _prefs: &InstallPreferences) -> InstallResult {
+        let cmd_str = match build_install_command(spec) {
+            Some(cmd) => cmd,
+            None => {
+                return InstallResult {
+                    success: false,
+                    message: format!("Cannot build install command for {}", spec.package),
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    exit_code: None,
+                };
+            }
+        };
+
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(300),
+            tokio::process::Command::new("sh")
+                .arg("-c")
+                .arg(&cmd_str)
+                .output(),
+        )
+        .await;
+
+        match result {
+            Ok(Ok(output)) => {
+                let success = output.status.success();
+                InstallResult {
+                    success,
+                    message: if success {
+                        format!("Successfully installed {}", spec.package)
+                    } else {
+                        format!("Failed to install {}", spec.package)
+                    },
+                    stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+                    stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+                    exit_code: output.status.code(),
+                }
+            }
+            Ok(Err(e)) => InstallResult {
+                success: false,
+                message: format!("Failed to execute install command: {}", e),
+                stdout: String::new(),
+                stderr: String::new(),
+                exit_code: None,
+            },
+            Err(_) => InstallResult {
+                success: false,
+                message: "Installation timed out after 300 seconds".to_string(),
+                stdout: String::new(),
+                stderr: String::new(),
+                exit_code: None,
+            },
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::domain::skill::{InstallKind, InstallSpec, Os};
+    use crate::skill::config::InstallPreferences;
 
     fn make_spec(kind: InstallKind, package: &str) -> InstallSpec {
         InstallSpec {
@@ -169,5 +274,74 @@ mod tests {
         assert_eq!(filtered.len(), 2);
         assert_eq!(filtered[0].id, "matching");
         assert_eq!(filtered[1].id, "universal");
+    }
+
+    #[test]
+    fn select_best_install_prefers_brew() {
+        let specs = vec![
+            InstallSpec {
+                id: "npm-pkg".into(),
+                kind: InstallKind::Npm,
+                package: "pkg".into(),
+                bins: vec!["pkg".into()],
+                os: None,
+                url: None,
+            },
+            InstallSpec {
+                id: "brew-pkg".into(),
+                kind: InstallKind::Brew,
+                package: "pkg".into(),
+                bins: vec!["pkg".into()],
+                os: None,
+                url: None,
+            },
+        ];
+
+        let prefs = InstallPreferences {
+            prefer_brew: true,
+            ..Default::default()
+        };
+
+        let best = select_best_install(&specs, &prefs);
+        assert!(best.is_some());
+        assert_eq!(best.unwrap().id, "brew-pkg");
+    }
+
+    #[test]
+    fn select_best_install_no_brew_preference() {
+        let specs = vec![
+            InstallSpec {
+                id: "brew-pkg".into(),
+                kind: InstallKind::Brew,
+                package: "pkg".into(),
+                bins: vec!["pkg".into()],
+                os: None,
+                url: None,
+            },
+            InstallSpec {
+                id: "uv-pkg".into(),
+                kind: InstallKind::Uv,
+                package: "pkg".into(),
+                bins: vec!["pkg".into()],
+                os: None,
+                url: None,
+            },
+        ];
+
+        let prefs = InstallPreferences {
+            prefer_brew: false,
+            ..Default::default()
+        };
+
+        let best = select_best_install(&specs, &prefs);
+        assert!(best.is_some());
+        assert_eq!(best.unwrap().id, "uv-pkg");
+    }
+
+    #[test]
+    fn select_best_install_empty() {
+        let specs: Vec<InstallSpec> = vec![];
+        let prefs = InstallPreferences::default();
+        assert!(select_best_install(&specs, &prefs).is_none());
     }
 }

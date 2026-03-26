@@ -17,7 +17,7 @@ pub mod status;
 pub use commands::{list_available_commands, resolve_command, SkillCommandSpec};
 pub use config::{InstallPreferences, NodeManager, SkillConfigUpdate, SkillEntryConfig, SkillsConfig};
 pub use eligibility::{EligibilityResult, EligibilityService, IneligibilityReason};
-pub use installer::{build_install_command, filter_install_specs_for_current_os};
+pub use installer::{build_install_command, filter_install_specs_for_current_os, select_best_install, InstallExecutor, InstallResult};
 pub use manifest::{parse_skill_content, parse_skill_file, SkillParseError};
 pub use prompt::build_skills_prompt_xml;
 pub use registry::SkillRegistry;
