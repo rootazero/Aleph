@@ -33,7 +33,7 @@ AcpHarnessManager (session pool, mode routing)
     ├─ Oneshot: spawn → execute → exit
     └─ NativeAcp: session pool → reuse/create → streaming
          ↓
-    StreamingSink (real-time chunk forwarding to client)
+    AcpChunkCallback → EventEmitter (real-time chunk forwarding to client)
     ↓
 User (sees step-level + streaming progress, can intervene)
 ```
@@ -52,21 +52,41 @@ Every harness implements both `execute_oneshot()` and `spawn_session()`.
 
 ### Changes
 
-**`AcpHarness` trait** — Ensure both methods are required (not defaulted to error):
-- `execute_oneshot(prompt, cwd) -> Result<String>`
-- `spawn_session(cwd) -> Result<AcpSession>`
+**`AcpHarness` trait** — Keep default implementations for both methods (returning "unsupported mode" error), preserving backward compatibility for `CustomHarness` and future third-party implementations. Add a new method:
+- `fn supported_modes(&self) -> Vec<HarnessMode>` — declares which modes a harness actually supports
+- Manager validates at runtime: if LLM requests an unsupported mode, return a clear error
+
+Each harness overrides the methods it supports:
+- `execute_oneshot(prompt, cwd) -> Result<String>` (default: error)
+- `spawn_session(cwd) -> Result<AcpSession>` (default: error)
 
 **Per-harness dual paths**:
 
 | Harness | Oneshot | Native ACP |
 |---------|---------|------------|
 | ClaudeCodeHarness | `claude --print --output-format json -p "<prompt>"` (existing) | `claude --acp` (new) |
-| CodexHarness | `codex exec "<prompt>"` (existing) | `codex --acp` (new, verify CLI support, fallback to oneshot if unsupported) |
+| CodexHarness | `codex exec "<prompt>"` (existing) | `codex --acp` (new — detect at harness registration via `codex --help` or version check; if unsupported, `supported_modes()` returns `[Oneshot]` only and Manager auto-falls back) |
 | GeminiHarness | TBD — verify `gemini` oneshot CLI flags (new) | `gemini --acp` (existing) |
 
-**Config layer** — `AcpHarnessEntry.mode` renamed to `default_mode`. Preset factories updated accordingly.
+**Config layer** — `AcpHarnessEntry.mode` renamed to `default_mode`, with serde backward compatibility:
+```rust
+#[serde(default, alias = "mode")]
+pub default_mode: HarnessModeSerde,
+```
+Preset factories updated accordingly.
 
-**Pre-requisite: Bug fix** — Investigate and fix Panel displaying all harnesses as "Native ACP" regardless of actual configuration.
+**Pre-requisite: Bug fix — Root cause analysis**
+
+The Panel shows all harnesses as "Native ACP" because all three presets in `config/types/acp.rs` set `mode: HarnessModeSerde::NativeAcp` (lines 162, 178, 189). Meanwhile, each harness struct hard-codes its own `mode()` return value and completely ignores the config's `mode` field. This is a config-vs-runtime disconnect.
+
+**Fix**: After renaming to `default_mode`, the harness constructors must accept and store the config value as a field:
+```rust
+struct ClaudeCodeHarness {
+    default_mode: HarnessMode,  // from config, not hard-coded
+    // ...
+}
+```
+The `mode()` trait method returns `self.default_mode`. Preset factories set correct defaults (ClaudeCode → Oneshot, Codex → Oneshot, Gemini → NativeAcp).
 
 ## Section 2: Manager Session Pool Upgrade
 
@@ -80,15 +100,35 @@ Smart session pool indexed by `(harness_id, cwd)`, with automatic lifecycle mana
 
 ### Changes
 
+**Session pool key type**:
+```rust
+/// Canonicalized session pool key — prevents duplicate sessions for equivalent paths
+#[derive(Clone, Hash, Eq, PartialEq)]
+struct SessionKey {
+    harness_id: String,
+    cwd: PathBuf,  // always canonicalized via std::fs::canonicalize() at construction
+}
+
+impl SessionKey {
+    fn new(harness_id: &str, cwd: &str) -> Self {
+        Self {
+            harness_id: harness_id.to_string(),
+            cwd: std::fs::canonicalize(cwd).unwrap_or_else(|_| PathBuf::from(cwd)),
+        }
+    }
+}
+```
+
 **Session pool structure**:
 ```rust
 // Old
 sessions: RwLock<HashMap<String, AcpSession>>
 
-// New
-sessions: RwLock<HashMap<(String, String), Vec<AcpSession>>>
-//                       (harness_id, cwd)   active sessions
+// New — keyed by canonicalized SessionKey, single session per key (most recent)
+sessions: RwLock<HashMap<SessionKey, AcpSession>>
 ```
+
+Selection strategy: one active session per `(harness_id, cwd)` pair. When `reuse_session: true`, reuse it if alive; if dead, replace with a new one. When `reuse_session: false`, drop existing session and create fresh. No `Vec` — one session per key is sufficient for the orchestration use case.
 
 **`manager.prompt()` interface extension**:
 ```rust
@@ -99,23 +139,42 @@ pub async fn prompt(
     cwd: &str,
     mode: Option<HarnessMode>,       // None = use harness default_mode
     reuse_session: bool,              // true = find/reuse, false = force new
-    sink: Option<&StreamingSink>,     // for streaming passthrough
+    on_chunk: Option<AcpChunkCallback>,  // for streaming passthrough (see Section 4)
 ) -> Result<String>
 ```
 
 Behavior:
 - `mode: None` → use `harness.default_mode()`
 - `mode: Some(Oneshot)` → always `execute_oneshot()`, ignore `reuse_session`
-- `mode: Some(NativeAcp)` + `reuse_session: true` → find alive session for `(harness_id, cwd)`, reuse if found, else create new
-- `mode: Some(NativeAcp)` + `reuse_session: false` → always create new session
+- `mode: Some(NativeAcp)` + `reuse_session: true` → find alive session for key, reuse if found, else create new
+- `mode: Some(NativeAcp)` + `reuse_session: false` → drop existing session, create new
 
 **Session lifecycle**:
 - Dead sessions (process exited, timeout) auto-cleaned on next access
 - No background GC thread — lazy cleanup on access is sufficient
 
-**Concurrency safety**:
-- `RwLock` on session pool — read lock for lookup, write lock for create/remove
-- Different sessions are fully independent, parallel tool calls safe
+**Concurrency safety and lock ordering**:
+
+Lock ordering (preserving existing convention): `sessions → harnesses → configs`
+
+Critical: the write lock on `sessions` must NOT be held during `session.prompt()` (which can block for minutes). Pattern:
+```rust
+// 1. Acquire write lock briefly to extract/create session
+let session = {
+    let mut pool = self.sessions.write().await;
+    pool.remove(&key)  // take ownership
+    // or create new session
+};
+// 2. Lock released here
+
+// 3. Use session without holding pool lock
+let result = session.prompt(text, cwd, timeout, on_chunk).await;
+
+// 4. Re-insert session into pool
+self.sessions.write().await.insert(key, session);
+```
+
+This allows parallel tool calls to access different sessions without blocking.
 
 ## Section 3: Tool Layer Changes
 
@@ -161,6 +220,18 @@ Two-level real-time reporting: step notifications + native ACP chunk forwarding.
 
 ### Changes
 
+**Streaming abstraction — `AcpChunkCallback`**
+
+The existing `StreamingDeltaSink` is designed for LLM provider deltas (`ProviderDelta`), not ACP chunks. Instead of coupling ACP to the provider streaming type, define a lightweight callback:
+
+```rust
+/// Callback for real-time ACP streaming chunks
+/// Receives the chunk text as it arrives from the external tool
+pub type AcpChunkCallback = Arc<dyn Fn(&str) + Send + Sync>;
+```
+
+At the tool call site, the callback is constructed to bridge into the existing notification system (e.g., `EventEmitter::emit_tool_progress` or a new `emit_acp_chunk` event that clients render as tool intermediate output).
+
 **`session.prompt()` extension**:
 ```rust
 pub async fn prompt(
@@ -168,16 +239,16 @@ pub async fn prompt(
     text: &str,
     cwd: &str,
     timeout: Duration,
-    sink: Option<&StreamingSink>,  // new
+    on_chunk: Option<AcpChunkCallback>,  // new — lightweight callback, not StreamingSink
 ) -> Result<(String, Vec<ContentBlock>)>
 ```
 
-When `sink` is `Some`:
-- Each `agent_message_chunk` notification is forwarded via `sink` in real-time
+When `on_chunk` is `Some`:
+- Each `agent_message_chunk` notification calls `on_chunk(chunk_text)` in real-time
 - Text is still aggregated for the final return value
-- Client receives intermediate output as tool execution progress
+- The callback bridges into EventEmitter for client delivery
 
-When `sink` is `None`:
+When `on_chunk` is `None`:
 - Existing behavior — internal aggregation only
 
 **Oneshot mode**: No streaming data to forward. Step-level notifications (`notify_tool_start/result`) are sufficient.
@@ -204,8 +275,9 @@ directing engineers:
   a different tool to review it.
 - **Parallel when independent**: If tasks are independent (e.g., code + tests),
   dispatch multiple tools simultaneously.
-- **Reuse sessions for continuity**: Use reuse_session=true when follow-up
-  prompts need prior context (e.g., "now add error handling to what you wrote").
+- **Reuse sessions for continuity**: When follow-up prompts need prior
+  context (e.g., "now add error handling to what you wrote"), reuse the
+  session so the tool retains conversation history.
 - **Switch tools strategically**: Different tools have different strengths.
   You may use one for planning and another for implementation.
 - **Report progress**: The user sees your tool calls in real-time.
@@ -220,29 +292,30 @@ Injected as a fixed section in the system prompt template, alongside existing to
 
 | Layer | File | Change |
 |-------|------|--------|
-| Harness dual-mode | `core/src/acp/harnesses/claude_code.rs` | Add native_acp path (`claude --acp`) |
-| | `core/src/acp/harnesses/codex.rs` | Add native_acp path (`codex --acp`) |
-| | `core/src/acp/harnesses/gemini.rs` | Add oneshot path |
-| | `core/src/acp/harness.rs` | Ensure trait requires both mode methods |
-| Config | `core/src/config/types/acp.rs` | `mode` → `default_mode`, update presets |
-| Manager | `core/src/acp/manager.rs` | Session pool `(harness_id, cwd)`, `prompt()` extension, auto-cleanup |
-| Tools | `core/src/builtin_tools/acp_tools.rs` | `AcpDelegateArgs` + mode/reuse_session, pass sink |
-| Streaming | `core/src/acp/session.rs` | `prompt()` accepts `Option<StreamingSink>`, chunk forwarding |
-| Prompt | System prompt template | Add orchestration strategy section |
+| Harness dual-mode | `core/src/acp/harnesses/claude_code.rs` | Add native_acp path (`claude --acp`), accept `default_mode` from config |
+| | `core/src/acp/harnesses/codex.rs` | Add native_acp path (`codex --acp`), detect support at registration |
+| | `core/src/acp/harnesses/gemini.rs` | Add oneshot path, accept `default_mode` from config |
+| | `core/src/acp/harness.rs` | Add `supported_modes()` method, keep default impls for oneshot/session |
+| Config | `core/src/config/types/acp.rs` | `mode` → `default_mode` with `#[serde(alias = "mode")]`, fix preset defaults |
+| Manager | `core/src/acp/manager.rs` | `SessionKey` newtype, session pool with extract-use-reinsert pattern, `prompt()` extension |
+| Tools | `core/src/builtin_tools/acp_tools.rs` | `AcpDelegateArgs` + mode/reuse_session, construct `AcpChunkCallback` |
+| Streaming | `core/src/acp/session.rs` | `AcpChunkCallback` type, `prompt()` accepts `Option<AcpChunkCallback>` |
+| Prompt | System prompt template | Add orchestration strategy section (~200 words, intent-level not parameter-level) |
 | Panel | `interfaces/webchat/src/views/settings/acp_harnesses.rs` | Display/toggle default_mode, fix mode display bug |
 | Tests | `core/tests/acp_probe/` | Dual-mode tests, session pool tests, parallel tests |
-| Bug fix | Pre-requisite | Panel mode display vs actual config mismatch |
+| Bug fix | Pre-requisite | Config-vs-harness mode disconnect (root cause: presets all set NativeAcp, harness structs ignore config) |
 
 ### What Does NOT Change
 
 - Agent loop — untouched
-- StreamingSink interface — unchanged, only new call sites
+- `StreamingDeltaSink` — unchanged, ACP uses its own `AcpChunkCallback`
 - Other tools — unaffected
 - Channel layer — untouched
 - Gateway RPC handlers — minor parameter additions only
+- `AcpHarness` trait backward compatibility — default impls preserved, `CustomHarness` unaffected
 
 ## Estimated Scope
 
-- ~800 LOC implementation (excluding tests)
-- ~400 LOC tests
-- Risk: low — all changes are additive, existing oneshot paths preserved
+- ~1000 LOC implementation (excluding tests)
+- ~500 LOC tests
+- Risk: low — all changes are additive, existing oneshot paths preserved, trait backward-compatible
