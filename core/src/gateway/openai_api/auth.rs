@@ -28,7 +28,11 @@ pub fn extract_bearer_token(header_value: &str) -> Option<&str> {
 pub enum ApiError {
     Unauthorized(String),
     BadRequest(String),
+    NotFound(String),
+    Conflict(String),
     InternalError(String),
+    BadGateway(String),
+    GatewayTimeout(String),
     ServiceUnavailable(String),
 }
 
@@ -38,8 +42,26 @@ impl ApiError {
         match self {
             ApiError::Unauthorized(_) => 401,
             ApiError::BadRequest(_) => 400,
+            ApiError::NotFound(_) => 404,
+            ApiError::Conflict(_) => 409,
             ApiError::InternalError(_) => 500,
+            ApiError::BadGateway(_) => 502,
+            ApiError::GatewayTimeout(_) => 504,
             ApiError::ServiceUnavailable(_) => 503,
+        }
+    }
+
+    /// Returns a machine-readable error code string.
+    pub fn code(&self) -> &'static str {
+        match self {
+            ApiError::Unauthorized(_) => "invalid_api_key",
+            ApiError::BadRequest(_) => "invalid_request_error",
+            ApiError::NotFound(_) => "model_not_found",
+            ApiError::Conflict(_) => "agent_busy",
+            ApiError::InternalError(_) => "internal_error",
+            ApiError::BadGateway(_) => "provider_error",
+            ApiError::GatewayTimeout(_) => "timeout",
+            ApiError::ServiceUnavailable(_) => "service_unavailable",
         }
     }
 
@@ -48,14 +70,19 @@ impl ApiError {
         let (message, error_type) = match self {
             ApiError::Unauthorized(msg) => (msg.as_str(), "authentication_error"),
             ApiError::BadRequest(msg) => (msg.as_str(), "invalid_request_error"),
+            ApiError::NotFound(msg) => (msg.as_str(), "invalid_request_error"),
+            ApiError::Conflict(msg) => (msg.as_str(), "conflict_error"),
             ApiError::InternalError(msg) => (msg.as_str(), "internal_error"),
+            ApiError::BadGateway(msg) => (msg.as_str(), "upstream_error"),
+            ApiError::GatewayTimeout(msg) => (msg.as_str(), "upstream_error"),
             ApiError::ServiceUnavailable(msg) => (msg.as_str(), "service_unavailable"),
         };
 
         json!({
             "error": {
                 "message": message,
-                "type": error_type
+                "type": error_type,
+                "code": self.code()
             }
         })
     }
@@ -110,8 +137,24 @@ mod tests {
             400
         );
         assert_eq!(
+            ApiError::NotFound("not found".into()).status_code(),
+            404
+        );
+        assert_eq!(
+            ApiError::Conflict("conflict".into()).status_code(),
+            409
+        );
+        assert_eq!(
             ApiError::InternalError("internal error".into()).status_code(),
             500
+        );
+        assert_eq!(
+            ApiError::BadGateway("bad gateway".into()).status_code(),
+            502
+        );
+        assert_eq!(
+            ApiError::GatewayTimeout("timeout".into()).status_code(),
+            504
         );
         assert_eq!(
             ApiError::ServiceUnavailable("unavailable".into()).status_code(),
@@ -120,25 +163,65 @@ mod tests {
     }
 
     #[test]
+    fn test_api_error_codes() {
+        assert_eq!(ApiError::Unauthorized("".into()).code(), "invalid_api_key");
+        assert_eq!(ApiError::BadRequest("".into()).code(), "invalid_request_error");
+        assert_eq!(ApiError::NotFound("".into()).code(), "model_not_found");
+        assert_eq!(ApiError::Conflict("".into()).code(), "agent_busy");
+        assert_eq!(ApiError::InternalError("".into()).code(), "internal_error");
+        assert_eq!(ApiError::BadGateway("".into()).code(), "provider_error");
+        assert_eq!(ApiError::GatewayTimeout("".into()).code(), "timeout");
+        assert_eq!(ApiError::ServiceUnavailable("".into()).code(), "service_unavailable");
+    }
+
+    #[test]
     fn test_api_error_to_json() {
         let err = ApiError::Unauthorized("Invalid API key".to_string());
         let json_val = err.to_json();
         assert_eq!(json_val["error"]["message"], "Invalid API key");
         assert_eq!(json_val["error"]["type"], "authentication_error");
+        assert_eq!(json_val["error"]["code"], "invalid_api_key");
 
         let err = ApiError::BadRequest("Missing model field".to_string());
         let json_val = err.to_json();
         assert_eq!(json_val["error"]["message"], "Missing model field");
         assert_eq!(json_val["error"]["type"], "invalid_request_error");
+        assert_eq!(json_val["error"]["code"], "invalid_request_error");
+
+        let err = ApiError::NotFound("Model not found".to_string());
+        let json_val = err.to_json();
+        assert_eq!(json_val["error"]["message"], "Model not found");
+        assert_eq!(json_val["error"]["type"], "invalid_request_error");
+        assert_eq!(json_val["error"]["code"], "model_not_found");
+
+        let err = ApiError::Conflict("Agent is busy".to_string());
+        let json_val = err.to_json();
+        assert_eq!(json_val["error"]["message"], "Agent is busy");
+        assert_eq!(json_val["error"]["type"], "conflict_error");
+        assert_eq!(json_val["error"]["code"], "agent_busy");
 
         let err = ApiError::InternalError("Something went wrong".to_string());
         let json_val = err.to_json();
         assert_eq!(json_val["error"]["message"], "Something went wrong");
         assert_eq!(json_val["error"]["type"], "internal_error");
+        assert_eq!(json_val["error"]["code"], "internal_error");
+
+        let err = ApiError::BadGateway("Provider failed".to_string());
+        let json_val = err.to_json();
+        assert_eq!(json_val["error"]["message"], "Provider failed");
+        assert_eq!(json_val["error"]["type"], "upstream_error");
+        assert_eq!(json_val["error"]["code"], "provider_error");
+
+        let err = ApiError::GatewayTimeout("Request timed out".to_string());
+        let json_val = err.to_json();
+        assert_eq!(json_val["error"]["message"], "Request timed out");
+        assert_eq!(json_val["error"]["type"], "upstream_error");
+        assert_eq!(json_val["error"]["code"], "timeout");
 
         let err = ApiError::ServiceUnavailable("Service is down".to_string());
         let json_val = err.to_json();
         assert_eq!(json_val["error"]["message"], "Service is down");
         assert_eq!(json_val["error"]["type"], "service_unavailable");
+        assert_eq!(json_val["error"]["code"], "service_unavailable");
     }
 }

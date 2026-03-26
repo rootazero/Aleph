@@ -19,6 +19,12 @@ pub struct ChatCompletionRequest {
     pub stop: Option<Vec<String>>,
     #[serde(default)]
     pub tools: Option<Vec<serde_json::Value>>,
+    #[serde(default)]
+    pub tool_choice: Option<serde_json::Value>,
+    #[serde(default)]
+    pub frequency_penalty: Option<f64>,
+    #[serde(default)]
+    pub presence_penalty: Option<f64>,
 }
 
 /// A single message in a chat conversation.
@@ -61,6 +67,50 @@ pub struct Delta {
     pub content: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub role: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<Vec<DeltaToolCall>>,
+}
+
+/// A tool call delta in a streaming response.
+#[derive(Debug, Serialize)]
+pub struct DeltaToolCall {
+    pub index: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub r#type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub function: Option<DeltaFunction>,
+}
+
+/// Function details within a tool call delta.
+#[derive(Debug, Serialize)]
+pub struct DeltaFunction {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub arguments: Option<String>,
+}
+
+/// A single choice in a streaming chunk response.
+#[derive(Debug, Serialize)]
+pub struct StreamChoice {
+    pub index: u32,
+    pub delta: Delta,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub finish_reason: Option<String>,
+}
+
+/// A streaming chat completion chunk.
+#[derive(Debug, Serialize)]
+pub struct ChatCompletionChunk {
+    pub id: String,
+    pub object: String,
+    pub created: u64,
+    pub model: String,
+    pub choices: Vec<StreamChoice>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub usage: Option<Usage>,
 }
 
 /// Token usage statistics.
@@ -187,6 +237,7 @@ mod tests {
                 delta: Some(Delta {
                     content: Some("Hello".to_string()),
                     role: None,
+                    tool_calls: None,
                 }),
             }],
             usage: None,
@@ -239,5 +290,152 @@ mod tests {
         assert!(req.top_p.is_none());
         assert!(req.stop.is_none());
         assert!(req.tools.is_none());
+        assert!(req.tool_choice.is_none());
+        assert!(req.frequency_penalty.is_none());
+        assert!(req.presence_penalty.is_none());
+    }
+
+    #[test]
+    fn test_request_with_new_fields_deserializes() {
+        let json_str = json!({
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "tool_choice": "auto",
+            "frequency_penalty": 0.5,
+            "presence_penalty": 0.3
+        });
+
+        let req: ChatCompletionRequest = serde_json::from_value(json_str).unwrap();
+        assert_eq!(req.tool_choice, Some(json!("auto")));
+        assert_eq!(req.frequency_penalty, Some(0.5));
+        assert_eq!(req.presence_penalty, Some(0.3));
+    }
+
+    #[test]
+    fn test_delta_with_tool_calls_serializes() {
+        let delta = Delta {
+            content: None,
+            role: None,
+            tool_calls: Some(vec![DeltaToolCall {
+                index: 0,
+                id: Some("call_abc".to_string()),
+                r#type: Some("function".to_string()),
+                function: Some(DeltaFunction {
+                    name: Some("get_weather".to_string()),
+                    arguments: Some("{\"city\":".to_string()),
+                }),
+            }]),
+        };
+
+        let json_val = serde_json::to_value(&delta).unwrap();
+        assert!(json_val.get("content").is_none());
+        assert!(json_val.get("role").is_none());
+        let tc = &json_val["tool_calls"][0];
+        assert_eq!(tc["index"], 0);
+        assert_eq!(tc["id"], "call_abc");
+        assert_eq!(tc["type"], "function");
+        assert_eq!(tc["function"]["name"], "get_weather");
+        assert_eq!(tc["function"]["arguments"], "{\"city\":");
+    }
+
+    #[test]
+    fn test_delta_tool_call_partial_serializes() {
+        // Subsequent chunks only carry argument fragments, no id/type/name
+        let delta = Delta {
+            content: None,
+            role: None,
+            tool_calls: Some(vec![DeltaToolCall {
+                index: 0,
+                id: None,
+                r#type: None,
+                function: Some(DeltaFunction {
+                    name: None,
+                    arguments: Some("\"NYC\"}".to_string()),
+                }),
+            }]),
+        };
+
+        let json_val = serde_json::to_value(&delta).unwrap();
+        let tc = &json_val["tool_calls"][0];
+        assert_eq!(tc["index"], 0);
+        assert!(tc.get("id").is_none());
+        assert!(tc.get("type").is_none());
+        assert!(tc["function"].get("name").is_none());
+        assert_eq!(tc["function"]["arguments"], "\"NYC\"}");
+    }
+
+    #[test]
+    fn test_stream_choice_serializes() {
+        let choice = StreamChoice {
+            index: 0,
+            delta: Delta {
+                content: Some("Hi".to_string()),
+                role: Some("assistant".to_string()),
+                tool_calls: None,
+            },
+            finish_reason: None,
+        };
+
+        let json_val = serde_json::to_value(&choice).unwrap();
+        assert_eq!(json_val["index"], 0);
+        assert_eq!(json_val["delta"]["content"], "Hi");
+        assert_eq!(json_val["delta"]["role"], "assistant");
+        assert!(json_val.get("finish_reason").is_none());
+    }
+
+    #[test]
+    fn test_chat_completion_chunk_serializes() {
+        let chunk = ChatCompletionChunk {
+            id: "chatcmpl-chunk1".to_string(),
+            object: "chat.completion.chunk".to_string(),
+            created: 1700000000,
+            model: "gpt-4".to_string(),
+            choices: vec![StreamChoice {
+                index: 0,
+                delta: Delta {
+                    content: Some("Hello".to_string()),
+                    role: None,
+                    tool_calls: None,
+                },
+                finish_reason: None,
+            }],
+            usage: None,
+        };
+
+        let json_val = serde_json::to_value(&chunk).unwrap();
+        assert_eq!(json_val["id"], "chatcmpl-chunk1");
+        assert_eq!(json_val["object"], "chat.completion.chunk");
+        assert_eq!(json_val["created"], 1700000000_u64);
+        assert_eq!(json_val["model"], "gpt-4");
+        assert_eq!(json_val["choices"][0]["delta"]["content"], "Hello");
+        assert!(json_val.get("usage").is_none());
+    }
+
+    #[test]
+    fn test_chat_completion_chunk_with_usage() {
+        let chunk = ChatCompletionChunk {
+            id: "chatcmpl-final".to_string(),
+            object: "chat.completion.chunk".to_string(),
+            created: 1700000000,
+            model: "gpt-4".to_string(),
+            choices: vec![StreamChoice {
+                index: 0,
+                delta: Delta {
+                    content: None,
+                    role: None,
+                    tool_calls: None,
+                },
+                finish_reason: Some("stop".to_string()),
+            }],
+            usage: Some(Usage {
+                prompt_tokens: 10,
+                completion_tokens: 20,
+                total_tokens: 30,
+            }),
+        };
+
+        let json_val = serde_json::to_value(&chunk).unwrap();
+        assert_eq!(json_val["choices"][0]["finish_reason"], "stop");
+        assert_eq!(json_val["usage"]["total_tokens"], 30);
     }
 }

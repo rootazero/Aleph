@@ -233,6 +233,44 @@ fn setup_graceful_shutdown(args: &Args) -> tokio::sync::oneshot::Receiver<()> {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Build an `HttpProvider` from a provider name and config.
+///
+/// Mirrors the logic of `providers::create_provider` but returns the concrete
+/// `HttpProvider` type (needed for `stream_raw()` in the passthrough path).
+fn build_http_provider(
+    name: &str,
+    config: &alephcore::ProviderConfig,
+) -> Result<alephcore::providers::http_provider::HttpProvider, Box<dyn std::error::Error>> {
+    use alephcore::providers::http_provider::HttpProvider;
+    use alephcore::providers::protocols::ProtocolRegistry;
+    use alephcore::providers::presets;
+
+    let mut cfg = config.clone();
+    let name_lower = name.to_lowercase();
+
+    // Apply preset
+    if let Some(preset) = presets::get_preset(&name_lower) {
+        if cfg.base_url.is_none() || cfg.base_url.as_ref().map(|s| s.is_empty()).unwrap_or(false) {
+            cfg.base_url = Some(preset.base_url.to_string());
+        }
+        if cfg.protocol.is_none() {
+            cfg.protocol = Some(preset.protocol.to_string());
+        }
+    }
+
+    let protocol_name = cfg.protocol();
+    let registry = ProtocolRegistry::global();
+    if registry.list_protocols().is_empty() {
+        registry.register_builtin();
+    }
+    let adapter = registry.get(&protocol_name).ok_or_else(|| {
+        format!("Unknown protocol: '{}'", protocol_name)
+    })?;
+
+    HttpProvider::new(name.to_string(), cfg, adapter)
+        .map_err(|e| e.into())
+}
+
 /// Start the gateway server
 pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
     use alephcore::gateway::server::GatewayConfig as ServerConfig;
@@ -513,6 +551,27 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         cron_service.clone(), heartbeat_service.clone(), args.daemon,
         auth_bundle.auth_ctx.shared_token_mgr.clone(),
     ).await;
+
+    // Wire OpenAI-compatible API dependencies into GatewayServer
+    server.execution_adapter = agent_result.execution_adapter.clone();
+    server.openai_agent_registry = agent_result.agent_registry.clone();
+    {
+        let app_cfg = app_config.read().await;
+        // Build model → HttpProvider map from configured providers
+        let mut provider_map = std::collections::HashMap::new();
+        let mut provider_configs = Vec::new();
+        for (name, config) in &app_cfg.providers {
+            provider_configs.push((name.clone(), config.clone()));
+            if let Ok(http_provider) = build_http_provider(name, config) {
+                let provider = Arc::new(http_provider);
+                for model in &config.models {
+                    provider_map.entry(model.clone()).or_insert_with(|| provider.clone());
+                }
+            }
+        }
+        server.openai_provider_map = Arc::new(provider_map);
+        server.openai_provider_configs = provider_configs;
+    }
 
     let config_patcher = {
         let config_path = alephcore::Config::default_path();
