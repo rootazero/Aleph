@@ -1,0 +1,10 @@
+name = "llm-task"
+version = "0.1.0"
+description = "Batch LLM operations: parallel prompts, map, chain, and evaluate"
+
+[aleph]
+runtime = "mcp"
+
+[aleph.permissions]
+network = true
+filesystem = "read"

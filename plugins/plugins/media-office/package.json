@@ -1,0 +1,13 @@
+{
+  "name": "@aleph/media-office",
+  "version": "0.1.0",
+  "description": "Aleph plugin — Office document text, table, and metadata extraction",
+  "main": "src/index.js",
+  "private": true,
+  "scripts": {
+    "start": "node src/index.js"
+  },
+  "dependencies": {
+    "adm-zip": "^0.5.10"
+  }
+}
