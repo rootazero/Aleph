@@ -93,8 +93,14 @@ async fn build_harness_info(
     let mode = manager
         .harness_mode(id)
         .await
-        .map(|m| format!("{:?}", m).to_lowercase())
-        .unwrap_or_else(|| format!("{:?}", entry.default_mode).to_lowercase());
+        .map(|m| serde_json::to_value(m.to_serde())
+            .ok()
+            .and_then(|v| v.as_str().map(|s| s.to_string()))
+            .unwrap_or_else(|| format!("{:?}", m).to_lowercase()))
+        .unwrap_or_else(|| serde_json::to_value(&entry.default_mode)
+            .ok()
+            .and_then(|v| v.as_str().map(|s| s.to_string()))
+            .unwrap_or_else(|| "oneshot".to_string()));
 
     let executable = entry
         .executable

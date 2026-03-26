@@ -382,7 +382,9 @@ fn HarnessDetailPanel(
 
     // Form state
     let executable = RwSignal::new(info.config.executable.clone().unwrap_or_default());
-    let mode = RwSignal::new(info.config.mode.clone());
+    // Use the top-level `mode` field (computed by server from actual harness instance),
+    // not `config.mode` (which maps to `default_mode` serialized as `"default_mode"` key).
+    let mode = RwSignal::new(info.mode.clone());
     let timeout_seconds = RwSignal::new(info.config.timeout_seconds);
     let args_text = RwSignal::new(info.config.args.join(", "));
     let output_format_type = RwSignal::new({
