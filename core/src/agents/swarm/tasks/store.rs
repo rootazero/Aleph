@@ -12,8 +12,7 @@ use tokio::sync::Mutex;
 
 use super::{
     CoordTask, CoordTaskFilter, CoordTaskId, CoordTaskStatus, CoordTaskStore,
-    CoordTaskUpdate, NewCoordTask, NewTeam, Priority, Team, TeamFilter, TeamMember, TeamStatus,
-    TeamUpdate,
+    CoordTaskUpdate, NewCoordTask, Priority,
 };
 use crate::error::AlephError;
 
@@ -112,49 +111,6 @@ fn load_task(conn: &Connection, task_id: &str) -> rusqlite::Result<Option<CoordT
     }
 }
 
-/// Load a team with its members.
-fn load_team(conn: &Connection, team_id: &str) -> rusqlite::Result<Option<Team>> {
-    let mut stmt = conn.prepare_cached(
-        "SELECT id, name, description, leader, status, created_at FROM coord_teams WHERE id = ?1",
-    )?;
-    let team_opt: Option<Team> = stmt
-        .query_row(params![team_id], |row| {
-            let status_str: String = row.get(4)?;
-            Ok(Team {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                description: row.get(2)?,
-                leader: row.get(3)?,
-                members: Vec::new(),
-                status: TeamStatus::from_stored(&status_str).unwrap_or_default(),
-                created_at: row.get(5)?,
-            })
-        })
-        .optional()?;
-
-    match team_opt {
-        Some(mut team) => {
-            let mut mstmt = conn.prepare_cached(
-                "SELECT agent_id, role, joined_at FROM coord_team_members WHERE team_id = ?1",
-            )?;
-            let members = mstmt.query_map(params![team_id], |row| {
-                Ok(TeamMember {
-                    agent_id: row.get(0)?,
-                    role: row.get(1)?,
-                    joined_at: row.get(2)?,
-                    run_id: None,
-                    persona: None,
-                })
-            })?;
-            for m in members {
-                team.members.push(m?);
-            }
-            Ok(Some(team))
-        }
-        None => Ok(None),
-    }
-}
-
 // ---------------------------------------------------------------------------
 // SqliteCoordTaskStore
 // ---------------------------------------------------------------------------
@@ -180,15 +136,6 @@ impl SqliteCoordTaskStore {
 
         conn.execute_batch(
             r#"
-            CREATE TABLE IF NOT EXISTS coord_teams (
-                id TEXT PRIMARY KEY,
-                name TEXT NOT NULL,
-                description TEXT NOT NULL DEFAULT '',
-                leader TEXT NOT NULL,
-                status TEXT NOT NULL DEFAULT 'active',
-                created_at INTEGER NOT NULL
-            );
-
             CREATE TABLE IF NOT EXISTS coord_tasks (
                 id TEXT PRIMARY KEY,
                 team_id TEXT,
@@ -201,8 +148,7 @@ impl SqliteCoordTaskStore {
                 metadata TEXT NOT NULL DEFAULT '{}',
                 created_at INTEGER NOT NULL,
                 started_at INTEGER,
-                completed_at INTEGER,
-                FOREIGN KEY (team_id) REFERENCES coord_teams(id) ON DELETE CASCADE
+                completed_at INTEGER
             );
 
             CREATE TABLE IF NOT EXISTS coord_task_dependencies (
@@ -211,15 +157,6 @@ impl SqliteCoordTaskStore {
                 PRIMARY KEY (task_id, depends_on),
                 FOREIGN KEY (task_id) REFERENCES coord_tasks(id) ON DELETE CASCADE,
                 FOREIGN KEY (depends_on) REFERENCES coord_tasks(id) ON DELETE CASCADE
-            );
-
-            CREATE TABLE IF NOT EXISTS coord_team_members (
-                team_id TEXT NOT NULL,
-                agent_id TEXT NOT NULL,
-                role TEXT NOT NULL DEFAULT '',
-                joined_at INTEGER NOT NULL,
-                PRIMARY KEY (team_id, agent_id),
-                FOREIGN KEY (team_id) REFERENCES coord_teams(id) ON DELETE CASCADE
             );
 
             CREATE INDEX IF NOT EXISTS idx_coord_tasks_team_status ON coord_tasks(team_id, status);
@@ -492,121 +429,6 @@ impl CoordTaskStore for SqliteCoordTaskStore {
         Ok(tasks)
     }
 
-    // --- Team CRUD ---
-
-    async fn create_team(&self, input: NewTeam) -> crate::error::Result<Team> {
-        let conn = self.conn.lock().await;
-        let now = now_epoch();
-
-        conn.execute(
-            r#"
-            INSERT INTO coord_teams (id, name, description, leader, status, created_at)
-            VALUES (?1, ?2, ?3, ?4, 'active', ?5)
-            "#,
-            params![input.id, input.name, input.description, input.leader, now],
-        )
-        .map_err(db_err)?;
-
-        Ok(Team {
-            id: input.id,
-            name: input.name,
-            description: input.description,
-            leader: input.leader,
-            members: Vec::new(),
-            status: TeamStatus::Active,
-            created_at: now,
-        })
-    }
-
-    async fn get_team(&self, id: &str) -> crate::error::Result<Option<Team>> {
-        let conn = self.conn.lock().await;
-        load_team(&conn, id).map_err(db_err)
-    }
-
-    async fn update_team(&self, id: &str, update: TeamUpdate) -> crate::error::Result<Team> {
-        let conn = self.conn.lock().await;
-
-        if let Some(ref status) = update.status {
-            conn.execute(
-                "UPDATE coord_teams SET status = ?1 WHERE id = ?2",
-                params![status.as_str(), id],
-            )
-            .map_err(db_err)?;
-        }
-
-        load_team(&conn, id)
-            .map_err(db_err)?
-            .ok_or_else(|| db_err(format!("team not found: {id}")))
-    }
-
-    async fn list_teams(&self, _filter: TeamFilter) -> crate::error::Result<Vec<Team>> {
-        let conn = self.conn.lock().await;
-        let mut stmt = conn
-            .prepare("SELECT id FROM coord_teams ORDER BY created_at ASC")
-            .map_err(db_err)?;
-        let ids: Vec<String> = stmt
-            .query_map([], |row| row.get(0))
-            .map_err(db_err)?
-            .filter_map(|r| r.ok())
-            .collect();
-
-        let mut teams = Vec::new();
-        for tid in ids {
-            if let Some(team) = load_team(&conn, &tid).map_err(db_err)? {
-                teams.push(team);
-            }
-        }
-        Ok(teams)
-    }
-
-    async fn add_member(&self, team_id: &str, member: TeamMember) -> crate::error::Result<()> {
-        let conn = self.conn.lock().await;
-        conn.execute(
-            "INSERT OR REPLACE INTO coord_team_members (team_id, agent_id, role, joined_at) VALUES (?1, ?2, ?3, ?4)",
-            params![team_id, member.agent_id, member.role, member.joined_at],
-        )
-        .map_err(db_err)?;
-        Ok(())
-    }
-
-    async fn remove_member(&self, team_id: &str, agent_id: &str) -> crate::error::Result<()> {
-        let conn = self.conn.lock().await;
-        conn.execute(
-            "DELETE FROM coord_team_members WHERE team_id = ?1 AND agent_id = ?2",
-            params![team_id, agent_id],
-        )
-        .map_err(db_err)?;
-        Ok(())
-    }
-
-    async fn get_agent_teams(&self, agent_id: &str) -> crate::error::Result<Vec<Team>> {
-        let conn = self.conn.lock().await;
-        // Teams where agent is leader OR member
-        let mut stmt = conn
-            .prepare(
-                r#"
-                SELECT DISTINCT t.id FROM coord_teams t
-                LEFT JOIN coord_team_members m ON m.team_id = t.id
-                WHERE t.leader = ?1 OR m.agent_id = ?1
-                ORDER BY t.created_at ASC
-                "#,
-            )
-            .map_err(db_err)?;
-
-        let ids: Vec<String> = stmt
-            .query_map(params![agent_id], |row| row.get(0))
-            .map_err(db_err)?
-            .filter_map(|r| r.ok())
-            .collect();
-
-        let mut teams = Vec::new();
-        for tid in ids {
-            if let Some(team) = load_team(&conn, &tid).map_err(db_err)? {
-                teams.push(team);
-            }
-        }
-        Ok(teams)
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -662,20 +484,9 @@ mod tests {
     async fn test_list_tasks_with_filter() {
         let store = setup_store().await;
 
-        // Create a team first for team_id filter
-        let team = store
-            .create_team(NewTeam {
-                id: "team-1".into(),
-                name: "Alpha".into(),
-                description: "".into(),
-                leader: "leader-1".into(),
-            })
-            .await
-            .unwrap();
-
         let _t1 = store
             .create_task(NewCoordTask {
-                team_id: Some(team.id.clone()),
+                team_id: Some("team-1".into()),
                 subject: "Task A".into(),
                 description: "".into(),
                 owner: Some("agent-1".into()),
@@ -688,7 +499,7 @@ mod tests {
 
         let _t2 = store
             .create_task(NewCoordTask {
-                team_id: Some(team.id.clone()),
+                team_id: Some("team-1".into()),
                 subject: "Task B".into(),
                 description: "".into(),
                 owner: Some("agent-2".into()),
@@ -871,130 +682,4 @@ mod tests {
         assert_eq!(unblocked2[0].id, c.id);
     }
 
-    #[tokio::test]
-    async fn test_team_crud() {
-        let store = setup_store().await;
-
-        let team = store
-            .create_team(NewTeam {
-                id: "team-x".into(),
-                name: "X Team".into(),
-                description: "A test team".into(),
-                leader: "leader-1".into(),
-            })
-            .await
-            .unwrap();
-
-        assert_eq!(team.id, "team-x");
-        assert_eq!(team.name, "X Team");
-        assert_eq!(team.status, TeamStatus::Active);
-
-        // Add members
-        store
-            .add_member(
-                "team-x",
-                TeamMember {
-                    agent_id: "agent-a".into(),
-                    role: "worker".into(),
-                    joined_at: now_epoch(),
-                    run_id: None,
-                    persona: None,
-                },
-            )
-            .await
-            .unwrap();
-        store
-            .add_member(
-                "team-x",
-                TeamMember {
-                    agent_id: "agent-b".into(),
-                    role: "reviewer".into(),
-                    joined_at: now_epoch(),
-                    run_id: None,
-                    persona: None,
-                },
-            )
-            .await
-            .unwrap();
-
-        // Get team — should have 2 members
-        let fetched = store.get_team("team-x").await.unwrap().unwrap();
-        assert_eq!(fetched.members.len(), 2);
-
-        // Remove member
-        store.remove_member("team-x", "agent-a").await.unwrap();
-        let fetched2 = store.get_team("team-x").await.unwrap().unwrap();
-        assert_eq!(fetched2.members.len(), 1);
-        assert_eq!(fetched2.members[0].agent_id, "agent-b");
-
-        // Update team status
-        let updated = store
-            .update_team(
-                "team-x",
-                TeamUpdate {
-                    status: Some(TeamStatus::Completed),
-                },
-            )
-            .await
-            .unwrap();
-        assert_eq!(updated.status, TeamStatus::Completed);
-    }
-
-    #[tokio::test]
-    async fn test_get_agent_teams() {
-        let store = setup_store().await;
-
-        // Team 1: agent-x is leader
-        store
-            .create_team(NewTeam {
-                id: "team-1".into(),
-                name: "Team One".into(),
-                description: "".into(),
-                leader: "agent-x".into(),
-            })
-            .await
-            .unwrap();
-
-        // Team 2: agent-x is member (not leader)
-        store
-            .create_team(NewTeam {
-                id: "team-2".into(),
-                name: "Team Two".into(),
-                description: "".into(),
-                leader: "agent-y".into(),
-            })
-            .await
-            .unwrap();
-
-        store
-            .add_member(
-                "team-2",
-                TeamMember {
-                    agent_id: "agent-x".into(),
-                    role: "helper".into(),
-                    joined_at: now_epoch(),
-                    run_id: None,
-                    persona: None,
-                },
-            )
-            .await
-            .unwrap();
-
-        // Team 3: agent-x has no relation
-        store
-            .create_team(NewTeam {
-                id: "team-3".into(),
-                name: "Team Three".into(),
-                description: "".into(),
-                leader: "agent-z".into(),
-            })
-            .await
-            .unwrap();
-
-        let teams = store.get_agent_teams("agent-x").await.unwrap();
-        assert_eq!(teams.len(), 2);
-        let ids: Vec<&str> = teams.iter().map(|t| t.id.as_str()).collect();
-        assert!(ids.contains(&"team-1"));
-        assert!(ids.contains(&"team-2"));
-    }
 }

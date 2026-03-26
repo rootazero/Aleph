@@ -33,6 +33,9 @@ fn make_args(action: &str) -> DesktopArgs {
         duration_ms: None,
         max_depth: None,
         include_non_interactive: None,
+        duration: None,
+        fps: None,
+        with_audio: None,
     }
 }
 

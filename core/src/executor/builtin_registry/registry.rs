@@ -142,11 +142,6 @@ pub struct BuiltinToolRegistry {
     pub(crate) task_update_tool: Option<crate::builtin_tools::task_manage::TaskUpdateTool>,
     pub(crate) task_list_tool: Option<crate::builtin_tools::task_manage::TaskListTool>,
     pub(crate) task_wait_tool: Option<crate::builtin_tools::task_manage::TaskWaitTool>,
-    /// Team coordination tools (optional — require CoordTaskStore)
-    pub(crate) team_create_tool: Option<crate::builtin_tools::team_manage::TeamCreateTool>,
-    pub(crate) team_launch_tool: Option<crate::builtin_tools::team_manage::TeamLaunchTool>,
-    pub(crate) team_list_tool: Option<crate::builtin_tools::team_manage::TeamListTool>,
-    pub(crate) team_disband_tool: Option<crate::builtin_tools::team_manage::TeamDisbandTool>,
     /// Channel registry for deferred injection (same pattern as gateway_context).
     /// Used by channel_pairing tool.
     pub(crate) channel_registry_cell: Arc<tokio::sync::OnceCell<Arc<ChannelRegistry>>>,
@@ -559,24 +554,6 @@ impl ToolRegistry for BuiltinToolRegistry {
             }),
             "task_wait" => Box::pin(async move {
                 let tool = self.task_wait_tool.as_ref().ok_or_else(|| AlephError::tool("task_wait not available: no CoordTaskStore or AgentMessageBus configured"))?;
-                tool.call_json(arguments).await
-            }),
-
-            // Team coordination tools
-            "team_create" => Box::pin(async move {
-                let tool = self.team_create_tool.as_ref().ok_or_else(|| AlephError::tool("team_create not available: no CoordTaskStore configured"))?;
-                tool.call_json(arguments).await
-            }),
-            "team_launch" => Box::pin(async move {
-                let tool = self.team_launch_tool.as_ref().ok_or_else(|| AlephError::tool("team_launch not available: no CoordTaskStore configured"))?;
-                tool.call_json(arguments).await
-            }),
-            "team_list" => Box::pin(async move {
-                let tool = self.team_list_tool.as_ref().ok_or_else(|| AlephError::tool("team_list not available: no CoordTaskStore configured"))?;
-                tool.call_json(arguments).await
-            }),
-            "team_disband" => Box::pin(async move {
-                let tool = self.team_disband_tool.as_ref().ok_or_else(|| AlephError::tool("team_disband not available: no CoordTaskStore configured"))?;
                 tool.call_json(arguments).await
             }),
 

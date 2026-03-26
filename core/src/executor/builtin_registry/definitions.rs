@@ -318,27 +318,6 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         description: "Wait for specific tasks or all team tasks to complete",
         requires_config: true,
     },
-    // Team coordination tools — require CoordTaskStore
-    BuiltinToolDefinition {
-        name: "team_create",
-        description: "Create a coordination team with a leader",
-        requires_config: true,
-    },
-    BuiltinToolDefinition {
-        name: "team_launch",
-        description: "Launch a team from a template with agents and tasks",
-        requires_config: true,
-    },
-    BuiltinToolDefinition {
-        name: "team_list",
-        description: "List all coordination teams and their status",
-        requires_config: true,
-    },
-    BuiltinToolDefinition {
-        name: "team_disband",
-        description: "Disband a team, cancelling remaining tasks",
-        requires_config: true,
-    },
     // Channel management tools — require ChannelRegistry
     BuiltinToolDefinition {
         name: "channel_pairing",
@@ -440,10 +419,9 @@ pub fn create_tool_boxed(
         }
         "clawhub" => Some(Box::new(crate::builtin_tools::clawhub::ClawHubTool::new())),
         "media_send" => Some(Box::new(crate::builtin_tools::media_send::MediaSendTool::new())),
-        // Task/team coordination tools require CoordTaskStore + AgentMessageBus at runtime,
+        // Task coordination tools require CoordTaskStore + AgentMessageBus at runtime,
         // created dynamically in BuiltinToolRegistry::with_config().
-        "task_create" | "task_update" | "task_list" | "task_wait"
-        | "team_create" | "team_launch" | "team_list" | "team_disband" => None,
+        "task_create" | "task_update" | "task_list" | "task_wait" => None,
         // Browser tools — create ProfileManager from config or use default
         "browser_open" | "browser_click" | "browser_type" | "browser_screenshot"
         | "browser_snapshot" | "browser_navigate" | "browser_tabs" | "browser_select"

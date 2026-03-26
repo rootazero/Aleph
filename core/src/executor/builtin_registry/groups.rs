@@ -83,7 +83,6 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
         id: "team",
         name: "团队协调",
         tools: &[
-            "team_create", "team_launch", "team_list", "team_disband",
             "task_create", "task_update", "task_list", "task_wait",
         ],
     },

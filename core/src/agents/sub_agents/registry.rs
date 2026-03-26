@@ -550,8 +550,7 @@ mod tests {
             make_session_key("p1"),
             "Task",
             "explore",
-        )
-        .with_keep_alive(true);
+        );
         let run_id = run.run_id.clone();
         registry.register(run).await.unwrap();
 
@@ -575,8 +574,7 @@ mod tests {
             make_session_key("p1"),
             "Task",
             "explore",
-        )
-        .with_keep_alive(true);
+        );
         let run_id = run.run_id.clone();
         registry.register(run).await.unwrap();
 

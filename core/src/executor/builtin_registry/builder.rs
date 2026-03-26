@@ -318,12 +318,10 @@ impl BuiltinToolRegistry {
                 (None, None, None, None)
             };
 
-        // Add task/team coordination tools (if CoordTaskStore is available)
-        let (task_create_tool, task_update_tool, task_list_tool, task_wait_tool,
-             team_create_tool, team_launch_tool, team_list_tool, team_disband_tool) =
+        // Add task coordination tools (if CoordTaskStore is available)
+        let (task_create_tool, task_update_tool, task_list_tool, task_wait_tool) =
             if let Some(ref store) = config.coord_task_store {
                 use crate::builtin_tools::task_manage::{TaskCreateTool, TaskUpdateTool, TaskListTool, TaskWaitTool};
-                use crate::builtin_tools::team_manage::{TeamCreateTool, TeamLaunchTool, TeamListTool, TeamDisbandTool};
 
                 let create = TaskCreateTool::new(Arc::clone(store));
                 let list = TaskListTool::new(Arc::clone(store));
@@ -338,34 +336,12 @@ impl BuiltinToolRegistry {
                     (None, None)
                 };
 
-                let sub_reg = config.sub_agent_registry.as_ref().map(Arc::clone)
-                    .unwrap_or_else(|| Arc::new(crate::agents::sub_agents::SubAgentRegistry::new_in_memory()));
-                let agent_id = config.current_agent_id.clone()
-                    .unwrap_or_else(|| "main".to_string());
-                let session_key = config.current_session_key.clone()
-                    .unwrap_or_else(|| crate::routing::SessionKey::main("main"));
-
-                let team_create = TeamCreateTool::new(
-                    Arc::clone(store), Arc::clone(&sub_reg), agent_id.clone(), session_key.clone(),
-                );
-                let team_launch = TeamLaunchTool::new(
-                    Arc::clone(store), Arc::clone(&sub_reg), agent_id.clone(), session_key.clone(),
-                );
-                let team_list = TeamListTool::new(Arc::clone(store));
-                let team_disband = TeamDisbandTool::new(
-                    Arc::clone(store), Arc::clone(&sub_reg),
-                );
-
-                // Register parameter schemas for all task/team tools
+                // Register parameter schemas for task tools
                 {
                     use crate::tools::AlephTool;
                     let mut defs: Vec<crate::dispatcher::ToolDefinition> = vec![
                         create.definition(),
                         list.definition(),
-                        team_create.definition(),
-                        team_launch.definition(),
-                        team_list.definition(),
-                        team_disband.definition(),
                     ];
                     if let Some(ref u) = update {
                         defs.push(u.definition());
@@ -385,13 +361,10 @@ impl BuiltinToolRegistry {
                     }
                 }
 
-                info!("Registered task/team coordination tools");
-                (
-                    Some(create), update, Some(list), wait,
-                    Some(team_create), Some(team_launch), Some(team_list), Some(team_disband),
-                )
+                info!("Registered task coordination tools");
+                (Some(create), update, Some(list), wait)
             } else {
-                (None, None, None, None, None, None, None, None)
+                (None, None, None, None)
             };
 
         // Initialize tool policy handle (use provided or create a default one)
@@ -499,10 +472,6 @@ impl BuiltinToolRegistry {
             task_update_tool,
             task_list_tool,
             task_wait_tool,
-            team_create_tool,
-            team_launch_tool,
-            team_list_tool,
-            team_disband_tool,
             tools,
         }
     }

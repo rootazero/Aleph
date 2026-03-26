@@ -2,8 +2,7 @@
 //!
 //! Provides the foundational types for the swarm task coordination system:
 //! - `CoordTask`: A unit of work assigned to an agent
-//! - `Team`: A named group of agents that collaborate on tasks
-//! - `CoordTaskStore`: Async persistence trait for tasks and teams
+//! - `CoordTaskStore`: Async persistence trait for tasks
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -17,7 +16,6 @@ pub mod template;
 // ---------------------------------------------------------------------------
 
 pub type CoordTaskId = String;
-pub type TeamId = String;
 pub type AgentId = String;
 
 // ---------------------------------------------------------------------------
@@ -107,38 +105,6 @@ impl std::fmt::Display for CoordTaskStatus {
 }
 
 // ---------------------------------------------------------------------------
-// TeamStatus
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum TeamStatus {
-    #[default]
-    Active,
-    Completed,
-    Disbanded,
-}
-
-impl TeamStatus {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Active => "active",
-            Self::Completed => "completed",
-            Self::Disbanded => "disbanded",
-        }
-    }
-
-    pub fn from_stored(s: &str) -> Option<Self> {
-        match s {
-            "active" => Some(Self::Active),
-            "completed" => Some(Self::Completed),
-            "disbanded" => Some(Self::Disbanded),
-            _ => None,
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
 // CoordTask
 // ---------------------------------------------------------------------------
 
@@ -146,7 +112,7 @@ impl TeamStatus {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CoordTask {
     pub id: CoordTaskId,
-    pub team_id: Option<TeamId>,
+    pub team_id: Option<String>,
     pub subject: String,
     pub description: String,
     pub status: CoordTaskStatus,
@@ -162,42 +128,12 @@ pub struct CoordTask {
 }
 
 // ---------------------------------------------------------------------------
-// Team
-// ---------------------------------------------------------------------------
-
-/// A named group of agents that collaborate on coordinated tasks
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Team {
-    pub id: TeamId,
-    pub name: String,
-    pub description: String,
-    pub leader: AgentId,
-    pub members: Vec<TeamMember>,
-    pub status: TeamStatus,
-    pub created_at: u64,
-}
-
-/// A member of a team
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TeamMember {
-    pub agent_id: AgentId,
-    pub role: String,
-    pub joined_at: u64,
-    /// Sub-agent run ID (for team members spawned as sub-agents)
-    #[serde(default)]
-    pub run_id: Option<String>,
-    /// Persona prompt used for this team member
-    #[serde(default)]
-    pub persona: Option<String>,
-}
-
-// ---------------------------------------------------------------------------
 // Input / update / filter types
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
 pub struct NewCoordTask {
-    pub team_id: Option<TeamId>,
+    pub team_id: Option<String>,
     pub subject: String,
     pub description: String,
     pub owner: Option<AgentId>,
@@ -216,32 +152,16 @@ pub struct CoordTaskUpdate {
 
 #[derive(Debug, Clone, Default)]
 pub struct CoordTaskFilter {
-    pub team_id: Option<TeamId>,
+    pub team_id: Option<String>,
     pub status: Option<CoordTaskStatus>,
     pub owner: Option<AgentId>,
 }
-
-#[derive(Debug, Clone)]
-pub struct NewTeam {
-    pub id: TeamId,
-    pub name: String,
-    pub description: String,
-    pub leader: AgentId,
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct TeamUpdate {
-    pub status: Option<TeamStatus>,
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct TeamFilter {}
 
 // ---------------------------------------------------------------------------
 // CoordTaskStore trait
 // ---------------------------------------------------------------------------
 
-/// Async persistence interface for coordination tasks and teams.
+/// Async persistence interface for coordination tasks.
 #[async_trait]
 pub trait CoordTaskStore: Send + Sync {
     // --- Task CRUD ---
@@ -258,15 +178,4 @@ pub trait CoordTaskStore: Send + Sync {
     /// Returns tasks whose ALL dependencies are now Completed after completing `completed_id`
     async fn get_newly_unblocked(&self, completed_id: &str) -> crate::error::Result<Vec<CoordTask>>;
 
-    // --- Team CRUD ---
-
-    async fn create_team(&self, team: NewTeam) -> crate::error::Result<Team>;
-    async fn get_team(&self, id: &str) -> crate::error::Result<Option<Team>>;
-    async fn update_team(&self, id: &str, update: TeamUpdate) -> crate::error::Result<Team>;
-    async fn list_teams(&self, filter: TeamFilter) -> crate::error::Result<Vec<Team>>;
-    async fn add_member(&self, team_id: &str, member: TeamMember) -> crate::error::Result<()>;
-    async fn remove_member(&self, team_id: &str, agent_id: &str) -> crate::error::Result<()>;
-
-    /// Find all teams where agent_id is leader or member
-    async fn get_agent_teams(&self, agent_id: &str) -> crate::error::Result<Vec<Team>>;
 }

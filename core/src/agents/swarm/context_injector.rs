@@ -9,7 +9,7 @@ use tracing::{debug, info, warn};
 
 use super::bus::AgentMessageBus;
 use super::events::{CriticalEvent, EventTier, ImportantEvent};
-use super::tasks::{CoordTask, CoordTaskFilter, CoordTaskStore, Team};
+use super::tasks::CoordTaskStore;
 use crate::error::Result;
 
 /// Maximum number of swarm state entries to keep in context
@@ -181,40 +181,11 @@ impl ContextInjector {
 
     /// Inject task coordination context for an agent
     ///
-    /// Checks whether the agent belongs to any teams and, if so, produces
-    /// role-specific prompt sections (leader vs member).
-    pub async fn inject_task_context(&self, agent_id: &str) -> Option<String> {
-        let store = self.task_store.as_ref()?;
-        let teams = store.get_agent_teams(agent_id).await.ok()?;
-        if teams.is_empty() {
-            return None;
-        }
-
-        let mut sections = Vec::new();
-        for team in &teams {
-            let is_leader = team.leader == agent_id;
-            let all_tasks = store
-                .list_tasks(CoordTaskFilter {
-                    team_id: Some(team.id.clone()),
-                    ..Default::default()
-                })
-                .await
-                .ok()?;
-
-            if is_leader {
-                sections.push(format_leader_prompt(team, &all_tasks));
-            } else {
-                let my_tasks: Vec<_> = all_tasks
-                    .iter()
-                    .filter(|t| t.owner.as_deref() == Some(agent_id))
-                    .collect();
-                sections.push(format_member_prompt(team, agent_id, &my_tasks));
-            }
-        }
-        if sections.is_empty() {
-            return None;
-        }
-        Some(sections.join("\n\n"))
+    /// TODO: Re-implement with the new `crate::teams` module once team tools land.
+    pub async fn inject_task_context(&self, _agent_id: &str) -> Option<String> {
+        // Old team-based context injection removed; will be re-implemented
+        // with the new teams module (crate::teams::TeamStore).
+        None
     }
 
     /// Handle critical event (Tier 1: Interrupt-Driven)
@@ -393,95 +364,6 @@ impl ContextInjector {
         let mut window = self.context_window.write().await;
         window.clear();
     }
-}
-
-// ---------------------------------------------------------------------------
-// Prompt formatting helpers
-// ---------------------------------------------------------------------------
-
-/// Build a leader-perspective task coordination prompt section
-fn format_leader_prompt(team: &Team, tasks: &[CoordTask]) -> String {
-    let mut out = format!(
-        "## You are Team Leader\n\n\
-         You are the leader of team \"{}\". Your responsibilities:\n\n\
-         ### Task Management\n\
-         - Use `task_list` to view the team task board\n\
-         - Use `task_create` to assign new tasks (set owner and blocked_by)\n\
-         - Use `task_update` to cancel or reassign tasks\n\
-         - Use `task_wait` to wait for critical tasks\n\n\
-         ### Coordination (your judgment, not system rules)\n\
-         - Agent task failed → you decide: retry, reassign, or skip\n\
-         - Task taking too long → you decide whether to intervene\n\
-         - All tasks complete → summarize results, report to user via session_send\n\n\
-         ### Team Members\n",
-        team.name
-    );
-
-    for m in &team.members {
-        out.push_str(&format!("- **{}** ({})\n", m.agent_id, m.role));
-    }
-
-    out.push_str("\n### Current Task Board\n");
-    out.push_str("| Subject | Status | Owner | Dependencies |\n");
-    out.push_str("|---------|--------|-------|--------------|\n");
-    for t in tasks {
-        let owner = t.owner.as_deref().unwrap_or("—");
-        let deps = if t.dependencies.is_empty() {
-            "—".to_string()
-        } else {
-            t.dependencies.join(", ")
-        };
-        out.push_str(&format!(
-            "| {} | {} | {} | {} |\n",
-            t.subject, t.status, owner, deps
-        ));
-    }
-
-    out
-}
-
-/// Build a member-perspective task coordination prompt section
-fn format_member_prompt(team: &Team, agent_id: &str, my_tasks: &[&CoordTask]) -> String {
-    // Find agent's role from the member list
-    let role = team
-        .members
-        .iter()
-        .find(|m| m.agent_id == agent_id)
-        .map(|m| m.role.as_str())
-        .unwrap_or("member");
-
-    let mut out = format!(
-        "## You are a Team Member\n\n\
-         You are {role} in team \"{team_name}\". Leader is {leader}.\n\n\
-         ### Workflow\n\
-         1. `task_list` — check your assigned tasks\n\
-         2. `task_update(task_id, status=\"in_progress\")` — start working\n\
-         3. `task_update(task_id, status=\"completed\", result=\"summary\")` — done\n\
-         4. `task_update(task_id, status=\"failed\", result=\"reason\")` — failed\n\n\
-         ### Collaboration\n\
-         - Blocked or need decision → `session_send({leader}, \"describe issue\")`\n\n\
-         ### Your Tasks\n",
-        role = role,
-        team_name = team.name,
-        leader = team.leader,
-    );
-
-    if my_tasks.is_empty() {
-        out.push_str("No tasks assigned yet.\n");
-    } else {
-        out.push_str("| Subject | Status | Dependencies |\n");
-        out.push_str("|---------|--------|--------------|\n");
-        for t in my_tasks {
-            let deps = if t.dependencies.is_empty() {
-                "—".to_string()
-            } else {
-                t.dependencies.join(", ")
-            };
-            out.push_str(&format!("| {} | {} | {} |\n", t.subject, t.status, deps));
-        }
-    }
-
-    out
 }
 
 #[cfg(test)]

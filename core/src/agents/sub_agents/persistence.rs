@@ -112,37 +112,4 @@ mod tests {
         assert_eq!(id, "subagent:run:abc-123");
     }
 
-    #[test]
-    fn test_persona_excluded_from_fact() {
-        let run = SubAgentRun::new(
-            SessionKey::main("s1"),
-            SessionKey::main("p1"),
-            "Test task",
-            "explore",
-        )
-        .with_persona("Secret persona content".to_string())
-        .with_keep_alive(true);
-
-        let fact = SubAgentRunFact::from_run(&run);
-        assert!(!fact.content.contains("Secret persona"));
-        assert!(fact.content.contains("keep_alive"));
-    }
-
-    #[test]
-    fn test_roundtrip_without_persona() {
-        let run = SubAgentRun::new(
-            SessionKey::main("s1"),
-            SessionKey::main("p1"),
-            "Test task",
-            "explore",
-        )
-        .with_persona("My persona".to_string())
-        .with_keep_alive(true);
-
-        let fact = SubAgentRunFact::from_run(&run);
-        let restored = SubAgentRunFact::to_run(&fact).unwrap();
-
-        assert_eq!(restored.persona, None);
-        assert!(restored.keep_alive);
-    }
 }
