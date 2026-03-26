@@ -119,10 +119,29 @@ fn timestamp_suffix() -> String {
 }
 
 // ---------------------------------------------------------------------------
+// Helper: check if a CLI tool is available
+// ---------------------------------------------------------------------------
+
+async fn check_tool_available(tool: &str) -> bool {
+    tokio::process::Command::new("which")
+        .arg(tool)
+        .output()
+        .await
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+// ---------------------------------------------------------------------------
 // Camera snap via imagesnap CLI
 // ---------------------------------------------------------------------------
 
 async fn snap_with_imagesnap() -> Result<CameraSnapResult> {
+    if !check_tool_available("imagesnap").await {
+        return Err(aleph_desktop::DesktopError::BridgeFailed(
+            "imagesnap is not installed. Install it with: brew install imagesnap".into(),
+        ));
+    }
+
     let out_path = media_dir().join(format!("camera_snap_{}.jpg", timestamp_suffix()));
 
     // imagesnap -w 1.0 captures with a 1-second warmup for auto-exposure
@@ -132,7 +151,7 @@ async fn snap_with_imagesnap() -> Result<CameraSnapResult> {
         .await
         .map_err(|e| {
             aleph_desktop::DesktopError::BridgeFailed(format!(
-                "Failed to run imagesnap (install: brew install imagesnap): {e}"
+                "Failed to run imagesnap: {e}"
             ))
         })?;
 
@@ -173,6 +192,12 @@ async fn snap_with_imagesnap() -> Result<CameraSnapResult> {
 // ---------------------------------------------------------------------------
 
 async fn clip_with_ffmpeg(config: &CameraClipConfig) -> Result<CameraClipResult> {
+    if !check_tool_available("ffmpeg").await {
+        return Err(aleph_desktop::DesktopError::BridgeFailed(
+            "ffmpeg is not installed. Install it with: brew install ffmpeg".into(),
+        ));
+    }
+
     let out_path = media_dir().join(format!("camera_clip_{}.mp4", timestamp_suffix()));
     let duration_str = format!("{:.1}", config.duration_secs);
 
@@ -216,7 +241,7 @@ async fn clip_with_ffmpeg(config: &CameraClipConfig) -> Result<CameraClipResult>
         .await
         .map_err(|e| {
             aleph_desktop::DesktopError::BridgeFailed(format!(
-                "Failed to run ffmpeg (install: brew install ffmpeg): {e}"
+                "Failed to run ffmpeg: {e}"
             ))
         })?;
 
@@ -234,6 +259,58 @@ async fn clip_with_ffmpeg(config: &CameraClipConfig) -> Result<CameraClipResult>
         file_path: out_path.to_string_lossy().into_owned(),
         duration_secs: config.duration_secs,
         has_audio: config.with_audio,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Audio recording via ffmpeg CLI
+// ---------------------------------------------------------------------------
+
+async fn record_audio_with_ffmpeg(config: &AudioRecordConfig) -> Result<AudioRecordResult> {
+    if !check_tool_available("ffmpeg").await {
+        return Err(aleph_desktop::DesktopError::BridgeFailed(
+            "ffmpeg is not installed. Install it with: brew install ffmpeg".into(),
+        ));
+    }
+
+    let out_path = media_dir().join(format!("audio_record_{}.m4a", timestamp_suffix()));
+    let duration_str = format!("{:.1}", config.duration_secs);
+
+    // Record from default microphone using avfoundation
+    // :0 = default audio input device (no video)
+    let args = [
+        "-f", "avfoundation",
+        "-i", ":0",
+        "-t", &duration_str,
+        "-y", &out_path.to_string_lossy(),
+    ];
+
+    debug!(duration = config.duration_secs, "Recording audio via ffmpeg");
+
+    let output = tokio::process::Command::new("ffmpeg")
+        .args(&args)
+        .output()
+        .await
+        .map_err(|e| {
+            aleph_desktop::DesktopError::BridgeFailed(format!(
+                "Failed to run ffmpeg: {e}"
+            ))
+        })?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        // ffmpeg writes progress info to stderr; only treat as error if file doesn't exist
+        if !out_path.exists() {
+            return Err(aleph_desktop::DesktopError::BridgeFailed(format!(
+                "ffmpeg audio recording failed: {stderr}"
+            )));
+        }
+    }
+
+    Ok(AudioRecordResult {
+        file_path: out_path.to_string_lossy().into_owned(),
+        duration_secs: config.duration_secs,
+        format: "m4a".to_string(),
     })
 }
 
@@ -548,6 +625,12 @@ impl MediaCapability for MacOSMedia {
             "Recording camera clip via ffmpeg"
         );
         clip_with_ffmpeg(&config).await
+    }
+
+    async fn record_audio(&self, config: AudioRecordConfig) -> Result<AudioRecordResult> {
+        let config = config.clamped();
+        debug!(duration = config.duration_secs, "Recording audio via ffmpeg");
+        record_audio_with_ffmpeg(&config).await
     }
 
     async fn list_audio_devices(&self) -> Result<Vec<AudioDeviceInfo>> {

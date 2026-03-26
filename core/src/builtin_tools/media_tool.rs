@@ -28,7 +28,7 @@ impl MediaTool {
 /// Arguments for the media tool.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct MediaArgs {
-    /// Action to perform: "camera_snap", "camera_clip", "list_audio_devices", "speech_to_text"
+    /// Action to perform: "camera_snap", "camera_clip", "record_audio", "list_audio_devices", "speech_to_text"
     pub action: String,
     /// JPEG quality (0.0–1.0). Used by camera_snap. Default: 0.9
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -60,11 +60,12 @@ pub struct MediaOutput {
 #[async_trait]
 impl AlephTool for MediaTool {
     const NAME: &'static str = "media";
-    const DESCRIPTION: &'static str = r#"Camera capture, audio device management, and speech-to-text.
+    const DESCRIPTION: &'static str = r#"Camera capture, audio recording, device management, and speech-to-text.
 
 Actions:
 - camera_snap: Take a photo from the default camera. Returns base64-encoded JPEG. Optional: quality (0.0–1.0)
 - camera_clip: Record a video clip from the default camera. Returns file path to MP4. Optional: duration (seconds, 0.25–60), with_audio (bool)
+- record_audio: Record audio from the default microphone. Returns file path to M4A. Optional: duration (seconds, 0.25–300, default 5)
 - list_audio_devices: List all audio input devices with names, UIDs, and default status
 - speech_to_text: Transcribe an audio file to text using on-device speech recognition. Required: audio_path. Optional: language (default "en-US")
 
@@ -72,6 +73,7 @@ Examples:
 {"action":"camera_snap"}
 {"action":"camera_snap","quality":0.8}
 {"action":"camera_clip","duration":5.0,"with_audio":true}
+{"action":"record_audio","duration":10.0}
 {"action":"list_audio_devices"}
 {"action":"speech_to_text","audio_path":"/path/to/audio.m4a","language":"en-US"}"#;
 
@@ -136,6 +138,26 @@ Examples:
                 }
             }
 
+            "record_audio" => {
+                let config = aleph_desktop::media_types::AudioRecordConfig {
+                    duration_secs: args.duration.unwrap_or(5.0),
+                }
+                .clamped();
+
+                match media_cap.record_audio(config).await {
+                    Ok(result) => Ok(MediaOutput {
+                        success: true,
+                        data: Some(serde_json::to_value(result).unwrap_or_default()),
+                        message: None,
+                    }),
+                    Err(e) => Ok(MediaOutput {
+                        success: false,
+                        data: None,
+                        message: Some(e.to_string()),
+                    }),
+                }
+            }
+
             "list_audio_devices" => match media_cap.list_audio_devices().await {
                 Ok(devices) => Ok(MediaOutput {
                     success: true,
@@ -185,7 +207,7 @@ Examples:
                 success: false,
                 data: None,
                 message: Some(format!(
-                    "Unknown action: '{unknown}'. Valid actions: camera_snap, camera_clip, list_audio_devices, speech_to_text"
+                    "Unknown action: '{unknown}'. Valid actions: camera_snap, camera_clip, record_audio, list_audio_devices, speech_to_text"
                 )),
             }),
         }
