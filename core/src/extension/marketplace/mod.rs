@@ -113,6 +113,16 @@ impl MarketplaceManager {
             .get(name)
             .ok_or_else(|| format!("Unknown marketplace '{name}'"))?;
 
+        // Builtin marketplace is managed by bundled extractor — just return cache path
+        if name == BUILTIN_MARKETPLACE_NAME {
+            let cache = self.cache_dir.join(name);
+            return if cache.exists() {
+                Ok(cache)
+            } else {
+                Err("Builtin marketplace cache not yet extracted".to_string())
+            };
+        }
+
         match config.source_type {
             MarketplaceSourceType::Github => {
                 sync_github_marketplace(&config.source, &self.cache_dir, name)
@@ -248,7 +258,7 @@ impl MarketplaceManager {
 fn builtin_config() -> MarketplaceConfig {
     MarketplaceConfig {
         source: BUILTIN_MARKETPLACE_SOURCE.to_string(),
-        source_type: MarketplaceSourceType::Github,
+        source_type: MarketplaceSourceType::Local,
     }
 }
 
