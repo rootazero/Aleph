@@ -273,8 +273,8 @@ impl TeamStore for SqliteTeamStore {
             .map_err(db_err)?
             .query_map([], |row| row.get(0))
             .map_err(db_err)?
-            .filter_map(|r| r.ok())
-            .collect();
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(db_err)?;
 
         let mut summaries = Vec::new();
         for id in ids {
@@ -289,14 +289,26 @@ impl TeamStore for SqliteTeamStore {
         let conn = self.conn.lock().await;
         let now = now_epoch();
 
+        // Only disband active teams — prevents overwriting disbanded_at on re-disband
         let affected = conn
             .execute(
-                "UPDATE teams SET status = 'disbanded', disbanded_at = ?1 WHERE id = ?2",
+                "UPDATE teams SET status = 'disbanded', disbanded_at = ?1 WHERE id = ?2 AND status = 'active'",
                 params![now, id],
             )
             .map_err(db_err)?;
 
         if affected == 0 {
+            // Distinguish "not found" from "already disbanded"
+            let exists: bool = conn
+                .prepare_cached("SELECT 1 FROM teams WHERE id = ?1")
+                .map_err(db_err)?
+                .query_row(params![id], |_| Ok(true))
+                .optional()
+                .map_err(db_err)?
+                .unwrap_or(false);
+            if exists {
+                return Err(db_err(format!("team already disbanded: {id}")));
+            }
             return Err(db_err(format!("team not found: {id}")));
         }
         Ok(())
@@ -360,8 +372,8 @@ impl TeamStore for SqliteTeamStore {
             .map_err(db_err)?
             .query_map(params![team_id], read_member_row)
             .map_err(db_err)?
-            .filter_map(|r| r.ok())
-            .collect();
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(db_err)?;
 
         Ok(members)
     }
@@ -381,8 +393,8 @@ impl TeamStore for SqliteTeamStore {
             .map_err(db_err)?
             .query_map(params![agent_id], |row| row.get(0))
             .map_err(db_err)?
-            .filter_map(|r| r.ok())
-            .collect();
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(db_err)?;
 
         let mut summaries = Vec::new();
         for id in ids {
@@ -456,8 +468,8 @@ impl TeamStore for SqliteTeamStore {
             .map_err(db_err)?
             .query_map(params![team_id], read_task_row)
             .map_err(db_err)?
-            .filter_map(|r| r.ok())
-            .collect();
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(db_err)?;
 
         Ok(tasks)
     }

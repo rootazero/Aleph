@@ -275,7 +275,13 @@ impl AlephTool for TeamCreateTool {
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         let leader_id = self.current_agent_id.clone();
 
-        // Resolve all members first (fail fast before creating the team)
+        // Resolve all members first (fail fast before creating the team).
+        // NOTE: Inline agent creation is not atomic with team creation. If an
+        // inline agent is successfully created but a subsequent step fails
+        // (e.g., later member resolution or team record creation), the agent
+        // will remain registered without being part of a team. This is an
+        // accepted limitation — the spec does not require transactional
+        // rollback, and the orphaned agent can be cleaned up manually.
         let mut resolved: Vec<(String, String, bool)> = Vec::new(); // (agent_id, role, created)
         for spec in &args.members {
             let created = spec.create.is_some();

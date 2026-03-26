@@ -13,7 +13,11 @@ pub struct TeamSummary {
     pub description: String,
     pub leader_id: String,
     pub status: String,
+    /// Present in list responses (TeamSummary), absent in get responses (Team).
+    #[serde(default)]
     pub member_count: usize,
+    /// Present in list responses (TeamSummary), absent in get responses (Team).
+    #[serde(default)]
     pub task_count: usize,
     pub created_at: i64,
     pub disbanded_at: Option<i64>,
@@ -53,7 +57,9 @@ pub struct TeamsApi;
 impl TeamsApi {
     pub async fn list(state: &DashboardState) -> Result<Vec<TeamSummary>, String> {
         let result = state.rpc_call("teams.list", Value::Null).await?;
-        serde_json::from_value(result).map_err(|e| e.to_string())
+        // Server returns {"teams": [...]}, extract the inner array
+        let teams_value = result.get("teams").cloned().unwrap_or(Value::Array(vec![]));
+        serde_json::from_value(teams_value).map_err(|e| e.to_string())
     }
 
     pub async fn get(state: &DashboardState, team_id: &str) -> Result<TeamDetail, String> {
@@ -73,6 +79,8 @@ impl TeamsApi {
 
     pub async fn agent_teams(state: &DashboardState, agent_id: &str) -> Result<Vec<TeamSummary>, String> {
         let result = state.rpc_call("agents.teams", json!({"agent_id": agent_id})).await?;
-        serde_json::from_value(result).map_err(|e| e.to_string())
+        // Server returns {"teams": [...]}, extract the inner array
+        let teams_value = result.get("teams").cloned().unwrap_or(Value::Array(vec![]));
+        serde_json::from_value(teams_value).map_err(|e| e.to_string())
     }
 }

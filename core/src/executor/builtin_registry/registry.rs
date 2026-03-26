@@ -569,7 +569,13 @@ impl ToolRegistry for BuiltinToolRegistry {
             }),
             "team_delegate" => Box::pin(async move {
                 let tool = self.team_delegate_tool.as_ref().ok_or_else(|| AlephError::tool("team_delegate not available: no TeamStore configured"))?;
-                tool.call_json(arguments).await
+                // Inject GatewayContext from OnceCell (deferred — same pattern as session_send)
+                let context = self.gateway_context.get().ok_or_else(|| {
+                    AlephError::tool("team_delegate not available: GatewayContext not yet injected")
+                })?;
+                let mut delegate = tool.clone();
+                delegate.set_context((**context).clone());
+                delegate.call_json(arguments).await
             }),
             "team_status" => Box::pin(async move {
                 let tool = self.team_status_tool.as_ref().ok_or_else(|| AlephError::tool("team_status not available: no TeamStore configured"))?;
