@@ -166,6 +166,14 @@ pub struct GatewayServer {
     pub start_time: Instant,
     /// Optional A2A server state (set during startup if A2A is enabled)
     a2a_state: Option<Arc<crate::a2a::adapter::server::A2AServerState>>,
+    /// Execution adapter for OpenAI-compatible agent completions
+    pub execution_adapter: Option<Arc<dyn crate::gateway::execution_adapter::ExecutionAdapter>>,
+    /// Agent registry for OpenAI-compatible agent completions
+    pub openai_agent_registry: Option<Arc<crate::gateway::agent_instance::AgentRegistry>>,
+    /// Model → HttpProvider map for passthrough completions
+    pub openai_provider_map: Arc<HashMap<String, Arc<crate::providers::http_provider::HttpProvider>>>,
+    /// Provider configs for /v1/models listing
+    pub openai_provider_configs: Vec<(String, crate::config::ProviderConfig)>,
 }
 
 impl GatewayServer {
@@ -200,6 +208,10 @@ impl GatewayServer {
             event_scope_guard: Arc::new(EventScopeGuard::default_rules()),
             start_time: Instant::now(),
             a2a_state: None,
+            execution_adapter: None,
+            openai_agent_registry: None,
+            openai_provider_map: Arc::new(HashMap::new()),
+            openai_provider_configs: Vec::new(),
         }
     }
 
@@ -233,6 +245,10 @@ impl GatewayServer {
             event_scope_guard: Arc::new(EventScopeGuard::default_rules()),
             start_time: Instant::now(),
             a2a_state: None,
+            execution_adapter: None,
+            openai_agent_registry: None,
+            openai_provider_map: Arc::new(HashMap::new()),
+            openai_provider_configs: Vec::new(),
         }
     }
 
@@ -301,10 +317,10 @@ impl GatewayServer {
         let openai_state = Arc::new(OpenAiApiState {
             server_id: format!("aleph-{}", self.addr),
             api_token: None, // Auth handled by HTTP middleware layer
-            execution_adapter: None,
-            provider_map: Arc::new(HashMap::new()),
-            agent_registry: None,
-            provider_configs: Arc::new(Vec::new()),
+            execution_adapter: self.execution_adapter.clone(),
+            provider_map: self.openai_provider_map.clone(),
+            agent_registry: self.openai_agent_registry.clone(),
+            provider_configs: Arc::new(self.openai_provider_configs.clone()),
             created_at: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
