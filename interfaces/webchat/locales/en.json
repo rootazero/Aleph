@@ -999,7 +999,10 @@
       "display_name_placeholder": "Display Name (optional)",
       "create": "Create",
       "id_required": "Agent ID is required",
-      "default_agent": "Default Agent"
+      "default_agent": "Default Agent",
+      "filter_all": "All Agents",
+      "filter_channel": "Channel Agents",
+      "filter_standalone": "Standalone Agents"
     },
     "loading": "Loading agent...",
     "no_agent_selected": "No agent selected",

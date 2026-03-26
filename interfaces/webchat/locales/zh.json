@@ -999,7 +999,10 @@
       "display_name_placeholder": "显示名称（可选）",
       "create": "创建",
       "id_required": "智能体 ID 不能为空",
-      "default_agent": "默认智能体"
+      "default_agent": "默认智能体",
+      "filter_all": "所有智能体",
+      "filter_channel": "频道智能体",
+      "filter_standalone": "独立智能体"
     },
     "loading": "加载智能体...",
     "no_agent_selected": "未选择智能体",

@@ -1,10 +1,12 @@
 //
 // Agents mode sidebar — agent list with create, select, and default agent controls.
 //
+use std::collections::HashMap;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use leptos_router::hooks::use_location;
 use crate::api::agents::{AgentSummary, AgentsApi};
+use crate::api::workspace::WorkspaceApi;
 use crate::context::DashboardState;
 use crate::i18n::*;
 
@@ -21,6 +23,11 @@ pub fn AgentsSidebar() -> impl IntoView {
     let new_agent_id = RwSignal::new(String::new());
     let new_agent_name = RwSignal::new(String::new());
     let create_error = RwSignal::new(Option::<String>::None);
+
+    // Filter state: "all" | "channel" | "standalone"
+    let filter = RwSignal::new("all".to_string());
+    // agent_id → channel_name bindings map
+    let bindings = RwSignal::new(HashMap::<String, String>::new());
 
     // Reload agents list
     let reload = move || {
@@ -43,19 +50,40 @@ pub fn AgentsSidebar() -> impl IntoView {
     Effect::new(move || {
         if state.is_connected.get() {
             reload();
+            // Load channel bindings
+            let dash = state;
+            spawn_local(async move {
+                match WorkspaceApi::agent_bindings(&dash).await {
+                    Ok(map) => bindings.set(map),
+                    Err(e) => {
+                        web_sys::console::warn_1(
+                            &format!("Failed to load agent bindings: {e}").into(),
+                        );
+                    }
+                }
+            });
         }
     });
 
     view! {
         <div class="flex flex-col h-full">
             // Header + Create button
-            <div class="p-3 border-b border-border">
+            <div class="p-3 border-b border-border space-y-2">
                 <button
                     on:click=move |_| show_create.update(|v| *v = !*v)
                     class="w-full px-3 py-2 bg-primary text-white rounded-lg hover:bg-primary-hover transition-colors text-sm font-medium"
                 >
                     {t!(i18n, agents.sidebar.new_agent)}
                 </button>
+                // Filter dropdown
+                <select
+                    on:change=move |ev| filter.set(event_target_value(&ev))
+                    class="w-full px-3 py-1.5 bg-surface-secondary border border-border rounded-md text-xs text-text-secondary focus:outline-none focus:ring-1 focus:ring-primary/30"
+                >
+                    <option value="all">{t!(i18n, agents.sidebar.filter_all)}</option>
+                    <option value="channel">{t!(i18n, agents.sidebar.filter_channel)}</option>
+                    <option value="standalone">{t!(i18n, agents.sidebar.filter_standalone)}</option>
+                </select>
             </div>
 
             // Create form (collapsible)
@@ -127,14 +155,28 @@ pub fn AgentsSidebar() -> impl IntoView {
                         }.into_any()
                     } else {
                         let current_path = location.pathname.get();
+                        let current_filter = filter.get();
+                        let current_bindings = bindings.get();
+
+                        // Apply filter
+                        let filtered: Vec<AgentSummary> = agents.get().into_iter().filter(|agent| {
+                            match current_filter.as_str() {
+                                "channel" => current_bindings.contains_key(&agent.id),
+                                "standalone" => !current_bindings.contains_key(&agent.id),
+                                _ => true, // "all"
+                            }
+                        }).collect();
+
                         view! {
                             <div class="py-1">
-                                {agents.get().into_iter().map(|agent| {
+                                {filtered.into_iter().map(|agent| {
                                     let agent_path = format!("/agents/{}/overview", agent.id);
                                     let is_active = current_path.starts_with(&format!("/agents/{}", agent.id));
                                     let is_default = agent.is_default;
                                     let emoji = agent.emoji.clone().unwrap_or_default();
                                     let display_name = agent.name.clone().unwrap_or_else(|| agent.id.clone());
+                                    // Channel badge for bound agents (shown in "all" and "channel" views)
+                                    let channel_badge = current_bindings.get(&agent.id).cloned();
 
                                     view! {
                                         <a
@@ -149,6 +191,15 @@ pub fn AgentsSidebar() -> impl IntoView {
                                         >
                                             <span class="text-base">{emoji}</span>
                                             <span class="flex-1 truncate">{display_name}</span>
+                                            {channel_badge.map(|ch| {
+                                                let title = ch.clone();
+                                                view! {
+                                                    <span
+                                                        class="text-xs px-1.5 py-0.5 bg-primary/10 text-primary rounded truncate max-w-16"
+                                                        title=title
+                                                    >{ch}</span>
+                                                }
+                                            })}
                                             {is_default.then(|| view! {
                                                 <span class="text-xs text-warning" title="Default agent">"★"</span>
                                             })}
