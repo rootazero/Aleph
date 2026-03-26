@@ -404,10 +404,11 @@ impl<E: EventEmitter + Send + Sync + 'static> crate::agent_loop::LoopCallback
     }
 
     fn on_intermediate_text(&mut self, text: &str) {
-        // Same deduplication guard as on_text — skip tokens already delivered by DeltaSink.
-        if self.streaming_active && self.has_emitted_text.swap(false, Ordering::Acquire) {
-            return;
-        }
+        // No deduplication guard here — intermediate messages must always be
+        // delivered to the channel as standalone messages, even when DeltaSink
+        // has already streamed the tokens to WebSocket clients.
+        // DeltaSink handles real-time UI streaming; intermediate messages are
+        // a separate delivery path for channels (Telegram, Slack, etc.).
         self.seq += 1;
         let chunk_index = self.chunk_index;
         self.chunk_index += 1;

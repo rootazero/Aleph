@@ -157,13 +157,12 @@ impl TeamCreateTool {
     }
 
     /// Create a new agent from an inline CreateAgentSpec and register it.
+    /// If an agent with the same ID already exists, silently reuse it
+    /// instead of creating a duplicate (prevents registry pollution).
     async fn create_inline_agent(&self, spec: &CreateAgentSpec) -> Result<String> {
-        // Check for duplicates
         if self.registry.get(&spec.id).await.is_some() {
-            return Err(AlephError::other(format!(
-                "Agent '{}' already exists",
-                spec.id
-            )));
+            info!(agent_id = %spec.id, "team_create: reusing existing agent");
+            return Ok(spec.id.clone());
         }
 
         let agents_state_root = dirs::home_dir()
@@ -258,6 +257,9 @@ impl AlephTool for TeamCreateTool {
     const DESCRIPTION: &'static str =
         "Create a named team of agents. The calling agent becomes the team leader. \
         Members can be existing agents (by agent_id) or new agents created inline. \
+        IMPORTANT: Before creating new agents, prefer reusing existing agents by agent_id \
+        when their capabilities match the required role. Only create new agents when no \
+        suitable existing agent is available. \
         Returns the team ID and the list of enrolled members.";
 
     type Args = TeamCreateArgs;
