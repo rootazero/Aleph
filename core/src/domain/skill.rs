@@ -383,6 +383,12 @@ pub struct SkillManifest {
     invocation: InvocationPolicy,
     /// Where the skill came from.
     source: SkillSource,
+    /// API Key environment variable name (e.g. "OPENAI_API_KEY").
+    primary_env: Option<String>,
+    /// External documentation / key acquisition URL.
+    homepage: Option<String>,
+    /// UI emoji icon.
+    emoji: Option<String>,
 }
 
 impl SkillManifest {
@@ -406,6 +412,9 @@ impl SkillManifest {
             install_specs: Vec::new(),
             invocation: InvocationPolicy::default(),
             source,
+            primary_env: None,
+            homepage: None,
+            emoji: None,
         }
     }
 
@@ -461,6 +470,21 @@ impl SkillManifest {
         &self.source
     }
 
+    /// API Key environment variable name required by this skill.
+    pub fn primary_env(&self) -> Option<&str> {
+        self.primary_env.as_deref()
+    }
+
+    /// External documentation / key acquisition URL.
+    pub fn homepage(&self) -> Option<&str> {
+        self.homepage.as_deref()
+    }
+
+    /// UI emoji icon.
+    pub fn emoji(&self) -> Option<&str> {
+        self.emoji.as_deref()
+    }
+
     /// Override priority (delegates to `SkillSource::priority()`).
     pub fn priority(&self) -> u8 {
         self.source.priority()
@@ -511,6 +535,21 @@ impl SkillManifest {
     /// Set the invocation policy.
     pub fn set_invocation(&mut self, invocation: InvocationPolicy) {
         self.invocation = invocation;
+    }
+
+    /// Set the primary API key environment variable name.
+    pub fn set_primary_env(&mut self, env: String) {
+        self.primary_env = Some(env);
+    }
+
+    /// Set the external documentation / key acquisition URL.
+    pub fn set_homepage(&mut self, url: String) {
+        self.homepage = Some(url);
+    }
+
+    /// Set the UI emoji icon.
+    pub fn set_emoji(&mut self, emoji: String) {
+        self.emoji = Some(emoji);
     }
 }
 
@@ -568,6 +607,31 @@ mod tests {
 
         // Workspace should always beat Bundled
         assert!(SkillSource::Workspace.priority() > SkillSource::Bundled.priority());
+    }
+
+    #[test]
+    fn manifest_new_metadata_fields() {
+        let mut manifest = SkillManifest::new(
+            "test:skill",
+            "Test Skill",
+            "A test skill",
+            SkillContent::new("content"),
+            SkillSource::Bundled,
+        );
+
+        // Defaults are None
+        assert!(manifest.primary_env().is_none());
+        assert!(manifest.homepage().is_none());
+        assert!(manifest.emoji().is_none());
+
+        // Set values
+        manifest.set_primary_env("OPENAI_API_KEY".to_string());
+        manifest.set_homepage("https://openai.com".to_string());
+        manifest.set_emoji("🔍".to_string());
+
+        assert_eq!(manifest.primary_env(), Some("OPENAI_API_KEY"));
+        assert_eq!(manifest.homepage(), Some("https://openai.com"));
+        assert_eq!(manifest.emoji(), Some("🔍"));
     }
 
     // === Task 2 tests ===
