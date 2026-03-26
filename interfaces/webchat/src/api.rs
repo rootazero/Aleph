@@ -28,6 +28,7 @@ pub mod settings;
 pub mod system;
 pub mod browser;
 pub mod workspace;
+pub mod teams;
 
 // Re-export all public types for backward compatibility (crate::api::Foo)
 pub use browser::*;
