@@ -6,6 +6,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::acp::protocol::{AcpRequest, AcpResponse, AcpSessionState};
 use crate::acp::transport::StdioTransport;
+use crate::acp::AcpChunkCallback;
 use crate::error::{AlephError, Result};
 
 // =============================================================================
@@ -173,6 +174,7 @@ impl AcpSession {
         text: &str,
         cwd: &str,
         timeout: Duration,
+        on_chunk: Option<&AcpChunkCallback>,
     ) -> Result<(String, Vec<AcpResponse>)> {
         if self.state == AcpSessionState::Error {
             return Err(AlephError::tool(format!(
@@ -193,6 +195,10 @@ impl AcpSession {
                 let mut text_parts: Vec<String> = Vec::new();
                 for notif in &notifications {
                     if let Some(chunk) = notif.streaming_text() {
+                        // Forward to callback if provided
+                        if let Some(cb) = &on_chunk {
+                            cb(&chunk);
+                        }
                         text_parts.push(chunk);
                     }
                 }

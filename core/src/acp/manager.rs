@@ -416,9 +416,6 @@ impl AcpHarnessManager {
         reuse_session: bool,
         on_chunk: Option<AcpChunkCallback>,
     ) -> Result<String> {
-        // Placeholder — will be wired in Task 7
-        let _on_chunk = on_chunk;
-
         // Resolve effective mode and validate
         let (effective_mode, timeout) = {
             let harnesses = self.harnesses.read().await;
@@ -468,7 +465,7 @@ impl AcpHarnessManager {
                 };
                 // Write lock released — other harness calls can proceed
 
-                let result = session.prompt(prompt_text, cwd, timeout).await;
+                let result = session.prompt(prompt_text, cwd, timeout, on_chunk.as_ref()).await;
 
                 // Re-insert session if still alive
                 if session.is_alive() {
