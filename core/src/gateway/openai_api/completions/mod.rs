@@ -1,5 +1,6 @@
 //! POST /v1/chat/completions — dual-mode dispatch.
 
+pub mod agent;
 pub mod passthrough;
 
 use std::sync::Arc;
@@ -41,10 +42,7 @@ pub async fn handle(
 
     // Route by model prefix
     if req.model.starts_with("aleph/") {
-        // Agent path — placeholder until Task 6
-        Err(ApiError::ServiceUnavailable(
-            "Agent mode not yet implemented".into(),
-        ))
+        agent::handle(state, &headers, req).await
     } else {
         passthrough::handle(state, req).await
     }
