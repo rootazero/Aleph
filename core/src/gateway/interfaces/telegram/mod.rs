@@ -31,9 +31,8 @@ use crate::gateway::formatter::{MessageFormatter, MarkupFormat};
 use async_trait::async_trait;
 use chrono::{TimeZone, Utc};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::Instant;
 use tokio::sync::{mpsc, oneshot, RwLock};
 use tokio_util::sync::CancellationToken;
 
@@ -556,16 +555,6 @@ impl Channel for TelegramChannel {
         let channel_id = self.info.id.clone();
         let channel_id_for_cb = self.info.id.clone();
 
-        // Stall detection: shared timestamp updated by message/callback handlers
-        let now_secs = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-        let last_update_at = std::sync::Arc::new(AtomicU64::new(now_secs));
-        let last_update_for_msg = last_update_at.clone();
-        let last_update_for_cb = last_update_at.clone();
-        let last_update_for_watchdog = last_update_at.clone();
-
         // Clone pairing state for the message handler closure
         let pairing_codes_clone = self.pairing_codes.clone();
         let prompt_times_clone = self.pairing_prompt_times.clone();
@@ -576,8 +565,6 @@ impl Channel for TelegramChannel {
             tracing::info!("Starting Telegram long-polling...");
             *status.write().await = ChannelStatus::Connected;
 
-            const STALL_WARN_SECS: u64 = 90;
-            const STALL_RESTART_SECS: u64 = 300;
             let mut attempt = 0u32;
             let mut healthy_since: Option<Instant> = None;
 
@@ -592,9 +579,6 @@ impl Channel for TelegramChannel {
                 let iter_config_for_cb = config_for_cb.clone();
                 let iter_channel_id = channel_id.clone();
                 let iter_channel_id_for_cb = channel_id_for_cb.clone();
-                let iter_last_update_for_msg = last_update_for_msg.clone();
-                let iter_last_update_for_cb = last_update_for_cb.clone();
-                let iter_last_update_wd = last_update_for_watchdog.clone();
                 let iter_pairing_codes = pairing_codes_clone.clone();
                 let iter_prompt_times = prompt_times_clone.clone();
                 let iter_runtime_users = runtime_users_clone.clone();
@@ -606,16 +590,10 @@ impl Channel for TelegramChannel {
                         let inbound_tx = iter_inbound_tx.clone();
                         let config = iter_config.clone();
                         let channel_id = iter_channel_id.clone();
-                        let last_update = iter_last_update_for_msg.clone();
                         let pairing_codes = iter_pairing_codes.clone();
                         let prompt_times = iter_prompt_times.clone();
                         let runtime_users = iter_runtime_users.clone();
                         async move {
-                            // Update stall detection timestamp
-                            last_update.store(
-                                SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs(),
-                                Ordering::Relaxed,
-                            );
                             if let Some(inbound) = TelegramChannel::convert_message(
                                 &msg, &bot, &config, &channel_id, &runtime_users,
                             ).await {
@@ -687,14 +665,8 @@ impl Channel for TelegramChannel {
                         let inbound_tx = iter_inbound_tx_for_cb.clone();
                         let config = iter_config_for_cb.clone();
                         let channel_id = iter_channel_id_for_cb.clone();
-                        let last_update = iter_last_update_for_cb.clone();
                         let runtime_users = iter_runtime_users_for_cb.clone();
                         async move {
-                            // Update stall detection timestamp
-                            last_update.store(
-                                SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs(),
-                                Ordering::Relaxed,
-                            );
                             // Extract chat_id and optional thread_id for forum topic isolation
                             let (raw_chat_id, thread_id_val) = q.message.as_ref()
                                 .map(|m| {
@@ -778,36 +750,55 @@ impl Channel for TelegramChannel {
                 let mut dispatcher = Dispatcher::builder(bot.clone(), handler)
                     .build();
 
-                // Watchdog: detect polling stalls and trigger auto-restart
+                // Watchdog: periodic health check via get_me() API call.
+                // Previous approach tracked "last message received" which falsely
+                // triggered restarts during idle periods (no users messaging).
+                // Now we actively probe the API — only restart on real failures.
+                const HEALTH_CHECK_INTERVAL_SECS: u64 = 120;
+                const MAX_CONSECUTIVE_FAILURES: u32 = 3;
+
                 let (stall_tx, mut stall_rx) = tokio::sync::mpsc::channel::<()>(1);
                 let watchdog_cancel = CancellationToken::new();
                 let watchdog_token = watchdog_cancel.clone();
-                let _watchdog = tokio::spawn({
-                    let last_update_wd = iter_last_update_wd;
-                    async move {
-                        let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
-                        loop {
-                            tokio::select! {
-                                _ = interval.tick() => {
-                                    let now = SystemTime::now()
-                                        .duration_since(UNIX_EPOCH)
-                                        .unwrap_or_default()
-                                        .as_secs();
-                                    let last = last_update_wd.load(Ordering::Relaxed);
-                                    let gap = now.saturating_sub(last);
-                                    if gap > STALL_RESTART_SECS {
-                                        tracing::error!(gap_secs = gap, "Telegram polling stall — triggering auto-restart");
-                                        let _ = stall_tx.send(()).await;
-                                        break;
-                                    } else if gap > STALL_WARN_SECS {
+                let watchdog_bot = bot.clone();
+                let _watchdog = tokio::spawn(async move {
+                    let mut interval = tokio::time::interval(
+                        std::time::Duration::from_secs(HEALTH_CHECK_INTERVAL_SECS),
+                    );
+                    let mut consecutive_failures: u32 = 0;
+                    loop {
+                        tokio::select! {
+                            _ = interval.tick() => {
+                                match watchdog_bot.get_me().await {
+                                    Ok(_) => {
+                                        if consecutive_failures > 0 {
+                                            tracing::info!(
+                                                "Telegram health check recovered after {} failures",
+                                                consecutive_failures,
+                                            );
+                                        }
+                                        consecutive_failures = 0;
+                                    }
+                                    Err(e) => {
+                                        consecutive_failures += 1;
                                         tracing::warn!(
-                                            "Telegram polling stall detected ({}s since last update)",
-                                            gap
+                                            failures = consecutive_failures,
+                                            "Telegram health check failed: {}",
+                                            e,
                                         );
+                                        if consecutive_failures >= MAX_CONSECUTIVE_FAILURES {
+                                            tracing::error!(
+                                                failures = consecutive_failures,
+                                                "Telegram health check failed {} consecutive times — triggering restart",
+                                                consecutive_failures,
+                                            );
+                                            let _ = stall_tx.send(()).await;
+                                            break;
+                                        }
                                     }
                                 }
-                                _ = watchdog_token.cancelled() => break,
                             }
+                            _ = watchdog_token.cancelled() => break,
                         }
                     }
                 });
@@ -824,7 +815,7 @@ impl Channel for TelegramChannel {
                     break;
                 }
 
-                // Dispatcher stopped unexpectedly or stall detected — auto-restart
+                // Dispatcher stopped unexpectedly or health check failed — auto-restart
                 *status.write().await = ChannelStatus::Connecting;
                 tracing::error!(attempt = attempt, reason = which, "Telegram polling {} — auto-restarting", which);
 
@@ -835,11 +826,6 @@ impl Channel for TelegramChannel {
                 let delay = std::cmp::min(5 * 2u64.pow(attempt.saturating_sub(1).min(4)), 60);
                 tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
 
-                // Reset stall timestamp so watchdog starts fresh
-                last_update_at.store(
-                    SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs(),
-                    Ordering::Relaxed,
-                );
                 healthy_since = Some(Instant::now());
 
                 tracing::info!(attempt = attempt, "Telegram reconnected, queued messages will be delivered");

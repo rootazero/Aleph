@@ -12,8 +12,9 @@ use crate::builtin_tools::message::{
     ReplyParams, SendParams,
 };
 use crate::error::Result;
+use crate::gateway::formatter::{MessageFormatter, MarkupFormat};
 
-use teloxide::{prelude::*, types::ChatId};
+use teloxide::{prelude::*, types::{ChatId, ParseMode}};
 
 /// Telegram message operations adapter
 ///
@@ -79,8 +80,10 @@ impl MessageOperations for TelegramMessageOps {
             "Sending Telegram reply"
         );
 
+        let html_text = MessageFormatter::format(&params.text, MarkupFormat::TelegramHtml);
         match bot
-            .send_message(chat_id, &params.text)
+            .send_message(chat_id, &html_text)
+            .parse_mode(ParseMode::Html)
             .reply_parameters(teloxide::types::ReplyParameters::new(reply_to))
             .await
         {
@@ -113,8 +116,10 @@ impl MessageOperations for TelegramMessageOps {
             "Editing Telegram message"
         );
 
+        let html_text = MessageFormatter::format(&params.text, MarkupFormat::TelegramHtml);
         match bot
-            .edit_message_text(chat_id, message_id, &params.text)
+            .edit_message_text(chat_id, message_id, &html_text)
+            .parse_mode(ParseMode::Html)
             .await
         {
             Ok(_) => {
@@ -228,7 +233,8 @@ impl MessageOperations for TelegramMessageOps {
             "Sending Telegram message"
         );
 
-        match bot.send_message(chat_id, &params.text).await {
+        let html_text = MessageFormatter::format(&params.text, MarkupFormat::TelegramHtml);
+        match bot.send_message(chat_id, &html_text).parse_mode(ParseMode::Html).await {
             Ok(sent) => {
                 debug!(message_id = %sent.id.0, "Message sent successfully");
                 Ok(MessageResult::success_with_id(sent.id.0.to_string()))
