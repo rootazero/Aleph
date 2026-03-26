@@ -18,7 +18,7 @@ image = { workspace = true }
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", features = [
     "NSString", "NSArray", "NSDictionary", "NSProcessInfo", "NSURL",
-    "NSData", "NSEnumerator", "NSBundle",
+    "NSData", "NSEnumerator", "NSBundle", "NSLocale",
 ] }
 objc2-app-kit = { version = "0.3", features = [
     "NSPasteboard", "NSWorkspace", "NSRunningApplication", "NSImage",
@@ -35,5 +35,10 @@ objc2-av-foundation = { version = "0.3", features = [
 ] }
 objc2-speech = { version = "0.3", features = [
     "SFSpeechRecognizer",
+    "SFSpeechRecognitionRequest",
+    "SFSpeechRecognitionResult",
+    "SFSpeechRecognitionTask",
+    "SFTranscription",
+    "block2",
 ] }
 core-foundation = "0.10"

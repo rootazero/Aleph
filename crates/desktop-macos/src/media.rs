@@ -433,6 +433,102 @@ fn get_input_channel_count(device_id: core_audio_ffi::AudioDeviceID) -> u32 {
 }
 
 // ---------------------------------------------------------------------------
+// Speech-to-text via SFSpeechRecognizer
+// ---------------------------------------------------------------------------
+
+fn speech_to_text_blocking(
+    audio_path: &str,
+    config: &SpeechToTextConfig,
+) -> Result<SpeechToTextResult> {
+    use objc2::AllocAnyThread;
+    use objc2_foundation::{NSLocale, NSString, NSURL};
+    use objc2_speech::{
+        SFSpeechRecognitionResult, SFSpeechRecognizer, SFSpeechURLRecognitionRequest,
+    };
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    // Verify the audio file exists
+    if !std::path::Path::new(audio_path).exists() {
+        return Err(aleph_desktop::DesktopError::BridgeFailed(format!(
+            "Audio file not found: {audio_path}"
+        )));
+    }
+
+    // Create locale and recognizer
+    let locale_str = NSString::from_str(&config.language);
+    let locale = NSLocale::initWithLocaleIdentifier(NSLocale::alloc(), &locale_str);
+
+    let recognizer = unsafe {
+        SFSpeechRecognizer::initWithLocale(SFSpeechRecognizer::alloc(), &locale)
+    };
+    let recognizer = recognizer.ok_or_else(|| {
+        aleph_desktop::DesktopError::BridgeFailed(format!(
+            "Failed to create speech recognizer for locale: {}",
+            config.language
+        ))
+    })?;
+
+    if !unsafe { recognizer.isAvailable() } {
+        return Err(aleph_desktop::DesktopError::BridgeFailed(
+            "Speech recognizer is not available".into(),
+        ));
+    }
+
+    // Create URL recognition request
+    let path_str = NSString::from_str(audio_path);
+    let url = NSURL::fileURLWithPath(&path_str);
+    let request = unsafe {
+        SFSpeechURLRecognitionRequest::initWithURL(
+            SFSpeechURLRecognitionRequest::alloc(),
+            &url,
+        )
+    };
+
+    // Bridge the async callback with a channel
+    let (tx, rx) = mpsc::channel::<std::result::Result<String, String>>();
+
+    let handler = block2::RcBlock::new(
+        move |result: *mut SFSpeechRecognitionResult, error: *mut objc2_foundation::NSError| {
+            if !error.is_null() {
+                let err = unsafe { &*error };
+                let desc = err.localizedDescription();
+                let _ = tx.send(Err(desc.to_string()));
+                return;
+            }
+            if result.is_null() {
+                return;
+            }
+            let result = unsafe { &*result };
+            if unsafe { result.isFinal() } {
+                let transcription = unsafe { result.bestTranscription() };
+                let text = unsafe { transcription.formattedString() };
+                let _ = tx.send(Ok(text.to_string()));
+            }
+        },
+    );
+
+    // Start recognition task (the returned task keeps recognition alive)
+    let _task = unsafe {
+        recognizer.recognitionTaskWithRequest_resultHandler(&request, &handler)
+    };
+
+    // Wait for result with a 60-second timeout (Apple's speech recognition limit)
+    match rx.recv_timeout(Duration::from_secs(60)) {
+        Ok(Ok(text)) => Ok(SpeechToTextResult {
+            text,
+            language: config.language.clone(),
+        }),
+        Ok(Err(err_msg)) => Err(aleph_desktop::DesktopError::BridgeFailed(format!(
+            "Speech recognition error: {err_msg}"
+        ))),
+        Err(_) => Err(aleph_desktop::DesktopError::BridgeFailed(
+            "Speech recognition timed out after 60 seconds".into(),
+        )),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // MediaCapability implementation
 // ---------------------------------------------------------------------------
 
@@ -462,6 +558,22 @@ impl MediaCapability for MacOSMedia {
             .map_err(|e| {
                 aleph_desktop::DesktopError::BridgeFailed(format!(
                     "Failed to spawn blocking task: {e}"
+                ))
+            })?
+    }
+
+    async fn speech_to_text(
+        &self,
+        audio_path: &str,
+        config: SpeechToTextConfig,
+    ) -> Result<SpeechToTextResult> {
+        debug!(path = audio_path, lang = %config.language, "Transcribing audio via SFSpeechRecognizer");
+        let path = audio_path.to_string();
+        tokio::task::spawn_blocking(move || speech_to_text_blocking(&path, &config))
+            .await
+            .map_err(|e| {
+                aleph_desktop::DesktopError::BridgeFailed(format!(
+                    "Failed to spawn speech-to-text task: {e}"
                 ))
             })?
     }
