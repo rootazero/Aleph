@@ -10,7 +10,7 @@ fn make_oneshot_entry(script: &str, format: OutputFormatSerde) -> AcpHarnessEntr
         display_name: "Test CLI".to_string(),
         executable: Some(mock_script_path(script)),
         args: vec![],
-        mode: HarnessModeSerde::Oneshot,
+        default_mode: HarnessModeSerde::Oneshot,
         output_format: format,
         enabled: true,
         ..Default::default()
@@ -119,7 +119,7 @@ async fn p3_08_oneshot_executable_not_found() {
     let entry = AcpHarnessEntry {
         display_name: "Missing".to_string(),
         executable: Some("/nonexistent/path/to/missing-binary-xyz123".to_string()),
-        mode: HarnessModeSerde::Oneshot,
+        default_mode: HarnessModeSerde::Oneshot,
         output_format: OutputFormatSerde::PlainText,
         enabled: true,
         ..Default::default()
@@ -137,7 +137,7 @@ async fn p3_09_build_config_maps_all_fields() {
         display_name: "Full Config".to_string(),
         executable: Some("/usr/bin/test-exe".to_string()),
         args: vec!["--arg1".to_string(), "val".to_string()],
-        mode: HarnessModeSerde::Oneshot,
+        default_mode: HarnessModeSerde::Oneshot,
         output_format: OutputFormatSerde::PlainText,
         env,
         cwd: Some("/custom/dir".to_string()),

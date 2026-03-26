@@ -133,14 +133,14 @@ async fn p2_08_prompt_routes_to_correct_mode() {
         AcpHarnessEntry {
             display_name: "Test Codex".to_string(),
             executable: Some(mock_script_path("mock_codex.sh")),
-            mode: HarnessModeSerde::Oneshot,
+            default_mode: HarnessModeSerde::Oneshot,
             output_format: OutputFormatSerde::PlainText,
             enabled: true,
             ..Default::default()
         },
     );
     let manager = AcpHarnessManager::from_entries(entries);
-    let result = manager.prompt("test-codex", "hello", "/tmp").await.unwrap();
+    let result = manager.prompt("test-codex", "hello", "/tmp", None, true, None).await.unwrap();
     assert!(
         result.contains("codex response:"),
         "Expected 'codex response:' in output, got: {}",

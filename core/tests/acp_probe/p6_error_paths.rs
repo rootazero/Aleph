@@ -11,7 +11,7 @@ async fn p6_01_oneshot_timeout() {
     let entry = AcpHarnessEntry {
         display_name: "Timeout Test".to_string(),
         executable: Some(mock_script_path("mock_timeout.sh")),
-        mode: HarnessModeSerde::Oneshot,
+        default_mode: HarnessModeSerde::Oneshot,
         output_format: OutputFormatSerde::PlainText,
         timeout_seconds: 2, // 2 second timeout (script sleeps 300)
         enabled: true,
@@ -33,7 +33,7 @@ async fn p6_02_process_crash_returns_error() {
     let entry = AcpHarnessEntry {
         display_name: "Crash Test".to_string(),
         executable: Some(mock_script_path("mock_crash.sh")),
-        mode: HarnessModeSerde::Oneshot,
+        default_mode: HarnessModeSerde::Oneshot,
         output_format: OutputFormatSerde::PlainText,
         enabled: true,
         ..Default::default()
@@ -48,7 +48,7 @@ async fn p6_02_process_crash_returns_error() {
 #[tokio::test]
 async fn p6_03_prompt_to_unregistered_harness() {
     let manager = AcpHarnessManager::from_entries(HashMap::new());
-    let result = manager.prompt("ghost", "test", "/tmp").await;
+    let result = manager.prompt("ghost", "test", "/tmp", None, true, None).await;
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();
     assert!(
@@ -63,7 +63,7 @@ async fn p6_04_executable_not_found_error() {
     let entry = AcpHarnessEntry {
         display_name: "Missing".to_string(),
         executable: Some("/nonexistent/path/missing-binary-xyz123".to_string()),
-        mode: HarnessModeSerde::Oneshot,
+        default_mode: HarnessModeSerde::Oneshot,
         output_format: OutputFormatSerde::PlainText,
         enabled: true,
         ..Default::default()
@@ -87,7 +87,7 @@ async fn p6_05_malformed_json_output_fallback() {
     let entry = AcpHarnessEntry {
         display_name: "Bad JSON".to_string(),
         executable: Some(mock_script_path("mock_codex.sh")), // outputs plain text
-        mode: HarnessModeSerde::Oneshot,
+        default_mode: HarnessModeSerde::Oneshot,
         output_format: OutputFormatSerde::Json {
             field: "result".into(),
         },
@@ -158,7 +158,7 @@ async fn p6_07_shutdown_all_completes() {
 #[tokio::test]
 async fn p6_08_manager_prompt_unknown_harness() {
     let manager = AcpHarnessManager::new();
-    let result = manager.prompt("totally-unknown", "test", "/tmp").await;
+    let result = manager.prompt("totally-unknown", "test", "/tmp", None, true, None).await;
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();
     assert!(

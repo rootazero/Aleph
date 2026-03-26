@@ -6,7 +6,7 @@ fn p1_01_preset_defaults_complete() {
     // Verify all 3 presets have correct executable/args/mode/output_format
     let claude = AcpHarnessEntry::preset_claude_code();
     assert_eq!(claude.executable.as_deref(), Some("claude"));
-    assert_eq!(claude.mode, HarnessModeSerde::Oneshot);
+    assert_eq!(claude.default_mode, HarnessModeSerde::Oneshot);
     assert!(matches!(claude.output_format, OutputFormatSerde::Json { .. }));
     if let OutputFormatSerde::Json { field } = &claude.output_format {
         assert_eq!(field, "result");
@@ -15,13 +15,13 @@ fn p1_01_preset_defaults_complete() {
 
     let codex = AcpHarnessEntry::preset_codex();
     assert_eq!(codex.executable.as_deref(), Some("codex"));
-    assert_eq!(codex.mode, HarnessModeSerde::Oneshot);
+    assert_eq!(codex.default_mode, HarnessModeSerde::Oneshot);
     assert!(matches!(codex.output_format, OutputFormatSerde::PlainText));
     assert_eq!(codex.preset.as_deref(), Some("codex"));
 
     let gemini = AcpHarnessEntry::preset_gemini();
     assert_eq!(gemini.executable.as_deref(), Some("gemini"));
-    assert_eq!(gemini.mode, HarnessModeSerde::NativeAcp);
+    assert_eq!(gemini.default_mode, HarnessModeSerde::NativeAcp);
     assert!(matches!(gemini.output_format, OutputFormatSerde::PlainText));
     assert_eq!(gemini.preset.as_deref(), Some("gemini"));
 }
@@ -94,6 +94,6 @@ fn p1_07_default_values_sensible() {
     assert!(entry.preset.is_none());
     assert!(entry.executable.is_none());
     assert!(entry.cwd.is_none());
-    assert_eq!(entry.mode, HarnessModeSerde::Oneshot);
+    assert_eq!(entry.default_mode, HarnessModeSerde::Oneshot);
     assert!(matches!(entry.output_format, OutputFormatSerde::PlainText));
 }
