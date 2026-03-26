@@ -78,7 +78,7 @@ impl AlephTool for ClaudeCodeTool {
         notify_tool_start(Self::NAME, &args_summary);
 
         let cwd = resolve_cwd(args.cwd.as_deref());
-        let result = self.manager.prompt("claude-code", &args.prompt, &cwd).await;
+        let result = self.manager.prompt("claude-code", &args.prompt, &cwd, None, true, None).await;
 
         match result {
             Ok(text) => {
@@ -126,7 +126,7 @@ impl AlephTool for CodexTool {
         notify_tool_start(Self::NAME, &args_summary);
 
         let cwd = resolve_cwd(args.cwd.as_deref());
-        let result = self.manager.prompt("codex", &args.prompt, &cwd).await;
+        let result = self.manager.prompt("codex", &args.prompt, &cwd, None, true, None).await;
 
         match result {
             Ok(text) => {
@@ -174,7 +174,7 @@ impl AlephTool for GeminiCliTool {
         notify_tool_start(Self::NAME, &args_summary);
 
         let cwd = resolve_cwd(args.cwd.as_deref());
-        let result = self.manager.prompt("gemini", &args.prompt, &cwd).await;
+        let result = self.manager.prompt("gemini", &args.prompt, &cwd, None, true, None).await;
 
         match result {
             Ok(text) => {
