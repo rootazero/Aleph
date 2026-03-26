@@ -1,5 +1,6 @@
 //! macOS platform implementation for Aleph desktop capabilities.
 
+pub mod hotkey;
 mod automation;
 mod media;
 mod permission;

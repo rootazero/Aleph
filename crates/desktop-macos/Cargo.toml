@@ -22,6 +22,7 @@ objc2-foundation = { version = "0.3", features = [
 ] }
 objc2-app-kit = { version = "0.3", features = [
     "NSPasteboard", "NSWorkspace", "NSRunningApplication", "NSImage",
+    "NSEvent", "block2",
 ] }
 objc2-user-notifications = { version = "0.3", features = [
     "UNUserNotificationCenter", "UNNotificationContent",
