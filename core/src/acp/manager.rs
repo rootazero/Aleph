@@ -116,16 +116,17 @@ impl AcpHarnessManager {
 
     /// Factory: build the right harness implementation from an entry.
     fn build_harness(id: &str, entry: &AcpHarnessEntry) -> Box<dyn AcpHarness> {
+        let default_mode = HarnessMode::from_serde(&entry.default_mode);
         let preset = entry.preset.as_deref().unwrap_or("");
         match preset {
             "claude-code" => {
-                Box::new(ClaudeCodeHarness::new(entry.executable.clone()))
+                Box::new(ClaudeCodeHarness::new(entry.executable.clone(), default_mode))
             }
             "codex" => {
-                Box::new(CodexHarness::new(entry.executable.clone()))
+                Box::new(CodexHarness::new(entry.executable.clone(), default_mode))
             }
             "gemini" => {
-                Box::new(GeminiHarness::new(entry.executable.clone()))
+                Box::new(GeminiHarness::new(entry.executable.clone(), default_mode))
             }
             _ => {
                 // Custom or unknown preset — use CustomHarness

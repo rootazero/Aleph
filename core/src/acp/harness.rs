@@ -53,6 +53,11 @@ pub trait AcpHarness: Send + Sync {
     /// Execution mode for this harness.
     fn mode(&self) -> HarnessMode;
 
+    /// Modes this harness supports. Used by Manager for runtime validation.
+    fn supported_modes(&self) -> Vec<HarnessMode> {
+        vec![self.mode()]
+    }
+
     /// Build the spawn configuration for this harness.
     fn build_config(&self, cwd: Option<&str>) -> HarnessConfig;
 

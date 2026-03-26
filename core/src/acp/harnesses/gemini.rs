@@ -13,12 +13,14 @@ const DEFAULT_EXECUTABLE: &str = "gemini";
 /// Protocol: initialize → session/new → session/prompt (streaming agent_message_chunk).
 pub struct GeminiHarness {
     executable: String,
+    default_mode: HarnessMode,
 }
 
 impl GeminiHarness {
-    pub fn new(executable: Option<String>) -> Self {
+    pub fn new(executable: Option<String>, default_mode: HarnessMode) -> Self {
         Self {
             executable: executable.unwrap_or_else(|| DEFAULT_EXECUTABLE.to_string()),
+            default_mode,
         }
     }
 }
@@ -34,7 +36,11 @@ impl AcpHarness for GeminiHarness {
     }
 
     fn mode(&self) -> HarnessMode {
-        HarnessMode::NativeAcp
+        self.default_mode
+    }
+
+    fn supported_modes(&self) -> Vec<HarnessMode> {
+        vec![HarnessMode::Oneshot, HarnessMode::NativeAcp]
     }
 
     fn build_config(&self, cwd: Option<&str>) -> HarnessConfig {

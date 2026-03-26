@@ -21,12 +21,14 @@ const DEFAULT_EXECUTABLE: &str = "codex";
 /// The response is plain text on stdout.
 pub struct CodexHarness {
     executable: String,
+    default_mode: HarnessMode,
 }
 
 impl CodexHarness {
-    pub fn new(executable: Option<String>) -> Self {
+    pub fn new(executable: Option<String>, default_mode: HarnessMode) -> Self {
         Self {
             executable: executable.unwrap_or_else(|| DEFAULT_EXECUTABLE.to_string()),
+            default_mode,
         }
     }
 }
@@ -42,7 +44,11 @@ impl AcpHarness for CodexHarness {
     }
 
     fn mode(&self) -> HarnessMode {
-        HarnessMode::Oneshot
+        self.default_mode
+    }
+
+    fn supported_modes(&self) -> Vec<HarnessMode> {
+        vec![HarnessMode::Oneshot, HarnessMode::NativeAcp]
     }
 
     fn build_config(&self, cwd: Option<&str>) -> HarnessConfig {

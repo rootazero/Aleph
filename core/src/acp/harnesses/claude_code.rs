@@ -21,12 +21,14 @@ const DEFAULT_EXECUTABLE: &str = "claude";
 /// The response is a JSON object with a `result` field containing the text.
 pub struct ClaudeCodeHarness {
     executable: String,
+    default_mode: HarnessMode,
 }
 
 impl ClaudeCodeHarness {
-    pub fn new(executable: Option<String>) -> Self {
+    pub fn new(executable: Option<String>, default_mode: HarnessMode) -> Self {
         Self {
             executable: executable.unwrap_or_else(|| DEFAULT_EXECUTABLE.to_string()),
+            default_mode,
         }
     }
 }
@@ -42,7 +44,11 @@ impl AcpHarness for ClaudeCodeHarness {
     }
 
     fn mode(&self) -> HarnessMode {
-        HarnessMode::Oneshot
+        self.default_mode
+    }
+
+    fn supported_modes(&self) -> Vec<HarnessMode> {
+        vec![HarnessMode::Oneshot, HarnessMode::NativeAcp]
     }
 
     fn build_config(&self, cwd: Option<&str>) -> HarnessConfig {
