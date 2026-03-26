@@ -30,4 +30,24 @@ pub trait MediaCapability: Send + Sync {
             "audio device listing not available on this platform".into(),
         ))
     }
+
+    /// Record audio from the default microphone.
+    async fn record_audio(&self, config: AudioRecordConfig) -> Result<AudioRecordResult> {
+        let _ = config;
+        Err(crate::DesktopError::NotImplemented(
+            "audio recording not available on this platform".into(),
+        ))
+    }
+
+    /// Transcribe an audio file to text using on-device speech recognition.
+    async fn speech_to_text(
+        &self,
+        audio_path: &str,
+        config: SpeechToTextConfig,
+    ) -> Result<SpeechToTextResult> {
+        let _ = (audio_path, config);
+        Err(crate::DesktopError::NotImplemented(
+            "speech to text not available on this platform".into(),
+        ))
+    }
 }

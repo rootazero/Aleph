@@ -65,6 +65,61 @@ pub struct CameraClipResult {
     pub has_audio: bool,
 }
 
+/// Speech-to-text configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SpeechToTextConfig {
+    /// Recognition language (e.g., "zh-Hans", "en-US"). Default: "en-US".
+    pub language: String,
+}
+
+impl Default for SpeechToTextConfig {
+    fn default() -> Self {
+        Self {
+            language: "en-US".to_string(),
+        }
+    }
+}
+
+/// Speech-to-text result.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SpeechToTextResult {
+    /// Transcribed text.
+    pub text: String,
+    /// Language used for recognition.
+    pub language: String,
+}
+
+/// Audio recording configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AudioRecordConfig {
+    /// Recording duration in seconds. Clamped to [0.25, 300.0]. Default: 5.0.
+    pub duration_secs: f64,
+}
+
+impl AudioRecordConfig {
+    pub fn clamped(mut self) -> Self {
+        self.duration_secs = self.duration_secs.clamp(0.25, 300.0);
+        self
+    }
+}
+
+impl Default for AudioRecordConfig {
+    fn default() -> Self {
+        Self { duration_secs: 5.0 }
+    }
+}
+
+/// Audio recording result.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AudioRecordResult {
+    /// Absolute path to the recorded audio file.
+    pub file_path: String,
+    /// Actual recording duration in seconds.
+    pub duration_secs: f64,
+    /// Audio format (e.g., "m4a").
+    pub format: String,
+}
+
 /// Information about an audio input device.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AudioDeviceInfo {
