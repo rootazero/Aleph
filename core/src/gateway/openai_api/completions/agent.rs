@@ -39,6 +39,7 @@ struct SseEventEmitter {
     model: String,
     created: u64,
     seq: std::sync::atomic::AtomicU64,
+    tool_tracker: std::sync::Mutex<stream::ToolCallTracker>,
 }
 
 impl SseEventEmitter {
@@ -49,6 +50,7 @@ impl SseEventEmitter {
             model,
             created,
             seq: std::sync::atomic::AtomicU64::new(0),
+            tool_tracker: std::sync::Mutex::new(stream::ToolCallTracker::default()),
         }
     }
 
@@ -100,13 +102,18 @@ impl EventEmitter for SseEventEmitter {
                 params,
                 ..
             } => {
+                let idx = self
+                    .tool_tracker
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .index_for(&tool_id);
                 let arguments = serde_json::to_string(&params).unwrap_or_default();
                 let chunk = self.make_chunk(
                     Delta {
                         content: None,
                         role: None,
                         tool_calls: Some(vec![DeltaToolCall {
-                            index: 0,
+                            index: idx,
                             id: Some(tool_id),
                             r#type: Some("function".to_string()),
                             function: Some(DeltaFunction {
@@ -121,20 +128,12 @@ impl EventEmitter for SseEventEmitter {
             }
 
             StreamEvent::RunComplete { summary, .. } => {
-                // Emit a final chunk with finish_reason "stop", then [DONE]
-                let chunk = self.make_chunk(
-                    Delta {
-                        content: None,
-                        role: None,
-                        tool_calls: None,
-                    },
-                    Some("stop".to_string()),
-                );
-                let usage_chunk = ChatCompletionChunk {
+                // Single final chunk with finish_reason + usage + [DONE]
+                let chunk = ChatCompletionChunk {
                     usage: Some(Usage {
                         prompt_tokens: 0,
                         completion_tokens: 0,
-                        total_tokens: summary.total_tokens as u32,
+                        total_tokens: u32::try_from(summary.total_tokens).unwrap_or(u32::MAX),
                     }),
                     ..self.make_chunk(
                         Delta {
@@ -145,13 +144,7 @@ impl EventEmitter for SseEventEmitter {
                         Some("stop".to_string()),
                     )
                 };
-                let frame = format!(
-                    "{}{}{}",
-                    stream::sse_data(&chunk),
-                    stream::sse_data(&usage_chunk),
-                    SSE_DONE
-                );
-                // Send directly — we combine stop + usage + DONE
+                let frame = format!("{}{}", stream::sse_data(&chunk), SSE_DONE);
                 self.tx
                     .send(frame)
                     .await

@@ -316,7 +316,7 @@ impl GatewayServer {
         // OpenAI-compatible API routes (/v1/models, /v1/health, /v1/chat/completions)
         let openai_state = Arc::new(OpenAiApiState {
             server_id: format!("aleph-{}", self.addr),
-            api_token: None, // Auth handled by HTTP middleware layer
+            api_token: None, // Phase 1: auth intentionally open (self-hosted single-user)
             execution_adapter: self.execution_adapter.clone(),
             provider_map: self.openai_provider_map.clone(),
             agent_registry: self.openai_agent_registry.clone(),
