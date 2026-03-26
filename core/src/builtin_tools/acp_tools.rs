@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use tracing::info;
 
 use super::{notify_tool_result, notify_tool_start};
+use crate::acp::harness::HarnessMode;
 use crate::acp::manager::AcpHarnessManager;
 use crate::error::{AlephError, Result};
 use crate::sync_primitives::Arc;
@@ -25,6 +26,10 @@ pub struct AcpDelegateArgs {
     pub prompt: String,
     /// Working directory for the agent session. Defaults to home directory if not specified.
     pub cwd: Option<String>,
+    /// Execution mode override: "oneshot" or "native_acp". If not specified, uses the harness default.
+    pub mode: Option<String>,
+    /// Whether to reuse an existing session for multi-step continuity (native_acp mode only). Defaults to true.
+    pub reuse_session: Option<bool>,
 }
 
 /// Output from ACP delegate tools.
@@ -39,6 +44,17 @@ pub struct AcpDelegateOutput {
 // =============================================================================
 // Helper: resolve cwd
 // =============================================================================
+
+fn parse_mode(s: &str) -> Result<HarnessMode> {
+    match s {
+        "oneshot" => Ok(HarnessMode::Oneshot),
+        "native_acp" => Ok(HarnessMode::NativeAcp),
+        _ => Err(AlephError::tool(format!(
+            "Invalid mode '{}'. Use 'oneshot' or 'native_acp'.",
+            s
+        ))),
+    }
+}
 
 fn resolve_cwd(cwd: Option<&str>) -> String {
     cwd.map(|s| s.to_string()).unwrap_or_else(|| {
@@ -68,7 +84,10 @@ impl ClaudeCodeTool {
 impl AlephTool for ClaudeCodeTool {
     const NAME: &'static str = "claude_code";
     const DESCRIPTION: &'static str =
-        "Delegate a coding task to Claude Code CLI. Use when you need Claude Code's specialized coding capabilities with direct file system access.";
+        "Delegate a coding task to Claude Code CLI. Supports two modes: \
+         'oneshot' (fresh process per prompt, default) and 'native_acp' \
+         (persistent session with context continuity). Set reuse_session \
+         to maintain context across multi-step workflows.";
 
     type Args = AcpDelegateArgs;
     type Output = AcpDelegateOutput;
@@ -78,7 +97,9 @@ impl AlephTool for ClaudeCodeTool {
         notify_tool_start(Self::NAME, &args_summary);
 
         let cwd = resolve_cwd(args.cwd.as_deref());
-        let result = self.manager.prompt("claude-code", &args.prompt, &cwd, None, true, None).await;
+        let mode = args.mode.as_deref().map(parse_mode).transpose()?;
+        let reuse = args.reuse_session.unwrap_or(true);
+        let result = self.manager.prompt("claude-code", &args.prompt, &cwd, mode, reuse, None).await;
 
         match result {
             Ok(text) => {
@@ -116,7 +137,8 @@ impl CodexTool {
 impl AlephTool for CodexTool {
     const NAME: &'static str = "codex";
     const DESCRIPTION: &'static str =
-        "Delegate a coding task to OpenAI Codex CLI. Use when you need Codex's code generation capabilities with direct file system access.";
+        "Delegate a coding task to OpenAI Codex CLI. Supports 'oneshot' (default) \
+         and 'native_acp' modes. Set reuse_session for multi-step continuity.";
 
     type Args = AcpDelegateArgs;
     type Output = AcpDelegateOutput;
@@ -126,7 +148,9 @@ impl AlephTool for CodexTool {
         notify_tool_start(Self::NAME, &args_summary);
 
         let cwd = resolve_cwd(args.cwd.as_deref());
-        let result = self.manager.prompt("codex", &args.prompt, &cwd, None, true, None).await;
+        let mode = args.mode.as_deref().map(parse_mode).transpose()?;
+        let reuse = args.reuse_session.unwrap_or(true);
+        let result = self.manager.prompt("codex", &args.prompt, &cwd, mode, reuse, None).await;
 
         match result {
             Ok(text) => {
@@ -164,7 +188,8 @@ impl GeminiCliTool {
 impl AlephTool for GeminiCliTool {
     const NAME: &'static str = "gemini_cli";
     const DESCRIPTION: &'static str =
-        "Delegate a task to Google Gemini CLI. Use when you need Gemini's capabilities with direct file system access.";
+        "Delegate a task to Google Gemini CLI. Supports 'native_acp' (default, persistent session) \
+         and 'oneshot' modes. Set reuse_session for multi-step continuity.";
 
     type Args = AcpDelegateArgs;
     type Output = AcpDelegateOutput;
@@ -174,7 +199,9 @@ impl AlephTool for GeminiCliTool {
         notify_tool_start(Self::NAME, &args_summary);
 
         let cwd = resolve_cwd(args.cwd.as_deref());
-        let result = self.manager.prompt("gemini", &args.prompt, &cwd, None, true, None).await;
+        let mode = args.mode.as_deref().map(parse_mode).transpose()?;
+        let reuse = args.reuse_session.unwrap_or(true);
+        let result = self.manager.prompt("gemini", &args.prompt, &cwd, mode, reuse, None).await;
 
         match result {
             Ok(text) => {
@@ -337,6 +364,8 @@ mod tests {
         let args: AcpDelegateArgs = serde_json::from_str(json).unwrap();
         assert_eq!(args.prompt, "Fix the bug");
         assert_eq!(args.cwd, Some("/home/user/project".to_string()));
+        assert_eq!(args.mode, None);
+        assert_eq!(args.reuse_session, None);
     }
 
     #[test]
@@ -345,6 +374,28 @@ mod tests {
         let args: AcpDelegateArgs = serde_json::from_str(json).unwrap();
         assert_eq!(args.prompt, "Fix the bug");
         assert_eq!(args.cwd, None);
+        assert_eq!(args.mode, None);
+        assert_eq!(args.reuse_session, None);
+    }
+
+    #[test]
+    fn test_delegate_args_with_mode_and_reuse() {
+        let json = r#"{"prompt": "task", "mode": "native_acp", "reuse_session": false}"#;
+        let args: AcpDelegateArgs = serde_json::from_str(json).unwrap();
+        assert_eq!(args.mode, Some("native_acp".to_string()));
+        assert_eq!(args.reuse_session, Some(false));
+    }
+
+    #[test]
+    fn test_parse_mode_valid() {
+        assert!(matches!(parse_mode("oneshot"), Ok(HarnessMode::Oneshot)));
+        assert!(matches!(parse_mode("native_acp"), Ok(HarnessMode::NativeAcp)));
+    }
+
+    #[test]
+    fn test_parse_mode_invalid() {
+        assert!(parse_mode("unknown").is_err());
+        assert!(parse_mode("").is_err());
     }
 
     #[test]
