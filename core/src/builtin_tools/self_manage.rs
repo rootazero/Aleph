@@ -58,7 +58,6 @@ impl Default for SelfManageTool {
         let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/tmp"));
         let aleph_home = home.join(".aleph");
         Self::new(vec![
-            aleph_home.join("skills-official"),
             aleph_home.join("skills"),
         ])
     }

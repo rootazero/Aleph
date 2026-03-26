@@ -275,14 +275,7 @@ pub fn get_all_skills_dirs(project_dir: Option<&std::path::Path>) -> Result<Vec<
     if let Ok(home) = get_home_dir() {
         info!(home = %home.display(), "Checking global directories");
 
-        // ~/.aleph/skills-official (official, read-only)
-        let global_official = home.join(".aleph").join("skills-official");
-        if global_official.is_dir() && !dirs.contains(&global_official) {
-            info!(path = %global_official.display(), "Found global ~/.aleph/skills-official");
-            dirs.push(global_official);
-        }
-
-        // ~/.aleph/skills (user custom)
+        // ~/.aleph/skills (user + official bundled skills)
         let global_aleph = home.join(".aleph").join("skills");
         if global_aleph.is_dir() && !dirs.contains(&global_aleph) {
             info!(path = %global_aleph.display(), "Found global ~/.aleph/skills");
