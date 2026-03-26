@@ -1,24 +1,24 @@
-//! Codex harness adapter — oneshot mode.
+//! Codex harness adapter — oneshot and native ACP modes.
 //!
-//! Codex CLI does not support ACP protocol. Instead, we use:
-//! `codex exec "<prompt>"`
+//! Oneshot mode: `codex exec "<prompt>"`
+//! Native ACP mode: `codex --acp` (persistent stdio session)
 //!
-//! This spawns a fresh process per prompt and returns plain text output.
+//! Default mode is Oneshot; NativeAcp can be selected via config.
 
 use async_trait::async_trait;
 use tokio::process::Command;
 use tracing::{debug, error};
 
 use crate::acp::harness::{AcpHarness, HarnessMode};
-use crate::acp::session::HarnessConfig;
+use crate::acp::session::{AcpSession, HarnessConfig};
 use crate::error::{AlephError, Result};
 
 const DEFAULT_EXECUTABLE: &str = "codex";
 
-/// ACP harness for Codex CLI (oneshot mode).
+/// ACP harness for Codex CLI (oneshot and native ACP modes).
 ///
-/// Each prompt spawns: `codex exec "<prompt>"`
-/// The response is plain text on stdout.
+/// Oneshot: spawns `codex exec "<prompt>"` per request.
+/// NativeAcp: spawns `codex --acp` as a persistent stdio session.
 pub struct CodexHarness {
     executable: String,
     default_mode: HarnessMode,
@@ -88,5 +88,18 @@ impl AcpHarness for CodexHarness {
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         Ok(stdout.trim().to_string())
+    }
+
+    async fn spawn_session(&self, cwd: Option<&str>) -> Result<AcpSession> {
+        let config = HarnessConfig {
+            executable: self.executable.clone(),
+            args: vec!["--acp".to_string()],
+            cwd: cwd.map(String::from),
+            ..Default::default()
+        };
+        let timeout = config.timeout;
+        let mut session = AcpSession::spawn(self.id(), &config).await?;
+        session.initialize(timeout).await?;
+        Ok(session)
     }
 }
