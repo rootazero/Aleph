@@ -142,6 +142,11 @@ pub struct BuiltinToolRegistry {
     pub(crate) task_update_tool: Option<crate::builtin_tools::task_manage::TaskUpdateTool>,
     pub(crate) task_list_tool: Option<crate::builtin_tools::task_manage::TaskListTool>,
     pub(crate) task_wait_tool: Option<crate::builtin_tools::task_manage::TaskWaitTool>,
+    /// Team management tools (optional — require TeamStore)
+    pub(crate) team_create_tool: Option<crate::builtin_tools::team::TeamCreateTool>,
+    pub(crate) team_delegate_tool: Option<crate::builtin_tools::team::TeamDelegateTool>,
+    pub(crate) team_status_tool: Option<crate::builtin_tools::team::TeamStatusTool>,
+    pub(crate) team_disband_tool: Option<crate::builtin_tools::team::TeamDisbandTool>,
     /// Channel registry for deferred injection (same pattern as gateway_context).
     /// Used by channel_pairing tool.
     pub(crate) channel_registry_cell: Arc<tokio::sync::OnceCell<Arc<ChannelRegistry>>>,
@@ -554,6 +559,24 @@ impl ToolRegistry for BuiltinToolRegistry {
             }),
             "task_wait" => Box::pin(async move {
                 let tool = self.task_wait_tool.as_ref().ok_or_else(|| AlephError::tool("task_wait not available: no CoordTaskStore or AgentMessageBus configured"))?;
+                tool.call_json(arguments).await
+            }),
+
+            // Team management tools
+            "team_create" => Box::pin(async move {
+                let tool = self.team_create_tool.as_ref().ok_or_else(|| AlephError::tool("team_create not available: no TeamStore configured"))?;
+                tool.call_json(arguments).await
+            }),
+            "team_delegate" => Box::pin(async move {
+                let tool = self.team_delegate_tool.as_ref().ok_or_else(|| AlephError::tool("team_delegate not available: no TeamStore configured"))?;
+                tool.call_json(arguments).await
+            }),
+            "team_status" => Box::pin(async move {
+                let tool = self.team_status_tool.as_ref().ok_or_else(|| AlephError::tool("team_status not available: no TeamStore configured"))?;
+                tool.call_json(arguments).await
+            }),
+            "team_disband" => Box::pin(async move {
+                let tool = self.team_disband_tool.as_ref().ok_or_else(|| AlephError::tool("team_disband not available: no TeamStore configured"))?;
                 tool.call_json(arguments).await
             }),
 

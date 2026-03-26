@@ -126,6 +126,45 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         }
     };
 
+    // Create team store (SQLite-backed team management for team tools).
+    let team_store: Option<Arc<dyn alephcore::teams::TeamStore>> = {
+        use alephcore::teams::SqliteTeamStore;
+        use alephcore::utils::paths::get_data_dir;
+
+        let db_path = get_data_dir()
+            .unwrap_or_else(|_| std::env::temp_dir().join("aleph_data"))
+            .join("teams.db");
+
+        match rusqlite::Connection::open(&db_path) {
+            Ok(conn) => {
+                let store = Arc::new(SqliteTeamStore::new(conn));
+                let store_clone = Arc::clone(&store);
+                match tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current().block_on(store_clone.migrate())
+                }) {
+                    Ok(()) => {
+                        if !daemon {
+                            println!("  Team store initialized (SQLite)");
+                        }
+                        Some(store as Arc<dyn alephcore::teams::TeamStore>)
+                    }
+                    Err(e) => {
+                        if !daemon {
+                            eprintln!("Warning: Team store migration failed: {}. Team management tools disabled.", e);
+                        }
+                        None
+                    }
+                }
+            }
+            Err(e) => {
+                if !daemon {
+                    eprintln!("Warning: Failed to open teams.db: {}. Team management tools disabled.", e);
+                }
+                None
+            }
+        }
+    };
+
     // Initialize SwarmCoordinator and attach the coord task store.
     let swarm_coordinator: Option<Arc<alephcore::agents::swarm::SwarmCoordinator>> = {
         use alephcore::agents::swarm::{SwarmCoordinator, SwarmConfig};
@@ -411,6 +450,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             memory_similarity_threshold: Some(app_config.memory.similarity_threshold),
             coord_task_store: coord_store.clone(),
             agent_message_bus: agent_message_bus.clone(),
+            team_store: team_store.clone(),
             browser_profile_manager: Some(std::sync::Arc::new(
                 alephcore::browser::manager::ProfileManager::new(app_config.general.browser.clone()),
             )),

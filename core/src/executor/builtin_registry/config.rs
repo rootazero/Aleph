@@ -66,6 +66,8 @@ pub struct BuiltinToolConfig {
     pub coord_task_store: Option<Arc<dyn crate::agents::swarm::tasks::CoordTaskStore>>,
     /// Agent message bus for task update/wait event notifications
     pub agent_message_bus: Option<Arc<crate::agents::swarm::AgentMessageBus>>,
+    /// Team store for team management tools (team_create, team_delegate, team_status, team_disband)
+    pub team_store: Option<Arc<dyn crate::teams::TeamStore>>,
     /// Sub-agent registry for team management tools
     pub sub_agent_registry: Option<Arc<crate::agents::sub_agents::SubAgentRegistry>>,
     /// Current agent ID for team tools (leader identity)

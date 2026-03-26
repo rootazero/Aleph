@@ -297,6 +297,27 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         description: "Search, browse, install, and update skills from ClawHub registry",
         requires_config: false,
     },
+    // Team management tools — require TeamStore
+    BuiltinToolDefinition {
+        name: "team_create",
+        description: "Create a new team with the calling agent as leader, enrolling existing or inline-created members",
+        requires_config: true,
+    },
+    BuiltinToolDefinition {
+        name: "team_delegate",
+        description: "Delegate a task to a team member, execute it, and return the result",
+        requires_config: true,
+    },
+    BuiltinToolDefinition {
+        name: "team_status",
+        description: "Query the current state of a team, including members and task history",
+        requires_config: true,
+    },
+    BuiltinToolDefinition {
+        name: "team_disband",
+        description: "Mark a team as disbanded (preserved for history, cannot be undone)",
+        requires_config: true,
+    },
     // Task coordination tools — require CoordTaskStore
     BuiltinToolDefinition {
         name: "task_create",
@@ -419,6 +440,9 @@ pub fn create_tool_boxed(
         }
         "clawhub" => Some(Box::new(crate::builtin_tools::clawhub::ClawHubTool::new())),
         "media_send" => Some(Box::new(crate::builtin_tools::media_send::MediaSendTool::new())),
+        // Team management tools require TeamStore at runtime,
+        // created dynamically in BuiltinToolRegistry::with_config().
+        "team_create" | "team_delegate" | "team_status" | "team_disband" => None,
         // Task coordination tools require CoordTaskStore + AgentMessageBus at runtime,
         // created dynamically in BuiltinToolRegistry::with_config().
         "task_create" | "task_update" | "task_list" | "task_wait" => None,

@@ -367,6 +367,52 @@ impl BuiltinToolRegistry {
                 (None, None, None, None)
             };
 
+        // Add team management tools (if TeamStore is available)
+        let (team_create_tool, team_delegate_tool, team_status_tool, team_disband_tool) =
+            if let Some(ref store) = config.team_store {
+                use crate::builtin_tools::team::{TeamCreateTool, TeamDelegateTool, TeamStatusTool, TeamDisbandTool};
+
+                let agent_registry = config.agent_registry.clone().unwrap_or_else(|| {
+                    Arc::new(crate::gateway::agent_instance::AgentRegistry::new())
+                });
+
+                let create = TeamCreateTool::new(
+                    Arc::clone(store),
+                    agent_registry,
+                    config.agent_manager.clone(),
+                    config.current_agent_id.clone().unwrap_or_else(|| "main".to_string()),
+                );
+                let delegate = TeamDelegateTool::new(Arc::clone(store));
+                let status = TeamStatusTool::new(Arc::clone(store));
+                let disband = TeamDisbandTool::new(Arc::clone(store));
+
+                // Register parameter schemas for team tools
+                {
+                    use crate::tools::AlephTool;
+                    let tool_defs = [
+                        create.definition(),
+                        delegate.definition(),
+                        status.definition(),
+                        disband.definition(),
+                    ];
+                    for td in &tool_defs {
+                        let mut ut = UnifiedTool::new(
+                            format!("builtin:{}", td.name),
+                            &td.name,
+                            &td.description,
+                            ToolSource::Builtin,
+                        );
+                        ut = ut.with_parameters_schema(td.parameters.clone());
+                        tools.insert(td.name.clone(), ut);
+                    }
+                }
+
+                info!("Registered team management tools (team_create, team_delegate, team_status, team_disband)");
+                (Some(create), Some(delegate), Some(status), Some(disband))
+            } else {
+                (None, None, None, None)
+            };
+
         // Initialize tool policy handle (use provided or create a default one)
         let tool_policy_handle = config.tool_policy.clone()
             .or_else(|| Some(crate::builtin_tools::agent_manage::new_tool_policy_handle()));
@@ -472,6 +518,10 @@ impl BuiltinToolRegistry {
             task_update_tool,
             task_list_tool,
             task_wait_tool,
+            team_create_tool,
+            team_delegate_tool,
+            team_status_tool,
+            team_disband_tool,
             tools,
         }
     }

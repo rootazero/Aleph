@@ -147,6 +147,8 @@ pub use vault_store::{VaultAction, VaultStoreArgs, VaultStoreOutput, VaultStoreT
 pub use voice_tools::{VoiceModeSetArgs, VoiceModeSetOutput, VoiceModeSetTool};
 pub use team::{
     CreateAgentSpec, EnrolledMember, MemberSpec, TeamCreateArgs, TeamCreateOutput, TeamCreateTool,
+    TeamDelegateArgs, TeamDelegateOutput, TeamDelegateTool,
+    TeamStatusArgs, TeamStatusOutput, TeamStatusTool,
     TeamDisbandArgs, TeamDisbandOutput, TeamDisbandTool,
 };
 
