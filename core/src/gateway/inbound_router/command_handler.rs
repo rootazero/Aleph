@@ -71,6 +71,16 @@ pub(super) fn serialize_intent_result(result: &IntentResult) -> Option<String> {
 }
 
 impl InboundMessageRouter {
+    /// Resolve user locale from app config.
+    pub(super) async fn resolve_locale(&self) -> crate::gateway::i18n::Locale {
+        if let Some(ref cfg) = self.app_config {
+            let cfg = cfg.read().await;
+            crate::gateway::i18n::Locale::from_config(cfg.general.language.as_deref())
+        } else {
+            crate::gateway::i18n::Locale::Zh
+        }
+    }
+
     /// Handle /btw command: ephemeral sidebar conversation that doesn't affect context.
     ///
     /// Creates a SessionKey::Ephemeral so the question/answer is not persisted
@@ -142,8 +152,12 @@ impl InboundMessageRouter {
         }
 
         // Send confirmation reply
+        let locale = self.resolve_locale().await;
         let topic_suffix = topic.map(|t| format!(" ({})", t)).unwrap_or_default();
-        let reply_text = format!("新对话已开始{}", topic_suffix);
+        let reply_text = crate::gateway::i18n::t(
+            crate::gateway::i18n::Msg::NewSessionStarted { topic_suffix: &topic_suffix },
+            locale,
+        );
         let reply = OutboundMessage::text(msg.conversation_id.as_str(), &reply_text);
         if let Err(e) = self.channel_registry.send(&msg.channel_id, reply).await {
             error!("[Router] Failed to send /new reply: {}", e);
@@ -176,9 +190,10 @@ impl InboundMessageRouter {
             .collect::<Vec<_>>()
             .join("\n");
 
-        let prompt = format!(
-            "用一句简短的中文概括以下对话的主题（10字以内，不要标点符号）：\n\n{}",
-            conversation
+        let locale = self.resolve_locale().await;
+        let prompt = crate::gateway::i18n::t(
+            crate::gateway::i18n::Msg::TopicGenerationPrompt { conversation: &conversation },
+            locale,
         );
 
         let __msgs = [UnifiedMessage::user(&prompt)];

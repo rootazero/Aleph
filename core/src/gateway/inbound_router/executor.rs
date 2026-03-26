@@ -149,6 +149,13 @@ impl InboundMessageRouter {
         let mut metadata = HashMap::new();
         metadata.insert("channel_id".to_string(), ctx.message.channel_id.as_str().to_string());
         metadata.insert("sender_id".to_string(), ctx.sender_normalized.clone());
+
+        // Inject user locale for downstream i18n (run_loop, error messages)
+        if let Some(ref cfg) = self.app_config {
+            let cfg = cfg.read().await;
+            let lang = cfg.general.language.as_deref().unwrap_or("zh");
+            metadata.insert("locale".to_string(), lang.to_string());
+        }
         let is_slash = slash_command_mode.is_some();
         if let Some(mode) = slash_command_mode {
             metadata.insert(SLASH_COMMAND_MODE_KEY.to_string(), mode);
@@ -194,9 +201,30 @@ impl InboundMessageRouter {
         );
 
         // Spawn the execution task (non-blocking)
+        let error_channel_registry = self.channel_registry.clone();
+        let error_reply_route = ctx.reply_route.clone();
+        let error_app_config = self.app_config.clone();
         tokio::spawn(async move {
             if let Err(e) = execution_adapter.execute(request, agent, emitter).await {
                 error!("Agent execution failed (run_id: {}): {}", run_id, e);
+
+                // Resolve user locale from config
+                let locale = if let Some(ref cfg) = error_app_config {
+                    let cfg = cfg.read().await;
+                    crate::gateway::i18n::Locale::from_config(cfg.general.language.as_deref())
+                } else {
+                    crate::gateway::i18n::Locale::Zh
+                };
+
+                // Send error feedback to user so they know what happened
+                let user_msg = crate::gateway::i18n::format_execution_error(&e.to_string(), locale);
+                let reply = crate::gateway::channel::OutboundMessage::text(
+                    error_reply_route.conversation_id.as_str(),
+                    &user_msg,
+                );
+                if let Err(send_err) = error_channel_registry.send(&error_reply_route.channel_id, reply).await {
+                    error!("Failed to send error reply: {}", send_err);
+                }
             }
         });
 
@@ -251,3 +279,4 @@ impl InboundMessageRouter {
         ))
     }
 }
+
