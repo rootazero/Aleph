@@ -159,7 +159,7 @@ impl AcpHarnessEntry {
                 "--output-format".into(),
                 "json".into(),
             ],
-            mode: HarnessModeSerde::NativeAcp,
+            mode: HarnessModeSerde::Oneshot,
             output_format: OutputFormatSerde::Json {
                 field: "result".into(),
             },
@@ -174,7 +174,7 @@ impl AcpHarnessEntry {
             display_name: "Codex".into(),
             executable: Some("codex".into()),
             args: vec!["exec".into()],
-            mode: HarnessModeSerde::NativeAcp,
+            mode: HarnessModeSerde::Oneshot,
             output_format: OutputFormatSerde::PlainText,
             preset: Some(PRESET_CODEX.into()),
             ..Default::default()
@@ -211,5 +211,31 @@ impl AcpHarnessEntry {
     /// Check whether a string is a known preset id
     pub fn is_preset_id(id: &str) -> bool {
         Self::preset_ids().contains(&id)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_preset_modes() {
+        let claude_code = AcpHarnessEntry::preset_claude_code();
+        assert_eq!(
+            claude_code.mode, HarnessModeSerde::Oneshot,
+            "Claude Code preset should have mode=Oneshot"
+        );
+
+        let codex = AcpHarnessEntry::preset_codex();
+        assert_eq!(
+            codex.mode, HarnessModeSerde::Oneshot,
+            "Codex preset should have mode=Oneshot"
+        );
+
+        let gemini = AcpHarnessEntry::preset_gemini();
+        assert_eq!(
+            gemini.mode, HarnessModeSerde::NativeAcp,
+            "Gemini preset should have mode=NativeAcp"
+        );
     }
 }
