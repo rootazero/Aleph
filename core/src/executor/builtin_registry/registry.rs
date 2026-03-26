@@ -64,6 +64,8 @@ pub struct BuiltinToolRegistry {
     pub(crate) automation_tool: crate::builtin_tools::AutomationTool,
     /// Permission tool instance (TCC permission detection and request)
     pub(crate) permission_tool: crate::builtin_tools::PermissionTool,
+    /// Media tool instance (camera capture, audio device management)
+    pub(crate) media_tool: crate::builtin_tools::MediaTool,
     /// Desktop platform reference (shared with new tools; held for future use)
     #[allow(dead_code)]
     pub(crate) desktop_platform: crate::sync_primitives::Arc<dyn aleph_desktop::DesktopPlatform>,
@@ -354,6 +356,7 @@ impl ToolRegistry for BuiltinToolRegistry {
             "system" => Box::pin(async move { self.system_tool.call_json(arguments).await }),
             "automation" => Box::pin(async move { self.automation_tool.call_json(arguments).await }),
             "permission" => Box::pin(async move { self.permission_tool.call_json(arguments).await }),
+            "media" => Box::pin(async move { self.media_tool.call_json(arguments).await }),
             "scratchpad" => Box::pin(async move { self.scratchpad_tool.call_json(arguments).await }),
 
             // Memory tools - search and browse personal memory

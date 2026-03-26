@@ -1,6 +1,7 @@
 //! macOS platform implementation for Aleph desktop capabilities.
 
 mod automation;
+mod media;
 mod permission;
 mod pim;
 mod system;
@@ -13,6 +14,7 @@ use aleph_desktop::NativeScreen;
 use aleph_desktop::DesktopPlatform;
 
 use automation::MacOSAutomation;
+use media::MacOSMedia;
 use permission::MacOSPermission;
 use pim::MacOSPim;
 use system::MacOSSystem;
@@ -21,6 +23,7 @@ use system::MacOSSystem;
 pub struct MacOSPlatform {
     screen: NativeScreen,
     automation: MacOSAutomation,
+    media: MacOSMedia,
     permission: MacOSPermission,
     pim: MacOSPim,
     system: MacOSSystem,
@@ -32,6 +35,7 @@ impl MacOSPlatform {
         Self {
             screen: NativeScreen::new(),
             automation: MacOSAutomation::new(),
+            media: MacOSMedia::new(),
             permission: MacOSPermission::new(),
             pim: MacOSPim::new(),
             system: MacOSSystem::new(),
@@ -71,7 +75,7 @@ impl DesktopPlatform for MacOSPlatform {
     }
 
     fn media(&self) -> Option<&dyn MediaCapability> {
-        None // TODO: wire MacOSMedia after implementation
+        Some(&self.media)
     }
 }
 

@@ -60,6 +60,7 @@ pub mod permission_tool;
 pub mod pim;
 pub mod browser;
 pub mod browser_tools;
+pub mod media_tool;
 pub mod media_tools;
 pub mod scratchpad;
 pub mod vision;
@@ -111,6 +112,7 @@ pub use mcp_prompt::{McpGetPromptArgs, McpGetPromptOutput, McpGetPromptTool, Pro
 pub use desktop::{DesktopArgs, DesktopOutput, DesktopTool};
 pub use system_tool::{SystemArgs, SystemOutput, SystemTool};
 pub use automation_tool::{AutomationArgs, AutomationOutput, AutomationTool};
+pub use media_tool::{MediaArgs, MediaOutput, MediaTool};
 pub use permission_tool::{PermissionArgs, PermissionOutput, PermissionTool};
 pub use pim::{PimArgs, PimOutput, PimTool};
 pub use browser::{BrowserAction, BrowserArgs, BrowserOutput, BrowserTool};

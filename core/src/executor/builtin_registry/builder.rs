@@ -9,7 +9,7 @@ use crate::sync_primitives::Arc;
 
 use tracing::info;
 
-use crate::builtin_tools::{AutomationTool, BashExecTool, CodeExecTool, DesktopTool, FileOpsTool, ImageGenerateTool, MemoryBrowseTool, MemorySearchTool, PdfGenerateTool, PermissionTool, PimTool, ReadConfigGuideTool, SelfManageTool, ScratchpadTool, SearchTool, SystemTool, VaultStoreTool, WebFetchTool};
+use crate::builtin_tools::{AutomationTool, BashExecTool, CodeExecTool, DesktopTool, FileOpsTool, ImageGenerateTool, MediaTool, MemoryBrowseTool, MemorySearchTool, PdfGenerateTool, PermissionTool, PimTool, ReadConfigGuideTool, SelfManageTool, ScratchpadTool, SearchTool, SystemTool, VaultStoreTool, WebFetchTool};
 use crate::builtin_tools::browser_tools::{
     BrowserOpenTool, BrowserClickTool, BrowserTypeTool, BrowserScreenshotTool,
     BrowserSnapshotTool, BrowserNavigateTool, BrowserTabsTool, BrowserSelectTool,
@@ -85,6 +85,7 @@ impl BuiltinToolRegistry {
         let system_tool = SystemTool::new(Arc::clone(&desktop_platform));
         let automation_tool = AutomationTool::new(Arc::clone(&desktop_platform));
         let permission_tool = PermissionTool::new(Arc::clone(&desktop_platform));
+        let media_tool = MediaTool::new(Arc::clone(&desktop_platform));
 
         // PIM tool (Calendar, Reminders, Notes, Contacts via Desktop Bridge)
         let pim_tool = PimTool::new()
@@ -418,6 +419,7 @@ impl BuiltinToolRegistry {
             system_tool,
             automation_tool,
             permission_tool,
+            media_tool,
             desktop_platform,
             scratchpad_tool,
             memory_search_tool,
@@ -556,6 +558,8 @@ impl BuiltinToolRegistry {
             serde_json::to_value(schema_for!(crate::builtin_tools::automation_tool::AutomationArgs)).unwrap_or_default());
         reg(tools, "permission", PermissionTool::DESCRIPTION,
             serde_json::to_value(schema_for!(crate::builtin_tools::permission_tool::PermissionArgs)).unwrap_or_default());
+        reg(tools, "media", MediaTool::DESCRIPTION,
+            serde_json::to_value(schema_for!(crate::builtin_tools::media_tool::MediaArgs)).unwrap_or_default());
         reg(tools, "scratchpad", ScratchpadTool::DESCRIPTION,
             serde_json::to_value(schema_for!(crate::builtin_tools::scratchpad::ScratchpadArgs)).unwrap_or_default());
         reg(tools, "clawhub", crate::builtin_tools::clawhub::ClawHubTool::DESCRIPTION,
