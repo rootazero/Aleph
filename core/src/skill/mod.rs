@@ -30,6 +30,7 @@ use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
 
 use crate::domain::skill::{SkillId, SkillManifest, SkillSource};
+use crate::domain::Entity;
 
 // ---------------------------------------------------------------------------
 // Error type
@@ -94,11 +95,20 @@ struct Inner {
     skill_dirs: RwLock<Vec<PathBuf>>,
     version_counter: RwLock<u64>,
     eligibility: EligibilityService,
+    config: RwLock<SkillsConfig>,
+    config_path: PathBuf,
 }
 
 impl SkillSystem {
     /// Create a new, empty skill system.
     pub fn new() -> Self {
+        let data_dir = dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join(".aleph")
+            .join("data");
+        let config_path = data_dir.join("skills.toml");
+        let config = SkillsConfig::load(&config_path);
+
         Self {
             inner: Arc::new(Inner {
                 registry: RwLock::new(SkillRegistry::new()),
@@ -106,6 +116,8 @@ impl SkillSystem {
                 skill_dirs: RwLock::new(Vec::new()),
                 version_counter: RwLock::new(0),
                 eligibility: EligibilityService::new(),
+                config: RwLock::new(config),
+                config_path,
             }),
         }
     }
@@ -215,6 +227,116 @@ impl SkillSystem {
     pub async fn resolve_command(&self, name: &str) -> Option<SkillCommandSpec> {
         let registry = self.inner.registry.read().await;
         commands::resolve_command(name, &registry)
+    }
+
+    /// Register skills from external sources (plugins, markdown).
+    pub async fn register_external(&self, manifests: Vec<SkillManifest>) {
+        let mut registry = self.inner.registry.write().await;
+        registry.register_all(manifests);
+        drop(registry);
+        self.rebuild_snapshot().await;
+    }
+
+    /// Build full status entries for all skills, incorporating user config.
+    pub async fn full_status(&self) -> Vec<SkillStatusEntry> {
+        let registry = self.inner.registry.read().await;
+        let config = self.inner.config.read().await;
+
+        registry
+            .list_all()
+            .into_iter()
+            .map(|manifest| {
+                let eligibility = self.inner.eligibility.evaluate(manifest);
+                let entry_config = config.get_entry(manifest.id());
+                // Vault integration wired in RPC layer
+                let api_key_set = false;
+                SkillStatusEntry::build(manifest, &eligibility, entry_config, api_key_set)
+            })
+            .collect()
+    }
+
+    /// Update a skill's configuration and persist to disk.
+    pub async fn update_config(
+        &self,
+        id: &SkillId,
+        update: SkillConfigUpdate,
+    ) -> Result<(), std::io::Error> {
+        let mut config = self.inner.config.write().await;
+        config.apply_update(id, update);
+        config.save(&self.inner.config_path)?;
+        drop(config);
+        self.rebuild_snapshot().await;
+        Ok(())
+    }
+
+    /// Install a dependency for a skill.
+    pub async fn install_dependency(
+        &self,
+        id: &SkillId,
+        spec_id: Option<&str>,
+    ) -> InstallResult {
+        let registry = self.inner.registry.read().await;
+        let manifest = match registry.get(id) {
+            Some(m) => m.clone(),
+            None => {
+                return InstallResult {
+                    success: false,
+                    message: format!("Skill not found: {}", id.as_str()),
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    exit_code: None,
+                };
+            }
+        };
+        drop(registry);
+
+        let config = self.inner.config.read().await;
+        let prefs = config.install_preferences.clone();
+        drop(config);
+
+        let spec = if let Some(spec_id) = spec_id {
+            manifest.install_specs().iter().find(|s| s.id == spec_id).cloned()
+        } else {
+            select_best_install(manifest.install_specs(), &prefs).cloned()
+        };
+
+        let spec = match spec {
+            Some(s) => s,
+            None => {
+                return InstallResult {
+                    success: false,
+                    message: "No matching install spec found".to_string(),
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    exit_code: None,
+                };
+            }
+        };
+
+        let result = InstallExecutor::run(&spec, &prefs).await;
+        if result.success {
+            self.rebuild_snapshot().await;
+        }
+        result
+    }
+
+    /// Remove a skill from the registry. Bundled skills cannot be removed.
+    pub async fn remove_skill(&self, id: &SkillId) -> Result<bool, std::io::Error> {
+        let mut registry = self.inner.registry.write().await;
+        if let Some(m) = registry.get(id) {
+            if matches!(m.source(), SkillSource::Bundled) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "Cannot remove bundled skills",
+                ));
+            }
+        }
+        let removed = registry.remove(id);
+        drop(registry);
+        if removed {
+            self.rebuild_snapshot().await;
+        }
+        Ok(removed)
     }
 
     // --- Private helpers ---
@@ -503,5 +625,50 @@ Content."#,
         assert!(is_skill_file(Path::new("/some/dir/skill.md")));
         assert!(!is_skill_file(Path::new("/some/dir/README.md")));
         assert!(!is_skill_file(Path::new("/some/dir/")));
+    }
+
+    #[tokio::test]
+    async fn register_external_skills() {
+        use crate::domain::skill::{PluginId, SkillContent};
+        let system = SkillSystem::new();
+        let manifest = SkillManifest::new(
+            "plugin:test", "Test Plugin Skill", "From a plugin",
+            SkillContent::new("content"), SkillSource::Plugin(PluginId::new("test-plugin")),
+        );
+        system.register_external(vec![manifest]).await;
+        let skills = system.list_skills().await;
+        assert_eq!(skills.len(), 1);
+        assert_eq!(skills[0].name(), "Test Plugin Skill");
+    }
+
+    #[tokio::test]
+    async fn full_status_returns_entries() {
+        use crate::domain::skill::SkillContent;
+        let system = SkillSystem::new();
+        let manifest = SkillManifest::new(
+            "test:skill", "Test Skill", "A test",
+            SkillContent::new("content"), SkillSource::Bundled,
+        );
+        system.register_external(vec![manifest]).await;
+        let entries = system.full_status().await;
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "Test Skill");
+        assert!(entries[0].eligible);
+    }
+
+    #[tokio::test]
+    async fn remove_skill_from_registry() {
+        use crate::domain::skill::SkillContent;
+        let system = SkillSystem::new();
+        let manifest = SkillManifest::new(
+            "test:removable", "Removable", "desc",
+            SkillContent::new("c"), SkillSource::Global,
+        );
+        system.register_external(vec![manifest]).await;
+        assert_eq!(system.list_skills().await.len(), 1);
+
+        let removed = system.remove_skill(&SkillId::new("test:removable")).await.unwrap();
+        assert!(removed);
+        assert_eq!(system.list_skills().await.len(), 0);
     }
 }

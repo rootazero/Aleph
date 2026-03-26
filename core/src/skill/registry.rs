@@ -66,6 +66,11 @@ impl SkillRegistry {
         self.manifests.is_empty()
     }
 
+    /// Remove a skill by ID. Returns true if it existed.
+    pub fn remove(&mut self, id: &SkillId) -> bool {
+        self.manifests.remove(id).is_some()
+    }
+
     /// Remove all registered skills.
     pub fn clear(&mut self) {
         self.manifests.clear();
