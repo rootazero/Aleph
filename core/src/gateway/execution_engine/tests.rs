@@ -1,6 +1,7 @@
 //! Tests for the execution engine module.
 
 use super::*;
+use super::engine::wait_for_deadline;
 use crate::sync_primitives::{AtomicUsize, Ordering};
 
 use crate::gateway::agent_instance::{AgentInstance, AgentInstanceConfig};
@@ -121,4 +122,144 @@ async fn test_simple_execution_engine_run() {
 
     assert!(has_reasoning, "Should have Reasoning event");
     assert!(has_response, "Should have ResponseChunk event");
+}
+
+// =============================================================================
+// Cascade timeout resolution
+// =============================================================================
+
+/// Helper: resolve timeout using the same cascade as engine.rs:349-352
+fn resolve_timeout(
+    request_timeout: Option<u64>,
+    agent_timeout: Option<u64>,
+    engine_default: u64,
+) -> u64 {
+    request_timeout
+        .or(agent_timeout)
+        .unwrap_or(engine_default)
+}
+
+#[test]
+fn test_cascade_request_wins_over_agent_and_global() {
+    assert_eq!(resolve_timeout(Some(30), Some(600), 172_800), 30);
+}
+
+#[test]
+fn test_cascade_agent_wins_over_global() {
+    assert_eq!(resolve_timeout(None, Some(3600), 172_800), 3600);
+}
+
+#[test]
+fn test_cascade_falls_through_to_global() {
+    assert_eq!(resolve_timeout(None, None, 172_800), 172_800);
+}
+
+#[test]
+fn test_cascade_request_overrides_even_when_agent_is_none() {
+    assert_eq!(resolve_timeout(Some(60), None, 172_800), 60);
+}
+
+#[test]
+fn test_cascade_matches_engine_default() {
+    let engine_config = ExecutionEngineConfig::default();
+    assert_eq!(
+        resolve_timeout(None, None, engine_config.default_timeout_secs),
+        172_800
+    );
+}
+
+// =============================================================================
+// wait_for_deadline — resettable deadline behavior
+// =============================================================================
+
+#[tokio::test]
+async fn test_wait_for_deadline_fires_at_deadline() {
+    let deadline = Arc::new(tokio::sync::Mutex::new(
+        tokio::time::Instant::now() + tokio::time::Duration::from_millis(100),
+    ));
+
+    let start = tokio::time::Instant::now();
+    wait_for_deadline(deadline).await;
+    let elapsed = start.elapsed();
+
+    // Should fire after ~100ms (with some tolerance)
+    assert!(
+        elapsed >= tokio::time::Duration::from_millis(80),
+        "fired too early: {:?}",
+        elapsed
+    );
+    assert!(
+        elapsed < tokio::time::Duration::from_millis(500),
+        "fired too late: {:?}",
+        elapsed
+    );
+}
+
+#[tokio::test]
+async fn test_wait_for_deadline_extension_delays_firing() {
+    let deadline = Arc::new(tokio::sync::Mutex::new(
+        tokio::time::Instant::now() + tokio::time::Duration::from_millis(100),
+    ));
+
+    let deadline_clone = deadline.clone();
+
+    // Spawn a task that extends the deadline after 50ms
+    tokio::spawn(async move {
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        // Extend deadline by 200ms from now
+        *deadline_clone.lock().await =
+            tokio::time::Instant::now() + tokio::time::Duration::from_millis(200);
+    });
+
+    let start = tokio::time::Instant::now();
+    wait_for_deadline(deadline).await;
+    let elapsed = start.elapsed();
+
+    // Should fire after ~250ms (50ms wait + 200ms extended), not at 100ms
+    assert!(
+        elapsed >= tokio::time::Duration::from_millis(200),
+        "deadline extension was ignored, fired too early: {:?}",
+        elapsed
+    );
+    assert!(
+        elapsed < tokio::time::Duration::from_secs(1),
+        "fired too late: {:?}",
+        elapsed
+    );
+}
+
+#[tokio::test]
+async fn test_wait_for_deadline_multiple_extensions() {
+    let deadline = Arc::new(tokio::sync::Mutex::new(
+        tokio::time::Instant::now() + tokio::time::Duration::from_millis(50),
+    ));
+
+    let dl = deadline.clone();
+
+    // Extend twice: at 30ms and at 100ms
+    tokio::spawn(async move {
+        tokio::time::sleep(tokio::time::Duration::from_millis(30)).await;
+        *dl.lock().await =
+            tokio::time::Instant::now() + tokio::time::Duration::from_millis(100);
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(80)).await;
+        *dl.lock().await =
+            tokio::time::Instant::now() + tokio::time::Duration::from_millis(100);
+    });
+
+    let start = tokio::time::Instant::now();
+    wait_for_deadline(deadline).await;
+    let elapsed = start.elapsed();
+
+    // Should fire after ~210ms (30 + 80 + 100), not at 50ms
+    assert!(
+        elapsed >= tokio::time::Duration::from_millis(180),
+        "multiple extensions were ignored: {:?}",
+        elapsed
+    );
+    assert!(
+        elapsed < tokio::time::Duration::from_secs(2),
+        "fired too late: {:?}",
+        elapsed
+    );
 }

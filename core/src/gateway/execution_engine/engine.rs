@@ -743,7 +743,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
 ///
 /// The deadline can be extended by compression tasks. This function re-checks
 /// after waking to handle extensions that occurred during sleep.
-async fn wait_for_deadline(deadline: Arc<tokio::sync::Mutex<tokio::time::Instant>>) {
+pub(super) async fn wait_for_deadline(deadline: Arc<tokio::sync::Mutex<tokio::time::Instant>>) {
     loop {
         let dl = *deadline.lock().await;
         tokio::time::sleep_until(dl).await;
