@@ -206,7 +206,7 @@ SkillSystem::full_status():
   2. For each manifest:
      a. EligibilityService::evaluate() → eligible + missing
      b. SkillsConfig::get(id) → enabled override, scope override
-     c. Vault::has_secret("skill:{id}") → api_key_set
+     c. SkillsConfig::has_api_key(id, vault) → api_key_set
      d. filter_install_specs_for_current_os() → install_options
      e. If primary_env set && api_key_set=false → add to missing.env
   3. Assemble SkillStatusEntry
@@ -342,7 +342,7 @@ Before skill execution, if `primary_env` is set and Vault has the key, inject it
 let mut cmd = tokio::process::Command::new(command);
 if let Some(env_name) = &manifest.primary_env {
     if let Ok(Some(secret)) = vault.get_secret(&format!("skill:{}", manifest.id)) {
-        cmd.env(env_name, secret.value());
+        cmd.env(env_name, secret.expose());
     }
 }
 ```
