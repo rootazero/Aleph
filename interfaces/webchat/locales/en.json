@@ -1030,7 +1030,8 @@
       "files": "Files",
       "skills": "Skills",
       "tools": "Tools",
-      "channels": "Channels"
+      "channels": "Channels",
+      "teams": "Teams"
     },
     "overview": {
       "title": "Identity",
@@ -1090,6 +1091,13 @@
       "bound": "BOUND",
       "not_bound": "Not Bound",
       "not_bound_hint": "Go to Settings → Channels to bind this agent"
+    },
+    "teams": {
+      "empty_hint": "To add this agent to a team, ask any agent to create a team with this agent as a member.",
+      "status_active": "Active",
+      "status_disbanded": "Disbanded",
+      "leader": "Leader",
+      "members": "members"
     },
     "skills": {
       "search_placeholder": "Search skills...",

@@ -7,6 +7,7 @@ pub mod files;
 pub mod skills;
 pub mod tools;
 pub mod channels;
+pub mod teams;
 
 use leptos::prelude::*;
 use leptos::task::spawn_local;
@@ -34,6 +35,7 @@ enum AgentTab {
     Skills,
     Tools,
     Channels,
+    Teams,
 }
 
 impl AgentTab {
@@ -44,6 +46,7 @@ impl AgentTab {
             "skills" => Self::Skills,
             "tools" => Self::Tools,
             "channels" => Self::Channels,
+            "teams" => Self::Teams,
             _ => Self::Overview,
         }
     }
@@ -56,17 +59,19 @@ impl AgentTab {
             Self::Skills => "skills",
             Self::Tools => "tools",
             Self::Channels => "channels",
+            Self::Teams => "teams",
         }
     }
 }
 
-const ALL_TABS: [AgentTab; 6] = [
+const ALL_TABS: [AgentTab; 7] = [
     AgentTab::Overview,
     AgentTab::Behavior,
     AgentTab::Files,
     AgentTab::Skills,
     AgentTab::Tools,
     AgentTab::Channels,
+    AgentTab::Teams,
 ];
 
 #[component]
@@ -195,6 +200,7 @@ pub fn AgentsView() -> impl IntoView {
                                     AgentTab::Skills => t_string!(i18n, agents.tabs.skills).to_string(),
                                     AgentTab::Tools => t_string!(i18n, agents.tabs.tools).to_string(),
                                     AgentTab::Channels => t_string!(i18n, agents.tabs.channels).to_string(),
+                                    AgentTab::Teams => t_string!(i18n, agents.tabs.teams).to_string(),
                                 };
                                 view! {
                                     <a
@@ -222,6 +228,7 @@ pub fn AgentsView() -> impl IntoView {
                                 AgentTab::Skills => view! { <skills::SkillsTab agent_id=current_id.clone() /> }.into_any(),
                                 AgentTab::Tools => view! { <tools::ToolsTab agent_id=current_id.clone() /> }.into_any(),
                                 AgentTab::Channels => view! { <channels::ChannelsTab agent_id=current_id.clone() /> }.into_any(),
+                                AgentTab::Teams => view! { <teams::TeamsTab agent_id=current_id.clone() /> }.into_any(),
                             }}
                         </div>
                     </div>

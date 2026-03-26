@@ -1030,7 +1030,8 @@
       "files": "文件",
       "skills": "技能",
       "tools": "工具",
-      "channels": "频道"
+      "channels": "频道",
+      "teams": "团队"
     },
     "overview": {
       "title": "身份",
@@ -1090,6 +1091,13 @@
       "bound": "已绑定",
       "not_bound": "未绑定",
       "not_bound_hint": "请在 设置 → 频道 中绑定此智能体"
+    },
+    "teams": {
+      "empty_hint": "要将此智能体加入团队，请让任意智能体创建一个包含此智能体作为成员的团队。",
+      "status_active": "活跃",
+      "status_disbanded": "已解散",
+      "leader": "队长",
+      "members": "成员"
     },
     "skills": {
       "search_placeholder": "搜索技能...",
