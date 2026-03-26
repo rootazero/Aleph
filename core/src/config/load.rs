@@ -152,6 +152,9 @@ impl Config {
             }
         }
 
+        // Ensure ACP preset harnesses are in config (so Panel sees them and saves work)
+        config.acp.ensure_presets();
+
         // Validate config
         config.validate()?;
 
@@ -218,6 +221,7 @@ impl Config {
                 config.prompts_override =
                     crate::config::prompts_override::load_prompts_override(&prompts_path);
             }
+            config.acp.ensure_presets();
             if let Some(parent) = path.parent() {
                 let _ = fs::create_dir_all(parent);
             }

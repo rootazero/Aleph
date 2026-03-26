@@ -36,6 +36,19 @@ impl Default for AcpConfig {
     }
 }
 
+impl AcpConfig {
+    /// Ensure preset harnesses are present in the config.
+    ///
+    /// Called after loading config from disk. If `harnesses` is empty (no user
+    /// customization), populates with all preset defaults so they are visible
+    /// in Panel UI and persist correctly on save.
+    pub fn ensure_presets(&mut self) {
+        for (id, entry) in AcpHarnessEntry::all_presets() {
+            self.harnesses.entry(id).or_insert(entry);
+        }
+    }
+}
+
 // =============================================================================
 // HarnessModeSerde
 // =============================================================================
