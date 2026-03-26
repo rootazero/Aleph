@@ -305,11 +305,11 @@ impl HandlerRegistry {
         registry.register("markdown_skills.list", markdown_skills::handle_list);
         registry.register("markdown_skills.unload", markdown_skills::handle_unload);
 
-        // Skills handlers (SKILL.md file-based skills)
-        registry.register("skills.list", skills::handle_list);
-        registry.register("skills.install", skills::handle_install);
-        registry.register("skills.installFromZip", skills::handle_install_from_zip);
-        registry.register("skills.delete", skills::handle_delete);
+        // Unified skill management (via SkillSystem)
+        registry.register("skills.status", skills::handle_status);
+        registry.register("skills.update", skills::handle_update);
+        registry.register("skills.install_dep", skills::handle_install_dep);
+        registry.register("skills.remove", skills::handle_remove);
 
         // ClawHub handlers
         registry.register("clawhub.search", clawhub::handle_search);
