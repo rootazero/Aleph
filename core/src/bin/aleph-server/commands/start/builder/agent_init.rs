@@ -49,6 +49,8 @@ pub(in crate::commands::start) struct AgentHandlersResult {
     pub generation_registry: Option<Arc<std::sync::RwLock<alephcore::generation::GenerationProviderRegistry>>>,
     /// Builtin tool registry (for heartbeat probe executor)
     pub tool_registry: Option<Arc<BuiltinToolRegistry>>,
+    /// Team store for panel RPC handlers
+    pub team_store: Option<Arc<dyn alephcore::teams::TeamStore>>,
 }
 
 /// Register agent.run / agent.status / agent.cancel / chat.* handlers.
@@ -1132,5 +1134,6 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         channel_registry_cell: channel_reg_cell,
         generation_registry: Some(generation_registry),
         tool_registry: tool_reg_out,
+        team_store,
     }
 }

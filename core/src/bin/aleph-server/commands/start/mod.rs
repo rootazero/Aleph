@@ -555,6 +555,11 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // Agent management (agent_manager created earlier for tool config sharing)
     register_agents_handlers(&mut server, &agent_manager, &event_bus);
 
+    // Team management (team store created inside register_agent_handlers)
+    if let Some(ref ts) = agent_result.team_store {
+        register_teams_handlers(&mut server, ts);
+    }
+
     // Identity resolver (shared for session-level overrides)
     let identity_resolver: alephcore::gateway::handlers::identity::SharedIdentityResolver = Arc::new(
         tokio::sync::RwLock::new(

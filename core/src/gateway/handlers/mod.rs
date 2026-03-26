@@ -40,6 +40,7 @@
 //! | daemon | Daemon status, shutdown, logs |
 //! | arena | Multi-agent arena lifecycle |
 //! | guests | Guest invitation management |
+//! | teams | Team management (list, get, disband, delete) |
 
 pub mod activity;
 pub mod health;
@@ -102,6 +103,7 @@ pub mod oauth;
 pub mod acp_config;
 pub mod execution_config;
 pub mod arena;
+pub mod teams;
 
 pub use approval_bridge::{parse_session_target, get_forward_targets, ForwardMode};
 pub use identity::SharedIdentityResolver;
@@ -471,6 +473,28 @@ impl HandlerRegistry {
                 INTERNAL_ERROR,
                 "arena.settle requires ArenaManager - wire SharedArenaManager first".to_string(),
             )
+        });
+
+        // Team management handlers (placeholders — actual handlers wired with TeamStore in Gateway startup)
+        registry.register("teams.list", |req| async move {
+            JsonRpcResponse::error(req.id, INTERNAL_ERROR,
+                "teams.list requires TeamStore — wire in Gateway startup".to_string())
+        });
+        registry.register("teams.get", |req| async move {
+            JsonRpcResponse::error(req.id, INTERNAL_ERROR,
+                "teams.get requires TeamStore — wire in Gateway startup".to_string())
+        });
+        registry.register("teams.disband", |req| async move {
+            JsonRpcResponse::error(req.id, INTERNAL_ERROR,
+                "teams.disband requires TeamStore — wire in Gateway startup".to_string())
+        });
+        registry.register("teams.delete", |req| async move {
+            JsonRpcResponse::error(req.id, INTERNAL_ERROR,
+                "teams.delete requires TeamStore — wire in Gateway startup".to_string())
+        });
+        registry.register("agents.teams", |req| async move {
+            JsonRpcResponse::error(req.id, INTERNAL_ERROR,
+                "agents.teams requires TeamStore — wire in Gateway startup".to_string())
         });
 
         // Agent management handlers (placeholders — actual handlers wired with AgentManager)
