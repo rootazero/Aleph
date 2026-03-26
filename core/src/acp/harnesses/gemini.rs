@@ -1,9 +1,11 @@
-//! Gemini ACP harness adapter — native ACP over stdio.
+//! Gemini ACP harness adapter — native ACP and oneshot modes.
 
 use async_trait::async_trait;
+use tracing::{debug, error};
 
 use crate::acp::harness::{AcpHarness, HarnessMode};
 use crate::acp::session::HarnessConfig;
+use crate::error::Result;
 
 const DEFAULT_EXECUTABLE: &str = "gemini";
 
@@ -50,5 +52,36 @@ impl AcpHarness for GeminiHarness {
             cwd: cwd.map(String::from),
             ..Default::default()
         }
+    }
+
+    async fn execute_oneshot(&self, prompt: &str, cwd: &str) -> Result<String> {
+        use tokio::process::Command;
+
+        let mut cmd = Command::new(&self.executable);
+        cmd.args(["-p", prompt])
+            .current_dir(cwd)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+
+        debug!(harness = "gemini", "Spawning oneshot Gemini process");
+
+        let output = cmd.output().await.map_err(|e| {
+            crate::error::AlephError::tool(format!(
+                "Failed to execute Gemini CLI: {}. Is 'gemini' installed and in PATH?",
+                e
+            ))
+        })?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            error!(harness = "gemini", stderr = %stderr, "Gemini CLI failed");
+            return Err(crate::error::AlephError::tool(format!(
+                "Gemini CLI exited with {}: {}",
+                output.status,
+                stderr.chars().take(500).collect::<String>()
+            )));
+        }
+
+        Ok(String::from_utf8_lossy(&output.stdout).to_string())
     }
 }
