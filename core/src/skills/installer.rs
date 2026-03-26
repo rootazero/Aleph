@@ -4,8 +4,8 @@
 //! - Third-party skills from any GitHub repository
 //! - Local ZIP file upload
 //!
-//! Note: Aleph official skills (rootazero/Aleph-skills) are managed by
-//! `updater.rs`, not this installer. They auto-sync on startup via git.
+//! Note: Aleph official skills are bundled in the binary and extracted
+//! on startup by `bundled::extractor`. This installer handles third-party skills.
 
 use crate::error::{AlephError, Result};
 use crate::skills::types::{PackageManager, SkillRequirements};

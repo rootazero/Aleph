@@ -177,8 +177,7 @@ async fn initialize_extension_manager(daemon: bool) {
     let aleph_home = dirs::home_dir()
         .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
         .join(".aleph");
-    alephcore::skills::updater::migrate_skills_directory(&aleph_home).await;
-    alephcore::skills::updater::update_official_skills(&aleph_home.join("skills-official")).await;
+    alephcore::bundled::extract_bundled_content(&aleph_home);
 
     match alephcore::extension::ExtensionManager::with_defaults().await {
         Ok(extension_manager) => {
