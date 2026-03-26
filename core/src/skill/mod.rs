@@ -484,8 +484,9 @@ Content."#,
     }
 
     #[test]
-    fn guess_source_official() {
-        let path = PathBuf::from("/Users/test/.aleph/skills-official/self/SKILL.md");
+    fn guess_source_non_aleph_path_is_bundled() {
+        // Paths outside .aleph/skills (e.g. system-installed) default to Bundled
+        let path = PathBuf::from("/usr/local/share/aleph/skills/self/SKILL.md");
         assert_eq!(guess_source(&path), SkillSource::Bundled);
     }
 

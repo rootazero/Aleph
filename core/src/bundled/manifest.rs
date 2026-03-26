@@ -65,7 +65,7 @@ impl SkillManifest {
     pub fn save(&self, skills_dir: &Path) -> std::io::Result<()> {
         let path = skills_dir.join("manifest.json");
         let content = serde_json::to_string_pretty(self)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+            .map_err(std::io::Error::other)?;
         std::fs::write(&path, content)?;
         debug!(path = %path.display(), "Saved skills manifest");
         Ok(())

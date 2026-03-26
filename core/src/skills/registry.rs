@@ -74,7 +74,7 @@ pub enum SkillSource {
 pub enum SkillEcosystem {
     /// Aleph native skill (from .aleph/skills)
     Aleph,
-    /// Aleph official skill (from .aleph/skills-official, read-only)
+    /// Aleph official skill (bundled with binary, read-only)
     Official,
     /// Claude Code compatible skill (from .claude/skills)
     Claude,

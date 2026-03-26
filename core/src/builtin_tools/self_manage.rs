@@ -4,7 +4,7 @@
 //! manage Aleph settings, it calls this tool to get the full self-management
 //! manual (workspace map + operation protocol + domain routing).
 //!
-//! The tool reads the `/self` SKILL.md from skills-official/ or skills/,
+//! The tool reads the `/self` SKILL.md from the bundled skills directory,
 //! providing the same content as the `/self` slash command but triggered
 //! by natural language intent.
 
