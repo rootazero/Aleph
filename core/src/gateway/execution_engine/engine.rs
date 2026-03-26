@@ -11,7 +11,7 @@ use crate::sync_primitives::{AtomicU32, AtomicU64};
 use crate::sync_primitives::Arc;
 
 use tokio::sync::{mpsc, RwLock};
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 
 use super::{ActiveRun, ExecutionEngineConfig, ExecutionError, RunRequest, RunState, RunStatus};
 use crate::gateway::agent_instance::{AgentInstance, AgentState, MessageRole};
@@ -250,11 +250,19 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // Check if this is the first real user message (for auto-topic generation).
         // Slash commands routed via fast-path don't count — they bypass
         // add_message entirely, so history stays empty for the next real message.
-        let is_first_message = agent
+        let history_empty = agent
             .get_history(&request.session_key, Some(1))
             .await
-            .is_empty()
-            && !request.metadata.contains_key(SLASH_COMMAND_MODE_KEY);
+            .is_empty();
+        let is_slash = request.metadata.contains_key(SLASH_COMMAND_MODE_KEY);
+        let is_first_message = history_empty && !is_slash;
+
+        if is_first_message {
+            info!(
+                session_key = %request.session_key.to_key_string(),
+                "First message detected for session (will generate topic)"
+            );
+        }
 
         // Store user message in session (with attachment markers for history)
         let mut session_text = request.input.clone();
@@ -447,6 +455,10 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                             .unwrap_or_else(|| self.provider_registry.default_provider());
                         let topic_session_key = request.session_key.clone();
                         let topic_message = request.input.clone();
+                        info!(
+                            session_key = %topic_session_key.to_key_string(),
+                            "Auto-topic: spawning generation for first message"
+                        );
                         tokio::spawn(async move {
                             use crate::providers::adapter::RequestPayload;
                             use crate::providers::message::UnifiedMessage;
@@ -467,34 +479,49 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                                 tool_choice: None,
                             };
 
-                            match topic_provider.process(payload).await {
+                            let topic_text = match topic_provider.process(payload).await {
                                 Ok(resp) => {
-                                    let topic_text = resp.text_content().trim().to_string();
-                                    if !topic_text.is_empty() {
-                                        if let Err(e) = sm.set_topic(&topic_session_key, &topic_text).await {
-                                            warn!(error = %e, "Failed to set session topic");
-                                        } else {
-                                            let event_json = serde_json::json!({
-                                                "method": "stream.session_updated",
-                                                "params": {
-                                                    "session_key": topic_session_key.to_key_string(),
-                                                    "topic": topic_text,
-                                                }
-                                            });
-                                            eb.publish(event_json.to_string());
-                                            debug!(
-                                                session_key = %topic_session_key.to_key_string(),
-                                                topic = %topic_text,
-                                                "Auto-generated session topic"
-                                            );
-                                        }
-                                    }
+                                    let text = resp.text_content().trim().to_string();
+                                    if text.is_empty() { None } else { Some(text) }
                                 }
                                 Err(e) => {
-                                    warn!(error = %e, "Topic generation failed");
+                                    warn!(error = %e, "Auto-topic: LLM call failed, using fallback");
+                                    None
                                 }
+                            };
+
+                            // Fallback: use truncated first message as topic
+                            let topic_text = topic_text.unwrap_or_else(|| {
+                                let msg = topic_message.trim();
+                                let truncated: String = msg.chars().take(20).collect();
+                                if truncated.len() < msg.len() {
+                                    format!("{}…", truncated)
+                                } else {
+                                    truncated
+                                }
+                            });
+
+                            if let Err(e) = sm.set_topic(&topic_session_key, &topic_text).await {
+                                warn!(error = %e, "Auto-topic: failed to persist topic");
+                            } else {
+                                let event_json = serde_json::json!({
+                                    "method": "stream.session_updated",
+                                    "params": {
+                                        "session_key": topic_session_key.to_key_string(),
+                                        "topic": topic_text,
+                                    }
+                                });
+                                eb.publish(event_json.to_string());
+                                info!(
+                                    session_key = %topic_session_key.to_key_string(),
+                                    topic = %topic_text,
+                                    "Auto-topic: session topic set"
+                                );
                             }
                         });
+                    } else {
+                        info!("Auto-topic: skipped (session_manager={}, event_bus={})",
+                            self.session_manager.is_some(), self.event_bus.is_some());
                     }
                 }
 
@@ -528,29 +555,24 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 Ok(())
             }
             Err(e) => {
-                // Only emit RunError for system-level errors (Timeout, Cancelled).
-                // Loop failures (ExecutionError::Failed) have already emitted
-                // RunError via callback, so re-emitting would cause
-                // duplicate error messages on channels like Telegram.
-                match e {
-                    ExecutionError::Timeout | ExecutionError::Cancelled => {
-                        let _ = emitter
-                            .emit(StreamEvent::RunError {
-                                run_id: run_id.clone(),
-                                seq: final_seq,
-                                error: e.to_string(),
-                                error_code: Some(match e {
-                                    ExecutionError::Timeout => "TIMEOUT".to_string(),
-                                    ExecutionError::Cancelled => "CANCELLED".to_string(),
-                                    _ => unreachable!(),
-                                }),
-                            })
-                            .await;
-                    }
-                    _ => {
-                        // Already reported via callback — skip duplicate emission
-                    }
-                }
+                let error_code = match &e {
+                    ExecutionError::Timeout => "TIMEOUT",
+                    ExecutionError::Cancelled => "CANCELLED",
+                    ExecutionError::Failed(_) => "FAILED",
+                    ExecutionError::TooManyRuns(_) => "TOO_MANY_RUNS",
+                    ExecutionError::AgentBusy(_) => "AGENT_BUSY",
+                    ExecutionError::RunNotFound(_) => "RUN_NOT_FOUND",
+                    ExecutionError::RunNotActive(_) => "RUN_NOT_ACTIVE",
+                    ExecutionError::Escalated { .. } => "ESCALATED",
+                };
+                let _ = emitter
+                    .emit(StreamEvent::RunError {
+                        run_id: run_id.clone(),
+                        seq: final_seq,
+                        error: e.to_string(),
+                        error_code: Some(error_code.to_string()),
+                    })
+                    .await;
                 Err(ExecutionError::Failed(e.to_string()))
             }
         };

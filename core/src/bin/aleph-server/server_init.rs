@@ -325,6 +325,13 @@ where
     metadata.insert("channel_id".to_string(), channel_id.to_string());
     metadata.insert("sender_id".to_string(), peer_id.to_string());
 
+    // Inject user locale for downstream i18n
+    {
+        let cfg = app_config.read().await;
+        let lang = cfg.general.language.as_deref().unwrap_or("zh");
+        metadata.insert("locale".to_string(), lang.to_string());
+    }
+
     // Slash command detection: if message starts with "/", try to resolve via CommandParser
     // and inject SLASH_COMMAND_MODE_KEY for fast-path execution in ExecutionEngine.
     if params.message.trim().starts_with('/') {

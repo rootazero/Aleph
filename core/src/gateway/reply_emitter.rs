@@ -755,8 +755,24 @@ impl EventEmitter for ReplyEmitter {
                 content, is_final, is_intermediate, ..
             } => {
                 if is_intermediate {
-                    // Intermediate message: send immediately as a standalone message
-                    if !content.is_empty() {
+                    if content.is_empty() {
+                        // Intermediate boundary marker from DeltaSink: flush
+                        // accumulated buffer as a standalone intermediate message,
+                        // then clear it so it doesn't pollute the final response.
+                        let mut buffer = self.buffer.lock().await;
+                        let accumulated = std::mem::take(&mut *buffer);
+                        drop(buffer);
+                        if !accumulated.is_empty() {
+                            if self.should_voice().await {
+                                self.send_as_voice(&accumulated).await;
+                            } else if self.config.stream_enabled && accumulated.chars().count() > TYPEWRITER_CHARS_PER_STEP * 2 {
+                                self.send_typewriter(&accumulated).await;
+                            } else {
+                                self.send_to_channel(&accumulated).await;
+                            }
+                        }
+                    } else {
+                        // Non-empty intermediate: send immediately as standalone message
                         if self.should_voice().await {
                             self.send_as_voice(&content).await;
                         } else if self.config.stream_enabled && content.chars().count() > TYPEWRITER_CHARS_PER_STEP * 2 {

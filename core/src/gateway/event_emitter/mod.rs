@@ -94,6 +94,7 @@ pub trait EventEmitter: Send + Sync {
         content: &str,
         chunk_index: u32,
         is_final: bool,
+        is_intermediate: bool,
     ) {
         let seq = self.next_seq();
         let _ = self
@@ -103,7 +104,7 @@ pub trait EventEmitter: Send + Sync {
                 content: content.to_string(),
                 chunk_index,
                 is_final,
-                is_intermediate: false,
+                is_intermediate,
             })
             .await;
     }

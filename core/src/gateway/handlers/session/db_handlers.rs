@@ -27,6 +27,9 @@ pub async fn handle_list_db(
         Ok(sessions) => {
             let infos: Vec<SessionInfo> = sessions
                 .into_iter()
+                // Filter out internal sessions (heartbeat tasks, cron tasks, ephemeral)
+                // that should not appear in user-facing session lists
+                .filter(|m| m.session_type != "task" && m.session_type != "ephemeral")
                 .map(|m| {
                     // Extract topic and status from metadata JSON
                     let (topic, status) = m.metadata_json

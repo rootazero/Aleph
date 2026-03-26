@@ -201,6 +201,41 @@ pub struct LoopRunResult {
 }
 
 // =============================================================================
+// Helpers
+// =============================================================================
+
+/// Strip intermediate text that the LLM repeated at the start of its final response.
+///
+/// When the LLM produces intermediate messages (text + tool_calls), it sees them
+/// in its conversation history. It often repeats these messages verbatim at the
+/// start of its final response. This function strips those known prefixes so
+/// channel deliveries (Telegram, etc.) don't duplicate content.
+fn strip_repeated_intermediate(text: &str, intermediates: &[String]) -> String {
+    if intermediates.is_empty() {
+        return text.to_string();
+    }
+    let mut remaining = text.trim_start();
+    let mut stripped_any = false;
+    for intermediate in intermediates {
+        let trimmed = intermediate.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if let Some(rest) = remaining.strip_prefix(trimmed) {
+            remaining = rest.trim_start();
+            stripped_any = true;
+        } else {
+            break;
+        }
+    }
+    if stripped_any {
+        remaining.to_string()
+    } else {
+        text.to_string()
+    }
+}
+
+// =============================================================================
 // LoopCallback
 // =============================================================================
 
@@ -329,6 +364,7 @@ impl<P: LoopProvider> AgentLoop<P> {
         let mut messages = messages;
 
         let mut final_text: Option<String> = None;
+        let mut intermediate_texts: Vec<String> = Vec::new();
         let mut iterations: usize = 0;
         let mut tool_calls_made: usize = 0;
         let mut total_tokens: usize = 0;
@@ -400,19 +436,24 @@ impl<P: LoopProvider> AgentLoop<P> {
                 if response.has_tool_calls() {
                     // Intermediate: LLM said something AND requested tools → still working
                     callback.on_intermediate_text(text);
+                    intermediate_texts.push(text.clone());
+                    // Don't accumulate into final_text — intermediate messages
+                    // are already delivered separately to channels
                 } else {
                     // Final: LLM said something with no tool calls → done
-                    callback.on_text(text);
-                }
-                // Append text if auto-continuing from truncation, otherwise replace
-                if let Some(ref mut existing) = final_text {
-                    if auto_continue_count > 0 {
-                        existing.push_str(text);
+                    // Strip any intermediate text the LLM repeated at the start
+                    let cleaned = strip_repeated_intermediate(text, &intermediate_texts);
+                    callback.on_text(&cleaned);
+                    // Append text if auto-continuing from truncation, otherwise replace
+                    if let Some(ref mut existing) = final_text {
+                        if auto_continue_count > 0 {
+                            existing.push_str(&cleaned);
+                        } else {
+                            *existing = cleaned;
+                        }
                     } else {
-                        *existing = text.clone();
+                        final_text = Some(cleaned);
                     }
-                } else {
-                    final_text = Some(text.clone());
                 }
             }
 
@@ -2049,6 +2090,64 @@ mod tests {
         assert_eq!(cb.texts, vec!["Here are the results. <task-complete/>"]);
         // final_text should be the last text produced
         assert_eq!(result.final_text.as_deref(), Some("Here are the results. <task-complete/>"));
+    }
+
+    // =========================================================================
+    // L14b: LLM repeats intermediate text in final response → stripped
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_repeated_intermediate_text_stripped_from_final() {
+        let provider = MockProvider::new(vec![
+            // Turn 1: intermediate text + tool call
+            ProviderResponse {
+                text: Some("Let me set up the team.".to_string()),
+                tool_calls: vec![NativeToolCall {
+                    id: "call_1".to_string(),
+                    name: "echo".to_string(),
+                    arguments: json!({ "message": "team" }),
+                }],
+                thinking: None,
+                stop_reason: StopReason::ToolUse,
+                usage: None,
+            },
+            // Turn 2: another intermediate text + tool call
+            ProviderResponse {
+                text: Some("Team is ready.".to_string()),
+                tool_calls: vec![NativeToolCall {
+                    id: "call_2".to_string(),
+                    name: "echo".to_string(),
+                    arguments: json!({ "message": "run" }),
+                }],
+                thinking: None,
+                stop_reason: StopReason::ToolUse,
+                usage: None,
+            },
+            // Turn 3: LLM repeats intermediate texts at the start of final response
+            ProviderResponse {
+                text: Some("Let me set up the team. Team is ready. Here are the results. <task-complete/>".to_string()),
+                tool_calls: vec![],
+                thinking: None,
+                stop_reason: StopReason::EndTurn,
+                usage: None,
+            },
+        ]);
+
+        let agent = make_loop(provider);
+        let mut cb = TrackingCallback::default();
+        let result = agent.run("analyze stocks", &mut cb).await.unwrap();
+
+        assert_eq!(result.iterations, 3);
+        assert_eq!(cb.intermediate_texts, vec![
+            "Let me set up the team.",
+            "Team is ready.",
+        ]);
+        // Repeated intermediate text should be stripped from the final
+        assert_eq!(cb.texts, vec!["Here are the results. <task-complete/>"]);
+        assert_eq!(
+            result.final_text.as_deref(),
+            Some("Here are the results. <task-complete/>")
+        );
     }
 
     // =========================================================================

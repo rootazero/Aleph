@@ -280,13 +280,15 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                         tool_calls = result.tool_calls_made,
                         "Agent hit iteration/token limit without producing a response"
                     );
-                    format!(
-                        "抱歉，我在处理这个请求时用了太多步骤但没能完成（{} 次迭代，{} 次工具调用）。\n\
-                         请尝试更直接的指令，比如使用 /video、/image、/audio 等命令直接生成内容。\n\n\
-                         Sorry, I was unable to complete the task within the allowed limits ({} iterations, {} tool calls). \
-                         Try using direct commands like /video, /image, or /audio for generation tasks.",
-                        result.iterations, result.tool_calls_made,
-                        result.iterations, result.tool_calls_made
+                    let locale = crate::gateway::i18n::Locale::from_config(
+                        request.metadata.get("locale").map(|s| s.as_str())
+                    );
+                    crate::gateway::i18n::t(
+                        crate::gateway::i18n::Msg::ErrLoopExhausted {
+                            iterations: result.iterations,
+                            tool_calls: result.tool_calls_made,
+                        },
+                        locale,
                     )
                 } else {
                     result.final_text.unwrap_or_default()
@@ -404,11 +406,13 @@ impl<E: EventEmitter + Send + Sync + 'static> crate::agent_loop::LoopCallback
     }
 
     fn on_intermediate_text(&mut self, text: &str) {
-        // No deduplication guard here — intermediate messages must always be
-        // delivered to the channel as standalone messages, even when DeltaSink
-        // has already streamed the tokens to WebSocket clients.
-        // DeltaSink handles real-time UI streaming; intermediate messages are
-        // a separate delivery path for channels (Telegram, Slack, etc.).
+        // When streaming is active, DeltaSink already delivered the text tokens
+        // and its boundary marker triggers emitters (ReplyEmitter, GatewayEventEmitter)
+        // to flush their accumulated buffer as a standalone intermediate message.
+        // Skip here to avoid duplicate intermediate messages on channels.
+        if self.streaming_active {
+            return;
+        }
         self.seq += 1;
         let chunk_index = self.chunk_index;
         self.chunk_index += 1;

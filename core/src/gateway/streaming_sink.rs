@@ -10,6 +10,7 @@ use async_trait::async_trait;
 use tokio::sync::Mutex;
 
 use crate::gateway::event_emitter::EventEmitter;
+use crate::providers::adapter::StopReason;
 use crate::providers::delta::{DeltaSink, ProviderDelta};
 use crate::sync_primitives::Arc;
 
@@ -22,8 +23,13 @@ const THROTTLE_MS: u64 = 100;
 /// Buffers text deltas within a 100ms throttle window to avoid flooding WebSocket
 /// connections with tiny single-token messages.
 ///
-/// On `Done`, flushes any remaining buffer and emits a final marker chunk with
-/// `is_final = true` and empty content, signalling the client that the stream is complete.
+/// On `Done`, flushes any remaining buffer:
+/// - `Done(ToolUse)`: intermediate iteration — flushes with `is_intermediate = true`,
+///   emits boundary marker (empty content, `is_intermediate = true`, `is_final = false`).
+///   This tells the WebSocket client to finalize accumulated text as a standalone
+///   intermediate message. No `is_final` marker, since more iterations follow.
+/// - `Done(EndTurn | MaxTokens)`: final iteration — flushes normally and emits
+///   final marker (empty content, `is_final = true`) to signal stream completion.
 pub struct StreamingDeltaSink {
     run_id: String,
     emitter: Arc<dyn EventEmitter + Send + Sync>,
@@ -76,12 +82,14 @@ impl DeltaSink for StreamingDeltaSink {
                     drop(buf);
 
                     let idx = self.chunk_index.fetch_add(1, Ordering::Relaxed);
-                    self.emitter.emit_response_chunk(&self.run_id, &content, idx, false).await;
+                    self.emitter.emit_response_chunk(&self.run_id, &content, idx, false, false).await;
                     self.has_emitted_text.store(true, Ordering::Release);
                     *self.last_emit.lock().await = Instant::now();
                 }
             }
-            ProviderDelta::Done(_) => {
+            ProviderDelta::Done(stop_reason) => {
+                let is_intermediate = matches!(stop_reason, StopReason::ToolUse);
+
                 // Flush any remaining buffered text
                 let mut buf = self.buffer.lock().await;
                 let remaining = std::mem::take(&mut *buf);
@@ -89,13 +97,29 @@ impl DeltaSink for StreamingDeltaSink {
 
                 if !remaining.is_empty() {
                     let idx = self.chunk_index.fetch_add(1, Ordering::Relaxed);
-                    self.emitter.emit_response_chunk(&self.run_id, &remaining, idx, false).await;
+                    // Always emit remaining text as non-intermediate.
+                    // The boundary marker below signals the intermediate boundary;
+                    // emitters (ReplyEmitter, GatewayEventEmitter) flush their
+                    // accumulated buffer as an intermediate message upon receiving it.
+                    self.emitter.emit_response_chunk(
+                        &self.run_id, &remaining, idx, false, false,
+                    ).await;
                     self.has_emitted_text.store(true, Ordering::Release);
                 }
 
-                // Emit final marker — empty content + is_final = true
                 let idx = self.chunk_index.fetch_add(1, Ordering::Relaxed);
-                self.emitter.emit_response_chunk(&self.run_id, "", idx, true).await;
+                if is_intermediate {
+                    // Intermediate boundary: tell client to finalize accumulated
+                    // text as a standalone intermediate message
+                    self.emitter.emit_response_chunk(
+                        &self.run_id, "", idx, false, true,
+                    ).await;
+                } else {
+                    // Final marker: stream complete
+                    self.emitter.emit_response_chunk(
+                        &self.run_id, "", idx, true, false,
+                    ).await;
+                }
             }
             // ThinkingDelta, ToolCall*, Usage, Error — not handled in Phase 2
             _ => {}
@@ -193,6 +217,66 @@ mod tests {
         let events = emitter.events().await;
         assert!(events.is_empty(), "Non-text deltas should not produce any events");
         assert!(!flag.load(Ordering::Acquire), "Flag should remain unset");
+    }
+
+    /// Done(ToolUse) should flush text as non-intermediate, then emit boundary marker.
+    /// Emitters use the boundary marker to flush their accumulated buffer as an
+    /// intermediate message, preventing fragment/duplication issues.
+    #[tokio::test]
+    async fn test_tool_use_done_emits_intermediate_boundary() {
+        let flag = Arc::new(AtomicBool::new(false));
+        let (sink, emitter) = make_sink("run-int", flag.clone());
+
+        sink.on_delta(&ProviderDelta::TextDelta("Setting up team...".to_string())).await;
+        sink.on_delta(&ProviderDelta::Done(StopReason::ToolUse)).await;
+
+        let events = emitter.events().await;
+        assert!(events.len() >= 2, "Expected at least 2 events, got {}", events.len());
+
+        // Flushed text should be non-intermediate (emitters buffer it, boundary flushes)
+        let text_event = events.iter().find(|e| {
+            matches!(e, StreamEvent::ResponseChunk { content, is_intermediate, .. }
+                if !content.is_empty() && !*is_intermediate)
+        });
+        assert!(text_event.is_some(), "Flushed text should be non-intermediate");
+
+        // Last event: intermediate boundary marker (empty, is_intermediate=true, is_final=false)
+        let last = events.last().unwrap();
+        assert!(
+            matches!(last, StreamEvent::ResponseChunk { content, is_final, is_intermediate, .. }
+                if content.is_empty() && !*is_final && *is_intermediate),
+            "Last event must be intermediate boundary, got: {:?}", last
+        );
+    }
+
+    /// Multi-iteration: intermediate then final
+    #[tokio::test]
+    async fn test_intermediate_then_final_iterations() {
+        let flag = Arc::new(AtomicBool::new(false));
+        let (sink, emitter) = make_sink("run-multi", flag.clone());
+
+        // Iteration 1: intermediate
+        sink.on_delta(&ProviderDelta::TextDelta("Thinking...".to_string())).await;
+        sink.on_delta(&ProviderDelta::Done(StopReason::ToolUse)).await;
+
+        // Iteration 2: final
+        sink.on_delta(&ProviderDelta::TextDelta("Done!".to_string())).await;
+        sink.on_delta(&ProviderDelta::Done(StopReason::EndTurn)).await;
+
+        let events = emitter.events().await;
+
+        // Should have intermediate boundary (no is_final) and final marker (is_final=true)
+        let has_intermediate_boundary = events.iter().any(|e| {
+            matches!(e, StreamEvent::ResponseChunk { content, is_final, is_intermediate, .. }
+                if content.is_empty() && !*is_final && *is_intermediate)
+        });
+        let has_final_marker = events.iter().any(|e| {
+            matches!(e, StreamEvent::ResponseChunk { is_final, is_intermediate, .. }
+                if *is_final && !*is_intermediate)
+        });
+
+        assert!(has_intermediate_boundary, "Must have intermediate boundary marker");
+        assert!(has_final_marker, "Must have final marker");
     }
 
     /// Done with no prior TextDelta should only emit the final marker (no text chunk).
