@@ -107,6 +107,7 @@ pub mod gateway;
 pub mod group_chat;
 pub mod clawhub;
 pub mod tasks;
+pub mod teams;
 
 #[cfg(test)]
 mod tests;
