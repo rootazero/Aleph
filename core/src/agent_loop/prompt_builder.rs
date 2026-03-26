@@ -63,7 +63,8 @@ const BASE_BEHAVIOR: &str = "\
   - Parallel when independent: If tasks are independent (e.g., code + tests), dispatch multiple tools simultaneously.\n\
   - Reuse sessions for continuity: When follow-up prompts need prior context, reuse the session so the tool retains conversation history.\n\
   - Switch tools strategically: Different tools have different strengths. You may use one for planning and another for implementation.\n\
-  - Handle failures: If a tool fails or produces poor results, retry, try a different tool, or ask the user — use your judgment.";
+  - Handle failures: If a tool fails (e.g., permission denied, timeout), fall back to bash/code_exec to complete the task yourself, try a different tool, or ask the user.\n\
+  - CLI tools run in non-interactive mode: they cannot ask for user confirmation. If a tool reports permission issues, use bash to do the work directly rather than retrying the same tool.";
 
 /// Builds the system prompt by assembling sections.
 pub struct PromptBuilder {
