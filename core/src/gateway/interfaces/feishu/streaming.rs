@@ -11,7 +11,7 @@ use crate::gateway::event_emitter::{EventEmitError, EventEmitter, StreamEvent};
 use crate::gateway::reply_emitter::ReplyEmitter;
 use crate::gateway::inbound_context::ReplyRoute;
 
-use super::client::FeishuClient;
+use super::api::FeishuApi;
 use super::types::TypingState;
 
 const STREAM_THROTTLE_MS: u64 = 100;
@@ -44,7 +44,7 @@ impl FeishuStreamingCard {
         self.closed.load(Ordering::SeqCst)
     }
 
-    async fn update(&self, client: &FeishuClient, chunk: &str) {
+    async fn update(&self, client: &FeishuApi, chunk: &str) {
         if self.is_closed() { return; }
 
         { self.accumulated_text.lock().await.push_str(chunk); }
@@ -59,7 +59,7 @@ impl FeishuStreamingCard {
         }
     }
 
-    async fn flush(&self, client: &FeishuClient) {
+    async fn flush(&self, client: &FeishuApi) {
         if self.is_closed() { return; }
 
         let text = self.accumulated_text.lock().await.clone();
@@ -72,7 +72,7 @@ impl FeishuStreamingCard {
         }
     }
 
-    async fn close(&self, client: &FeishuClient, final_text: &str) {
+    async fn close(&self, client: &FeishuApi, final_text: &str) {
         if self.closed.swap(true, Ordering::SeqCst) { return; }
 
         let seq = self.next_sequence();
@@ -91,7 +91,7 @@ impl FeishuStreamingCard {
 /// EventEmitter that streams to Feishu cards in real-time.
 pub struct FeishuEventEmitter {
     inner: ReplyEmitter,
-    client: Arc<FeishuClient>,
+    client: Arc<FeishuApi>,
     card: Arc<Mutex<Option<FeishuStreamingCard>>>,
     chat_id: String,
     reply_to_message_id: Option<String>,
@@ -104,7 +104,7 @@ pub struct FeishuEventEmitter {
 impl FeishuEventEmitter {
     pub fn new(
         inner: ReplyEmitter,
-        client: Arc<FeishuClient>,
+        client: Arc<FeishuApi>,
         _route: ReplyRoute,
         chat_id: String,
         reply_to_message_id: Option<String>,
