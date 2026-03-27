@@ -1,3 +1,4 @@
+pub mod config;
 pub mod types;
 pub mod events;
 pub mod client;
@@ -19,7 +20,7 @@ use crate::thinker::interaction::{
     InteractionConstraints, InteractionManifest, InteractionParadigm,
 };
 
-pub use types::FeishuConfig;
+pub use config::FeishuConfig;
 use client::{FeishuClient, FeishuSendError};
 use events::{extract_text_content, mark_bot_mentions, parse_ws_frame};
 use types::{ChatType, FeishuEvent};
