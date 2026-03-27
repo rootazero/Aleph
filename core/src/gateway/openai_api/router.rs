@@ -17,6 +17,8 @@ pub fn openai_routes(state: Arc<OpenAiApiState>) -> Router {
         .route("/v1/models", get(super::models::list_models))
         .route("/v1/models/{model_id}", get(super::models::get_model))
         .route("/v1/chat/completions", post(super::completions::handle))
+        .route("/v1/embeddings", post(super::embeddings::handle))
+        .route("/v1/responses", post(super::responses::handle))
         .route("/v1/health", get(health))
         .with_state(state)
 }
