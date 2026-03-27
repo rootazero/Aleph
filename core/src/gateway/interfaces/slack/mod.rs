@@ -212,7 +212,7 @@ impl Channel for SlackChannel {
 
     }
 
-    async fn delete(&self, message_id: &MessageId) -> ChannelResult<()> {
+    async fn delete(&self, _conversation_id: &ConversationId, message_id: &MessageId) -> ChannelResult<()> {
         // Note: Deleting requires both message ts and channel ID
         let _ = message_id;
         Err(ChannelError::UnsupportedFeature(
