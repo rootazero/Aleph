@@ -5,8 +5,10 @@
 //! unified `SkillSystem` facade for the rest of the application.
 
 pub mod commands;
+pub mod compat;
 pub mod config;
 pub mod eligibility;
+pub mod events;
 pub mod installer;
 pub mod manifest;
 pub mod prompt;
@@ -15,8 +17,10 @@ pub mod snapshot;
 pub mod status;
 
 pub use commands::{list_available_commands, resolve_command, SkillCommandSpec};
+pub use compat::SkillInfo;
 pub use config::{InstallPreferences, NodeManager, SkillConfigUpdate, SkillEntryConfig, SkillsConfig};
 pub use eligibility::{EligibilityResult, EligibilityService, IneligibilityReason};
+pub use events::SkillSystemEvent;
 pub use installer::{build_install_command, filter_install_specs_for_current_os, select_best_install, InstallExecutor, InstallResult};
 pub use manifest::{parse_skill_content, parse_skill_file, SkillParseError};
 pub use prompt::build_skills_prompt_xml;
@@ -97,6 +101,7 @@ struct Inner {
     eligibility: EligibilityService,
     config: RwLock<SkillsConfig>,
     config_path: PathBuf,
+    event_tx: tokio::sync::broadcast::Sender<SkillSystemEvent>,
 }
 
 impl SkillSystem {
@@ -108,6 +113,7 @@ impl SkillSystem {
             .join("data");
         let config_path = data_dir.join("skills.toml");
         let config = SkillsConfig::load(&config_path);
+        let (event_tx, _) = tokio::sync::broadcast::channel(64);
 
         Self {
             inner: Arc::new(Inner {
@@ -118,6 +124,7 @@ impl SkillSystem {
                 eligibility: EligibilityService::new(),
                 config: RwLock::new(config),
                 config_path,
+                event_tx,
             }),
         }
     }
@@ -231,9 +238,19 @@ impl SkillSystem {
 
     /// Register skills from external sources (plugins, markdown).
     pub async fn register_external(&self, manifests: Vec<SkillManifest>) {
+        let events: Vec<SkillSystemEvent> = manifests
+            .iter()
+            .map(|m| SkillSystemEvent::loaded(m.id().as_str(), m.name()))
+            .collect();
+
         let mut registry = self.inner.registry.write().await;
         registry.register_all(manifests);
         drop(registry);
+
+        for event in events {
+            self.emit_event(event);
+        }
+
         self.rebuild_snapshot().await;
     }
 
@@ -334,12 +351,23 @@ impl SkillSystem {
         let removed = registry.remove(id);
         drop(registry);
         if removed {
+            self.emit_event(SkillSystemEvent::removed(id.as_str()));
             self.rebuild_snapshot().await;
         }
         Ok(removed)
     }
 
+    /// Subscribe to skill system events.
+    pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<SkillSystemEvent> {
+        self.inner.event_tx.subscribe()
+    }
+
     // --- Private helpers ---
+
+    /// Emit a skill system event to all subscribers.
+    fn emit_event(&self, event: SkillSystemEvent) {
+        let _ = self.inner.event_tx.send(event);
+    }
 
     /// Increment the version counter and build a new snapshot.
     async fn rebuild_snapshot(&self) {
@@ -351,10 +379,19 @@ impl SkillSystem {
         let registry = self.inner.registry.read().await;
         let new_snapshot =
             SkillSnapshot::build(&registry, &self.inner.eligibility, current_version);
+        let skill_ids: Vec<String> = registry
+            .list_all()
+            .iter()
+            .map(|m| m.id().as_str().to_string())
+            .collect();
+        let count = skill_ids.len();
         drop(registry);
 
         let mut snapshot = self.inner.snapshot.write().await;
         *snapshot = new_snapshot;
+        drop(snapshot);
+
+        self.emit_event(SkillSystemEvent::all_reloaded(count, skill_ids));
     }
 }
 
@@ -694,5 +731,25 @@ Content."#,
         assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::PermissionDenied);
         // Skill should still be there
         assert_eq!(system.list_skills().await.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn subscribe_receives_events() {
+        use crate::domain::skill::SkillContent;
+        let system = SkillSystem::new();
+        let mut rx = system.subscribe();
+
+        let manifest = SkillManifest::new(
+            "test:event", "Event Test", "desc",
+            SkillContent::new("c"), SkillSource::Global,
+        );
+        system.register_external(vec![manifest]).await;
+
+        // Should receive an event
+        let event = tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            rx.recv()
+        ).await;
+        assert!(event.is_ok());
     }
 }
