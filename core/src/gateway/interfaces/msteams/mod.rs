@@ -3,3 +3,4 @@
 //! Pure HTTP implementation against Bot Framework REST API v3.
 
 pub mod types;
+pub mod config;
