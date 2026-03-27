@@ -25,33 +25,55 @@ use super::config::TelegramConfig;
 /// Classification of Telegram API errors for retry logic.
 #[derive(Debug)]
 pub(crate) enum ErrorClass {
-    /// Transient error (network, server-side) — safe to retry.
-    Recoverable,
-    /// Permanent error (bad request, unauthorized) — do not retry.
-    Unrecoverable,
-    /// Rate limited by Telegram — wait the given seconds before retrying.
+    /// DNS/TCP failure — safe to retry, data never sent.
+    PreConnect,
+    /// Timeout/reset — may have been sent, retry cautiously.
+    PostConnect,
+    /// Telegram API rejection — don't retry, fallback to plain text.
+    Rejected(String),
+    /// 429 rate limit — wait exact seconds then retry.
     RateLimited(u64),
 }
 
 /// Classify a teloxide request error for retry decisions.
+///
+/// Uses teloxide's typed enums (`ApiError`, `RequestError::RetryAfter`) and
+/// reqwest's `is_connect()` for precise classification instead of fragile
+/// string matching.
 pub(crate) fn classify_error(err: &teloxide::RequestError) -> ErrorClass {
     match err {
+        // Rate limit is a top-level RequestError variant (not inside ApiError)
+        teloxide::RequestError::RetryAfter(seconds) => {
+            ErrorClass::RateLimited(seconds.seconds() as u64)
+        }
         teloxide::RequestError::Api(api_err) => {
-            let msg = api_err.to_string();
-            if msg.contains("Too Many Requests") || msg.contains("429") {
-                ErrorClass::RateLimited(30)
-            } else if msg.contains("Unauthorized")
-                || msg.contains("401")
-                || msg.contains("Bad Request")
-                || msg.contains("400")
-            {
-                ErrorClass::Unrecoverable
-            } else {
-                ErrorClass::Recoverable
+            use teloxide::ApiError;
+            match api_err {
+                // Permanent rejections — user blocked bot, chat/user gone
+                ApiError::BotBlocked | ApiError::ChatNotFound | ApiError::UserNotFound => {
+                    ErrorClass::Rejected(api_err.to_string())
+                }
+                // Invalid token is also permanent
+                ApiError::InvalidToken => ErrorClass::Rejected(api_err.to_string()),
+                // Catch other permanent errors by message content
+                _ => {
+                    let msg = api_err.to_string();
+                    if msg.contains("Bad Request") {
+                        ErrorClass::Rejected(msg)
+                    } else {
+                        ErrorClass::PostConnect
+                    }
+                }
             }
         }
-        teloxide::RequestError::Network(_) => ErrorClass::Recoverable,
-        _ => ErrorClass::Recoverable,
+        teloxide::RequestError::Network(reqwest_err) => {
+            if reqwest_err.is_connect() {
+                ErrorClass::PreConnect // DNS/TCP failure — data never sent
+            } else {
+                ErrorClass::PostConnect // timeout, reset, etc.
+            }
+        }
+        _ => ErrorClass::PostConnect,
     }
 }
 
@@ -352,11 +374,11 @@ pub(crate) async fn send_message(
                 Err(e) => {
                     attempts += 1;
                     match classify_error(&e) {
-                        ErrorClass::Unrecoverable => {
-                            // Try plain text fallback (strip HTML)
+                        ErrorClass::Rejected(reason) => {
+                            // Permanent rejection — try plain text fallback (strip HTML)
                             tracing::warn!(
-                                "HTML send failed (unrecoverable), retrying as plain text: {}",
-                                e
+                                "HTML send rejected ({}), falling back to plain text",
+                                reason
                             );
                             break build_request(None, chunk, reply_to_ref, keyboard_ref)
                                 .await
@@ -381,14 +403,28 @@ pub(crate) async fn send_message(
                             );
                             tokio::time::sleep(std::time::Duration::from_secs(secs)).await;
                         }
-                        ErrorClass::Recoverable => {
+                        ErrorClass::PreConnect => {
+                            // DNS/TCP failure — data never sent, safe to retry aggressively
                             if attempts > max_retries {
                                 return Err(ChannelError::SendFailed(e.to_string()));
                             }
                             let backoff_ms = 500 * attempts as u64;
                             tracing::warn!(
-                                "Telegram send error (recoverable), retrying in {}ms (attempt {}/{}): {}",
+                                "Telegram pre-connect error, retrying in {}ms (attempt {}/{}): {}",
                                 backoff_ms, attempts, max_retries, e
+                            );
+                            tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
+                        }
+                        ErrorClass::PostConnect => {
+                            // Data may have been sent — limit retries to avoid duplicates
+                            let post_connect_max = max_retries.min(2);
+                            if attempts > post_connect_max {
+                                return Err(ChannelError::SendFailed(e.to_string()));
+                            }
+                            let backoff_ms = 1000 * attempts as u64;
+                            tracing::warn!(
+                                "Telegram post-connect error, retrying in {}ms (attempt {}/{}): {}",
+                                backoff_ms, attempts, post_connect_max, e
                             );
                             tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
                         }
@@ -731,6 +767,57 @@ mod tests {
                 "chunk too long: {} chars",
                 chunk.chars().count()
             );
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Error classification tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_classify_rate_limited() {
+        use teloxide::types::Seconds;
+        let seconds = Seconds::from_seconds(30);
+        let err = teloxide::RequestError::RetryAfter(seconds);
+        match classify_error(&err) {
+            ErrorClass::RateLimited(secs) => assert_eq!(secs, 30),
+            other => panic!("Expected RateLimited, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_classify_bot_blocked() {
+        let err = teloxide::RequestError::Api(teloxide::ApiError::BotBlocked);
+        match classify_error(&err) {
+            ErrorClass::Rejected(_) => {}
+            other => panic!("Expected Rejected, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_classify_chat_not_found() {
+        let err = teloxide::RequestError::Api(teloxide::ApiError::ChatNotFound);
+        match classify_error(&err) {
+            ErrorClass::Rejected(_) => {}
+            other => panic!("Expected Rejected, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_classify_user_not_found() {
+        let err = teloxide::RequestError::Api(teloxide::ApiError::UserNotFound);
+        match classify_error(&err) {
+            ErrorClass::Rejected(_) => {}
+            other => panic!("Expected Rejected, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_classify_invalid_token() {
+        let err = teloxide::RequestError::Api(teloxide::ApiError::InvalidToken);
+        match classify_error(&err) {
+            ErrorClass::Rejected(_) => {}
+            other => panic!("Expected Rejected, got {:?}", other),
         }
     }
 }

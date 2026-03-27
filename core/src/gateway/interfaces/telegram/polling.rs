@@ -14,6 +14,35 @@ use teloxide::prelude::*;
 use tokio::sync::{oneshot, RwLock};
 use tokio_util::sync::CancellationToken;
 
+/// Tracks polling loop state for restart decisions and watchdog logic.
+struct PollingState {
+    attempt: u32,
+    healthy_since: Option<Instant>,
+    last_update_at: Instant,
+}
+
+impl PollingState {
+    fn new() -> Self {
+        Self {
+            attempt: 0,
+            healthy_since: None,
+            last_update_at: Instant::now(),
+        }
+    }
+
+    /// Reset attempt counter if we were healthy for >5 minutes.
+    fn maybe_reset_attempts(&mut self) {
+        if self.healthy_since.is_some_and(|t| t.elapsed() > std::time::Duration::from_secs(300)) {
+            self.attempt = 1;
+        }
+    }
+
+    /// Calculate exponential backoff delay (capped at 60s).
+    fn backoff_secs(&self) -> u64 {
+        std::cmp::min(5 * 2u64.pow(self.attempt.saturating_sub(1).min(4)), 60)
+    }
+}
+
 /// Run the Telegram long-polling loop with watchdog and auto-restart.
 ///
 /// The caller builds the dptree `handler` (message + callback branches)
@@ -29,11 +58,10 @@ pub(crate) async fn run_polling_loop(
     tracing::info!("Starting Telegram long-polling...");
     *status.write().await = ChannelStatus::Connected;
 
-    let mut attempt = 0u32;
-    let mut healthy_since: Option<Instant> = None;
+    let mut state = PollingState::new();
 
     loop {
-        attempt += 1;
+        state.attempt += 1;
 
         let mut dispatcher = Dispatcher::builder(bot.clone(), handler.clone())
             .build();
@@ -105,18 +133,16 @@ pub(crate) async fn run_polling_loop(
 
         // Dispatcher stopped unexpectedly or health check failed — auto-restart
         *status.write().await = ChannelStatus::Connecting;
-        tracing::error!(attempt = attempt, reason = which, "Telegram polling {} — auto-restarting", which);
+        tracing::error!(attempt = state.attempt, reason = which, "Telegram polling {} — auto-restarting", which);
 
-        // Reset attempt counter if we were healthy for >5 minutes
-        if healthy_since.is_some_and(|t| t.elapsed() > std::time::Duration::from_secs(300)) {
-            attempt = 1;
-        }
-        let delay = std::cmp::min(5 * 2u64.pow(attempt.saturating_sub(1).min(4)), 60);
+        state.maybe_reset_attempts();
+        let delay = state.backoff_secs();
         tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
 
-        healthy_since = Some(Instant::now());
+        state.healthy_since = Some(Instant::now());
+        state.last_update_at = Instant::now();
 
-        tracing::info!(attempt = attempt, "Telegram reconnected, queued messages will be delivered");
+        tracing::info!(attempt = state.attempt, "Telegram reconnected, queued messages will be delivered");
         *status.write().await = ChannelStatus::Connected;
     }
 
