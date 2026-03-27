@@ -102,6 +102,7 @@ pub mod acp_config;
 pub mod execution_config;
 pub mod arena;
 pub mod teams;
+pub mod tools_visibility;
 
 pub use approval_bridge::{parse_session_target, get_forward_targets, ForwardMode};
 pub use identity::SharedIdentityResolver;
@@ -487,6 +488,10 @@ impl HandlerRegistry {
             JsonRpcResponse::error(req.id, INTERNAL_ERROR,
                 "agents.teams requires TeamStore — wire in Gateway startup".to_string())
         });
+
+        // Tools visibility handlers (placeholders — actual handlers wired with ToolRegistry)
+        registry.register("tools.catalog", tools_visibility::handle_catalog_stub);
+        registry.register("tools.effective", tools_visibility::handle_effective_stub);
 
         // Agent management handlers (placeholders — actual handlers wired with AgentManager)
         registry.register("agents.list", |req| async move {
