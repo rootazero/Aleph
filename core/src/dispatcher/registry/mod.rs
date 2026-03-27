@@ -17,7 +17,7 @@ use tokio::sync::RwLock;
 
 use crate::config::RoutingRuleConfig;
 use crate::mcp::types::McpToolInfo;
-use crate::skills::SkillInfo;
+use crate::skill::SkillInfo;
 
 use super::types::{ChannelType, ToolIndex, ToolIndexEntry, ToolSourceType, UnifiedTool};
 use conflict::ConflictResolver;

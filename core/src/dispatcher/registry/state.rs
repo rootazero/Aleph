@@ -7,7 +7,7 @@ use tracing::{debug, info};
 
 use crate::config::RoutingRuleConfig;
 use crate::mcp::types::McpToolInfo;
-use crate::skills::SkillInfo;
+use crate::skill::SkillInfo;
 
 use super::super::types::{ToolSourceType, UnifiedTool};
 use super::conflict::ConflictResolver;

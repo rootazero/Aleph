@@ -289,8 +289,8 @@ impl SkillRegistration {
     }
 
     /// Convert to SkillInfo for compatibility with ToolRegistry
-    pub fn to_skill_info(&self) -> crate::skills::SkillInfo {
-        crate::skills::SkillInfo {
+    pub fn to_skill_info(&self) -> crate::skill::SkillInfo {
+        crate::skill::SkillInfo {
             id: self.qualified_name(),
             name: self.name.clone(),
             description: self.description.clone(),

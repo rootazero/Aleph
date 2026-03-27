@@ -4,11 +4,12 @@
 //! into the payload context for prompt assembly.
 
 use crate::capability::strategy::CapabilityStrategy;
+use crate::domain::skill::SkillId;
+use crate::domain::Entity;
 use crate::error::Result;
 use crate::payload::{AgentPayload, Capability};
-use crate::skills::SkillsRegistry;
+use crate::skill::SkillSystem;
 use async_trait::async_trait;
-use crate::sync_primitives::Arc;
 use tracing::{debug, info, warn};
 
 /// Skills capability strategy
@@ -16,19 +17,19 @@ use tracing::{debug, info, warn};
 /// Matches user input against loaded skills and injects instructions
 /// from the matched SKILL.md into the payload context.
 pub struct SkillsStrategy {
-    /// Skills registry containing loaded skills
-    skills_registry: Option<Arc<SkillsRegistry>>,
+    /// Skills system containing loaded skills
+    skill_system: Option<SkillSystem>,
 }
 
 impl SkillsStrategy {
     /// Create a new skills strategy
-    pub fn new(skills_registry: Option<Arc<SkillsRegistry>>) -> Self {
-        Self { skills_registry }
+    pub fn new(skill_system: Option<SkillSystem>) -> Self {
+        Self { skill_system }
     }
 
-    /// Update the skills registry
-    pub fn set_registry(&mut self, registry: Arc<SkillsRegistry>) {
-        self.skills_registry = Some(registry);
+    /// Update the skills system
+    pub fn set_system(&mut self, system: SkillSystem) {
+        self.skill_system = Some(system);
     }
 }
 
@@ -43,21 +44,12 @@ impl CapabilityStrategy for SkillsStrategy {
     }
 
     fn is_available(&self) -> bool {
-        // Available if registry is configured
-        self.skills_registry.is_some()
+        // Available if system is configured
+        self.skill_system.is_some()
     }
 
     fn validate_config(&self) -> Result<()> {
-        // Validate skills directory exists if registry is configured
-        if let Some(registry) = &self.skills_registry {
-            let dir = registry.skills_dir();
-            if !dir.exists() {
-                return Err(crate::error::AlephError::config(format!(
-                    "Skills directory does not exist: {}",
-                    dir.display()
-                )));
-            }
-        }
+        // SkillSystem manages its own directories internally
         Ok(())
     }
 
@@ -66,11 +58,11 @@ impl CapabilityStrategy for SkillsStrategy {
             return Ok(false);
         }
 
-        // Check if registry has any skills loaded
-        if let Some(registry) = &self.skills_registry {
-            let count = registry.count();
+        // Check if system has any skills loaded
+        if let Some(system) = &self.skill_system {
+            let count = system.list_skills().await.len();
             debug!(skill_count = count, "Skills health check: skills loaded");
-            // Skills is healthy as long as registry exists
+            // Skills is healthy as long as system exists
             // (could have 0 skills but still be operational)
             return Ok(true);
         }
@@ -85,22 +77,17 @@ impl CapabilityStrategy for SkillsStrategy {
         info.insert("priority".to_string(), "4".to_string());
         info.insert("available".to_string(), self.is_available().to_string());
         info.insert(
-            "has_registry".to_string(),
-            self.skills_registry.is_some().to_string(),
+            "has_system".to_string(),
+            self.skill_system.is_some().to_string(),
         );
-        if let Some(registry) = &self.skills_registry {
-            info.insert("skill_count".to_string(), registry.count().to_string());
-            info.insert(
-                "skills_dir".to_string(),
-                registry.skills_dir().display().to_string(),
-            );
-        }
+        // Note: status_info is sync, cannot call async list_skills here.
+        // We omit skill_count and skills_dir to keep this sync-safe.
         info
     }
 
     async fn execute(&self, mut payload: AgentPayload) -> Result<AgentPayload> {
-        let Some(registry) = &self.skills_registry else {
-            warn!("Skills capability requested but no registry configured");
+        let Some(system) = &self.skill_system else {
+            warn!("Skills capability requested but no system configured");
             return Ok(payload);
         };
 
@@ -115,22 +102,22 @@ impl CapabilityStrategy for SkillsStrategy {
         // Check if this is an explicit skill invocation via slash command
         if let crate::payload::Intent::Skills(skill_id) = &payload.meta.intent {
             // Explicit slash command: pre-load the specific skill's instructions
-            if let Some(skill) = registry.get_skill(skill_id) {
+            if let Some(skill) = system.get_skill(&SkillId::new(skill_id)).await {
                 info!(
                     skill_id = %skill_id,
                     "Explicit skill invocation via slash command - pre-loading instructions"
                 );
-                payload.context.skill_instructions = Some(skill.instructions.clone());
+                payload.context.skill_instructions = Some(skill.content().as_str().to_string());
                 // Also populate available_skills for consistency
                 payload.context.available_skills = Some(vec![crate::payload::SkillMetadata {
-                    id: skill.id.clone(),
+                    id: skill.id().as_str().to_string(),
                     description: skill.description().to_string(),
                 }]);
                 return Ok(payload);
             } else {
                 warn!(
                     skill_id = %skill_id,
-                    "Requested skill not found in registry"
+                    "Requested skill not found in system"
                 );
                 // Fall through to Progressive Disclosure mode
             }
@@ -145,12 +132,12 @@ impl CapabilityStrategy for SkillsStrategy {
         // as task directives) rather than passively receiving them (treating as context).
 
         // Collect skill metadata for all available skills
-        let skills = registry.list_skills();
+        let skills = system.list_skills().await;
         if !skills.is_empty() {
             let metadata: Vec<crate::payload::SkillMetadata> = skills
                 .iter()
                 .map(|s| crate::payload::SkillMetadata {
-                    id: s.id.clone(),
+                    id: s.id().as_str().to_string(),
                     description: s.description().to_string(),
                 })
                 .collect();
@@ -161,7 +148,7 @@ impl CapabilityStrategy for SkillsStrategy {
             );
             payload.context.available_skills = Some(metadata);
         } else {
-            debug!("No skills available in registry");
+            debug!("No skills available in system");
         }
 
         // For general chat, agent will use read_skill tool to load instructions when needed.
@@ -201,14 +188,19 @@ description: {}
         fs::write(skill_dir.join("SKILL.md"), content).unwrap();
     }
 
+    async fn make_system(skills_dir: std::path::PathBuf) -> SkillSystem {
+        let system = SkillSystem::new();
+        system.init(vec![skills_dir]).await.unwrap();
+        system
+    }
+
     #[tokio::test]
     async fn test_skills_strategy_available() {
         let temp_dir = TempDir::new().unwrap();
         let skills_dir = temp_dir.path().to_path_buf();
-        let registry = Arc::new(SkillsRegistry::new(skills_dir));
-        registry.load_all().unwrap();
+        let system = make_system(skills_dir).await;
 
-        let strategy = SkillsStrategy::new(Some(registry));
+        let strategy = SkillsStrategy::new(Some(system));
         assert!(strategy.is_available());
     }
 
@@ -232,10 +224,9 @@ description: {}
             "# Refine Text\n\nWhen refining text, focus on clarity and conciseness.",
         );
 
-        let registry = Arc::new(SkillsRegistry::new(skills_dir));
-        registry.load_all().unwrap();
+        let system = make_system(skills_dir).await;
 
-        let strategy = SkillsStrategy::new(Some(registry));
+        let strategy = SkillsStrategy::new(Some(system));
 
         let anchor = ContextAnchor::new(None);
         let payload = PayloadBuilder::new()
@@ -281,10 +272,9 @@ description: {}
             "# Refine Text\n\nWhen refining text, focus on clarity and conciseness.",
         );
 
-        let registry = Arc::new(SkillsRegistry::new(skills_dir));
-        registry.load_all().unwrap();
+        let system = make_system(skills_dir).await;
 
-        let strategy = SkillsStrategy::new(Some(registry));
+        let strategy = SkillsStrategy::new(Some(system));
 
         let anchor = ContextAnchor::new(None);
         // GeneralChat instead of Intent::Skills
@@ -332,10 +322,9 @@ description: {}
             "# Translate\n\nInstructions.",
         );
 
-        let registry = Arc::new(SkillsRegistry::new(skills_dir));
-        registry.load_all().unwrap();
+        let system = make_system(skills_dir).await;
 
-        let strategy = SkillsStrategy::new(Some(registry));
+        let strategy = SkillsStrategy::new(Some(system));
 
         let anchor = ContextAnchor::new(None);
         let payload = PayloadBuilder::new()
@@ -366,10 +355,9 @@ description: {}
         let temp_dir = TempDir::new().unwrap();
         let skills_dir = temp_dir.path().to_path_buf();
 
-        let registry = Arc::new(SkillsRegistry::new(skills_dir));
-        registry.load_all().unwrap();
+        let system = make_system(skills_dir).await;
 
-        let strategy = SkillsStrategy::new(Some(registry));
+        let strategy = SkillsStrategy::new(Some(system));
 
         let anchor = ContextAnchor::new(None);
         let payload = PayloadBuilder::new()
@@ -392,14 +380,13 @@ description: {}
 
     #[tokio::test]
     async fn test_skills_strategy_empty_registry() {
-        // With empty registry, available_skills should be None
+        // With empty system, available_skills should be None
         let temp_dir = TempDir::new().unwrap();
         let skills_dir = temp_dir.path().to_path_buf();
 
-        let registry = Arc::new(SkillsRegistry::new(skills_dir));
-        registry.load_all().unwrap();
+        let system = make_system(skills_dir).await;
 
-        let strategy = SkillsStrategy::new(Some(registry));
+        let strategy = SkillsStrategy::new(Some(system));
 
         let anchor = ContextAnchor::new(None);
         let payload = PayloadBuilder::new()
@@ -415,7 +402,7 @@ description: {}
 
         let result = strategy.execute(payload).await.unwrap();
 
-        // No skills in registry, so no available_skills
+        // No skills in system, so no available_skills
         assert!(result.context.available_skills.is_none());
         // No skill_instructions (agent uses read_skill tool, which will fail)
         assert!(result.context.skill_instructions.is_none());

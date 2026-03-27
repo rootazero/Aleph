@@ -937,10 +937,10 @@ pub(in crate::commands::start) async fn register_agent_handlers(
 
                 {
                     let skill_manifests = ext_manager.skill_system().list_skills().await;
-                    let skill_infos: Vec<alephcore::skills::SkillInfo> = skill_manifests
+                    let skill_infos: Vec<alephcore::skill::SkillInfo> = skill_manifests
                         .iter()
                         .filter(|s| s.is_user_invocable())
-                        .map(|s| alephcore::skills::SkillInfo {
+                        .map(|s| alephcore::skill::SkillInfo {
                             id: s.id().as_str().to_string(),
                             name: s.name().to_string(),
                             description: s.description().to_string(),
@@ -958,7 +958,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 // Register plugin commands (from CC-format plugins' commands/ directories)
                 {
                     let commands = ext_manager.get_all_commands().await;
-                    let command_skill_infos: Vec<alephcore::skills::SkillInfo> = commands
+                    let command_skill_infos: Vec<alephcore::skill::SkillInfo> = commands
                         .iter()
                         .filter(|cmd| cmd.plugin_name.is_some())
                         .map(|cmd| {
@@ -967,7 +967,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                             } else {
                                 cmd.name.clone()
                             };
-                            alephcore::skills::SkillInfo {
+                            alephcore::skill::SkillInfo {
                                 id,
                                 name: cmd.name.clone(),
                                 description: cmd.description.clone(),

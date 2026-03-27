@@ -196,8 +196,9 @@ pub use crate::extension::{
 
 pub use crate::skills::{
     initialize_builtin_skills, list_installed_skills,
-    Skill, SkillInfo, SkillsInstaller, SkillsRegistry,
+    Skill, SkillsInstaller, SkillsRegistry,
 };
+pub use crate::skill::SkillInfo;
 
 pub use crate::skill::{
     SkillSystem, SkillStatusEntry, SkillStatusFilter,

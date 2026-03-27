@@ -294,7 +294,7 @@ impl InitializationCoordinator {
     // =========================================================================
 
     async fn install_skills(&self) -> Result<(), InitError> {
-        use crate::skills::SkillsRegistry;
+        use crate::skill::SkillSystem;
 
         let skills_dir = self.config_dir.join("skills");
 
@@ -310,26 +310,27 @@ impl InitializationCoordinator {
 
         // Note: Built-in skills are copied from app bundle by the platform layer (Swift/C#)
         // The bundle_skills_dir path is not available from Rust core
-        // This phase just ensures the directory exists and validates the registry
+        // This phase just ensures the directory exists and validates the system
 
         // Report progress
         if let Some(h) = &self.handler {
             h.on_phase_progress(
                 "skills".to_string(),
                 0.5,
-                "Validating skills registry...".to_string(),
+                "Validating skills system...".to_string(),
             );
         }
 
-        // Initialize and validate skills registry
-        let registry = SkillsRegistry::new(skills_dir.clone());
-        if let Err(e) = registry.load_all() {
+        // Initialize and validate skills system
+        let system = SkillSystem::new();
+        if let Err(e) = system.init(vec![skills_dir.clone()]).await {
             // Non-fatal: just warn if skills can't be loaded
-            warn!(error = %e, "Failed to load skills registry");
+            warn!(error = %e, "Failed to initialize skill system");
         }
 
+        let skill_count = system.list_skills().await.len();
         info!(
-            skill_count = registry.count(),
+            skill_count = skill_count,
             "Skills directory initialized"
         );
         Ok(())

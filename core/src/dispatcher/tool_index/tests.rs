@@ -895,48 +895,48 @@ mod tests {
 
     #[test]
     fn test_skill_registry_event_creation() {
-        use crate::skills::SkillRegistryEvent;
+        use crate::skill::SkillSystemEvent;
 
-        let loaded = SkillRegistryEvent::loaded("test-skill", "Test Skill");
+        let loaded = SkillSystemEvent::loaded("test-skill", "Test Skill");
         assert_eq!(loaded.skill_id(), Some("test-skill"));
         assert!(!loaded.is_bulk_reload());
 
-        let removed = SkillRegistryEvent::removed("old-skill");
+        let removed = SkillSystemEvent::removed("old-skill");
         assert_eq!(removed.skill_id(), Some("old-skill"));
         assert!(!removed.is_bulk_reload());
 
-        let reloaded = SkillRegistryEvent::all_reloaded(3, vec!["a".into(), "b".into(), "c".into()]);
+        let reloaded = SkillSystemEvent::all_reloaded(3, vec!["a".into(), "b".into(), "c".into()]);
         assert!(reloaded.skill_id().is_none());
         assert!(reloaded.is_bulk_reload());
     }
 
     #[test]
     fn test_skill_registry_event_serialization() {
-        use crate::skills::SkillRegistryEvent;
+        use crate::skill::SkillSystemEvent;
 
-        let event = SkillRegistryEvent::loaded("test", "Test Skill");
+        let event = SkillSystemEvent::loaded("test", "Test Skill");
         let json = serde_json::to_string(&event).expect("serialize should succeed");
 
         assert!(json.contains("skill_loaded"));
         assert!(json.contains("test"));
 
-        let deserialized: SkillRegistryEvent =
+        let deserialized: SkillSystemEvent =
             serde_json::from_str(&json).expect("deserialize should succeed");
         assert_eq!(deserialized.skill_id(), Some("test"));
     }
 
     #[tokio::test]
-    async fn test_skill_registry_subscribe() {
-        use crate::skills::SkillsRegistry;
+    async fn test_skill_system_subscribe() {
+        use crate::skill::SkillSystem;
         use tempfile::TempDir;
 
         let temp_dir = TempDir::new().unwrap();
         let skills_dir = temp_dir.path().to_path_buf();
 
-        let registry = SkillsRegistry::new(skills_dir);
+        let system = SkillSystem::new();
 
         // Should be able to subscribe
-        let mut receiver = registry.subscribe();
+        let mut receiver = system.subscribe();
 
         // Create a skill for testing
         let skill_dir = temp_dir.path().join("test-skill");
@@ -947,14 +947,14 @@ mod tests {
         )
         .unwrap();
 
-        // Load skills (should emit AllReloaded event)
-        registry.load_all().unwrap();
+        // Init skills (should emit AllReloaded event)
+        system.init(vec![skills_dir]).await.unwrap();
 
         // Try to receive the event (non-blocking)
         tokio::time::timeout(std::time::Duration::from_millis(100), async {
             if let Ok(event) = receiver.recv().await {
                 match event {
-                    crate::skills::SkillRegistryEvent::AllReloaded { count, skill_ids } => {
+                    crate::skill::SkillSystemEvent::AllReloaded { count, skill_ids } => {
                         assert_eq!(count, 1);
                         assert!(skill_ids.contains(&"test-skill".to_string()));
                     }

@@ -42,7 +42,7 @@ use crate::mcp::McpClient;
 use crate::memory::store::MemoryBackend;
 use crate::memory::{EmbeddingProvider, FactRetrieval, FactRetrievalConfig};
 use crate::payload::{AgentPayload, Capability};
-use crate::skills::SkillsRegistry;
+use crate::skill::SkillSystem;
 use crate::sync_primitives::Arc;
 use tracing::{debug, info, warn};
 
@@ -56,8 +56,8 @@ pub struct CapabilityExecutor {
     memory_config: Option<Arc<MemoryConfig>>,
     /// Embedding provider for memory retrieval
     embedder: Option<Arc<dyn EmbeddingProvider>>,
-    /// Skills registry for Skills capability
-    skills_registry: Option<Arc<SkillsRegistry>>,
+    /// Skills system for Skills capability
+    skill_system: Option<SkillSystem>,
     /// Skills configuration
     skills_config: Option<Arc<SkillsConfig>>,
     /// MCP client for tool access
@@ -95,7 +95,7 @@ impl CapabilityExecutor {
             memory_db,
             memory_config,
             embedder: None,
-            skills_registry: None,
+            skill_system: None,
             skills_config: None,
             mcp_client: None,
             mcp_config: None,
@@ -135,14 +135,14 @@ impl CapabilityExecutor {
     ///
     /// # Arguments
     ///
-    /// * `skills_registry` - Skills registry containing loaded skills
+    /// * `skill_system` - Skill system containing loaded skills
     /// * `skills_config` - Skills configuration
     pub fn with_skills(
         mut self,
-        skills_registry: Option<Arc<SkillsRegistry>>,
+        skill_system: Option<SkillSystem>,
         skills_config: Option<Arc<SkillsConfig>>,
     ) -> Self {
-        self.skills_registry = skills_registry;
+        self.skill_system = skill_system;
         self.skills_config = skills_config;
         self
     }
@@ -401,9 +401,9 @@ impl CapabilityExecutor {
             return Ok(payload);
         }
 
-        // Check if skills registry is available
-        let Some(registry) = &self.skills_registry else {
-            warn!("Skills capability requested but no registry configured");
+        // Check if skills system is available
+        let Some(system) = &self.skill_system else {
+            warn!("Skills capability requested but no skill system configured");
             return Ok(payload);
         };
 
@@ -412,18 +412,19 @@ impl CapabilityExecutor {
 
         // If skill_id is specified, look up directly
         if let Some(id) = skill_id {
-            if let Some(skill) = registry.get_skill(id) {
+            use crate::domain::skill::SkillId;
+            if let Some(skill) = system.get_skill(&SkillId::new(id)).await {
                 info!(
                     skill_id = %id,
                     skill_name = %skill.name(),
                     "Injecting skill instructions from explicit /skill command"
                 );
-                payload.context.skill_instructions = Some(skill.instructions.clone());
+                payload.context.skill_instructions = Some(skill.content().as_str().to_string());
                 return Ok(payload);
             } else {
                 warn!(
                     skill_id = %id,
-                    "Skill not found in registry"
+                    "Skill not found in system"
                 );
                 return Ok(payload);
             }
@@ -435,14 +436,16 @@ impl CapabilityExecutor {
             return Ok(payload);
         }
 
-        // Try to auto-match skill based on user input
-        if let Some(skill) = registry.find_matching(&payload.user_input) {
-            info!(
-                skill_id = %skill.id,
-                skill_name = %skill.name(),
-                "Auto-matched skill based on user input"
-            );
-            payload.context.skill_instructions = Some(skill.instructions.clone());
+        // Try to auto-match skill based on user input via resolve_command
+        if let Some(cmd) = system.resolve_command(&payload.user_input).await {
+            if let Some(skill) = system.get_skill(&cmd.skill_id).await {
+                info!(
+                    skill_id = %cmd.skill_id.as_str(),
+                    skill_name = %skill.name(),
+                    "Auto-matched skill based on user input"
+                );
+                payload.context.skill_instructions = Some(skill.content().as_str().to_string());
+            }
         } else {
             debug!("No skill matched for user input");
         }

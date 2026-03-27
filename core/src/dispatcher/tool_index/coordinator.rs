@@ -12,7 +12,7 @@ use crate::memory::context::{
     FactSource, FactSpecificity, FactType, MemoryCategory, MemoryFact, MemoryLayer, TemporalScope,
 };
 use crate::memory::store::{MemoryBackend, MemoryStore};
-use crate::skills::{SkillRegistryEvent, SkillsRegistry};
+use crate::skill::{SkillSystemEvent, SkillSystem};
 use super::inference::SemanticPurposeInferrer;
 use crate::sync_primitives::Arc;
 use tokio::sync::broadcast;
@@ -427,13 +427,13 @@ impl ToolIndexCoordinator {
     /// A JoinHandle for the spawned task
     pub fn start_skill_listener<F>(
         self: Arc<Self>,
-        registry: Arc<SkillsRegistry>,
+        system: SkillSystem,
         skill_to_tool: F,
     ) -> tokio::task::JoinHandle<()>
     where
         F: Fn(String) -> Option<ToolMeta> + Send + Sync + 'static,
     {
-        let mut receiver = registry.subscribe();
+        let mut receiver = system.subscribe();
         let coordinator = self;
         let skill_to_tool = Arc::new(skill_to_tool);
 
@@ -444,7 +444,7 @@ impl ToolIndexCoordinator {
                 match receiver.recv().await {
                     Ok(event) => {
                         match &event {
-                            SkillRegistryEvent::AllReloaded { count, skill_ids } => {
+                            SkillSystemEvent::AllReloaded { count, skill_ids } => {
                                 tracing::info!(
                                     count = %count,
                                     "Skills reloaded, syncing all skill tools"
@@ -462,7 +462,7 @@ impl ToolIndexCoordinator {
                                     );
                                 }
                             }
-                            SkillRegistryEvent::SkillLoaded { skill_id, skill_name } => {
+                            SkillSystemEvent::SkillLoaded { skill_id, skill_name } => {
                                 tracing::info!(
                                     skill_id = %skill_id,
                                     skill_name = %skill_name,
@@ -479,7 +479,7 @@ impl ToolIndexCoordinator {
                                     }
                                 }
                             }
-                            SkillRegistryEvent::SkillRemoved { skill_id } => {
+                            SkillSystemEvent::SkillRemoved { skill_id } => {
                                 tracing::info!(
                                     skill_id = %skill_id,
                                     "Skill removed, invalidating tool fact"
