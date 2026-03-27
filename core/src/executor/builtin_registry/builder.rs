@@ -413,6 +413,33 @@ impl BuiltinToolRegistry {
                 (None, None, None, None)
             };
 
+        // Skill management tools — always available
+        let skill_system = crate::skill::SkillSystem::new();
+        let skill_status_tool = crate::builtin_tools::skill_status::SkillStatusTool::new(skill_system.clone());
+        let skill_install_tool = crate::builtin_tools::skill_install::SkillInstallTool::new(skill_system.clone());
+        let skill_manage_tool = crate::builtin_tools::skill_manage::SkillManageTool::new(skill_system);
+
+        // Register skill management tool schemas
+        {
+            use crate::tools::AlephTool;
+            let tool_defs = [
+                skill_status_tool.definition(),
+                skill_install_tool.definition(),
+                skill_manage_tool.definition(),
+            ];
+            for td in &tool_defs {
+                let mut ut = UnifiedTool::new(
+                    format!("builtin:{}", td.name),
+                    &td.name,
+                    &td.description,
+                    ToolSource::Builtin,
+                );
+                ut = ut.with_parameters_schema(td.parameters.clone());
+                tools.insert(td.name.clone(), ut);
+            }
+        }
+        info!("Registered skill management tools (skill_status, skill_install, skill_manage)");
+
         // Initialize tool policy handle (use provided or create a default one)
         let tool_policy_handle = config.tool_policy.clone()
             .or_else(|| Some(crate::builtin_tools::agent_manage::new_tool_policy_handle()));
@@ -522,6 +549,9 @@ impl BuiltinToolRegistry {
             team_delegate_tool,
             team_status_tool,
             team_disband_tool,
+            skill_status_tool,
+            skill_install_tool,
+            skill_manage_tool,
             tools,
         }
     }

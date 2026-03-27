@@ -147,6 +147,10 @@ pub struct BuiltinToolRegistry {
     pub(crate) team_delegate_tool: Option<crate::builtin_tools::team::TeamDelegateTool>,
     pub(crate) team_status_tool: Option<crate::builtin_tools::team::TeamStatusTool>,
     pub(crate) team_disband_tool: Option<crate::builtin_tools::team::TeamDisbandTool>,
+    /// Skill management tools — always available (SkillSystem is always initialized)
+    pub(crate) skill_status_tool: crate::builtin_tools::skill_status::SkillStatusTool,
+    pub(crate) skill_install_tool: crate::builtin_tools::skill_install::SkillInstallTool,
+    pub(crate) skill_manage_tool: crate::builtin_tools::skill_manage::SkillManageTool,
     /// Channel registry for deferred injection (same pattern as gateway_context).
     /// Used by channel_pairing tool.
     pub(crate) channel_registry_cell: Arc<tokio::sync::OnceCell<Arc<ChannelRegistry>>>,
@@ -637,6 +641,11 @@ impl ToolRegistry for BuiltinToolRegistry {
                 })?;
                 tool.call_json(arguments).await
             }),
+
+            // Skill management tools
+            "skill_status" => Box::pin(async move { self.skill_status_tool.call_json(arguments).await }),
+            "skill_install" => Box::pin(async move { self.skill_install_tool.call_json(arguments).await }),
+            "skill_manage" => Box::pin(async move { self.skill_manage_tool.call_json(arguments).await }),
 
             _ => {
                 // Check if this is a plugin tool

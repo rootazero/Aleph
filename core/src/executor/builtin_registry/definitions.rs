@@ -355,6 +355,22 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
     // Use /voice on|off instead. Excluded from BUILTIN_TOOL_DEFINITIONS
     // to avoid appearing in command lists.
 
+    // Skill management tools — LLM-callable tools for querying and configuring skills
+    BuiltinToolDefinition {
+        name: "skill_status",
+        description: "Query skill system status — list all skills with readiness, missing deps, and install options",
+        requires_config: false,
+    },
+    BuiltinToolDefinition {
+        name: "skill_install",
+        description: "Install missing dependencies for a skill",
+        requires_config: false,
+    },
+    BuiltinToolDefinition {
+        name: "skill_manage",
+        description: "Toggle or configure a skill (enable/disable, change prompt scope)",
+        requires_config: false,
+    },
     // ACP delegate tools — delegate coding tasks to external CLI agents.
     // Require AcpHarnessManager; execution returns clear error if harness unavailable.
     BuiltinToolDefinition {
@@ -499,6 +515,16 @@ pub fn create_tool_boxed(
                 _ => None,
             }
         }
+        // Skill management tools — always available
+        "skill_status" => Some(Box::new(
+            crate::builtin_tools::skill_status::SkillStatusTool::new(crate::skill::SkillSystem::new())
+        )),
+        "skill_install" => Some(Box::new(
+            crate::builtin_tools::skill_install::SkillInstallTool::new(crate::skill::SkillSystem::new())
+        )),
+        "skill_manage" => Some(Box::new(
+            crate::builtin_tools::skill_manage::SkillManageTool::new(crate::skill::SkillSystem::new())
+        )),
         _ => None,
     }
 }
