@@ -20,6 +20,7 @@ pub mod delivery;
 pub mod group_chat;
 pub mod handlers;
 pub mod message_ops;
+mod polling;
 
 pub use config::{PairingEntry, TelegramConfig, WebhookConfig};
 pub use message_ops::TelegramMessageOps;
@@ -35,7 +36,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::{mpsc, oneshot, RwLock};
-use tokio_util::sync::CancellationToken;
 
 use teloxide::{
     prelude::*,
@@ -276,298 +276,188 @@ impl Channel for TelegramChannel {
         self.bot = Some(bot.clone());
 
         // Create shutdown channel
-        let (shutdown_tx, mut shutdown_rx) = oneshot::channel();
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
         self.shutdown_tx = Some(shutdown_tx);
 
-        // Start message polling
+        // Build handler closures capturing channel-specific Arc clones
         let inbound_tx = self.channel_state.sender();
         let inbound_tx_for_cb = self.channel_state.sender();
         let callback_tx = self.callback_tx.clone();
         let config = self.config.clone();
         let config_for_cb = self.config.clone();
-        let status = self.channel_state.status_handle();
         let channel_id = self.info.id.clone();
         let channel_id_for_cb = self.info.id.clone();
 
-        // Clone pairing state for the message handler closure
         let pairing_codes_clone = self.pairing_codes.clone();
         let prompt_times_clone = self.pairing_prompt_times.clone();
         let runtime_users_clone = self.runtime_allowed_users.clone();
         let runtime_users_for_cb = self.runtime_allowed_users.clone();
 
-        tokio::spawn(async move {
-            tracing::info!("Starting Telegram long-polling...");
-            *status.write().await = ChannelStatus::Connected;
-
-            let mut attempt = 0u32;
-            let mut healthy_since: Option<Instant> = None;
-
-            loop {
-                attempt += 1;
-
-                // Re-clone captured variables for this iteration's handler closures
-                let iter_inbound_tx = inbound_tx.clone();
-                let iter_inbound_tx_for_cb = inbound_tx_for_cb.clone();
-                let iter_callback_tx = callback_tx.clone();
-                let iter_config = config.clone();
-                let iter_config_for_cb = config_for_cb.clone();
-                let iter_channel_id = channel_id.clone();
-                let iter_channel_id_for_cb = channel_id_for_cb.clone();
-                let iter_pairing_codes = pairing_codes_clone.clone();
-                let iter_prompt_times = prompt_times_clone.clone();
-                let iter_runtime_users = runtime_users_clone.clone();
-                let iter_runtime_users_for_cb = runtime_users_for_cb.clone();
-
-                // Message handler
-                let message_handler = Update::filter_message().endpoint(
-                    move |bot: Bot, msg: teloxide::types::Message| {
-                        let inbound_tx = iter_inbound_tx.clone();
-                        let config = iter_config.clone();
-                        let channel_id = iter_channel_id.clone();
-                        let pairing_codes = iter_pairing_codes.clone();
-                        let prompt_times = iter_prompt_times.clone();
-                        let runtime_users = iter_runtime_users.clone();
-                        async move {
-                            if let Some(inbound) = handlers::convert_message(
-                                &msg, &bot, &config, &channel_id, &runtime_users,
-                            ).await {
-                                if let Err(e) = inbound_tx.send(inbound).await {
-                                    tracing::error!("Failed to send inbound message: {}", e);
-                                }
-                            } else if let Some(from) = &msg.from {
-                                // Message was rejected (unauthorized user or service message).
-                                // Handle pairing flow for DM messages from unauthorized users.
-                                let user_id = from.id.0 as i64;
-                                let is_dm = !msg.chat.is_group() && !msg.chat.is_supergroup();
-                                let has_allowlist = !config.allowed_users.is_empty()
-                                    || !runtime_users.read().await.is_empty();
-
-                                if is_dm && has_allowlist && !config.is_user_allowed(user_id) {
-                                    if let Some(text) = msg.text() {
-                                        let code = text.trim().to_uppercase();
-                                        let mut codes = pairing_codes.write().await;
-                                        if let Some(entry) = codes.get(&code) {
-                                            if !entry.is_expired() {
-                                                codes.remove(&code);
-                                                drop(codes);
-                                                runtime_users.write().await.push(user_id);
-                                                let _ = bot.send_message(
-                                                    msg.chat.id,
-                                                    "Paired successfully! You can now send messages.",
-                                                ).await;
-                                                tracing::info!(
-                                                    "User {} paired via code {}",
-                                                    user_id,
-                                                    code
-                                                );
-                                            } else {
-                                                codes.remove(&code);
-                                                let _ = bot.send_message(
-                                                    msg.chat.id,
-                                                    "Pairing code expired. Please request a new one.",
-                                                ).await;
-                                            }
-                                        } else {
-                                            // Rate-limited prompt: once per 5 minutes per user
-                                            let mut times = prompt_times.write().await;
-                                            let should_prompt = times
-                                                .get(&user_id)
-                                                .map(|t| t.elapsed().as_secs() > 300)
-                                                .unwrap_or(true);
-                                            if should_prompt {
-                                                times.insert(user_id, Instant::now());
-                                                let _ = bot.send_message(
-                                                    msg.chat.id,
-                                                    "Please enter your pairing code.",
-                                                ).await;
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            Ok::<(), std::convert::Infallible>(())
+        // Message handler
+        let message_handler = Update::filter_message().endpoint(
+            move |bot: Bot, msg: teloxide::types::Message| {
+                let inbound_tx = inbound_tx.clone();
+                let config = config.clone();
+                let channel_id = channel_id.clone();
+                let pairing_codes = pairing_codes_clone.clone();
+                let prompt_times = prompt_times_clone.clone();
+                let runtime_users = runtime_users_clone.clone();
+                async move {
+                    if let Some(inbound) = handlers::convert_message(
+                        &msg, &bot, &config, &channel_id, &runtime_users,
+                    ).await {
+                        if let Err(e) = inbound_tx.send(inbound).await {
+                            tracing::error!("Failed to send inbound message: {}", e);
                         }
-                    },
-                );
+                    } else if let Some(from) = &msg.from {
+                        // Message was rejected (unauthorized user or service message).
+                        // Handle pairing flow for DM messages from unauthorized users.
+                        let user_id = from.id.0 as i64;
+                        let is_dm = !msg.chat.is_group() && !msg.chat.is_supergroup();
+                        let has_allowlist = !config.allowed_users.is_empty()
+                            || !runtime_users.read().await.is_empty();
 
-                // Callback query handler — also re-injects callback data as an
-                // InboundMessage so the inbound router can process namespace
-                // sub-command selections through the normal message pipeline.
-                let callback_handler = Update::filter_callback_query().endpoint(
-                    move |bot: Bot, q: TgCallbackQuery| {
-                        let tx = iter_callback_tx.clone();
-                        let inbound_tx = iter_inbound_tx_for_cb.clone();
-                        let config = iter_config_for_cb.clone();
-                        let channel_id = iter_channel_id_for_cb.clone();
-                        let runtime_users = iter_runtime_users_for_cb.clone();
-                        async move {
-                            // Extract chat_id and optional thread_id for forum topic isolation
-                            let (raw_chat_id, thread_id_val) = q.message.as_ref()
-                                .map(|m| {
-                                    let chat = m.chat().id.0;
-                                    // Extract thread_id from Regular messages for forum topics
-                                    let tid = match m {
-                                        teloxide::types::MaybeInaccessibleMessage::Regular(msg) => {
-                                            msg.thread_id.map(|t| t.0.0)
-                                        }
-                                        _ => None,
-                                    };
-                                    (chat, tid)
-                                })
-                                .unwrap_or((0, None));
-
-                            let conv_id_str = if let Some(tid) = thread_id_val {
-                                format!("{}:topic:{}", raw_chat_id, tid)
-                            } else {
-                                raw_chat_id.to_string()
-                            };
-
-                            let msg_id_str = q
-                                .message
-                                .as_ref()
-                                .map(|m| m.id().to_string())
-                                .unwrap_or_default();
-
-                            if let Some(data) = q.data.clone() {
-                                let user_id_val = q.from.id.0 as i64;
-
-                                // Send to callback channel (for existing consumers)
-                                let query = CallbackQuery {
-                                    id: q.id.clone(),
-                                    user_id: UserId::new(q.from.id.to_string()),
-                                    chat_id: ConversationId::new(conv_id_str.clone()),
-                                    message_id: MessageId::new(msg_id_str),
-                                    data: data.clone(),
-                                };
-                                if let Err(e) = tx.send(query).await {
-                                    tracing::error!("Failed to send callback query: {}", e);
-                                }
-
-                                // Re-inject as InboundMessage if user is allowed
-                                // (static config or runtime-paired)
-                                let rt_allowed = runtime_users.read().await.contains(&user_id_val);
-                                if config.is_user_allowed(user_id_val) || rt_allowed {
-                                    let inbound = InboundMessage {
-                                        id: MessageId::new(format!("cb_{}", q.id)),
-                                        channel_id: channel_id.clone(),
-                                        conversation_id: ConversationId::new(conv_id_str),
-                                        sender_id: UserId::new(q.from.id.to_string()),
-                                        sender_name: q.from.username.clone().or_else(|| Some(q.from.first_name.clone())),
-                                        text: data,
-                                        attachments: Vec::new(),
-                                        timestamp: Utc::now(),
-                                        reply_to: None,
-                                        is_group: false,
-                                        raw: None,
-                                    };
-                                    if let Err(e) = inbound_tx.send(inbound).await {
-                                        tracing::error!("Failed to re-inject callback as inbound message: {}", e);
-                                    }
-                                }
-                            }
-
-                            // Answer callback to remove loading indicator
-                            if let Err(e) = bot.answer_callback_query(&q.id).await {
-                                tracing::warn!("Failed to answer callback query: {}", e);
-                            }
-
-                            Ok::<(), std::convert::Infallible>(())
-                        }
-                    },
-                );
-
-                // Combine handlers
-                let handler = dptree::entry()
-                    .branch(message_handler)
-                    .branch(callback_handler);
-
-                let mut dispatcher = Dispatcher::builder(bot.clone(), handler)
-                    .build();
-
-                // Watchdog: periodic health check via get_me() API call.
-                // Previous approach tracked "last message received" which falsely
-                // triggered restarts during idle periods (no users messaging).
-                // Now we actively probe the API — only restart on real failures.
-                const HEALTH_CHECK_INTERVAL_SECS: u64 = 120;
-                const MAX_CONSECUTIVE_FAILURES: u32 = 3;
-
-                let (stall_tx, mut stall_rx) = tokio::sync::mpsc::channel::<()>(1);
-                let watchdog_cancel = CancellationToken::new();
-                let watchdog_token = watchdog_cancel.clone();
-                let watchdog_bot = bot.clone();
-                let _watchdog = tokio::spawn(async move {
-                    let mut interval = tokio::time::interval(
-                        std::time::Duration::from_secs(HEALTH_CHECK_INTERVAL_SECS),
-                    );
-                    let mut consecutive_failures: u32 = 0;
-                    loop {
-                        tokio::select! {
-                            _ = interval.tick() => {
-                                match watchdog_bot.get_me().await {
-                                    Ok(_) => {
-                                        if consecutive_failures > 0 {
-                                            tracing::info!(
-                                                "Telegram health check recovered after {} failures",
-                                                consecutive_failures,
-                                            );
-                                        }
-                                        consecutive_failures = 0;
-                                    }
-                                    Err(e) => {
-                                        consecutive_failures += 1;
-                                        tracing::warn!(
-                                            failures = consecutive_failures,
-                                            "Telegram health check failed: {}",
-                                            e,
+                        if is_dm && has_allowlist && !config.is_user_allowed(user_id) {
+                            if let Some(text) = msg.text() {
+                                let code = text.trim().to_uppercase();
+                                let mut codes = pairing_codes.write().await;
+                                if let Some(entry) = codes.get(&code) {
+                                    if !entry.is_expired() {
+                                        codes.remove(&code);
+                                        drop(codes);
+                                        runtime_users.write().await.push(user_id);
+                                        let _ = bot.send_message(
+                                            msg.chat.id,
+                                            "Paired successfully! You can now send messages.",
+                                        ).await;
+                                        tracing::info!(
+                                            "User {} paired via code {}",
+                                            user_id,
+                                            code
                                         );
-                                        if consecutive_failures >= MAX_CONSECUTIVE_FAILURES {
-                                            tracing::error!(
-                                                failures = consecutive_failures,
-                                                "Telegram health check failed {} consecutive times — triggering restart",
-                                                consecutive_failures,
-                                            );
-                                            let _ = stall_tx.send(()).await;
-                                            break;
-                                        }
+                                    } else {
+                                        codes.remove(&code);
+                                        let _ = bot.send_message(
+                                            msg.chat.id,
+                                            "Pairing code expired. Please request a new one.",
+                                        ).await;
+                                    }
+                                } else {
+                                    // Rate-limited prompt: once per 5 minutes per user
+                                    let mut times = prompt_times.write().await;
+                                    let should_prompt = times
+                                        .get(&user_id)
+                                        .map(|t| t.elapsed().as_secs() > 300)
+                                        .unwrap_or(true);
+                                    if should_prompt {
+                                        times.insert(user_id, Instant::now());
+                                        let _ = bot.send_message(
+                                            msg.chat.id,
+                                            "Please enter your pairing code.",
+                                        ).await;
                                     }
                                 }
                             }
-                            _ = watchdog_token.cancelled() => break,
                         }
                     }
-                });
-
-                let which = tokio::select! {
-                    _ = dispatcher.dispatch() => "stopped",
-                    _ = &mut shutdown_rx => "shutdown",
-                    _ = stall_rx.recv() => "stall",
-                };
-                watchdog_cancel.cancel();
-
-                if which == "shutdown" {
-                    tracing::info!("Telegram channel shutdown requested");
-                    break;
+                    Ok::<(), std::convert::Infallible>(())
                 }
+            },
+        );
 
-                // Dispatcher stopped unexpectedly or health check failed — auto-restart
-                *status.write().await = ChannelStatus::Connecting;
-                tracing::error!(attempt = attempt, reason = which, "Telegram polling {} — auto-restarting", which);
+        // Callback query handler — also re-injects callback data as an
+        // InboundMessage so the inbound router can process namespace
+        // sub-command selections through the normal message pipeline.
+        let callback_handler = Update::filter_callback_query().endpoint(
+            move |bot: Bot, q: TgCallbackQuery| {
+                let tx = callback_tx.clone();
+                let inbound_tx = inbound_tx_for_cb.clone();
+                let config = config_for_cb.clone();
+                let channel_id = channel_id_for_cb.clone();
+                let runtime_users = runtime_users_for_cb.clone();
+                async move {
+                    // Extract chat_id and optional thread_id for forum topic isolation
+                    let (raw_chat_id, thread_id_val) = q.message.as_ref()
+                        .map(|m| {
+                            let chat = m.chat().id.0;
+                            // Extract thread_id from Regular messages for forum topics
+                            let tid = match m {
+                                teloxide::types::MaybeInaccessibleMessage::Regular(msg) => {
+                                    msg.thread_id.map(|t| t.0.0)
+                                }
+                                _ => None,
+                            };
+                            (chat, tid)
+                        })
+                        .unwrap_or((0, None));
 
-                // Reset attempt counter if we were healthy for >5 minutes
-                if healthy_since.is_some_and(|t| t.elapsed() > std::time::Duration::from_secs(300)) {
-                    attempt = 1;
+                    let conv_id_str = if let Some(tid) = thread_id_val {
+                        format!("{}:topic:{}", raw_chat_id, tid)
+                    } else {
+                        raw_chat_id.to_string()
+                    };
+
+                    let msg_id_str = q
+                        .message
+                        .as_ref()
+                        .map(|m| m.id().to_string())
+                        .unwrap_or_default();
+
+                    if let Some(data) = q.data.clone() {
+                        let user_id_val = q.from.id.0 as i64;
+
+                        // Send to callback channel (for existing consumers)
+                        let query = CallbackQuery {
+                            id: q.id.clone(),
+                            user_id: UserId::new(q.from.id.to_string()),
+                            chat_id: ConversationId::new(conv_id_str.clone()),
+                            message_id: MessageId::new(msg_id_str),
+                            data: data.clone(),
+                        };
+                        if let Err(e) = tx.send(query).await {
+                            tracing::error!("Failed to send callback query: {}", e);
+                        }
+
+                        // Re-inject as InboundMessage if user is allowed
+                        // (static config or runtime-paired)
+                        let rt_allowed = runtime_users.read().await.contains(&user_id_val);
+                        if config.is_user_allowed(user_id_val) || rt_allowed {
+                            let inbound = InboundMessage {
+                                id: MessageId::new(format!("cb_{}", q.id)),
+                                channel_id: channel_id.clone(),
+                                conversation_id: ConversationId::new(conv_id_str),
+                                sender_id: UserId::new(q.from.id.to_string()),
+                                sender_name: q.from.username.clone().or_else(|| Some(q.from.first_name.clone())),
+                                text: data,
+                                attachments: Vec::new(),
+                                timestamp: Utc::now(),
+                                reply_to: None,
+                                is_group: false,
+                                raw: None,
+                            };
+                            if let Err(e) = inbound_tx.send(inbound).await {
+                                tracing::error!("Failed to re-inject callback as inbound message: {}", e);
+                            }
+                        }
+                    }
+
+                    // Answer callback to remove loading indicator
+                    if let Err(e) = bot.answer_callback_query(&q.id).await {
+                        tracing::warn!("Failed to answer callback query: {}", e);
+                    }
+
+                    Ok::<(), std::convert::Infallible>(())
                 }
-                let delay = std::cmp::min(5 * 2u64.pow(attempt.saturating_sub(1).min(4)), 60);
-                tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
+            },
+        );
 
-                healthy_since = Some(Instant::now());
+        // Compose the dptree handler and delegate to polling loop
+        let handler = dptree::entry()
+            .branch(message_handler)
+            .branch(callback_handler);
 
-                tracing::info!(attempt = attempt, "Telegram reconnected, queued messages will be delivered");
-                *status.write().await = ChannelStatus::Connected;
-            }
-
-            *status.write().await = ChannelStatus::Disconnected;
-        });
+        let status = self.channel_state.status_handle();
+        tokio::spawn(polling::run_polling_loop(bot, handler, status, shutdown_rx));
 
         self.set_status(ChannelStatus::Connected).await;
         Ok(())
