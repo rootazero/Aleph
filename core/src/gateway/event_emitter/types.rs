@@ -93,7 +93,11 @@ pub enum StreamEvent {
     ResponseChunk {
         run_id: String,
         seq: u64,
+        /// The text delta for this chunk
         content: String,
+        /// Accumulated full text within the current iteration
+        #[serde(default)]
+        full_text: String,
         chunk_index: u32,
         is_final: bool,
         /// When true, send to user immediately as standalone message (intermediate progress).
