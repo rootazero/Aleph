@@ -291,8 +291,8 @@ impl InboundMessageRouter {
         );
 
         // Resolve agent ID via multi-tier route bindings with fallback
-        let agent_id = self.resolve_agent_id_async(&msg).await
-            .unwrap_or_else(|| self.default_agent_id.clone());
+        let (agent_id, resolved_route) = self.resolve_agent_id_async(&msg).await
+            .unwrap_or_else(|| (self.default_agent_id.clone(), None));
 
         // Check link access control
         if let Some(ref registry) = self.agent_registry {
@@ -310,7 +310,7 @@ impl InboundMessageRouter {
         }
 
         // Build context with resolved agent
-        let ctx = self.build_context_with_agent(&msg, &agent_id).await;
+        let ctx = self.build_context_with_agent(&msg, &agent_id, resolved_route.as_ref()).await;
 
         // Check permissions
         let mut ctx = match self.check_permission(ctx).await {
