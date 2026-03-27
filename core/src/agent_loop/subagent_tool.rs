@@ -144,8 +144,21 @@ impl LoopTool for SubagentTool {
         );
 
         let mut callback = NoopCallback;
-        match agent_loop.run(&task, &mut callback).await {
-            Ok(result) => {
+        let timeout_duration = std::time::Duration::from_secs(timeout_secs);
+        let run_result = tokio::time::timeout(
+            timeout_duration,
+            agent_loop.run(&task, &mut callback),
+        ).await;
+
+        match run_result {
+            Err(_elapsed) => {
+                tracing::warn!(task = %task, timeout_secs, "subagent: timed out");
+                ToolResult::Error {
+                    error: format!("Sub-agent timed out after {}s", timeout_secs),
+                    retryable: false,
+                }
+            }
+            Ok(Ok(result)) => {
                 tracing::info!(
                     iterations = result.iterations,
                     tool_calls = result.tool_calls_made,
@@ -161,7 +174,7 @@ impl LoopTool for SubagentTool {
                     }),
                 }
             }
-            Err(e) => {
+            Ok(Err(e)) => {
                 tracing::warn!(error = %e, "subagent: sub-task failed");
 
                 ToolResult::Error {

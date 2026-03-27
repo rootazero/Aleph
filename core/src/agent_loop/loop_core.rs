@@ -615,11 +615,19 @@ impl<P: LoopProvider> AgentLoop<P> {
                         let (output_text, is_error, should_stop) = match &result {
                             ToolResult::Success { output } => {
                                 consecutive_errors = 0;
-                                (serde_json::to_string(output).unwrap_or_default(), false, false)
+                                let text = serde_json::to_string(output).unwrap_or_else(|e| {
+                                    tracing::error!(tool = %tc.name, error = %e, "Failed to serialize tool output");
+                                    format!("[serialization error: {}]", e)
+                                });
+                                (text, false, false)
                             },
                             ToolResult::SuccessAndStopLoop { output } => {
                                 tracing::info!(tool = %tc.name, "Tool returned SuccessAndStopLoop — will break loop");
-                                (serde_json::to_string(output).unwrap_or_default(), false, true)
+                                let text = serde_json::to_string(output).unwrap_or_else(|e| {
+                                    tracing::error!(tool = %tc.name, error = %e, "Failed to serialize tool output");
+                                    format!("[serialization error: {}]", e)
+                                });
+                                (text, false, true)
                             },
                             ToolResult::Error { error, retryable } => {
                                 if !retryable {
@@ -2419,5 +2427,70 @@ mod tests {
         ];
         remove_oldest_complete_round(&mut msgs);
         assert_eq!(msgs.len(), 2);
+    }
+
+    // =========================================================================
+    // strip_repeated_intermediate tests
+    // =========================================================================
+
+    #[test]
+    fn test_strip_repeated_intermediate_no_intermediates() {
+        let result = strip_repeated_intermediate("Hello world", &[]);
+        assert_eq!(result, "Hello world");
+    }
+
+    #[test]
+    fn test_strip_repeated_intermediate_exact_match() {
+        let intermediates = vec!["Setting up...".to_string()];
+        let text = "Setting up... Here is the result.";
+        let result = strip_repeated_intermediate(text, &intermediates);
+        assert_eq!(result, "Here is the result.");
+    }
+
+    #[test]
+    fn test_strip_repeated_intermediate_multiple() {
+        let intermediates = vec![
+            "Step 1 done.".to_string(),
+            "Step 2 done.".to_string(),
+        ];
+        let text = "Step 1 done. Step 2 done. Final answer.";
+        let result = strip_repeated_intermediate(text, &intermediates);
+        assert_eq!(result, "Final answer.");
+    }
+
+    #[test]
+    fn test_strip_repeated_intermediate_no_match() {
+        let intermediates = vec!["Something else".to_string()];
+        let text = "Completely different text";
+        let result = strip_repeated_intermediate(text, &intermediates);
+        assert_eq!(result, "Completely different text");
+    }
+
+    #[test]
+    fn test_strip_repeated_intermediate_partial_match() {
+        // Only first intermediate matches, second doesn't — stops stripping
+        let intermediates = vec![
+            "First part.".to_string(),
+            "Nonexistent.".to_string(),
+        ];
+        let text = "First part. Actual content here.";
+        let result = strip_repeated_intermediate(text, &intermediates);
+        assert_eq!(result, "Actual content here.");
+    }
+
+    #[test]
+    fn test_strip_repeated_intermediate_empty_intermediate() {
+        let intermediates = vec!["".to_string(), "  ".to_string()];
+        let text = "Should not be modified";
+        let result = strip_repeated_intermediate(text, &intermediates);
+        assert_eq!(result, "Should not be modified");
+    }
+
+    #[test]
+    fn test_strip_repeated_intermediate_whitespace_handling() {
+        let intermediates = vec!["  Hello  ".to_string()];
+        let text = "  Hello   World";
+        let result = strip_repeated_intermediate(text, &intermediates);
+        assert_eq!(result, "World");
     }
 }

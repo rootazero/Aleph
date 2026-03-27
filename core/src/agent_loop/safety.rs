@@ -81,9 +81,15 @@ impl SafetyGuard {
         tool_permissions: HashMap<String, PermissionAction>,
         default_permission: PermissionAction,
     ) -> Self {
-        let blocked_patterns = blocked
+        let blocked_patterns: Vec<Regex> = blocked
             .into_iter()
-            .filter_map(|p| Regex::new(&p).ok())
+            .filter_map(|p| match Regex::new(&p) {
+                Ok(r) => Some(r),
+                Err(e) => {
+                    tracing::warn!(pattern = %p, error = %e, "Failed to compile safety regex — pattern skipped");
+                    None
+                }
+            })
             .collect();
         Self {
             blocked_patterns,
