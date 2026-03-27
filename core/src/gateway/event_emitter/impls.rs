@@ -82,6 +82,7 @@ impl EventEmitter for GatewayEventEmitter {
                             let flush_event = StreamEvent::ResponseChunk {
                                 run_id: run_id.clone(),
                                 seq: self.next_seq(),
+                                full_text: accumulated.clone(),
                                 content: accumulated,
                                 chunk_index: 0,
                                 is_final: false,
@@ -119,6 +120,7 @@ impl EventEmitter for GatewayEventEmitter {
                 let final_event = StreamEvent::ResponseChunk {
                     run_id: run_id.clone(),
                     seq: self.next_seq(),
+                    full_text: full_content.clone(),
                     content: full_content,
                     chunk_index: 0,
                     is_final: true,
@@ -143,6 +145,7 @@ impl EventEmitter for GatewayEventEmitter {
                     let flush_event = StreamEvent::ResponseChunk {
                         run_id: run_id.clone(),
                         seq: self.next_seq(),
+                        full_text: buffered.clone(),
                         content: buffered,
                         chunk_index: 0,
                         is_final: true,
@@ -161,6 +164,7 @@ impl EventEmitter for GatewayEventEmitter {
                         let fallback_event = StreamEvent::ResponseChunk {
                             run_id: run_id.clone(),
                             seq: self.next_seq(),
+                            full_text: final_response.clone(),
                             content: final_response.clone(),
                             chunk_index: 0,
                             is_final: true,

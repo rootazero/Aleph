@@ -146,7 +146,7 @@ async fn handle_text_frame(
         Ok(Some(FeishuEvent::MessageReceive {
             message_id, chat_id, chat_type, sender_id,
             sender_name, message_type, content, mut mentions,
-            parent_id,
+            parent_id, ..
         })) => {
             // Dedup check
             {
@@ -234,6 +234,9 @@ async fn handle_text_frame(
             if sender.send(inbound).await.is_err() {
                 tracing::warn!("Feishu inbound channel closed");
             }
+        }
+        Ok(Some(FeishuEvent::CardAction { .. })) => {
+            tracing::debug!("Feishu card action (not handled in websocket)");
         }
         Ok(Some(FeishuEvent::Unknown(t))) => {
             tracing::debug!("Unknown Feishu event: {t}");
