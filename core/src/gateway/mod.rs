@@ -90,6 +90,7 @@ pub mod voice;
 pub mod media;
 pub mod streaming_sink;
 pub mod i18n;
+pub mod streaming;
 pub use server::GatewayServer;
 pub use protocol::{JsonRpcRequest, JsonRpcResponse, JsonRpcError};
 pub use event_bus::GatewayEventBus;
