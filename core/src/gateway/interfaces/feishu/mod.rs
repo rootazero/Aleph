@@ -2,6 +2,7 @@ pub mod types;
 pub mod events;
 pub mod client;
 pub mod streaming;
+pub mod user_cache;
 
 use std::collections::VecDeque;
 use std::sync::Mutex as StdMutex;
