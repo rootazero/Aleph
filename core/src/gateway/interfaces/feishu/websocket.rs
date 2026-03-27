@@ -1,0 +1,246 @@
+use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
+
+use chrono::Utc;
+use futures_util::StreamExt;
+use tokio::sync::{mpsc, watch};
+
+use crate::gateway::channel::{
+    ChannelId, ChannelStatus, ConversationId, InboundMessage, MessageId, UserId,
+};
+
+use super::config::{FeishuConfig, GroupSessionScope};
+use super::auth::TokenState;
+use super::dedup::MessageDedup;
+use super::events::{extract_text_content, mark_bot_mentions, parse_ws_frame};
+use super::types::{ChatType, FeishuEvent, WsEndpointResponse};
+use super::user_cache::{UserProfileCache, UserProfile};
+
+/// All context needed by the WS loop, passed as a single struct.
+pub(super) struct WsLoopContext {
+    pub(super) initial_ws_url: String,
+    pub(super) channel_id: ChannelId,
+    pub(super) config: FeishuConfig,
+    pub(super) bot_open_id: String,
+    pub(super) sender: mpsc::Sender<InboundMessage>,
+    pub(super) status_handle: Arc<tokio::sync::RwLock<ChannelStatus>>,
+    pub(super) shutdown_rx: watch::Receiver<bool>,
+    pub(super) ws_http: reqwest::Client,
+    pub(super) ws_base_url: String,
+    pub(super) ws_token: Arc<tokio::sync::RwLock<TokenState>>,
+    pub(super) user_cache: Arc<UserProfileCache>,
+}
+
+/// Run the WebSocket event loop with automatic reconnection.
+pub(super) async fn run_ws_loop(ctx: WsLoopContext) {
+    let dedup = Arc::new(StdMutex::new(MessageDedup::new()));
+    let mut shutdown_rx = ctx.shutdown_rx;
+    let mut backoff_secs: u64 = 1;
+    let mut current_url = ctx.initial_ws_url;
+
+    loop {
+        if *shutdown_rx.borrow() {
+            break;
+        }
+
+        tracing::info!(
+            "Connecting to Feishu WebSocket: {}...",
+            current_url.get(..60).unwrap_or(&current_url)
+        );
+
+        match tokio_tungstenite::connect_async(&current_url).await {
+            Ok((ws_stream, _)) => {
+                backoff_secs = 1;
+                *ctx.status_handle.write().await = ChannelStatus::Connected;
+                tracing::info!("Feishu WebSocket connected");
+
+                let (_, mut read) = ws_stream.split();
+
+                loop {
+                    tokio::select! {
+                        msg = read.next() => {
+                            match msg {
+                                Some(Ok(tokio_tungstenite::tungstenite::Message::Text(text))) => {
+                                    handle_text_frame(
+                                        &text,
+                                        &dedup,
+                                        &ctx.config,
+                                        &ctx.bot_open_id,
+                                        &ctx.channel_id,
+                                        &ctx.sender,
+                                        &ctx.user_cache,
+                                    ).await;
+                                }
+                                Some(Ok(tokio_tungstenite::tungstenite::Message::Ping(_))) => {}
+                                Some(Ok(_)) => {}
+                                Some(Err(e)) => {
+                                    tracing::warn!("Feishu WS error: {e}");
+                                    break;
+                                }
+                                None => {
+                                    tracing::info!("Feishu WS stream ended");
+                                    break;
+                                }
+                            }
+                        }
+                        _ = shutdown_rx.changed() => {
+                            tracing::info!("Feishu WS shutdown signal received");
+                            return;
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!("Feishu WS connection failed: {e}");
+            }
+        }
+
+        *ctx.status_handle.write().await = ChannelStatus::Error;
+        tracing::info!("Reconnecting in {backoff_secs}s...");
+
+        tokio::select! {
+            _ = tokio::time::sleep(std::time::Duration::from_secs(backoff_secs)) => {}
+            _ = shutdown_rx.changed() => {
+                tracing::info!("Feishu WS shutdown during backoff");
+                return;
+            }
+        }
+
+        backoff_secs = (backoff_secs * 2).min(60);
+
+        // Re-fetch WS endpoint URL (old URLs may be expired)
+        let token = ctx.ws_token.read().await.access_token.clone();
+        let url = format!("{}/open-apis/callback/ws/endpoint", ctx.ws_base_url);
+        match ctx.ws_http.post(&url)
+            .header("Authorization", format!("Bearer {token}"))
+            .header("Content-Type", "application/json; charset=utf-8")
+            .json(&serde_json::json!({}))
+            .send()
+            .await
+        {
+            Ok(resp) => {
+                if let Ok(ws_resp) = resp.json::<WsEndpointResponse>().await {
+                    if ws_resp.code == 0 {
+                        if let Some(data) = ws_resp.data {
+                            current_url = data.url;
+                            tracing::debug!("Re-fetched WS endpoint URL");
+                        }
+                    }
+                }
+            }
+            Err(e) => tracing::warn!("Failed to re-fetch WS endpoint: {e}"),
+        }
+    }
+}
+
+async fn handle_text_frame(
+    text: &str,
+    dedup: &Arc<StdMutex<MessageDedup>>,
+    config: &FeishuConfig,
+    bot_open_id: &str,
+    channel_id: &ChannelId,
+    sender: &mpsc::Sender<InboundMessage>,
+    user_cache: &UserProfileCache,
+) {
+    match parse_ws_frame(text) {
+        Ok(Some(FeishuEvent::MessageReceive {
+            message_id, chat_id, chat_type, sender_id,
+            sender_name, message_type, content, mut mentions,
+            parent_id,
+        })) => {
+            // Dedup check
+            {
+                let mut seen = dedup.lock().unwrap_or_else(|e| e.into_inner());
+                if seen.is_duplicate(&message_id) {
+                    return;
+                }
+            }
+
+            mark_bot_mentions(&mut mentions, bot_open_id);
+
+            if chat_type == ChatType::Group && config.require_mention {
+                let bot_mentioned = mentions.iter().any(|m| m.is_bot);
+                if !bot_mentioned {
+                    return;
+                }
+            }
+
+            if chat_type == ChatType::Group && !config.groups_allowed {
+                return;
+            }
+
+            if chat_type == ChatType::P2p && !config.dm_allowed {
+                return;
+            }
+
+            let extracted_text = match message_type.as_str() {
+                "text" => {
+                    match extract_text_content(&content, &mentions) {
+                        Some(t) => t,
+                        None => return,
+                    }
+                }
+                "image" => "[Image]".to_string(),
+                other => {
+                    tracing::debug!("Skipping unsupported message type: {other}");
+                    return;
+                }
+            };
+
+            // Resolve sender name: try user_cache first, then event payload
+            let resolved_name = sender_name.or_else(|| {
+                user_cache.get(&sender_id).and_then(|p| p.name.clone())
+            });
+
+            // Cache the sender profile if we have a name
+            if let Some(ref name) = resolved_name {
+                user_cache.insert(UserProfile {
+                    open_id: sender_id.clone(),
+                    name: Some(name.clone()),
+                });
+            }
+
+            // Determine conversation_id based on group_session_scope
+            let conversation_id = if chat_type == ChatType::Group {
+                match config.group_session_scope {
+                    GroupSessionScope::Group => chat_id.clone(),
+                    GroupSessionScope::User => format!("{}:{}", chat_id, sender_id),
+                    GroupSessionScope::Thread => {
+                        if let Some(ref root) = parent_id {
+                            format!("{}:{}", chat_id, root)
+                        } else {
+                            format!("{}:{}", chat_id, message_id)
+                        }
+                    }
+                }
+            } else {
+                chat_id.clone()
+            };
+
+            let inbound = InboundMessage {
+                id: MessageId::new(&message_id),
+                channel_id: channel_id.clone(),
+                conversation_id: ConversationId::new(&conversation_id),
+                sender_id: UserId::new(&sender_id),
+                sender_name: resolved_name,
+                text: extracted_text,
+                attachments: Vec::new(),
+                timestamp: Utc::now(),
+                reply_to: parent_id.map(MessageId::new),
+                is_group: chat_type == ChatType::Group,
+                raw: None,
+            };
+
+            if sender.send(inbound).await.is_err() {
+                tracing::warn!("Feishu inbound channel closed");
+            }
+        }
+        Ok(Some(FeishuEvent::Unknown(t))) => {
+            tracing::debug!("Unknown Feishu event: {t}");
+        }
+        Ok(None) => {}
+        Err(e) => {
+            tracing::warn!("Failed to parse Feishu WS frame: {e}");
+        }
+    }
+}

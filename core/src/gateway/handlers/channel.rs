@@ -325,7 +325,10 @@ pub fn create_channel_from_config(id: &str, channel_type: &str, config: Value) -
         "nostr" => serde_json::from_value::<NostrConfig>(config).ok()
             .map(|cfg| Box::new(NostrChannel::new(id, cfg)) as _),
         "feishu" => serde_json::from_value::<FeishuConfig>(config).ok()
-            .map(|cfg| Box::new(FeishuChannel::new(id, cfg)) as _),
+            .and_then(|cfg| match FeishuChannel::new(id, cfg) {
+                Ok(ch) => Some(Box::new(ch) as _),
+                Err(e) => { tracing::warn!("Invalid feishu config: {}", e); None }
+            }),
         _ => None,
     }
 }
