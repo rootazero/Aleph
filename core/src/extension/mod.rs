@@ -251,15 +251,7 @@ impl ExtensionManager {
 
         // Initialize SkillSystem with discovered skill directories
         let mut skill_dirs: Vec<PathBuf> = Vec::new();
-        // Official skills dir (SkillSource::Bundled via guess_source, priority 1)
-        let official_dir = dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("/tmp"))
-            .join(".aleph")
-            .join("skills-official");
-        if official_dir.exists() {
-            skill_dirs.push(official_dir);
-        }
-        // User skills dirs (SkillSource::Global via guess_source, priority 2 — overrides official)
+        // Skill dirs from discovery (includes ~/.aleph/skills/ where bundled + user skills live)
         for d in self.discovery.discover_skill_dirs().unwrap_or_default() {
             skill_dirs.push(d.path);
         }

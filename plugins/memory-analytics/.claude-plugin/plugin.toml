@@ -1,0 +1,10 @@
+name = "memory-analytics"
+version = "0.1.0"
+description = "Memory usage analytics: fact distribution, timeline, health assessment"
+
+[aleph]
+runtime = "wasm"
+entry = "target/wasm32-wasip1/release/memory_analytics.wasm"
+
+[aleph.capabilities]
+workspace = { allowed_prefixes = [".aleph/"] }

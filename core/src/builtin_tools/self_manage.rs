@@ -4,7 +4,7 @@
 //! manage Aleph settings, it calls this tool to get the full self-management
 //! manual (workspace map + operation protocol + domain routing).
 //!
-//! The tool reads the `/self` SKILL.md from skills-official/ or skills/,
+//! The tool reads the `/self` SKILL.md from the bundled skills directory,
 //! providing the same content as the `/self` slash command but triggered
 //! by natural language intent.
 
@@ -58,7 +58,6 @@ impl Default for SelfManageTool {
         let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/tmp"));
         let aleph_home = home.join(".aleph");
         Self::new(vec![
-            aleph_home.join("skills-official"),
             aleph_home.join("skills"),
         ])
     }

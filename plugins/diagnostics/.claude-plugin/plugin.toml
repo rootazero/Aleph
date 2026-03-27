@@ -1,0 +1,16 @@
+name = "diagnostics"
+version = "0.1.0"
+description = "System health monitoring and performance diagnostics"
+
+[aleph]
+runtime = "mcp"
+
+[aleph.permissions]
+shell = true
+filesystem = "read"
+network = true
+
+[[aleph.services]]
+id = "metrics-collector"
+start_handler = "startCollector"
+stop_handler = "stopCollector"

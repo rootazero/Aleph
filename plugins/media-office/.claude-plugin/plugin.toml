@@ -1,0 +1,9 @@
+name = "media-office"
+version = "0.1.0"
+description = "Extract text, tables, and metadata from Office documents (DOCX, XLSX, PPTX)"
+
+[aleph]
+runtime = "mcp"
+
+[aleph.permissions]
+filesystem = "read"

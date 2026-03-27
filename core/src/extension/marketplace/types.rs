@@ -84,7 +84,8 @@ pub struct PluginSearchResult {
 // =============================================================================
 
 pub const BUILTIN_MARKETPLACE_NAME: &str = "aleph-official";
-pub const BUILTIN_MARKETPLACE_SOURCE: &str = "rootazero/Aleph-plugins";
+/// Builtin marketplace is extracted from bundled content, not cloned from GitHub.
+pub const BUILTIN_MARKETPLACE_SOURCE: &str = "bundled";
 
 // =============================================================================
 // Path Helpers

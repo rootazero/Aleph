@@ -419,33 +419,39 @@ fn is_skill_file(path: &Path) -> bool {
 
 /// Guess the `SkillSource` from a file path.
 ///
-/// - Contains `skills-official` → Bundled (priority 1, overridable by Global/Workspace)
-/// - Contains `.aleph/skills` and is under a workspace → Workspace
-/// - Contains `.aleph/skills` at home dir level → Global
-/// - Otherwise → Bundled
+/// - Under `~/.aleph/skills/` with manifest marking official → Bundled
+/// - Under `~/.aleph/skills/` otherwise → Global
+/// - Contains `.aleph/skills` but not under home → Workspace
+/// - Otherwise → Bundled (e.g. Claude Code compatibility paths)
 fn guess_source(path: &Path) -> SkillSource {
     let path_str = path.to_string_lossy();
-
-    // Official skills directory → Bundled (priority 1, overridable by Global/Workspace)
-    if path_str.contains("skills-official") {
-        return SkillSource::Bundled;
-    }
 
     if path_str.contains(".aleph/skills") {
         if let Some(home) = dirs::home_dir() {
             let home_skills = home.join(".aleph").join("skills");
             if path.starts_with(&home_skills) {
+                // Under ~/.aleph/skills/ — check manifest to distinguish official from user
+                if let Some(manifest) = crate::bundled::manifest::SkillManifest::load(&home_skills) {
+                    if let Ok(relative) = path.strip_prefix(&home_skills) {
+                        if let Some(skill_name) = relative.components().next() {
+                            let name = skill_name.as_os_str().to_string_lossy();
+                            if manifest.is_official(&name) {
+                                return SkillSource::Bundled;
+                            }
+                        }
+                    }
+                }
                 return SkillSource::Global;
             }
         } else {
-            // Cannot determine home directory — fall back to Global for safety
-            // so we don't accidentally give workspace-level priority
             tracing::warn!("dirs::home_dir() returned None, defaulting to Global source");
             return SkillSource::Global;
         }
+        // Path contains .aleph/skills but NOT under home → project-level workspace skill
         return SkillSource::Workspace;
     }
 
+    // Claude Code compatibility paths (.claude/skills) or plugin skills
     SkillSource::Bundled
 }
 
@@ -602,8 +608,9 @@ Content."#,
     }
 
     #[test]
-    fn guess_source_official() {
-        let path = PathBuf::from("/Users/test/.aleph/skills-official/self/SKILL.md");
+    fn guess_source_non_aleph_path_is_bundled() {
+        // Paths outside .aleph/skills (e.g. system-installed) default to Bundled
+        let path = PathBuf::from("/usr/local/share/aleph/skills/self/SKILL.md");
         assert_eq!(guess_source(&path), SkillSource::Bundled);
     }
 

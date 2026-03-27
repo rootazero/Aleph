@@ -1,0 +1,29 @@
+name = "voice-call"
+version = "0.1.0"
+description = "Voice calling framework with WebRTC/SIP stubs and call state management"
+
+[aleph]
+runtime = "mcp"
+
+[aleph.permissions]
+network = true
+shell = true
+
+[aleph.config_schema.sip_server]
+type = "string"
+description = "SIP server address (e.g. sip.example.com)"
+
+[aleph.config_schema.stun_servers]
+type = "array"
+description = "STUN/TURN server URLs for WebRTC ICE"
+
+[aleph.config_schema.default_codec]
+type = "string"
+description = "Default audio codec"
+default = "opus"
+
+[[aleph.services]]
+id = "call-manager"
+description = "Manages call sessions and audio streams"
+start_handler = "startCallManager"
+stop_handler = "stopCallManager"

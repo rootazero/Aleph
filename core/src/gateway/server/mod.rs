@@ -16,7 +16,7 @@ use axum::{
     routing::get,
 };
 use super::control_plane::create_control_plane_router;
-use super::openai_api::routes::{openai_routes, OpenAiApiState};
+use super::openai_api::{openai_routes, OpenAiApiState};
 
 use super::event_bus::{GatewayEventBus, TopicEvent};
 use super::handlers::HandlerRegistry;
@@ -166,6 +166,14 @@ pub struct GatewayServer {
     pub start_time: Instant,
     /// Optional A2A server state (set during startup if A2A is enabled)
     a2a_state: Option<Arc<crate::a2a::adapter::server::A2AServerState>>,
+    /// Execution adapter for OpenAI-compatible agent completions
+    pub execution_adapter: Option<Arc<dyn crate::gateway::execution_adapter::ExecutionAdapter>>,
+    /// Agent registry for OpenAI-compatible agent completions
+    pub openai_agent_registry: Option<Arc<crate::gateway::agent_instance::AgentRegistry>>,
+    /// Model → HttpProvider map for passthrough completions
+    pub openai_provider_map: Arc<HashMap<String, Arc<crate::providers::http_provider::HttpProvider>>>,
+    /// Provider configs for /v1/models listing
+    pub openai_provider_configs: Vec<(String, crate::config::ProviderConfig)>,
 }
 
 impl GatewayServer {
@@ -200,6 +208,10 @@ impl GatewayServer {
             event_scope_guard: Arc::new(EventScopeGuard::default_rules()),
             start_time: Instant::now(),
             a2a_state: None,
+            execution_adapter: None,
+            openai_agent_registry: None,
+            openai_provider_map: Arc::new(HashMap::new()),
+            openai_provider_configs: Vec::new(),
         }
     }
 
@@ -233,6 +245,10 @@ impl GatewayServer {
             event_scope_guard: Arc::new(EventScopeGuard::default_rules()),
             start_time: Instant::now(),
             a2a_state: None,
+            execution_adapter: None,
+            openai_agent_registry: None,
+            openai_provider_map: Arc::new(HashMap::new()),
+            openai_provider_configs: Vec::new(),
         }
     }
 
@@ -300,7 +316,15 @@ impl GatewayServer {
         // OpenAI-compatible API routes (/v1/models, /v1/health, /v1/chat/completions)
         let openai_state = Arc::new(OpenAiApiState {
             server_id: format!("aleph-{}", self.addr),
-            api_token: None, // Auth handled by HTTP middleware layer
+            api_token: None, // Phase 1: auth intentionally open (self-hosted single-user)
+            execution_adapter: self.execution_adapter.clone(),
+            provider_map: self.openai_provider_map.clone(),
+            agent_registry: self.openai_agent_registry.clone(),
+            provider_configs: Arc::new(self.openai_provider_configs.clone()),
+            created_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
         });
         let openai = openai_routes(openai_state);
 

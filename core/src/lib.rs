@@ -79,6 +79,7 @@ pub mod runtimes;
 pub mod search;
 pub mod skills;
 pub mod skill;
+pub mod bundled;
 
 pub mod supervisor;
 pub mod thinker;

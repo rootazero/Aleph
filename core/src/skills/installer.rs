@@ -4,9 +4,10 @@
 //! - Third-party skills from any GitHub repository
 //! - Local ZIP file upload
 //!
-//! Note: Aleph official skills (rootazero/Aleph-skills) are managed by
-//! `updater.rs`, not this installer. They auto-sync on startup via git.
+//! Note: Aleph official skills are bundled in the binary and extracted
+//! on startup by `bundled::extractor`. This installer handles third-party skills.
 
+use crate::bundled::manifest::{SkillEntry, SkillManifest, SkillOrigin};
 use crate::error::{AlephError, Result};
 use crate::skills::types::{PackageManager, SkillRequirements};
 use crate::skills::Skill;
@@ -41,7 +42,9 @@ impl SkillsInstaller {
         info!(url = %normalized, "Installing skills from GitHub");
 
         let zip_url = format!("{}/archive/refs/heads/main.zip", normalized);
-        self.install_from_github_zip(&zip_url).await
+        let installed_ids = self.install_from_github_zip(&zip_url).await?;
+        self.update_manifest_install(&installed_ids, Some(&normalized));
+        Ok(installed_ids)
     }
 
     /// Install from ZIP file (local path)
@@ -58,7 +61,9 @@ impl SkillsInstaller {
             ))
         })?;
 
-        self.extract_and_install_from_zip(file)
+        let installed_ids = self.extract_and_install_from_zip(file)?;
+        self.update_manifest_install(&installed_ids, None);
+        Ok(installed_ids)
     }
 
     /// Delete a skill
@@ -78,6 +83,14 @@ impl SkillsInstaller {
         std::fs::remove_dir_all(&skill_dir)
             .map_err(|e| AlephError::config(format!("Failed to delete skill '{}': {}", id, e)))?;
 
+        // Remove from manifest
+        if let Some(mut manifest) = SkillManifest::load(&self.skills_dir) {
+            manifest.skills.remove(id);
+            if let Err(e) = manifest.save(&self.skills_dir) {
+                warn!(error = %e, "Failed to update manifest after deletion");
+            }
+        }
+
         Ok(())
     }
 
@@ -91,6 +104,33 @@ impl SkillsInstaller {
                 .all(|c| c.is_ascii_lowercase() || c == '-' || c.is_ascii_digit())
             && !name.starts_with('-')
             && !name.ends_with('-')
+    }
+
+    /// Update manifest after installing a skill.
+    fn update_manifest_install(&self, skill_names: &[String], source_url: Option<&str>) {
+        let mut manifest =
+            SkillManifest::load(&self.skills_dir).unwrap_or_else(|| SkillManifest::new(""));
+
+        let now = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        for name in skill_names {
+            manifest.skills.insert(
+                name.clone(),
+                SkillEntry {
+                    source: if source_url.is_some() {
+                        SkillOrigin::Github
+                    } else {
+                        SkillOrigin::Local
+                    },
+                    version: None,
+                    url: source_url.map(|u| u.to_string()),
+                    installed_at: Some(now.clone()),
+                },
+            );
+        }
+
+        if let Err(e) = manifest.save(&self.skills_dir) {
+            warn!(error = %e, "Failed to update manifest after install");
+        }
     }
 
     /// Normalize GitHub URL to standard format
