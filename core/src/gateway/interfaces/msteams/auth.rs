@@ -81,8 +81,9 @@ impl TokenCache {
         }
 
         let token = self.fetch_token().await?;
+        let token_str = token.token.clone();
         *guard = Some(token);
-        Ok(guard.as_ref().unwrap().token.clone())
+        Ok(token_str)
     }
 
     async fn fetch_token(&self) -> Result<CachedToken, ChannelError> {
@@ -237,8 +238,8 @@ impl JwtValidator {
             "https://sts.windows.net/d6d49420-f39b-4df7-a1dc-d59a935871db/",
         ]);
         validation.set_audience(&[self.app_id.as_str()]);
-        // No clock-skew leeway — tokens must be strictly valid
-        validation.leeway = 0;
+        // Small leeway for clock drift between Aleph server and Microsoft infrastructure
+        validation.leeway = 30;
 
         for key in keys.iter() {
             match decode::<BotClaims>(token, key, &validation) {

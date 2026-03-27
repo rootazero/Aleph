@@ -831,7 +831,8 @@ impl EventEmitter for ReplyEmitter {
                             let mut state = self.native_stream_state.lock().await;
                             if state.is_none() && accumulated.chars().count() >= 20 {
                                 // First chunk with enough content: start streaming
-                                match handler.stream_start(&self.route.conversation_id, "Thinking...").await {
+                                let status = crate::gateway::interfaces::msteams::types::pick_status_text();
+                                match handler.stream_start(&self.route.conversation_id, status).await {
                                     Ok(stream_id) => {
                                         *state = Some(NativeStreamState {
                                             stream_id,
@@ -860,8 +861,8 @@ impl EventEmitter for ReplyEmitter {
                         }
                     }
 
-                    // Instant mode: flush on final chunk
-                    if !self.config.stream_enabled && is_final {
+                    // Instant mode: flush on final chunk (skip if native streaming active)
+                    if !self.config.stream_enabled && is_final && self.native_handler.is_none() {
                         let mut buffer = self.buffer.lock().await;
                         if !buffer.is_empty() {
                             let text = std::mem::take(&mut *buffer);

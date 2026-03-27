@@ -5,7 +5,6 @@
 pub mod api;
 pub mod auth;
 pub mod config;
-pub mod message_ops;
 pub mod streaming;
 pub mod types;
 
@@ -469,7 +468,9 @@ impl MsTeamsChannel {
         }
 
         // Validate service URL
-        let service_url = activity.service_url.as_deref().unwrap_or_default();
+        let service_url = activity.service_url.as_deref().ok_or_else(|| {
+            ChannelError::ReceiveFailed("Message activity missing 'serviceUrl' field".into())
+        })?;
         if !validate_service_url(service_url) {
             warn!(
                 service_url = %service_url,
@@ -578,18 +579,31 @@ impl MsTeamsChannel {
 
         // Fire-and-forget: send welcome card
         tokio::spawn(async move {
-            // Cache the ref
+            // Cache the ref (with eviction, matching cache_conversation_ref logic)
             {
                 let mut map = refs.write().await;
-                map.insert(
-                    conv_id.clone(),
+                let entry = map.entry(conv_id.clone()).or_insert_with(|| {
                     ConversationReference {
-                        service_url: svc_url.clone(),
+                        service_url: String::new(),
                         conversation_id: conv_id.clone(),
-                        bot_id: bot_id_clone,
+                        bot_id: String::new(),
                         last_seen: Instant::now(),
-                    },
-                );
+                    }
+                });
+                entry.service_url = svc_url.clone();
+                entry.bot_id = bot_id_clone;
+                entry.last_seen = Instant::now();
+
+                // Evict oldest if over capacity
+                if map.len() > MAX_CONVERSATION_REFS {
+                    if let Some(oldest_key) = map
+                        .iter()
+                        .min_by_key(|(_, v)| v.last_seen)
+                        .map(|(k, _)| k.clone())
+                    {
+                        map.remove(&oldest_key);
+                    }
+                }
             }
 
             let card = build_welcome_card("Aleph", &["What can you do?", "Help me with a task"]);
