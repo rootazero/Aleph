@@ -4,6 +4,14 @@ use reqwest::multipart;
 use super::auth::TokenManager;
 use super::types::*;
 
+/// Truncate a string to at most `max_chars` characters, respecting UTF-8 boundaries.
+fn truncate_chars(s: &str, max_chars: usize) -> &str {
+    match s.char_indices().nth(max_chars) {
+        Some((idx, _)) => &s[..idx],
+        None => s,
+    }
+}
+
 #[derive(Debug)]
 pub enum FeishuSendError {
     RateLimited { retry_after_secs: u64 },
@@ -380,7 +388,7 @@ impl FeishuApi {
             "config": {
                 "streaming_mode": false,
                 "summary": {
-                    "content": summary.get(..50).unwrap_or(summary)
+                    "content": truncate_chars(summary, 50)
                 }
             }
         });

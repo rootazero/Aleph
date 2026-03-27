@@ -1,12 +1,12 @@
 pub mod config;
-pub mod types;
-pub mod events;
-pub mod auth;
-pub mod api;
-pub mod streaming;
-pub mod dedup;
-pub mod user_cache;
-pub mod websocket;
+pub(crate) mod types;
+pub(crate) mod events;
+pub(crate) mod auth;
+pub(crate) mod api;
+pub(crate) mod streaming;
+mod dedup;
+mod user_cache;
+mod websocket;
 
 use std::sync::Arc;
 use tokio::sync::watch;
@@ -152,9 +152,7 @@ impl Channel for FeishuChannel {
             sender: self.channel_state.sender(),
             status_handle: self.channel_state.status_handle(),
             shutdown_rx,
-            ws_http: http,
-            ws_base_url: base_url,
-            ws_token: auth.token_state(),
+            api: api.clone(),
             user_cache: user_cache.clone(),
         };
 

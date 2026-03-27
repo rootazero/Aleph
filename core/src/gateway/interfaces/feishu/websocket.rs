@@ -9,11 +9,11 @@ use crate::gateway::channel::{
     ChannelId, ChannelStatus, ConversationId, InboundMessage, MessageId, UserId,
 };
 
+use super::api::FeishuApi;
 use super::config::{FeishuConfig, GroupSessionScope};
-use super::auth::TokenState;
 use super::dedup::MessageDedup;
 use super::events::{extract_text_content, mark_bot_mentions, parse_ws_frame};
-use super::types::{ChatType, FeishuEvent, WsEndpointResponse};
+use super::types::{ChatType, FeishuEvent};
 use super::user_cache::{UserProfileCache, UserProfile};
 
 /// All context needed by the WS loop, passed as a single struct.
@@ -25,9 +25,7 @@ pub(super) struct WsLoopContext {
     pub(super) sender: mpsc::Sender<InboundMessage>,
     pub(super) status_handle: Arc<tokio::sync::RwLock<ChannelStatus>>,
     pub(super) shutdown_rx: watch::Receiver<bool>,
-    pub(super) ws_http: reqwest::Client,
-    pub(super) ws_base_url: String,
-    pub(super) ws_token: Arc<tokio::sync::RwLock<TokenState>>,
+    pub(super) api: Arc<FeishuApi>,
     pub(super) user_cache: Arc<UserProfileCache>,
 }
 
@@ -108,25 +106,11 @@ pub(super) async fn run_ws_loop(ctx: WsLoopContext) {
 
         backoff_secs = (backoff_secs * 2).min(60);
 
-        // Re-fetch WS endpoint URL (old URLs may be expired)
-        let token = ctx.ws_token.read().await.access_token.clone();
-        let url = format!("{}/open-apis/callback/ws/endpoint", ctx.ws_base_url);
-        match ctx.ws_http.post(&url)
-            .header("Authorization", format!("Bearer {token}"))
-            .header("Content-Type", "application/json; charset=utf-8")
-            .json(&serde_json::json!({}))
-            .send()
-            .await
-        {
-            Ok(resp) => {
-                if let Ok(ws_resp) = resp.json::<WsEndpointResponse>().await {
-                    if ws_resp.code == 0 {
-                        if let Some(data) = ws_resp.data {
-                            current_url = data.url;
-                            tracing::debug!("Re-fetched WS endpoint URL");
-                        }
-                    }
-                }
+        // Re-fetch WS endpoint URL via FeishuApi (old URLs may be expired)
+        match ctx.api.get_ws_endpoint().await {
+            Ok(url) => {
+                current_url = url;
+                tracing::debug!("Re-fetched WS endpoint URL");
             }
             Err(e) => tracing::warn!("Failed to re-fetch WS endpoint: {e}"),
         }

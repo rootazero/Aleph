@@ -80,7 +80,10 @@ impl FeishuStreamingCard {
             warn!("Failed to send final streaming card update: {e}");
         }
 
-        let summary = final_text.get(..50).unwrap_or(final_text);
+        let summary = match final_text.char_indices().nth(50) {
+            Some((idx, _)) => &final_text[..idx],
+            None => final_text,
+        };
         let close_seq = self.next_sequence();
         if let Err(e) = api.close_streaming_card(&self.card_id, summary, close_seq).await {
             warn!("Failed to close streaming card: {e}");

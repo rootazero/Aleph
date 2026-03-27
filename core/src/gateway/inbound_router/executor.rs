@@ -251,7 +251,11 @@ impl InboundMessageRouter {
             serde_json::from_value::<FeishuConfig>(raw.clone()).ok()?
         };
 
-        // Create a dedicated API client for the emitter
+        // TODO: Share Arc<FeishuApi> from FeishuChannel instead of creating per-emitter.
+        // Current approach creates a new TokenManager + FeishuApi per message, causing
+        // redundant token refresh requests. Requires exposing the shared API handle from
+        // the channel via the registry or trait extension.
+        // The lazy get_token() in TokenManager mitigates the worst case.
         let http = reqwest::Client::new();
         let base_url = feishu_cfg.base_url();
         let auth = Arc::new(TokenManager::new(&feishu_cfg.app_id, &feishu_cfg.app_secret, &base_url, http.clone()));
