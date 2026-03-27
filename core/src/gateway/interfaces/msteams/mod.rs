@@ -5,6 +5,7 @@
 pub mod api;
 pub mod auth;
 pub mod config;
+pub mod message_ops;
 pub mod streaming;
 pub mod types;
 
@@ -37,7 +38,7 @@ use self::types::*;
 /// Cached reference for proactive messaging and service URL resolution.
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
-pub(super) struct ConversationReference {
+pub(crate) struct ConversationReference {
     service_url: String,
     conversation_id: String,
     bot_id: String,
@@ -57,8 +58,8 @@ pub struct MsTeamsChannel {
     client: Arc<BotFrameworkClient>,
     jwt_validator: Arc<JwtValidator>,
     conversation_refs: Arc<RwLock<HashMap<String, ConversationReference>>>,
-    /// Reverse map: message_id → conversation_id (for delete without conversation context)
-    sent_messages: Arc<RwLock<HashMap<String, String>>>,
+    /// Reverse map: message_id → (conversation_id, inserted_at) for delete without conversation context
+    sent_messages: Arc<RwLock<HashMap<String, (String, Instant)>>>,
 }
 
 impl MsTeamsChannel {
@@ -272,12 +273,15 @@ impl Channel for MsTeamsChannel {
         // Track sent message for delete-by-id
         {
             let mut sent = self.sent_messages.write().await;
-            sent.insert(resp.id.clone(), conversation_id.to_string());
-            // Cap at 10k entries
+            sent.insert(resp.id.clone(), (conversation_id.to_string(), Instant::now()));
+            // Cap at MAX_CONVERSATION_REFS entries, evict oldest on overflow
             if sent.len() > MAX_CONVERSATION_REFS {
-                // Remove arbitrary entry (not worth tracking age for this)
-                if let Some(key) = sent.keys().next().cloned() {
-                    sent.remove(&key);
+                if let Some(oldest_key) = sent
+                    .iter()
+                    .min_by_key(|(_, (_, ts))| *ts)
+                    .map(|(k, _)| k.clone())
+                {
+                    sent.remove(&oldest_key);
                 }
             }
         }
@@ -339,7 +343,7 @@ impl Channel for MsTeamsChannel {
             conversation_id.as_str().to_string()
         } else {
             let sent = self.sent_messages.read().await;
-            sent.get(message_id.as_str()).cloned().ok_or_else(|| {
+            sent.get(message_id.as_str()).map(|(cid, _)| cid.clone()).ok_or_else(|| {
                 ChannelError::SendFailed(format!(
                     "Cannot delete message '{}': no conversation context",
                     message_id.as_str()

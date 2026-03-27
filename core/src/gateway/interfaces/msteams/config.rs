@@ -24,16 +24,11 @@ pub struct MsTeamsConfig {
     /// Send typing indicator while processing
     #[serde(default = "default_true")]
     pub send_typing: bool,
-    /// Maximum retries for failed messages
-    #[serde(default = "default_max_retries")]
-    pub max_retries: u32,
 }
 
 fn default_tenant() -> String { "common".into() }
 fn default_true() -> bool { true }
 fn default_webhook_path() -> String { "/msteams/messages".into() }
-fn default_max_retries() -> u32 { 3 }
-
 impl Default for MsTeamsConfig {
     fn default() -> Self {
         Self {
@@ -44,7 +39,6 @@ impl Default for MsTeamsConfig {
             groups_allowed: true,
             webhook_path: default_webhook_path(),
             send_typing: true,
-            max_retries: 3,
         }
     }
 }

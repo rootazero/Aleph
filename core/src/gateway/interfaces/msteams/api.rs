@@ -21,6 +21,10 @@ impl BotFrameworkClient {
         }
     }
 
+    // Note: Teams conversation IDs contain ':' and '@' (e.g., "19:conv@thread.v2").
+    // These are valid URL path characters per RFC 3986 §3.3 (pchar includes ':' and '@').
+    // Bot Framework REST API expects raw IDs, not percent-encoded.
+
     /// POST {serviceUrl}/v3/conversations/{conversationId}/activities
     pub async fn send_activity(
         &self,
@@ -82,9 +86,13 @@ impl BotFrameworkClient {
             debug!(url = %url, "Activity updated successfully");
             Ok(())
         } else {
+            let retry_after = resp.headers()
+                .get("retry-after")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.parse::<u64>().ok());
             let body = resp.text().await.unwrap_or_default();
             warn!(status = %status, body = %body, "Failed to update activity");
-            Err(map_http_error(status.as_u16(), &body))
+            Err(map_http_error(status.as_u16(), &body, retry_after))
         }
     }
 
@@ -115,9 +123,13 @@ impl BotFrameworkClient {
             debug!(url = %url, "Activity deleted successfully");
             Ok(())
         } else {
+            let retry_after = resp.headers()
+                .get("retry-after")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.parse::<u64>().ok());
             let body = resp.text().await.unwrap_or_default();
             warn!(status = %status, body = %body, "Failed to delete activity");
-            Err(map_http_error(status.as_u16(), &body))
+            Err(map_http_error(status.as_u16(), &body, retry_after))
         }
     }
 
@@ -160,9 +172,13 @@ impl BotFrameworkClient {
             debug!(url = %url, id = %response.id, "Activity sent successfully");
             Ok(response)
         } else {
+            let retry_after = resp.headers()
+                .get("retry-after")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.parse::<u64>().ok());
             let body = resp.text().await.unwrap_or_default();
             warn!(status = %status, body = %body, "Failed to send activity");
-            Err(map_http_error(status.as_u16(), &body))
+            Err(map_http_error(status.as_u16(), &body, retry_after))
         }
     }
 }
@@ -175,13 +191,10 @@ fn ensure_trailing_slash(url: &str) -> String {
     }
 }
 
-fn map_http_error(status: u16, body: &str) -> ChannelError {
+fn map_http_error(status: u16, body: &str, retry_after: Option<u64>) -> ChannelError {
     match status {
         401 | 403 => ChannelError::AuthFailed(format!("HTTP {}: {}", status, body)),
-        429 => {
-            // Try to extract retry-after from body
-            ChannelError::RateLimited { retry_after_secs: 5 }
-        }
+        429 => ChannelError::RateLimited { retry_after_secs: retry_after.unwrap_or(5) },
         404 => ChannelError::SendFailed(format!("Not found: {}", body)),
         _ => ChannelError::SendFailed(format!("HTTP {}: {}", status, body)),
     }
@@ -199,25 +212,31 @@ mod tests {
 
     #[test]
     fn test_map_http_error_auth() {
-        let err = map_http_error(401, "unauthorized");
+        let err = map_http_error(401, "unauthorized", None);
         assert!(matches!(err, ChannelError::AuthFailed(_)));
     }
 
     #[test]
     fn test_map_http_error_rate_limit() {
-        let err = map_http_error(429, "too many requests");
-        assert!(matches!(err, ChannelError::RateLimited { .. }));
+        let err = map_http_error(429, "too many requests", None);
+        assert!(matches!(err, ChannelError::RateLimited { retry_after_secs: 5 }));
+    }
+
+    #[test]
+    fn test_map_http_error_rate_limit_with_header() {
+        let err = map_http_error(429, "too many requests", Some(30));
+        assert!(matches!(err, ChannelError::RateLimited { retry_after_secs: 30 }));
     }
 
     #[test]
     fn test_map_http_error_not_found() {
-        let err = map_http_error(404, "not found");
+        let err = map_http_error(404, "not found", None);
         assert!(matches!(err, ChannelError::SendFailed(_)));
     }
 
     #[test]
     fn test_map_http_error_server() {
-        let err = map_http_error(500, "internal server error");
+        let err = map_http_error(500, "internal server error", None);
         assert!(matches!(err, ChannelError::SendFailed(_)));
     }
 }

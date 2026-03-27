@@ -21,8 +21,6 @@ struct CachedToken {
     token: String,
     /// Absolute time after which the token should be refreshed (80% of lifetime)
     refresh_at: Instant,
-    /// Absolute time after which the token is invalid
-    expires_at: Instant,
 }
 
 impl CachedToken {
@@ -134,7 +132,6 @@ impl TokenCache {
         Ok(CachedToken {
             token: tr.access_token,
             refresh_at: now + refresh_after,
-            expires_at: now + lifetime,
         })
     }
 }
