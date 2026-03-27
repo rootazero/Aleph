@@ -91,7 +91,7 @@ impl GatewayEventEmitter {
             };
             drop(buffer);
 
-            self.emit_response_chunk(run_id, &full_content, chunk_index, true, false)
+            self.emit_response_chunk(run_id, &full_content, "", chunk_index, true, false)
                 .await;
             return;
         }
@@ -119,7 +119,7 @@ impl GatewayEventEmitter {
         *last_at = now;
         drop(last_at);
 
-        self.emit_response_chunk(run_id, &full_content, chunk_index, false, false)
+        self.emit_response_chunk(run_id, &full_content, "", chunk_index, false, false)
             .await;
     }
 }
@@ -149,6 +149,7 @@ impl EventEmitter for GatewayEventEmitter {
                                 run_id: run_id.clone(),
                                 seq: self.next_seq(),
                                 content: accumulated,
+                                full_text: String::new(),
                                 chunk_index: 0,
                                 is_final: false,
                                 is_intermediate: true,
@@ -186,6 +187,7 @@ impl EventEmitter for GatewayEventEmitter {
                     run_id: run_id.clone(),
                     seq: self.next_seq(),
                     content: full_content,
+                    full_text: String::new(),
                     chunk_index: 0,
                     is_final: true,
                     is_intermediate: false,
@@ -210,6 +212,7 @@ impl EventEmitter for GatewayEventEmitter {
                         run_id: run_id.clone(),
                         seq: self.next_seq(),
                         content: buffered,
+                        full_text: String::new(),
                         chunk_index: 0,
                         is_final: true,
                         is_intermediate: false,
@@ -228,6 +231,7 @@ impl EventEmitter for GatewayEventEmitter {
                             run_id: run_id.clone(),
                             seq: self.next_seq(),
                             content: final_response.clone(),
+                            full_text: String::new(),
                             chunk_index: 0,
                             is_final: true,
                             is_intermediate: false,
