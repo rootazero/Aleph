@@ -74,8 +74,7 @@ vault_store(action="list")
 ├── mcp_config.json          # MCP server definitions
 ├── agents/{id}/             # Agent data (SOUL.md, MEMORY.md, sessions/)
 ├── workspaces/{id}/output/  # Agent file output
-├── skills/                  # User custom skills
-├── skills-official/         # Official skills (read-only)
+├── skills/                  # All skills (official + user-installed)
 ├── plugins/                 # Installed plugins
 ├── data/                    # LanceDB, vault, sessions DB
 └── output/                  # Global default output
