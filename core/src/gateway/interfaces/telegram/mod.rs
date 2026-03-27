@@ -17,10 +17,8 @@
 
 pub mod config;
 pub mod group_chat;
-pub mod message_ops;
 
 pub use config::{PairingEntry, TelegramConfig, WebhookConfig};
-pub use message_ops::TelegramMessageOps;
 
 use crate::gateway::channel::{
     Attachment, CallbackQuery, Channel, ChannelCapabilities, ChannelError, ChannelFactory,

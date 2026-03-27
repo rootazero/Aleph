@@ -12,7 +12,6 @@
 //! - [`PdfGenerateTool`] - PDF generation from text/Markdown
 //! - [`ImageGenerateTool`] - Image generation from text prompts
 //! - [`SpeechGenerateTool`] - Text-to-speech generation
-//! - [`MessageTool`] - Cross-channel message operations
 //!
 //! # Meta Tools (Smart Tool Discovery)
 //!
@@ -44,7 +43,6 @@ pub mod invalid;
 pub mod mcp_wrapper;
 pub mod memory_search;
 pub mod memory_browse;
-pub mod message;
 pub mod meta_tools;
 pub mod pdf_generate;
 pub mod search;
@@ -155,13 +153,6 @@ pub use team::{
     TeamDisbandArgs, TeamDisbandOutput, TeamDisbandTool,
 };
 
-
-// Message tool re-exports
-pub use message::{
-    ChannelCapabilities, DeleteParams, EditParams, MessageAction, MessageOperations,
-    MessageResult, MessageTool, MessageToolArgs, MessageToolOutput, ReactParams, ReplyParams,
-    SendParams,
-};
 
 // ============================================================================
 // Tool Progress Callback System
