@@ -1,88 +1,49 @@
 use std::collections::HashMap;
 use std::sync::Mutex as StdMutex;
-use std::time::{Duration, Instant};
-use std::sync::Arc;
 
-use super::api::FeishuApi;
-
-const CACHE_CAPACITY: usize = 500;
-const CACHE_TTL: Duration = Duration::from_secs(3600); // 1 hour
-
-enum CachedEntry {
-    Found { name: String, fetched_at: Instant },
-    NotAvailable { fetched_at: Instant },
+/// Cached user profile info from Feishu.
+#[derive(Debug, Clone)]
+pub struct UserProfile {
+    pub open_id: String,
+    pub name: Option<String>,
 }
 
-impl CachedEntry {
-    fn is_expired(&self) -> bool {
-        let fetched_at = match self {
-            CachedEntry::Found { fetched_at, .. } => fetched_at,
-            CachedEntry::NotAvailable { fetched_at } => fetched_at,
-        };
-        fetched_at.elapsed() > CACHE_TTL
-    }
-}
-
+/// Simple in-memory cache for Feishu user profiles.
 pub struct UserProfileCache {
-    api: Arc<FeishuApi>,
-    cache: StdMutex<HashMap<String, CachedEntry>>,
+    cache: StdMutex<HashMap<String, UserProfile>>,
 }
 
 impl UserProfileCache {
-    pub fn new(api: Arc<FeishuApi>) -> Self {
+    pub fn new() -> Self {
         Self {
-            api,
-            cache: StdMutex::new(HashMap::with_capacity(CACHE_CAPACITY)),
+            cache: StdMutex::new(HashMap::new()),
         }
     }
 
-    pub async fn resolve_name(&self, open_id: &str) -> Option<String> {
-        // Check cache
-        {
-            let cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
-            if let Some(entry) = cache.get(open_id) {
-                if !entry.is_expired() {
-                    return match entry {
-                        CachedEntry::Found { name, .. } => Some(name.clone()),
-                        CachedEntry::NotAvailable { .. } => None,
-                    };
-                }
-            }
-        }
+    /// Get a cached profile by open_id.
+    pub fn get(&self, open_id: &str) -> Option<UserProfile> {
+        let guard = self.cache.lock().unwrap_or_else(|e| e.into_inner());
+        guard.get(open_id).cloned()
+    }
 
-        // Fetch from API
-        let result: Result<Option<String>, String> = self.api.get_user_info(open_id).await;
+    /// Insert or update a profile.
+    pub fn insert(&self, profile: UserProfile) {
+        let mut guard = self.cache.lock().unwrap_or_else(|e| e.into_inner());
+        guard.insert(profile.open_id.clone(), profile);
+    }
+}
 
-        let entry = match result {
-            Ok(Some(name)) => CachedEntry::Found { name: name.clone(), fetched_at: Instant::now() },
-            _ => CachedEntry::NotAvailable { fetched_at: Instant::now() },
-        };
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-        let name = match &entry {
-            CachedEntry::Found { name, .. } => Some(name.clone()),
-            CachedEntry::NotAvailable { .. } => None,
-        };
+    #[test]
+    fn test_cache_miss_and_hit() {
+        let cache = UserProfileCache::new();
+        assert!(cache.get("ou_123").is_none());
 
-        // Store in cache
-        {
-            let mut cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
-
-            // Evict oldest if at capacity
-            if cache.len() >= CACHE_CAPACITY && !cache.contains_key(open_id) {
-                if let Some(oldest_key) = cache.iter()
-                    .min_by_key(|(_, entry)| match entry {
-                        CachedEntry::Found { fetched_at, .. } => *fetched_at,
-                        CachedEntry::NotAvailable { fetched_at } => *fetched_at,
-                    })
-                    .map(|(k, _)| k.clone())
-                {
-                    cache.remove(&oldest_key);
-                }
-            }
-
-            cache.insert(open_id.to_string(), entry);
-        }
-
-        name
+        cache.insert(UserProfile { open_id: "ou_123".into(), name: Some("Alice".into()) });
+        let p = cache.get("ou_123").unwrap();
+        assert_eq!(p.name.as_deref(), Some("Alice"));
     }
 }

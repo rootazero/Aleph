@@ -1,48 +1,31 @@
 use std::collections::VecDeque;
-use std::time::{Duration, Instant};
 
-const DEFAULT_CAPACITY: usize = 5000;
-const DEFAULT_TTL: Duration = Duration::from_secs(86400); // 24 hours
+const DEDUP_CAPACITY: usize = 1000;
 
+/// Ring-buffer message deduplication.
 pub struct MessageDedup {
-    seen: VecDeque<(String, Instant)>,
+    seen: VecDeque<String>,
     capacity: usize,
-    ttl: Duration,
 }
 
 impl MessageDedup {
     pub fn new() -> Self {
         Self {
-            seen: VecDeque::with_capacity(DEFAULT_CAPACITY),
-            capacity: DEFAULT_CAPACITY,
-            ttl: DEFAULT_TTL,
+            seen: VecDeque::with_capacity(DEDUP_CAPACITY),
+            capacity: DEDUP_CAPACITY,
         }
     }
 
-    /// Returns true if the message_id was already seen (duplicate).
+    /// Returns `true` if the message_id is a duplicate (already seen).
+    /// If new, records it and returns `false`.
     pub fn is_duplicate(&mut self, message_id: &str) -> bool {
-        let now = Instant::now();
-
-        // Drain expired entries from front
-        while let Some((_, ts)) = self.seen.front() {
-            if now.duration_since(*ts) > self.ttl {
-                self.seen.pop_front();
-            } else {
-                break;
-            }
-        }
-
-        // Check for existing
-        if self.seen.iter().any(|(id, _)| id == message_id) {
+        if self.seen.iter().any(|id| id == message_id) {
             return true;
         }
-
-        // Evict oldest if at capacity
         if self.seen.len() >= self.capacity {
             self.seen.pop_front();
         }
-
-        self.seen.push_back((message_id.to_string(), now));
+        self.seen.push_back(message_id.to_string());
         false
     }
 }
@@ -52,36 +35,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_not_duplicate() {
+    fn test_dedup_new_message() {
         let mut dedup = MessageDedup::new();
-        assert!(!dedup.is_duplicate("msg1"));
+        assert!(!dedup.is_duplicate("msg_001"));
     }
 
     #[test]
-    fn test_is_duplicate() {
+    fn test_dedup_duplicate_message() {
         let mut dedup = MessageDedup::new();
-        assert!(!dedup.is_duplicate("msg1"));
-        assert!(dedup.is_duplicate("msg1"));
+        assert!(!dedup.is_duplicate("msg_001"));
+        assert!(dedup.is_duplicate("msg_001"));
     }
 
     #[test]
-    fn test_different_ids_not_duplicate() {
-        let mut dedup = MessageDedup::new();
-        assert!(!dedup.is_duplicate("msg1"));
-        assert!(!dedup.is_duplicate("msg2"));
-    }
-
-    #[test]
-    fn test_capacity_eviction() {
-        let mut dedup = MessageDedup {
-            seen: VecDeque::new(),
-            capacity: 3,
-            ttl: DEFAULT_TTL,
-        };
+    fn test_dedup_capacity_eviction() {
+        let mut dedup = MessageDedup { seen: VecDeque::new(), capacity: 3 };
         assert!(!dedup.is_duplicate("a"));
         assert!(!dedup.is_duplicate("b"));
         assert!(!dedup.is_duplicate("c"));
-        assert!(!dedup.is_duplicate("d")); // "a" evicted
-        assert!(!dedup.is_duplicate("a")); // "a" is new again
+        // "a" should be evicted after this
+        assert!(!dedup.is_duplicate("d"));
+        assert!(!dedup.is_duplicate("a")); // no longer seen
     }
 }

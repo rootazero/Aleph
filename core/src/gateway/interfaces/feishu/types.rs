@@ -223,4 +223,3 @@ pub struct TypingState {
     pub message_id: String,
     pub reaction_id: String,
 }
-
