@@ -1,6 +1,7 @@
 pub mod config;
 pub mod types;
 pub mod events;
+pub mod auth;
 pub mod client;
 pub mod streaming;
 
