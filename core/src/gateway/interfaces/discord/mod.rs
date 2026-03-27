@@ -470,9 +470,8 @@ impl Channel for DiscordChannel {
         ))
     }
 
-    async fn delete(&self, message_id: &MessageId) -> ChannelResult<()> {
-        // Note: Deleting requires channel_id which we don't have in this interface
-        let _ = message_id;
+    async fn delete(&self, conversation_id: &ConversationId, message_id: &MessageId) -> ChannelResult<()> {
+        let _ = (conversation_id, message_id);
         Err(ChannelError::UnsupportedFeature(
             "Message deletion requires channel context".to_string(),
         ))

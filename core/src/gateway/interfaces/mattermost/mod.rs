@@ -260,7 +260,7 @@ impl Channel for MattermostChannel {
 
     }
 
-    async fn delete(&self, message_id: &MessageId) -> ChannelResult<()> {
+    async fn delete(&self, _conversation_id: &ConversationId, message_id: &MessageId) -> ChannelResult<()> {
         // Mattermost delete: DELETE /api/v4/posts/{post_id}
         let server = self.config.server_url_trimmed().to_string();
         let url = format!("{server}/api/v4/posts/{}", message_id.as_str());

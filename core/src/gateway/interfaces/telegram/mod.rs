@@ -1108,7 +1108,7 @@ impl Channel for TelegramChannel {
         self.edit_message(conversation_id, message_id, Some(new_text), None).await
     }
 
-    async fn delete(&self, message_id: &MessageId) -> ChannelResult<()> {
+    async fn delete(&self, _conversation_id: &ConversationId, message_id: &MessageId) -> ChannelResult<()> {
         // Note: Deleting requires both message_id and chat_id
         let _ = message_id;
         Err(ChannelError::UnsupportedFeature(

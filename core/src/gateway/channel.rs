@@ -515,12 +515,12 @@ pub trait Channel: Send + Sync {
     }
 
     /// Delete a message
-    async fn delete(&self, message_id: &MessageId) -> ChannelResult<()> {
+    async fn delete(&self, conversation_id: &ConversationId, message_id: &MessageId) -> ChannelResult<()> {
         if !self.capabilities().deletion {
             return Err(ChannelError::UnsupportedFeature("deletion".to_string()));
         }
         // Default implementation does nothing
-        let _ = message_id;
+        let _ = (conversation_id, message_id);
         Ok(())
     }
 }
