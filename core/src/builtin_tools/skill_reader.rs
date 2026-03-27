@@ -480,8 +480,12 @@ After finding a relevant skill, use skill.read(skill_id) to load its full instru
         let content = fs::read_to_string(&skill_md).ok()?;
         let id = skill_dir.file_name()?.to_str()?.to_string();
 
-        // Parse frontmatter
-        let skill = crate::skills::Skill::parse(&id, &content).ok()?;
+        // Parse frontmatter using v2 parser
+        let manifest = crate::skill::parse_skill_content(
+            &content,
+            crate::domain::skill::SkillSource::Global,
+        )
+        .ok()?;
 
         // List files
         let files = self.list_skill_files(skill_dir);
@@ -491,10 +495,10 @@ After finding a relevant skill, use skill.read(skill_id) to load its full instru
 
         Some(SkillSummary {
             id,
-            name: skill.frontmatter.name,
-            description: skill.frontmatter.description,
+            name: manifest.name().to_string(),
+            description: manifest.description().to_string(),
             location: skill_dir.to_string_lossy().to_string(),
-            triggers: skill.frontmatter.triggers,
+            triggers: Vec::new(),  // v2 doesn't use triggers
             files,
             source: Some(source),
         })

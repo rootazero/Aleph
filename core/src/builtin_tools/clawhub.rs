@@ -205,9 +205,11 @@ impl ClawHubTool {
             // Validate SKILL.md if found
             if relative_path == "SKILL.md" || relative_path.ends_with("/SKILL.md") {
                 let text = String::from_utf8_lossy(&content);
-                crate::skills::Skill::parse(slug, &text).map_err(|e| {
-                    AlephError::tool(format!("Invalid SKILL.md in package: {}", e))
-                })?;
+                crate::skill::parse_skill_content(
+                    &text,
+                    crate::domain::skill::SkillSource::Global,
+                )
+                .map_err(|e| AlephError::tool(format!("Invalid SKILL.md in package: {}", e)))?;
                 found_skill_md = true;
             }
 

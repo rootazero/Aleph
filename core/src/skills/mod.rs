@@ -208,6 +208,20 @@ pub struct SkillInfo {
     pub ecosystem: String,
 }
 
+impl From<crate::domain::skill::SkillManifest> for SkillInfo {
+    fn from(manifest: crate::domain::skill::SkillManifest) -> Self {
+        use crate::domain::Entity;
+        Self {
+            id: manifest.id().as_str().to_string(),
+            name: manifest.name().to_string(),
+            description: manifest.description().to_string(),
+            triggers: Vec::new(),  // v2 doesn't use triggers
+            allowed_tools: Vec::new(),  // v2 uses invocation policy instead
+            ecosystem: "aleph".to_string(),
+        }
+    }
+}
+
 // Re-exports
 pub use cli_wrapper::{CliWrapperError, CliWrapperValidator};
 pub use events::SkillRegistryEvent;
