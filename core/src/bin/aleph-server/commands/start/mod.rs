@@ -572,6 +572,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         server.openai_provider_map = Arc::new(provider_map);
         server.openai_provider_configs = provider_configs;
     }
+    server.embedding_provider = agent_result.embedder.clone();
 
     let config_patcher = {
         let config_path = alephcore::Config::default_path();
