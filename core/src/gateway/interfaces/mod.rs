@@ -39,6 +39,7 @@ pub mod webhook;
 pub mod xmpp;
 pub mod nostr;
 pub mod feishu;
+pub mod msteams;
 
 pub use cli::{CliChannel, CliChannelConfig, CliChannelFactory};
 
