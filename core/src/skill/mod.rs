@@ -454,6 +454,31 @@ fn is_skill_file(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
+/// Return the standard skill directories used when no project context is available.
+///
+/// Scans the canonical user-level locations:
+/// - `~/.aleph/skills/` — Aleph native global skills
+/// - `~/.claude/skills/` — Claude Code compatibility
+///
+/// Only directories that actually exist are returned.
+pub fn default_skill_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+
+    if let Some(home) = dirs::home_dir() {
+        let aleph_skills = home.join(".aleph").join("skills");
+        if aleph_skills.exists() {
+            dirs.push(aleph_skills);
+        }
+
+        let claude_skills = home.join(".claude").join("skills");
+        if claude_skills.exists() {
+            dirs.push(claude_skills);
+        }
+    }
+
+    dirs
+}
+
 /// Guess the `SkillSource` from a file path.
 ///
 /// - Under `~/.aleph/skills/` with manifest marking official → Bundled

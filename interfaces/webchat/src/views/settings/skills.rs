@@ -31,7 +31,10 @@ pub struct SkillStatusEntry {
     pub description: String,
     #[serde(default)]
     pub emoji: Option<String>,
-    pub source: String,
+    pub source: serde_json::Value,
+    /// Human-readable source label for grouping and display (e.g. "Bundled", "Global", "Plugin")
+    #[serde(default)]
+    pub source_label: String,
     #[serde(default)]
     pub homepage: Option<String>,
     pub eligible: bool,
@@ -347,7 +350,7 @@ fn SkillTabBar(
 
 #[derive(Clone, PartialEq)]
 struct SkillGroup {
-    source: String,
+    source_label: String,
     skills: Vec<SkillStatusEntry>,
 }
 
@@ -361,14 +364,14 @@ fn SkillList(
     on_select: Callback<String>,
     on_toggle: Callback<(String, bool)>,
 ) -> impl IntoView {
-    // Group by source
+    // Group by source_label (pre-rendered display string from core)
     let mut groups: Vec<SkillGroup> = Vec::new();
     for skill in skills {
-        if let Some(group) = groups.iter_mut().find(|g| g.source == skill.source) {
+        if let Some(group) = groups.iter_mut().find(|g| g.source_label == skill.source_label) {
             group.skills.push(skill);
         } else {
-            let src = skill.source.clone();
-            groups.push(SkillGroup { source: src, skills: vec![skill] });
+            let label = skill.source_label.clone();
+            groups.push(SkillGroup { source_label: label, skills: vec![skill] });
         }
     }
 
@@ -378,10 +381,10 @@ fn SkillList(
         <div class="space-y-6">
             <For
                 each=move || groups.get_value()
-                key=|g| g.source.clone()
+                key=|g| g.source_label.clone()
                 children=move |group| {
                     let group_skills = StoredValue::new(group.skills);
-                    let source_label = group.source;
+                    let source_label = group.source_label;
                     view! {
                         <div class="space-y-2">
                             <h3 class="text-xs font-semibold text-text-tertiary uppercase tracking-wider px-1">
@@ -512,7 +515,7 @@ fn SkillDetailDialog(
 
     view! {
         <div class="fixed inset-0 bg-black/50 flex items-center justify-center z-50"
-            on:click=move |ev| {
+            on:click=move |ev: web_sys::MouseEvent| {
                 // Close on backdrop click
                 use wasm_bindgen::JsCast;
                 if let Some(target) = ev.target() {
@@ -538,7 +541,7 @@ fn SkillDetailDialog(
                             <div class="flex items-center gap-2 mt-0.5 flex-wrap">
                                 // Source badge
                                 <span class="px-2 py-0.5 rounded-full text-xs bg-surface-sunken text-text-secondary">
-                                    {skill_for_header.source.clone()}
+                                    {skill_for_header.source_label.clone()}
                                 </span>
                                 // Scope badge
                                 <span class="px-2 py-0.5 rounded-full text-xs bg-primary-subtle text-primary">
@@ -878,7 +881,7 @@ fn SkillDetailDialog(
                         <div class="space-y-1 text-xs text-text-secondary">
                             <div class="flex items-center gap-2">
                                 <span class="text-text-tertiary w-16">"Source"</span>
-                                <span class="text-text-primary">{skill_for_info.source.clone()}</span>
+                                <span class="text-text-primary">{skill_for_info.source_label.clone()}</span>
                             </div>
                             <div class="flex items-center gap-2">
                                 <span class="text-text-tertiary w-16">"ID"</span>

@@ -39,6 +39,8 @@ pub struct SkillStatusEntry {
     pub description: String,
     pub emoji: Option<String>,
     pub source: SkillSource,
+    /// Human-readable source label for UI display (e.g. "Bundled", "Global", "Plugin")
+    pub source_label: String,
     pub homepage: Option<String>,
     pub eligible: bool,
     pub disabled: bool,
@@ -99,12 +101,20 @@ impl SkillStatusEntry {
             })
             .collect();
 
+        let source_label = match manifest.source() {
+            SkillSource::Bundled => "Bundled".to_string(),
+            SkillSource::Global => "Global".to_string(),
+            SkillSource::Workspace => "Workspace".to_string(),
+            SkillSource::Plugin(id) => format!("Plugin: {}", id.as_str()),
+        };
+
         Self {
             id: manifest.id().clone(),
             name: manifest.name().to_string(),
             description: manifest.description().to_string(),
             emoji: manifest.emoji().map(|s| s.to_string()),
             source: manifest.source().clone(),
+            source_label,
             homepage: manifest.homepage().map(|s| s.to_string()),
             eligible,
             disabled,

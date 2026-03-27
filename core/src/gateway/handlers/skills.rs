@@ -7,12 +7,23 @@ use serde_json::json;
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 use super::parse_params;
 use crate::domain::skill::{PromptScope, SkillId};
-use crate::skill::{SkillConfigUpdate, SkillSystem};
+use crate::skill::{default_skill_dirs, SkillConfigUpdate, SkillSystem};
 
 /// Shared SkillSystem instance (lazy-initialized, thread-safe).
+///
+/// Initializes with the standard user-level skill directories so that
+/// skills installed in `~/.aleph/skills/` are visible to RPC handlers.
 fn shared_system() -> &'static SkillSystem {
     static SYSTEM: OnceLock<SkillSystem> = OnceLock::new();
-    SYSTEM.get_or_init(SkillSystem::new)
+    SYSTEM.get_or_init(|| {
+        let system = SkillSystem::new();
+        let dirs = default_skill_dirs();
+        // Initialize synchronously: we are called from an async context,
+        // so use block_in_place to run the async init without spawning a new thread.
+        let rt = tokio::runtime::Handle::current();
+        let _ = tokio::task::block_in_place(|| rt.block_on(system.init(dirs)));
+        system
+    })
 }
 
 // ============================================================================
