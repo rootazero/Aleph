@@ -7,11 +7,28 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use axum::extract::{Path, State};
+use axum::http::HeaderMap;
 use axum::Json;
 
-use super::auth::ApiError;
+use super::auth::{extract_bearer_token, ApiError};
 use super::state::OpenAiApiState;
 use super::types::{ModelList, ModelObject};
+
+/// Validate bearer token against state.api_token (shared auth logic).
+fn check_auth(state: &OpenAiApiState, headers: &HeaderMap) -> Result<(), ApiError> {
+    let auth_header = headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    let token = extract_bearer_token(auth_header)
+        .ok_or_else(|| ApiError::Unauthorized("Missing or invalid Authorization header".into()))?;
+    if let Some(ref expected) = state.api_token {
+        if token != expected.as_str() {
+            return Err(ApiError::Unauthorized("Invalid API key".into()));
+        }
+    }
+    Ok(())
+}
 
 /// Build the full model list (virtual agents + real provider models).
 async fn build_model_list(state: &OpenAiApiState) -> Vec<ModelObject> {
@@ -58,18 +75,24 @@ async fn build_model_list(state: &OpenAiApiState) -> Vec<ModelObject> {
     models
 }
 
-pub async fn list_models(State(state): State<Arc<OpenAiApiState>>) -> Json<ModelList> {
+pub async fn list_models(
+    State(state): State<Arc<OpenAiApiState>>,
+    headers: HeaderMap,
+) -> Result<Json<ModelList>, ApiError> {
+    check_auth(&state, &headers)?;
     let models = build_model_list(&state).await;
-    Json(ModelList {
+    Ok(Json(ModelList {
         object: "list".to_string(),
         data: models,
-    })
+    }))
 }
 
 pub async fn get_model(
     State(state): State<Arc<OpenAiApiState>>,
+    headers: HeaderMap,
     Path(model_id): Path<String>,
 ) -> Result<Json<ModelObject>, ApiError> {
+    check_auth(&state, &headers)?;
     let models = build_model_list(&state).await;
     models
         .into_iter()

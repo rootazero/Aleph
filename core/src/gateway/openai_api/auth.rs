@@ -8,19 +8,13 @@ use serde_json::json;
 /// the token. Returns `None` if the prefix is missing or the token is empty.
 pub fn extract_bearer_token(header_value: &str) -> Option<&str> {
     // Case-insensitive check for "Bearer " prefix (RFC 6750)
-    let stripped = if header_value.len() >= 7
-        && header_value[..7].eq_ignore_ascii_case("bearer ")
-    {
-        &header_value[7..]
-    } else {
+    // Use .get(..7) instead of &s[..7] to avoid panic on non-ASCII input (P7)
+    let prefix = header_value.get(..7)?;
+    if !prefix.eq_ignore_ascii_case("bearer ") {
         return None;
-    };
-
-    if stripped.is_empty() {
-        None
-    } else {
-        Some(stripped)
     }
+    let token = &header_value[7..];
+    if token.is_empty() { None } else { Some(token) }
 }
 
 /// API error types for the OpenAI-compatible endpoint.
