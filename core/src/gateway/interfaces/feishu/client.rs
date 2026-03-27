@@ -3,6 +3,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 use reqwest::multipart;
 
+use super::config::FeishuConfig;
 use super::types::*;
 
 const TOKEN_REFRESH_MARGIN_SECS: u64 = 300;
