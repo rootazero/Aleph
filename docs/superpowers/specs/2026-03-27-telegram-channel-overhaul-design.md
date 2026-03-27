@@ -129,8 +129,9 @@ impl AccessController {
 ### Backward compatibility
 
 - Old config `allowed_users: [123]` auto-maps to `dm_policy: allowlist` + `allowed_users: [123]`
-- `allowed_users: []` (empty) maps to `dm_policy: open`
+- `allowed_users: []` (empty) maps to `dm_policy: pairing` (safe default — avoids accidental open access)
 - New `dm_policy` field takes precedence when explicitly set
+- To get open access, user must explicitly set `dm_policy: open`
 
 ### Not doing (YAGNI)
 
