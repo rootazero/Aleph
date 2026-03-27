@@ -109,6 +109,7 @@ impl WhatsAppChannel {
             rich_text: true,
             max_message_length: 65536,
             max_attachment_size: 100 * 1024 * 1024, // 100MB
+            stream_protocol: Default::default(),
         }
     }
 

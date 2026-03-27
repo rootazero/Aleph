@@ -92,6 +92,7 @@ impl MattermostChannel {
             rich_text: true, // Mattermost supports standard Markdown
             max_message_length: 16383,
             max_attachment_size: 100 * 1024 * 1024, // 100MB
+            stream_protocol: Default::default(),
         }
     }
 

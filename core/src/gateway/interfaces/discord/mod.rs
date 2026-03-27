@@ -101,6 +101,7 @@ impl DiscordChannel {
             rich_text: true, // Markdown support
             max_message_length: 2000,
             max_attachment_size: 25 * 1024 * 1024, // 25MB for normal, 100MB for Nitro
+            stream_protocol: Default::default(),
         }
     }
 

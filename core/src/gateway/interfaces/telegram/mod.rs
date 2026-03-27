@@ -135,6 +135,7 @@ impl TelegramChannel {
             rich_text: true, // Markdown/HTML support
             max_message_length: 4096,
             max_attachment_size: 50 * 1024 * 1024, // 50MB
+            stream_protocol: Default::default(),
         }
     }
 

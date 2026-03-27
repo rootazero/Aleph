@@ -90,6 +90,7 @@ impl EmailChannel {
             rich_text: true,     // HTML email
             max_message_length: 1_048_576, // 1MB
             max_attachment_size: 25 * 1024 * 1024, // 25MB
+            stream_protocol: Default::default(),
         }
     }
 

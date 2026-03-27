@@ -76,6 +76,7 @@ impl IMessageChannel {
                 rich_text: false,
                 max_message_length: 20000, // Approximate limit
                 max_attachment_size: 100 * 1024 * 1024, // 100 MB
+                stream_protocol: Default::default(),
             },
         };
 

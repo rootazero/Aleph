@@ -90,6 +90,7 @@ impl FeishuChannel {
             rich_text: true,
             max_message_length: 4096,
             max_attachment_size: 20 * 1024 * 1024,
+            stream_protocol: Default::default(),
         }
     }
 }
