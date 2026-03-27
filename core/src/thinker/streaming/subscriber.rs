@@ -267,7 +267,7 @@ mod tests {
 
         let subscriber = StreamSubscriberBuilder::new()
             .on_text(move |_, _| {
-                *text_clone.lock().unwrap() = true;
+                *text_clone.lock().unwrap_or_else(|e| e.into_inner()) = true;
             })
             .build();
 
@@ -276,6 +276,6 @@ mod tests {
             accumulated: "test".to_string(),
         });
 
-        assert!(*text_received.lock().unwrap());
+        assert!(*text_received.lock().unwrap_or_else(|e| e.into_inner()));
     }
 }

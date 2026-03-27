@@ -143,11 +143,6 @@ impl BlockCoalescer {
         if let Some(last) = self.last_append {
             let elapsed = last.elapsed();
             if elapsed >= Duration::from_millis(self.config.idle_ms) {
-                // Idle timeout reached
-                if self.buffer.len() >= self.config.min_chars {
-                    return Some(self.take_buffer());
-                }
-                // Below min_chars but idle - still flush to avoid stale content
                 return Some(self.take_buffer());
             }
         }

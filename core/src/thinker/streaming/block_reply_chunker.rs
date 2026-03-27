@@ -136,8 +136,7 @@ impl BlockReplyChunker {
                     blocks.push(block.trim().to_string());
 
                     // Prepend fence reopen to remaining buffer
-                    let remainder = std::mem::take(&mut self.buffer);
-                    self.buffer = format!("{}\n{}", reopen_line, remainder);
+                    self.buffer.insert_str(0, &format!("{}\n", reopen_line));
                 }
                 None => {
                     if self.buffer.len() >= self.config.max_block_size {
@@ -154,8 +153,7 @@ impl BlockReplyChunker {
                                 block.push_str(&split.close_line);
                                 blocks.push(block);
 
-                                let remainder = std::mem::take(&mut self.buffer);
-                                self.buffer = format!("{}\n{}", split.reopen_line, remainder);
+                                self.buffer.insert_str(0, &format!("{}\n", split.reopen_line));
                                 continue;
                             }
                         }
@@ -243,8 +241,9 @@ impl BlockReplyChunker {
                 break;
             }
             if matches!(c, '.' | '!' | '?') {
-                // Check next char is space or end
-                let is_sentence_end = if let Some(next) = search_str.chars().nth(i + 1) {
+                // Check next char is space or end (i is a byte offset from char_indices)
+                let next_char_start = i + c.len_utf8();
+                let is_sentence_end = if let Some(next) = search_str[next_char_start..].chars().next() {
                     next.is_whitespace() || next == '\n'
                 } else {
                     true
