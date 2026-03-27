@@ -192,6 +192,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     .emit(StreamEvent::ResponseChunk {
                         run_id: run_id.to_string(),
                         seq: 1,
+                        delta: response.clone(),
                         content: response.clone(),
                         full_text: String::new(),
                         chunk_index: 0,
@@ -255,6 +256,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     .emit(StreamEvent::ResponseChunk {
                         run_id: run_id.to_string(),
                         seq: 1,
+                        delta: response.clone(),
                         content: response.clone(),
                         full_text: String::new(),
                         chunk_index: 0,

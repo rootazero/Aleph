@@ -91,7 +91,7 @@ pub trait EventEmitter: Send + Sync {
     async fn emit_response_chunk(
         &self,
         run_id: &str,
-        content: &str,
+        delta: &str,
         full_text: &str,
         chunk_index: u32,
         is_final: bool,
@@ -102,8 +102,9 @@ pub trait EventEmitter: Send + Sync {
             .emit(StreamEvent::ResponseChunk {
                 run_id: run_id.to_string(),
                 seq,
-                content: content.to_string(),
+                delta: delta.to_string(),
                 full_text: full_text.to_string(),
+                content: delta.to_string(), // backward compat
                 chunk_index,
                 is_final,
                 is_intermediate,

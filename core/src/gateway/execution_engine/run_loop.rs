@@ -390,6 +390,7 @@ impl<E: EventEmitter + Send + Sync + 'static> crate::agent_loop::LoopCallback
         let event = StreamEvent::ResponseChunk {
             run_id: self.run_id.clone(),
             seq: self.seq,
+            delta: text.to_string(),
             content: text.to_string(),
             full_text: String::new(),
             chunk_index,
@@ -421,6 +422,7 @@ impl<E: EventEmitter + Send + Sync + 'static> crate::agent_loop::LoopCallback
         let event = StreamEvent::ResponseChunk {
             run_id: self.run_id.clone(),
             seq: self.seq,
+            delta: text.to_string(),
             content: text.to_string(),
             full_text: String::new(),
             chunk_index,

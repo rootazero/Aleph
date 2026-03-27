@@ -64,7 +64,7 @@ impl EventEmitter for GatewayEventEmitter {
         // In instant mode, buffer non-final ResponseChunks and only emit on final
         if self.output_mode == OutputMode::Instant {
             if let StreamEvent::ResponseChunk {
-                ref content,
+                ref delta,
                 is_final,
                 is_intermediate,
                 ref run_id,
@@ -72,7 +72,7 @@ impl EventEmitter for GatewayEventEmitter {
             } = event
             {
                 if is_intermediate {
-                    if content.is_empty() {
+                    if delta.is_empty() {
                         // Intermediate boundary marker: flush accumulated buffer
                         // as an intermediate message, then clear it
                         let mut buffer = self.instant_buffer.lock().await;
@@ -82,6 +82,7 @@ impl EventEmitter for GatewayEventEmitter {
                             let flush_event = StreamEvent::ResponseChunk {
                                 run_id: run_id.clone(),
                                 seq: self.next_seq(),
+                                delta: accumulated.clone(),
                                 full_text: accumulated.clone(),
                                 content: accumulated,
                                 chunk_index: 0,
@@ -102,24 +103,25 @@ impl EventEmitter for GatewayEventEmitter {
                     }
                     return Ok(());
                 } else if !is_final {
-                    // Buffer the chunk content, don't emit yet
-                    self.instant_buffer.lock().await.push_str(content);
+                    // Buffer the chunk delta, don't emit yet
+                    self.instant_buffer.lock().await.push_str(delta);
                     return Ok(());
                 }
 
                 // Final chunk: combine buffered content + this chunk, emit as single response
                 let mut buffer = self.instant_buffer.lock().await;
                 let full_content = if buffer.is_empty() {
-                    content.clone()
+                    delta.clone()
                 } else {
                     let buffered = std::mem::take(&mut *buffer);
-                    format!("{}{}", buffered, content)
+                    format!("{}{}", buffered, delta)
                 };
                 drop(buffer);
 
                 let final_event = StreamEvent::ResponseChunk {
                     run_id: run_id.clone(),
                     seq: self.next_seq(),
+                    delta: full_content.clone(),
                     full_text: full_content.clone(),
                     content: full_content,
                     chunk_index: 0,
@@ -145,6 +147,7 @@ impl EventEmitter for GatewayEventEmitter {
                     let flush_event = StreamEvent::ResponseChunk {
                         run_id: run_id.clone(),
                         seq: self.next_seq(),
+                        delta: buffered.clone(),
                         full_text: buffered.clone(),
                         content: buffered,
                         chunk_index: 0,
@@ -164,6 +167,7 @@ impl EventEmitter for GatewayEventEmitter {
                         let fallback_event = StreamEvent::ResponseChunk {
                             run_id: run_id.clone(),
                             seq: self.next_seq(),
+                            delta: final_response.clone(),
                             full_text: final_response.clone(),
                             content: final_response.clone(),
                             chunk_index: 0,

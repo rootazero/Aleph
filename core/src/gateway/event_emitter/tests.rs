@@ -175,6 +175,7 @@ async fn test_instant_mode_buffers_non_final_chunks() {
         .emit(StreamEvent::ResponseChunk {
             run_id: "run-1".to_string(),
             seq: 0,
+            delta: "Hello ".to_string(),
             content: "Hello ".to_string(),
             full_text: String::new(),
             chunk_index: 0,
@@ -187,6 +188,7 @@ async fn test_instant_mode_buffers_non_final_chunks() {
         .emit(StreamEvent::ResponseChunk {
             run_id: "run-1".to_string(),
             seq: 1,
+            delta: "World".to_string(),
             content: "World".to_string(),
             full_text: String::new(),
             chunk_index: 1,
@@ -205,6 +207,7 @@ async fn test_instant_mode_buffers_non_final_chunks() {
         .emit(StreamEvent::ResponseChunk {
             run_id: "run-1".to_string(),
             seq: 2,
+            delta: "!".to_string(),
             content: "!".to_string(),
             full_text: String::new(),
             chunk_index: 2,
