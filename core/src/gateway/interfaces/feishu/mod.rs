@@ -2,6 +2,7 @@ pub mod config;
 pub mod types;
 pub mod events;
 pub mod auth;
+pub mod api;
 pub mod client;
 pub mod streaming;
 
