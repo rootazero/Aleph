@@ -17,6 +17,7 @@ use crate::providers::message::UnifiedMessage;
 use crate::providers::AiProvider;
 
 use super::auth::{extract_bearer_token, ApiError};
+use super::completions::passthrough::{convert_openai_tools, convert_tool_choice};
 use super::state::OpenAiApiState;
 use super::stream;
 use super::types::{ResponsesInput, ResponsesRequest, ResponsesResponse, ResponsesUsage};
@@ -95,15 +96,19 @@ pub async fn handle(
     let unified_messages = convert_input(&req.input);
     let system_prompt = req.instructions.clone();
 
+    // Convert tools and tool_choice from OpenAI format
+    let tool_defs = req.tools.as_ref().map(|t| convert_openai_tools(t));
+    let tool_choice = req.tool_choice.as_ref().and_then(convert_tool_choice);
+
     // Build RequestPayload
     let payload = RequestPayload {
         messages: &unified_messages,
         system_prompt: system_prompt.as_deref(),
-        tools: None,
+        tools: tool_defs.as_deref(),
         think_level: None,
         temperature: req.temperature.map(|t| t as f32),
         max_tokens: req.max_output_tokens,
-        tool_choice: None,
+        tool_choice,
     };
 
     let is_streaming = req.stream.unwrap_or(false);

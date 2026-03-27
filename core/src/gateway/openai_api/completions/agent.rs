@@ -20,6 +20,7 @@ use crate::gateway::media::PendingMedia;
 use crate::gateway::openai_api::auth::ApiError;
 use crate::gateway::openai_api::state::OpenAiApiState;
 use crate::gateway::openai_api::stream::{self, SSE_DONE};
+use crate::gateway::agent_instance::MessageRole;
 use crate::gateway::openai_api::types::{
     ChatChoice, ChatCompletionChunk, ChatCompletionRequest, ChatCompletionResponse, ChatMessage,
     Delta, DeltaFunction, DeltaToolCall, StreamChoice, Usage,
@@ -107,7 +108,10 @@ impl EventEmitter for SseEventEmitter {
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
                     .index_for(&tool_id);
-                let arguments = serde_json::to_string(&params).unwrap_or_default();
+                let arguments = match &params {
+                    serde_json::Value::String(s) => s.clone(),
+                    other => serde_json::to_string(other).unwrap_or_default(),
+                };
                 let chunk = self.make_chunk(
                     Delta {
                         content: None,
@@ -130,11 +134,16 @@ impl EventEmitter for SseEventEmitter {
             StreamEvent::RunComplete { summary, .. } => {
                 // Single final chunk with finish_reason + usage + [DONE]
                 let chunk = ChatCompletionChunk {
-                    usage: Some(Usage {
-                        prompt_tokens: 0,
-                        completion_tokens: 0,
-                        total_tokens: u32::try_from(summary.total_tokens).unwrap_or(u32::MAX),
-                    }),
+                    usage: if summary.total_tokens > 0 {
+                        Some(Usage {
+                            prompt_tokens: 0,
+                            completion_tokens: 0,
+                            total_tokens: u32::try_from(summary.total_tokens)
+                                .unwrap_or(u32::MAX),
+                        })
+                    } else {
+                        None
+                    },
                     ..self.make_chunk(
                         Delta {
                             content: None,
@@ -291,6 +300,25 @@ pub async fn handle(
         epoch: 0,
     };
 
+    // Seed session with conversation history for stateless clients (e.g. Cursor)
+    // that send the full multi-turn history in every request.
+    if req.messages.len() > 1 {
+        let existing = agent.get_history(&session_key, Some(1)).await;
+        if existing.is_empty() {
+            agent.ensure_session(&session_key).await;
+            for msg in &req.messages[..req.messages.len() - 1] {
+                let role = match msg.role.as_str() {
+                    "user" => MessageRole::User,
+                    "assistant" => MessageRole::Assistant,
+                    "system" | _ => continue,
+                };
+                if let Some(content) = &msg.content {
+                    agent.add_message(&session_key, role, content).await;
+                }
+            }
+        }
+    }
+
     let run_id = uuid::Uuid::new_v4().to_string();
     let pending_media: PendingMedia = Arc::new(std::sync::Mutex::new(Vec::new()));
 
@@ -432,11 +460,15 @@ async fn handle_non_streaming(
             finish_reason: Some("stop".to_string()),
             delta: None,
         }],
-        usage: Some(Usage {
-            prompt_tokens: 0,
-            completion_tokens: 0,
-            total_tokens: total_tokens as u32,
-        }),
+        usage: if total_tokens > 0 {
+            Some(Usage {
+                prompt_tokens: 0,
+                completion_tokens: 0,
+                total_tokens: u32::try_from(total_tokens).unwrap_or(u32::MAX),
+            })
+        } else {
+            None
+        },
     };
 
     Ok(Json(response).into_response())

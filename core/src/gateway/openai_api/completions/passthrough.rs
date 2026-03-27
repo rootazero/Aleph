@@ -21,7 +21,7 @@ use crate::providers::AiProvider;
 use serde_json::{json, Value};
 
 /// Convert OpenAI-format tool definitions to internal `ToolDefinition`.
-fn convert_openai_tools(tools: &[Value]) -> Vec<ToolDefinition> {
+pub fn convert_openai_tools(tools: &[Value]) -> Vec<ToolDefinition> {
     tools
         .iter()
         .filter_map(|t| {
@@ -47,7 +47,7 @@ fn convert_openai_tools(tools: &[Value]) -> Vec<ToolDefinition> {
 }
 
 /// Convert OpenAI-format tool_choice value to internal `ToolChoice`.
-fn convert_tool_choice(choice: &Value) -> Option<ToolChoice> {
+pub fn convert_tool_choice(choice: &Value) -> Option<ToolChoice> {
     match choice {
         Value::String(s) => match s.as_str() {
             "auto" => Some(ToolChoice::Auto),
@@ -79,11 +79,37 @@ fn convert_messages(messages: &[ChatMessage]) -> Vec<UnifiedMessage> {
                         text: content_text.to_string(),
                     }],
                 }),
-                "assistant" => Some(UnifiedMessage::Assistant {
-                    content: vec![ContentBlock::Text {
-                        text: content_text.to_string(),
-                    }],
-                }),
+                "assistant" => {
+                    let mut content = Vec::new();
+                    if !content_text.is_empty() {
+                        content.push(ContentBlock::Text {
+                            text: content_text.to_string(),
+                        });
+                    }
+                    if let Some(tool_calls) = &msg.tool_calls {
+                        for tc in tool_calls {
+                            if let (Some(id), Some(func)) = (
+                                tc.get("id").and_then(|v| v.as_str()),
+                                tc.get("function"),
+                            ) {
+                                content.push(ContentBlock::ToolCall {
+                                    id: id.to_string(),
+                                    name: func
+                                        .get("name")
+                                        .and_then(|n| n.as_str())
+                                        .unwrap_or("")
+                                        .to_string(),
+                                    arguments: func
+                                        .get("arguments")
+                                        .and_then(|a| a.as_str())
+                                        .and_then(|s| serde_json::from_str(s).ok())
+                                        .unwrap_or(json!({})),
+                                });
+                            }
+                        }
+                    }
+                    Some(UnifiedMessage::Assistant { content })
+                }
                 "tool" => {
                     let tool_call_id = msg.tool_call_id.clone().unwrap_or_default();
                     Some(UnifiedMessage::ToolResult {
