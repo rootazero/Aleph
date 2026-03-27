@@ -125,6 +125,7 @@ pub async fn handle(
                     role: "assistant".to_string(),
                     content: response.text,
                     tool_calls: None,
+                    tool_call_id: None,
                 },
                 finish_reason: Some("stop".to_string()),
                 delta: None,

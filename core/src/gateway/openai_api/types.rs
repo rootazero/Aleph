@@ -35,6 +35,8 @@ pub struct ChatMessage {
     pub content: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<Vec<serde_json::Value>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
 }
 
 /// A chat completion response.
@@ -137,6 +139,91 @@ pub struct ModelList {
     pub data: Vec<ModelObject>,
 }
 
+// === Embedding types ===
+
+#[derive(Debug, Deserialize)]
+pub struct EmbeddingRequest {
+    #[serde(default)]
+    pub model: Option<String>,
+    pub input: EmbeddingInput,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub enum EmbeddingInput {
+    Single(String),
+    Batch(Vec<String>),
+}
+
+#[derive(Debug, Serialize)]
+pub struct EmbeddingResponse {
+    pub object: String,
+    pub data: Vec<EmbeddingData>,
+    pub model: String,
+    pub usage: Usage,
+}
+
+#[derive(Debug, Serialize)]
+pub struct EmbeddingData {
+    pub object: String,
+    pub index: u32,
+    pub embedding: Vec<f32>,
+}
+
+// === Responses API types ===
+
+#[derive(Debug, Deserialize)]
+pub struct ResponsesRequest {
+    pub model: String,
+    pub input: ResponsesInput,
+    #[serde(default)]
+    pub stream: Option<bool>,
+    #[serde(default)]
+    pub instructions: Option<String>,
+    #[serde(default)]
+    pub temperature: Option<f64>,
+    #[serde(default)]
+    pub max_output_tokens: Option<u32>,
+    #[serde(default)]
+    pub tools: Option<Vec<serde_json::Value>>,
+    #[serde(default)]
+    pub tool_choice: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub enum ResponsesInput {
+    Text(String),
+    Messages(Vec<ResponsesMessage>),
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ResponsesMessage {
+    pub role: String,
+    #[serde(default)]
+    pub content: Option<serde_json::Value>,
+    #[serde(default)]
+    pub name: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ResponsesResponse {
+    pub id: String,
+    pub object: String,
+    pub created_at: u64,
+    pub status: String,
+    pub model: String,
+    pub output: Vec<serde_json::Value>,
+    pub usage: ResponsesUsage,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ResponsesUsage {
+    pub input_tokens: u32,
+    pub output_tokens: u32,
+    pub total_tokens: u32,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -190,6 +277,7 @@ mod tests {
                     role: "assistant".to_string(),
                     content: Some("Hello! How can I help?".to_string()),
                     tool_calls: None,
+                    tool_call_id: None,
                 },
                 finish_reason: Some("stop".to_string()),
                 delta: None,
@@ -232,6 +320,7 @@ mod tests {
                     role: "assistant".to_string(),
                     content: None,
                     tool_calls: None,
+                    tool_call_id: None,
                 },
                 finish_reason: None,
                 delta: Some(Delta {
@@ -437,5 +526,128 @@ mod tests {
         let json_val = serde_json::to_value(&chunk).unwrap();
         assert_eq!(json_val["choices"][0]["finish_reason"], "stop");
         assert_eq!(json_val["usage"]["total_tokens"], 30);
+    }
+
+    #[test]
+    fn test_embedding_input_single_deserializes() {
+        let json_str = json!({
+            "model": "text-embedding-ada-002",
+            "input": "Hello world"
+        });
+
+        let req: EmbeddingRequest = serde_json::from_value(json_str).unwrap();
+        assert_eq!(req.model, Some("text-embedding-ada-002".to_string()));
+        match req.input {
+            EmbeddingInput::Single(s) => assert_eq!(s, "Hello world"),
+            _ => panic!("Expected Single variant"),
+        }
+    }
+
+    #[test]
+    fn test_embedding_input_batch_deserializes() {
+        let json_str = json!({
+            "input": ["Hello", "World"]
+        });
+
+        let req: EmbeddingRequest = serde_json::from_value(json_str).unwrap();
+        assert!(req.model.is_none());
+        match req.input {
+            EmbeddingInput::Batch(v) => {
+                assert_eq!(v.len(), 2);
+                assert_eq!(v[0], "Hello");
+                assert_eq!(v[1], "World");
+            }
+            _ => panic!("Expected Batch variant"),
+        }
+    }
+
+    #[test]
+    fn test_embedding_response_serializes() {
+        let response = EmbeddingResponse {
+            object: "list".to_string(),
+            data: vec![EmbeddingData {
+                object: "embedding".to_string(),
+                index: 0,
+                embedding: vec![0.1, 0.2, 0.3],
+            }],
+            model: "text-embedding-ada-002".to_string(),
+            usage: Usage {
+                prompt_tokens: 5,
+                completion_tokens: 0,
+                total_tokens: 5,
+            },
+        };
+
+        let json_val = serde_json::to_value(&response).unwrap();
+        assert_eq!(json_val["object"], "list");
+        assert_eq!(json_val["data"][0]["object"], "embedding");
+        assert_eq!(json_val["data"][0]["index"], 0);
+        let emb = json_val["data"][0]["embedding"].as_array().unwrap();
+        assert_eq!(emb.len(), 3);
+        assert_eq!(json_val["model"], "text-embedding-ada-002");
+        assert_eq!(json_val["usage"]["prompt_tokens"], 5);
+    }
+
+    #[test]
+    fn test_responses_input_text_deserializes() {
+        let json_str = json!({
+            "model": "gpt-4",
+            "input": "Hello!"
+        });
+
+        let req: ResponsesRequest = serde_json::from_value(json_str).unwrap();
+        assert_eq!(req.model, "gpt-4");
+        match req.input {
+            ResponsesInput::Text(s) => assert_eq!(s, "Hello!"),
+            _ => panic!("Expected Text variant"),
+        }
+    }
+
+    #[test]
+    fn test_responses_input_messages_deserializes() {
+        let json_str = json!({
+            "model": "gpt-4",
+            "input": [
+                {"role": "user", "content": "Hi there"}
+            ],
+            "instructions": "Be helpful",
+            "temperature": 0.5
+        });
+
+        let req: ResponsesRequest = serde_json::from_value(json_str).unwrap();
+        assert_eq!(req.model, "gpt-4");
+        match req.input {
+            ResponsesInput::Messages(msgs) => {
+                assert_eq!(msgs.len(), 1);
+                assert_eq!(msgs[0].role, "user");
+            }
+            _ => panic!("Expected Messages variant"),
+        }
+        assert_eq!(req.instructions.as_deref(), Some("Be helpful"));
+        assert_eq!(req.temperature, Some(0.5));
+    }
+
+    #[test]
+    fn test_tool_call_id_deserializes() {
+        let json_str = json!({
+            "role": "tool",
+            "content": "42",
+            "tool_call_id": "call_abc123"
+        });
+
+        let msg: ChatMessage = serde_json::from_value(json_str).unwrap();
+        assert_eq!(msg.role, "tool");
+        assert_eq!(msg.tool_call_id, Some("call_abc123".to_string()));
+    }
+
+    #[test]
+    fn test_tool_call_id_absent_by_default() {
+        let json_str = json!({
+            "role": "user",
+            "content": "Hello"
+        });
+
+        let msg: ChatMessage = serde_json::from_value(json_str).unwrap();
+        assert!(msg.tool_call_id.is_none());
     }
 }
