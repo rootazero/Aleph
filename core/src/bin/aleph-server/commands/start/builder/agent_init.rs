@@ -1035,6 +1035,46 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             }
         }
 
+        // Wire tools.catalog to return all active tools grouped by source
+        {
+            let reg = dispatch_registry.clone();
+            server.handlers_mut().register("tools.catalog", move |req| {
+                let registry = reg.clone();
+                async move {
+                    alephcore::gateway::handlers::tools_visibility::handle_catalog(req, &registry).await
+                }
+            });
+            if !daemon {
+                println!("  tools.catalog: wired to unified dispatch registry");
+            }
+        }
+
+        // Wire tools.effective to return tools available to a specific agent
+        {
+            let reg = dispatch_registry.clone();
+            let agent_def_registry = std::sync::Arc::new(alephcore::agents::AgentRegistry::with_builtins());
+            server.handlers_mut().register("tools.effective", move |req| {
+                let registry = reg.clone();
+                let agents = agent_def_registry.clone();
+                async move {
+                    let agent_id = req.params.as_ref()
+                        .and_then(|p| p.get("agent_id"))
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+                    let agent_def = match &agent_id {
+                        Some(id) => agents.get(id),
+                        None => agents.get("main"),
+                    };
+                    alephcore::gateway::handlers::tools_visibility::handle_effective(
+                        req, &registry, agent_def.as_ref(),
+                    ).await
+                }
+            });
+            if !daemon {
+                println!("  tools.effective: wired to unified dispatch registry + agent defs");
+            }
+        }
+
         // Wire command.execute to resolve slash commands via CommandParser + ToolRegistry
         {
             let parser = Arc::new(alephcore::command::CommandParser::new(dispatch_registry.clone()));
