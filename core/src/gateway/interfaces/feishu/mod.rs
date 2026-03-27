@@ -6,6 +6,7 @@ pub mod api;
 pub mod client;
 pub mod streaming;
 pub mod dedup;
+pub mod user_cache;
 
 use std::collections::VecDeque;
 use std::sync::Mutex as StdMutex;
