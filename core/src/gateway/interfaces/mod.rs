@@ -59,3 +59,4 @@ pub use webhook::{WebhookChannel, WebhookChannelFactory, WebhookChannelConfig};
 pub use xmpp::{XmppChannel, XmppChannelFactory, XmppConfig};
 pub use nostr::{NostrChannel, NostrChannelFactory, NostrConfig};
 pub use feishu::{FeishuChannel, FeishuConfig};
+pub use msteams::{MsTeamsChannel, MsTeamsConfig};

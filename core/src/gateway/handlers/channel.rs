@@ -298,6 +298,7 @@ pub fn create_channel_from_config(id: &str, channel_type: &str, config: Value) -
     use crate::gateway::interfaces::xmpp::{XmppChannel, XmppConfig};
     use crate::gateway::interfaces::nostr::{NostrChannel, NostrConfig};
     use crate::gateway::interfaces::feishu::{FeishuChannel, FeishuConfig};
+    use crate::gateway::interfaces::msteams::{MsTeamsChannel, MsTeamsConfig};
 
     match channel_type {
         "telegram" => serde_json::from_value::<TelegramConfig>(config).ok()
@@ -326,6 +327,14 @@ pub fn create_channel_from_config(id: &str, channel_type: &str, config: Value) -
             .map(|cfg| Box::new(NostrChannel::new(id, cfg)) as _),
         "feishu" => serde_json::from_value::<FeishuConfig>(config).ok()
             .map(|cfg| Box::new(FeishuChannel::new(id, cfg)) as _),
+        "msteams" => serde_json::from_value::<MsTeamsConfig>(config).ok()
+            .and_then(|cfg| {
+                if let Err(e) = cfg.validate() {
+                    tracing::warn!("Invalid msteams config: {}", e);
+                    return None;
+                }
+                Some(Box::new(MsTeamsChannel::new(id, cfg)) as _)
+            }),
         _ => None,
     }
 }
