@@ -15,6 +15,7 @@
 //! - Network stall detection with watchdog
 //! - Smart retry with error classification
 
+pub mod access;
 pub mod config;
 pub mod delivery;
 pub mod group_chat;
@@ -22,6 +23,7 @@ pub mod handlers;
 pub mod message_ops;
 mod polling;
 
+pub use access::AccessController;
 pub use config::{PairingEntry, TelegramConfig, WebhookConfig};
 pub use message_ops::TelegramMessageOps;
 
@@ -30,12 +32,11 @@ use crate::gateway::channel::{
     ChannelInfo, ChannelResult, ChannelState, ChannelStatus, ConversationId, InboundMessage,
     MessageId, OutboundMessage, PairingData, SendResult, UserId,
 };
+use access::{AccessDecision, PairingResult};
 use async_trait::async_trait;
 use chrono::Utc;
-use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Instant;
-use tokio::sync::{mpsc, oneshot, RwLock};
+use tokio::sync::{mpsc, oneshot};
 
 use teloxide::{
     prelude::*,
@@ -60,12 +61,8 @@ pub struct TelegramChannel {
     bot: Option<Bot>,
     /// ToolRegistry for building slash commands at startup
     tool_registry: Option<Arc<crate::dispatcher::ToolRegistry>>,
-    /// Active pairing codes (code → entry). Shared with handler closure.
-    pairing_codes: Arc<RwLock<HashMap<String, PairingEntry>>>,
-    /// Rate-limit map: user_id → last prompt time. Avoids spamming unauthorized users.
-    pairing_prompt_times: Arc<RwLock<HashMap<i64, Instant>>>,
-    /// Users authorized at runtime via pairing (in-memory only).
-    runtime_allowed_users: Arc<RwLock<Vec<i64>>>,
+    /// Centralized access controller (pairing, allowlists, policies).
+    access: Arc<AccessController>,
 }
 
 impl TelegramChannel {
@@ -81,6 +78,8 @@ impl TelegramChannel {
             capabilities: Self::capabilities(),
         };
 
+        let access = Arc::new(AccessController::new(config.clone()));
+
         Self {
             info,
             config,
@@ -90,9 +89,7 @@ impl TelegramChannel {
             shutdown_tx: None,
             bot: None,
             tool_registry: None,
-            pairing_codes: Arc::new(RwLock::new(HashMap::new())),
-            pairing_prompt_times: Arc::new(RwLock::new(HashMap::new())),
-            runtime_allowed_users: Arc::new(RwLock::new(Vec::new())),
+            access,
         }
     }
 
@@ -138,39 +135,12 @@ impl Channel for TelegramChannel {
     }
 
     async fn get_pairing_data(&self) -> ChannelResult<PairingData> {
-        use rand::Rng;
-
-        // Generate a 6-character alphanumeric code
-        let code: String = rand::thread_rng()
-            .sample_iter(&rand::distributions::Alphanumeric)
-            .take(6)
-            .map(char::from)
-            .collect::<String>()
-            .to_uppercase();
-
-        let entry = PairingEntry::new(code.clone());
-        let mut codes = self.pairing_codes.write().await;
-        codes.insert(code.clone(), entry);
-        // Clean up expired entries
-        codes.retain(|_, e| !e.is_expired());
-        drop(codes);
-
+        let code = self.access.generate_code().await;
         Ok(PairingData::Code(code))
     }
 
     async fn list_active_pairing_codes(&self) -> ChannelResult<Vec<(String, u64)>> {
-        let mut codes = self.pairing_codes.write().await;
-        // Clean up expired entries first
-        codes.retain(|_, e| !e.is_expired());
-        let result = codes
-            .values()
-            .map(|e| {
-                let elapsed = e.created_at.elapsed().as_secs();
-                let remaining = e.ttl_secs.saturating_sub(elapsed);
-                (e.code.clone(), remaining)
-            })
-            .collect();
-        Ok(result)
+        Ok(self.access.list_codes().await)
     }
 
     async fn start(&mut self) -> ChannelResult<()> {
@@ -283,81 +253,62 @@ impl Channel for TelegramChannel {
         let inbound_tx = self.channel_state.sender();
         let inbound_tx_for_cb = self.channel_state.sender();
         let callback_tx = self.callback_tx.clone();
-        let config = self.config.clone();
-        let config_for_cb = self.config.clone();
         let channel_id = self.info.id.clone();
         let channel_id_for_cb = self.info.id.clone();
 
-        let pairing_codes_clone = self.pairing_codes.clone();
-        let prompt_times_clone = self.pairing_prompt_times.clone();
-        let runtime_users_clone = self.runtime_allowed_users.clone();
-        let runtime_users_for_cb = self.runtime_allowed_users.clone();
+        let access_clone = self.access.clone();
+        let access_for_cb = self.access.clone();
 
         // Message handler
         let message_handler = Update::filter_message().endpoint(
             move |bot: Bot, msg: teloxide::types::Message| {
                 let inbound_tx = inbound_tx.clone();
-                let config = config.clone();
                 let channel_id = channel_id.clone();
-                let pairing_codes = pairing_codes_clone.clone();
-                let prompt_times = prompt_times_clone.clone();
-                let runtime_users = runtime_users_clone.clone();
+                let access = access_clone.clone();
                 async move {
-                    if let Some(inbound) = handlers::convert_message(
-                        &msg, &bot, &config, &channel_id, &runtime_users,
-                    ).await {
-                        if let Err(e) = inbound_tx.send(inbound).await {
-                            tracing::error!("Failed to send inbound message: {}", e);
-                        }
-                    } else if let Some(from) = &msg.from {
-                        // Message was rejected (unauthorized user or service message).
-                        // Handle pairing flow for DM messages from unauthorized users.
-                        let user_id = from.id.0 as i64;
-                        let is_dm = !msg.chat.is_group() && !msg.chat.is_supergroup();
-                        let has_allowlist = !config.allowed_users.is_empty()
-                            || !runtime_users.read().await.is_empty();
+                    let user_id = msg.from.as_ref().map(|u| u.id.0 as i64).unwrap_or(0);
+                    let is_group = msg.chat.is_group() || msg.chat.is_supergroup();
+                    let chat_id = msg.chat.id.0;
 
-                        if is_dm && has_allowlist && !config.is_user_allowed(user_id) {
+                    match access.check_message(user_id, chat_id, is_group).await {
+                        AccessDecision::Allowed => {
+                            if let Some(inbound) = handlers::convert_message(
+                                &msg, &bot, &access, &channel_id,
+                            ).await {
+                                if let Err(e) = inbound_tx.send(inbound).await {
+                                    tracing::error!("Failed to send inbound message: {}", e);
+                                }
+                            }
+                        }
+                        AccessDecision::NeedsPairing => {
+                            // Handle pairing flow for DM messages
                             if let Some(text) = msg.text() {
-                                let code = text.trim().to_uppercase();
-                                let mut codes = pairing_codes.write().await;
-                                if let Some(entry) = codes.get(&code) {
-                                    if !entry.is_expired() {
-                                        codes.remove(&code);
-                                        drop(codes);
-                                        runtime_users.write().await.push(user_id);
+                                match access.try_pair(user_id, text).await {
+                                    PairingResult::Success => {
                                         let _ = bot.send_message(
                                             msg.chat.id,
                                             "Paired successfully! You can now send messages.",
                                         ).await;
-                                        tracing::info!(
-                                            "User {} paired via code {}",
-                                            user_id,
-                                            code
-                                        );
-                                    } else {
-                                        codes.remove(&code);
+                                    }
+                                    PairingResult::Expired => {
                                         let _ = bot.send_message(
                                             msg.chat.id,
                                             "Pairing code expired. Please request a new one.",
                                         ).await;
                                     }
-                                } else {
-                                    // Rate-limited prompt: once per 5 minutes per user
-                                    let mut times = prompt_times.write().await;
-                                    let should_prompt = times
-                                        .get(&user_id)
-                                        .map(|t| t.elapsed().as_secs() > 300)
-                                        .unwrap_or(true);
-                                    if should_prompt {
-                                        times.insert(user_id, Instant::now());
-                                        let _ = bot.send_message(
-                                            msg.chat.id,
-                                            "Please enter your pairing code.",
-                                        ).await;
+                                    PairingResult::InvalidCode => {
+                                        if access.should_prompt(user_id).await {
+                                            let _ = bot.send_message(
+                                                msg.chat.id,
+                                                "Please enter your pairing code.",
+                                            ).await;
+                                        }
                                     }
                                 }
                             }
+                        }
+                        AccessDecision::Denied => {
+                            tracing::debug!("Access denied for user {} in chat {}", user_id, chat_id);
                         }
                     }
                     Ok::<(), std::convert::Infallible>(())
@@ -372,9 +323,8 @@ impl Channel for TelegramChannel {
             move |bot: Bot, q: TgCallbackQuery| {
                 let tx = callback_tx.clone();
                 let inbound_tx = inbound_tx_for_cb.clone();
-                let config = config_for_cb.clone();
                 let channel_id = channel_id_for_cb.clone();
-                let runtime_users = runtime_users_for_cb.clone();
+                let access = access_for_cb.clone();
                 async move {
                     // Extract chat_id and optional thread_id for forum topic isolation
                     let (raw_chat_id, thread_id_val) = q.message.as_ref()
@@ -418,10 +368,15 @@ impl Channel for TelegramChannel {
                             tracing::error!("Failed to send callback query: {}", e);
                         }
 
-                        // Re-inject as InboundMessage if user is allowed
-                        // (static config or runtime-paired)
-                        let rt_allowed = runtime_users.read().await.contains(&user_id_val);
-                        if config.is_user_allowed(user_id_val) || rt_allowed {
+                        // Re-inject as InboundMessage if user is allowed.
+                        // Use AccessController for the DM check (callbacks
+                        // originate from the chat where the inline keyboard
+                        // was sent — treat as DM for access purposes).
+                        let is_group = raw_chat_id < 0; // Negative chat_id = group
+                        let decision = access
+                            .check_message(user_id_val, raw_chat_id, is_group)
+                            .await;
+                        if decision == AccessDecision::Allowed {
                             let inbound = InboundMessage {
                                 id: MessageId::new(format!("cb_{}", q.id)),
                                 channel_id: channel_id.clone(),
@@ -432,7 +387,7 @@ impl Channel for TelegramChannel {
                                 attachments: Vec::new(),
                                 timestamp: Utc::now(),
                                 reply_to: None,
-                                is_group: false,
+                                is_group,
                                 raw: None,
                             };
                             if let Err(e) = inbound_tx.send(inbound).await {

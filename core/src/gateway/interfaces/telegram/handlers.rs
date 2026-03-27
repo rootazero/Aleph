@@ -8,23 +8,21 @@ use crate::gateway::channel::{
     Attachment, ChannelId, ConversationId, InboundMessage, MessageId, UserId,
 };
 use chrono::{TimeZone, Utc};
-use std::sync::Arc;
 use teloxide::prelude::*;
 use teloxide::types::{MediaKind, MessageKind};
-use tokio::sync::RwLock;
 
-use super::config::TelegramConfig;
+use super::access::AccessController;
 
 /// Convert a Telegram message to an [`InboundMessage`].
 ///
-/// `runtime_users` contains user IDs authorized via the pairing flow at
-/// runtime. They are checked in addition to the static config allowlist.
+/// Access control is handled by the caller via [`AccessController::check_message`].
+/// This function only performs message content extraction; it assumes the caller
+/// has already verified that the message is allowed.
 pub(crate) async fn convert_message(
     msg: &teloxide::types::Message,
     bot: &Bot,
-    config: &TelegramConfig,
+    _access: &AccessController,
     channel_id: &ChannelId,
-    runtime_users: &Arc<RwLock<Vec<i64>>>,
 ) -> Option<InboundMessage> {
     // Get sender info
     let (sender_id, sender_name) = if let Some(from) = &msg.from {
@@ -40,20 +38,7 @@ pub(crate) async fn convert_message(
         (UserId::new("unknown"), None)
     };
 
-    // Check if user is allowed (static config OR runtime-paired)
-    let user_id = msg.from.as_ref().map(|u| u.id.0 as i64).unwrap_or(0);
-    let runtime_allowed = runtime_users.read().await.contains(&user_id);
-    if !config.is_user_allowed(user_id) && !runtime_allowed {
-        tracing::debug!("User {} not in allowlist, ignoring message", user_id);
-        return None;
-    }
-
-    // Check if group is allowed
     let is_group = msg.chat.is_group() || msg.chat.is_supergroup();
-    if is_group && !config.is_group_allowed(msg.chat.id.0) {
-        tracing::debug!("Group {} not in allowlist, ignoring message", msg.chat.id.0);
-        return None;
-    }
 
     // Extract attachments first (async — resolves file URLs via Bot API)
     let attachments = extract_attachments(msg, bot).await;

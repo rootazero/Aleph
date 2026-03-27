@@ -5,6 +5,38 @@
 use serde::{Deserialize, Serialize};
 use std::time::Instant;
 
+/// DM access policy.
+///
+/// Controls how the bot handles direct messages from users.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum DmPolicy {
+    /// Reject all DMs.
+    Disabled,
+    /// Require a pairing code before accepting messages (safe default).
+    #[default]
+    Pairing,
+    /// Only accept messages from users in the allowlist.
+    Allowlist,
+    /// Accept messages from any user.
+    Open,
+}
+
+/// Group access policy.
+///
+/// Controls how the bot handles group/supergroup messages.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum GroupPolicy {
+    /// Reject all group messages.
+    Disabled,
+    /// Only accept messages from allowed groups (default).
+    #[default]
+    Allowlist,
+    /// Accept messages from any group.
+    Open,
+}
+
 /// A pending pairing entry: code + creation time + TTL.
 #[derive(Debug, Clone)]
 pub struct PairingEntry {
@@ -52,6 +84,14 @@ pub struct TelegramConfig {
     /// Allow group messages
     #[serde(default = "default_true")]
     pub groups_allowed: bool,
+
+    /// DM access policy (default: Pairing)
+    #[serde(default)]
+    pub dm_policy: DmPolicy,
+
+    /// Group access policy (default: Allowlist)
+    #[serde(default)]
+    pub group_policy: GroupPolicy,
 
     /// Webhook configuration (optional, defaults to long-polling)
     #[serde(default)]
@@ -121,6 +161,8 @@ impl Default for TelegramConfig {
             allowed_groups: Vec::new(),
             dm_allowed: true,
             groups_allowed: true,
+            dm_policy: DmPolicy::default(),
+            group_policy: GroupPolicy::default(),
             webhook: None,
             polling_interval_secs: 1,
             send_typing: true,
@@ -143,7 +185,7 @@ impl TelegramConfig {
     ///
     /// Returns `true` when the allowlist is empty (open to all) or when the user
     /// is explicitly listed. Runtime-paired users are tracked separately in
-    /// `TelegramChannel::runtime_allowed_users`.
+    /// `AccessController::runtime_users`.
     pub fn is_user_allowed(&self, user_id: i64) -> bool {
         if self.allowed_users.is_empty() {
             true
@@ -162,6 +204,32 @@ impl TelegramConfig {
         } else {
             self.allowed_groups.contains(&chat_id)
         }
+    }
+
+    /// Resolve effective DM policy.
+    ///
+    /// Backward compatibility: non-empty `allowed_users` with the default
+    /// `Pairing` policy promotes to `Allowlist`. An explicit `dm_policy`
+    /// always wins. `dm_allowed: false` forces `Disabled`.
+    pub fn effective_dm_policy(&self) -> DmPolicy {
+        if !self.dm_allowed {
+            return DmPolicy::Disabled;
+        }
+        match self.dm_policy {
+            DmPolicy::Pairing if !self.allowed_users.is_empty() => DmPolicy::Allowlist,
+            ref p => p.clone(),
+        }
+    }
+
+    /// Resolve effective group policy.
+    ///
+    /// Backward compatibility: `groups_allowed: false` forces `Disabled`
+    /// regardless of the explicit `group_policy` value.
+    pub fn effective_group_policy(&self) -> GroupPolicy {
+        if !self.groups_allowed {
+            return GroupPolicy::Disabled;
+        }
+        self.group_policy.clone()
     }
 
     /// Validate configuration
@@ -250,5 +318,68 @@ mod tests {
         // Backdate the creation time so it appears expired
         entry.created_at = Instant::now() - std::time::Duration::from_secs(3601);
         assert!(entry.is_expired());
+    }
+
+    // --- DmPolicy / GroupPolicy backward-compatibility tests ---
+
+    #[test]
+    fn test_effective_dm_policy_default() {
+        let config = TelegramConfig::default();
+        assert_eq!(config.effective_dm_policy(), DmPolicy::Pairing);
+    }
+
+    #[test]
+    fn test_effective_dm_policy_with_allowlist() {
+        let config = TelegramConfig {
+            allowed_users: vec![123],
+            ..Default::default()
+        };
+        // Non-empty allowed_users with default Pairing → promoted to Allowlist
+        assert_eq!(config.effective_dm_policy(), DmPolicy::Allowlist);
+    }
+
+    #[test]
+    fn test_effective_dm_policy_explicit_open() {
+        let config = TelegramConfig {
+            dm_policy: DmPolicy::Open,
+            allowed_users: vec![123], // Should be ignored
+            ..Default::default()
+        };
+        assert_eq!(config.effective_dm_policy(), DmPolicy::Open);
+    }
+
+    #[test]
+    fn test_effective_dm_policy_dm_disabled() {
+        let config = TelegramConfig {
+            dm_allowed: false,
+            dm_policy: DmPolicy::Open, // Overridden by dm_allowed=false
+            ..Default::default()
+        };
+        assert_eq!(config.effective_dm_policy(), DmPolicy::Disabled);
+    }
+
+    #[test]
+    fn test_effective_group_policy_disabled() {
+        let config = TelegramConfig {
+            groups_allowed: false,
+            group_policy: GroupPolicy::Open, // Overridden
+            ..Default::default()
+        };
+        assert_eq!(config.effective_group_policy(), GroupPolicy::Disabled);
+    }
+
+    #[test]
+    fn test_effective_group_policy_default() {
+        let config = TelegramConfig::default();
+        assert_eq!(config.effective_group_policy(), GroupPolicy::Allowlist);
+    }
+
+    #[test]
+    fn test_effective_group_policy_open() {
+        let config = TelegramConfig {
+            group_policy: GroupPolicy::Open,
+            ..Default::default()
+        };
+        assert_eq!(config.effective_group_policy(), GroupPolicy::Open);
     }
 }
