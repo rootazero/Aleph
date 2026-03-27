@@ -8,15 +8,61 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use futures::StreamExt;
 
+use crate::dispatcher::{ToolCategory, ToolDefinition};
 use crate::gateway::openai_api::auth::ApiError;
 use crate::gateway::openai_api::state::OpenAiApiState;
 use crate::gateway::openai_api::stream;
 use crate::gateway::openai_api::types::{
     ChatChoice, ChatCompletionRequest, ChatCompletionResponse, ChatMessage, Usage,
 };
-use crate::providers::adapter::RequestPayload;
+use crate::providers::adapter::{RequestPayload, ToolChoice};
 use crate::providers::message::{ContentBlock, UnifiedMessage};
 use crate::providers::AiProvider;
+use serde_json::{json, Value};
+
+/// Convert OpenAI-format tool definitions to internal `ToolDefinition`.
+fn convert_openai_tools(tools: &[Value]) -> Vec<ToolDefinition> {
+    tools
+        .iter()
+        .filter_map(|t| {
+            let func = t.get("function")?;
+            Some(ToolDefinition {
+                name: func.get("name")?.as_str()?.to_string(),
+                description: func
+                    .get("description")
+                    .and_then(|d| d.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                parameters: func.get("parameters").cloned().unwrap_or(json!({})),
+                requires_confirmation: false,
+                category: ToolCategory::Custom,
+                llm_context: None,
+                strict: func
+                    .get("strict")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false),
+            })
+        })
+        .collect()
+}
+
+/// Convert OpenAI-format tool_choice value to internal `ToolChoice`.
+fn convert_tool_choice(choice: &Value) -> Option<ToolChoice> {
+    match choice {
+        Value::String(s) => match s.as_str() {
+            "auto" => Some(ToolChoice::Auto),
+            "none" => Some(ToolChoice::None),
+            "required" => Some(ToolChoice::Required),
+            _ => None,
+        },
+        Value::Object(obj) => obj
+            .get("function")
+            .and_then(|f| f.get("name"))
+            .and_then(|n| n.as_str())
+            .map(|name| ToolChoice::Specific(name.to_string())),
+        _ => None,
+    }
+}
 
 /// Convert `ChatMessage` list to `Vec<UnifiedMessage>`.
 ///
@@ -38,6 +84,17 @@ fn convert_messages(messages: &[ChatMessage]) -> Vec<UnifiedMessage> {
                         text: content_text.to_string(),
                     }],
                 }),
+                "tool" => {
+                    let tool_call_id = msg.tool_call_id.clone().unwrap_or_default();
+                    Some(UnifiedMessage::ToolResult {
+                        tool_call_id,
+                        tool_name: String::new(),
+                        content: vec![ContentBlock::Text {
+                            text: content_text.to_string(),
+                        }],
+                        is_error: false,
+                    })
+                }
                 _ => None,
             }
         })
@@ -72,14 +129,17 @@ pub async fn handle(
     let system_prompt = extract_system_prompt(&req.messages);
 
     // Build payload
+    let tool_defs = req.tools.as_ref().map(|t| convert_openai_tools(t));
+    let tool_choice = req.tool_choice.as_ref().and_then(convert_tool_choice);
+
     let payload = RequestPayload {
         messages: &unified_messages,
         system_prompt: system_prompt.as_deref(),
-        tools: None,
+        tools: tool_defs.as_deref(),
         think_level: None,
         temperature: req.temperature.map(|t| t as f32),
         max_tokens: req.max_tokens,
-        tool_choice: None,
+        tool_choice,
     };
 
     let is_streaming = req.stream.unwrap_or(false);
@@ -114,6 +174,33 @@ pub async fn handle(
             total_tokens: u.input_tokens + u.output_tokens,
         });
 
+        let tool_calls = if response.tool_calls.is_empty() {
+            None
+        } else {
+            Some(
+                response
+                    .tool_calls
+                    .iter()
+                    .map(|tc| {
+                        json!({
+                            "id": tc.id,
+                            "type": "function",
+                            "function": {
+                                "name": tc.name,
+                                "arguments": tc.arguments.to_string()
+                            }
+                        })
+                    })
+                    .collect::<Vec<_>>(),
+            )
+        };
+
+        let finish_reason = if tool_calls.is_some() {
+            "tool_calls"
+        } else {
+            "stop"
+        };
+
         let completion = ChatCompletionResponse {
             id: stream::completion_id(),
             object: "chat.completion".to_string(),
@@ -124,10 +211,10 @@ pub async fn handle(
                 message: ChatMessage {
                     role: "assistant".to_string(),
                     content: response.text,
-                    tool_calls: None,
+                    tool_calls,
                     tool_call_id: None,
                 },
-                finish_reason: Some("stop".to_string()),
+                finish_reason: Some(finish_reason.to_string()),
                 delta: None,
             }],
             usage,
