@@ -16,6 +16,7 @@
 //! - Smart retry with error classification
 
 pub mod access;
+pub mod chunking;
 pub mod config;
 pub mod delivery;
 pub mod group_chat;
@@ -272,7 +273,7 @@ impl Channel for TelegramChannel {
                     match access.check_message(user_id, chat_id, is_group).await {
                         AccessDecision::Allowed => {
                             if let Some(inbound) = handlers::convert_message(
-                                &msg, &bot, &access, &channel_id,
+                                &msg, &bot, &channel_id,
                             ).await {
                                 if let Err(e) = inbound_tx.send(inbound).await {
                                     tracing::error!("Failed to send inbound message: {}", e);

@@ -11,8 +11,6 @@ use chrono::{TimeZone, Utc};
 use teloxide::prelude::*;
 use teloxide::types::{MediaKind, MessageKind};
 
-use super::access::AccessController;
-
 /// Convert a Telegram message to an [`InboundMessage`].
 ///
 /// Access control is handled by the caller via [`AccessController::check_message`].
@@ -21,7 +19,6 @@ use super::access::AccessController;
 pub(crate) async fn convert_message(
     msg: &teloxide::types::Message,
     bot: &Bot,
-    _access: &AccessController,
     channel_id: &ChannelId,
 ) -> Option<InboundMessage> {
     // Get sender info

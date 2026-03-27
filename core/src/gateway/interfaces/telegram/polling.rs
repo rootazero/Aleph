@@ -18,7 +18,6 @@ use tokio_util::sync::CancellationToken;
 struct PollingState {
     attempt: u32,
     healthy_since: Option<Instant>,
-    last_update_at: Instant,
 }
 
 impl PollingState {
@@ -26,7 +25,6 @@ impl PollingState {
         Self {
             attempt: 0,
             healthy_since: None,
-            last_update_at: Instant::now(),
         }
     }
 
@@ -140,7 +138,6 @@ pub(crate) async fn run_polling_loop(
         tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
 
         state.healthy_since = Some(Instant::now());
-        state.last_update_at = Instant::now();
 
         tracing::info!(attempt = state.attempt, "Telegram reconnected, queued messages will be delivered");
         *status.write().await = ChannelStatus::Connected;
