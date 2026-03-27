@@ -5,9 +5,9 @@
 //!
 //! # Output Modes
 //!
-//! - **Typewriter** (`stream_enabled = true`): Sends an initial message, then
-//!   progressively edits it with more content, creating a streaming visual effect.
-//!   Falls back to instant behavior if the channel doesn't support editing.
+//! - **Streaming** (`stream_enabled = true`): Sends an initial message once a
+//!   character threshold is reached, then progressively edits in real-time as
+//!   tokens arrive (debounced). Uses `StreamingController` for state management.
 //! - **Instant** (`stream_enabled = false`): Buffers all content, sends once on
 //!   completion.
 //!
@@ -23,6 +23,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
 use crate::gateway::media::PendingMedia;
+use crate::gateway::streaming::{StreamingController, StreamingConfig, StreamAction};
 use crate::media::cache::MediaCache;
 use super::channel::OutboundMessage;
 use super::channel_registry::ChannelRegistry;
@@ -74,10 +75,9 @@ impl ReplyEmitterConfig {
 
 /// Routes Agent output back to the originating channel/conversation.
 ///
-/// In typewriter mode, all response chunks are buffered silently. When
-/// `RunComplete` fires, the emitter sends an initial message and then
-/// progressively edits it with more content (300ms intervals), creating
-/// a streaming visual similar to ChatGPT's Telegram bot.
+/// In streaming mode, tokens are pushed to a `StreamingController` as they
+/// arrive. Once the character threshold is reached, an initial message is sent
+/// and subsequent edits are debounced (300ms intervals) for real-time streaming.
 ///
 /// In instant mode, the full response is sent as one message on completion.
 pub struct ReplyEmitter {
@@ -106,10 +106,9 @@ pub struct ReplyEmitter {
     pending_media: PendingMedia,
     /// Media cache for downloading media items
     media_cache: MediaCache,
+    /// Real-time streaming state machine (replaces old typewriter mode)
+    streaming: Mutex<StreamingController>,
 }
-
-/// Number of characters to reveal per edit step.
-const TYPEWRITER_CHARS_PER_STEP: usize = 80;
 
 impl ReplyEmitter {
     /// Create a new ReplyEmitter with default configuration (instant mode)
@@ -133,6 +132,11 @@ impl ReplyEmitter {
             voice_state: Mutex::new(Default::default()),
             pending_media,
             media_cache: MediaCache::new(),
+            streaming: Mutex::new(StreamingController::new(StreamingConfig {
+                min_initial_chars: 30,
+                debounce_interval: Duration::from_millis(300),
+                enabled: false,
+            })),
         }
     }
 
@@ -144,6 +148,7 @@ impl ReplyEmitter {
         config: ReplyEmitterConfig,
         pending_media: PendingMedia,
     ) -> Self {
+        let stream_enabled = config.stream_enabled;
         Self {
             channel_registry,
             route,
@@ -158,6 +163,11 @@ impl ReplyEmitter {
             voice_state: Mutex::new(Default::default()),
             pending_media,
             media_cache: MediaCache::new(),
+            streaming: Mutex::new(StreamingController::new(StreamingConfig {
+                min_initial_chars: 30,
+                debounce_interval: Duration::from_millis(300),
+                enabled: stream_enabled,
+            })),
         }
     }
 
@@ -362,175 +372,6 @@ impl ReplyEmitter {
 
     fn format_content(&self, content: &str, _is_first: bool) -> String {
         content.to_string()
-    }
-
-    // ── Typewriter mode ─────────────────────────────────────────────────
-
-    /// Send the buffered content with progressive edit-in-place streaming.
-    ///
-    /// 1. Send initial message with a small portion of the text
-    /// 2. Edit the message with progressively more content (every 300ms)
-    /// 3. Final edit with the complete text
-    ///
-    /// Falls back to instant send if the channel doesn't support editing.
-    async fn send_typewriter(&self, full_text: &str) {
-        if full_text.is_empty() {
-            return;
-        }
-
-        let formatted = self.format_content(full_text, true);
-        self.has_sent.store(true, Ordering::SeqCst);
-
-        // For short responses, just send directly (no need for progressive editing)
-        if formatted.chars().count() <= TYPEWRITER_CHARS_PER_STEP * 2 {
-            self.send_to_channel(&formatted).await;
-            return;
-        }
-
-        // Split into chunks that respect Telegram's message length limit.
-        // The first chunk gets the typewriter animation; remaining chunks
-        // are sent as separate messages instantly to avoid overly long waits.
-        let chunks = Self::split_message(&formatted, Self::MAX_MESSAGE_LENGTH);
-
-        // Animate the first chunk with progressive edits
-        let first_chunk = &chunks[0];
-        let char_indices: Vec<usize> = first_chunk.char_indices().map(|(i, _)| i).collect();
-        let total_chars = char_indices.len();
-        let has_more = chunks.len() > 1;
-        let first_end = TYPEWRITER_CHARS_PER_STEP.min(total_chars);
-        let first_byte_end = if first_end < total_chars {
-            char_indices[first_end]
-        } else {
-            first_chunk.len()
-        };
-        let initial_text = &first_chunk[..first_byte_end];
-
-        // Append "▍" cursor indicator
-        let initial_with_cursor = format!("{}▍", initial_text);
-
-        let message = OutboundMessage {
-            conversation_id: self.route.conversation_id.clone(),
-            text: initial_with_cursor,
-            attachments: vec![],
-            reply_to: self.route.reply_to.clone(),
-            inline_keyboard: None,
-            metadata: Default::default(),
-        };
-
-        let msg_id = match self.channel_registry.send(&self.route.channel_id, message).await {
-            Ok(result) => {
-                debug!(
-                    "Typewriter: sent initial message {} ({}B)",
-                    result.message_id.as_str(),
-                    initial_text.len()
-                );
-                result.message_id
-            }
-            Err(e) => {
-                error!("Typewriter: failed to send initial message: {}", e);
-                // Fall back: send everything at once (split-aware)
-                self.send_to_channel(&formatted).await;
-                return;
-            }
-        };
-
-        // Progressive edits within the first chunk
-        let mut revealed_chars = first_end;
-
-        while revealed_chars < total_chars {
-            // Adaptive interval: accelerate in the second half of the message
-            let progress = revealed_chars as f64 / total_chars as f64;
-            let interval_ms = if progress > 0.5 {
-                let extra = ((progress - 0.5) * 2.0 * 200.0) as u64;
-                300 + extra.min(200)
-            } else {
-                300
-            };
-            tokio::time::sleep(Duration::from_millis(interval_ms)).await;
-
-            revealed_chars = (revealed_chars + TYPEWRITER_CHARS_PER_STEP).min(total_chars);
-            let byte_end = if revealed_chars < total_chars {
-                char_indices[revealed_chars]
-            } else {
-                first_chunk.len()
-            };
-
-            let partial = &first_chunk[..byte_end];
-            let edit_text = if revealed_chars < total_chars || has_more {
-                format!("{}▍", partial) // Still typing (more chunks follow)
-            } else {
-                partial.to_string() // Done — remove cursor
-            };
-
-            match self.channel_registry.edit(
-                &self.route.channel_id,
-                &self.route.conversation_id,
-                &msg_id,
-                &edit_text,
-            ).await {
-                Ok(()) => {
-                    debug!(
-                        "Typewriter: edited message ({}/{} chars)",
-                        revealed_chars, total_chars
-                    );
-                }
-                Err(e) => {
-                    // Edit failed — likely unsupported channel, stop trying
-                    debug!("Typewriter: edit failed ({}), stopping progressive edits", e);
-                    break;
-                }
-            }
-        }
-
-        // Final edit on first chunk: remove cursor if no more chunks follow
-        if !has_more {
-            let _ = self.channel_registry.edit(
-                &self.route.channel_id,
-                &self.route.conversation_id,
-                &msg_id,
-                first_chunk,
-            ).await;
-        } else {
-            // Remove the cursor from the first message before sending continuations
-            let _ = self.channel_registry.edit(
-                &self.route.channel_id,
-                &self.route.conversation_id,
-                &msg_id,
-                first_chunk,
-            ).await;
-
-            // Send remaining chunks as separate messages (no animation)
-            for chunk in &chunks[1..] {
-                let message = OutboundMessage {
-                    conversation_id: self.route.conversation_id.clone(),
-                    text: chunk.clone(),
-                    attachments: vec![],
-                    reply_to: None,
-                    inline_keyboard: None,
-                    metadata: Default::default(),
-                };
-
-                match self
-                    .channel_registry
-                    .send(&self.route.channel_id, message)
-                    .await
-                {
-                    Ok(result) => {
-                        debug!(
-                            "Typewriter: sent continuation chunk (message_id: {})",
-                            result.message_id.as_str(),
-                        );
-                    }
-                    Err(e) => {
-                        error!("Typewriter: failed to send continuation chunk: {}", e);
-                        break;
-                    }
-                }
-            }
-        }
-
-        let media_attachments = self.drain_and_send_media().await;
-        self.send_media_standalone(media_attachments).await;
     }
 
     // ── Shared helpers ──────────────────────────────────────────────────
@@ -765,8 +606,6 @@ impl EventEmitter for ReplyEmitter {
                         if !accumulated.is_empty() {
                             if self.should_voice().await {
                                 self.send_as_voice(&accumulated).await;
-                            } else if self.config.stream_enabled && accumulated.chars().count() > TYPEWRITER_CHARS_PER_STEP * 2 {
-                                self.send_typewriter(&accumulated).await;
                             } else {
                                 self.send_to_channel(&accumulated).await;
                             }
@@ -775,8 +614,6 @@ impl EventEmitter for ReplyEmitter {
                         // Non-empty intermediate: send immediately as standalone message
                         if self.should_voice().await {
                             self.send_as_voice(&content).await;
-                        } else if self.config.stream_enabled && content.chars().count() > TYPEWRITER_CHARS_PER_STEP * 2 {
-                            self.send_typewriter(&content).await;
                         } else {
                             self.send_to_channel(&content).await;
                         }
@@ -792,6 +629,42 @@ impl EventEmitter for ReplyEmitter {
                     // Existing behavior: accumulate text into buffer
                     if !content.is_empty() {
                         self.buffer.lock().await.push_str(&content);
+                    }
+
+                    // Real-time streaming: push chunks to controller and act
+                    if self.config.stream_enabled && !content.is_empty() {
+                        let mut ctrl = self.streaming.lock().await;
+                        ctrl.push_chunk(&content);
+                        match ctrl.poll_action() {
+                            StreamAction::SendInitial(text) => {
+                                let message = OutboundMessage {
+                                    conversation_id: self.route.conversation_id.clone(),
+                                    text,
+                                    attachments: vec![],
+                                    reply_to: self.route.reply_to.clone(),
+                                    inline_keyboard: None,
+                                    metadata: Default::default(),
+                                };
+                                if let Ok(result) = self.channel_registry.send(&self.route.channel_id, message).await {
+                                    ctrl.record_sent(result.message_id);
+                                    self.has_sent.store(true, Ordering::SeqCst);
+                                }
+                            }
+                            StreamAction::Edit(text) => {
+                                if let Some(msg_id) = ctrl.message_id() {
+                                    let msg_id = msg_id.clone();
+                                    if self.channel_registry.edit(
+                                        &self.route.channel_id,
+                                        &self.route.conversation_id,
+                                        &msg_id, &text,
+                                    ).await.is_ok() {
+                                        ctrl.record_edit();
+                                    }
+                                }
+                            }
+                            StreamAction::Wait => {}
+                            _ => {}
+                        }
                     }
 
                     // Instant mode: flush on final chunk
@@ -826,7 +699,33 @@ impl EventEmitter for ReplyEmitter {
                     if self.should_voice().await {
                         self.send_as_voice(&text).await;
                     } else if self.config.stream_enabled {
-                        self.send_typewriter(&text).await;
+                        // Finalize the streaming controller
+                        let mut ctrl = self.streaming.lock().await;
+                        match ctrl.finalize() {
+                            StreamAction::SendFinal(final_text) => {
+                                drop(ctrl);
+                                if self.should_voice().await {
+                                    self.send_as_voice(&final_text).await;
+                                } else {
+                                    self.send_to_channel(&final_text).await;
+                                }
+                            }
+                            StreamAction::EditFinal(final_text) => {
+                                let msg_id = ctrl.message_id().cloned();
+                                drop(ctrl);
+                                if let Some(msg_id) = msg_id {
+                                    let _ = self.channel_registry.edit(
+                                        &self.route.channel_id,
+                                        &self.route.conversation_id,
+                                        &msg_id, &final_text,
+                                    ).await;
+                                }
+                            }
+                            StreamAction::Done => { drop(ctrl); }
+                            _ => { drop(ctrl); }
+                        }
+                        let media = self.drain_and_send_media().await;
+                        self.send_media_standalone(media).await;
                     } else {
                         self.send_to_channel(&text).await;
                     }
@@ -844,8 +743,6 @@ impl EventEmitter for ReplyEmitter {
                             );
                             if self.should_voice().await {
                                 self.send_as_voice(final_response).await;
-                            } else if self.config.stream_enabled {
-                                self.send_typewriter(final_response).await;
                             } else {
                                 self.send_to_channel(final_response).await;
                             }
