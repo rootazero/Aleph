@@ -316,6 +316,25 @@ pub struct ChannelCapabilities {
     pub max_message_length: usize,
     /// Maximum attachment size in bytes (0 = unlimited)
     pub max_attachment_size: u64,
+    /// Streaming protocol supported by this channel
+    #[serde(default)]
+    pub stream_protocol: StreamProtocol,
+}
+
+/// Streaming protocol supported by a channel
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StreamProtocol {
+    /// No streaming — buffer and send on completion
+    None,
+    /// Send initial message, then repeatedly edit it (Telegram, Discord)
+    EditBased,
+    /// Channel handles streaming natively (Teams streaminfo)
+    Native,
+}
+
+impl Default for StreamProtocol {
+    fn default() -> Self { Self::None }
 }
 
 /// Channel connection status
@@ -515,14 +534,30 @@ pub trait Channel: Send + Sync {
     }
 
     /// Delete a message
-    async fn delete(&self, message_id: &MessageId) -> ChannelResult<()> {
+    async fn delete(&self, conversation_id: &ConversationId, message_id: &MessageId) -> ChannelResult<()> {
         if !self.capabilities().deletion {
             return Err(ChannelError::UnsupportedFeature("deletion".to_string()));
         }
         // Default implementation does nothing
-        let _ = message_id;
+        let _ = (conversation_id, message_id);
         Ok(())
     }
+
+    /// Get native stream handler (if channel supports StreamProtocol::Native)
+    fn native_stream_handler(&self) -> Option<Arc<dyn NativeStreamHandler>> {
+        None
+    }
+}
+
+/// Handler for channels that support native streaming protocols (e.g., Teams streaminfo)
+#[async_trait]
+pub trait NativeStreamHandler: Send + Sync {
+    /// Start streaming — send initial status indicator, returns stream_id
+    async fn stream_start(&self, conversation_id: &ConversationId, status_text: &str) -> ChannelResult<String>;
+    /// Send accumulated text as streaming update
+    async fn stream_update(&self, conversation_id: &ConversationId, stream_id: &str, text: &str, sequence: u32) -> ChannelResult<()>;
+    /// Finalize stream with complete message
+    async fn stream_finalize(&self, conversation_id: &ConversationId, stream_id: &str, message: OutboundMessage) -> ChannelResult<SendResult>;
 }
 
 /// Provider of interaction manifest for a channel

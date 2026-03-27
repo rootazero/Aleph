@@ -93,6 +93,7 @@ impl XmppChannel {
             rich_text: false,        // Using plain text for simplicity
             max_message_length: 65535,
             max_attachment_size: 0,
+            stream_protocol: Default::default(),
         }
     }
 

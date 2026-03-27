@@ -98,6 +98,7 @@ impl WebhookChannel {
             rich_text: true,
             max_message_length: 1_048_576, // 1MB
             max_attachment_size: 0,
+            stream_protocol: Default::default(),
         }
     }
 

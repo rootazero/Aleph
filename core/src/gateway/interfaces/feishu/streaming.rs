@@ -11,7 +11,7 @@ use crate::gateway::event_emitter::{EventEmitError, EventEmitter, StreamEvent};
 use crate::gateway::reply_emitter::ReplyEmitter;
 use crate::gateway::inbound_context::ReplyRoute;
 
-use super::client::FeishuClient;
+use super::api::FeishuApi;
 use super::types::TypingState;
 
 const STREAM_THROTTLE_MS: u64 = 100;
@@ -44,7 +44,7 @@ impl FeishuStreamingCard {
         self.closed.load(Ordering::SeqCst)
     }
 
-    async fn update(&self, client: &FeishuClient, chunk: &str) {
+    async fn update(&self, api: &FeishuApi, chunk: &str) {
         if self.is_closed() { return; }
 
         { self.accumulated_text.lock().await.push_str(chunk); }
@@ -55,34 +55,34 @@ impl FeishuStreamingCard {
         };
 
         if should_send {
-            self.flush(client).await;
+            self.flush(api).await;
         }
     }
 
-    async fn flush(&self, client: &FeishuClient) {
+    async fn flush(&self, api: &FeishuApi) {
         if self.is_closed() { return; }
 
         let text = self.accumulated_text.lock().await.clone();
         if text.is_empty() { return; }
 
         let seq = self.next_sequence();
-        match client.update_streaming_card(&self.card_id, &text, seq).await {
+        match api.update_streaming_card(&self.card_id, &text, seq).await {
             Ok(()) => { *self.last_update.lock().await = Instant::now(); }
             Err(e) => { warn!("Failed to update streaming card: {e}"); }
         }
     }
 
-    async fn close(&self, client: &FeishuClient, final_text: &str) {
+    async fn close(&self, api: &FeishuApi, final_text: &str) {
         if self.closed.swap(true, Ordering::SeqCst) { return; }
 
         let seq = self.next_sequence();
-        if let Err(e) = client.update_streaming_card(&self.card_id, final_text, seq).await {
+        if let Err(e) = api.update_streaming_card(&self.card_id, final_text, seq).await {
             warn!("Failed to send final streaming card update: {e}");
         }
 
         let summary = final_text.get(..50).unwrap_or(final_text);
         let close_seq = self.next_sequence();
-        if let Err(e) = client.close_streaming_card(&self.card_id, summary, close_seq).await {
+        if let Err(e) = api.close_streaming_card(&self.card_id, summary, close_seq).await {
             warn!("Failed to close streaming card: {e}");
         }
     }
@@ -91,7 +91,7 @@ impl FeishuStreamingCard {
 /// EventEmitter that streams to Feishu cards in real-time.
 pub struct FeishuEventEmitter {
     inner: ReplyEmitter,
-    client: Arc<FeishuClient>,
+    api: Arc<FeishuApi>,
     card: Arc<Mutex<Option<FeishuStreamingCard>>>,
     chat_id: String,
     reply_to_message_id: Option<String>,
@@ -104,7 +104,7 @@ pub struct FeishuEventEmitter {
 impl FeishuEventEmitter {
     pub fn new(
         inner: ReplyEmitter,
-        client: Arc<FeishuClient>,
+        api: Arc<FeishuApi>,
         _route: ReplyRoute,
         chat_id: String,
         reply_to_message_id: Option<String>,
@@ -113,7 +113,7 @@ impl FeishuEventEmitter {
     ) -> Self {
         Self {
             inner,
-            client,
+            api,
             card: Arc::new(Mutex::new(None)),
             chat_id,
             reply_to_message_id,
@@ -130,7 +130,7 @@ impl FeishuEventEmitter {
             Some(id) => id.clone(),
             None => return,
         };
-        match self.client.add_reaction(&msg_id, "Typing").await {
+        match self.api.add_reaction(&msg_id, "Typing").await {
             Ok(reaction_id) => {
                 let mut state = self.typing_state.lock().unwrap_or_else(|e| e.into_inner());
                 *state = Some(TypingState { message_id: msg_id, reaction_id });
@@ -146,7 +146,7 @@ impl FeishuEventEmitter {
             guard.take()
         };
         if let Some(typing) = state {
-            if let Err(e) = self.client.remove_reaction(&typing.message_id, &typing.reaction_id).await {
+            if let Err(e) = self.api.remove_reaction(&typing.message_id, &typing.reaction_id).await {
                 debug!("Failed to remove typing indicator (non-critical): {e}");
             } else {
                 debug!("Removed typing indicator");
@@ -155,7 +155,7 @@ impl FeishuEventEmitter {
     }
 
     async fn create_card(&self) -> Option<FeishuStreamingCard> {
-        let card_id = match self.client.create_streaming_card("⏳ Thinking...").await {
+        let card_id = match self.api.create_streaming_card("⏳ Thinking...").await {
             Ok(id) => id,
             Err(e) => {
                 warn!("Failed to create streaming card, falling back to instant: {e}");
@@ -163,7 +163,7 @@ impl FeishuEventEmitter {
             }
         };
         let reply_to = self.reply_to_message_id.as_deref();
-        match self.client.send_card_message(&self.chat_id, &card_id, reply_to).await {
+        match self.api.send_card_message(&self.chat_id, &card_id, reply_to).await {
             Ok(_msg_id) => {
                 debug!("Streaming card created and sent: {card_id}");
                 Some(FeishuStreamingCard::new(card_id))
@@ -206,7 +206,7 @@ impl EventEmitter for FeishuEventEmitter {
                         }
                     }
                     if let Some(card) = card_guard.as_ref() {
-                        card.update(&self.client, content).await;
+                        card.update(&self.api, content).await;
                     }
                 }
 
@@ -214,7 +214,7 @@ impl EventEmitter for FeishuEventEmitter {
                     let card_guard = self.card.lock().await;
                     if let Some(card) = card_guard.as_ref() {
                         let final_text = card.accumulated_text.lock().await.clone();
-                        card.close(&self.client, &final_text).await;
+                        card.close(&self.api, &final_text).await;
                     }
                     drop(card_guard);
                     self.stop_typing().await;
@@ -228,7 +228,7 @@ impl EventEmitter for FeishuEventEmitter {
                 if let Some(card) = card_guard.as_ref() {
                     if !card.is_closed() {
                         let final_text = card.accumulated_text.lock().await.clone();
-                        card.close(&self.client, &final_text).await;
+                        card.close(&self.api, &final_text).await;
                     }
                     drop(card_guard);
                     self.stop_typing().await;
@@ -250,7 +250,7 @@ impl EventEmitter for FeishuEventEmitter {
                         } else {
                             text
                         };
-                        card.close(&self.client, &error_text).await;
+                        card.close(&self.api, &error_text).await;
                     }
                 }
                 drop(card_guard);

@@ -122,6 +122,8 @@ lru = "0.12"
 sha2 = "0.10"
 # For HMAC signature verification (webhooks)
 hmac = "0.12"
+# For JWT validation (Teams Bot Framework)
+jsonwebtoken = "9"
 subtle = "2.5"
 hex = "0.4"
 # Ed25519 signatures for device authentication

@@ -84,76 +84,6 @@ fn test_event_method_names() {
     assert_eq!(event_method(&event), "stream.tool_start");
 }
 
-#[tokio::test]
-async fn test_throttled_response_chunk_buffering() {
-    use crate::gateway::event_bus::GatewayEventBus;
-
-    let event_bus = Arc::new(GatewayEventBus::new());
-    let emitter = GatewayEventEmitter::new(event_bus);
-
-    // First chunk should be sent (enough time elapsed from initialization)
-    emitter
-        .emit_response_chunk_throttled("run-1", "Hello ", 0, false)
-        .await;
-
-    // These should be buffered (within 150ms window)
-    emitter
-        .emit_response_chunk_throttled("run-1", "World", 1, false)
-        .await;
-    emitter
-        .emit_response_chunk_throttled("run-1", "!", 2, false)
-        .await;
-
-    // Check that content is buffered
-    let buffer = emitter.delta_buffer.lock().await;
-    assert!(
-        buffer.contains("World") || buffer.contains("!"),
-        "Buffer should contain throttled content"
-    );
-    drop(buffer);
-
-    // Final chunk should flush everything
-    emitter
-        .emit_response_chunk_throttled("run-1", " Done", 3, true)
-        .await;
-
-    // Buffer should be empty after final
-    let buffer = emitter.delta_buffer.lock().await;
-    assert!(buffer.is_empty(), "Buffer should be empty after final chunk");
-}
-
-#[tokio::test]
-async fn test_throttled_response_chunk_final_always_sends() {
-    use crate::gateway::event_bus::GatewayEventBus;
-
-    let event_bus = Arc::new(GatewayEventBus::new());
-    let emitter = GatewayEventEmitter::new(event_bus);
-
-    // Add some content to buffer
-    {
-        let mut buffer = emitter.delta_buffer.lock().await;
-        buffer.push_str("buffered content ");
-    }
-
-    // Final should include buffered content
-    emitter
-        .emit_response_chunk_throttled("run-1", "final", 0, true)
-        .await;
-
-    // Buffer should be cleared
-    let buffer = emitter.delta_buffer.lock().await;
-    assert!(buffer.is_empty(), "Buffer should be empty after final");
-}
-
-#[test]
-fn test_throttle_constant() {
-    assert_eq!(
-        GatewayEventEmitter::DELTA_THROTTLE_MS,
-        150,
-        "Throttle interval should be 150ms"
-    );
-}
-
 #[test]
 fn test_reasoning_block_serialization() {
     let event = StreamEvent::reasoning_block(
@@ -246,6 +176,7 @@ async fn test_instant_mode_buffers_non_final_chunks() {
             run_id: "run-1".to_string(),
             seq: 0,
             content: "Hello ".to_string(),
+            full_text: String::new(),
             chunk_index: 0,
             is_final: false,
             is_intermediate: false,
@@ -257,6 +188,7 @@ async fn test_instant_mode_buffers_non_final_chunks() {
             run_id: "run-1".to_string(),
             seq: 1,
             content: "World".to_string(),
+            full_text: String::new(),
             chunk_index: 1,
             is_final: false,
             is_intermediate: false,
@@ -274,6 +206,7 @@ async fn test_instant_mode_buffers_non_final_chunks() {
             run_id: "run-1".to_string(),
             seq: 2,
             content: "!".to_string(),
+            full_text: String::new(),
             chunk_index: 2,
             is_final: true,
             is_intermediate: false,

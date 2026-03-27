@@ -113,6 +113,7 @@ impl CliChannel {
                 rich_text: false,
                 max_message_length: 0, // unlimited
                 max_attachment_size: 0,
+                stream_protocol: Default::default(),
             },
         };
 

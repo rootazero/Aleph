@@ -240,7 +240,8 @@ impl InboundMessageRouter {
     ) -> Option<crate::gateway::interfaces::feishu::streaming::FeishuEventEmitter> {
         use crate::gateway::interfaces::feishu::FeishuConfig;
         use crate::gateway::interfaces::feishu::streaming::FeishuEventEmitter;
-        use crate::gateway::interfaces::feishu::client::FeishuClient;
+        use crate::gateway::interfaces::feishu::api::FeishuApi;
+        use crate::gateway::interfaces::feishu::auth::TokenManager;
 
         // Read feishu config from app config
         let feishu_cfg = {
@@ -250,12 +251,15 @@ impl InboundMessageRouter {
             serde_json::from_value::<FeishuConfig>(raw.clone()).ok()?
         };
 
-        // Create a dedicated client for the emitter
-        let client = Arc::new(FeishuClient::new(&feishu_cfg));
-        if let Err(e) = client.refresh_token().await {
+        // Create a dedicated API client for the emitter
+        let http = reqwest::Client::new();
+        let base_url = feishu_cfg.base_url();
+        let auth = Arc::new(TokenManager::new(&feishu_cfg.app_id, &feishu_cfg.app_secret, &base_url, http.clone()));
+        if let Err(e) = auth.refresh_token().await {
             tracing::warn!("Failed to create feishu emitter client: {e}");
             return None;
         }
+        let client = Arc::new(FeishuApi::new(auth, &base_url, http));
 
         let inner = ReplyEmitter::with_config(
             self.channel_registry.clone(),

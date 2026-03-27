@@ -87,6 +87,7 @@ impl SignalChannel {
             rich_text: false, // Signal is plain text
             max_message_length: 65535,
             max_attachment_size: 100 * 1024 * 1024, // 100MB
+            stream_protocol: Default::default(),
         }
     }
 

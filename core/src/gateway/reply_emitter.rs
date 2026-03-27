@@ -108,6 +108,20 @@ pub struct ReplyEmitter {
     media_cache: MediaCache,
     /// Real-time streaming state machine (replaces old typewriter mode)
     streaming: Mutex<StreamingController>,
+
+    /// Native stream handler (if channel supports StreamProtocol::Native)
+    native_handler: Option<Arc<dyn crate::gateway::channel::NativeStreamHandler>>,
+    /// Active native stream state
+    native_stream_state: Mutex<Option<NativeStreamState>>,
+    /// Whether native streaming disabled due to error
+    native_disabled: AtomicBool,
+}
+
+/// Tracks the state of an active native stream (e.g., Teams streaming info).
+struct NativeStreamState {
+    stream_id: String,
+    sequence: u32,
+    last_update: std::time::Instant,
 }
 
 impl ReplyEmitter {
@@ -137,6 +151,9 @@ impl ReplyEmitter {
                 debounce_interval: Duration::from_millis(300),
                 enabled: false,
             })),
+            native_handler: None,
+            native_stream_state: Mutex::new(None),
+            native_disabled: AtomicBool::new(false),
         }
     }
 
@@ -168,6 +185,9 @@ impl ReplyEmitter {
                 debounce_interval: Duration::from_millis(300),
                 enabled: stream_enabled,
             })),
+            native_handler: None,
+            native_stream_state: Mutex::new(None),
+            native_disabled: AtomicBool::new(false),
         }
     }
 
@@ -189,6 +209,13 @@ impl ReplyEmitter {
         self.voice_state = Mutex::new(voice_state);
         self.generation_registry = Some(generation_registry);
         self.generation_config = Some(generation_config);
+        self
+    }
+
+    /// Attach a native stream handler, enabling real-time streaming for
+    /// channels that support `StreamProtocol::Native` (e.g., Microsoft Teams).
+    pub fn with_native_handler(mut self, handler: Arc<dyn crate::gateway::channel::NativeStreamHandler>) -> Self {
+        self.native_handler = Some(handler);
         self
     }
 
@@ -667,8 +694,48 @@ impl EventEmitter for ReplyEmitter {
                         }
                     }
 
-                    // Instant mode: flush on final chunk
-                    if !self.config.stream_enabled && is_final {
+                    // Native streaming: forward chunks in real-time
+                    if !self.native_disabled.load(Ordering::SeqCst) {
+                        if let Some(ref handler) = self.native_handler {
+                            let buffer = self.buffer.lock().await;
+                            let accumulated = buffer.clone();
+                            drop(buffer);
+
+                            let mut state = self.native_stream_state.lock().await;
+                            if state.is_none() && accumulated.chars().count() >= 20 {
+                                // First chunk with enough content: start streaming
+                                let status = crate::gateway::interfaces::msteams::types::pick_status_text();
+                                match handler.stream_start(&self.route.conversation_id, status).await {
+                                    Ok(stream_id) => {
+                                        *state = Some(NativeStreamState {
+                                            stream_id,
+                                            sequence: 0,
+                                            last_update: std::time::Instant::now(),
+                                        });
+                                    }
+                                    Err(e) => {
+                                        warn!("Native stream_start failed, falling back: {}", e);
+                                        self.native_disabled.store(true, Ordering::SeqCst);
+                                    }
+                                }
+                            } else if let Some(ref mut s) = *state {
+                                // Throttle updates at 1500ms
+                                if s.last_update.elapsed() >= std::time::Duration::from_millis(1500) {
+                                    s.sequence += 1;
+                                    if let Err(e) = handler.stream_update(
+                                        &self.route.conversation_id, &s.stream_id, &accumulated, s.sequence
+                                    ).await {
+                                        warn!("Native stream_update failed: {}", e);
+                                        // Don't disable — try to finalize later
+                                    }
+                                    s.last_update = std::time::Instant::now();
+                                }
+                            }
+                        }
+                    }
+
+                    // Instant mode: flush on final chunk (skip if native streaming active)
+                    if !self.config.stream_enabled && is_final && self.native_handler.is_none() {
                         let mut buffer = self.buffer.lock().await;
                         if !buffer.is_empty() {
                             let text = std::mem::take(&mut *buffer);
@@ -687,6 +754,41 @@ impl EventEmitter for ReplyEmitter {
             StreamEvent::RunComplete { summary, .. } => {
                 // Stop the persistent typing indicator
                 self.typing_cancel.cancel();
+
+                // Finalize native stream if active
+                if !self.native_disabled.load(Ordering::SeqCst) {
+                    if let Some(ref handler) = self.native_handler {
+                        let state = self.native_stream_state.lock().await.take();
+                        if let Some(s) = state {
+                            let text = {
+                                let mut buffer = self.buffer.lock().await;
+                                std::mem::take(&mut *buffer)
+                            };
+                            if !text.is_empty() {
+                                let message = OutboundMessage::text(
+                                    self.route.conversation_id.as_str(), &text
+                                );
+                                match handler.stream_finalize(
+                                    &self.route.conversation_id, &s.stream_id, message
+                                ).await {
+                                    Ok(_result) => {
+                                        self.has_sent.store(true, Ordering::SeqCst);
+                                        // Stop typing, react success, clean up media — then return
+                                        self.typing_cancel.cancel();
+                                        self.react_on_inbound("\u{1f44d}").await;
+                                        let _ = self.drain_and_send_media().await;
+                                        return Ok(());
+                                    }
+                                    Err(e) => {
+                                        warn!("Native stream_finalize failed, falling back: {}", e);
+                                        // Re-fill buffer for normal path
+                                        *self.buffer.lock().await = text;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
 
                 // Flush accumulated buffer (always flush — intermediate messages
                 // may have set has_sent, but the buffer holds the final response)

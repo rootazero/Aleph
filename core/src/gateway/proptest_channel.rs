@@ -60,6 +60,7 @@ fn arb_channel_capabilities() -> impl Strategy<Value = ChannelCapabilities> {
                 rich_text: bools[10],
                 max_message_length: max_msg,
                 max_attachment_size: max_att,
+                stream_protocol: Default::default(),
             }
         })
 }

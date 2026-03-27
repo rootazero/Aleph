@@ -20,12 +20,10 @@ pub mod config;
 pub mod delivery;
 pub mod group_chat;
 pub mod handlers;
-pub mod message_ops;
 mod polling;
 
 pub use access::AccessController;
 pub use config::{PairingEntry, TelegramConfig, WebhookConfig};
-pub use message_ops::TelegramMessageOps;
 
 use crate::gateway::channel::{
     CallbackQuery, Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId,
@@ -115,6 +113,7 @@ impl TelegramChannel {
             rich_text: true, // Markdown/HTML support
             max_message_length: 4096,
             max_attachment_size: 50 * 1024 * 1024, // 50MB
+            stream_protocol: Default::default(),
         }
     }
 
@@ -464,7 +463,7 @@ impl Channel for TelegramChannel {
         delivery::edit_message(bot, conversation_id.as_str(), message_id, Some(new_text), None).await
     }
 
-    async fn delete(&self, message_id: &MessageId) -> ChannelResult<()> {
+    async fn delete(&self, _conversation_id: &ConversationId, message_id: &MessageId) -> ChannelResult<()> {
         // Note: Deleting requires both message_id and chat_id
         let _ = message_id;
         Err(ChannelError::UnsupportedFeature(

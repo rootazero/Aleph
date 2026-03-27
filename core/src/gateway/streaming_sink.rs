@@ -1,7 +1,10 @@
 //! Real-time streaming bridge: ProviderDelta → EventEmitter
 //!
 //! Created per-run by ExecutionEngine, injected into AgentLoop via with_delta_sink().
-//! Buffers text deltas within a 100ms throttle window for smooth delivery.
+//! Uses semantic boundary detection for natural text chunking:
+//! - Hard boundaries (\n\n, sentence endings, code fences) → flush immediately
+//! - Soft boundary (single \n) → flush after 30ms
+//! - No boundary → flush after 50ms
 
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::Instant;
@@ -14,20 +17,39 @@ use crate::providers::adapter::StopReason;
 use crate::providers::delta::{DeltaSink, ProviderDelta};
 use crate::sync_primitives::Arc;
 
-/// Throttle window in milliseconds — buffers text deltas within this window
-const THROTTLE_MS: u64 = 100;
+/// Hard flush timeout (ms) — force flush if no semantic boundary found
+const FLUSH_TIMEOUT_MS: u64 = 50;
+
+/// Soft boundary timeout (ms) — shorter timeout after single newline
+const SOFT_BOUNDARY_TIMEOUT_MS: u64 = 30;
+
+/// Check if buffer ends with a hard semantic boundary (immediate flush).
+fn has_semantic_boundary(s: &str) -> bool {
+    s.ends_with("\n\n")
+        || s.ends_with(". ")
+        || s.ends_with("。")
+        || s.ends_with("？")
+        || s.ends_with("！")
+        || s.ends_with("! ")
+        || s.ends_with("? ")
+        || s.lines().last().map_or(false, |line| line.trim_start().starts_with("```"))
+}
+
+/// Check if buffer ends with a soft boundary (shorter timeout).
+fn has_soft_boundary(s: &str) -> bool {
+    s.ends_with('\n') && !s.ends_with("\n\n")
+}
 
 /// Bridges ProviderDelta events to the Gateway EventEmitter for real-time text streaming.
 ///
 /// Created per-run by ExecutionEngine and injected into AgentLoop via with_delta_sink().
-/// Buffers text deltas within a 100ms throttle window to avoid flooding WebSocket
-/// connections with tiny single-token messages.
+/// Uses semantic boundary detection to align chunks with natural text boundaries,
+/// providing better rendering on the frontend.
 ///
 /// On `Done`, flushes any remaining buffer:
 /// - `Done(ToolUse)`: intermediate iteration — flushes with `is_intermediate = true`,
 ///   emits boundary marker (empty content, `is_intermediate = true`, `is_final = false`).
-///   This tells the WebSocket client to finalize accumulated text as a standalone
-///   intermediate message. No `is_final` marker, since more iterations follow.
+///   Resets `accumulated` for the next iteration.
 /// - `Done(EndTurn | MaxTokens)`: final iteration — flushes normally and emits
 ///   final marker (empty content, `is_final = true`) to signal stream completion.
 pub struct StreamingDeltaSink {
@@ -40,6 +62,9 @@ pub struct StreamingDeltaSink {
     has_emitted_text: Arc<AtomicBool>,
     buffer: Mutex<String>,
     last_emit: Mutex<Instant>,
+    /// Accumulated full text within the current iteration.
+    /// Reset on intermediate boundaries (Done(ToolUse)).
+    accumulated: Mutex<String>,
 }
 
 impl StreamingDeltaSink {
@@ -61,6 +86,7 @@ impl StreamingDeltaSink {
             has_emitted_text,
             buffer: Mutex::new(String::new()),
             last_emit: Mutex::new(Instant::now()),
+            accumulated: Mutex::new(String::new()),
         }
     }
 }
@@ -77,12 +103,34 @@ impl DeltaSink for StreamingDeltaSink {
                 let elapsed = last.elapsed().as_millis() as u64;
                 drop(last);
 
-                if elapsed >= THROTTLE_MS {
+                // Determine flush threshold based on semantic boundaries
+                let should_flush = if has_semantic_boundary(&buf) {
+                    // Hard boundary: flush immediately
+                    true
+                } else if has_soft_boundary(&buf) {
+                    // Soft boundary: flush after shorter timeout
+                    elapsed >= SOFT_BOUNDARY_TIMEOUT_MS
+                } else {
+                    // No boundary: flush after standard timeout
+                    elapsed >= FLUSH_TIMEOUT_MS
+                };
+
+                if should_flush {
                     let content = std::mem::take(&mut *buf);
                     drop(buf);
 
+                    // Update accumulated text
+                    let mut acc = self.accumulated.lock().await;
+                    acc.push_str(&content);
+                    let full_text = acc.clone();
+                    drop(acc);
+
                     let idx = self.chunk_index.fetch_add(1, Ordering::Relaxed);
-                    self.emitter.emit_response_chunk(&self.run_id, &content, idx, false, false).await;
+                    self.emitter
+                        .emit_response_chunk(
+                            &self.run_id, &content, &full_text, idx, false, false,
+                        )
+                        .await;
                     self.has_emitted_text.store(true, Ordering::Release);
                     *self.last_emit.lock().await = Instant::now();
                 }
@@ -96,29 +144,42 @@ impl DeltaSink for StreamingDeltaSink {
                 drop(buf);
 
                 if !remaining.is_empty() {
+                    // Update accumulated with remaining buffer
+                    let mut acc = self.accumulated.lock().await;
+                    acc.push_str(&remaining);
+                    let full_text = acc.clone();
+                    drop(acc);
+
                     let idx = self.chunk_index.fetch_add(1, Ordering::Relaxed);
-                    // Always emit remaining text as non-intermediate.
-                    // The boundary marker below signals the intermediate boundary;
-                    // emitters (ReplyEmitter, GatewayEventEmitter) flush their
-                    // accumulated buffer as an intermediate message upon receiving it.
-                    self.emitter.emit_response_chunk(
-                        &self.run_id, &remaining, idx, false, false,
-                    ).await;
+                    self.emitter
+                        .emit_response_chunk(
+                            &self.run_id, &remaining, &full_text, idx, false, false,
+                        )
+                        .await;
                     self.has_emitted_text.store(true, Ordering::Release);
                 }
+
+                // Get accumulated full_text for the marker
+                let full_text = self.accumulated.lock().await.clone();
 
                 let idx = self.chunk_index.fetch_add(1, Ordering::Relaxed);
                 if is_intermediate {
                     // Intermediate boundary: tell client to finalize accumulated
                     // text as a standalone intermediate message
-                    self.emitter.emit_response_chunk(
-                        &self.run_id, "", idx, false, true,
-                    ).await;
+                    self.emitter
+                        .emit_response_chunk(
+                            &self.run_id, "", &full_text, idx, false, true,
+                        )
+                        .await;
+                    // Reset accumulated for next iteration
+                    self.accumulated.lock().await.clear();
                 } else {
                     // Final marker: stream complete
-                    self.emitter.emit_response_chunk(
-                        &self.run_id, "", idx, true, false,
-                    ).await;
+                    self.emitter
+                        .emit_response_chunk(
+                            &self.run_id, "", &full_text, idx, true, false,
+                        )
+                        .await;
                 }
             }
             // ThinkingDelta, ToolCall*, Usage, Error — not handled in Phase 2
@@ -152,13 +213,36 @@ mod tests {
         (sink, emitter)
     }
 
+    #[test]
+    fn test_semantic_boundary_detection() {
+        assert!(has_semantic_boundary("hello\n\n"));
+        assert!(has_semantic_boundary("hello. "));
+        assert!(has_semantic_boundary("你好。"));
+        assert!(has_semantic_boundary("what？"));
+        assert!(has_semantic_boundary("wow！"));
+        assert!(has_semantic_boundary("hello! "));
+        assert!(has_semantic_boundary("what? "));
+        assert!(has_semantic_boundary("```rust\n"));
+        assert!(has_semantic_boundary("some code\n```"));
+        assert!(!has_semantic_boundary("hello\n"));
+        assert!(!has_semantic_boundary("hello world"));
+        assert!(!has_semantic_boundary("hello"));
+    }
+
+    #[test]
+    fn test_soft_boundary_detection() {
+        assert!(has_soft_boundary("hello\n"));
+        assert!(!has_soft_boundary("hello world"));
+        assert!(!has_soft_boundary("hello\n\n"));
+    }
+
     /// Send TextDelta followed by Done; expect buffer flushed and final marker emitted.
     #[tokio::test]
     async fn test_done_flushes_buffer_and_emits_final() {
         let flag = Arc::new(AtomicBool::new(false));
         let (sink, emitter) = make_sink("run-1", flag.clone());
 
-        // TextDelta — will be buffered (elapsed < 100ms)
+        // TextDelta — will be buffered (elapsed < timeout)
         sink.on_delta(&ProviderDelta::TextDelta("hello world".to_string())).await;
 
         // Done — should flush buffer + emit final marker
@@ -220,8 +304,6 @@ mod tests {
     }
 
     /// Done(ToolUse) should flush text as non-intermediate, then emit boundary marker.
-    /// Emitters use the boundary marker to flush their accumulated buffer as an
-    /// intermediate message, preventing fragment/duplication issues.
     #[tokio::test]
     async fn test_tool_use_done_emits_intermediate_boundary() {
         let flag = Arc::new(AtomicBool::new(false));
@@ -300,5 +382,63 @@ mod tests {
 
         // Flag should remain unset since no text was emitted
         assert!(!flag.load(Ordering::Acquire), "Flag should remain unset when no text was emitted");
+    }
+
+    /// Verify accumulated text resets between iterations (on intermediate Done(ToolUse))
+    #[tokio::test]
+    async fn test_accumulated_resets_on_intermediate() {
+        let flag = Arc::new(AtomicBool::new(false));
+        let (sink, emitter) = make_sink("run-acc", flag.clone());
+
+        // Iteration 1
+        sink.on_delta(&ProviderDelta::TextDelta("First part.".to_string())).await;
+        sink.on_delta(&ProviderDelta::Done(StopReason::ToolUse)).await;
+
+        // Iteration 2
+        sink.on_delta(&ProviderDelta::TextDelta("Second part.".to_string())).await;
+        sink.on_delta(&ProviderDelta::Done(StopReason::EndTurn)).await;
+
+        let events = emitter.events().await;
+
+        // Find text chunks and verify full_text resets between iterations
+        let text_chunks: Vec<_> = events.iter().filter(|e| {
+            matches!(e, StreamEvent::ResponseChunk { content, .. } if !content.is_empty())
+        }).collect();
+
+        assert!(text_chunks.len() >= 2, "Should have text chunks from both iterations");
+
+        if let StreamEvent::ResponseChunk { full_text, .. } = &text_chunks[0] {
+            assert!(full_text.contains("First part."));
+        }
+
+        if let StreamEvent::ResponseChunk { full_text, .. } = text_chunks.last().unwrap() {
+            assert!(!full_text.contains("First part."), "accumulated should reset between iterations");
+            assert!(full_text.contains("Second part."));
+        }
+    }
+
+    /// Verify full_text accumulates within a single iteration
+    #[tokio::test]
+    async fn test_full_text_accumulates_within_iteration() {
+        let flag = Arc::new(AtomicBool::new(false));
+        let (sink, emitter) = make_sink("run-acc2", flag.clone());
+
+        // Send text with a hard boundary to force immediate flush
+        sink.on_delta(&ProviderDelta::TextDelta("Hello. ".to_string())).await;
+        // Another chunk with hard boundary
+        sink.on_delta(&ProviderDelta::TextDelta("World. ".to_string())).await;
+        sink.on_delta(&ProviderDelta::Done(StopReason::EndTurn)).await;
+
+        let events = emitter.events().await;
+
+        // Find chunks with non-empty content
+        let text_chunks: Vec<_> = events.iter().filter(|e| {
+            matches!(e, StreamEvent::ResponseChunk { content, .. } if !content.is_empty())
+        }).collect();
+
+        // The last text chunk's full_text should contain all accumulated text
+        if let Some(StreamEvent::ResponseChunk { full_text, .. }) = text_chunks.last() {
+            assert!(full_text.contains("Hello."), "full_text should contain earlier text");
+        }
     }
 }

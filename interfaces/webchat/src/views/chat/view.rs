@@ -3,7 +3,7 @@
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use wasm_bindgen::prelude::*;
-use crate::components::markdown::MarkdownRenderer;
+use crate::components::markdown::{MarkdownRenderer, StreamingRenderer};
 use crate::context::DashboardState;
 use crate::api::chat::{ChatApi, ChatAttachment};
 use crate::i18n::*;
@@ -182,6 +182,10 @@ fn MessageBubble(message: ChatMessage) -> impl IntoView {
                         <div class="whitespace-pre-wrap break-words text-sm leading-relaxed">
                             {content.clone()}
                         </div>
+                    }.into_any()
+                } else if is_streaming {
+                    view! {
+                        <StreamingRenderer content=content.clone() />
                     }.into_any()
                 } else {
                     view! {

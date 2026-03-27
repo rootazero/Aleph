@@ -27,11 +27,9 @@
 
 pub mod api;
 pub mod config;
-pub mod message_ops;
 pub mod permissions;
 
 pub use config::{DiscordConfig, IntentsConfig};
-pub use message_ops::DiscordMessageOps;
 
 use crate::gateway::channel::{
     Attachment, Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId,
@@ -46,7 +44,7 @@ use tokio::sync::{mpsc, oneshot, RwLock};
 use serenity::{
     all::{
         ChannelId as SerenityChannelId, Context, CreateAttachment, CreateMessage,
-        EventHandler, GatewayIntents, Message, Ready,
+        EditMessage, EventHandler, GatewayIntents, Message, MessageId as SerenityMessageId, Ready,
     },
     Client,
 };
@@ -101,9 +99,49 @@ impl DiscordChannel {
             rich_text: true, // Markdown support
             max_message_length: 2000,
             max_attachment_size: 25 * 1024 * 1024, // 25MB for normal, 100MB for Nitro
+            stream_protocol: Default::default(),
         }
     }
 
+    /// Parse a conversation_id into a SerenityChannelId, handling dm:user_id format.
+    async fn resolve_channel_id(
+        &self,
+        conversation_id: &ConversationId,
+    ) -> ChannelResult<SerenityChannelId> {
+        let http = self.http.as_ref().ok_or_else(|| {
+            ChannelError::NotConnected("HTTP client not initialized".to_string())
+        })?;
+
+        if conversation_id.as_str().starts_with("dm:") {
+            let user_id: u64 = conversation_id
+                .as_str()
+                .strip_prefix("dm:")
+                .unwrap()
+                .parse()
+                .map_err(|e| ChannelError::Internal(format!("Invalid user ID: {}", e)))?;
+
+            let user = serenity::all::UserId::new(user_id);
+            let dm = user.create_dm_channel(http).await.map_err(|e| {
+                ChannelError::Internal(format!("Failed to create DM channel: {}", e))
+            })?;
+            Ok(dm.id)
+        } else {
+            conversation_id
+                .as_str()
+                .parse::<u64>()
+                .map(SerenityChannelId::new)
+                .map_err(|e| ChannelError::Internal(format!("Invalid channel ID: {}", e)))
+        }
+    }
+
+    /// Parse a MessageId string into a SerenityMessageId.
+    fn parse_message_id(message_id: &MessageId) -> ChannelResult<SerenityMessageId> {
+        message_id
+            .as_str()
+            .parse::<u64>()
+            .map(SerenityMessageId::new)
+            .map_err(|e| ChannelError::Internal(format!("Invalid message ID: {}", e)))
+    }
 }
 
 /// Event handler for Discord gateway events
@@ -463,27 +501,60 @@ impl Channel for DiscordChannel {
     }
 
     async fn edit(&self, conversation_id: &ConversationId, message_id: &MessageId, new_text: &str) -> ChannelResult<()> {
-        // Discord edit requires channel_id + message_id + text
-        let _ = (conversation_id, message_id, new_text);
-        Err(ChannelError::UnsupportedFeature(
-            "Discord message editing not yet implemented via Channel trait".to_string(),
-        ))
+        let http = self.http.as_ref().ok_or_else(|| {
+            ChannelError::NotConnected("HTTP client not initialized".to_string())
+        })?;
+
+        let channel_id = self.resolve_channel_id(conversation_id).await?;
+        let msg_id = Self::parse_message_id(message_id)?;
+
+        let builder = EditMessage::new().content(new_text);
+        channel_id
+            .edit_message(http, msg_id, builder)
+            .await
+            .map_err(|e| ChannelError::SendFailed(format!("Failed to edit message: {}", e)))?;
+
+        Ok(())
     }
 
-    async fn delete(&self, message_id: &MessageId) -> ChannelResult<()> {
-        // Note: Deleting requires channel_id which we don't have in this interface
-        let _ = message_id;
-        Err(ChannelError::UnsupportedFeature(
-            "Message deletion requires channel context".to_string(),
-        ))
+    async fn delete(&self, conversation_id: &ConversationId, message_id: &MessageId) -> ChannelResult<()> {
+        let http = self.http.as_ref().ok_or_else(|| {
+            ChannelError::NotConnected("HTTP client not initialized".to_string())
+        })?;
+
+        let channel_id = self.resolve_channel_id(conversation_id).await?;
+        let msg_id = Self::parse_message_id(message_id)?;
+
+        channel_id
+            .delete_message(http, msg_id)
+            .await
+            .map_err(|e| ChannelError::SendFailed(format!("Failed to delete message: {}", e)))?;
+
+        Ok(())
     }
 
-    async fn react(&self, _conversation_id: &ConversationId, message_id: &MessageId, reaction: &str) -> ChannelResult<()> {
-        // Note: Reacting requires channel_id which we don't have in this interface
-        let _ = (message_id, reaction);
-        Err(ChannelError::UnsupportedFeature(
-            "Reactions require channel context".to_string(),
-        ))
+    async fn react(&self, conversation_id: &ConversationId, message_id: &MessageId, reaction: &str) -> ChannelResult<()> {
+        let http = self.http.as_ref().ok_or_else(|| {
+            ChannelError::NotConnected("HTTP client not initialized".to_string())
+        })?;
+
+        let channel_id = self.resolve_channel_id(conversation_id).await?;
+        let msg_id = Self::parse_message_id(message_id)?;
+
+        // Parse emoji — custom format <:name:id> or <a:name:id>, otherwise Unicode
+        let reaction_type = if reaction.starts_with('<') {
+            serenity::all::ReactionType::try_from(reaction).map_err(|e| {
+                ChannelError::Internal(format!("Invalid emoji format: {}", e))
+            })?
+        } else {
+            serenity::all::ReactionType::Unicode(reaction.to_string())
+        };
+
+        http.create_reaction(channel_id, msg_id, &reaction_type)
+            .await
+            .map_err(|e| ChannelError::SendFailed(format!("Failed to add reaction: {}", e)))?;
+
+        Ok(())
     }
 }
 

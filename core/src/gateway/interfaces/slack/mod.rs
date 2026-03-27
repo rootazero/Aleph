@@ -92,6 +92,7 @@ impl SlackChannel {
             rich_text: true, // Slack mrkdwn support
             max_message_length: 3000,
             max_attachment_size: 1_073_741_824, // 1GB
+            stream_protocol: Default::default(),
         }
     }
 
@@ -211,7 +212,7 @@ impl Channel for SlackChannel {
 
     }
 
-    async fn delete(&self, message_id: &MessageId) -> ChannelResult<()> {
+    async fn delete(&self, _conversation_id: &ConversationId, message_id: &MessageId) -> ChannelResult<()> {
         // Note: Deleting requires both message ts and channel ID
         let _ = message_id;
         Err(ChannelError::UnsupportedFeature(

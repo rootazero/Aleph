@@ -23,13 +23,11 @@ mod db;
 mod sender;
 mod target;
 pub mod config;
-pub mod message_ops;
 
 pub use db::MessagesDb;
 pub use sender::MessageSender;
 pub use target::{IMessageTarget, Service, parse_target, normalize_phone};
 pub use config::{IMessageConfig, DmPolicy as IMessageDmPolicy, GroupPolicy as IMessageGroupPolicy};
-pub use message_ops::IMessageMessageOps;
 
 use crate::sync_primitives::{AtomicBool, Ordering};
 use crate::sync_primitives::Arc;
@@ -76,6 +74,7 @@ impl IMessageChannel {
                 rich_text: false,
                 max_message_length: 20000, // Approximate limit
                 max_attachment_size: 100 * 1024 * 1024, // 100 MB
+                stream_protocol: Default::default(),
             },
         };
 

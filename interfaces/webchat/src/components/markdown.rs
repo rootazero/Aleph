@@ -100,6 +100,61 @@ fn html_escape(s: &str) -> String {
         .replace('\'', "&#x27;")
 }
 
+/// Lightweight streaming renderer — escapes HTML, tracks code fences, no Markdown parse.
+///
+/// Much cheaper than full Markdown: O(n) string scan with HTML escape only.
+/// Used during streaming; replaced by full MarkdownRenderer on completion.
+fn render_streaming(content: &str) -> String {
+    let mut html = String::with_capacity(content.len() * 2);
+    let mut in_fence = false;
+    let mut fence_lang: String;
+
+    for line in content.split('\n') {
+        if line.starts_with("```") {
+            if in_fence {
+                // Close fence
+                html.push_str("</code></pre></div>");
+                in_fence = false;
+            } else {
+                // Open fence
+                fence_lang = line.trim_start_matches('`').trim().to_string();
+                let lang_label = if fence_lang.is_empty() { "code" } else { &fence_lang };
+                html.push_str(&format!(
+                    r#"<div class="code-block-wrapper relative group my-3"><div class="flex items-center justify-between px-3 py-1.5 bg-surface-sunken/50 rounded-t-lg border border-b-0 border-border text-xs text-text-tertiary"><span>{lang_label}</span></div><pre class="rounded-b-lg border border-border bg-surface-sunken overflow-x-auto p-3 text-sm leading-relaxed"><code>"#,
+                ));
+                in_fence = true;
+            }
+        } else if in_fence {
+            html.push_str(&html_escape(line));
+            html.push('\n');
+        } else {
+            // Plain text: escape and convert newlines
+            html.push_str(&html_escape(line));
+            html.push_str("<br>");
+        }
+    }
+
+    // If still in fence (incomplete), close it
+    if in_fence {
+        html.push_str("</code></pre></div>");
+    }
+
+    html
+}
+
+/// A Leptos component for streaming content — lightweight rendering without full Markdown parse.
+///
+/// Tracks code fences and escapes HTML, but does not process Markdown syntax.
+/// Switches to MarkdownRenderer on completion for full formatting.
+#[component]
+pub fn StreamingRenderer(content: String) -> impl IntoView {
+    let html = render_streaming(&content);
+
+    view! {
+        <div class="markdown-body text-sm leading-relaxed streaming-content" inner_html=html />
+    }
+}
+
 /// A Leptos component that renders Markdown content with syntax-highlighted code blocks.
 #[component]
 pub fn MarkdownRenderer(content: String) -> impl IntoView {

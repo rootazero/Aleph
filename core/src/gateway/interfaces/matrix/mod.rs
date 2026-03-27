@@ -94,6 +94,7 @@ impl MatrixChannel {
             rich_text: true, // Matrix supports org.matrix.custom.html
             max_message_length: 65535,
             max_attachment_size: 100 * 1024 * 1024, // 100MB
+            stream_protocol: Default::default(),
         }
     }
 

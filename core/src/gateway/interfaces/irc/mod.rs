@@ -91,6 +91,7 @@ impl IrcChannel {
             rich_text: false, // IRC has minimal formatting (mIRC codes)
             max_message_length: 400, // Conservative PRIVMSG limit
             max_attachment_size: 0,
+            stream_protocol: Default::default(),
         }
     }
 

@@ -97,6 +97,7 @@ impl NostrChannel {
             rich_text: false,  // Plain text only
             max_message_length: 65535,
             max_attachment_size: 0,
+            stream_protocol: Default::default(),
         }
     }
 

@@ -7,7 +7,6 @@
 //! - `DynEventEmitter` — wrapper for trait objects
 
 use async_trait::async_trait;
-use std::time::Instant;
 use tokio::sync::Mutex;
 
 use crate::sync_primitives::{AtomicU64, Ordering};
@@ -21,16 +20,12 @@ use crate::gateway::protocol::JsonRpcRequest;
 /// Gateway-based event emitter
 ///
 /// Broadcasts events to all connected WebSocket clients via the event bus.
-/// Supports throttled response chunk emission (150ms) for smoother streaming.
 /// Respects `output_mode` configuration:
-/// - Typewriter: stream chunks with 150ms throttling
+/// - Typewriter: stream chunks immediately as they arrive
 /// - Instant: buffer all chunks, only emit on final
 pub struct GatewayEventEmitter {
     pub(super) event_bus: Arc<GatewayEventBus>,
     pub(super) seq_counter: AtomicU64,
-    // Throttling state for response chunks (typewriter mode)
-    pub(super) delta_buffer: Mutex<String>,
-    pub(super) last_delta_at: Mutex<Instant>,
     // Instant mode buffer for accumulating all chunks
     pub(super) instant_buffer: Mutex<String>,
     /// Output mode: typewriter (streaming) or instant (all-at-once)
@@ -38,15 +33,10 @@ pub struct GatewayEventEmitter {
 }
 
 impl GatewayEventEmitter {
-    /// Delta event throttle interval (150ms like OpenClaw)
-    pub(super) const DELTA_THROTTLE_MS: u64 = 150;
-
     pub fn new(event_bus: Arc<GatewayEventBus>) -> Self {
         Self {
             event_bus,
             seq_counter: AtomicU64::new(0),
-            delta_buffer: Mutex::new(String::new()),
-            last_delta_at: Mutex::new(Instant::now()),
             instant_buffer: Mutex::new(String::new()),
             output_mode: OutputMode::Typewriter,
         }
@@ -57,8 +47,6 @@ impl GatewayEventEmitter {
         Self {
             event_bus,
             seq_counter: AtomicU64::new(0),
-            delta_buffer: Mutex::new(String::new()),
-            last_delta_at: Mutex::new(Instant::now()),
             instant_buffer: Mutex::new(String::new()),
             output_mode,
         }
@@ -67,60 +55,6 @@ impl GatewayEventEmitter {
     /// Get the current output mode
     pub fn output_mode(&self) -> &OutputMode {
         &self.output_mode
-    }
-
-    /// Emit response chunk with 150ms throttling
-    ///
-    /// Buffers chunks within the throttle window, sends accumulated content on boundary.
-    /// Final chunks are always sent immediately with any buffered content.
-    pub async fn emit_response_chunk_throttled(
-        &self,
-        run_id: &str,
-        content: &str,
-        chunk_index: u32,
-        is_final: bool,
-    ) {
-        if is_final {
-            // Always send final chunk immediately with any buffered content
-            let mut buffer = self.delta_buffer.lock().await;
-            let full_content = if buffer.is_empty() {
-                content.to_string()
-            } else {
-                let buffered = std::mem::take(&mut *buffer);
-                format!("{}{}", buffered, content)
-            };
-            drop(buffer);
-
-            self.emit_response_chunk(run_id, &full_content, chunk_index, true, false)
-                .await;
-            return;
-        }
-
-        let now = Instant::now();
-        let mut last_at = self.last_delta_at.lock().await;
-        let elapsed = now.duration_since(*last_at).as_millis() as u64;
-
-        if elapsed < Self::DELTA_THROTTLE_MS {
-            // Buffer the content, don't send yet
-            self.delta_buffer.lock().await.push_str(content);
-            return;
-        }
-
-        // Send buffered + new content
-        let mut buffer = self.delta_buffer.lock().await;
-        let full_content = if buffer.is_empty() {
-            content.to_string()
-        } else {
-            let buffered = std::mem::take(&mut *buffer);
-            format!("{}{}", buffered, content)
-        };
-        drop(buffer);
-
-        *last_at = now;
-        drop(last_at);
-
-        self.emit_response_chunk(run_id, &full_content, chunk_index, false, false)
-            .await;
     }
 }
 
@@ -148,6 +82,7 @@ impl EventEmitter for GatewayEventEmitter {
                             let flush_event = StreamEvent::ResponseChunk {
                                 run_id: run_id.clone(),
                                 seq: self.next_seq(),
+                                full_text: accumulated.clone(),
                                 content: accumulated,
                                 chunk_index: 0,
                                 is_final: false,
@@ -185,6 +120,7 @@ impl EventEmitter for GatewayEventEmitter {
                 let final_event = StreamEvent::ResponseChunk {
                     run_id: run_id.clone(),
                     seq: self.next_seq(),
+                    full_text: full_content.clone(),
                     content: full_content,
                     chunk_index: 0,
                     is_final: true,
@@ -209,6 +145,7 @@ impl EventEmitter for GatewayEventEmitter {
                     let flush_event = StreamEvent::ResponseChunk {
                         run_id: run_id.clone(),
                         seq: self.next_seq(),
+                        full_text: buffered.clone(),
                         content: buffered,
                         chunk_index: 0,
                         is_final: true,
@@ -227,6 +164,7 @@ impl EventEmitter for GatewayEventEmitter {
                         let fallback_event = StreamEvent::ResponseChunk {
                             run_id: run_id.clone(),
                             seq: self.next_seq(),
+                            full_text: final_response.clone(),
                             content: final_response.clone(),
                             chunk_index: 0,
                             is_final: true,
