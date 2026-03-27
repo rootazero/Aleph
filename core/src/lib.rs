@@ -77,7 +77,6 @@ pub mod providers;
 pub mod routing;
 pub mod runtimes;
 pub mod search;
-pub mod skills;
 pub mod skill;
 pub mod bundled;
 
@@ -194,10 +193,6 @@ pub use crate::extension::{
 // Skills & MCP Exports
 // =============================================================================
 
-pub use crate::skills::{
-    initialize_builtin_skills, list_installed_skills,
-    Skill, SkillsInstaller, SkillsRegistry,
-};
 pub use crate::skill::SkillInfo;
 
 pub use crate::skill::{
