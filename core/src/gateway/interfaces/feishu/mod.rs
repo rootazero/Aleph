@@ -164,7 +164,7 @@ impl Channel for FeishuChannel {
                                                 Ok(Some(FeishuEvent::MessageReceive {
                                                     message_id, chat_id, chat_type, sender_id,
                                                     sender_name, message_type, content, mut mentions,
-                                                    parent_id,
+                                                    parent_id, ..
                                                 })) => {
                                                     {
                                                         let mut seen = dedup.lock().unwrap_or_else(|e| e.into_inner());
@@ -226,6 +226,9 @@ impl Channel for FeishuChannel {
                                                         tracing::warn!("Feishu inbound channel closed");
                                                         return;
                                                     }
+                                                }
+                                                Ok(Some(FeishuEvent::CardAction { .. })) => {
+                                                    tracing::debug!("Received card action event (not yet handled)");
                                                 }
                                                 Ok(Some(FeishuEvent::Unknown(t))) => {
                                                     tracing::debug!("Unknown Feishu event: {t}");

@@ -36,6 +36,13 @@ pub enum FeishuEvent {
         content: String,
         mentions: Vec<Mention>,
         parent_id: Option<String>,
+        root_id: Option<String>,
+    },
+    CardAction {
+        chat_id: String,
+        sender_id: String,
+        action_value: String,
+        message_id: String,
     },
     Unknown(String),
 }
@@ -158,6 +165,7 @@ pub struct MessageBody {
     pub content: Option<String>,
     pub mentions: Option<Vec<MentionPayload>>,
     pub parent_id: Option<String>,
+    pub root_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
