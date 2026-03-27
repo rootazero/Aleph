@@ -201,6 +201,35 @@ impl Channel for MsTeamsChannel {
             warn!(error = %e, "Failed to refresh JWT keys on startup — webhook verification will fail until keys are loaded");
         }
 
+        // Background task: refresh JWKS keys every 12h or on-demand when signature mismatch
+        let validator = Arc::clone(&self.jwt_validator);
+        let status_handle = self.state.status_handle();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(12 * 3600));
+            interval.tick().await; // skip immediate tick
+            loop {
+                tokio::select! {
+                    _ = interval.tick() => {
+                        debug!("Periodic JWKS key refresh");
+                    }
+                    _ = async {
+                        loop {
+                            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+                            if validator.key_refresh_needed() { break; }
+                        }
+                    } => {
+                        info!("On-demand JWKS key refresh triggered by signature mismatch");
+                    }
+                }
+                if status_handle.try_read().map(|s| *s == ChannelStatus::Disconnected).unwrap_or(false) {
+                    break;
+                }
+                if let Err(e) = validator.refresh_keys().await {
+                    warn!(error = %e, "Background JWKS key refresh failed");
+                }
+            }
+        });
+
         self.state.set_status(ChannelStatus::Connected).await;
         info!(channel_id = %self.info.id, "Microsoft Teams channel connected");
         Ok(())
@@ -305,19 +334,19 @@ impl Channel for MsTeamsChannel {
             .await
     }
 
-    async fn delete(&self, message_id: &MessageId) -> ChannelResult<()> {
-        // Look up conversation_id from our sent-message cache
-        let conversation_id = {
+    async fn delete(&self, conversation_id: &ConversationId, message_id: &MessageId) -> ChannelResult<()> {
+        // Use provided conversation_id, fall back to sent-message cache
+        let conversation_id = if !conversation_id.as_str().is_empty() {
+            conversation_id.as_str().to_string()
+        } else {
             let sent = self.sent_messages.read().await;
-            sent.get(message_id.as_str()).cloned()
+            sent.get(message_id.as_str()).cloned().ok_or_else(|| {
+                ChannelError::SendFailed(format!(
+                    "Cannot delete message '{}': no conversation context",
+                    message_id.as_str()
+                ))
+            })?
         };
-
-        let conversation_id = conversation_id.ok_or_else(|| {
-            ChannelError::SendFailed(format!(
-                "Cannot delete message '{}': no conversation context cached",
-                message_id.as_str()
-            ))
-        })?;
 
         let service_url = self
             .get_service_url(&conversation_id)
@@ -408,14 +437,19 @@ impl MsTeamsChannel {
         })?;
 
         // Access control: check user allowlist
-        if let Some(ref aad_id) = from.aad_object_id {
-            if !self.config.is_user_allowed(aad_id) {
-                debug!(
-                    aad_id = %aad_id,
-                    user_name = ?from.name,
-                    "Dropping message from disallowed user"
-                );
-                return Ok(vec![]);
+        // When allowed_users is non-empty, sender MUST have a valid aad_object_id
+        // in the list. Missing aad_object_id with active allowlist = reject.
+        if !self.config.allowed_users.is_empty() {
+            match from.aad_object_id.as_deref() {
+                Some(aad_id) if self.config.is_user_allowed(aad_id) => {}
+                Some(aad_id) => {
+                    debug!(aad_id = %aad_id, "Dropping message from disallowed user");
+                    return Ok(vec![]);
+                }
+                None => {
+                    debug!(user_id = %from.id, "Dropping message: no aad_object_id but allowlist is active");
+                    return Ok(vec![]);
+                }
             }
         }
 
