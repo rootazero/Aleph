@@ -174,6 +174,8 @@ pub struct GatewayServer {
     pub openai_provider_map: Arc<HashMap<String, Arc<crate::providers::http_provider::HttpProvider>>>,
     /// Provider configs for /v1/models listing
     pub openai_provider_configs: Vec<(String, crate::config::ProviderConfig)>,
+    /// Embedding provider for /v1/embeddings
+    pub embedding_provider: Option<Arc<dyn crate::memory::EmbeddingProvider>>,
 }
 
 impl GatewayServer {
@@ -212,6 +214,7 @@ impl GatewayServer {
             openai_agent_registry: None,
             openai_provider_map: Arc::new(HashMap::new()),
             openai_provider_configs: Vec::new(),
+            embedding_provider: None,
         }
     }
 
@@ -249,6 +252,7 @@ impl GatewayServer {
             openai_agent_registry: None,
             openai_provider_map: Arc::new(HashMap::new()),
             openai_provider_configs: Vec::new(),
+            embedding_provider: None,
         }
     }
 
@@ -325,6 +329,7 @@ impl GatewayServer {
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_secs(),
+            embedding_provider: self.embedding_provider.clone(),
         });
         let openai = openai_routes(openai_state);
 

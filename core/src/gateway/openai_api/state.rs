@@ -17,4 +17,5 @@ pub struct OpenAiApiState {
     pub agent_registry: Option<Arc<AgentRegistry>>,
     pub provider_configs: Arc<Vec<(String, ProviderConfig)>>,
     pub created_at: u64,
+    pub embedding_provider: Option<Arc<dyn crate::memory::EmbeddingProvider>>,
 }

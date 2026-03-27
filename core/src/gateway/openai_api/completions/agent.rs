@@ -427,6 +427,7 @@ async fn handle_non_streaming(
                     Some(content)
                 },
                 tool_calls: None,
+                tool_call_id: None,
             },
             finish_reason: Some("stop".to_string()),
             delta: None,

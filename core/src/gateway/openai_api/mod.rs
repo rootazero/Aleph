@@ -2,7 +2,9 @@
 
 pub mod auth;
 pub mod completions;
+pub mod embeddings;
 pub mod models;
+pub mod responses;
 pub mod router;
 pub mod state;
 pub mod stream;
