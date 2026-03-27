@@ -198,6 +198,12 @@ pub use crate::skills::{
     Skill, SkillInfo, SkillsInstaller, SkillsRegistry,
 };
 
+pub use crate::skill::{
+    SkillSystem, SkillStatusEntry, SkillStatusFilter,
+    SkillsConfig, SkillConfigUpdate,
+    InstallExecutor, InstallResult,
+};
+
 pub use crate::mcp::{
     McpServerConfig, McpServerStatus, McpServerStatusInfo, McpServerType, McpToolInfo,
 };

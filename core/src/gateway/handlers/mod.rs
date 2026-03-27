@@ -16,7 +16,6 @@
 //! | plugins | Plugin lifecycle |
 //! | services | Background service lifecycle |
 //! | skills | Skills management |
-//! | markdown_skills | Markdown skill runtime management |
 //! | mcp | MCP integration |
 //! | providers | AI provider management |
 //! | profiles | Auth profile management |
@@ -68,7 +67,6 @@ pub mod memory;
 pub mod plugins;
 pub mod services;
 pub mod skills;
-pub mod markdown_skills;
 pub mod mcp;
 pub mod mcp_config;
 pub mod memory_config;
@@ -297,13 +295,6 @@ impl HandlerRegistry {
         registry.register("mcp.list_pending_approvals", mcp::handle_list_pending_approvals);
         registry.register("mcp.respond_approval", mcp::handle_respond_approval);
         registry.register("mcp.cancel_approval", mcp::handle_cancel_approval);
-
-        // Markdown Skills handlers
-        registry.register("markdown_skills.install", markdown_skills::handle_install);
-        registry.register("markdown_skills.load", markdown_skills::handle_load);
-        registry.register("markdown_skills.reload", markdown_skills::handle_reload);
-        registry.register("markdown_skills.list", markdown_skills::handle_list);
-        registry.register("markdown_skills.unload", markdown_skills::handle_unload);
 
         // Unified skill management (via SkillSystem)
         registry.register("skills.status", skills::handle_status);
@@ -758,12 +749,12 @@ mod tests {
     }
 
     #[test]
-    fn test_markdown_skills_handlers_registered() {
+    fn test_skill_system_handlers_registered() {
         let registry = HandlerRegistry::new();
-        assert!(registry.has_method("markdown_skills.load"));
-        assert!(registry.has_method("markdown_skills.reload"));
-        assert!(registry.has_method("markdown_skills.list"));
-        assert!(registry.has_method("markdown_skills.unload"));
+        assert!(registry.has_method("skills.status"));
+        assert!(registry.has_method("skills.update"));
+        assert!(registry.has_method("skills.install_dep"));
+        assert!(registry.has_method("skills.remove"));
     }
 
     #[test]
