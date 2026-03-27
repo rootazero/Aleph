@@ -25,7 +25,7 @@ Aleph's Feishu channel (1955 lines, 5 files) is a functional MVP but has signifi
 | Webhook | Deferred to future | WebSocket sufficient for self-hosted personal assistant |
 | Group session scope | `group` + `group_topic` (no `_sender` variants) | Personal assistant context; per-sender isolation unnatural |
 | Dedup persistence | Not needed — increase capacity + add TTL | WS doesn't replay confirmed messages; simplicity (P6) |
-| Sender name | LRU cache, 500 capacity, 1h TTL | Non-blocking; graceful degradation on permission error |
+| Sender name | Time-based eviction cache, 500 capacity, 1h TTL | Non-blocking; graceful degradation on permission error |
 
 ## File Structure (After)
 
@@ -38,9 +38,9 @@ core/src/gateway/interfaces/feishu/
 ├── auth.rs         # TokenManager: get/refresh/background renewal (~120 lines)   [FROM client.rs]
 ├── api.rs          # FeishuApi: all HTTP API calls (~350 lines)                  [FROM client.rs]
 ├── websocket.rs    # WS connect loop + reconnect + event dispatch (~180 lines)   [FROM mod.rs]
-├── streaming.rs    # FeishuStreamingCard + FeishuEventEmitter (~270 lines)       [UNCHANGED]
+├── streaming.rs    # FeishuStreamingCard + FeishuEventEmitter (~270 lines)       [UPDATED refs]
 ├── message_ops.rs  # MessageOperations trait impl (~100 lines)                   [NEW]
-├── user_cache.rs   # Sender name LRU cache (~80 lines)                          [NEW]
+├── user_cache.rs   # Sender name eviction cache (~80 lines)                     [NEW]
 └── dedup.rs        # MessageDedup with TTL (~60 lines)                           [NEW]
 ```
 
@@ -114,7 +114,11 @@ impl FeishuApi {
 }
 ```
 
-**Key change**: `ws_reconnect_handle()` replaced by `refresh_ws_endpoint()`. The WS loop calls this method instead of reaching into client internals. This fixes the P5 (Least Knowledge) violation.
+**Key changes**:
+- `ws_reconnect_handle()` replaced by `refresh_ws_endpoint()`. The WS loop calls this method instead of reaching into client internals. This fixes the P5 (Least Knowledge) violation.
+- `reply_message()` changes from private to `pub` — needed by `message_ops.rs` for cross-channel reply operations.
+- `FeishuSendError` moves to `api.rs` (co-located with the methods that produce it).
+- `close_streaming_card()` summary truncation uses `char_indices()` to find a valid char boundary instead of byte slicing with `.get(..50)`, fixing the known UTF-8 safety pattern.
 
 ### 1.2 `mod.rs` — Slimmed FeishuChannel
 
@@ -148,17 +152,20 @@ Extracted from `mod.rs:135-296`. Takes ownership of:
 - Shutdown signal handling
 
 ```rust
-pub async fn run_ws_loop(
-    api: Arc<FeishuApi>,
-    initial_url: String,
-    config: FeishuConfig,
-    sender: mpsc::Sender<InboundMessage>,
-    channel_id: ChannelId,
-    bot_open_id: String,
-    user_cache: Arc<UserProfileCache>,
-    status_handle: StatusHandle,
-    mut shutdown_rx: watch::Receiver<bool>,
-)
+/// Bundles parameters for the WebSocket loop to avoid a 9-parameter function signature (P5).
+pub struct WsLoopContext {
+    pub api: Arc<FeishuApi>,
+    pub initial_url: String,
+    pub config: FeishuConfig,
+    pub sender: mpsc::Sender<InboundMessage>,
+    pub channel_id: ChannelId,
+    pub bot_open_id: String,
+    pub user_cache: Arc<UserProfileCache>,
+    pub status_handle: StatusHandle,
+    pub shutdown_rx: watch::Receiver<bool>,
+}
+
+pub async fn run_ws_loop(ctx: WsLoopContext)
 ```
 
 Single top-level function, not a struct. Called via `tokio::spawn` from `FeishuChannel::start()`.
@@ -168,6 +175,13 @@ Single top-level function, not a struct. Called via `tokio::spawn` from `FeishuC
 New file `message_ops.rs`:
 
 ```rust
+use crate::builtin_tools::message::{
+    MessageOperations,
+    ChannelCapabilities,  // NOTE: This is builtin_tools::message::ChannelCapabilities,
+                          // NOT gateway::channel::ChannelCapabilities — different structs
+    MessageResult, ReplyParams, EditParams, ReactParams, DeleteParams, SendParams,
+};
+
 pub struct FeishuMessageOps {
     api: Arc<FeishuApi>,
 }
@@ -193,9 +207,9 @@ impl MessageOperations for FeishuMessageOps {
 }
 ```
 
-**Registration**: In `FeishuChannel::start()`, after successful auth, register `FeishuMessageOps` into the `MessageOpsRegistry` (same pattern as Telegram/Discord).
+**Registration**: In `FeishuChannel::start()`, after successful auth, register `FeishuMessageOps` into `MessageOperationsRegistry` (at `core/src/builtin_tools/message/tool.rs`). The registry is accessed via `AppContext` — same pattern as Telegram (`telegram/mod.rs` registers in `start()`) and Discord. The channel receives a handle to the registry through the channel factory (`create_channel_from_config` in `core/src/gateway/handlers/channel.rs`).
 
-## Section 3: Sender Name Cache
+## Section 3: Sender Name Cache (Time-Based Eviction)
 
 New file `user_cache.rs`:
 
@@ -221,7 +235,7 @@ impl UserProfileCache {
 - Cache hit + not expired → return immediately
 - Cache miss → call `GET /open-apis/contact/v3/users/{open_id}?user_id_type=open_id`
 - API failure → cache `NotAvailable` to avoid repeated failing requests for same user
-- Capacity full → evict oldest entry (iterate to find min `fetched_at`)
+- Capacity full → evict oldest entry by `fetched_at` (O(n) scan, acceptable at n=500)
 - All operations are non-blocking for message processing (failure returns None)
 - Required permission: `contact:user.base:readonly`
 
@@ -341,7 +355,7 @@ impl FeishuConfig {
 }
 ```
 
-Called in `FeishuChannel::new()`. Fail fast, before any network calls.
+Called in `FeishuChannel::new()`, which changes signature to `Result<Self, ChannelError>`. The channel factory in `create_channel_from_config` already handles `Result` returns. Fail fast, before any network calls.
 
 ## Section 8: Cleanup Checklist
 
@@ -353,8 +367,8 @@ Called in `FeishuChannel::new()`. Fail fast, before any network calls.
 | `types.rs` FeishuConfig + defaults | **MOVE** to `config.rs` |
 | `FeishuClient` struct | **REPLACED** by `TokenManager` + `FeishuApi` |
 | `ws_reconnect_handle()` | **REPLACED** by `FeishuApi::refresh_ws_endpoint()` |
-| All `FeishuClient` references in `streaming.rs` | **UPDATE** to `FeishuApi` |
-| All `FeishuClient` references in `executor.rs` | **UPDATE** to `FeishuApi` |
+| All `FeishuClient` references in `streaming.rs` | **UPDATE** to `FeishuApi` (import, field type, constructor param) |
+| `FeishuClient` in `core/src/gateway/inbound_router/executor.rs` | **UPDATE** — currently creates a fresh `Arc::new(FeishuClient::new(&feishu_cfg))` per emitter (line 254). Change to receive the shared `Arc<FeishuApi>` from `FeishuChannel` via the channel registry, not create a new instance. This avoids duplicate token managers and ensures consistent auth state. |
 
 ## Testing Strategy
 
