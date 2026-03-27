@@ -5,6 +5,8 @@
 pub mod api;
 pub mod auth;
 pub mod config;
+pub mod message_ops;
+pub mod streaming;
 pub mod types;
 
 pub use config::MsTeamsConfig;
@@ -36,7 +38,7 @@ use self::types::*;
 /// Cached reference for proactive messaging and service URL resolution.
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
-struct ConversationReference {
+pub(super) struct ConversationReference {
     service_url: String,
     conversation_id: String,
     bot_id: String,
@@ -333,7 +335,10 @@ impl Channel for MsTeamsChannel {
     }
 
     fn native_stream_handler(&self) -> Option<Arc<dyn NativeStreamHandler>> {
-        None // Task 8 will add this
+        Some(Arc::new(streaming::MsTeamsStreamHandler::new(
+            Arc::clone(&self.client),
+            Arc::clone(&self.conversation_refs),
+        )))
     }
 }
 
