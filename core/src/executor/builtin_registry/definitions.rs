@@ -318,6 +318,22 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         description: "Mark a team as disbanded (preserved for history, cannot be undone)",
         requires_config: true,
     },
+    BuiltinToolDefinition {
+        name: "team_digest",
+        description: "Generate a summary of recent team activity for the specified time period",
+        requires_config: true,
+    },
+    // Team messaging tools — require MessageRouter / Inbox
+    BuiltinToolDefinition {
+        name: "message_send",
+        description: "Send a message to team members with to/cc routing",
+        requires_config: true,
+    },
+    BuiltinToolDefinition {
+        name: "inbox_read",
+        description: "Read inbox messages or a full thread. Use mode='inbox' (default) to read your messages, mode='thread' with thread_id to read a conversation thread.",
+        requires_config: true,
+    },
     // Task coordination tools — require CoordTaskStore
     BuiltinToolDefinition {
         name: "task_create",
@@ -482,7 +498,8 @@ pub fn create_tool_boxed(
         "media_send" => Some(Box::new(crate::builtin_tools::media_send::MediaSendTool::new())),
         // Team management tools require TeamStore at runtime,
         // created dynamically in BuiltinToolRegistry::with_config().
-        "team_create" | "team_delegate" | "team_status" | "team_disband" => None,
+        "team_create" | "team_delegate" | "team_status" | "team_disband" | "team_digest"
+        | "message_send" | "inbox_read" => None,
         // Task coordination tools require CoordTaskStore + AgentMessageBus at runtime,
         // created dynamically in BuiltinToolRegistry::with_config().
         "task_create" | "task_update" | "task_list" | "task_wait" => None,

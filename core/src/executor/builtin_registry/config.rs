@@ -78,4 +78,10 @@ pub struct BuiltinToolConfig {
     pub current_session_key: Option<crate::routing::SessionKey>,
     /// Channel registry for channel management tools (pairing, etc.)
     pub channel_registry: Option<Arc<crate::gateway::channel_registry::ChannelRegistry>>,
+    /// Event log store for team_digest tool
+    pub event_store: Option<Arc<dyn crate::teams::events::EventLogStore>>,
+    /// Message router for message_send tool
+    pub message_router: Option<Arc<crate::teams::messages::MessageRouter>>,
+    /// Inbox helper for inbox_read tool
+    pub inbox: Option<Arc<crate::teams::messages::Inbox>>,
 }

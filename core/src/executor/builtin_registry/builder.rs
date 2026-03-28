@@ -395,6 +395,78 @@ impl BuiltinToolRegistry {
                 (None, None, None, None)
             };
 
+        // Add team_digest tool (if EventLogStore + TeamStore are available)
+        let team_digest_tool =
+            if let (Some(ref event_store), Some(ref team_store)) = (&config.event_store, &config.team_store) {
+                use crate::builtin_tools::team::TeamDigestTool;
+
+                let current_agent_id = config.current_agent_id.clone().unwrap_or_else(|| "main".to_string());
+                let digest = TeamDigestTool::new(
+                    Arc::clone(team_store),
+                    Arc::clone(event_store),
+                    current_agent_id,
+                );
+
+                // Register parameter schema
+                {
+                    use crate::tools::AlephTool;
+                    let td = digest.definition();
+                    let mut ut = UnifiedTool::new(
+                        format!("builtin:{}", td.name),
+                        &td.name,
+                        &td.description,
+                        ToolSource::Builtin,
+                    );
+                    ut = ut.with_parameters_schema(td.parameters.clone());
+                    tools.insert(td.name.clone(), ut);
+                }
+
+                info!("Registered team_digest tool");
+                Some(digest)
+            } else {
+                None
+            };
+
+        // Add message_send + inbox_read tools (if MessageRouter / Inbox are available)
+        let (message_send_tool, inbox_read_tool) = {
+            let current_agent_id = config.current_agent_id.clone().unwrap_or_else(|| "main".to_string());
+            let send = config.message_router.as_ref().map(|router| {
+                use crate::builtin_tools::team::MessageSendTool;
+                MessageSendTool::new(Arc::clone(router), current_agent_id.clone())
+            });
+            let read = config.inbox.as_ref().map(|inbox| {
+                use crate::builtin_tools::team::InboxReadTool;
+                InboxReadTool::new(Arc::clone(inbox), current_agent_id)
+            });
+
+            // Register parameter schemas
+            {
+                use crate::tools::AlephTool;
+                let mut defs: Vec<crate::dispatcher::ToolDefinition> = Vec::new();
+                if let Some(ref s) = send {
+                    defs.push(s.definition());
+                }
+                if let Some(ref r) = read {
+                    defs.push(r.definition());
+                }
+                for td in &defs {
+                    let mut ut = UnifiedTool::new(
+                        format!("builtin:{}", td.name),
+                        &td.name,
+                        &td.description,
+                        ToolSource::Builtin,
+                    );
+                    ut = ut.with_parameters_schema(td.parameters.clone());
+                    tools.insert(td.name.clone(), ut);
+                }
+            }
+
+            if send.is_some() || read.is_some() {
+                info!("Registered team messaging tools (message_send={}, inbox_read={})", send.is_some(), read.is_some());
+            }
+            (send, read)
+        };
+
         // Add task artifact tools (if ArtifactStore is available)
         let (task_submit_tool, task_read_artifact_tool) =
             if let Some(ref artifact_store) = config.artifact_store {
@@ -565,6 +637,9 @@ impl BuiltinToolRegistry {
             team_delegate_tool,
             team_status_tool,
             team_disband_tool,
+            team_digest_tool,
+            message_send_tool,
+            inbox_read_tool,
             skill_status_tool,
             skill_install_tool,
             skill_manage_tool,

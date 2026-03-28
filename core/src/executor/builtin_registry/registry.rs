@@ -148,6 +148,10 @@ pub struct BuiltinToolRegistry {
     pub(crate) team_delegate_tool: Option<crate::builtin_tools::team::TeamDelegateTool>,
     pub(crate) team_status_tool: Option<crate::builtin_tools::team::TeamStatusTool>,
     pub(crate) team_disband_tool: Option<crate::builtin_tools::team::TeamDisbandTool>,
+    pub(crate) team_digest_tool: Option<crate::builtin_tools::team::TeamDigestTool>,
+    /// Team messaging tools (optional — require MessageRouter / Inbox)
+    pub(crate) message_send_tool: Option<crate::builtin_tools::team::MessageSendTool>,
+    pub(crate) inbox_read_tool: Option<crate::builtin_tools::team::InboxReadTool>,
     /// Skill management tools — always available (SkillSystem is always initialized)
     pub(crate) skill_status_tool: crate::builtin_tools::skill_status::SkillStatusTool,
     pub(crate) skill_install_tool: crate::builtin_tools::skill_install::SkillInstallTool,
@@ -588,6 +592,20 @@ impl ToolRegistry for BuiltinToolRegistry {
             }),
             "team_disband" => Box::pin(async move {
                 let tool = self.team_disband_tool.as_ref().ok_or_else(|| AlephError::tool("team_disband not available: no TeamStore configured"))?;
+                tool.call_json(arguments).await
+            }),
+            "team_digest" => Box::pin(async move {
+                let tool = self.team_digest_tool.as_ref().ok_or_else(|| AlephError::tool("team_digest not available: no EventLogStore configured"))?;
+                tool.call_json(arguments).await
+            }),
+
+            // Team messaging tools
+            "message_send" => Box::pin(async move {
+                let tool = self.message_send_tool.as_ref().ok_or_else(|| AlephError::tool("message_send not available: no MessageRouter configured"))?;
+                tool.call_json(arguments).await
+            }),
+            "inbox_read" => Box::pin(async move {
+                let tool = self.inbox_read_tool.as_ref().ok_or_else(|| AlephError::tool("inbox_read not available: no Inbox configured"))?;
                 tool.call_json(arguments).await
             }),
 
