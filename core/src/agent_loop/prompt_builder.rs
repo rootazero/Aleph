@@ -75,6 +75,7 @@ pub struct PromptBuilder {
     capability_rules: Option<String>,
     custom_instructions: Option<String>,
     eligible_skills: Option<Vec<SkillManifest>>,
+    model_behavior: Option<String>,
 }
 
 impl PromptBuilder {
@@ -125,6 +126,7 @@ impl PromptBuilder {
             capability_rules: None,
             custom_instructions: None,
             eligible_skills: None,
+            model_behavior: None,
         }
     }
 
@@ -171,6 +173,12 @@ impl PromptBuilder {
         self
     }
 
+    /// Set model behavior content (loaded from model_behaviors/).
+    pub fn with_model_behavior(mut self, content: &str) -> Self {
+        self.model_behavior = Some(content.to_string());
+        self
+    }
+
     /// Assemble the full system prompt from all configured sections.
     ///
     /// Sections are separated by `\n\n---\n\n` and each has a `# Header`.
@@ -204,6 +212,11 @@ impl PromptBuilder {
                 .collect::<Vec<_>>()
                 .join("\n");
             sections.push(format!("# Directives\n\n{}", bullets));
+        }
+
+        // 3.5 Model Behavior — LLM-family-specific behavioral directives
+        if let Some(behavior) = &self.model_behavior {
+            sections.push(format!("# Model Behavior\n\n{}", behavior));
         }
 
         // 4. Tool Usage Rules
@@ -484,5 +497,33 @@ mod tests {
         let prompt = PromptBuilder::new().build(&[], None);
         assert!(prompt.contains("CODE TASK ORCHESTRATION"));
         assert!(prompt.contains("tech lead"));
+    }
+
+    #[test]
+    fn test_build_includes_model_behavior() {
+        let prompt = PromptBuilder::new()
+            .with_model_behavior("You MUST call tools proactively.")
+            .build(&[], None);
+
+        assert!(prompt.contains("# Model Behavior"));
+        assert!(prompt.contains("You MUST call tools proactively."));
+    }
+
+    #[test]
+    fn test_build_omits_model_behavior_when_not_set() {
+        let prompt = PromptBuilder::new().build(&[], None);
+        assert!(!prompt.contains("# Model Behavior"));
+    }
+
+    #[test]
+    fn test_model_behavior_appears_before_tool_rules() {
+        let prompt = PromptBuilder::new()
+            .with_model_behavior("Be proactive.")
+            .with_capability_rules("Always confirm.")
+            .build(&[], None);
+
+        let behavior_pos = prompt.find("# Model Behavior").unwrap();
+        let rules_pos = prompt.find("# Tool Usage Rules").unwrap();
+        assert!(behavior_pos < rules_pos, "Model Behavior should appear before Tool Usage Rules");
     }
 }
