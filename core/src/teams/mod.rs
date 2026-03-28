@@ -12,6 +12,9 @@ pub mod sessions;
 pub mod store;
 pub mod types;
 
+#[cfg(test)]
+pub mod integration_tests;
+
 pub use store::{SqliteTeamStore, TeamStore};
 pub use types::{
     NewTeam, NewTeamMember, Team, TeamId, TeamMember, TeamStatus, TeamSummary,
