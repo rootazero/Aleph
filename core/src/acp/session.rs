@@ -41,6 +41,20 @@ impl Default for HarnessConfig {
 }
 
 // =============================================================================
+// PersistedAcpSession
+// =============================================================================
+
+/// Minimal state for restoring an ACP session after restart.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct PersistedAcpSession {
+    pub harness_id: String,
+    pub acp_session_id: String,
+    pub cwd: String,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub last_used_at: chrono::DateTime<chrono::Utc>,
+}
+
+// =============================================================================
 // AcpSession
 // =============================================================================
 
@@ -162,13 +176,34 @@ impl AcpSession {
         Ok(session_id)
     }
 
+    /// Try to restore an existing ACP session via `session/load`.
+    ///
+    /// Returns Ok(session_id) on success, Err on failure (caller should fall back to session/new).
+    pub async fn load_acp_session(&mut self, session_id: &str, cwd: &str, timeout: Duration) -> Result<String> {
+        let req = AcpRequest::load_session(session_id, cwd);
+        match self.transport.request(&req, timeout).await {
+            Ok((resp, _)) => {
+                let sid = resp.result.as_ref()
+                    .and_then(|r| r.get("sessionId"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(session_id)
+                    .to_string();
+                info!(harness_id = %self.harness_id, session_id = %sid, "ACP session loaded");
+                self.acp_session_id = Some(sid.clone());
+                Ok(sid)
+            }
+            Err(e) => {
+                debug!(harness_id = %self.harness_id, error = %e, "session/load failed, will fall back to session/new");
+                Err(e)
+            }
+        }
+    }
+
     /// Send a prompt and collect the full response text from streaming chunks.
     ///
-    /// For native ACP harnesses (like Gemini), this:
-    /// 1. Ensures an ACP session exists (calls `session/new` if needed)
-    /// 2. Sends `session/prompt` with the text
-    /// 3. Collects streaming `agent_message_chunk` notifications
-    /// 4. Returns the aggregated text when `result` with `stopReason` arrives
+    /// Two execution paths:
+    /// - **Streaming** (on_chunk provided): Uses `request_streaming()` to forward chunks in real-time
+    /// - **Legacy** (no on_chunk): Uses `request()` to collect all notifications, extracts text after
     pub async fn prompt(
         &mut self,
         text: &str,
@@ -186,47 +221,63 @@ impl AcpSession {
         self.state = AcpSessionState::Busy;
 
         // Ensure we have an ACP session
-        let session_id = match self.create_acp_session(cwd, timeout).await {
-            Ok(sid) => sid,
-            Err(e) => {
-                self.state = AcpSessionState::Error;
-                return Err(e);
-            }
-        };
-
+        let session_id = self.create_acp_session(cwd, timeout).await?;
         let req = AcpRequest::prompt(&session_id, text);
-        match self.transport.request(&req, timeout).await {
-            Ok((resp, notifications)) => {
-                // Collect text from streaming agent_message_chunk notifications
-                let mut text_parts: Vec<String> = Vec::new();
-                for notif in &notifications {
-                    if let Some(chunk) = notif.streaming_text() {
-                        // Forward to callback if provided
-                        if let Some(cb) = &on_chunk {
-                            cb(&chunk);
-                        }
-                        text_parts.push(chunk);
+
+        if let Some(cb) = on_chunk {
+            // Streaming path: forward chunks in real-time via callback
+            let cb = cb.clone();
+            let accumulated = std::sync::Mutex::new(String::new());
+
+            let result = self.transport.request_streaming(&req, timeout, |notif| {
+                if let Some(chunk) = notif.streaming_text() {
+                    cb(&chunk);
+                    if let Ok(mut acc) = accumulated.lock() {
+                        acc.push_str(&chunk);
                     }
                 }
+            }).await;
 
-                // If we got streaming chunks, use them; otherwise fall back to result
-                let result_text = if !text_parts.is_empty() {
-                    text_parts.join("")
-                } else {
-                    resp.text_content().unwrap_or_default()
-                };
-
-                self.state = AcpSessionState::Idle;
-                Ok((result_text, notifications))
+            match result {
+                Ok(resp) => {
+                    let acc_text = accumulated.into_inner().unwrap_or_default();
+                    let result_text = if acc_text.is_empty() {
+                        resp.text_content().unwrap_or_default()
+                    } else {
+                        acc_text
+                    };
+                    self.state = AcpSessionState::Idle;
+                    Ok((result_text, vec![]))
+                }
+                Err(e) => {
+                    error!(harness_id = %self.harness_id, error = %e, "ACP prompt failed");
+                    self.state = AcpSessionState::Error;
+                    Err(e)
+                }
             }
-            Err(e) => {
-                error!(
-                    harness_id = %self.harness_id,
-                    error = %e,
-                    "ACP prompt failed"
-                );
-                self.state = AcpSessionState::Error;
-                Err(e)
+        } else {
+            // Legacy path: collect all notifications, extract text after
+            match self.transport.request(&req, timeout).await {
+                Ok((resp, notifications)) => {
+                    let mut text_parts: Vec<String> = Vec::new();
+                    for notif in &notifications {
+                        if let Some(chunk) = notif.streaming_text() {
+                            text_parts.push(chunk);
+                        }
+                    }
+                    let result_text = if !text_parts.is_empty() {
+                        text_parts.join("")
+                    } else {
+                        resp.text_content().unwrap_or_default()
+                    };
+                    self.state = AcpSessionState::Idle;
+                    Ok((result_text, notifications))
+                }
+                Err(e) => {
+                    error!(harness_id = %self.harness_id, error = %e, "ACP prompt failed");
+                    self.state = AcpSessionState::Error;
+                    Err(e)
+                }
             }
         }
     }
