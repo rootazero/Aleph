@@ -384,20 +384,48 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     return Ok(response);
                 }
                 Err(e) => {
-                    // Classify the error for health tracking and retry decisions
-                    let mut is_transient_or_permanent = false;
+                    // Classify the error for health tracking and retry decisions.
+                    // Errors may arrive as AlephError (from process()) or as plain
+                    // anyhow::Error (from stream_raw's map_err). Try both paths.
+                    let mut is_retryable = false;
+
                     if let Some(aleph_err) = e.downcast_ref::<crate::error::AlephError>() {
                         let provider_err: Option<crate::providers::health::ProviderError> = aleph_err.into();
                         if let Some(pe) = provider_err {
-                            is_transient_or_permanent = true; // any classified provider error triggers fallback
+                            is_retryable = true;
                             self.provider_registry.report_outcome(&resolved.provider_name, Err(pe));
+                        }
+                    } else {
+                        // stream_raw wraps errors as anyhow strings — classify via message
+                        let msg = e.to_string();
+                        let is_network = msg.contains("Network error") || msg.contains("error sending request")
+                            || msg.contains("connection") || msg.contains("dns") || msg.contains("timed out");
+                        let is_auth = msg.contains("401") || msg.contains("403") || msg.contains("Unauthorized");
+                        let is_server = msg.contains("500") || msg.contains("502") || msg.contains("503");
+
+                        if is_network || is_server {
+                            is_retryable = true;
+                            self.provider_registry.report_outcome(
+                                &resolved.provider_name,
+                                Err(crate::providers::health::ProviderError::Transient(
+                                    crate::providers::health::TransientError::ConnectionFailed,
+                                )),
+                            );
+                        } else if is_auth {
+                            is_retryable = true;
+                            self.provider_registry.report_outcome(
+                                &resolved.provider_name,
+                                Err(crate::providers::health::ProviderError::Permanent(
+                                    crate::providers::health::PermanentError::AuthFailed,
+                                )),
+                            );
                         }
                     }
 
                     // Retry with fallback on any provider-classified error (transient or permanent)
                     // Transient: rate limit, 5xx, timeout — provider might recover
                     // Permanent: auth failed, model not found — this provider is dead, try another
-                    if is_transient_or_permanent && attempt < MAX_FALLBACK_ATTEMPTS {
+                    if is_retryable && attempt < MAX_FALLBACK_ATTEMPTS {
                         // Check if a different provider is available
                         match self.provider_registry.resolve_with_fallback(
                             &agent.config().model, &agent.config().fallback_models
