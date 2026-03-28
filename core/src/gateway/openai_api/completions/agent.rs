@@ -184,6 +184,7 @@ impl EventEmitter for SseEventEmitter {
             StreamEvent::RunAccepted { .. } => None,
             StreamEvent::AskUser { .. } => None,
             StreamEvent::UncertaintySignal { .. } => None,
+            StreamEvent::ModelResolved { .. } => None,
             StreamEvent::SessionUpdated { .. } => None,
         };
 

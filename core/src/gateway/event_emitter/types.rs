@@ -7,6 +7,7 @@ use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::providers::health::ModelInfo;
 use crate::sync_primitives::{AtomicU64, Ordering};
 
 /// Error type for event emission
@@ -163,6 +164,15 @@ pub enum StreamEvent {
         uncertainty: String,
         /// Suggested action for handling the uncertainty
         suggested_action: UncertaintyAction,
+    },
+
+    /// Model has been resolved (possibly via fallback)
+    ///
+    /// Emitted after the provider registry resolves the model,
+    /// so the UI can display fallback indicators.
+    ModelResolved {
+        run_id: String,
+        model_info: ModelInfo,
     },
 
     /// Session was updated (new messages added)

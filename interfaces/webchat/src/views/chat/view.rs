@@ -85,7 +85,7 @@ fn MessageList() -> impl IntoView {
         <div node_ref=scroll_ref class="flex-1 overflow-y-auto px-4 py-6 space-y-4">
             <For
                 each=move || chat.messages.get()
-                key=|msg| format!("{}:{}:{}:{}:{}", msg.id, msg.content.len(), msg.is_streaming, msg.is_intermediate, msg.tool_calls.len())
+                key=|msg| format!("{}:{}:{}:{}:{}:{}", msg.id, msg.content.len(), msg.is_streaming, msg.is_intermediate, msg.tool_calls.len(), msg.model_info.is_some())
                 children=move |msg| {
                     view! { <MessageBubble message=msg /> }
                 }
@@ -158,6 +158,7 @@ fn MessageBubble(message: ChatMessage) -> impl IntoView {
     let content = message.content.clone();
     let is_streaming = message.is_streaming;
     let error = message.error.clone();
+    let model_info = message.model_info.clone();
 
     let streaming_cursor = if is_streaming {
         Some(view! {
@@ -170,6 +171,30 @@ fn MessageBubble(message: ChatMessage) -> impl IntoView {
     let error_view = error.map(|err| view! {
         <div class="mt-2 text-xs text-danger/80">{err}</div>
     });
+
+    // Model info indicator (shows fallback when applicable)
+    let model_view = if !is_user {
+        model_info.map(|info| {
+            if info.is_fallback {
+                let original = info.original_model.unwrap_or_default();
+                view! {
+                    <div class="mt-1.5 text-[10px] leading-tight font-mono flex items-center gap-1">
+                        <span style="text-decoration: line-through; opacity: 0.4;">{original}</span>
+                        <span class="text-text-tertiary">{"\u{2192}"}</span>
+                        <span style="color: #fde047;">{info.model}</span>
+                    </div>
+                }.into_any()
+            } else {
+                view! {
+                    <div class="mt-1.5 text-[10px] leading-tight font-mono text-text-tertiary">
+                        {info.model}
+                    </div>
+                }.into_any()
+            }
+        })
+    } else {
+        None
+    };
 
     view! {
         <div class=bubble_align>
@@ -198,6 +223,9 @@ fn MessageBubble(message: ChatMessage) -> impl IntoView {
 
                 // Error message
                 {error_view}
+
+                // Model info (with fallback indicator)
+                {model_view}
             </div>
         </div>
     }

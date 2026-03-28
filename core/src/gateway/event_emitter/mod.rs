@@ -156,6 +156,7 @@ pub(crate) fn event_method(event: &StreamEvent) -> &'static str {
         StreamEvent::AskUser { .. } => "stream.ask_user",
         StreamEvent::ReasoningBlock { .. } => "stream.reasoning_block",
         StreamEvent::UncertaintySignal { .. } => "stream.uncertainty_signal",
+        StreamEvent::ModelResolved { .. } => "stream.model_resolved",
         StreamEvent::SessionUpdated { .. } => "stream.session_updated",
     }
 }

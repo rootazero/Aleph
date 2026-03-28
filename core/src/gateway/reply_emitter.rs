@@ -918,6 +918,7 @@ impl EventEmitter for ReplyEmitter {
             | StreamEvent::ToolEnd { .. }
             | StreamEvent::ReasoningBlock { .. }
             | StreamEvent::UncertaintySignal { .. }
+            | StreamEvent::ModelResolved { .. }
             | StreamEvent::SessionUpdated { .. } => {
                 debug!("Ignoring event for channel routing: {:?}", event);
             }

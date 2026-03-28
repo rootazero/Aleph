@@ -3,6 +3,17 @@
 use leptos::prelude::*;
 use serde::{Deserialize, Serialize};
 
+/// Model resolution info (mirrors core ModelInfo).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ModelInfo {
+    pub model: String,
+    pub provider: String,
+    #[serde(default)]
+    pub is_fallback: bool,
+    #[serde(default)]
+    pub original_model: Option<String>,
+}
+
 /// A rendered chat message (user or assistant).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ChatMessage {
@@ -17,6 +28,8 @@ pub struct ChatMessage {
     pub is_intermediate: bool, // true for intermediate progress messages
     #[serde(default)]
     pub error: Option<String>,
+    #[serde(default)]
+    pub model_info: Option<ModelInfo>,
 }
 
 /// Minimal tool call record for display.
@@ -93,6 +106,7 @@ impl ChatState {
                 is_streaming: false,
                 is_intermediate: false,
                 error: None,
+                model_info: None,
             });
         });
         self.error_message.set(None);
@@ -110,6 +124,7 @@ impl ChatState {
                 is_streaming: true,
                 is_intermediate: false,
                 error: None,
+                model_info: None,
             });
         });
         self.active_run_id.set(Some(run_id.to_string()));
@@ -145,9 +160,20 @@ impl ChatState {
                 is_streaming: true,
                 is_intermediate: false,
                 error: None,
+                model_info: None,
             });
         });
         self.phase.set(ChatPhase::Thinking);
+    }
+
+    /// Set model info on the current assistant message for the given run.
+    pub fn set_model_info(&self, run_id: &str, info: ModelInfo) {
+        let target_id = format!("assistant-{}", run_id);
+        self.messages.update(|msgs| {
+            if let Some(msg) = msgs.iter_mut().rev().find(|m| m.id == target_id) {
+                msg.model_info = Some(info);
+            }
+        });
     }
 
     /// Append a response text chunk to the current assistant message.

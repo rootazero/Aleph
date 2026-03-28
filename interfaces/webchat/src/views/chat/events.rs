@@ -2,7 +2,7 @@
 
 use leptos::prelude::*;
 use crate::context::{DashboardState, GatewayEvent};
-use super::state::ChatState;
+use super::state::{ChatState, ModelInfo};
 
 /// Subscribe to `run.*` events and dispatch to ChatState.
 /// Returns the subscription ID for cleanup.
@@ -71,6 +71,14 @@ pub fn subscribe_run_events(dashboard: &DashboardState, chat: ChatState) -> usiz
                     chat.finalize_intermediate(run_id);
                 } else if let Some(text) = chunk_text {
                     chat.append_chunk(run_id, text);
+                }
+            }
+            "model_resolved" => {
+                let model = data.get("model_info").and_then(|m| {
+                    serde_json::from_value::<ModelInfo>(m.clone()).ok()
+                });
+                if let Some(info) = model {
+                    chat.set_model_info(run_id, info);
                 }
             }
             "run_complete" => {

@@ -186,6 +186,7 @@ pub fn ChatSidebar() -> impl IntoView {
                             is_streaming: false,
                             is_intermediate: false,
                             error: None,
+                            model_info: None,
                         })
                         .collect();
                     chat.messages.set(msgs);

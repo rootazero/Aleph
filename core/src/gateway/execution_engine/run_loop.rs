@@ -76,6 +76,23 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             );
         }
 
+        // Emit ModelResolved so the Panel can show fallback indicators
+        let _ = emitter
+            .emit(StreamEvent::ModelResolved {
+                run_id: run_id.to_string(),
+                model_info: crate::providers::health::ModelInfo {
+                    model: resolved.model.clone(),
+                    provider: resolved.provider_name.clone(),
+                    is_fallback: resolved.is_fallback,
+                    original_model: if resolved.is_fallback {
+                        Some(resolved.original_model.clone())
+                    } else {
+                        None
+                    },
+                },
+            })
+            .await;
+
         let provider = self.provider_registry.get(&resolved.provider_name)
             .unwrap_or_else(|| self.provider_registry.default_provider());
 
