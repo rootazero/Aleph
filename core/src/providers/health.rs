@@ -72,6 +72,12 @@ pub enum ProviderHealth {
     },
 }
 
+impl Default for ProviderHealth {
+    fn default() -> Self {
+        Self::Healthy
+    }
+}
+
 impl ProviderHealth {
     /// Whether this provider can accept requests right now.
     ///
@@ -100,17 +106,16 @@ impl ProviderHealth {
 
         match error {
             ProviderError::Transient(transient) => {
-                let consecutive_failures = match self {
-                    ProviderHealth::Degraded { consecutive_failures, .. } => *consecutive_failures + 1,
-                    _ => 1,
+                let (consecutive_failures, old_since) = match self {
+                    ProviderHealth::Degraded { consecutive_failures, since, .. } => {
+                        (*consecutive_failures + 1, Some(*since))
+                    }
+                    _ => (1, None),
                 };
 
                 let cooldown = calculate_cooldown(consecutive_failures, transient);
                 *self = ProviderHealth::Degraded {
-                    since: match self {
-                        ProviderHealth::Degraded { since, .. } => *since,
-                        _ => now,
-                    },
+                    since: old_since.unwrap_or(now),
                     cooldown_until: now + cooldown,
                     consecutive_failures,
                 };
