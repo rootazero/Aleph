@@ -130,10 +130,8 @@ pub struct BuiltinToolRegistry {
     pub(super) event_bus: Option<Arc<crate::gateway::event_bus::GatewayEventBus>>,
     /// Extension manager for plugin tool execution
     pub(super) extension_manager: Option<Arc<crate::extension::ExtensionManager>>,
-    /// ACP delegate tools (optional - requires AcpHarnessManager)
-    pub(crate) claude_code_tool: Option<crate::builtin_tools::acp_tools::ClaudeCodeTool>,
-    pub(crate) codex_tool: Option<crate::builtin_tools::acp_tools::CodexTool>,
-    pub(crate) gemini_cli_tool: Option<crate::builtin_tools::acp_tools::GeminiCliTool>,
+    /// ACP delegate tool (optional - requires AcpHarnessManager)
+    pub(crate) acp_delegate_tool: Option<crate::builtin_tools::acp_tools::AcpDelegateTool>,
     pub(crate) acp_switch_tool: Option<crate::builtin_tools::acp_tools::AcpSwitchTool>,
     /// ClawHub tool instance
     pub(crate) clawhub_tool: crate::builtin_tools::clawhub::ClawHubTool,
@@ -616,22 +614,10 @@ impl ToolRegistry for BuiltinToolRegistry {
                 crate::builtin_tools::media_send::MediaSendTool::new().call_json(arguments).await
             }),
 
-            // ACP delegate tools
-            "claude_code" => Box::pin(async move {
-                let tool = self.claude_code_tool.as_ref().ok_or_else(|| {
-                    AlephError::tool("claude_code not available: ACP not configured or claude-code harness not found")
-                })?;
-                tool.call_json(arguments).await
-            }),
-            "codex" => Box::pin(async move {
-                let tool = self.codex_tool.as_ref().ok_or_else(|| {
-                    AlephError::tool("codex not available: ACP not configured or codex harness not found")
-                })?;
-                tool.call_json(arguments).await
-            }),
-            "gemini_cli" => Box::pin(async move {
-                let tool = self.gemini_cli_tool.as_ref().ok_or_else(|| {
-                    AlephError::tool("gemini_cli not available: ACP not configured or gemini harness not found")
+            // ACP delegate tool (unified)
+            "acp_delegate" => Box::pin(async move {
+                let tool = self.acp_delegate_tool.as_ref().ok_or_else(|| {
+                    AlephError::tool("acp_delegate not available: ACP not configured")
                 })?;
                 tool.call_json(arguments).await
             }),

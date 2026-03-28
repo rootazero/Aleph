@@ -258,12 +258,13 @@ impl BuiltinToolRegistry {
             };
 
         // Add ACP delegate tools (if AcpHarnessManager is provided)
-        let (claude_code_tool, codex_tool, gemini_cli_tool, acp_switch_tool) =
+        let (acp_delegate_tool, acp_switch_tool) =
             if let Some(ref manager) = config.acp_manager {
-                use crate::builtin_tools::acp_tools::{ClaudeCodeTool, CodexTool, GeminiCliTool, AcpSwitchTool};
+                use crate::builtin_tools::acp_tools::{AcpDelegateTool, AcpSwitchTool};
+                use crate::tools::AlephTool;
                 info!("Creating ACP delegate tools");
 
-                // All ACP tools share AcpDelegateArgs; acp_switch uses AcpSwitchArgs
+                // Register the unified acp_delegate tool
                 use schemars::schema_for;
                 let acp_schema = serde_json::to_value(
                     schema_for!(crate::builtin_tools::acp_tools::AcpDelegateArgs)
@@ -272,35 +273,13 @@ impl BuiltinToolRegistry {
                     schema_for!(crate::builtin_tools::acp_tools::AcpSwitchArgs)
                 ).unwrap_or_default();
 
-                let cc = if manager.has_harness("claude-code").await {
-                    let mut ut = UnifiedTool::new(
-                        "builtin:claude_code", "claude_code",
-                        ClaudeCodeTool::DESCRIPTION, ToolSource::Builtin,
-                    );
-                    ut.parameters_schema = Some(acp_schema.clone());
-                    tools.insert("claude_code".to_string(), ut);
-                    Some(ClaudeCodeTool::new(Arc::clone(manager)))
-                } else { None };
-
-                let cx = if manager.has_harness("codex").await {
-                    let mut ut = UnifiedTool::new(
-                        "builtin:codex", "codex",
-                        CodexTool::DESCRIPTION, ToolSource::Builtin,
-                    );
-                    ut.parameters_schema = Some(acp_schema.clone());
-                    tools.insert("codex".to_string(), ut);
-                    Some(CodexTool::new(Arc::clone(manager)))
-                } else { None };
-
-                let gm = if manager.has_harness("gemini").await {
-                    let mut ut = UnifiedTool::new(
-                        "builtin:gemini_cli", "gemini_cli",
-                        GeminiCliTool::DESCRIPTION, ToolSource::Builtin,
-                    );
-                    ut.parameters_schema = Some(acp_schema.clone());
-                    tools.insert("gemini_cli".to_string(), ut);
-                    Some(GeminiCliTool::new(Arc::clone(manager)))
-                } else { None };
+                let mut ut = UnifiedTool::new(
+                    "builtin:acp_delegate", "acp_delegate",
+                    AcpDelegateTool::DESCRIPTION, ToolSource::Builtin,
+                );
+                ut.parameters_schema = Some(acp_schema);
+                tools.insert("acp_delegate".to_string(), ut);
+                let delegate = Some(AcpDelegateTool::new(Arc::clone(manager)));
 
                 // acp_switch is always available when manager exists
                 let mut ut = UnifiedTool::new(
@@ -311,11 +290,10 @@ impl BuiltinToolRegistry {
                 tools.insert("acp_switch".to_string(), ut);
                 let sw = Some(AcpSwitchTool::new(Arc::clone(manager)));
 
-                info!("Registered ACP tools (claude_code={}, codex={}, gemini_cli={}, acp_switch=true)",
-                    cc.is_some(), cx.is_some(), gm.is_some());
-                (cc, cx, gm, sw)
+                info!("Registered ACP tools (acp_delegate=true, acp_switch=true)");
+                (delegate, sw)
             } else {
-                (None, None, None, None)
+                (None, None)
             };
 
         // Add task coordination tools (if CoordTaskStore is available)
@@ -529,9 +507,7 @@ impl BuiltinToolRegistry {
             tool_context_handle: config.tool_context.clone(),
             event_bus: config.event_bus.clone(),
             extension_manager: config.extension_manager.clone(),
-            claude_code_tool,
-            codex_tool,
-            gemini_cli_tool,
+            acp_delegate_tool,
             acp_switch_tool,
             channel_registry_cell: {
                 let cell = Arc::new(tokio::sync::OnceCell::new());
