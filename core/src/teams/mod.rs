@@ -7,6 +7,7 @@ pub mod artifacts;
 pub mod context;
 pub mod events;
 pub mod messages;
+pub mod sessions;
 pub mod store;
 pub mod types;
 
