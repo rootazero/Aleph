@@ -371,21 +371,11 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         description: "Toggle or configure a skill (enable/disable, change prompt scope)",
         requires_config: false,
     },
-    // ACP delegate tools — delegate coding tasks to external CLI agents.
-    // Require AcpHarnessManager; execution returns clear error if harness unavailable.
+    // ACP delegate tool — unified delegation to any external CLI agent.
+    // Requires AcpHarnessManager; execution returns clear error if harness unavailable.
     BuiltinToolDefinition {
-        name: "claude_code",
-        description: "Delegate a coding task to Claude Code CLI. Supports 'oneshot' (fresh process per prompt, default) and 'native_acp' (persistent session with context continuity). Set reuse_session for multi-step workflows.",
-        requires_config: true, // Requires AcpHarnessManager
-    },
-    BuiltinToolDefinition {
-        name: "codex",
-        description: "Delegate a coding task to OpenAI Codex CLI. Supports 'oneshot' (default) and 'native_acp' modes. Set reuse_session for multi-step continuity.",
-        requires_config: true,
-    },
-    BuiltinToolDefinition {
-        name: "gemini_cli",
-        description: "Delegate a task to Google Gemini CLI. Supports 'native_acp' (default, persistent session) and 'oneshot' modes. Set reuse_session for multi-step continuity.",
+        name: "acp_delegate",
+        description: "Delegate a task to an external CLI agent via ACP. Use 'claude-code', 'codex', or 'gemini' as the harness parameter, or any custom harness registered via acp.create.",
         requires_config: true,
     },
     BuiltinToolDefinition {

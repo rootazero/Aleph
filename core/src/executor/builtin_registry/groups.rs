@@ -106,7 +106,7 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
     ToolCategory {
         id: "acp",
         name: "外部代码 Agent",
-        tools: &["claude_code", "codex", "gemini_cli", "acp_switch"],
+        tools: &["acp_delegate", "acp_switch"],
     },
     ToolCategory {
         id: "heartbeat",
