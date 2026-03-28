@@ -345,9 +345,9 @@ impl BuiltinToolRegistry {
                 (None, None, None, None)
             };
 
-        // Add team management tools (if TeamStore is available)
+        // Add team management tools (if TeamStore + CoordTaskStore are available)
         let (team_create_tool, team_delegate_tool, team_status_tool, team_disband_tool) =
-            if let Some(ref store) = config.team_store {
+            if let (Some(ref store), Some(ref coord_store)) = (&config.team_store, &config.coord_task_store) {
                 use crate::builtin_tools::team::{TeamCreateTool, TeamDelegateTool, TeamStatusTool, TeamDisbandTool};
 
                 let agent_registry = config.agent_registry.clone().unwrap_or_else(|| {
@@ -360,8 +360,12 @@ impl BuiltinToolRegistry {
                     config.agent_manager.clone(),
                     config.current_agent_id.clone().unwrap_or_else(|| "main".to_string()),
                 );
-                let delegate = TeamDelegateTool::new(Arc::clone(store));
-                let status = TeamStatusTool::new(Arc::clone(store));
+                let delegate = TeamDelegateTool::new(
+                    Arc::clone(store),
+                    Arc::clone(coord_store),
+                    config.artifact_store.clone(),
+                );
+                let status = TeamStatusTool::new(Arc::clone(store), Arc::clone(coord_store));
                 let disband = TeamDisbandTool::new(Arc::clone(store));
 
                 // Register parameter schemas for team tools
