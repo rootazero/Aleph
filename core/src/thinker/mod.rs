@@ -9,7 +9,6 @@
 
 pub mod cache;
 pub mod channel_behavior;
-pub mod fallback;
 pub mod context;
 pub mod hooks;
 pub mod identity;
