@@ -335,8 +335,32 @@ pub async fn handle_delete(
 // Test
 // ============================================================================
 
-/// Test a provider connection
-pub async fn handle_test(request: JsonRpcRequest, config_store: Arc<RwLock<Config>>, vault: Arc<SharedTokenManager>) -> JsonRpcResponse {
+/// Test a provider connection (without health reset)
+pub async fn handle_test_no_registry(
+    request: JsonRpcRequest,
+    config_store: Arc<RwLock<Config>>,
+    vault: Arc<SharedTokenManager>,
+) -> JsonRpcResponse {
+    handle_test_inner(request, config_store, vault, None).await
+}
+
+/// Test a provider connection (with health reset on success)
+pub async fn handle_test(
+    request: JsonRpcRequest,
+    config_store: Arc<RwLock<Config>>,
+    vault: Arc<SharedTokenManager>,
+    multi_registry: Arc<crate::thinker::MultiProviderRegistry>,
+) -> JsonRpcResponse {
+    handle_test_inner(request, config_store, vault, Some(&multi_registry)).await
+}
+
+/// Shared implementation for testing a provider connection
+async fn handle_test_inner(
+    request: JsonRpcRequest,
+    config_store: Arc<RwLock<Config>>,
+    vault: Arc<SharedTokenManager>,
+    multi_registry: Option<&Arc<crate::thinker::MultiProviderRegistry>>,
+) -> JsonRpcResponse {
     let params: TestParams = match parse_params(&request) {
         Ok(p) => p,
         Err(e) => return e,
@@ -412,6 +436,11 @@ pub async fn handle_test(request: JsonRpcRequest, config_store: Arc<RwLock<Confi
                     if let Err(e) = save_config(&cfg, &["providers"]) {
                         error!(error = %e, "Failed to save config after test");
                     }
+                }
+                // Reset health to Healthy after successful connection test
+                if let Some(registry) = multi_registry {
+                    use crate::thinker::ProviderRegistry;
+                    registry.reset_health(name);
                 }
             }
 
@@ -567,6 +596,9 @@ async fn set_default_provider_inner(
                 if let Err(e) = registry.set_default(&name) {
                     error!(name = %name, error = %e, "Failed to set default in multi-registry");
                 } else {
+                    // Reset health to Healthy when provider is set as default
+                    use crate::thinker::ProviderRegistry;
+                    registry.reset_health(&name);
                     info!(name = %name, providers = ?registry.list_providers(), "Provider set as default in multi-registry");
                 }
             }

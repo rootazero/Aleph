@@ -20,7 +20,7 @@ pub use types::{
 // Re-export handler functions
 pub use handlers::{
     handle_list, handle_get, handle_update, handle_create, handle_delete,
-    handle_test, handle_needs_setup,
+    handle_test, handle_test_no_registry, handle_needs_setup,
     handle_set_default_config_only, handle_set_default,
 };
 

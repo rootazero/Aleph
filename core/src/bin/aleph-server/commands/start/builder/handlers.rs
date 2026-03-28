@@ -562,7 +562,11 @@ pub(in crate::commands::start) fn register_config_handlers(
         // Fallback: config-only update without runtime provider swap
         register_handler!(server, "providers.setDefault", providers::handle_set_default_config_only, config, event_bus);
     }
-    register_handler!(server, "providers.test", providers::handle_test, config, shared_token_mgr);
+    if let Some(ref registry) = multi_registry {
+        register_handler!(server, "providers.test", providers::handle_test, config, shared_token_mgr, registry);
+    } else {
+        register_handler!(server, "providers.test", providers::handle_test_no_registry, config, shared_token_mgr);
+    }
     register_handler!(server, "providers.needsSetup", providers::handle_needs_setup, config);
 
     // Routing rules
