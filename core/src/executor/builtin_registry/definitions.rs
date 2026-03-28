@@ -339,6 +339,17 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         description: "Wait for specific tasks or all team tasks to complete",
         requires_config: true,
     },
+    // Task artifact tools — require ArtifactStore
+    BuiltinToolDefinition {
+        name: "task_submit",
+        description: "Submit a structured artifact as task output",
+        requires_config: true,
+    },
+    BuiltinToolDefinition {
+        name: "task_read_artifact",
+        description: "Read artifacts submitted for a task",
+        requires_config: true,
+    },
     // Channel management tools — require ChannelRegistry
     BuiltinToolDefinition {
         name: "channel_pairing",
@@ -475,6 +486,9 @@ pub fn create_tool_boxed(
         // Task coordination tools require CoordTaskStore + AgentMessageBus at runtime,
         // created dynamically in BuiltinToolRegistry::with_config().
         "task_create" | "task_update" | "task_list" | "task_wait" => None,
+        // Task artifact tools require ArtifactStore + current_agent_id at runtime,
+        // created dynamically in BuiltinToolRegistry::with_config().
+        "task_submit" | "task_read_artifact" => None,
         // Browser tools — create ProfileManager from config or use default
         "browser_open" | "browser_click" | "browser_type" | "browser_screenshot"
         | "browser_snapshot" | "browser_navigate" | "browser_tabs" | "browser_select"

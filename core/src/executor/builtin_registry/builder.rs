@@ -395,6 +395,40 @@ impl BuiltinToolRegistry {
                 (None, None, None, None)
             };
 
+        // Add task artifact tools (if ArtifactStore is available)
+        let (task_submit_tool, task_read_artifact_tool) =
+            if let Some(ref artifact_store) = config.artifact_store {
+                use crate::builtin_tools::team::{TaskSubmitTool, TaskReadArtifactTool};
+
+                let current_agent_id = config.current_agent_id.clone().unwrap_or_else(|| "main".to_string());
+                let submit = TaskSubmitTool::new(Arc::clone(artifact_store), current_agent_id);
+                let read = TaskReadArtifactTool::new(Arc::clone(artifact_store));
+
+                // Register parameter schemas
+                {
+                    use crate::tools::AlephTool;
+                    let tool_defs = [
+                        submit.definition(),
+                        read.definition(),
+                    ];
+                    for td in &tool_defs {
+                        let mut ut = UnifiedTool::new(
+                            format!("builtin:{}", td.name),
+                            &td.name,
+                            &td.description,
+                            ToolSource::Builtin,
+                        );
+                        ut = ut.with_parameters_schema(td.parameters.clone());
+                        tools.insert(td.name.clone(), ut);
+                    }
+                }
+
+                info!("Registered task artifact tools (task_submit, task_read_artifact)");
+                (Some(submit), Some(read))
+            } else {
+                (None, None)
+            };
+
         // Skill management tools — always available
         let skill_system = crate::skill::SkillSystem::new();
         let skill_status_tool = crate::builtin_tools::skill_status::SkillStatusTool::new(skill_system.clone());
@@ -525,6 +559,8 @@ impl BuiltinToolRegistry {
             task_update_tool,
             task_list_tool,
             task_wait_tool,
+            task_submit_tool,
+            task_read_artifact_tool,
             team_create_tool,
             team_delegate_tool,
             team_status_tool,

@@ -85,6 +85,7 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
         tools: &[
             "team_create", "team_delegate", "team_status", "team_disband",
             "task_create", "task_update", "task_list", "task_wait",
+            "task_submit", "task_read_artifact",
         ],
     },
     // -- Infrastructure --

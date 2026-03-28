@@ -140,6 +140,9 @@ pub struct BuiltinToolRegistry {
     pub(crate) task_update_tool: Option<crate::builtin_tools::task_manage::TaskUpdateTool>,
     pub(crate) task_list_tool: Option<crate::builtin_tools::task_manage::TaskListTool>,
     pub(crate) task_wait_tool: Option<crate::builtin_tools::task_manage::TaskWaitTool>,
+    /// Task artifact tools (optional — require ArtifactStore)
+    pub(crate) task_submit_tool: Option<crate::builtin_tools::team::TaskSubmitTool>,
+    pub(crate) task_read_artifact_tool: Option<crate::builtin_tools::team::TaskReadArtifactTool>,
     /// Team management tools (optional — require TeamStore)
     pub(crate) team_create_tool: Option<crate::builtin_tools::team::TeamCreateTool>,
     pub(crate) team_delegate_tool: Option<crate::builtin_tools::team::TeamDelegateTool>,
@@ -585,6 +588,16 @@ impl ToolRegistry for BuiltinToolRegistry {
             }),
             "team_disband" => Box::pin(async move {
                 let tool = self.team_disband_tool.as_ref().ok_or_else(|| AlephError::tool("team_disband not available: no TeamStore configured"))?;
+                tool.call_json(arguments).await
+            }),
+
+            // Task artifact tools
+            "task_submit" => Box::pin(async move {
+                let tool = self.task_submit_tool.as_ref().ok_or_else(|| AlephError::tool("task_submit not available: no ArtifactStore configured"))?;
+                tool.call_json(arguments).await
+            }),
+            "task_read_artifact" => Box::pin(async move {
+                let tool = self.task_read_artifact_tool.as_ref().ok_or_else(|| AlephError::tool("task_read_artifact not available: no ArtifactStore configured"))?;
                 tool.call_json(arguments).await
             }),
 
