@@ -115,6 +115,10 @@ pub struct ReplyEmitter {
     native_stream_state: Mutex<Option<NativeStreamState>>,
     /// Whether native streaming disabled due to error
     native_disabled: AtomicBool,
+
+    /// Fallback model info — stored when ModelResolved fires with is_fallback=true.
+    /// Appended as a notice line to non-Panel channel replies.
+    fallback_info: Mutex<Option<crate::providers::health::ModelInfo>>,
 }
 
 /// Tracks the state of an active native stream (e.g., Teams streaming info).
@@ -154,6 +158,7 @@ impl ReplyEmitter {
             native_handler: None,
             native_stream_state: Mutex::new(None),
             native_disabled: AtomicBool::new(false),
+            fallback_info: Mutex::new(None),
         }
     }
 
@@ -188,6 +193,7 @@ impl ReplyEmitter {
             native_handler: None,
             native_stream_state: Mutex::new(None),
             native_disabled: AtomicBool::new(false),
+            fallback_info: Mutex::new(None),
         }
     }
 
@@ -790,6 +796,16 @@ impl EventEmitter for ReplyEmitter {
                     }
                 }
 
+                // Append fallback notice for non-Panel channels (Telegram, CLI, etc.)
+                if let Some(info) = self.fallback_info.lock().await.take() {
+                    let original = info.original_model.as_deref().unwrap_or("unknown");
+                    let notice = format!(
+                        "\n\n\u{26a1} {} \u{2192} {} ({})",
+                        original, info.model, info.provider,
+                    );
+                    self.buffer.lock().await.push_str(&notice);
+                }
+
                 // Flush accumulated buffer (always flush — intermediate messages
                 // may have set has_sent, but the buffer holds the final response)
                 let text = {
@@ -910,6 +926,13 @@ impl EventEmitter for ReplyEmitter {
                 }
             }
 
+            // Store fallback info for non-Panel notification
+            StreamEvent::ModelResolved { model_info, .. } => {
+                if model_info.is_fallback {
+                    *self.fallback_info.lock().await = Some(model_info);
+                }
+            }
+
             // Other events are not routed to channels
             StreamEvent::RunAccepted { .. }
             | StreamEvent::Reasoning { .. }
@@ -918,7 +941,6 @@ impl EventEmitter for ReplyEmitter {
             | StreamEvent::ToolEnd { .. }
             | StreamEvent::ReasoningBlock { .. }
             | StreamEvent::UncertaintySignal { .. }
-            | StreamEvent::ModelResolved { .. }
             | StreamEvent::SessionUpdated { .. } => {
                 debug!("Ignoring event for channel routing: {:?}", event);
             }

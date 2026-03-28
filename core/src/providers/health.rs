@@ -214,6 +214,12 @@ fn classify_provider_error_message(message: &str) -> Option<ProviderError> {
 // --- Routing types ---
 
 /// A resolved model after failover/routing decisions.
+///
+/// Uses `provider_name: String` rather than `Arc<dyn AiProvider>` so the result
+/// can be returned from a trait method without lifetime/ownership complications,
+/// and is serialization-friendly. The caller does a second `registry.get()` lookup
+/// to obtain the `Arc<dyn AiProvider>` — the negligible race window between
+/// resolve and lookup is acceptable for a personal assistant workload.
 #[derive(Debug, Clone)]
 pub struct ResolvedModel {
     /// Provider that will handle this request
@@ -322,27 +328,32 @@ mod tests {
             other => panic!("Expected Degraded, got {:?}", other),
         };
 
-        // Second failure: 60s cooldown
+        // Second failure: should be ~60s (30s * 2^1)
         health.record_failure(&error);
         let cooldown_2 = match &health {
-            ProviderHealth::Degraded { consecutive_failures, .. } => {
+            ProviderHealth::Degraded { cooldown_until, since, consecutive_failures, .. } => {
                 assert_eq!(*consecutive_failures, 2);
-                // Calculate expected: base * 2^1 = 60s
-                Duration::from_secs(60)
+                *cooldown_until - *since  // extract actual cooldown from state
             }
             other => panic!("Expected Degraded, got {:?}", other),
         };
 
-        // Third failure: 120s cooldown
+        // Third failure: should be ~120s (30s * 2^2)
         health.record_failure(&error);
-        match &health {
-            ProviderHealth::Degraded { consecutive_failures, .. } => {
+        let cooldown_3 = match &health {
+            ProviderHealth::Degraded { cooldown_until, since, consecutive_failures, .. } => {
                 assert_eq!(*consecutive_failures, 3);
+                *cooldown_until - *since
             }
             other => panic!("Expected Degraded, got {:?}", other),
-        }
+        };
 
-        assert!(cooldown_2 > cooldown_1);
+        assert!(cooldown_2 > cooldown_1, "second cooldown ({:?}) should exceed first ({:?})", cooldown_2, cooldown_1);
+        assert!(cooldown_3 > cooldown_2, "third cooldown ({:?}) should exceed second ({:?})", cooldown_3, cooldown_2);
+        // Verify approximate values (allow 1s tolerance for Instant arithmetic)
+        assert!(cooldown_1 >= Duration::from_secs(29) && cooldown_1 <= Duration::from_secs(31));
+        assert!(cooldown_2 >= Duration::from_secs(59) && cooldown_2 <= Duration::from_secs(61));
+        assert!(cooldown_3 >= Duration::from_secs(119) && cooldown_3 <= Duration::from_secs(121));
     }
 
     #[test]

@@ -265,25 +265,30 @@ impl MultiProviderRegistry {
     }
 
     /// Resolve model → provider name using slash syntax, prefix matching, or default.
-    fn resolve_model_to_provider(state: &RegistryState, model: &str) -> String {
-        // 1. Try "provider/model" slash syntax
-        if model.contains('/') {
-            if let Some(provider_name) = model.split('/').next() {
-                if state.providers.contains_key(provider_name) {
-                    return provider_name.to_string();
-                }
+    /// Resolve a model string to (provider_name, actual_model_name).
+    ///
+    /// For "provider/model" syntax (e.g., "openai/gpt-4o"), strips the prefix
+    /// and returns ("openai", "gpt-4o") so native APIs receive the correct model name.
+    /// For bare model names (e.g., "claude-sonnet-4"), uses prefix-based resolution.
+    fn resolve_model_to_provider_and_model(state: &RegistryState, model: &str) -> (String, String) {
+        // 1. Try "provider/model" slash syntax — strip prefix for the actual model name
+        if let Some(slash_pos) = model.find('/') {
+            let provider_name = &model[..slash_pos];
+            if state.providers.contains_key(provider_name) {
+                let actual_model = &model[slash_pos + 1..];
+                return (provider_name.to_string(), actual_model.to_string());
             }
         }
 
-        // 2. Try prefix-based resolution
+        // 2. Try prefix-based resolution (bare model name, no stripping needed)
         if let Some(name) = crate::providers::resolve_provider_from_model(model) {
             if state.providers.contains_key(&name) {
-                return name;
+                return (name, model.to_string());
             }
         }
 
         // 3. Fall back to default provider
-        state.default_name.clone()
+        (state.default_name.clone(), model.to_string())
     }
 }
 
@@ -334,14 +339,14 @@ impl ProviderRegistry for MultiProviderRegistry {
         // Build candidate chain: (provider_name, model_name)
         let mut candidates: Vec<(String, String)> = Vec::new();
 
-        // 1. Primary: resolve model → provider
-        let primary_provider = Self::resolve_model_to_provider(&state, model);
-        candidates.push((primary_provider, model.to_string()));
+        // 1. Primary: resolve model → provider (strips "provider/" prefix if present)
+        let (primary_provider, primary_model) = Self::resolve_model_to_provider_and_model(&state, model);
+        candidates.push((primary_provider, primary_model));
 
-        // 2. Agent-level fallbacks
+        // 2. Agent-level fallbacks (also strip prefix)
         for fb_model in agent_fallbacks {
-            let provider = Self::resolve_model_to_provider(&state, fb_model);
-            candidates.push((provider, fb_model.clone()));
+            let (provider, actual_model) = Self::resolve_model_to_provider_and_model(&state, fb_model);
+            candidates.push((provider, actual_model));
         }
 
         // 3. Global fallbacks — model is empty string (sentinel for "use provider's configured default")
@@ -561,7 +566,7 @@ mod multi_registry_tests {
 
         let resolved = r.resolve_with_fallback("openai/gpt-4o", &[]).unwrap();
         assert_eq!(resolved.provider_name, "openai");
-        assert_eq!(resolved.model, "openai/gpt-4o");
+        assert_eq!(resolved.model, "gpt-4o", "provider prefix should be stripped for native API");
         assert!(!resolved.is_fallback);
     }
 

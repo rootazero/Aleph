@@ -2,7 +2,6 @@
 //!
 //! Events emitted during streaming response processing.
 
-use crate::providers::health::ModelInfo;
 use serde::{Deserialize, Serialize};
 
 /// Events emitted during streaming
@@ -12,8 +11,6 @@ pub enum StreamEvent {
     /// Assistant message started
     AssistantStart {
         message_index: u32,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        model_info: Option<ModelInfo>,
     },
 
     /// Text content delta
