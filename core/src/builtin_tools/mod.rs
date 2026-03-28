@@ -177,6 +177,12 @@ pub trait ToolProgressCallback: Send + Sync {
     /// * `result_summary` - Brief summary of the result (may be truncated for display)
     /// * `success` - Whether the tool completed successfully
     fn on_tool_result(&self, tool_name: &str, result_summary: &str, success: bool);
+
+    /// Called when a tool emits a streaming chunk (e.g., ACP delegation output).
+    /// Default no-op — existing implementations don't break.
+    fn on_tool_streaming_chunk(&self, tool_name: &str, chunk: &str) {
+        let _ = (tool_name, chunk);
+    }
 }
 
 /// Global storage for the tool progress callback
@@ -226,5 +232,16 @@ pub fn notify_tool_result(tool_name: &str, result_summary: &str, success: bool) 
     let callback = TOOL_PROGRESS_CALLBACK.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(ref handler) = *callback {
         handler.on_tool_result(tool_name, result_summary, success);
+    }
+}
+
+/// Notify that a tool has emitted a streaming chunk
+///
+/// Called by streaming tools (e.g., ACP delegate) to forward real-time output.
+/// If no handler is set, this is a no-op.
+pub fn notify_tool_streaming_chunk(tool_name: &str, chunk: &str) {
+    let callback = TOOL_PROGRESS_CALLBACK.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(ref handler) = *callback {
+        handler.on_tool_streaming_chunk(tool_name, chunk);
     }
 }
