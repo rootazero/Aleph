@@ -98,6 +98,7 @@ impl HttpProvider {
             temperature: payload.temperature,
             max_tokens: payload.max_tokens,
             tool_choice: payload.tool_choice.clone(),
+            model: payload.model.clone(),
         };
 
         let request = self
@@ -185,6 +186,7 @@ impl HttpProvider {
             temperature: payload.temperature,
             max_tokens: payload.max_tokens,
             tool_choice: payload.tool_choice.clone(),
+            model: payload.model.clone(),
         };
 
         let request = self.adapter.build_request(&final_payload, &self.config)

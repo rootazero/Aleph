@@ -58,6 +58,7 @@ async fn try_provider(
         temperature: payload.temperature,
         max_tokens: payload.max_tokens,
         tool_choice: payload.tool_choice.clone(),
+        model: payload.model.clone(),
     }).await
 }
 

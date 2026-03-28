@@ -48,6 +48,8 @@ pub struct RequestPayload<'a> {
     pub max_tokens: Option<u32>,
     /// Tool selection control (auto/required/specific/none)
     pub tool_choice: Option<ToolChoice>,
+    /// Per-request model override (takes precedence over provider config)
+    pub model: Option<String>,
 }
 
 #[allow(clippy::derivable_impls)]
@@ -61,6 +63,7 @@ impl<'a> Default for RequestPayload<'a> {
             temperature: None,
             max_tokens: None,
             tool_choice: None,
+            model: None,
         }
     }
 }
@@ -107,6 +110,12 @@ impl<'a> RequestPayload<'a> {
     /// Set tool choice
     pub fn with_tool_choice(mut self, choice: Option<ToolChoice>) -> Self {
         self.tool_choice = choice;
+        self
+    }
+
+    /// Set model override
+    pub fn with_model(mut self, model: Option<String>) -> Self {
+        self.model = model;
         self
     }
 }

@@ -35,7 +35,7 @@ impl GeminiProtocol {
     }
 
     /// Build the endpoint URL — always uses the streaming endpoint (stream-first architecture)
-    fn build_endpoint(config: &ProviderConfig) -> String {
+    fn build_endpoint(config: &ProviderConfig, model_override: Option<&str>) -> String {
         let raw_base_url = config
             .base_url
             .as_ref()
@@ -51,10 +51,12 @@ impl GeminiProtocol {
             .trim_end_matches('/')
             .to_string();
 
+        let model = model_override.unwrap_or_else(|| config.default_model());
+
         // Always use the streaming endpoint
         format!(
             "{}/v1beta/models/{}:streamGenerateContent",
-            base_url, config.default_model()
+            base_url, model
         )
     }
 
@@ -199,7 +201,7 @@ impl ProtocolAdapter for GeminiProtocol {
         payload: &RequestPayload,
         config: &ProviderConfig,
     ) -> Result<reqwest::RequestBuilder> {
-        let endpoint = Self::build_endpoint(config);
+        let endpoint = Self::build_endpoint(config, payload.model.as_deref());
         let contents = Self::convert_messages(payload.messages);
         let system_instruction = Self::build_system_instruction(payload.system_prompt);
 
@@ -207,7 +209,7 @@ impl ProtocolAdapter for GeminiProtocol {
         let thinking_config = payload
             .think_level
             .as_ref()
-            .and_then(|level| Self::map_think_level(level, config.default_model()));
+            .and_then(|level| Self::map_think_level(level, payload.model.as_deref().unwrap_or_else(|| config.default_model())));
 
         // Per-request overrides provider config
         let generation_config = GenerationConfig {
@@ -252,7 +254,7 @@ impl ProtocolAdapter for GeminiProtocol {
 
         debug!(
             endpoint = %endpoint,
-            model = %config.default_model(),
+            model = %payload.model.as_deref().unwrap_or_else(|| config.default_model()),
             "Building Gemini request"
         );
 
@@ -585,7 +587,7 @@ mod tests {
     fn test_build_endpoint_always_streaming() {
         // Stream-first architecture: always uses streamGenerateContent endpoint
         let config = ProviderConfig::test_config("gemini-pro");
-        let endpoint = GeminiProtocol::build_endpoint(&config);
+        let endpoint = GeminiProtocol::build_endpoint(&config, None);
         assert_eq!(
             endpoint,
             "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:streamGenerateContent"
@@ -596,7 +598,7 @@ mod tests {
     fn test_build_endpoint_custom_base_url() {
         let mut config = ProviderConfig::test_config("gemini-pro");
         config.base_url = Some("https://custom.api.com".to_string());
-        let endpoint = GeminiProtocol::build_endpoint(&config);
+        let endpoint = GeminiProtocol::build_endpoint(&config, None);
         assert_eq!(
             endpoint,
             "https://custom.api.com/v1beta/models/gemini-pro:streamGenerateContent"

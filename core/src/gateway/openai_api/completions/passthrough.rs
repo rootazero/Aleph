@@ -166,6 +166,7 @@ pub async fn handle(
         temperature: req.temperature.map(|t| t as f32),
         max_tokens: req.max_tokens,
         tool_choice,
+        model: None,
     };
 
     let is_streaming = req.stream.unwrap_or(false);

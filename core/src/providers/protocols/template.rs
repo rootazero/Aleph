@@ -79,6 +79,9 @@ impl TemplateContext {
     /// Must be called after `with_config()` to override config values.
     pub fn with_payload_overrides(mut self, payload: &super::super::adapter::RequestPayload) -> Self {
         if let Some(ref mut config) = self.config {
+            if let Some(ref model) = payload.model {
+                config["model"] = json!(model);
+            }
             if let Some(temp) = payload.temperature {
                 config["temperature"] = json!(temp);
             }

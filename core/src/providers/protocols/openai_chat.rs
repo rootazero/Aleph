@@ -241,7 +241,7 @@ impl ProtocolAdapter for OpenAiProtocol {
 
         // Build request body — always streaming (stream-first architecture)
         let mut body = json!({
-            "model": config.default_model(),
+            "model": payload.model.as_deref().unwrap_or_else(|| config.default_model()),
             "messages": messages,
             "stream": true,
         });
@@ -322,7 +322,7 @@ impl ProtocolAdapter for OpenAiProtocol {
 
         debug!(
             endpoint = %endpoint,
-            model = %config.default_model(),
+            model = %payload.model.as_deref().unwrap_or_else(|| config.default_model()),
             "Building OpenAI request"
         );
 

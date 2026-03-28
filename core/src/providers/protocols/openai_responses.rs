@@ -201,7 +201,8 @@ impl ProtocolAdapter for OpenAiResponsesProtocol {
         config: &ProviderConfig,
     ) -> Result<reqwest::RequestBuilder> {
         let endpoint = Self::build_endpoint(config, &self.variant);
-        let request = Self::build_responses_request(payload, config.default_model(), &self.variant, config);
+        let actual_model = payload.model.as_deref().unwrap_or_else(|| config.default_model());
+        let request = Self::build_responses_request(payload, actual_model, &self.variant, config);
 
         let api_key = config.api_key.as_ref().ok_or_else(|| {
             AlephError::invalid_config("OpenAI API key not set")
@@ -210,7 +211,7 @@ impl ProtocolAdapter for OpenAiResponsesProtocol {
         if let Ok(json) = serde_json::to_string_pretty(&request) {
             debug!(
                 endpoint = %endpoint,
-                model = %config.default_model(),
+                model = %actual_model,
                 request_body = %json,
                 "Building OpenAI Responses API request"
             );

@@ -476,6 +476,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                                 temperature: Some(0.3),
                                 max_tokens: Some(30),
                                 tool_choice: None,
+                                model: None,
                             };
 
                             let topic_text = match topic_provider.process(payload).await {

@@ -264,6 +264,7 @@ impl ProtocolAdapter for AnthropicProtocol {
         payload: &RequestPayload,
         config: &ProviderConfig,
     ) -> Result<reqwest::RequestBuilder> {
+        let actual_model = payload.model.as_deref().unwrap_or_else(|| config.default_model());
         let endpoint = Self::build_endpoint(config);
         let messages = Self::convert_messages(payload.messages);
 
@@ -310,7 +311,7 @@ impl ProtocolAdapter for AnthropicProtocol {
             .map(|s| vec![SystemBlock::cached_text(s)]);
 
         let request_body = MessagesRequest {
-            model: config.default_model().to_string(),
+            model: actual_model.to_string(),
             messages,
             max_tokens,
             system,
@@ -329,7 +330,7 @@ impl ProtocolAdapter for AnthropicProtocol {
 
         debug!(
             endpoint = %endpoint,
-            model = %config.default_model(),
+            model = %actual_model,
             "Building Anthropic request"
         );
 
@@ -360,7 +361,7 @@ impl ProtocolAdapter for AnthropicProtocol {
             .post(&endpoint)
             .header("x-api-key", api_key)
             .header("anthropic-version", ANTHROPIC_VERSION)
-            .header("anthropic-beta", Self::build_beta_headers(config.default_model()))
+            .header("anthropic-beta", Self::build_beta_headers(actual_model))
             .header("Content-Type", "application/json")
             .json(&body))
     }
