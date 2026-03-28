@@ -62,61 +62,9 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             }
         }
 
-        // Resolve model with health-aware fallback
-        let resolved = self.provider_registry
-            .resolve_with_fallback(&agent.config().model, &agent.config().fallback_models)
-            .map_err(|e| ExecutionError::Failed(e.to_string()))?;
+        // === Pre-compute values reusable across retry attempts ===
 
-        if resolved.is_fallback {
-            info!(
-                run_id = run_id,
-                original = %resolved.original_model,
-                fallback_provider = %resolved.provider_name,
-                fallback_model = %resolved.model,
-                "Using fallback model"
-            );
-        }
-
-        // Emit ModelResolved so the Panel can show fallback indicators
-        let _ = emitter
-            .emit(StreamEvent::ModelResolved {
-                run_id: run_id.to_string(),
-                model_info: crate::providers::health::ModelInfo {
-                    model: resolved.model.clone(),
-                    provider: resolved.provider_name.clone(),
-                    is_fallback: resolved.is_fallback,
-                    original_model: if resolved.is_fallback {
-                        Some(resolved.original_model.clone())
-                    } else {
-                        None
-                    },
-                },
-            })
-            .await;
-
-        let provider = self.provider_registry.get(&resolved.provider_name)
-            .unwrap_or_else(|| self.provider_registry.default_provider());
-
-        // Resolve model behavior: config override > protocol auto-mapping
-        let behavior_content = {
-            let behavior_name = provider.model_behavior_override()
-                .map(|s| s.to_string())
-                .or_else(|| protocol_to_behavior(&provider.protocol().to_string()).map(|s| s.to_string()));
-            match behavior_name {
-                Some(name) => load_model_behavior(&name).await,
-                None => None,
-            }
-        };
-
-        // Only set model override if resolved.model is non-empty
-        // (empty string = global fallback sentinel, use provider's configured default)
-        let bridge = if resolved.model.is_empty() {
-            AiProviderBridge::new(provider)
-        } else {
-            AiProviderBridge::new(provider).with_model(resolved.model.clone())
-        };
-
-        // Build tool registry from UnifiedTool list (filtered by agent whitelist)
+        // Build tool registry inputs (filtered by agent whitelist)
         let allowed_tools: Vec<crate::dispatcher::UnifiedTool> = self
             .tools
             .iter()
@@ -125,93 +73,60 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             .collect();
 
         let default_working_dir = Some(agent.workspace().to_string_lossy().to_string());
-        let mut tool_registry = build_registry_from_tools(
-            self.tool_registry.clone(),
-            &allowed_tools,
-            default_working_dir.clone(),
-        );
 
-        // Register subagent tool — runs a sub-AgentLoop with same tools minus "subagent"
-        {
-            use crate::agent_loop::subagent_tool::{SubagentTool, ToolRegistryFactory, SafetyGuardFactory};
+        // Subagent tool factories (cloneable Arc closures)
+        let sub_allowed_tools: Vec<_> = allowed_tools
+            .iter()
+            .filter(|t| t.name != "subagent")
+            .cloned()
+            .collect();
 
-            let sub_provider = self.provider_registry.default_provider();
-            let sub_tool_registry = self.tool_registry.clone();
-            let sub_allowed_tools: Vec<_> = allowed_tools
-                .iter()
-                .filter(|t| t.name != "subagent")
-                .cloned()
-                .collect();
-            let sub_working_dir = default_working_dir.clone();
-
-            let factory: ToolRegistryFactory = Arc::new(move || {
+        let sub_tool_registry_ref = self.tool_registry.clone();
+        let sub_working_dir_ref = default_working_dir.clone();
+        let sub_tool_factory: crate::agent_loop::subagent_tool::ToolRegistryFactory = Arc::new({
+            let sub_tool_registry = sub_tool_registry_ref.clone();
+            let sub_allowed = sub_allowed_tools.clone();
+            let sub_dir = sub_working_dir_ref.clone();
+            move || {
                 build_registry_from_tools(
                     sub_tool_registry.clone(),
-                    &sub_allowed_tools,
-                    sub_working_dir.clone(),
+                    &sub_allowed,
+                    sub_dir.clone(),
                 )
-            });
+            }
+        });
 
+        let sub_safety_factory: crate::agent_loop::subagent_tool::SafetyGuardFactory = Arc::new({
             let global_perms = self.global_tool_permissions.clone();
             let agent_perms_clone = agent.config().tool_permissions();
-            let safety_factory: SafetyGuardFactory = Arc::new(move || {
-                SafetyGuard::from_permissions(&global_perms, &agent_perms_clone)
-            });
+            move || SafetyGuard::from_permissions(&global_perms, &agent_perms_clone)
+        });
 
-            tool_registry.register(Box::new(SubagentTool::new(sub_provider, factory, safety_factory)));
-        }
-
-        debug!(
-            run_id = run_id,
-            tool_count = tool_registry.len(),
-            "Agent loop: built tool registry"
-        );
-
-        // Resolve soul for prompt building
+        // Resolve soul for prompt building (constant across retries)
         let identity_resolver = crate::thinker::identity::IdentityResolver::with_defaults();
         let resolved_soul = identity_resolver.resolve();
-        let prompt_builder = if resolved_soul.is_empty() {
-            PromptBuilder::new()
-        } else {
-            PromptBuilder::from_soul(&resolved_soul)
-        };
 
-        // Populate eligible skills from SkillSystem for scope filtering
-        let prompt_builder = if let Ok(ext_manager) =
-            crate::gateway::handlers::plugins::get_extension_manager()
-        {
-            if ext_manager.is_loaded().await {
-                let snapshot = ext_manager.skill_system().current_snapshot().await;
-                if !snapshot.eligible_manifests.is_empty() {
-                    prompt_builder.with_eligible_skills(snapshot.eligible_manifests)
+        // Pre-fetch eligible skills snapshot (constant across retries)
+        let eligible_skills: Option<Vec<crate::domain::skill::SkillManifest>> =
+            if let Ok(ext_manager) = crate::gateway::handlers::plugins::get_extension_manager() {
+                if ext_manager.is_loaded().await {
+                    let snapshot = ext_manager.skill_system().current_snapshot().await;
+                    if !snapshot.eligible_manifests.is_empty() {
+                        Some(snapshot.eligible_manifests)
+                    } else {
+                        None
+                    }
                 } else {
-                    prompt_builder
+                    None
                 }
             } else {
-                prompt_builder
-            }
-        } else {
-            prompt_builder
-        };
+                None
+            };
 
-        // Inject model behavior directives (after soul + skills)
-        let prompt_builder = if let Some(ref content) = behavior_content {
-            prompt_builder.with_model_behavior(content)
-        } else {
-            prompt_builder
-        };
-
-        // Safety guard from merged global + agent permissions
+        // Agent config values
         let agent_perms = agent.config().tool_permissions();
-        let safety = SafetyGuard::from_permissions(&self.global_tool_permissions, &agent_perms);
-
-        // Config from agent
         let max_loops = agent.config().max_loops as usize;
         let token_budget = agent.config().max_tokens.unwrap_or(500_000);
-        let loop_config = LoopConfig {
-            max_iterations: max_loops,
-            token_budget,
-        };
 
         // Build optional ToolCompactorConfig from session compactor settings
         let tool_compactor_config = self.session_compactor.as_ref().map(|sc| {
@@ -223,29 +138,10 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             }
         });
 
-        // Real-time streaming: ProviderDelta → EventEmitter
-        let has_emitted_text = Arc::new(AtomicBool::new(false));
-        let streaming_sink = StreamingDeltaSink::new(
-            run_id.to_string(),
-            emitter.clone() as Arc<dyn crate::gateway::event_emitter::EventEmitter + Send + Sync>,
-            has_emitted_text.clone(),
-        );
-
-        // Create and run the agent loop
-        let agent_loop = AgentLoop::new(
-            bridge,
-            tool_registry,
-            prompt_builder,
-            safety,
-            loop_config,
-        )
-        .with_delta_sink(Box::new(streaming_sink))
-        .with_tool_compactor_config(tool_compactor_config);
-
         // Load conversation history from session (for multi-turn context)
         // Compression time excluded from agent's timeout budget
         let before_compress = tokio::time::Instant::now();
-        let mut history = if let Some(ref sc) = self.session_compactor {
+        let history = if let Some(ref sc) = self.session_compactor {
             sc.prepare_history(
                 &agent,
                 &request.session_key,
@@ -261,109 +157,277 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             *deadline.lock().await += compress_elapsed;
         }
 
-        // Create a streaming callback that emits events.
-        // streaming_active = true: DeltaSink handles real-time token delivery;
-        // StreamCallback deduplicates via has_emitted_text to avoid double-sending.
-        let mut callback = StreamCallback::new(
-            emitter.clone(),
-            run_id.to_string(),
-            request.pending_media.clone(),
-            true,                      // streaming_active — DeltaSink handles text delivery
-            has_emitted_text,          // shared with StreamingDeltaSink (last use, no clone)
-        );
+        // Pre-process multimodal attachments (constant across retries)
+        let multimodal_messages: Option<Vec<crate::providers::message::UnifiedMessage>> =
+            if let (false, Some(media_processor)) =
+                (request.attachments.is_empty(), self.media_processor.as_ref())
+            {
+                let supports_vision = true;
+                let media_blocks = media_processor
+                    .process(&request.attachments, supports_vision, &request.session_key.to_key_string(), run_id)
+                    .await;
 
-        // If attachments are present and a media processor is available,
-        // process them into multimodal content blocks and use the
-        // pre-built message path.
-        let loop_result = if let (false, Some(media_processor)) =
-            (request.attachments.is_empty(), self.media_processor.as_ref())
-        {
+                let mut content = vec![crate::providers::message::ContentBlock::Text {
+                    text: request.input.clone(),
+                }];
+                content.extend(media_blocks);
 
-            // TODO: Query ProviderModelInfo.supports_vision properly
-            let supports_vision = true;
+                let has_images = content.iter().any(|b| matches!(b, crate::providers::message::ContentBlock::Image { .. }));
+                let has_transcripts = content.iter().any(|b| {
+                    if let crate::providers::message::ContentBlock::Text { text } = b { text.starts_with("[Voice message transcript]") } else { false }
+                });
+                tracing::info!(
+                    target: "multimodal",
+                    probe = "P5_inject",
+                    run_id = %request.run_id,
+                    content_blocks = content.len(),
+                    has_images = has_images,
+                    has_transcripts = has_transcripts,
+                    "Multimodal UnifiedMessage built"
+                );
 
-            let media_blocks = media_processor
-                .process(&request.attachments, supports_vision, &request.session_key.to_key_string(), run_id)
-                .await;
+                let mut msgs = history.clone();
+                msgs.push(crate::providers::message::UnifiedMessage::user_with_content(content));
+                Some(msgs)
+            } else {
+                None
+            };
 
-            // Build multimodal user message: text + media blocks
-            let mut content = vec![crate::providers::message::ContentBlock::Text {
-                text: request.input.clone(),
-            }];
-            content.extend(media_blocks);
+        // === Retry loop: resolve provider → build agent loop → run ===
+        // On transient provider failure, report degraded, re-resolve, and retry
+        // with a different provider. Max 3 attempts to prevent infinite loops.
+        const MAX_FALLBACK_ATTEMPTS: usize = 3;
+        let mut attempt = 0usize;
 
-            let has_images = content.iter().any(|b| matches!(b, crate::providers::message::ContentBlock::Image { .. }));
-            let has_transcripts = content.iter().any(|b| {
-                if let crate::providers::message::ContentBlock::Text { text } = b { text.starts_with("[Voice message transcript]") } else { false }
-            });
-            tracing::info!(
-                target: "multimodal",
-                probe = "P5_inject",
-                run_id = %request.run_id,
-                content_blocks = content.len(),
-                has_images = has_images,
-                has_transcripts = has_transcripts,
-                "Multimodal UnifiedMessage built"
-            );
+        loop {
+            attempt += 1;
 
-            history.push(crate::providers::message::UnifiedMessage::user_with_content(content));
+            // Resolve model with health-aware fallback
+            let resolved = self.provider_registry
+                .resolve_with_fallback(&agent.config().model, &agent.config().fallback_models)
+                .map_err(|e| ExecutionError::Failed(e.to_string()))?;
 
-            let result = agent_loop.run_with_history_messages(history, &mut callback).await;
-
-            // Cleanup cached media files for this session
-            media_processor.cleanup(&request.session_key.to_key_string());
-
-            result
-        } else {
-            agent_loop.run_with_history(&request.input, history, &mut callback).await
-        };
-
-        match loop_result {
-            Ok(result) => {
-                // Report success for health tracking
-                self.provider_registry.report_outcome(&resolved.provider_name, Ok(()));
-
+            if resolved.is_fallback {
                 info!(
                     run_id = run_id,
-                    iterations = result.iterations,
-                    tool_calls = result.tool_calls_made,
-                    tokens = result.total_tokens,
-                    hit_limit = result.hit_limit,
-                    "Agent loop completed"
+                    attempt = attempt,
+                    original = %resolved.original_model,
+                    fallback_provider = %resolved.provider_name,
+                    fallback_model = %resolved.model,
+                    "Using fallback model"
                 );
-                let response = if result.hit_limit && result.final_text.as_ref().map(|t| t.is_empty()).unwrap_or(true) {
-                    warn!(
+            }
+
+            // Emit ModelResolved so the Panel can show fallback indicators
+            let _ = emitter
+                .emit(StreamEvent::ModelResolved {
+                    run_id: run_id.to_string(),
+                    model_info: crate::providers::health::ModelInfo {
+                        model: resolved.model.clone(),
+                        provider: resolved.provider_name.clone(),
+                        is_fallback: resolved.is_fallback,
+                        original_model: if resolved.is_fallback {
+                            Some(resolved.original_model.clone())
+                        } else {
+                            None
+                        },
+                    },
+                })
+                .await;
+
+            let provider = self.provider_registry.get(&resolved.provider_name)
+                .unwrap_or_else(|| self.provider_registry.default_provider());
+
+            // Resolve model behavior: config override > protocol auto-mapping
+            let behavior_content = {
+                let behavior_name = provider.model_behavior_override()
+                    .map(|s| s.to_string())
+                    .or_else(|| protocol_to_behavior(&provider.protocol().to_string()).map(|s| s.to_string()));
+                match behavior_name {
+                    Some(name) => load_model_behavior(&name).await,
+                    None => None,
+                }
+            };
+
+            // Build bridge with resolved provider
+            let bridge = if resolved.model.is_empty() {
+                AiProviderBridge::new(provider.clone())
+            } else {
+                AiProviderBridge::new(provider).with_model(resolved.model.clone())
+            };
+
+            // Build tool registry from UnifiedTool list
+            let mut tool_registry = build_registry_from_tools(
+                self.tool_registry.clone(),
+                &allowed_tools,
+                default_working_dir.clone(),
+            );
+
+            // Register subagent tool
+            {
+                use crate::agent_loop::subagent_tool::SubagentTool;
+                let sub_provider = self.provider_registry.default_provider();
+                tool_registry.register(Box::new(SubagentTool::new(
+                    sub_provider,
+                    sub_tool_factory.clone(),
+                    sub_safety_factory.clone(),
+                )));
+            }
+
+            debug!(
+                run_id = run_id,
+                attempt = attempt,
+                tool_count = tool_registry.len(),
+                "Agent loop: built tool registry"
+            );
+
+            // Build prompt builder
+            let prompt_builder = if resolved_soul.is_empty() {
+                PromptBuilder::new()
+            } else {
+                PromptBuilder::from_soul(&resolved_soul)
+            };
+            let prompt_builder = if let Some(ref skills) = eligible_skills {
+                prompt_builder.with_eligible_skills(skills.clone())
+            } else {
+                prompt_builder
+            };
+            let prompt_builder = if let Some(ref content) = behavior_content {
+                prompt_builder.with_model_behavior(content)
+            } else {
+                prompt_builder
+            };
+
+            // Safety guard from merged global + agent permissions
+            let safety = SafetyGuard::from_permissions(&self.global_tool_permissions, &agent_perms);
+
+            let loop_config = LoopConfig {
+                max_iterations: max_loops,
+                token_budget,
+            };
+
+            // Real-time streaming: ProviderDelta → EventEmitter
+            let has_emitted_text = Arc::new(AtomicBool::new(false));
+            let streaming_sink = StreamingDeltaSink::new(
+                run_id.to_string(),
+                emitter.clone() as Arc<dyn crate::gateway::event_emitter::EventEmitter + Send + Sync>,
+                has_emitted_text.clone(),
+            );
+
+            // Create the agent loop
+            let agent_loop = AgentLoop::new(
+                bridge,
+                tool_registry,
+                prompt_builder,
+                safety,
+                loop_config,
+            )
+            .with_delta_sink(Box::new(streaming_sink))
+            .with_tool_compactor_config(tool_compactor_config.clone());
+
+            // Create a streaming callback
+            let mut callback = StreamCallback::new(
+                emitter.clone(),
+                run_id.to_string(),
+                request.pending_media.clone(),
+                true,
+                has_emitted_text,
+            );
+
+            // Run the agent loop with history
+            let loop_result = if let Some(ref messages) = multimodal_messages {
+                agent_loop.run_with_history_messages(messages.clone(), &mut callback).await
+            } else {
+                agent_loop.run_with_history(&request.input, history.clone(), &mut callback).await
+            };
+
+            match loop_result {
+                Ok(result) => {
+                    // Report success for health tracking
+                    self.provider_registry.report_outcome(&resolved.provider_name, Ok(()));
+
+                    // Cleanup media if attachments were processed
+                    if multimodal_messages.is_some() {
+                        if let Some(media_processor) = self.media_processor.as_ref() {
+                            media_processor.cleanup(&request.session_key.to_key_string());
+                        }
+                    }
+
+                    info!(
                         run_id = run_id,
                         iterations = result.iterations,
                         tool_calls = result.tool_calls_made,
-                        "Agent hit iteration/token limit without producing a response"
+                        tokens = result.total_tokens,
+                        hit_limit = result.hit_limit,
+                        "Agent loop completed"
                     );
-                    let locale = crate::gateway::i18n::Locale::from_config(
-                        request.metadata.get("locale").map(|s| s.as_str())
-                    );
-                    crate::gateway::i18n::t(
-                        crate::gateway::i18n::Msg::ErrLoopExhausted {
-                            iterations: result.iterations,
-                            tool_calls: result.tool_calls_made,
-                        },
-                        locale,
-                    )
-                } else {
-                    result.final_text.unwrap_or_default()
-                };
-                Ok(response)
-            }
-            Err(e) => {
-                // Report provider errors for health tracking
-                if let Some(aleph_err) = e.downcast_ref::<crate::error::AlephError>() {
-                    let provider_err: Option<crate::providers::health::ProviderError> = aleph_err.into();
-                    if let Some(pe) = provider_err {
-                        self.provider_registry.report_outcome(&resolved.provider_name, Err(pe));
-                    }
+                    let response = if result.hit_limit && result.final_text.as_ref().map(|t| t.is_empty()).unwrap_or(true) {
+                        warn!(
+                            run_id = run_id,
+                            iterations = result.iterations,
+                            tool_calls = result.tool_calls_made,
+                            "Agent hit iteration/token limit without producing a response"
+                        );
+                        let locale = crate::gateway::i18n::Locale::from_config(
+                            request.metadata.get("locale").map(|s| s.as_str())
+                        );
+                        crate::gateway::i18n::t(
+                            crate::gateway::i18n::Msg::ErrLoopExhausted {
+                                iterations: result.iterations,
+                                tool_calls: result.tool_calls_made,
+                            },
+                            locale,
+                        )
+                    } else {
+                        result.final_text.unwrap_or_default()
+                    };
+                    return Ok(response);
                 }
+                Err(e) => {
+                    // Classify the error for health tracking and retry decisions
+                    let mut is_transient = false;
+                    if let Some(aleph_err) = e.downcast_ref::<crate::error::AlephError>() {
+                        let provider_err: Option<crate::providers::health::ProviderError> = aleph_err.into();
+                        if let Some(pe) = provider_err {
+                            is_transient = matches!(pe, crate::providers::health::ProviderError::Transient(_));
+                            self.provider_registry.report_outcome(&resolved.provider_name, Err(pe));
+                        }
+                    }
 
-                error!(run_id = run_id, error = %e, "Agent loop failed");
-                Err(ExecutionError::Failed(e.to_string()))
+                    if is_transient && attempt < MAX_FALLBACK_ATTEMPTS {
+                        // Check if a different provider is available
+                        match self.provider_registry.resolve_with_fallback(
+                            &agent.config().model, &agent.config().fallback_models
+                        ) {
+                            Ok(new_resolved) if new_resolved.provider_name != resolved.provider_name => {
+                                warn!(
+                                    run_id = run_id,
+                                    attempt = attempt,
+                                    failed_provider = %resolved.provider_name,
+                                    next_provider = %new_resolved.provider_name,
+                                    error = %e,
+                                    "Provider failed with transient error, retrying with fallback"
+                                );
+                                continue; // retry with new provider
+                            }
+                            _ => {
+                                // No different fallback available, give up
+                                error!(run_id = run_id, error = %e, "Agent loop failed, no alternative provider available");
+                            }
+                        }
+                    } else {
+                        error!(run_id = run_id, error = %e, attempt = attempt, "Agent loop failed");
+                    }
+
+                    // Cleanup media on failure too
+                    if multimodal_messages.is_some() {
+                        if let Some(media_processor) = self.media_processor.as_ref() {
+                            media_processor.cleanup(&request.session_key.to_key_string());
+                        }
+                    }
+
+                    return Err(ExecutionError::Failed(e.to_string()));
+                }
             }
         }
     }
