@@ -51,6 +51,8 @@ pub(in crate::commands::start) struct AgentHandlersResult {
     pub tool_registry: Option<Arc<BuiltinToolRegistry>>,
     /// Team store for panel RPC handlers
     pub team_store: Option<Arc<dyn alephcore::teams::TeamStore>>,
+    /// Coord task store for team RPC handlers (unified task system)
+    pub coord_task_store: Option<Arc<dyn alephcore::agents::swarm::tasks::CoordTaskStore>>,
 }
 
 /// Register agent.run / agent.status / agent.cancel / chat.* handlers.
@@ -1189,5 +1191,6 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         generation_registry: Some(generation_registry),
         tool_registry: tool_reg_out,
         team_store,
+        coord_task_store: coord_store,
     }
 }

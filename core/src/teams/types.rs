@@ -3,8 +3,10 @@
 //! Provides the foundational types for the team management system:
 //! - `Team`: A named group of agents with a designated leader
 //! - `TeamMember`: An agent's membership record within a team
-//! - `TeamTask`: A task assigned to a specific agent within a team
 //! - Store input/output types for CRUD operations
+//!
+//! Task tracking is handled by the unified `CoordTask` system
+//! (see `agents::swarm::tasks`).
 
 use serde::{Deserialize, Serialize};
 
@@ -47,44 +49,6 @@ impl std::str::FromStr for TeamStatus {
 }
 
 // ---------------------------------------------------------------------------
-// TeamTaskStatus
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum TeamTaskStatus {
-    #[default]
-    Pending,
-    Running,
-    Completed,
-    Failed,
-}
-
-impl TeamTaskStatus {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Pending => "pending",
-            Self::Running => "running",
-            Self::Completed => "completed",
-            Self::Failed => "failed",
-        }
-    }
-}
-
-impl std::str::FromStr for TeamTaskStatus {
-    type Err = String;
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        match s {
-            "pending" => Ok(Self::Pending),
-            "running" => Ok(Self::Running),
-            "completed" => Ok(Self::Completed),
-            "failed" => Ok(Self::Failed),
-            _ => Err(format!("unknown TeamTaskStatus: {s}")),
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Team
 // ---------------------------------------------------------------------------
 
@@ -114,23 +78,6 @@ pub struct TeamMember {
 }
 
 // ---------------------------------------------------------------------------
-// TeamTask
-// ---------------------------------------------------------------------------
-
-/// A task assigned to a specific agent within a team.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TeamTask {
-    pub id: String,
-    pub team_id: TeamId,
-    pub agent_id: String,
-    pub subject: String,
-    pub status: TeamTaskStatus,
-    pub result: Option<String>,
-    pub created_at: i64,
-    pub completed_at: Option<i64>,
-}
-
-// ---------------------------------------------------------------------------
 // Input types
 // ---------------------------------------------------------------------------
 
@@ -146,13 +93,6 @@ pub struct NewTeamMember {
     pub team_id: TeamId,
     pub agent_id: String,
     pub role: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct NewTeamTask {
-    pub team_id: TeamId,
-    pub agent_id: String,
-    pub subject: String,
 }
 
 // ---------------------------------------------------------------------------

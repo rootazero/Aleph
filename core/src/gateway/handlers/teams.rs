@@ -11,6 +11,7 @@ use serde::Deserialize;
 use serde_json::json;
 use tracing::debug;
 
+use crate::agents::swarm::tasks::{CoordTaskFilter, CoordTaskStore};
 use crate::sync_primitives::Arc;
 use crate::teams::TeamStore;
 
@@ -56,6 +57,7 @@ pub async fn handle_list(
 pub async fn handle_get(
     request: JsonRpcRequest,
     store: Arc<dyn TeamStore>,
+    coord_store: Arc<dyn CoordTaskStore>,
 ) -> JsonRpcResponse {
     debug!("Handling teams.get request");
 
@@ -93,7 +95,10 @@ pub async fn handle_get(
         }
     };
 
-    let tasks = match store.get_tasks(&params.team_id).await {
+    let tasks = match coord_store.list_tasks(CoordTaskFilter {
+        team_id: Some(params.team_id.clone()),
+        ..Default::default()
+    }).await {
         Ok(t) => t,
         Err(e) => {
             return JsonRpcResponse::error(

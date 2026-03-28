@@ -836,11 +836,12 @@ pub(in crate::commands::start) fn register_heartbeat_handlers(
 pub(in crate::commands::start) fn register_teams_handlers(
     server: &mut GatewayServer,
     store: &Arc<dyn alephcore::teams::TeamStore>,
+    coord_store: &Arc<dyn alephcore::agents::swarm::tasks::CoordTaskStore>,
 ) {
     use alephcore::gateway::handlers::teams;
 
     register_handler!(server, "teams.list", teams::handle_list, store);
-    register_handler!(server, "teams.get", teams::handle_get, store);
+    register_handler!(server, "teams.get", teams::handle_get, store, coord_store);
     register_handler!(server, "teams.disband", teams::handle_disband, store);
     register_handler!(server, "teams.delete", teams::handle_delete, store);
     register_handler!(server, "agents.teams", teams::handle_agent_teams, store);

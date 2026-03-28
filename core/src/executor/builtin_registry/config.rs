@@ -88,4 +88,6 @@ pub struct BuiltinToolConfig {
     pub session_coordinator: Option<Arc<crate::teams::sessions::SessionCoordinator>>,
     /// Session store for session_read tool (read-only access)
     pub session_store: Option<Arc<dyn crate::teams::sessions::SessionStore>>,
+    /// Message store for disbandment cleanup (expire pending messages)
+    pub message_store: Option<Arc<dyn crate::teams::messages::MessageStore>>,
 }

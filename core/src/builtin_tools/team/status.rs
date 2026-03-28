@@ -5,9 +5,10 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
+use crate::agents::swarm::tasks::{CoordTaskFilter, CoordTaskStatus, CoordTaskStore};
 use crate::error::{AlephError, Result};
 use crate::sync_primitives::Arc;
-use crate::teams::{TeamStore, TeamStatus as TeamStatusEnum, TeamTaskStatus};
+use crate::teams::{TeamStore, TeamStatus as TeamStatusEnum};
 use crate::tools::AlephTool;
 
 // =============================================================================
@@ -28,13 +29,13 @@ pub struct MemberInfo {
     pub role: String,
 }
 
-/// Summary of a team task.
+/// Summary of a team task (backed by CoordTask).
 #[derive(Debug, Clone, Serialize)]
 pub struct TaskInfo {
     pub id: String,
     pub agent_id: String,
     pub subject: String,
-    pub status: TeamTaskStatus,
+    pub status: CoordTaskStatus,
     pub result: Option<String>,
 }
 
@@ -57,11 +58,12 @@ pub struct TeamStatusOutput {
 #[derive(Clone)]
 pub struct TeamStatusTool {
     store: Arc<dyn TeamStore>,
+    coord_store: Arc<dyn CoordTaskStore>,
 }
 
 impl TeamStatusTool {
-    pub fn new(store: Arc<dyn TeamStore>) -> Self {
-        Self { store }
+    pub fn new(store: Arc<dyn TeamStore>, coord_store: Arc<dyn CoordTaskStore>) -> Self {
+        Self { store, coord_store }
     }
 }
 
@@ -90,7 +92,10 @@ impl AlephTool for TeamStatusTool {
             })?;
 
         let members_raw = self.store.get_members(&args.team_id).await?;
-        let tasks_raw = self.store.get_tasks(&args.team_id).await?;
+        let tasks_raw = self.coord_store.list_tasks(CoordTaskFilter {
+            team_id: Some(args.team_id.clone()),
+            ..Default::default()
+        }).await?;
 
         debug!(
             team_id = %args.team_id,
@@ -111,7 +116,7 @@ impl AlephTool for TeamStatusTool {
             .into_iter()
             .map(|t| TaskInfo {
                 id: t.id,
-                agent_id: t.agent_id,
+                agent_id: t.owner.unwrap_or_default(),
                 subject: t.subject,
                 status: t.status,
                 result: t.result,

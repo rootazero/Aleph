@@ -10,8 +10,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use tokio::sync::Mutex;
 
 use super::types::{
-    NewTeam, NewTeamMember, NewTeamTask, Team, TeamMember, TeamStatus, TeamSummary, TeamTask,
-    TeamTaskStatus,
+    NewTeam, NewTeamMember, Team, TeamMember, TeamStatus, TeamSummary,
 };
 use crate::error::AlephError;
 
@@ -23,18 +22,6 @@ impl rusqlite::types::FromSql for TeamStatus {
     fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
         let s = value.as_str()?;
         s.parse::<TeamStatus>().map_err(|e| {
-            rusqlite::types::FromSqlError::Other(Box::new(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                e,
-            )))
-        })
-    }
-}
-
-impl rusqlite::types::FromSql for TeamTaskStatus {
-    fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
-        let s = value.as_str()?;
-        s.parse::<TeamTaskStatus>().map_err(|e| {
             rusqlite::types::FromSqlError::Other(Box::new(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 e,
@@ -88,20 +75,6 @@ pub trait TeamStore: Send + Sync {
 
     /// Return summary records for all teams that an agent belongs to (as leader or member).
     async fn get_agent_teams(&self, agent_id: &str) -> crate::error::Result<Vec<TeamSummary>>;
-
-    /// Create a new task within a team.
-    async fn create_task(&self, input: NewTeamTask) -> crate::error::Result<TeamTask>;
-
-    /// Update the status (and optional result) of a task.
-    async fn update_task_status(
-        &self,
-        task_id: &str,
-        status: TeamTaskStatus,
-        result: Option<String>,
-    ) -> crate::error::Result<()>;
-
-    /// Return all tasks for a team.
-    async fn get_tasks(&self, team_id: &str) -> crate::error::Result<Vec<TeamTask>>;
 }
 
 // ---------------------------------------------------------------------------
@@ -193,19 +166,6 @@ fn read_member_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TeamMember> {
         agent_id: row.get(1)?,
         role: row.get(2)?,
         joined_at: row.get(3)?,
-    })
-}
-
-fn read_task_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TeamTask> {
-    Ok(TeamTask {
-        id: row.get(0)?,
-        team_id: row.get(1)?,
-        agent_id: row.get(2)?,
-        subject: row.get(3)?,
-        status: row.get(4)?,
-        result: row.get(5)?,
-        created_at: row.get(6)?,
-        completed_at: row.get(7)?,
     })
 }
 
@@ -451,94 +411,6 @@ impl TeamStore for SqliteTeamStore {
         Ok(summaries)
     }
 
-    async fn create_task(&self, input: NewTeamTask) -> crate::error::Result<TeamTask> {
-        let conn = self.conn.lock().await;
-
-        // Reject creating tasks on disbanded teams
-        let status: Option<String> = conn
-            .prepare_cached("SELECT status FROM teams WHERE id = ?1")
-            .map_err(db_err)?
-            .query_row(params![input.team_id], |r| r.get(0))
-            .optional()
-            .map_err(db_err)?;
-
-        match status.as_deref() {
-            None => return Err(db_err(format!("team not found: {}", input.team_id))),
-            Some("disbanded") => {
-                return Err(db_err(format!(
-                    "cannot create task on disbanded team: {}",
-                    input.team_id
-                )))
-            }
-            _ => {}
-        }
-
-        let id = uuid::Uuid::new_v4().to_string();
-        let now = now_epoch();
-
-        conn.execute(
-            r#"
-            INSERT INTO team_tasks (id, team_id, agent_id, subject, status, created_at)
-            VALUES (?1, ?2, ?3, ?4, 'pending', ?5)
-            "#,
-            params![id, input.team_id, input.agent_id, input.subject, now],
-        )
-        .map_err(db_err)?;
-
-        Ok(TeamTask {
-            id,
-            team_id: input.team_id,
-            agent_id: input.agent_id,
-            subject: input.subject,
-            status: TeamTaskStatus::Pending,
-            result: None,
-            created_at: now,
-            completed_at: None,
-        })
-    }
-
-    async fn update_task_status(
-        &self,
-        task_id: &str,
-        status: TeamTaskStatus,
-        result: Option<String>,
-    ) -> crate::error::Result<()> {
-        let conn = self.conn.lock().await;
-        let now = now_epoch();
-
-        let completed_at: Option<i64> = match status {
-            TeamTaskStatus::Completed | TeamTaskStatus::Failed => Some(now),
-            _ => None,
-        };
-
-        let affected = conn
-            .execute(
-                "UPDATE team_tasks SET status = ?1, result = ?2, completed_at = ?3 WHERE id = ?4",
-                params![status.as_str(), result, completed_at, task_id],
-            )
-            .map_err(db_err)?;
-
-        if affected == 0 {
-            return Err(db_err(format!("task not found: {task_id}")));
-        }
-        Ok(())
-    }
-
-    async fn get_tasks(&self, team_id: &str) -> crate::error::Result<Vec<TeamTask>> {
-        let conn = self.conn.lock().await;
-
-        let tasks = conn
-            .prepare_cached(
-                "SELECT id, team_id, agent_id, subject, status, result, created_at, completed_at FROM team_tasks WHERE team_id = ?1 ORDER BY created_at ASC",
-            )
-            .map_err(db_err)?
-            .query_map(params![team_id], read_task_row)
-            .map_err(db_err)?
-            .collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(db_err)?;
-
-        Ok(tasks)
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -603,15 +475,16 @@ mod tests {
             .unwrap();
         }
 
-        // Add a task
-        store
-            .create_task(NewTeamTask {
-                team_id: team.id.clone(),
-                agent_id: "agent-2".into(),
-                subject: "Do something".into(),
-            })
-            .await
+        // Add a task directly via SQL (team_tasks table kept for backward compat)
+        {
+            let conn = store.conn.lock().await;
+            let now = now_epoch();
+            conn.execute(
+                "INSERT INTO team_tasks (id, team_id, agent_id, subject, status, created_at) VALUES (?1, ?2, ?3, ?4, 'pending', ?5)",
+                params!["task-1", team.id, "agent-2", "Do something", now],
+            )
             .unwrap();
+        }
 
         let summaries = store.list_teams().await.unwrap();
         assert_eq!(summaries.len(), 1);
@@ -681,52 +554,6 @@ mod tests {
         let ids: Vec<&str> = members.iter().map(|m| m.agent_id.as_str()).collect();
         assert!(ids.contains(&"agent-a"));
         assert!(ids.contains(&"agent-b"));
-    }
-
-    #[tokio::test]
-    async fn test_task_lifecycle() {
-        let store = setup_store().await;
-
-        let team = store
-            .create_team(NewTeam {
-                name: "Epsilon".into(),
-                description: "".into(),
-                leader_id: "leader-4".into(),
-            })
-            .await
-            .unwrap();
-
-        let task = store
-            .create_task(NewTeamTask {
-                team_id: team.id.clone(),
-                agent_id: "agent-x".into(),
-                subject: "Analyze data".into(),
-            })
-            .await
-            .unwrap();
-
-        assert_eq!(task.status, TeamTaskStatus::Pending);
-        assert!(task.completed_at.is_none());
-
-        store
-            .update_task_status(&task.id, TeamTaskStatus::Running, None)
-            .await
-            .unwrap();
-
-        store
-            .update_task_status(
-                &task.id,
-                TeamTaskStatus::Completed,
-                Some("Analysis done".into()),
-            )
-            .await
-            .unwrap();
-
-        let tasks = store.get_tasks(&team.id).await.unwrap();
-        assert_eq!(tasks.len(), 1);
-        assert_eq!(tasks[0].status, TeamTaskStatus::Completed);
-        assert_eq!(tasks[0].result.as_deref(), Some("Analysis done"));
-        assert!(tasks[0].completed_at.is_some());
     }
 
     #[tokio::test]

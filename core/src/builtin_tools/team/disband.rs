@@ -3,10 +3,13 @@
 use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::error::Result;
 use crate::sync_primitives::Arc;
+use crate::teams::events::EventLogStore;
+use crate::teams::messages::MessageStore;
+use crate::teams::sessions::SessionStore;
 use crate::teams::TeamStore;
 use crate::tools::AlephTool;
 
@@ -39,11 +42,32 @@ pub struct TeamDisbandOutput {
 #[derive(Clone)]
 pub struct TeamDisbandTool {
     store: Arc<dyn TeamStore>,
+    msg_store: Option<Arc<dyn MessageStore>>,
+    session_store: Option<Arc<dyn SessionStore>>,
+    event_store: Option<Arc<dyn EventLogStore>>,
 }
 
 impl TeamDisbandTool {
     pub fn new(store: Arc<dyn TeamStore>) -> Self {
-        Self { store }
+        Self {
+            store,
+            msg_store: None,
+            session_store: None,
+            event_store: None,
+        }
+    }
+
+    /// Set optional cleanup stores for post-disband resource cleanup.
+    pub fn with_cleanup_stores(
+        mut self,
+        msg_store: Option<Arc<dyn MessageStore>>,
+        session_store: Option<Arc<dyn SessionStore>>,
+        event_store: Option<Arc<dyn EventLogStore>>,
+    ) -> Self {
+        self.msg_store = msg_store;
+        self.session_store = session_store;
+        self.event_store = event_store;
+        self
     }
 }
 
@@ -72,6 +96,27 @@ impl AlephTool for TeamDisbandTool {
         self.store.disband_team(&args.team_id).await?;
 
         info!(team_id = %args.team_id, "team_disband: team disbanded");
+
+        // Post-disband cleanup: expire messages, cancel sessions, prune events.
+        // Failures are logged but do not fail the disband operation.
+        if let Some(ref ms) = self.msg_store {
+            match ms.expire_all_for_team(&args.team_id).await {
+                Ok(n) => info!(team_id = %args.team_id, expired = n, "expired pending messages"),
+                Err(e) => warn!(team_id = %args.team_id, err = %e, "failed to expire messages"),
+            }
+        }
+        if let Some(ref ss) = self.session_store {
+            match ss.cancel_all_for_team(&args.team_id).await {
+                Ok(n) => info!(team_id = %args.team_id, cancelled = n, "cancelled active sessions"),
+                Err(e) => warn!(team_id = %args.team_id, err = %e, "failed to cancel sessions"),
+            }
+        }
+        if let Some(ref es) = self.event_store {
+            match es.prune_events(&args.team_id, chrono::Duration::hours(24)).await {
+                Ok(n) => info!(team_id = %args.team_id, pruned = n, "pruned old events"),
+                Err(e) => warn!(team_id = %args.team_id, err = %e, "failed to prune events"),
+            }
+        }
 
         Ok(TeamDisbandOutput {
             team_id: args.team_id.clone(),

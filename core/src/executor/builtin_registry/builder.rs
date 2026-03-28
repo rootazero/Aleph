@@ -366,7 +366,12 @@ impl BuiltinToolRegistry {
                     config.artifact_store.clone(),
                 );
                 let status = TeamStatusTool::new(Arc::clone(store), Arc::clone(coord_store));
-                let disband = TeamDisbandTool::new(Arc::clone(store));
+                let disband = TeamDisbandTool::new(Arc::clone(store))
+                    .with_cleanup_stores(
+                        config.message_store.clone(),
+                        config.session_store.clone(),
+                        config.event_store.clone(),
+                    );
 
                 // Register parameter schemas for team tools
                 {

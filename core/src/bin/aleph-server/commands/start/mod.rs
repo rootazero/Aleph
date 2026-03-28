@@ -616,8 +616,8 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     register_agents_handlers(&mut server, &agent_manager, &event_bus);
 
     // Team management (team store created inside register_agent_handlers)
-    if let Some(ref ts) = agent_result.team_store {
-        register_teams_handlers(&mut server, ts);
+    if let (Some(ref ts), Some(ref cs)) = (&agent_result.team_store, &agent_result.coord_task_store) {
+        register_teams_handlers(&mut server, ts, cs);
     }
 
     // Identity resolver (shared for session-level overrides)
