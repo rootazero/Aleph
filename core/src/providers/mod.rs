@@ -76,6 +76,7 @@ pub mod http_provider;
 pub mod presets;
 pub mod protocols;
 pub mod delta;
+pub mod health;
 pub mod model_discovery;
 pub mod oauth_refresh;
 
@@ -102,6 +103,7 @@ pub use registry::ProviderRegistry;
 pub use retry::retry_with_backoff;
 pub use adapter::{ProtocolAdapter, RequestPayload, ProviderResponse, NativeToolCall, StopReason, TokenUsage};
 pub use delta::{ProviderDelta, DeltaCollector, DeltaSink, NoopSink, IndexIdTracker, response_to_delta_stream};
+pub use health::{ProviderHealth, ProviderError, ResolvedModel, ModelInfo};
 pub use http_provider::HttpProvider;
 pub use presets::{get_preset, resolve_provider_from_model, ProviderPreset, PRESETS};
 pub use protocols::OpenAiProtocol;
