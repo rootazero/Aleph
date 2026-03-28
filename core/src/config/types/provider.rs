@@ -101,7 +101,6 @@ pub struct ProviderConfig {
     /// Model behavior override: use a specific behavior file instead of protocol default.
     /// Maps to a file in `~/.aleph/model_behaviors/{name}.md` or a built-in behavior.
     /// Example: Set to "anthropic" on an OpenRouter provider that routes to Claude.
-    /// TODO: Wire this field into run_loop.rs behavior resolution (currently uses AiProvider::protocol() only).
     #[serde(default)]
     pub model_behavior: Option<String>,
 

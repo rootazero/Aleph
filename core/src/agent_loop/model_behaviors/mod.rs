@@ -8,15 +8,29 @@ const BUILTIN_OPENAI: &str = include_str!("openai.md");
 const BUILTIN_GEMINI: &str = include_str!("gemini.md");
 const BUILTIN_OLLAMA: &str = include_str!("ollama.md");
 
-/// Load model behavior content by name.
+/// Validate a behavior name to prevent path traversal.
+///
+/// Only allows alphanumeric characters, hyphens, and underscores.
+fn is_valid_behavior_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 64
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
+/// Load model behavior content by name (async).
 ///
 /// Checks user override at `~/.aleph/model_behaviors/{name}.md` first,
-/// falls back to built-in content.
-pub fn load_model_behavior(name: &str) -> Option<String> {
-    // 1. Check user override (silently skip if home_dir unavailable)
+/// falls back to built-in content. Rejects invalid names to prevent
+/// path traversal.
+pub async fn load_model_behavior(name: &str) -> Option<String> {
+    if !is_valid_behavior_name(name) {
+        return None;
+    }
+
+    // 1. Check user override (async I/O, silently skip if home_dir unavailable)
     if let Some(home) = dirs::home_dir() {
         let user_path = home.join(".aleph/model_behaviors").join(format!("{name}.md"));
-        if let Ok(content) = std::fs::read_to_string(&user_path) {
+        if let Ok(content) = tokio::fs::read_to_string(&user_path).await {
             return Some(content);
         }
     }
@@ -82,15 +96,15 @@ mod tests {
         assert!(builtin_behavior("unknown-model").is_none());
     }
 
-    #[test]
-    fn test_load_falls_back_to_builtin() {
-        let content = load_model_behavior("openai").unwrap();
+    #[tokio::test]
+    async fn test_load_falls_back_to_builtin() {
+        let content = load_model_behavior("openai").await.unwrap();
         assert!(content.contains("Execution Directives"));
     }
 
-    #[test]
-    fn test_load_unknown_returns_none() {
-        assert!(load_model_behavior("nonexistent").is_none());
+    #[tokio::test]
+    async fn test_load_unknown_returns_none() {
+        assert!(load_model_behavior("nonexistent").await.is_none());
     }
 
     #[test]
@@ -121,5 +135,29 @@ mod tests {
     #[test]
     fn test_protocol_to_behavior_unknown() {
         assert_eq!(protocol_to_behavior("some-custom-protocol"), None);
+    }
+
+    // Path traversal validation tests
+    #[test]
+    fn test_valid_behavior_names() {
+        assert!(is_valid_behavior_name("openai"));
+        assert!(is_valid_behavior_name("my-custom"));
+        assert!(is_valid_behavior_name("my_custom_123"));
+    }
+
+    #[test]
+    fn test_invalid_behavior_names() {
+        assert!(!is_valid_behavior_name(""));
+        assert!(!is_valid_behavior_name("../etc/passwd"));
+        assert!(!is_valid_behavior_name("../../secret"));
+        assert!(!is_valid_behavior_name("foo/bar"));
+        assert!(!is_valid_behavior_name("foo.bar"));
+        assert!(!is_valid_behavior_name("a".repeat(65).as_str()));
+    }
+
+    #[tokio::test]
+    async fn test_load_rejects_path_traversal() {
+        assert!(load_model_behavior("../../../etc/passwd").await.is_none());
+        assert!(load_model_behavior("foo/bar").await.is_none());
     }
 }

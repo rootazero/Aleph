@@ -225,6 +225,10 @@ impl AiProvider for HttpProvider {
         self.adapter.name()
     }
 
+    fn model_behavior_override(&self) -> Option<&str> {
+        self.config.model_behavior.as_deref()
+    }
+
     fn as_http_provider(&self) -> Option<&HttpProvider> {
         Some(self)
     }

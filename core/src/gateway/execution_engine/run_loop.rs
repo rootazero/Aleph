@@ -97,10 +97,15 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         let provider = self.provider_registry.get(&resolved.provider_name)
             .unwrap_or_else(|| self.provider_registry.default_provider());
 
-        // Resolve model behavior from provider protocol
+        // Resolve model behavior: config override > protocol auto-mapping
         let behavior_content = {
-            let protocol_name = provider.protocol().to_string();
-            protocol_to_behavior(&protocol_name).and_then(load_model_behavior)
+            let behavior_name = provider.model_behavior_override()
+                .map(|s| s.to_string())
+                .or_else(|| protocol_to_behavior(&provider.protocol().to_string()).map(|s| s.to_string()));
+            match behavior_name {
+                Some(name) => load_model_behavior(&name).await,
+                None => None,
+            }
         };
 
         // Only set model override if resolved.model is non-empty

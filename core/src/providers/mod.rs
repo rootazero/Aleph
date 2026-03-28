@@ -231,6 +231,15 @@ pub trait AiProvider: Send + Sync {
         "unknown"
     }
 
+    /// Model behavior override from provider config.
+    ///
+    /// When set, this takes precedence over the protocol-based auto-mapping.
+    /// Used for providers like OpenRouter that use one protocol but route to
+    /// a different model family.
+    fn model_behavior_override(&self) -> Option<&str> {
+        None
+    }
+
     /// Downcast to HttpProvider for streaming access.
     ///
     /// Returns Some(&HttpProvider) only for HttpProvider instances.
