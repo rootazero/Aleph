@@ -352,7 +352,23 @@ impl ProviderRegistry for MultiProviderRegistry {
         // 3. Global fallbacks — model is empty string (sentinel for "use provider's configured default")
         // When the caller sees an empty model, it should NOT set payload.model,
         // letting the protocol adapter fall back to config.default_model().
-        for fb_provider_name in &state.fallbacks {
+        //
+        // If fallback_providers is explicitly configured, use that order.
+        // Otherwise, auto-fallback: all registered providers except the primary become candidates.
+        let global_fallbacks: Vec<String> = if state.fallbacks.is_empty() {
+            // Auto-fallback: any registered provider that isn't already a candidate
+            let existing: std::collections::HashSet<&str> = candidates.iter()
+                .map(|(p, _)| p.as_str())
+                .collect();
+            state.providers.keys()
+                .filter(|name| !existing.contains(name.as_str()))
+                .cloned()
+                .collect()
+        } else {
+            state.fallbacks.clone()
+        };
+
+        for fb_provider_name in &global_fallbacks {
             if state.providers.contains_key(fb_provider_name) {
                 candidates.push((fb_provider_name.clone(), String::new()));
             }
