@@ -121,13 +121,13 @@ impl LaneState {
 
         // Find the run in the queue
         if let Some(queued_run) = queue.iter().find(|qr| qr.run_id == run_id) {
-            let wait_ms = (current_time - queued_run.enqueued_at) as u64;
+            let wait_ms = (current_time - queued_run.enqueued_at).max(0) as u64;
             let threshold_ms = 30_000u64;
 
             if wait_ms > threshold_ms {
                 // +1 boost per 10 seconds over threshold, max +10
-                let boost = ((wait_ms - threshold_ms) / 10_000) as i8;
-                boost.min(10)
+                let boost = ((wait_ms - threshold_ms) / 10_000).min(10) as i8;
+                boost
             } else {
                 0
             }

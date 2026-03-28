@@ -78,20 +78,29 @@ impl AlephToolDyn for McpGetPromptTool {
         Box::pin(async move {
             let args: McpGetPromptArgs = serde_json::from_value(args)?;
 
-            // Get client for the server
+            // Extract server_id from prompt name prefix (e.g., "server_name:prompt_name")
+            // Try each colon position to handle server IDs with colons (e.g., "plugin:foo/bar")
             let name = &args.name;
-            let server_id = name.split(':').next().unwrap_or("");
+            let (client, prompt_name) = {
+                let mut found = None;
+                for (idx, _) in name.match_indices(':') {
+                    let candidate = &name[..idx];
+                    if let Ok(Some(c)) = self.handle.get_client(candidate).await {
+                        found = Some((c, &name[idx + 1..]));
+                        break;
+                    }
+                }
+                match found {
+                    Some(pair) => pair,
+                    None => {
+                        return Err(crate::error::AlephError::NotFound(
+                            format!("No MCP server found for prompt: {}", name)
+                        ).into());
+                    }
+                }
+            };
 
-            let client = self
-                .handle
-                .get_client(server_id)
-                .await
-                .map_err(|e| crate::error::AlephError::tool(format!("Failed to get client: {}", e)))?
-                .ok_or_else(|| crate::error::AlephError::NotFound(
-                    format!("MCP server not found: {}", server_id)
-                ))?;
-
-            let result = client.get_prompt(name, args.arguments).await?;
+            let result = client.get_prompt(prompt_name, args.arguments).await?;
 
             let messages: Vec<PromptOutputMessage> = result
                 .messages
@@ -100,7 +109,9 @@ impl AlephToolDyn for McpGetPromptTool {
                     let content = match m.content {
                         crate::mcp::PromptContent::Text { text } => text,
                         crate::mcp::PromptContent::Image { data, mime_type } => {
-                            format!("[Image: {} ({} bytes)]", mime_type, data.len())
+                            // data is base64-encoded; approximate decoded size
+                            let approx_bytes = data.len() * 3 / 4;
+                            format!("[Image: {} (~{} bytes)]", mime_type, approx_bytes)
                         }
                         crate::mcp::PromptContent::Resource { uri, text } => {
                             text.unwrap_or_else(|| format!("[Resource: {}]", uri))

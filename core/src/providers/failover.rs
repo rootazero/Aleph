@@ -406,6 +406,8 @@ impl AiProvider for FailoverProvider {
                     continue;
                 };
 
+                let mut already_marked_unhealthy = false;
+
                 for retry in 0..=self.config.max_retries {
                     if retry > 0 {
                         tracing::debug!("Retry {} for provider '{}'", retry, name);
@@ -446,6 +448,7 @@ impl AiProvider for FailoverProvider {
 
                             if Self::is_non_retryable_error(&e) {
                                 self.mark_unhealthy(i, error_msg).await;
+                                already_marked_unhealthy = true;
                                 break;
                             }
 
@@ -455,14 +458,18 @@ impl AiProvider for FailoverProvider {
                                     name
                                 );
                                 self.mark_unhealthy(i, error_msg).await;
+                                already_marked_unhealthy = true;
                                 break;
                             }
                         }
                     }
                 }
 
-                if let Some(ref error) = last_error {
-                    self.mark_unhealthy(i, error.clone()).await;
+                // Only mark unhealthy after retry exhaustion if not already done
+                if !already_marked_unhealthy {
+                    if let Some(ref error) = last_error {
+                        self.mark_unhealthy(i, error.clone()).await;
+                    }
                 }
             }
 

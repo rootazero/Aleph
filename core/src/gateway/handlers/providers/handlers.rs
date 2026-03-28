@@ -38,7 +38,7 @@ pub async fn handle_list(request: JsonRpcRequest, config: Arc<RwLock<Config>>, v
             timeout_seconds: cfg.timeout_seconds,
             max_tokens: cfg.max_tokens,
             temperature: cfg.temperature,
-            api_key: resolve_api_key(name, &vault),
+            has_api_key: has_api_key(name, &vault),
             is_default: default_provider.as_ref() == Some(name),
             verified: cfg.verified,
         })
@@ -73,7 +73,7 @@ pub async fn handle_get(request: JsonRpcRequest, config: Arc<RwLock<Config>>, va
                 timeout_seconds: cfg.timeout_seconds,
                 max_tokens: cfg.max_tokens,
                 temperature: cfg.temperature,
-                api_key: resolve_api_key(&params.name, &vault),
+                has_api_key: has_api_key(&params.name, &vault),
                 is_default: default_provider.as_ref() == Some(&params.name),
                 verified: cfg.verified,
             };
@@ -513,15 +513,23 @@ async fn set_default_provider_inner(
     {
         let mut cfg = config.write().await;
 
-        // Guard: only verified providers can be set as default
-        if let Some(provider) = cfg.providers.get(&name) {
-            if !provider.verified {
+        // Guard: provider must exist and be verified
+        match cfg.providers.get(&name) {
+            None => {
+                return JsonRpcResponse::error(
+                    request.id.clone(),
+                    INVALID_PARAMS,
+                    format!("Provider not found: {}", name),
+                );
+            }
+            Some(provider) if !provider.verified => {
                 return JsonRpcResponse::error(
                     request.id.clone(),
                     INVALID_PARAMS,
                     format!("Provider '{}' must pass a connection test before being set as default", name),
                 );
             }
+            _ => {}
         }
 
         // Capture provider config before setting default (for runtime swap)

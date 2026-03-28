@@ -3,8 +3,8 @@
 //! Holds the shared store, clock, config, and lifecycle flags.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 
+use crate::sync_primitives::Arc;
 use crate::tasks::cron::clock::Clock;
 use crate::tasks::cron::config::CronConfig;
 use crate::tasks::cron::store::CronStore;
@@ -61,6 +61,7 @@ impl<C: Clock> ServiceState<C> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sync_primitives::Arc;
     use crate::tasks::cron::clock::testing::FakeClock;
     use tempfile::TempDir;
 

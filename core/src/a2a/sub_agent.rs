@@ -3,8 +3,6 @@
 //! Integrates SmartRouter (routing) + A2AClientPool (communication) to delegate
 //! tasks to remote agents via the A2A protocol.
 
-use std::sync::Arc;
-
 use async_trait::async_trait;
 
 use crate::a2a::adapter::client::A2AClientPool;
@@ -13,6 +11,7 @@ use crate::a2a::service::SmartRouter;
 use crate::agents::sub_agents::{
     SubAgent, SubAgentCapability, SubAgentRequest, SubAgentResult,
 };
+use crate::sync_primitives::Arc;
 
 /// SubAgent implementation that delegates tasks to remote A2A agents.
 ///
@@ -28,7 +27,7 @@ pub struct A2ASubAgent {
     smart_router: Arc<SmartRouter>,
     client_pool: Arc<A2AClientPool>,
     /// Cached lowercased agent/skill names for sync can_handle matching
-    cached_names: std::sync::RwLock<Vec<String>>,
+    cached_names: crate::sync_primitives::RwLock<Vec<String>>,
 }
 
 impl A2ASubAgent {
@@ -36,7 +35,7 @@ impl A2ASubAgent {
         Self {
             smart_router,
             client_pool,
-            cached_names: std::sync::RwLock::new(Vec::new()),
+            cached_names: crate::sync_primitives::RwLock::new(Vec::new()),
         }
     }
 
@@ -51,18 +50,18 @@ impl A2ASubAgent {
             for agent in &agents {
                 let name_lower = agent.card.name.to_lowercase();
                 // Only cache names with >= 2 chars to avoid false positives
-                if name_lower.len() >= 2 {
+                if name_lower.chars().count() >= 2 {
                     names.push(name_lower);
                 }
                 for skill in &agent.card.skills {
                     let skill_lower = skill.name.to_lowercase();
-                    if skill_lower.len() >= 2 {
+                    if skill_lower.chars().count() >= 2 {
                         names.push(skill_lower);
                     }
                     if let Some(ref aliases) = skill.aliases {
                         for alias in aliases {
                             let alias_lower = alias.to_lowercase();
-                            if alias_lower.len() >= 2 {
+                            if alias_lower.chars().count() >= 2 {
                                 names.push(alias_lower);
                             }
                         }
@@ -180,9 +179,11 @@ impl SubAgent for A2ASubAgent {
                     format!("Task {} completed with state: {:?}", task.id, task.status.state)
                 };
 
-                let result = SubAgentResult::success(request.id.clone(), summary).with_output(
-                    serde_json::to_value(&task).unwrap_or_default(),
-                );
+                let output = serde_json::to_value(&task).unwrap_or_else(|e| {
+                    tracing::warn!("Failed to serialize A2ATask: {}", e);
+                    serde_json::Value::Null
+                });
+                let result = SubAgentResult::success(request.id.clone(), summary).with_output(output);
                 Ok(result)
             }
             Err(e) => {
@@ -200,7 +201,7 @@ mod tests {
     use super::*;
     use crate::a2a::domain::*;
     use crate::a2a::port::{A2AResult, AgentHealth, AgentResolver, RegisteredAgent};
-    use std::sync::Mutex;
+    use crate::sync_primitives::Mutex;
 
     // --- Mock AgentResolver for SmartRouter ---
 
@@ -236,7 +237,7 @@ mod tests {
         }
 
         async fn list_agents(&self) -> A2AResult<Vec<RegisteredAgent>> {
-            let agents = self.agents.lock().unwrap_or_else(|e: std::sync::PoisonError<_>| e.into_inner());
+            let agents = self.agents.lock().unwrap_or_else(|e| e.into_inner());
             Ok(agents.clone())
         }
 
@@ -326,6 +327,7 @@ mod tests {
             base_url: "http://localhost:8080/trading".to_string(),
             last_seen: chrono::Utc::now(),
             health: AgentHealth::Healthy,
+            auth_token: None,
         }];
         let sub = build_sub_agent(agents);
         sub.refresh_agent_names().await;
@@ -368,6 +370,7 @@ mod tests {
             base_url: "http://localhost:8080/dev".to_string(),
             last_seen: chrono::Utc::now(),
             health: AgentHealth::Healthy,
+            auth_token: None,
         }];
         let sub = build_sub_agent(agents);
         sub.refresh_agent_names().await;
@@ -402,6 +405,7 @@ mod tests {
             base_url: "http://localhost:8080/codebot".to_string(),
             last_seen: chrono::Utc::now(),
             health: AgentHealth::Healthy,
+            auth_token: None,
         }];
         let sub = build_sub_agent(agents);
         sub.refresh_agent_names().await;

@@ -77,7 +77,7 @@ impl PlaywrightMcpBackend {
 
             // Parse: role "name" [ref=xxx] or role "name" [attr=val]
             let (role, rest) = match content.find(' ') {
-                Some(pos) => (&content[..pos], content.get(pos + 1..).unwrap_or("")),
+                Some(pos) => (content.get(..pos).unwrap_or(content), content.get(pos + 1..).unwrap_or("")),
                 None => (content, ""),
             };
 
@@ -126,7 +126,7 @@ fn extract_bracket_value(text: &str, key: &str) -> Option<String> {
     if let Some(start) = text.find(&pattern) {
         let after = text.get(start + pattern.len()..)?;
         let end = after.find(']')?;
-        Some(after[..end].to_string())
+        Some(after.get(..end)?.to_string())
     } else {
         None
     }
@@ -161,8 +161,8 @@ impl BrowserBackend for PlaywrightMcpBackend {
             let line = line.trim();
             if let Some(rest) = line.strip_prefix("Tab ") {
                 if let Some(colon_pos) = rest.find(": ") {
-                    let id_str = rest[..colon_pos].trim();
-                    let url = rest[colon_pos + 2..].trim();
+                    let id_str = rest.get(..colon_pos).unwrap_or("").trim();
+                    let url = rest.get(colon_pos + 2..).unwrap_or("").trim();
                     tabs.push(TabInfo {
                         id: id_str.to_string(),
                         url: url.to_string(),

@@ -107,12 +107,12 @@ impl PimTool {
                 "notes_list" => pim
                     .notes_list(args.folder.as_deref())
                     .await
-                    .map(|v| serde_json::to_value(v).unwrap()),
+                    .map(|v| serde_json::to_value(v).unwrap_or_default()),
                 "notes_get" => {
                     let id = args.id.as_deref()?;
                     pim.notes_read(id)
                         .await
-                        .map(|v| serde_json::to_value(v).unwrap())
+                        .map(|v| serde_json::to_value(v).unwrap_or_default())
                 }
                 "notes_create" => {
                     let title = args.title.as_deref()?;
@@ -137,7 +137,7 @@ impl PimTool {
                 "notes_folders" => pim
                     .notes_folders()
                     .await
-                    .map(|v| serde_json::to_value(v).unwrap()),
+                    .map(|v| serde_json::to_value(v).unwrap_or_default()),
 
                 // ── Calendar ────────────────────────────────────
                 "calendar_list" => {
@@ -145,13 +145,13 @@ impl PimTool {
                     let to = args.to.as_deref()?;
                     pim.calendar_list_events(from, to, args.calendar_id.as_deref())
                         .await
-                        .map(|v| serde_json::to_value(v).unwrap())
+                        .map(|v| serde_json::to_value(v).unwrap_or_default())
                 }
                 "calendar_get" => {
                     let id = args.id.as_deref()?;
                     pim.calendar_get_event(id)
                         .await
-                        .map(|v| serde_json::to_value(v).unwrap())
+                        .map(|v| serde_json::to_value(v).unwrap_or_default())
                 }
                 "calendar_create" => {
                     let title = args.title.as_deref()?;
@@ -194,20 +194,20 @@ impl PimTool {
                 "calendar_calendars" => pim
                     .calendar_calendars()
                     .await
-                    .map(|v| serde_json::to_value(v).unwrap()),
+                    .map(|v| serde_json::to_value(v).unwrap_or_default()),
 
                 // ── Reminders ───────────────────────────────────
                 "reminders_list" => {
                     let include_completed = args.include_completed.unwrap_or(false);
                     pim.reminders_list(args.list_id.as_deref(), include_completed)
                         .await
-                        .map(|v| serde_json::to_value(v).unwrap())
+                        .map(|v| serde_json::to_value(v).unwrap_or_default())
                 }
                 "reminders_get" => {
                     let id = args.id.as_deref()?;
                     pim.reminders_get(id)
                         .await
-                        .map(|v| serde_json::to_value(v).unwrap())
+                        .map(|v| serde_json::to_value(v).unwrap_or_default())
                 }
                 "reminders_create" => {
                     let title = args.title.as_deref()?;
@@ -215,7 +215,7 @@ impl PimTool {
                         title: title.to_string(),
                         list_id: args.list_id.clone().unwrap_or_default(),
                         due_date: args.due_date.clone(),
-                        priority: args.priority.unwrap_or(0) as u8,
+                        priority: args.priority.unwrap_or(0).clamp(0, 9) as u8,
                         notes: args.notes.clone(),
                     };
                     pim.reminders_create(reminder)
@@ -237,25 +237,25 @@ impl PimTool {
                 "reminders_lists" => pim
                     .reminders_lists()
                     .await
-                    .map(|v| serde_json::to_value(v).unwrap()),
+                    .map(|v| serde_json::to_value(v).unwrap_or_default()),
 
                 // ── Contacts ────────────────────────────────────
                 "contacts_search" => {
                     let query = args.query.as_deref()?;
                     pim.contacts_search(query)
                         .await
-                        .map(|v| serde_json::to_value(v).unwrap())
+                        .map(|v| serde_json::to_value(v).unwrap_or_default())
                 }
                 "contacts_get" => {
                     let id = args.id.as_deref()?;
                     pim.contacts_get(id)
                         .await
-                        .map(|v| serde_json::to_value(v).unwrap())
+                        .map(|v| serde_json::to_value(v).unwrap_or_default())
                 }
                 "contacts_groups" => pim
                     .contacts_groups()
                     .await
-                    .map(|v| serde_json::to_value(v).unwrap()),
+                    .map(|v| serde_json::to_value(v).unwrap_or_default()),
 
                 // contacts_create, contacts_update, contacts_delete are not in
                 // PimCapability trait — fall through to the legacy bridge.

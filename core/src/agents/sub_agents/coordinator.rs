@@ -116,7 +116,7 @@ impl From<&ToolCallRecord> for ToolCallSummary {
             "error"
         };
         Self {
-            id: format!("{}_{}", record.name, &uuid::Uuid::new_v4().to_string()[..8]),
+            id: format!("{}_{}", record.name, uuid::Uuid::new_v4().to_string().get(..8).unwrap_or("00000000")),
             tool: record.name.clone(),
             state: ToolCallState {
                 status: status.to_string(),
@@ -207,11 +207,9 @@ impl ExecutionCoordinator {
 
     /// Start a new execution and get a handle for waiting
     pub async fn start_execution(&self, request_id: &str) -> ExecutionHandle {
-        let (tx, _rx) = oneshot::channel();
-
         let pending = PendingExecution {
             created_at: Instant::now(),
-            completion_tx: Some(tx),
+            completion_tx: None,
             tool_calls: Vec::new(),
         };
 
@@ -234,7 +232,8 @@ impl ExecutionCoordinator {
         request_id: &str,
         wait_timeout: Duration,
     ) -> Result<SubAgentResult, ExecutionError> {
-        // First check if already completed
+        // First check if already completed (handles race where completion
+        // arrived between start_execution and wait_for_result)
         {
             let completed = self.completed.read().await;
             if let Some(exec) = completed.get(request_id) {
@@ -242,11 +241,11 @@ impl ExecutionCoordinator {
             }
         }
 
-        // Get the receiver from pending
+        // Install a oneshot channel into the pending entry so
+        // on_execution_completed can signal us
         let rx = {
             let mut pending = self.pending.write().await;
             if let Some(exec) = pending.get_mut(request_id) {
-                // Create a new channel and swap out the sender
                 let (tx, rx) = oneshot::channel();
                 exec.completion_tx = Some(tx);
                 Some(rx)
@@ -254,6 +253,14 @@ impl ExecutionCoordinator {
                 None
             }
         };
+
+        // Re-check completed after installing rx (close the race window)
+        if rx.is_some() {
+            let completed = self.completed.read().await;
+            if let Some(exec) = completed.get(request_id) {
+                return Ok(exec.result.clone());
+            }
+        }
 
         match rx {
             Some(rx) => {
@@ -271,7 +278,7 @@ impl ExecutionCoordinator {
                         let partial = self.get_partial_summary(request_id).await;
                         Err(ExecutionError::Timeout {
                             request_id: request_id.to_string(),
-                            elapsed_ms: wait_timeout.as_millis() as u64,
+                            elapsed_ms: u64::try_from(wait_timeout.as_millis()).unwrap_or(u64::MAX),
                             partial_summary: partial,
                         })
                     }

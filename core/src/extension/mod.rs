@@ -86,7 +86,7 @@ use manifest::adapter::AdapterRegistry;
 use std::path::PathBuf;
 use crate::sync_primitives::Arc;
 use std::time::Instant;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 
 // =============================================================================
 // Cache State
@@ -148,6 +148,9 @@ pub struct ExtensionManager {
 
     /// Skill System v2 (independent bounded context)
     skill_system: crate::skill::SkillSystem,
+
+    /// Guard to serialize concurrent load_all() calls
+    load_guard: Mutex<()>,
 }
 
 impl ExtensionManager {
@@ -174,6 +177,7 @@ impl ExtensionManager {
             service_manager,
             adapter_registry,
             skill_system: crate::skill::SkillSystem::new(),
+            load_guard: Mutex::new(()),
         })
     }
 
@@ -197,7 +201,7 @@ impl ExtensionManager {
             let mut registry = self.plugin_registry.write().await;
             registry.clear();
 
-            for (dir_path, _origin) in &plugin_dirs {
+            for dir_path in &plugin_dirs {
                 match self.adapter_registry.parse_dir(dir_path) {
                     Ok(output) => {
                         // Collect MCP configs (no-op in CapabilityApi dispatch)
@@ -275,28 +279,25 @@ impl ExtensionManager {
     }
 
     /// Ensure extensions are loaded (lazy-loading entry point).
+    ///
+    /// Uses a Mutex guard to serialize concurrent calls — concurrent callers
+    /// wait for the first load to complete rather than seeing partial data.
     pub async fn ensure_loaded(&self) -> ExtensionResult<()> {
-        {
-            let state = self.cache_state.read().await;
-            if state.loaded {
-                return Ok(());
-            }
-        }
-
-        let mut state = self.cache_state.write().await;
-        if state.loaded {
+        // Fast path: already loaded (no lock contention)
+        if self.cache_state.read().await.loaded {
             return Ok(());
         }
 
-        state.loaded = true;
-        drop(state);
+        // Serialize concurrent loads — other callers block here until first load completes
+        let _guard = self.load_guard.lock().await;
 
-        if let Err(e) = self.load_all().await {
-            let mut state = self.cache_state.write().await;
-            state.loaded = false;
-            return Err(e);
+        // Re-check after acquiring guard (another task may have loaded while we waited)
+        if self.cache_state.read().await.loaded {
+            return Ok(());
         }
 
+        // load_all() sets cache_state.loaded = true on success
+        self.load_all().await?;
         Ok(())
     }
 
@@ -315,48 +316,30 @@ impl ExtensionManager {
     }
 
     /// Collect all plugin directories from discovery, deduplicating by canonical path.
-    fn collect_plugin_dirs(&self) -> ExtensionResult<Vec<(PathBuf, PluginOrigin)>> {
+    ///
+    /// Origin is not tracked here — `PluginRecord::from_adapter_output` derives it
+    /// from the `AdapterOutput::source` field set during manifest parsing.
+    fn collect_plugin_dirs(&self) -> ExtensionResult<Vec<PathBuf>> {
         use std::collections::HashSet;
 
         let mut seen = HashSet::new();
         let mut result = Vec::new();
 
-        // Skill directories → treat each as a plugin dir
-        if let Ok(dirs) = self.discovery.discover_skill_dirs() {
-            for d in dirs {
-                let canonical = d.path.canonicalize().unwrap_or_else(|_| d.path.clone());
-                if seen.insert(canonical) {
-                    result.push((d.path, PluginOrigin::Global));
-                }
-            }
-        }
+        // Collect from all discovery sources: skills, commands, agents, plugins
+        let all_dirs = [
+            self.discovery.discover_skill_dirs(),
+            self.discovery.discover_command_dirs(),
+            self.discovery.discover_agent_dirs(),
+            self.discovery.discover_plugins(),
+        ];
 
-        // Command directories
-        if let Ok(dirs) = self.discovery.discover_command_dirs() {
-            for d in dirs {
-                let canonical = d.path.canonicalize().unwrap_or_else(|_| d.path.clone());
-                if seen.insert(canonical) {
-                    result.push((d.path, PluginOrigin::Global));
-                }
-            }
-        }
-
-        // Agent directories
-        if let Ok(dirs) = self.discovery.discover_agent_dirs() {
-            for d in dirs {
-                let canonical = d.path.canonicalize().unwrap_or_else(|_| d.path.clone());
-                if seen.insert(canonical) {
-                    result.push((d.path, PluginOrigin::Global));
-                }
-            }
-        }
-
-        // Plugin directories (legacy .claude-plugin format)
-        if let Ok(dirs) = self.discovery.discover_plugins() {
-            for d in dirs {
-                let canonical = d.path.canonicalize().unwrap_or_else(|_| d.path.clone());
-                if seen.insert(canonical) {
-                    result.push((d.path, PluginOrigin::Global));
+        for dirs_result in all_dirs {
+            if let Ok(dirs) = dirs_result {
+                for d in dirs {
+                    let canonical = d.path.canonicalize().unwrap_or_else(|_| d.path.clone());
+                    if seen.insert(canonical) {
+                        result.push(d.path);
+                    }
                 }
             }
         }
@@ -380,9 +363,9 @@ impl ExtensionManager {
                 event: hr.event,
                 kind: HookKind::default(),
                 priority: match hr.priority {
-                    i if i <= -1000 => HookPriority::System,
-                    i if i <= -100 => HookPriority::High,
-                    i if i >= 100 => HookPriority::Low,
+                    i if i <= HookPriority::System.as_i32() => HookPriority::System,
+                    i if i <= HookPriority::High.as_i32() => HookPriority::High,
+                    i if i >= HookPriority::Low.as_i32() => HookPriority::Low,
                     _ => HookPriority::Normal,
                 },
                 matcher: None,

@@ -177,8 +177,9 @@ impl SharedArena {
             .or_default();
         agent_prog.current = current;
         if let Some(c) = completed {
+            let delta = c.saturating_sub(agent_prog.completed);
             agent_prog.completed = c;
-            self.progress.completed_steps += 1;
+            self.progress.completed_steps = self.progress.completed_steps.saturating_add(delta);
         }
     }
 

@@ -323,6 +323,11 @@ fn levenshtein_distance(a: &str, b: &str) -> usize {
     let a_len = a_chars.len();
     let b_len = b_chars.len();
 
+    // Prevent OOM on adversarial input
+    if a_len > 500 || b_len > 500 {
+        return a_len.abs_diff(b_len);
+    }
+
     if a_len == 0 {
         return b_len;
     }

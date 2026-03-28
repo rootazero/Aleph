@@ -37,7 +37,7 @@ use std::time::{Duration, Instant};
 
 use tokio::process::{Child, Command};
 use tokio::sync::RwLock;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 
 use crate::gateway::bridge::types::{BridgeRuntime, TransportType};
 use crate::gateway::link::LinkId;
@@ -240,19 +240,16 @@ impl BridgeSupervisor {
 
     /// List all managed processes and their current status (synchronous).
     ///
-    /// # Limitations
-    ///
-    /// This method uses `try_read()` on the tokio `RwLock`. If the lock is
-    /// currently held by a writer, this returns an empty `Vec` rather than
-    /// blocking. For reliable results, prefer [`list_processes_async`].
-    pub fn list_processes(&self) -> Vec<(LinkId, ProcessStatus)> {
-        match self.processes.try_read() {
-            Ok(guard) => guard
+    /// This method uses `try_read()` on the tokio `RwLock`. Returns `None`
+    /// if the lock is currently held by a writer, rather than blocking.
+    /// For reliable results, prefer [`list_processes_async`].
+    pub fn list_processes(&self) -> Option<Vec<(LinkId, ProcessStatus)>> {
+        self.processes.try_read().ok().map(|guard| {
+            guard
                 .iter()
                 .map(|(id, proc)| (id.clone(), proc.status.clone()))
-                .collect(),
-            Err(_) => Vec::new(),
-        }
+                .collect()
+        })
     }
 
     /// List all managed processes and their current status (async).
@@ -298,8 +295,8 @@ impl BridgeSupervisor {
             debug!(path = %socket_path.display(), "Removed stale socket");
         }
 
-        // 3. Validate the binary exists.
-        let resolved_exe = Self::resolve_executable(&config.executable)?;
+        // 3. Validate the binary exists (blocking I/O in spawn_blocking).
+        let resolved_exe = Self::resolve_executable(&config.executable).await?;
 
         // 4. Build and spawn the child process.
         let mut cmd = Command::new(&resolved_exe);
@@ -423,7 +420,10 @@ impl BridgeSupervisor {
         {
             let mut guard = self.processes.write().await;
             if guard.contains_key(link_id) {
-                // Drop `managed` here — kill_on_drop will reap the just-spawned child.
+                // Clean up: close transport before dropping the managed process.
+                // kill_on_drop will reap the child, but we must close the
+                // transport explicitly to release IPC resources.
+                let _ = transport.close().await;
                 return Err(BridgeSupervisorError::SpawnFailed(format!(
                     "A process is already managed for link_id '{}'; call stop() first",
                     link_id
@@ -474,9 +474,9 @@ impl BridgeSupervisor {
             );
         }
 
-        // Clean up socket file.
+        // Clean up socket file (async I/O).
         let socket_path = self.run_dir.join(format!("{}.sock", link_id.as_str()));
-        if socket_path.exists() {
+        if tokio::fs::try_exists(&socket_path).await.unwrap_or(false) {
             let _ = tokio::fs::remove_file(&socket_path).await;
             debug!(
                 link_id = %link_id,
@@ -490,20 +490,30 @@ impl BridgeSupervisor {
     }
 
     /// Stop all managed bridge processes.
+    ///
+    /// Signals health monitors to stop, then drains the process map
+    /// under a single write lock to avoid TOCTOU with concurrent spawns.
     pub async fn stop_all(&self) {
-        // Collect keys first to avoid holding the lock while stopping.
-        let link_ids: Vec<LinkId> = {
-            let guard = self.processes.read().await;
-            guard.keys().cloned().collect()
+        // Signal all health monitors to exit immediately.
+        let _ = self.shutdown_tx.send(true);
+
+        // Drain under a single write lock — no concurrent spawn can
+        // insert while we hold it.
+        let all: Vec<(LinkId, ManagedProcess)> = {
+            let mut guard = self.processes.write().await;
+            guard.drain().collect()
         };
 
-        for link_id in link_ids {
-            if let Err(e) = self.stop(&link_id).await {
-                error!(
-                    link_id = %link_id,
-                    error = %e,
-                    "Error stopping bridge process"
-                );
+        for (link_id, mut proc) in all {
+            if let Err(e) = proc.transport.close().await {
+                warn!(link_id = %link_id, error = %e, "Error closing transport during stop_all");
+            }
+            if let Err(e) = proc.child.kill().await {
+                warn!(link_id = %link_id, error = %e, "Error killing child during stop_all");
+            }
+            let socket_path = self.run_dir.join(format!("{}.sock", link_id.as_str()));
+            if tokio::fs::try_exists(&socket_path).await.unwrap_or(false) {
+                let _ = tokio::fs::remove_file(&socket_path).await;
             }
         }
     }
@@ -555,32 +565,35 @@ impl BridgeSupervisor {
                     .request("system.ping", serde_json::json!({}))
                     .await;
 
-                // Now acquire write lock to update status.
-                let mut guard = processes.write().await;
-                if let Some(proc) = guard.get_mut(&link_id) {
-                    match result {
-                        Ok(_) => {
-                            proc.last_heartbeat = Instant::now();
-                            if proc.status == ProcessStatus::Unhealthy {
-                                info!(
-                                    link_id = %link_id,
-                                    "Bridge recovered — marking as Running"
-                                );
+                // Acquire write lock, update status, drop lock, then log.
+                let log_action = {
+                    let mut guard = processes.write().await;
+                    if let Some(proc) = guard.get_mut(&link_id) {
+                        match &result {
+                            Ok(_) => {
+                                let was_unhealthy = proc.status == ProcessStatus::Unhealthy;
+                                proc.last_heartbeat = Instant::now();
+                                proc.status = ProcessStatus::Running;
+                                if was_unhealthy { Some(true) } else { None }
                             }
-                            proc.status = ProcessStatus::Running;
+                            Err(_) => {
+                                proc.status = ProcessStatus::Unhealthy;
+                                Some(false)
+                            }
                         }
-                        Err(e) => {
-                            warn!(
-                                link_id = %link_id,
-                                error = %e,
-                                "Health check failed"
-                            );
-                            proc.status = ProcessStatus::Unhealthy;
-                        }
+                    } else {
+                        // Process was removed while we were pinging — stop.
+                        break;
                     }
-                } else {
-                    // Process was removed while we were pinging — stop.
-                    break;
+                };
+                // Log outside the lock.
+                match log_action {
+                    Some(true) => info!(link_id = %link_id, "Bridge recovered — marking as Running"),
+                    Some(false) => {
+                        let err = result.unwrap_err();
+                        warn!(link_id = %link_id, error = %err, "Health check failed");
+                    }
+                    None => {}
                 }
             }
         });
@@ -615,25 +628,36 @@ impl BridgeSupervisor {
 
     /// Resolve an executable path, checking absolute paths exist and looking
     /// up relative paths via `which`.
-    fn resolve_executable(executable: &std::path::Path) -> Result<PathBuf, BridgeSupervisorError> {
-        if executable.is_absolute() {
-            if executable.exists() {
-                Ok(executable.to_path_buf())
+    ///
+    /// Uses `spawn_blocking` because `Path::exists` and `which::which` are
+    /// blocking filesystem operations.
+    async fn resolve_executable(
+        executable: &std::path::Path,
+    ) -> Result<PathBuf, BridgeSupervisorError> {
+        let exe = executable.to_path_buf();
+        tokio::task::spawn_blocking(move || {
+            if exe.is_absolute() {
+                if exe.exists() {
+                    Ok(exe)
+                } else {
+                    Err(BridgeSupervisorError::BinaryNotFound(format!(
+                        "Executable not found: {}",
+                        exe.display()
+                    )))
+                }
             } else {
-                Err(BridgeSupervisorError::BinaryNotFound(format!(
-                    "Executable not found: {}",
-                    executable.display()
-                )))
+                which::which(&exe).map_err(|e| {
+                    BridgeSupervisorError::BinaryNotFound(format!(
+                        "Cannot find '{}' in PATH: {e}",
+                        exe.display()
+                    ))
+                })
             }
-        } else {
-            // Try to find via `which` for relative/bare names.
-            which::which(executable).map_err(|e| {
-                BridgeSupervisorError::BinaryNotFound(format!(
-                    "Cannot find '{}' in PATH: {e}",
-                    executable.display()
-                ))
-            })
-        }
+        })
+        .await
+        .map_err(|e| {
+            BridgeSupervisorError::IoError(format!("resolve_executable join error: {e}"))
+        })?
     }
 }
 
@@ -658,7 +682,7 @@ mod tests {
     #[test]
     fn test_supervisor_creation() {
         let supervisor = BridgeSupervisor::new(PathBuf::from("/tmp/aleph-test/run"));
-        let processes = supervisor.list_processes();
+        let processes = supervisor.list_processes().expect("lock should be free");
         assert!(processes.is_empty());
     }
 
@@ -771,10 +795,11 @@ mod tests {
         assert!(processes.is_empty());
     }
 
-    #[test]
-    fn test_resolve_executable_absolute_not_found() {
+    #[tokio::test]
+    async fn test_resolve_executable_absolute_not_found() {
         let result =
-            BridgeSupervisor::resolve_executable(&PathBuf::from("/nonexistent/path/to/binary"));
+            BridgeSupervisor::resolve_executable(&PathBuf::from("/nonexistent/path/to/binary"))
+                .await;
         assert!(result.is_err());
         match result.unwrap_err() {
             BridgeSupervisorError::BinaryNotFound(msg) => {
@@ -784,11 +809,12 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_resolve_executable_relative_not_found() {
+    #[tokio::test]
+    async fn test_resolve_executable_relative_not_found() {
         let result = BridgeSupervisor::resolve_executable(&PathBuf::from(
             "definitely-not-a-real-binary-xyzzy",
-        ));
+        ))
+        .await;
         assert!(result.is_err());
         match result.unwrap_err() {
             BridgeSupervisorError::BinaryNotFound(msg) => {

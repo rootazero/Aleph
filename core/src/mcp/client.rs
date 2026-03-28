@@ -265,19 +265,28 @@ impl McpClient {
     ///
     /// The URI should include the server prefix (e.g., "server_name:file:///path")
     pub async fn read_resource(&self, uri: &str) -> Result<crate::mcp::resources::ResourceContent> {
-        let servers = self.external_servers.read().await;
+        // Clone Arc refs under lock, then release lock before awaiting network I/O
+        let (direct_match, all_connections) = {
+            let servers = self.external_servers.read().await;
 
-        // Check if URI has server prefix
-        if let Some((server_name, _resource_uri)) = uri.split_once(':') {
-            // Try server with matching prefix
-            if let Some(connection) = servers.get(server_name) {
-                return connection.read_resource(uri).await;
-            }
+            // Check if URI has server prefix
+            let direct = if let Some((server_name, _resource_uri)) = uri.split_once(':') {
+                servers.get(server_name).cloned()
+            } else {
+                None
+            };
+
+            let all: Vec<_> = servers.values().cloned().collect();
+            (direct, all)
+        };
+
+        // Try direct match first
+        if let Some(connection) = direct_match {
+            return connection.read_resource(uri).await;
         }
 
         // Try all servers
-        for connection in servers.values() {
-            // Check if this server has this resource
+        for connection in &all_connections {
             let resources = connection.list_resources().await;
             if resources.iter().any(|r| r.uri == uri) {
                 return connection.read_resource(uri).await;
@@ -295,22 +304,28 @@ impl McpClient {
         name: &str,
         arguments: Option<std::collections::HashMap<String, serde_json::Value>>,
     ) -> Result<crate::mcp::prompts::PromptResult> {
-        let servers = self.external_servers.read().await;
+        // Clone Arc refs under lock, then release lock before awaiting network I/O
+        let (direct_match, all_connections) = {
+            let servers = self.external_servers.read().await;
 
-        // Check if name has server prefix
-        if let Some((server_name, _prompt_name)) = name.split_once(':') {
-            // Try server with matching prefix
-            if let Some(connection) = servers.get(server_name) {
-                return connection.get_prompt(name, arguments).await;
-            }
+            let direct = if let Some((server_name, _prompt_name)) = name.split_once(':') {
+                servers.get(server_name).cloned()
+            } else {
+                None
+            };
+
+            let all: Vec<_> = servers.values().cloned().collect();
+            (direct, all)
+        };
+
+        if let Some(connection) = direct_match {
+            return connection.get_prompt(name, arguments).await;
         }
 
-        // Try all servers
-        for connection in servers.values() {
-            // Check if this server has this prompt
+        for connection in &all_connections {
             let prompts = connection.list_prompts().await;
             if prompts.iter().any(|p| p.name == name) {
-                return connection.get_prompt(name, arguments).await;
+                return connection.get_prompt(name, arguments.clone()).await;
             }
         }
 
@@ -340,25 +355,32 @@ impl McpClient {
 
     /// Call a tool by name
     pub async fn call_tool(&self, name: &str, args: serde_json::Value) -> Result<McpToolResult> {
-        let servers = self.external_servers.read().await;
+        // Clone Arc refs under lock, then release lock before awaiting network I/O
+        let (direct_match, all_connections) = {
+            let servers = self.external_servers.read().await;
 
-        // Check if tool name has server prefix (e.g., "server_name:tool_name")
-        if let Some((server_name, _tool_name)) = name.split_once(':') {
-            if let Some(connection) = servers.get(server_name) {
-                let result = connection.call_tool(name, args).await?;
-                return Ok(McpToolResult::success(result));
-            }
+            let direct = if let Some((server_name, _tool_name)) = name.split_once(':') {
+                servers.get(server_name).cloned()
+            } else {
+                None
+            };
+
+            let all: Vec<_> = servers.values().cloned().collect();
+            (direct, all)
+        };
+
+        if let Some(connection) = direct_match {
+            let result = connection.call_tool(name, args).await?;
+            return Ok(McpToolResult::success(result));
         }
 
-        // Try all servers
-        for connection in servers.values() {
+        for connection in &all_connections {
             if connection.has_tool(name).await {
                 let result = connection.call_tool(name, args).await?;
                 return Ok(McpToolResult::success(result));
             }
         }
 
-        // Tool not found
         Err(AlephError::McpToolNotFound(name.to_string()))
     }
 
@@ -432,7 +454,7 @@ impl McpClient {
                         headers: config.headers.clone(),
                         timeout,
                     },
-                ))
+                )?)
             }
             TransportPreference::Sse => {
                 tracing::info!(
@@ -447,7 +469,7 @@ impl McpClient {
                         headers: config.headers.clone(),
                         timeout,
                     },
-                );
+                )?;
 
                 // Set up sampling request handler for server-initiated sampling/createMessage
                 let sampling_handler = Arc::clone(&self.sampling_handler);
@@ -457,29 +479,29 @@ impl McpClient {
                         let handler = Arc::clone(&sampling_handler);
                         let server = server_name.clone();
                         let params_value = params.unwrap_or(serde_json::Value::Null);
+                        let rid = request_id.clone();
 
                         tokio::spawn(async move {
                             tracing::debug!(
                                 server = %server,
-                                request_id = request_id,
+                                request_id = %rid,
                                 "Processing sampling/createMessage request"
                             );
 
-                            match handler.handle_request(request_id, params_value, &server).await {
+                            match handler.handle_request(rid.clone(), params_value, &server).await {
                                 Ok(response) => {
                                     tracing::debug!(
                                         server = %server,
-                                        request_id = request_id,
+                                        request_id = %rid,
                                         "Sampling request completed successfully"
                                     );
-                                    // Note: Response sending will be handled by Task 22
-                                    // For now, just log the response
+                                    // TODO: Send response back to server via transport
                                     let _ = response;
                                 }
                                 Err(e) => {
                                     tracing::error!(
                                         server = %server,
-                                        request_id = request_id,
+                                        request_id = %rid,
                                         error = %e,
                                         "Sampling request failed"
                                     );
@@ -489,7 +511,7 @@ impl McpClient {
                     } else {
                         tracing::warn!(
                             method = %method,
-                            request_id = request_id,
+                            request_id = %request_id,
                             "Received unknown server-initiated request"
                         );
                     }
@@ -514,7 +536,7 @@ impl McpClient {
                         headers: config.headers.clone(),
                         timeout,
                     },
-                ))
+                )?)
             }
         };
 
@@ -570,10 +592,14 @@ impl McpClient {
 
     /// Check health of all external servers
     pub async fn check_server_health(&self) -> HashMap<String, bool> {
-        let servers = self.external_servers.read().await;
-        let mut health = HashMap::new();
+        // Clone Arc refs under lock, then release lock before awaiting network I/O
+        let connections: Vec<(String, Arc<McpServerConnection>)> = {
+            let servers = self.external_servers.read().await;
+            servers.iter().map(|(k, v)| (k.clone(), Arc::clone(v))).collect()
+        };
 
-        for (name, connection) in servers.iter() {
+        let mut health = HashMap::new();
+        for (name, connection) in &connections {
             health.insert(name.clone(), connection.is_running().await);
         }
 

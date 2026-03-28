@@ -28,7 +28,7 @@ pub fn resolve_linked_peer_id(
 
     // Sort by canonical name for deterministic resolution when multiple matches exist
     let mut sorted_links: Vec<_> = identity_links.iter().collect();
-    sorted_links.sort_by_key(|(k, _)| (*k).clone());
+    sorted_links.sort_by(|(a, _), (b, _)| a.cmp(b));
 
     for (canonical, ids) in sorted_links {
         let canonical_name = canonical.trim();

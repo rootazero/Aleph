@@ -118,10 +118,8 @@ pub static SAFE_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
         // Information commands
         Regex::new(r"^(echo|printf|date|cal|whoami|hostname|uname)(\s+|$)").unwrap(),
         Regex::new(r"^(which|where|whereis|type|file|stat)(\s+|$)").unwrap(),
-        // Git read operations
-        Regex::new(r"^git\s+(status|log|diff|show|branch|remote|fetch)(\s+|$)").unwrap(),
-        // Environment
-        Regex::new(r"^(env|printenv|set)(\s+|$)").unwrap(),
+        // Git read-only operations (fetch/remote excluded: they do network I/O or can mutate)
+        Regex::new(r"^git\s+(status|log|diff|show|branch)(\s+|$)").unwrap(),
         // Test and comparison
         Regex::new(r"^(test|\[|diff|cmp|comm)(\s+|$)").unwrap(),
         // Path operations

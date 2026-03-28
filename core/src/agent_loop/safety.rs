@@ -127,9 +127,11 @@ impl SafetyGuard {
     /// Returns `Err(SafetyError::NeedsConfirmation)` if the tool permission is Ask.
     /// Returns `Err(SafetyError::PolicyDenied)` if the tool permission is Deny.
     pub fn check(&self, call: &ToolCall) -> Result<(), SafetyError> {
-        // Build the haystack: "{name} {input_json}"
-        let input_json = call.input.to_string();
-        let haystack = format!("{} {}", call.name, input_json);
+        // Build the haystack from extracted string values (not raw JSON).
+        // Matching against serde_json::to_string() would let attackers bypass
+        // patterns via JSON escape sequences (e.g. \n bypassing \s+).
+        let mut haystack = call.name.clone();
+        collect_string_values(&call.input, &mut haystack);
 
         // Blocked patterns take highest priority.
         for pattern in &self.blocked_patterns {
@@ -157,6 +159,22 @@ impl SafetyGuard {
                 tool: call.name.clone(),
             }),
         }
+    }
+}
+
+/// Recursively extract all string values from a JSON value into the haystack.
+///
+/// This ensures blocked-pattern regexes match against actual string content
+/// rather than JSON-encoded text, preventing bypass via escape sequences.
+fn collect_string_values(v: &Value, out: &mut String) {
+    match v {
+        Value::String(s) => {
+            out.push(' ');
+            out.push_str(s);
+        }
+        Value::Object(m) => m.values().for_each(|v| collect_string_values(v, out)),
+        Value::Array(a) => a.iter().for_each(|v| collect_string_values(v, out)),
+        _ => {}
     }
 }
 
@@ -369,5 +387,25 @@ mod tests {
             input: json!({}),
         };
         assert!(guard.check(&call).is_ok());
+    }
+
+    #[test]
+    fn test_blocked_pattern_resists_json_escape_bypass() {
+        let guard = SafetyGuard::new(
+            vec![r"rm\s+-rf\s+/".to_string()],
+            HashMap::new(),
+            PermissionAction::Allow,
+        );
+        // Newline embedded in the command — previously bypassed because
+        // serde_json::to_string() encodes \n as \\n (two chars, not whitespace).
+        let call = ToolCall {
+            name: "shell".to_string(),
+            input: json!({ "command": "rm\n-rf /" }),
+        };
+        let result = guard.check(&call);
+        assert!(
+            matches!(result, Err(SafetyError::Blocked { .. })),
+            "newline in command should still match blocked pattern"
+        );
     }
 }

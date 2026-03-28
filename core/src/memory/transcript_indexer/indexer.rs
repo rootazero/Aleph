@@ -103,12 +103,17 @@ impl TranscriptIndexer {
         text.len().div_ceil(4)  // 4 chars per token, round up
     }
 
-    /// Get overlap text from end of chunk
+    /// Get overlap text from end of chunk (UTF-8 safe)
     fn get_overlap_text(&self, text: &str) -> String {
         let overlap_chars = self.config.overlap_tokens * 4;
-        if text.len() <= overlap_chars {
+        let char_count = text.chars().count();
+        if char_count <= overlap_chars {
             return text.to_string();
         }
-        text[text.len() - overlap_chars..].to_string()
+        let skip = char_count - overlap_chars;
+        text.char_indices()
+            .nth(skip)
+            .map(|(byte_pos, _)| text[byte_pos..].to_string())
+            .unwrap_or_else(|| text.to_string())
     }
 }

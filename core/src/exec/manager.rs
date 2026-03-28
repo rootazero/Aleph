@@ -177,8 +177,15 @@ impl ExecApprovalManager {
         &self,
         record: ExecApprovalRecord,
     ) -> Option<ApprovalDecisionType> {
-        let timeout_ms = record.expires_at_ms.saturating_sub(record.created_at_ms);
-        let timeout = Duration::from_millis(timeout_ms);
+        // Use remaining time from now, not the full original timeout window.
+        // This prevents granting a full timeout if wait_for_decision is called
+        // long after the record was created.
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        let remaining_ms = record.expires_at_ms.saturating_sub(now_ms);
+        let timeout = Duration::from_millis(remaining_ms);
 
         let (tx, rx) = oneshot::channel();
         let id = record.id.clone();
@@ -488,7 +495,7 @@ mod tests {
 
         // Spawn wait task
         let manager_clone = ExecApprovalManager::with_storage(manager.storage.clone());
-        manager_clone.pending.write().unwrap().insert(
+        manager_clone.pending.write().unwrap_or_else(|e| e.into_inner()).insert(
             id.clone(),
             PendingEntry {
                 record: record.clone(),
@@ -517,7 +524,7 @@ mod tests {
         // Add some pending
         let request1 = mock_request();
         let record1 = manager.create(&request1, 60_000);
-        manager.pending.write().unwrap().insert(
+        manager.pending.write().unwrap_or_else(|e| e.into_inner()).insert(
             record1.id.clone(),
             PendingEntry {
                 record: record1,
@@ -528,7 +535,7 @@ mod tests {
 
         let request2 = mock_request();
         let record2 = manager.create(&request2, 60_000);
-        manager.pending.write().unwrap().insert(
+        manager.pending.write().unwrap_or_else(|e| e.into_inner()).insert(
             record2.id.clone(),
             PendingEntry {
                 record: record2,

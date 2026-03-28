@@ -19,5 +19,12 @@ pub struct TranscriptionResult {
 #[async_trait]
 pub trait TranscriptionService: Send + Sync {
     /// Transcribe the given audio file to text.
-    async fn transcribe(&self, audio: &CachedMedia) -> anyhow::Result<TranscriptionResult>;
+    ///
+    /// `language` is an optional ISO 639-1 hint (e.g. "en", "zh") passed
+    /// natively to the transcription API rather than encoded in a prompt.
+    async fn transcribe(
+        &self,
+        audio: &CachedMedia,
+        language: Option<&str>,
+    ) -> anyhow::Result<TranscriptionResult>;
 }

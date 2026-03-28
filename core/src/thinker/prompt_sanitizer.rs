@@ -140,7 +140,11 @@ fn strip_injection_markers(value: &str) -> String {
             // All CI_MARKERS are ASCII-only, so ASCII-only lowercasing is sufficient.
             let lower = result.to_ascii_lowercase();
             if let Some(pos) = lower.find(*marker) {
-                result = format!("{}{}", &result[..pos], &result[pos + marker.len()..]);
+                let (head, tail) = (
+                    result.get(..pos).unwrap_or_default(),
+                    result.get(pos + marker.len()..).unwrap_or_default(),
+                );
+                result = format!("{}{}", head, tail);
             }
         }
     }

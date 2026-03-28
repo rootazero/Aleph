@@ -85,11 +85,19 @@ impl PluginLoader {
     }
 
     /// Get all MCP server configs as a flat HashMap (server_id -> config).
+    ///
+    /// If two plugins register MCP servers with the same ID, the later one wins
+    /// and a warning is logged.
     pub fn all_mcp_configs_map(&self) -> HashMap<String, McpManagerConfig> {
         let mut result = HashMap::new();
-        for servers in self.mcp_configs.values() {
+        for (plugin_id, servers) in &self.mcp_configs {
             for (id, config) in servers {
-                result.insert(id.clone(), config.clone());
+                if let Some(_existing) = result.insert(id.clone(), config.clone()) {
+                    warn!(
+                        "MCP server ID '{}' from plugin '{}' overwrites a server with the same ID from another plugin",
+                        id, plugin_id
+                    );
+                }
             }
         }
         result

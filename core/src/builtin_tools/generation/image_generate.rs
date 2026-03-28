@@ -122,11 +122,7 @@ impl ImageGenerateTool {
         // Find provider (using scoped block to ensure lock is dropped before await)
         let (provider_name, provider) = {
             // Acquire read lock on registry
-            let registry = self.registry.read().map_err(|e| {
-                let error_msg = format!("Failed to acquire registry lock: {}", e);
-                notify_tool_result(Self::NAME, &error_msg, false);
-                ToolError::Execution(error_msg)
-            })?;
+            let registry = self.registry.read().unwrap_or_else(|e| e.into_inner());
 
             if let Some(name) = &args.provider {
                 let provider = registry.get(name).ok_or_else(|| {

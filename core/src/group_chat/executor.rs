@@ -1,4 +1,4 @@
-//! GroupChat Executor — drives the coordinator→persona LLM loop.
+//! GroupChat Executor — drives the coordinator->persona LLM loop.
 //!
 //! Given a session and a user message, the executor:
 //! 1. Records the user message as a System turn
@@ -7,28 +7,112 @@
 //! 4. Records each persona response and returns the collected messages
 
 use crate::providers::AiProvider;
+use crate::providers::ProviderRegistry;
 use crate::providers::adapter::RequestPayload;
 use crate::providers::message::UnifiedMessage;
+use crate::resilience::database::StateDatabase;
 use crate::sync_primitives::Arc;
 
 use super::coordinator::{
     build_coordinator_prompt, build_fallback_plan, build_persona_prompt, parse_coordinator_plan,
 };
-use super::protocol::{GroupChatError, GroupChatMessage, Speaker};
+use super::protocol::{GroupChatError, GroupChatMessage, Persona, Speaker};
 use super::session::GroupChatSession;
 
-/// Executor that drives the coordinator→persona LLM loop for a single round.
+/// Executor that drives the coordinator->persona LLM loop for a single round.
 ///
-/// Holds an `Arc<dyn AiProvider>` used for both coordinator and persona calls.
-/// The executor is stateless — all session state lives in [`GroupChatSession`].
+/// Holds an `Arc<dyn AiProvider>` as the default provider, and an optional
+/// [`ProviderRegistry`] for resolving per-persona provider overrides.
 pub struct GroupChatExecutor {
-    provider: Arc<dyn AiProvider>,
+    default_provider: Arc<dyn AiProvider>,
+    provider_registry: Option<Arc<ProviderRegistry>>,
+    coordinator_visible: bool,
+    db: Option<Arc<StateDatabase>>,
 }
 
 impl GroupChatExecutor {
-    /// Create a new executor with the given AI provider.
-    pub fn new(provider: Arc<dyn AiProvider>) -> Self {
-        Self { provider }
+    /// Create a new executor with the given default AI provider.
+    pub fn new(default_provider: Arc<dyn AiProvider>) -> Self {
+        Self {
+            default_provider,
+            provider_registry: None,
+            coordinator_visible: false,
+            db: None,
+        }
+    }
+
+    /// Set a provider registry for per-persona provider resolution.
+    ///
+    /// When a persona specifies a `provider` field, the executor looks it up
+    /// in this registry. Falls back to the default provider if not found.
+    pub fn with_provider_registry(mut self, registry: Arc<ProviderRegistry>) -> Self {
+        self.provider_registry = Some(registry);
+        self
+    }
+
+    /// Set whether the coordinator's plan is included as a message.
+    pub fn with_coordinator_visible(mut self, visible: bool) -> Self {
+        self.coordinator_visible = visible;
+        self
+    }
+
+    /// Set the database for turn persistence.
+    pub fn with_database(mut self, db: Arc<StateDatabase>) -> Self {
+        self.db = Some(db);
+        self
+    }
+
+    /// Resolve the AI provider for a persona.
+    ///
+    /// If the persona specifies a `provider` name and a registry is available,
+    /// looks up the provider. Falls back to the default provider.
+    fn resolve_provider(&self, persona: &Persona) -> Arc<dyn AiProvider> {
+        if let Some(ref provider_name) = persona.provider {
+            if let Some(ref registry) = self.provider_registry {
+                if let Some(provider) = registry.get(provider_name) {
+                    return provider;
+                }
+                tracing::warn!(
+                    subsystem = "group_chat",
+                    persona_id = %persona.id,
+                    provider = %provider_name,
+                    "persona provider not found in registry, using default"
+                );
+            }
+        }
+        Arc::clone(&self.default_provider)
+    }
+
+    /// Persist a conversation turn to the database (best-effort).
+    fn persist_turn(
+        &self,
+        session_id: &str,
+        round: u32,
+        sequence: u32,
+        speaker: &Speaker,
+        content: &str,
+    ) {
+        let Some(db) = &self.db else { return };
+        let (speaker_type, speaker_id, speaker_name) = match speaker {
+            Speaker::Coordinator => ("coordinator", None, "Coordinator"),
+            Speaker::System => ("system", None, "System"),
+            Speaker::Persona { id, name } => ("persona", Some(id.as_str()), name.as_str()),
+        };
+        if let Err(e) = db.insert_group_chat_turn(
+            session_id,
+            round,
+            sequence,
+            speaker_type,
+            speaker_id,
+            speaker_name,
+            content,
+        ) {
+            tracing::warn!(
+                subsystem = "group_chat",
+                error = %e,
+                "failed to persist group chat turn to database"
+            );
+        }
     }
 
     /// Execute a single discussion round.
@@ -42,6 +126,9 @@ impl GroupChatExecutor {
     /// 5. Records each persona response as a turn in the session.
     /// 6. Returns the collected `GroupChatMessage` list for this round.
     ///
+    /// The `targets` parameter is used by the Mention action to instruct the
+    /// coordinator to prioritize specific personas.
+    ///
     /// # Errors
     ///
     /// - [`GroupChatError::ProviderUnavailable`] if the coordinator LLM call fails.
@@ -51,11 +138,13 @@ impl GroupChatExecutor {
         &self,
         session: &mut GroupChatSession,
         user_message: &str,
+        targets: &[String],
     ) -> Result<Vec<GroupChatMessage>, GroupChatError> {
         let round = session.current_round + 1;
 
         // Step 1: Record user message as a System turn
         session.add_turn(round, Speaker::System, user_message.to_string());
+        self.persist_turn(&session.id, round, 0, &Speaker::System, user_message);
 
         // Step 2: Build coordinator prompt and call LLM
         let history = session.build_history_text();
@@ -64,11 +153,12 @@ impl GroupChatExecutor {
             user_message,
             &history,
             &session.topic,
+            targets,
         );
 
         let coordinator_raw = {
             let msgs = [UnifiedMessage::user(&coordinator_prompt)];
-            self.provider
+            self.default_provider
                 .process(RequestPayload::new(&msgs))
                 .await
                 .map_err(|e| GroupChatError::ProviderUnavailable(e.to_string()))?
@@ -79,8 +169,27 @@ impl GroupChatExecutor {
         let plan = parse_coordinator_plan(&coordinator_raw)
             .unwrap_or_else(|_| build_fallback_plan(&session.participants));
 
-        // Step 4 & 5: Invoke each persona and collect messages
+        // Step 3b: Optionally include coordinator plan as a visible message
         let mut messages = Vec::new();
+        let mut seq_offset = 0u32;
+
+        if self.coordinator_visible {
+            let speaker = Speaker::Coordinator;
+            session.add_turn(round, speaker.clone(), coordinator_raw.clone());
+            self.persist_turn(&session.id, round, 1, &speaker, &coordinator_raw);
+
+            messages.push(GroupChatMessage {
+                session_id: session.id.clone(),
+                speaker,
+                content: coordinator_raw.clone(),
+                round,
+                sequence: 0,
+                is_final: plan.respondents.is_empty(),
+            });
+            seq_offset = 1;
+        }
+
+        // Step 4 & 5: Invoke each persona and collect messages
         let mut prior_discussion = String::new();
         let total_respondents = plan.respondents.len();
 
@@ -101,10 +210,11 @@ impl GroupChatExecutor {
                 &respondent.guidance,
             );
 
-            // Call persona LLM
+            // Call persona LLM (resolve per-persona provider)
+            let provider = self.resolve_provider(&persona);
             let persona_response = {
                 let msgs = [UnifiedMessage::user(&persona_prompt)];
-                self.provider
+                provider
                     .process(RequestPayload::new(&msgs).with_system(Some(&persona.system_prompt)))
                     .await
                     .map_err(|e| GroupChatError::PersonaInvocationFailed {
@@ -121,6 +231,9 @@ impl GroupChatExecutor {
             };
             session.add_turn(round, speaker.clone(), persona_response.clone());
 
+            let sequence = i as u32 + seq_offset;
+            self.persist_turn(&session.id, round, sequence + 1, &speaker, &persona_response);
+
             // Accumulate prior discussion for the next persona
             prior_discussion.push_str(&format!("[{}]: {}\n\n", persona.name, persona_response));
 
@@ -131,7 +244,7 @@ impl GroupChatExecutor {
                 speaker,
                 content: persona_response,
                 round,
-                sequence: i as u32,
+                sequence,
                 is_final,
             });
         }
@@ -149,7 +262,7 @@ mod tests {
     use super::*;
     use crate::providers::AiProvider;
     use crate::providers::adapter::{ProviderResponse, RequestPayload};
-    
+
     use crate::sync_primitives::Arc;
     use std::future::Future;
     use std::pin::Pin;
@@ -243,7 +356,7 @@ mod tests {
         let mut session = make_session();
 
         let messages = executor
-            .execute_round(&mut session, "How should we design auth?")
+            .execute_round(&mut session, "How should we design auth?", &[])
             .await
             .expect("execute_round should succeed");
 
@@ -288,7 +401,7 @@ mod tests {
         let mut session = make_session();
 
         let messages = executor
-            .execute_round(&mut session, "Should we ship?")
+            .execute_round(&mut session, "Should we ship?", &[])
             .await
             .expect("execute_round should succeed");
 
@@ -311,7 +424,7 @@ mod tests {
         let mut session = make_session();
 
         let messages = executor
-            .execute_round(&mut session, "Tell me about caching")
+            .execute_round(&mut session, "Tell me about caching", &[])
             .await
             .expect("execute_round should succeed with fallback");
 
@@ -349,7 +462,7 @@ mod tests {
         let mut session = make_session();
 
         let result = executor
-            .execute_round(&mut session, "Hello?")
+            .execute_round(&mut session, "Hello?", &[])
             .await;
 
         assert!(result.is_err());
@@ -401,7 +514,7 @@ mod tests {
         let mut session = make_session();
 
         let result = executor
-            .execute_round(&mut session, "Help me")
+            .execute_round(&mut session, "Help me", &[])
             .await;
 
         assert!(result.is_err());
@@ -428,7 +541,7 @@ mod tests {
         let mut session = make_session();
 
         let result = executor
-            .execute_round(&mut session, "Who are you?")
+            .execute_round(&mut session, "Who are you?", &[])
             .await;
 
         assert!(result.is_err());
@@ -456,20 +569,18 @@ mod tests {
         let mut session = make_session();
 
         // Round 1
-        let msgs1 = executor.execute_round(&mut session, "First").await.unwrap();
+        let msgs1 = executor.execute_round(&mut session, "First", &[]).await.unwrap();
         assert_eq!(msgs1[0].round, 1);
         assert_eq!(session.current_round, 1);
 
         // Round 2
-        let msgs2 = executor.execute_round(&mut session, "Second").await.unwrap();
+        let msgs2 = executor.execute_round(&mut session, "Second", &[]).await.unwrap();
         assert_eq!(msgs2[0].round, 2);
         assert_eq!(session.current_round, 2);
     }
 
     #[tokio::test]
     async fn test_prior_discussion_accumulates() {
-        // Verify that persona prompts include prior discussion context.
-        // We capture the input via a provider that echoes what it receives.
         let coordinator_response = r#"{"respondents":[{"persona_id":"arch","order":0,"guidance":"go first"},{"persona_id":"pm","order":1,"guidance":"go second"}],"need_summary":false}"#;
 
         struct EchoAfterCoordinator {
@@ -487,7 +598,6 @@ mod tests {
                     let resp = self.coordinator_response.clone();
                     Box::pin(async move { Ok(ProviderResponse::text_only(resp)) })
                 } else {
-                    // Echo a brief summary so we can verify accumulation
                     let input = payload.messages.first()
                         .and_then(|m| m.content_blocks().first())
                         .and_then(|b| b.as_text())
@@ -514,7 +624,7 @@ mod tests {
         let mut session = make_session();
 
         let messages = executor
-            .execute_round(&mut session, "Discuss caching")
+            .execute_round(&mut session, "Discuss caching", &[])
             .await
             .unwrap();
 
@@ -522,5 +632,83 @@ mod tests {
         assert_eq!(messages[0].content, "call#1 prior=false");
         // Second persona SHOULD have prior discussion (from the first persona)
         assert_eq!(messages[1].content, "call#2 prior=true");
+    }
+
+    #[tokio::test]
+    async fn test_coordinator_visible() {
+        let coordinator_response = r#"{"respondents":[{"persona_id":"arch","order":0,"guidance":"go"}],"need_summary":false}"#;
+
+        let provider = Arc::new(SequentialMockProvider::new(vec![
+            coordinator_response.to_string(),
+            "Architect says hi.".to_string(),
+        ]));
+
+        let executor = GroupChatExecutor::new(provider).with_coordinator_visible(true);
+        let mut session = make_session();
+
+        let messages = executor
+            .execute_round(&mut session, "Hello", &[])
+            .await
+            .unwrap();
+
+        // Should have coordinator message + persona message
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].speaker.name(), "Coordinator");
+        assert!(messages[0].content.contains("respondents"));
+        assert_eq!(messages[0].sequence, 0);
+        assert!(!messages[0].is_final);
+
+        assert_eq!(messages[1].speaker.name(), "Architect");
+        assert_eq!(messages[1].content, "Architect says hi.");
+        assert_eq!(messages[1].sequence, 1);
+        assert!(messages[1].is_final);
+    }
+
+    #[tokio::test]
+    async fn test_per_persona_provider_resolution() {
+        // Create a provider registry with a named provider
+        let mut registry = ProviderRegistry::new();
+        let special_provider = Arc::new(SequentialMockProvider::new(vec![
+            "Special provider response.".to_string(),
+        ]));
+        registry
+            .register("special".to_string(), special_provider)
+            .unwrap();
+
+        // Coordinator returns plan selecting the persona with provider override
+        let coordinator_response =
+            r#"{"respondents":[{"persona_id":"custom","order":0,"guidance":""}],"need_summary":false}"#;
+
+        let default_provider = Arc::new(SequentialMockProvider::new(vec![
+            coordinator_response.to_string(),
+            // This should NOT be used for the persona call
+            "Default provider response (should not appear).".to_string(),
+        ]));
+
+        let executor = GroupChatExecutor::new(default_provider)
+            .with_provider_registry(Arc::new(registry));
+
+        let mut session = GroupChatSession::new(
+            "test-provider".to_string(),
+            None,
+            vec![Persona {
+                id: "custom".to_string(),
+                name: "Custom".to_string(),
+                system_prompt: "You are custom.".to_string(),
+                provider: Some("special".to_string()),
+                model: None,
+                thinking_level: None,
+            }],
+            "test".to_string(),
+            "test:1".to_string(),
+        );
+
+        let messages = executor
+            .execute_round(&mut session, "Test provider resolution", &[])
+            .await
+            .unwrap();
+
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].content, "Special provider response.");
     }
 }

@@ -129,7 +129,7 @@ impl Lane {
     /// Get the default priority for this lane
     ///
     /// Higher values indicate higher priority.
-    pub fn default_priority(&self) -> i8 {
+    pub fn default_priority(&self) -> u8 {
         match self {
             Lane::Main => 10,
             Lane::Nested => 8,
@@ -267,10 +267,13 @@ impl SubAgentRun {
         task: impl Into<String>,
         agent_type: impl Into<String>,
     ) -> Self {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as i64;
+        let now = i64::try_from(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis(),
+        )
+        .unwrap_or(i64::MAX);
 
         Self {
             run_id: uuid::Uuid::new_v4().to_string(),
@@ -287,7 +290,7 @@ impl SubAgentRun {
             outcome: None,
             error: None,
             lane: Lane::default(),
-            priority: Lane::default().default_priority() as u8,
+            priority: Lane::default().default_priority(),
             max_turns: None,
             timeout_ms: None,
             checkpoint_id: None,
@@ -299,7 +302,7 @@ impl SubAgentRun {
     /// Set the execution lane
     pub fn with_lane(mut self, lane: Lane) -> Self {
         self.lane = lane;
-        self.priority = lane.default_priority() as u8;
+        self.priority = lane.default_priority();
         self
     }
 
@@ -409,7 +412,7 @@ mod tests {
         assert_eq!(run.agent_type, "mcp");
         assert_eq!(run.status, RunStatus::Pending);
         assert_eq!(run.lane, Lane::Subagent);
-        assert_eq!(run.priority, Lane::Subagent.default_priority() as u8);
+        assert_eq!(run.priority, Lane::Subagent.default_priority());
         assert_eq!(run.cleanup_policy, CleanupPolicy::Keep);
         assert!(run.created_at > 0);
         assert!(run.started_at.is_none());
@@ -435,7 +438,7 @@ mod tests {
             .with_cleanup_policy(CleanupPolicy::Archive);
 
         assert_eq!(run.lane, Lane::Main);
-        assert_eq!(run.priority, Lane::Main.default_priority() as u8);
+        assert_eq!(run.priority, Lane::Main.default_priority());
         assert_eq!(run.label, Some("Test Label".to_string()));
         assert_eq!(run.timeout_ms, Some(30000));
         assert_eq!(run.max_turns, Some(10));

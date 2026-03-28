@@ -66,9 +66,7 @@ impl ExecutorPrompt {
             | TaskCategory::FileCleanup => FILE_OPERATION_GUIDELINES,
             TaskCategory::CodeExecution => CODE_EXECUTION_GUIDELINES,
             TaskCategory::ImageGeneration => IMAGE_GENERATION_GUIDELINES,
-            TaskCategory::DocumentGeneration | TaskCategory::DocumentGenerate => {
-                DOCUMENT_GENERATION_GUIDELINES
-            }
+            TaskCategory::DocumentGeneration => DOCUMENT_GENERATION_GUIDELINES,
             TaskCategory::AppLaunch | TaskCategory::AppAutomation => APP_AUTOMATION_GUIDELINES,
             TaskCategory::WebSearch | TaskCategory::WebFetch => WEB_OPERATION_GUIDELINES,
             TaskCategory::SystemInfo => SYSTEM_INFO_GUIDELINES,

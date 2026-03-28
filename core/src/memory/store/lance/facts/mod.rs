@@ -323,12 +323,12 @@ impl MemoryStore for LanceMemoryBackend {
         let ns_value = ns.to_namespace_value();
         let ws_safe = escape_sql_string(workspace);
         let filter = if matches!(ns, NamespaceScope::Owner) {
-            format!("fact_type = '{}' AND agent = '{}'", fact_type.as_str(), ws_safe)
+            format!("fact_type = '{}' AND agent = '{}'", escape_sql_string(fact_type.as_str()), ws_safe)
         } else {
             let ns_safe = escape_sql_string(&ns_value);
             format!(
                 "fact_type = '{}' AND namespace = '{}' AND agent = '{}'",
-                fact_type.as_str(),
+                escape_sql_string(fact_type.as_str()),
                 ns_safe,
                 ws_safe
             )
@@ -422,65 +422,51 @@ impl MemoryStore for LanceMemoryBackend {
         half_life_days: f32,
         min_score: f32,
     ) -> Result<usize, AlephError> {
-        const BATCH_SIZE: usize = 1000;
-        let mut affected = 0usize;
-        let mut offset = 0usize;
-
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs() as i64;
 
-        // Process facts in batches to avoid loading all into memory at once.
-        loop {
-            let batch = scan_facts_with_offset(
-                &self.facts_table,
-                Some("is_valid = true"),
-                Some(BATCH_SIZE),
-                offset,
-            )
-            .await?;
+        // Collect ALL facts first, then apply mutations.
+        // Mutating during offset-based pagination causes facts to be
+        // skipped or double-processed because delete+insert changes row ordering.
+        let all_facts = scan_facts(
+            &self.facts_table,
+            Some("is_valid = true"),
+            None,
+        )
+        .await?;
 
-            if batch.is_empty() {
-                break;
+        let mut affected = 0usize;
+
+        for fact in &all_facts {
+            // Compute days since last access (or creation if never accessed).
+            let last_access = fact.last_accessed_at.unwrap_or(fact.updated_at);
+            let days_since_access = (now - last_access).max(0) as f64 / 86400.0;
+
+            // Ebbinghaus exponential decay: exp(-t * ln(2) / half_life)
+            let decay =
+                (-(days_since_access) * (2.0_f64.ln()) / half_life_days as f64).exp() as f32;
+            let new_confidence = fact.confidence * decay;
+
+            if new_confidence < min_score {
+                // Invalidate the fact due to decay.
+                let mut invalidated = fact.clone();
+                invalidated.is_valid = false;
+                invalidated.invalidation_reason = Some("decay_prune".to_string());
+                invalidated.decay_invalidated_at = Some(now);
+                invalidated.confidence = new_confidence;
+                invalidated.updated_at = now;
+                self.update_fact(&invalidated).await?;
+                affected += 1;
+            } else if (new_confidence - fact.confidence).abs() > f32::EPSILON {
+                // Update confidence with decayed value.
+                let mut updated = fact.clone();
+                updated.confidence = new_confidence;
+                updated.updated_at = now;
+                self.update_fact(&updated).await?;
+                affected += 1;
             }
-
-            let batch_len = batch.len();
-
-            for fact in &batch {
-                // Compute days since last access (or creation if never accessed).
-                let last_access = fact.last_accessed_at.unwrap_or(fact.updated_at);
-                let days_since_access = (now - last_access) as f64 / 86400.0;
-
-                // Ebbinghaus exponential decay: exp(-t * ln(2) / half_life)
-                let decay =
-                    (-(days_since_access) * (2.0_f64.ln()) / half_life_days as f64).exp() as f32;
-                let new_confidence = fact.confidence * decay;
-
-                if new_confidence < min_score {
-                    // Invalidate the fact due to decay.
-                    let mut invalidated = fact.clone();
-                    invalidated.is_valid = false;
-                    invalidated.invalidation_reason = Some("decay_prune".to_string());
-                    invalidated.decay_invalidated_at = Some(now);
-                    invalidated.confidence = new_confidence;
-                    invalidated.updated_at = now;
-                    self.update_fact(&invalidated).await?;
-                    affected += 1;
-                } else if (new_confidence - fact.confidence).abs() > f32::EPSILON {
-                    // Update confidence with decayed value.
-                    let mut updated = fact.clone();
-                    updated.confidence = new_confidence;
-                    updated.updated_at = now;
-                    self.update_fact(&updated).await?;
-                    affected += 1;
-                }
-            }
-
-            if batch_len < BATCH_SIZE {
-                break; // Last batch
-            }
-            offset += batch_len;
         }
 
         Ok(affected)

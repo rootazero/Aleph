@@ -14,13 +14,21 @@ pub enum DirectToolSource {
     Custom,
 }
 
+impl DirectToolSource {
+    /// Returns the string representation of the source.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::SlashCommand => "slash_command",
+            Self::Skill => "skill",
+            Self::Mcp => "mcp",
+            Self::Custom => "custom",
+        }
+    }
+}
+
 /// Which detection layer resolved the intent.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DetectionLayer {
-    /// L0 — system-level / bypass
-    L0,
-    /// L1 — exact slash-command match
-    L1,
     /// L2 — keyword / regex heuristics
     L2,
     /// L3 — lightweight classifier

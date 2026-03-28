@@ -9,8 +9,12 @@ use reqwest::Client;
 use std::collections::HashMap;
 use crate::sync_primitives::{Arc, RwLock};
 
-/// Global protocol registry instance
-pub static PROTOCOL_REGISTRY: Lazy<ProtocolRegistry> = Lazy::new(ProtocolRegistry::new);
+/// Global protocol registry instance (built-in protocols registered at init time)
+pub static PROTOCOL_REGISTRY: Lazy<ProtocolRegistry> = Lazy::new(|| {
+    let registry = ProtocolRegistry::new();
+    registry.register_builtin();
+    registry
+});
 
 /// Protocol factory function type
 type ProtocolFactory = fn(Client) -> Arc<dyn ProtocolAdapter>;

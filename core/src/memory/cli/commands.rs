@@ -109,8 +109,9 @@ pub struct FactSummary {
 impl FactSummary {
     /// Create from a MemoryFact
     pub fn from_fact(fact: &MemoryFact, strength: f32) -> Self {
-        let content_preview = if fact.content.len() > 50 {
-            format!("{}...", &fact.content[..47])
+        let content_preview = if fact.content.chars().count() > 50 {
+            let truncated: String = fact.content.chars().take(47).collect();
+            format!("{}...", truncated)
         } else {
             fact.content.clone()
         };

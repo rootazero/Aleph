@@ -460,10 +460,15 @@ After finding a relevant skill, use skill.read(skill_id) to load its full instru
         }
     }
 
-    /// Determine source type based on path
+    /// Determine source type based on path.
+    ///
+    /// "global" = installed under `~/.aleph/` or `~/.claude/` (skills, extensions, plugins).
+    /// Everything else is "project" (workspace-local).
     fn get_source_type(&self, skill_dir: &Path) -> String {
         if let Ok(home) = crate::utils::paths::get_home_dir() {
-            if skill_dir.starts_with(&home) {
+            let aleph_root = home.join(".aleph");
+            let claude_root = home.join(".claude");
+            if skill_dir.starts_with(&aleph_root) || skill_dir.starts_with(&claude_root) {
                 return "global".to_string();
             }
         }

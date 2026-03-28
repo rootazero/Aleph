@@ -105,6 +105,11 @@ impl MarkdownSkillGenerator {
     /// Returns the path to the generated file
     pub fn generate(&self, suggestion: &SolidificationSuggestion) -> Result<PathBuf> {
         let skill_name = to_skill_name(&suggestion.suggested_name);
+        if skill_name.is_empty() {
+            return Err(crate::error::AlephError::IoError(
+                format!("Cannot derive a valid skill name from '{}'", suggestion.suggested_name)
+            ));
+        }
         let skill_dir = self.config.output_dir.join(&skill_name);
 
         // Create skill directory
@@ -163,7 +168,8 @@ impl MarkdownSkillGenerator {
                     confidence_score: suggestion.confidence as f64,
                     created_from_trace: Some(suggestion.pattern_id.clone()),
                 }),
-                docker: None, // Can be added later if needed
+                timeout_secs: None,
+                docker: None,
             }),
         };
 
@@ -306,16 +312,28 @@ impl MarkdownSkillGenerator {
         Ok(result)
     }
 
-    /// Extract binary requirements from instructions
+    /// Extract binary requirements from instructions using word boundary matching.
     fn extract_binary_requirements(&self, instructions: &str) -> Vec<String> {
         let mut bins = Vec::new();
 
-        // Simple heuristic: look for common command patterns
         let common_commands = ["git", "docker", "kubectl", "gh", "aws", "npm", "cargo"];
 
         for cmd in common_commands {
-            if instructions.contains(cmd) {
-                bins.push(cmd.to_string());
+            // Check for word boundaries: the command must not be part of a larger word.
+            // Safety: both `cmd` and boundary chars we check are ASCII, so byte indexing
+            // is valid — any non-ASCII byte (e.g. multi-byte UTF-8) will simply fail
+            // `is_ascii_alphanumeric()` and count as a word boundary, which is correct.
+            for (i, _) in instructions.match_indices(cmd) {
+                let before_ok = i == 0
+                    || !instructions.as_bytes()[i - 1].is_ascii_alphanumeric();
+                let after_pos = i + cmd.len();
+                let after_ok = after_pos >= instructions.len()
+                    || !instructions.as_bytes()[after_pos].is_ascii_alphanumeric();
+
+                if before_ok && after_ok {
+                    bins.push(cmd.to_string());
+                    break;
+                }
             }
         }
 
@@ -324,32 +342,34 @@ impl MarkdownSkillGenerator {
     }
 
     /// Extract input hints from instructions
-    fn extract_input_hints(&self, instructions: &str) -> std::collections::HashMap<String, InputHint> {
-        use std::collections::HashMap;
+    fn extract_input_hints(&self, instructions: &str) -> std::collections::BTreeMap<String, InputHint> {
+        use std::collections::BTreeMap;
 
-        let mut hints = HashMap::new();
+        let mut hints = BTreeMap::new();
 
         // Simple heuristic: look for common parameter patterns
         // This is a basic implementation - could be enhanced with LLM extraction
 
-        // Look for --flag patterns
+        // Look for --flag patterns (ASCII-only flag names, safe to use byte offsets)
         for line in instructions.lines() {
             if let Some(flag_start) = line.find("--") {
+                // `flag_start + 2` is safe: "--" is 2 ASCII bytes
                 let rest = &line[flag_start + 2..];
-                if let Some(end) = rest.find(|c: char| !c.is_alphanumeric() && c != '-' && c != '_') {
+                let end = rest.find(|c: char| !c.is_ascii_alphanumeric() && c != '-' && c != '_')
+                    .unwrap_or(rest.len());
+                if end > 0 {
+                    // `end` from `find` on ASCII-only predicate is a valid char boundary
                     let flag_name = &rest[..end];
-                    if !flag_name.is_empty() {
-                        hints.insert(
-                            flag_name.replace('-', "_"),
-                            InputHint {
-                                hint_type: Some("string".to_string()),
-                                pattern: None,
-                                values: None,
-                                description: None,
-                                optional: true, // Default to optional for auto-extracted
-                            },
-                        );
-                    }
+                    hints.insert(
+                        flag_name.replace('-', "_"),
+                        InputHint {
+                            hint_type: Some("string".to_string()),
+                            pattern: None,
+                            values: None,
+                            description: None,
+                            optional: true, // Default to optional for auto-extracted
+                        },
+                    );
                 }
             }
         }
@@ -370,7 +390,10 @@ impl Default for MarkdownSkillGenerator {
 /// Replaces backslashes and double-quotes so the value cannot break
 /// out of a YAML `"..."` literal.
 fn escape_yaml_string(s: &str) -> String {
-    s.replace('\\', "\\\\").replace('"', "\\\"")
+    s.replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
 }
 
 /// Convert a suggestion name to a valid skill name (kebab-case)
@@ -394,6 +417,8 @@ mod tests {
         assert_eq!(to_skill_name("Quick Fix Git"), "quick-fix-git");
         assert_eq!(to_skill_name("Docker Build & Push"), "docker-build-push");
         assert_eq!(to_skill_name("search_files"), "search-files");
+        // All-symbol input produces empty string
+        assert_eq!(to_skill_name("!@#$%"), "");
     }
 
     #[test]

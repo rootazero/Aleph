@@ -168,31 +168,45 @@ pub(in crate::commands::start) async fn register_agent_handlers(
     };
 
     // Initialize SwarmCoordinator and attach the coord task store.
-    let swarm_coordinator: Option<Arc<alephcore::agents::swarm::SwarmCoordinator>> = {
+    let swarm_coordinator: Option<Arc<alephcore::agents::swarm::SwarmCoordinator>> = async {
         use alephcore::agents::swarm::{SwarmCoordinator, SwarmConfig};
 
-        match SwarmCoordinator::with_config(SwarmConfig::default()).await {
-            Ok(coordinator) => {
-                let coordinator = if let Some(ref store) = coord_store {
-                    coordinator.with_task_store(store.clone())
-                } else {
-                    coordinator
-                };
-                let coordinator = Arc::new(coordinator);
-                coordinator.clone().start().await;
-                if !daemon {
-                    println!("  Swarm coordinator started");
-                }
-                Some(coordinator)
-            }
-            Err(e) => {
+        let coordinator = SwarmCoordinator::with_config(SwarmConfig::default())
+            .await
+            .map_err(|e| {
                 if !daemon {
                     eprintln!("Warning: Failed to initialize swarm coordinator: {}.", e);
                 }
-                None
+            })
+            .ok()?;
+
+        // Attach task store if available; on failure, recreate without it
+        let coordinator = if let Some(ref store) = coord_store {
+            match coordinator.with_task_store(store.clone()) {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::warn!("Failed to attach task store to swarm coordinator: {e}");
+                    // coordinator was consumed; recreate without task store
+                    SwarmCoordinator::with_config(SwarmConfig::default())
+                        .await
+                        .map_err(|e2| {
+                            tracing::error!("Swarm coordinator recreation failed: {e2}");
+                        })
+                        .ok()?
+                }
             }
+        } else {
+            coordinator
+        };
+
+        let coordinator = Arc::new(coordinator);
+        coordinator.clone().start().await;
+        if !daemon {
+            println!("  Swarm coordinator started");
         }
-    };
+        Some(coordinator)
+    }
+    .await;
 
     // Extract the AgentMessageBus from the coordinator for tool config wiring.
     let agent_message_bus: Option<Arc<alephcore::agents::swarm::AgentMessageBus>> =

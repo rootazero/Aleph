@@ -336,7 +336,8 @@ pub async fn handle_compact(
     }
 
     // Build summary of compacted messages
-    let compacted = &messages[..before_count - keep_count];
+    // safe: guarded by before_count > keep_count check above, but use saturating_sub defensively
+    let compacted = &messages[..before_count.saturating_sub(keep_count)];
     let summary = build_compact_summary(compacted);
 
     // Reset session and re-add summary + recent messages

@@ -97,8 +97,9 @@ impl PendingAction {
         hasher.update(format!("{:?}{}", self.action_type, self.created_at));
         let result = hasher.finalize();
 
-        // Take first 16 characters of hex string
-        format!("{:x}", result)[..16].to_string()
+        // Take first 16 characters of hex string (safe: hex is always ASCII)
+        let hex = format!("{:x}", result);
+        hex.get(..16).unwrap_or(&hex).to_string()
     }
 
     /// Check if action is expired

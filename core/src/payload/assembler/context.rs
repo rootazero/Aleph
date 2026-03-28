@@ -56,11 +56,6 @@ fn format_markdown(context: &AgentContext) -> Option<String> {
         sections.push(mcp_section);
     }
 
-    // MCP resources section (tool listing, less commonly used)
-    if let Some(_resources) = &context.mcp_resources {
-        // Tool listing is handled in capability instructions, not here
-    }
-
     // WebFetch content section
     if let Some(webfetch) = &context.webfetch_content {
         let webfetch_section = format_webfetch_content_markdown(webfetch);

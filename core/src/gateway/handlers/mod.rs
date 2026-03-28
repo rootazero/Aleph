@@ -87,6 +87,7 @@ pub mod cron;
 pub mod heartbeat;
 pub mod exec_approvals;
 pub mod wizard;
+#[allow(dead_code)] // DTOs only — handlers deferred to Milestone 2
 pub mod supervisor;
 pub mod approval_bridge;
 pub mod identity;

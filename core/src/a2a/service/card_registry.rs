@@ -68,8 +68,11 @@ impl CardRegistry {
                 base_url: entry.url.clone(),
                 last_seen: Utc::now(),
                 health: AgentHealth::Healthy,
+                auth_token: entry.token.clone(),
             };
 
+            // Upsert: remove existing with same ID to avoid duplicates on config reload
+            agents.retain(|a| a.card.id != agent.card.id);
             agents.push(agent);
         }
     }
@@ -77,8 +80,28 @@ impl CardRegistry {
 
 /// Convert a human-readable name to a URL-safe slug.
 fn slug_from_name(name: &str) -> String {
-    name.to_lowercase()
-        .replace(|c: char| !c.is_alphanumeric(), "-")
+    let raw: String = name
+        .to_lowercase()
+        .replace(|c: char| !c.is_alphanumeric(), "-");
+    // Collapse consecutive hyphens and trim leading/trailing hyphens
+    let mut result = String::with_capacity(raw.len());
+    let mut prev_hyphen = true; // treat start as hyphen to trim leading
+    for c in raw.chars() {
+        if c == '-' {
+            if !prev_hyphen {
+                result.push('-');
+            }
+            prev_hyphen = true;
+        } else {
+            result.push(c);
+            prev_hyphen = false;
+        }
+    }
+    // Trim trailing hyphen
+    if result.ends_with('-') {
+        result.pop();
+    }
+    result
 }
 
 #[async_trait::async_trait]
@@ -105,6 +128,7 @@ impl AgentResolver for CardRegistry {
             base_url: base_url.to_string(),
             last_seen: Utc::now(),
             health: AgentHealth::Healthy,
+            auth_token: None,
         });
         Ok(())
     }
@@ -114,7 +138,7 @@ impl AgentResolver for CardRegistry {
         let before = agents.len();
         agents.retain(|a| a.card.id != agent_id);
         if agents.len() == before {
-            return Err(A2AError::TaskNotFound(format!(
+            return Err(A2AError::InvalidParams(format!(
                 "Agent not found: {}",
                 agent_id
             )));
@@ -285,6 +309,8 @@ mod tests {
     fn slug_from_name_converts_correctly() {
         assert_eq!(slug_from_name("My Agent"), "my-agent");
         assert_eq!(slug_from_name("code_review-v2"), "code-review-v2");
-        assert_eq!(slug_from_name("Hello World!"), "hello-world-");
+        assert_eq!(slug_from_name("Hello World!"), "hello-world");
+        assert_eq!(slug_from_name("  Hello  World  "), "hello-world");
+        assert_eq!(slug_from_name("!!!test!!!"), "test");
     }
 }

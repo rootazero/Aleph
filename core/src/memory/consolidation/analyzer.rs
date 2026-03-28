@@ -102,7 +102,7 @@ impl ConsolidationAnalyzer {
             .into_iter()
             .map(|fact| {
                 // Calculate recency score (facts updated in last 30 days get higher score)
-                let days_old = (now - fact.updated_at) / 86400;
+                let days_old = (now - fact.updated_at).max(0) / 86400;
                 let recency_score = if days_old < 30 {
                     1.0 - (days_old as f32 / 30.0)
                 } else {
@@ -245,6 +245,7 @@ impl ConsolidationAnalyzer {
     /// Consolidate a group of similar facts into one
     fn consolidate_group(&self, group: Vec<&FrequentFact>) -> ConsolidatedFact {
         // Use the fact with highest frequency score as the representative
+        // Safety: group is always non-empty (constructed with at least one element)
         let representative = group
             .iter()
             .max_by(|a, b| {
@@ -252,12 +253,16 @@ impl ConsolidationAnalyzer {
                     .partial_cmp(&b.frequency_score)
                     .unwrap_or(std::cmp::Ordering::Equal)
             })
-            .unwrap();
+            .expect("consolidate_group called with non-empty group");
 
         let source_fact_ids: Vec<String> = group.iter().map(|ff| ff.fact.id.clone()).collect();
 
         // Calculate aggregate access count (use frequency score as proxy)
-        let access_count = (representative.frequency_score * 100.0) as u32;
+        let access_count = if representative.frequency_score.is_finite() {
+            (representative.frequency_score * 100.0).clamp(0.0, u32::MAX as f32) as u32
+        } else {
+            0
+        };
 
         ConsolidatedFact::new(
             representative.fact.content.clone(),
@@ -278,9 +283,9 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
     let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
 
-    if norm_a == 0.0 || norm_b == 0.0 {
+    if !norm_a.is_finite() || !norm_b.is_finite() || norm_a == 0.0 || norm_b == 0.0 {
         return 0.0;
     }
 
-    dot_product / (norm_a * norm_b)
+    (dot_product / (norm_a * norm_b)).clamp(-1.0, 1.0)
 }

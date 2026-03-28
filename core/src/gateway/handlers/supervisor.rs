@@ -7,6 +7,9 @@
 //! - `supervisor.spawn` - Spawn a supervised process
 //! - `supervisor.write` - Write input to the process
 //! - `supervisor.status` - Get process status
+//!
+//! **Note**: Handler implementations are deferred to Milestone 2; only
+//! request/response DTOs are defined here for now.
 
 use serde::{Deserialize, Serialize};
 

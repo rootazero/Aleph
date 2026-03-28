@@ -172,16 +172,16 @@ impl ThinkingTagParser {
             let open_with_attrs = format!("<{} ", tag);
 
             if let Some(pos) = self.buffer.find(&open) {
-                let pre = self.buffer[..pos].to_string();
-                let post = self.buffer[pos + open.len()..].to_string();
+                let pre = self.buffer.get(..pos).unwrap_or_default().to_string();
+                let post = self.buffer.get(pos + open.len()..).unwrap_or_default().to_string();
                 return Some((pre, tag.to_string(), post));
             }
 
             // Check for tag with attributes
             if let Some(start) = self.buffer.find(&open_with_attrs) {
-                if let Some(end) = self.buffer[start..].find('>') {
-                    let pre = self.buffer[..start].to_string();
-                    let post = self.buffer[start + end + 1..].to_string();
+                if let Some(end) = self.buffer.get(start..).unwrap_or_default().find('>') {
+                    let pre = self.buffer.get(..start).unwrap_or_default().to_string();
+                    let post = self.buffer.get(start + end + 1..).unwrap_or_default().to_string();
                     return Some((pre, tag.to_string(), post));
                 }
             }
@@ -194,8 +194,8 @@ impl ThinkingTagParser {
         for tag in THINKING_TAGS {
             let close = format!("</{}>", tag);
             if let Some(pos) = self.buffer.find(&close) {
-                let pre = self.buffer[..pos].to_string();
-                let post = self.buffer[pos + close.len()..].to_string();
+                let pre = self.buffer.get(..pos).unwrap_or_default().to_string();
+                let post = self.buffer.get(pos + close.len()..).unwrap_or_default().to_string();
                 return Some((pre, post));
             }
         }
@@ -206,8 +206,8 @@ impl ThinkingTagParser {
     fn check_code_fence(&mut self) -> bool {
         if self.buffer.starts_with("```") {
             // Find end of fence line
-            let fence_end = self.buffer[3..].find('\n').map(|p| p + 4).unwrap_or(3);
-            let _fence = self.buffer[..fence_end].to_string();
+            let fence_end = self.buffer.get(3..).unwrap_or_default().find('\n').map(|p| p + 4).unwrap_or(3);
+            let _fence = self.buffer.get(..fence_end).unwrap_or_default().to_string();
             self.code_fence_pattern = Some("```".to_string());
             self.state = BlockState::FencedCode;
             true

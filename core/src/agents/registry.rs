@@ -45,20 +45,24 @@ impl AgentRegistry {
         agents.get(id).cloned()
     }
 
-    /// List all registered agent IDs
+    /// List all registered agent IDs (sorted for deterministic output)
     pub fn list_ids(&self) -> Vec<String> {
         let agents = self.agents.read().unwrap_or_else(|e| e.into_inner());
-        agents.keys().cloned().collect()
+        let mut ids: Vec<String> = agents.keys().cloned().collect();
+        ids.sort();
+        ids
     }
 
-    /// List all sub-agents (excluding primary)
+    /// List all sub-agents (excluding primary, sorted by id)
     pub fn list_subagents(&self) -> Vec<AgentDef> {
         let agents = self.agents.read().unwrap_or_else(|e| e.into_inner());
-        agents
+        let mut result: Vec<AgentDef> = agents
             .values()
             .filter(|a| a.mode == AgentMode::SubAgent)
             .cloned()
-            .collect()
+            .collect();
+        result.sort_by(|a, b| a.id.cmp(&b.id));
+        result
     }
 
     /// Remove an agent by ID

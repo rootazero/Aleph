@@ -178,15 +178,27 @@ impl McpManagerActor {
         tracing::info!("MCP Manager ready with {} servers", self.clients.len());
 
         // Main command loop
+        let mut shutdown_respond_to = None;
         while let Some(cmd) = self.cmd_rx.recv().await {
-            if !self.handle_command(cmd).await {
-                break;
+            match cmd {
+                McpCommand::Shutdown { respond_to } => {
+                    shutdown_respond_to = Some(respond_to);
+                    break;
+                }
+                other => {
+                    if !self.handle_command(other).await {
+                        break;
+                    }
+                }
             }
         }
 
-        // Shutdown sequence
+        // Shutdown sequence — ACK only after all servers are actually stopped
         tracing::info!("MCP Manager shutting down...");
         self.shutdown_all().await;
+        if let Some(respond_to) = shutdown_respond_to {
+            let _ = respond_to.send(());
+        }
         let _ = self.event_tx.send(McpManagerEvent::ManagerShutdown);
         tracing::info!("MCP Manager shutdown complete");
     }
@@ -262,9 +274,10 @@ impl McpManagerActor {
                 let result = self.reload_config().await;
                 let _ = respond_to.send(result);
             }
-            McpCommand::Shutdown { respond_to } => {
-                let _ = respond_to.send(());
-                return false;
+            McpCommand::Shutdown { .. } => {
+                // Handled in the run() loop directly to ensure ACK is sent
+                // after shutdown_all() completes
+                unreachable!("Shutdown is handled in run() loop");
             }
             McpCommand::SetSamplingCallback {
                 callback,
@@ -307,16 +320,16 @@ impl McpManagerActor {
             .await
             .map_err(|e| format!("Failed to save config: {}", e))?;
 
-        // Broadcast event
-        let _ = self.event_tx.send(McpManagerEvent::ServerAdded {
-            server_id: server_id.clone(),
-            server_name: server_name.clone(),
-        });
-
         // Start if auto_start
         if auto_start {
             self.start_server_internal(&config).await?;
         }
+
+        // Broadcast event after start succeeded (subscribers see consistent state)
+        let _ = self.event_tx.send(McpManagerEvent::ServerAdded {
+            server_id: server_id.clone(),
+            server_name: server_name.clone(),
+        });
 
         tracing::info!(server_id = %server_id, "Server added");
         Ok(())
@@ -367,10 +380,11 @@ impl McpManagerActor {
 
         let server_name = config.name.clone();
 
-        // Update health state
-        if let Some(health) = self.health_states.get_mut(server_id) {
-            health.mark_restarting();
-        }
+        // Update health state (insert if not yet tracked)
+        self.health_states
+            .entry(server_id.to_string())
+            .or_insert_with(ServerHealth::default)
+            .mark_restarting();
 
         // Broadcast restarting event
         let attempt = self

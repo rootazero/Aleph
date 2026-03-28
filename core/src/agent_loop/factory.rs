@@ -3,7 +3,7 @@
 //! Bridges the "old world" (AiProvider, AlephToolServer, SoulManifest) to the
 //! "new world" (AgentLoop with flat tool registry and prompt builder).
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use crate::providers::AiProvider;
 use crate::thinker::soul::SoulManifest;

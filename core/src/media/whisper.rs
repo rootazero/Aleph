@@ -58,7 +58,11 @@ impl WhisperTranscription {
 
 #[async_trait]
 impl TranscriptionService for WhisperTranscription {
-    async fn transcribe(&self, audio: &CachedMedia) -> anyhow::Result<TranscriptionResult> {
+    async fn transcribe(
+        &self,
+        audio: &CachedMedia,
+        language: Option<&str>,
+    ) -> anyhow::Result<TranscriptionResult> {
         let file_bytes = tokio::fs::read(&audio.local_path).await?;
         let file_name = audio
             .local_path
@@ -71,10 +75,14 @@ impl TranscriptionService for WhisperTranscription {
             .file_name(file_name)
             .mime_str(&audio.mime_type)?;
 
-        let form = multipart::Form::new()
+        let mut form = multipart::Form::new()
             .part("file", file_part)
             .text("model", self.model.clone())
             .text("response_format", "json");
+
+        if let Some(lang) = language {
+            form = form.text("language", lang.to_string());
+        }
 
         let url = format!("{}/audio/transcriptions", self.base_url);
         debug!(url = %url, model = %self.model, "sending Whisper transcription request");

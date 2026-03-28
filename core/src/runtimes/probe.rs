@@ -227,7 +227,7 @@ static REGEX_CACHE: Lazy<Mutex<HashMap<&'static str, Regex>>> =
 
 /// Get a compiled regex from the cache, or compile and cache it.
 fn get_compiled_regex(pattern: &'static str) -> Option<Regex> {
-    let mut cache = REGEX_CACHE.lock().ok()?;
+    let mut cache = REGEX_CACHE.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(re) = cache.get(pattern) {
         return Some(re.clone());
     }

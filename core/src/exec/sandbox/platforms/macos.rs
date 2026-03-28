@@ -72,9 +72,11 @@ impl SandboxAdapter for MacOSSandbox {
             match fs_cap {
                 FileSystemCapability::ReadOnly { path } => {
                     // Deny writes to this specific path (read already allowed by default)
+                    // Escape double-quotes to prevent Seatbelt profile injection
+                    let path_str = path.to_string_lossy().replace('"', "\\\"");
                     profile.push_str(&format!(
                         "(deny file-write* (subpath \"{}\"))\n",
-                        path.display()
+                        path_str
                     ));
                 }
                 FileSystemCapability::ReadWrite { .. } => {
@@ -94,14 +96,23 @@ impl SandboxAdapter for MacOSSandbox {
             NetworkCapability::Deny => {
                 profile.push_str("(deny network*)\n");
             }
-            NetworkCapability::AllowDomains(_domains) => {
+            NetworkCapability::AllowDomains(domains) => {
                 // Deny all network first, then allow specific domains
                 profile.push_str("(deny network*)\n");
-                for domain in _domains {
-                    profile.push_str(&format!(
-                        "(allow network-outbound (remote tcp \"{}:*\"))\n",
-                        domain
-                    ));
+                for domain in domains {
+                    // Validate domain to prevent Seatbelt profile injection.
+                    // Only allow safe characters: alphanumeric, dots, hyphens, underscores.
+                    if domain.chars().all(|c| c.is_alphanumeric() || matches!(c, '.' | '-' | '_')) {
+                        profile.push_str(&format!(
+                            "(allow network-outbound (remote tcp \"{}:*\"))\n",
+                            domain
+                        ));
+                    } else {
+                        return Err(AlephError::InvalidConfig {
+                            message: format!("Invalid domain in sandbox capabilities: {}", domain),
+                            suggestion: Some("Domain must only contain alphanumeric characters, dots, hyphens, and underscores".to_string()),
+                        });
+                    }
                 }
             }
             NetworkCapability::AllowAll => {

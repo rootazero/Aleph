@@ -80,46 +80,31 @@ impl MediaUnderstander {
         media: &LocalMedia,
         model: &str,
     ) -> (MediaUnderstanding, u64) {
-        let (understanding_type, description, tokens) = match &media.media_category {
-            MediaCategory::Image => match self
-                .provider
-                .understand(&media.local_path, &media.media_category, model)
-                .await
-            {
-                Ok((desc, tok)) => (UnderstandingType::ImageDescription, desc, tok),
-                Err(e) => (UnderstandingType::Skipped(e.clone()), e, 0),
-            },
-            MediaCategory::Link => match self
-                .provider
-                .understand(&media.local_path, &media.media_category, model)
-                .await
-            {
-                Ok((desc, tok)) => (UnderstandingType::LinkSummary, desc, tok),
-                Err(e) => (UnderstandingType::Skipped(e.clone()), e, 0),
-            },
-            MediaCategory::Document => match self
-                .provider
-                .understand(&media.local_path, &media.media_category, model)
-                .await
-            {
-                Ok((desc, tok)) => (UnderstandingType::DocumentSummary, desc, tok),
-                Err(e) => (UnderstandingType::Skipped(e.clone()), e, 0),
-            },
-            MediaCategory::Audio | MediaCategory::Video => {
-                let reason = "not yet supported".to_string();
-                (
-                    UnderstandingType::Skipped(reason.clone()),
-                    reason,
-                    0,
-                )
+        let success_type = match &media.media_category {
+            MediaCategory::Image => Some(UnderstandingType::ImageDescription),
+            MediaCategory::Link => Some(UnderstandingType::LinkSummary),
+            MediaCategory::Document => Some(UnderstandingType::DocumentSummary),
+            MediaCategory::Audio | MediaCategory::Video => None,
+            MediaCategory::Unknown => None,
+        };
+
+        let (understanding_type, description, tokens) = match success_type {
+            Some(ok_type) => {
+                match self
+                    .provider
+                    .understand(&media.local_path, &media.media_category, model)
+                    .await
+                {
+                    Ok((desc, tok)) => (ok_type, desc, tok),
+                    Err(e) => (UnderstandingType::Skipped(e.clone()), e, 0),
+                }
             }
-            MediaCategory::Unknown => {
-                let reason = "unknown media type".to_string();
-                (
-                    UnderstandingType::Skipped(reason.clone()),
-                    reason,
-                    0,
-                )
+            None => {
+                let reason = match &media.media_category {
+                    MediaCategory::Audio | MediaCategory::Video => "not yet supported".to_string(),
+                    _ => "unknown media type".to_string(),
+                };
+                (UnderstandingType::Skipped(reason.clone()), reason, 0)
             }
         };
 

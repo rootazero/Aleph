@@ -340,18 +340,17 @@ impl AuthProfileManager {
 
     /// Load agent state (with caching)
     fn load_agent_state(&self, agent_id: &str) -> ProfileManagerResult<AgentState> {
-        let agent_states = self.agent_states.read().unwrap_or_else(|e| e.into_inner());
-        if let Some(state) = agent_states.get(agent_id) {
-            return Ok(state.clone());
-        }
-        drop(agent_states);
-
-        let path = self.agent_state_path(agent_id);
-        let state = AgentState::load(&path)?;
-
+        // Use write lock with entry API to avoid TOCTOU race between read and write
         let mut agent_states = self.agent_states.write().unwrap_or_else(|e| e.into_inner());
-        agent_states.insert(agent_id.to_string(), state.clone());
-
+        let state = match agent_states.entry(agent_id.to_string()) {
+            std::collections::hash_map::Entry::Occupied(e) => e.get().clone(),
+            std::collections::hash_map::Entry::Vacant(e) => {
+                let path = self.agent_state_path(agent_id);
+                let loaded = AgentState::load(&path)?;
+                e.insert(loaded.clone());
+                loaded
+            }
+        };
         Ok(state)
     }
 

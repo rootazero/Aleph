@@ -46,7 +46,8 @@ pub enum Part {
     },
 }
 
-/// File content — either inline bytes (base64) or a URI reference
+/// File content — either inline bytes (base64) or a URI reference.
+/// Exactly one of `bytes` or `uri` must be set (A2A spec).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FileContent {
@@ -58,6 +59,17 @@ pub struct FileContent {
     pub bytes: Option<String>, // Base64 encoded
     #[serde(skip_serializing_if = "Option::is_none")]
     pub uri: Option<String>,
+}
+
+impl FileContent {
+    /// Validate that exactly one of `bytes` or `uri` is set
+    pub fn validate(&self) -> Result<(), &'static str> {
+        match (&self.bytes, &self.uri) {
+            (None, None) => Err("FileContent must have either bytes or uri"),
+            (Some(_), Some(_)) => Err("FileContent cannot have both bytes and uri"),
+            _ => Ok(()),
+        }
+    }
 }
 
 /// Artifact — output produced by an agent

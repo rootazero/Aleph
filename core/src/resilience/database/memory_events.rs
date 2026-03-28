@@ -102,19 +102,7 @@ impl StateDatabase {
             .map_err(|e| AlephError::other(format!("Failed to prepare statement: {e}")))?;
 
         let rows = stmt
-            .query_map(params![fact_id], |row| {
-                Ok(MemoryEventRow {
-                    id: row.get(0)?,
-                    fact_id: row.get(1)?,
-                    seq: u64::try_from(row.get::<_, i64>(2)?).unwrap_or(0),
-                    _event_type: row.get::<_, String>(3)?,
-                    event_json: row.get(4)?,
-                    actor: row.get(5)?,
-                    _tier: row.get::<_, String>(6)?,
-                    timestamp: row.get(7)?,
-                    correlation_id: row.get(8)?,
-                })
-            })
+            .query_map(params![fact_id], MemoryEventRow::from_row)
             .map_err(|e| AlephError::other(format!("Failed to query events: {e}")))?;
 
         let mut envelopes = Vec::new();
@@ -144,19 +132,7 @@ impl StateDatabase {
             .map_err(|e| AlephError::other(format!("Failed to prepare statement: {e}")))?;
 
         let rows = stmt
-            .query_map(params![fact_id, since_seq as i64], |row| {
-                Ok(MemoryEventRow {
-                    id: row.get(0)?,
-                    fact_id: row.get(1)?,
-                    seq: u64::try_from(row.get::<_, i64>(2)?).unwrap_or(0),
-                    _event_type: row.get::<_, String>(3)?,
-                    event_json: row.get(4)?,
-                    actor: row.get(5)?,
-                    _tier: row.get::<_, String>(6)?,
-                    timestamp: row.get(7)?,
-                    correlation_id: row.get(8)?,
-                })
-            })
+            .query_map(params![fact_id, i64::try_from(since_seq).unwrap_or(i64::MAX)], MemoryEventRow::from_row)
             .map_err(|e| AlephError::other(format!("Failed to query events: {e}")))?;
 
         let mut envelopes = Vec::new();
@@ -186,19 +162,7 @@ impl StateDatabase {
             .map_err(|e| AlephError::other(format!("Failed to prepare statement: {e}")))?;
 
         let rows = stmt
-            .query_map(params![fact_id, until_timestamp], |row| {
-                Ok(MemoryEventRow {
-                    id: row.get(0)?,
-                    fact_id: row.get(1)?,
-                    seq: u64::try_from(row.get::<_, i64>(2)?).unwrap_or(0),
-                    _event_type: row.get::<_, String>(3)?,
-                    event_json: row.get(4)?,
-                    actor: row.get(5)?,
-                    _tier: row.get::<_, String>(6)?,
-                    timestamp: row.get(7)?,
-                    correlation_id: row.get(8)?,
-                })
-            })
+            .query_map(params![fact_id, until_timestamp], MemoryEventRow::from_row)
             .map_err(|e| AlephError::other(format!("Failed to query events: {e}")))?;
 
         let mut envelopes = Vec::new();
@@ -230,19 +194,7 @@ impl StateDatabase {
             .map_err(|e| AlephError::other(format!("Failed to prepare statement: {e}")))?;
 
         let rows = stmt
-            .query_map(params![from_timestamp, to_timestamp, limit as i64], |row| {
-                Ok(MemoryEventRow {
-                    id: row.get(0)?,
-                    fact_id: row.get(1)?,
-                    seq: u64::try_from(row.get::<_, i64>(2)?).unwrap_or(0),
-                    _event_type: row.get::<_, String>(3)?,
-                    event_json: row.get(4)?,
-                    actor: row.get(5)?,
-                    _tier: row.get::<_, String>(6)?,
-                    timestamp: row.get(7)?,
-                    correlation_id: row.get(8)?,
-                })
-            })
+            .query_map(params![from_timestamp, to_timestamp, i64::try_from(limit).unwrap_or(i64::MAX)], MemoryEventRow::from_row)
             .map_err(|e| AlephError::other(format!("Failed to query events: {e}")))?;
 
         let mut envelopes = Vec::new();
@@ -309,6 +261,24 @@ struct MemoryEventRow {
     _tier: String,
     timestamp: i64,
     correlation_id: Option<String>,
+}
+
+impl MemoryEventRow {
+    /// Construct from a rusqlite row.
+    /// Expected column order: id, fact_id, seq, event_type, event_json, actor, tier, timestamp, correlation_id
+    fn from_row(row: &rusqlite::Row) -> rusqlite::Result<Self> {
+        Ok(Self {
+            id: row.get(0)?,
+            fact_id: row.get(1)?,
+            seq: u64::try_from(row.get::<_, i64>(2)?).unwrap_or(0),
+            _event_type: row.get::<_, String>(3)?,
+            event_json: row.get(4)?,
+            actor: row.get(5)?,
+            _tier: row.get::<_, String>(6)?,
+            timestamp: row.get(7)?,
+            correlation_id: row.get(8)?,
+        })
+    }
 }
 
 impl MemoryEventRow {

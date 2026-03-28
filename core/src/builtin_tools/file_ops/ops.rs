@@ -319,7 +319,7 @@ pub async fn execute_delete(
     let is_dir = canonical.is_dir();
     let items_deleted = if is_dir {
         let count = fs::read_dir(&canonical)
-            .map(|entries| entries.count())
+            .map(|entries| entries.filter(|e| e.is_ok()).count())
             .unwrap_or(0)
             + 1;
         fs::remove_dir_all(&canonical)

@@ -198,23 +198,18 @@ impl AlephTool for ArenaQueryTool {
             let mut slot_summaries: Vec<SlotSummary> = Vec::new();
             for agent in &active_agents {
                 let artifacts = handle.list_artifacts(agent).unwrap_or_default();
+                let slot_status = handle
+                    .slot_status(agent)
+                    .map(|s| format!("{:?}", s))
+                    .unwrap_or_else(|| "Idle".to_string());
                 slot_summaries.push(SlotSummary {
                     agent_id: agent.clone(),
-                    status: if artifacts.is_empty() {
-                        "Idle".to_string()
-                    } else {
-                        "Working".to_string()
-                    },
+                    status: slot_status,
                     artifact_count: artifacts.len(),
                 });
             }
 
-            let status = if completed_steps > 0 && completed_steps >= total_steps && total_steps > 0
-            {
-                "Settling".to_string()
-            } else {
-                "Active".to_string()
-            };
+            let status = format!("{:?}", handle.arena_status());
 
             return Ok(ArenaQueryOutput {
                 arena_id: args.arena_id,
@@ -273,13 +268,28 @@ pub struct ArenaSettleArgs {
     pub arena_id: String,
 }
 
+/// A shared fact returned from settling.
+#[derive(Debug, Clone, Serialize)]
+pub struct FactSummary {
+    /// The content of the fact
+    pub content: String,
+    /// Which agent contributed this fact
+    pub source_agent: String,
+    /// Confidence score
+    pub confidence: f32,
+    /// Tags
+    pub tags: Vec<String>,
+}
+
 /// Output from settling an arena.
 #[derive(Debug, Clone, Serialize)]
 pub struct ArenaSettleOutput {
     /// The arena ID that was settled
     pub arena_id: String,
-    /// Number of facts persisted to long-term memory
-    pub facts_persisted: usize,
+    /// Number of facts drained from the arena
+    pub facts_count: usize,
+    /// The actual facts — caller (agent loop) should persist these to memory
+    pub facts: Vec<FactSummary>,
     /// Number of artifacts archived
     pub artifacts_archived: usize,
     /// Final status after settling
@@ -327,17 +337,24 @@ impl AlephTool for ArenaSettleTool {
         let arena_id = ArenaId::from_string(&args.arena_id);
         let mut manager = self.manager.write().unwrap_or_else(|e| e.into_inner());
 
-        let (report, _facts) = manager
+        let (report, facts) = manager
             .settle_with_facts(&arena_id)
             .map_err(crate::error::AlephError::other)?;
 
-        // Note: The caller (agent loop / dispatcher) is responsible for
-        // persisting the returned facts to MemoryStore. The tool reports
-        // how many facts were drained.
+        let fact_summaries: Vec<FactSummary> = facts
+            .into_iter()
+            .map(|f| FactSummary {
+                content: f.content,
+                source_agent: f.source_agent,
+                confidence: f.confidence,
+                tags: f.tags,
+            })
+            .collect();
 
         Ok(ArenaSettleOutput {
             arena_id: args.arena_id,
-            facts_persisted: report.facts_persisted,
+            facts_count: report.facts_persisted,
+            facts: fact_summaries,
             artifacts_archived: report.artifacts_archived,
             status: "Archived".to_string(),
         })
@@ -531,7 +548,8 @@ mod tests {
 
         assert_eq!(settle_output.arena_id, create_output.arena_id);
         assert_eq!(settle_output.status, "Archived");
-        assert_eq!(settle_output.facts_persisted, 0);
+        assert_eq!(settle_output.facts_count, 0);
+        assert!(settle_output.facts.is_empty());
         assert_eq!(settle_output.artifacts_archived, 0);
     }
 

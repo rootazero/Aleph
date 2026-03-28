@@ -136,47 +136,17 @@ impl SkillSystem {
     pub async fn init(&self, dirs: Vec<PathBuf>) -> Result<(), SkillSystemError> {
         {
             let mut skill_dirs = self.inner.skill_dirs.write().await;
-            *skill_dirs = dirs.clone();
+            *skill_dirs = dirs;
         }
-
-        let mut registry = self.inner.registry.write().await;
-        registry.clear();
-
-        for dir in &dirs {
-            if dir.exists() {
-                let source = guess_source(dir);
-                let manifests = scan_directory(dir, source);
-                registry.register_all(manifests);
-            }
-        }
-
-        drop(registry);
-        self.rebuild_snapshot().await;
-
+        self.rescan_dirs().await;
         Ok(())
     }
 
     /// Rebuild the snapshot from the current registry state.
     ///
-    /// Increments the version counter and builds a new snapshot.
+    /// Re-scans all directories, increments the version counter, and builds a new snapshot.
     pub async fn rebuild(&self) -> Result<(), SkillSystemError> {
-        // Re-scan directories
-        let dirs = self.inner.skill_dirs.read().await.clone();
-
-        let mut registry = self.inner.registry.write().await;
-        registry.clear();
-
-        for dir in &dirs {
-            if dir.exists() {
-                let source = guess_source(dir);
-                let manifests = scan_directory(dir, source);
-                registry.register_all(manifests);
-            }
-        }
-
-        drop(registry);
-        self.rebuild_snapshot().await;
-
+        self.rescan_dirs().await;
         Ok(())
     }
 
@@ -220,14 +190,16 @@ impl SkillSystem {
     /// Build status entries for all registered skills.
     pub async fn skill_status(&self) -> Vec<SkillStatusEntry> {
         let registry = self.inner.registry.read().await;
-        registry
+        let mut entries: Vec<SkillStatusEntry> = registry
             .list_all()
             .into_iter()
             .map(|m| {
                 let result = self.inner.eligibility.evaluate(m);
                 SkillStatusEntry::build(m, &result, None, false)
             })
-            .collect()
+            .collect();
+        entries.sort_by(|a, b| a.id.as_str().cmp(b.id.as_str()));
+        entries
     }
 
     /// Resolve a slash command name to a skill command spec.
@@ -259,7 +231,7 @@ impl SkillSystem {
         let registry = self.inner.registry.read().await;
         let config = self.inner.config.read().await;
 
-        registry
+        let mut entries: Vec<SkillStatusEntry> = registry
             .list_all()
             .into_iter()
             .map(|manifest| {
@@ -269,7 +241,9 @@ impl SkillSystem {
                 let api_key_set = false;
                 SkillStatusEntry::build(manifest, &eligibility, entry_config, api_key_set)
             })
-            .collect()
+            .collect();
+        entries.sort_by(|a, b| a.id.as_str().cmp(b.id.as_str()));
+        entries
     }
 
     /// Update a skill's configuration and persist to disk.
@@ -363,6 +337,25 @@ impl SkillSystem {
     }
 
     // --- Private helpers ---
+
+    /// Scan all registered directories, repopulate the registry, and rebuild the snapshot.
+    async fn rescan_dirs(&self) {
+        let dirs = self.inner.skill_dirs.read().await.clone();
+
+        let mut registry = self.inner.registry.write().await;
+        registry.clear();
+
+        for dir in &dirs {
+            if dir.exists() {
+                let source = guess_source(dir);
+                let manifests = scan_directory(dir, source);
+                registry.register_all(manifests);
+            }
+        }
+
+        drop(registry);
+        self.rebuild_snapshot().await;
+    }
 
     /// Emit a skill system event to all subscribers.
     fn emit_event(&self, event: SkillSystemEvent) {
@@ -486,6 +479,12 @@ pub fn default_skill_dirs() -> Vec<PathBuf> {
 /// - Contains `.aleph/skills` but not under home → Workspace
 /// - Otherwise → Bundled (e.g. Claude Code compatibility paths)
 fn guess_source(path: &Path) -> SkillSource {
+    use std::sync::OnceLock;
+
+    // Cache the bundled manifest to avoid re-reading from disk on every call.
+    static CACHED_MANIFEST: OnceLock<Option<crate::bundled::manifest::SkillManifest>> =
+        OnceLock::new();
+
     let path_str = path.to_string_lossy();
 
     if path_str.contains(".aleph/skills") {
@@ -493,7 +492,10 @@ fn guess_source(path: &Path) -> SkillSource {
             let home_skills = home.join(".aleph").join("skills");
             if path.starts_with(&home_skills) {
                 // Under ~/.aleph/skills/ — check manifest to distinguish official from user
-                if let Some(manifest) = crate::bundled::manifest::SkillManifest::load(&home_skills) {
+                let manifest = CACHED_MANIFEST.get_or_init(|| {
+                    crate::bundled::manifest::SkillManifest::load(&home_skills)
+                });
+                if let Some(manifest) = manifest {
                     if let Ok(relative) = path.strip_prefix(&home_skills) {
                         if let Some(skill_name) = relative.components().next() {
                             let name = skill_name.as_os_str().to_string_lossy();

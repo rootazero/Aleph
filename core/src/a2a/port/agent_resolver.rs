@@ -22,6 +22,9 @@ pub struct RegisteredAgent {
     pub base_url: String,
     pub last_seen: DateTime<Utc>,
     pub health: AgentHealth,
+    /// Auth token for outbound requests to this agent
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auth_token: Option<String>,
 }
 
 /// Port for discovering and managing remote A2A agents.

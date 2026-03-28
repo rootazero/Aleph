@@ -87,7 +87,7 @@ pub fn create_provider(
             config.base_url.clone(),
             config.default_model().map(|s| s.to_string()),
             resolved_url,
-        )),
+        )?),
         "openai_tts" | "tts" => Arc::new(OpenAiTtsProvider::new(
             api_key,
             config.base_url.clone(),
@@ -126,17 +126,17 @@ pub fn create_provider(
             api_key,
             config.base_url.clone(),
             config.default_model().map(|s| s.to_string()),
-        )),
+        )?),
         "google" | "google_imagen" | "imagen" => Arc::new(GoogleImagenProvider::new(
             api_key,
             config.base_url.clone(),
             config.default_model().map(|s| s.to_string()),
-        )),
+        )?),
         "google_veo" | "veo" => Arc::new(GoogleVeoProvider::new(
             api_key,
             config.base_url.clone(),
             config.default_model().map(|s| s.to_string()),
-        )),
+        )?),
         "replicate" => {
             let mut builder = ReplicateProvider::builder(&api_key);
 
@@ -183,7 +183,7 @@ pub fn create_provider(
                 builder = builder.color(&config.color);
             }
 
-            Arc::new(builder.build())
+            Arc::new(builder.build()?)
         }
         other => {
             return Err(GenerationError::invalid_parameters(

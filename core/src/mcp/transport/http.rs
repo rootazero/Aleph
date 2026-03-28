@@ -87,22 +87,19 @@ impl HttpTransport {
     /// * `name` - Server name for logging and identification
     /// * `config` - HTTP transport configuration
     ///
-    /// # Panics
-    ///
-    /// Panics if the HTTP client cannot be created (should not happen under normal circumstances)
-    pub fn new(name: impl Into<String>, config: HttpTransportConfig) -> Self {
+    pub fn new(name: impl Into<String>, config: HttpTransportConfig) -> Result<Self> {
         let client = Client::builder()
             .timeout(config.timeout)
             .build()
-            .expect("Failed to create HTTP client");
+            .map_err(|e| AlephError::IoError(format!("Failed to create HTTP client: {}", e)))?;
 
-        Self {
+        Ok(Self {
             server_name: name.into(),
             config,
             client,
             alive: RwLock::new(true),
             _notification_handler: RwLock::new(None),
-        }
+        })
     }
 
     /// Build request with configured headers
@@ -168,6 +165,12 @@ impl McpTransport for HttpTransport {
     }
 
     async fn send_notification(&self, notification: &JsonRpcNotification) -> Result<()> {
+        // SSRF protection: validate the target URL before sending
+        let ssrf_policy = SsrfPolicy::default();
+        validate_url(&self.config.url, &ssrf_policy).map_err(|e| {
+            AlephError::IoError(format!("SSRF blocked for '{}': {}", self.server_name, e))
+        })?;
+
         let body = serde_json::to_string(notification).map_err(|e| {
             AlephError::IoError(format!("Failed to serialize notification: {}", e))
         })?;
@@ -259,7 +262,7 @@ mod tests {
             timeout: Duration::from_secs(300),
         };
 
-        let transport = HttpTransport::new("test-server", config);
+        let transport = HttpTransport::new("test-server", config).unwrap();
         assert_eq!(transport.server_name(), "test-server");
         assert!(transport.is_alive().await);
     }
@@ -267,7 +270,7 @@ mod tests {
     #[tokio::test]
     async fn test_http_transport_close() {
         let config = HttpTransportConfig::default();
-        let transport = HttpTransport::new("test", config);
+        let transport = HttpTransport::new("test", config).unwrap();
 
         assert!(transport.is_alive().await);
         transport.close().await.unwrap();
@@ -300,7 +303,7 @@ mod tests {
         };
 
         // Verify it can be used as a trait object
-        let transport: Box<dyn McpTransport> = Box::new(HttpTransport::new("test", config));
+        let transport: Box<dyn McpTransport> = Box::new(HttpTransport::new("test", config).unwrap());
 
         assert!(transport.is_alive().await);
         assert_eq!(transport.server_name(), "test");
@@ -311,7 +314,7 @@ mod tests {
     #[tokio::test]
     async fn test_http_transport_set_notification_handler() {
         let config = HttpTransportConfig::default();
-        let transport = HttpTransport::new("test", config);
+        let transport = HttpTransport::new("test", config).unwrap();
 
         // Should not panic when setting notification handler
         transport.set_notification_handler(Box::new(|_| {

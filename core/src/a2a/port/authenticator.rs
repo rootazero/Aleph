@@ -32,6 +32,7 @@ pub enum A2AAction {
     CancelTask,
     ListTasks,
     Subscribe,
+    ManagePushConfig,
 }
 
 /// Port for authentication and authorization of A2A requests.

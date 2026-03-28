@@ -312,16 +312,16 @@ impl ServerHealth {
     }
 
     /// Check if server should be restarted
-    pub fn should_restart(&self, max_restarts: u32, window_seconds: u64) -> bool {
+    ///
+    /// Also resets the restart window if it has expired, allowing the server
+    /// a fresh set of restart attempts after a quiet period.
+    pub fn should_restart(&mut self, max_restarts: u32, window_seconds: u64) -> bool {
+        // Reset expired window first so the counter starts fresh
+        self.maybe_reset_window(window_seconds);
+
         match self.status {
             HealthStatus::Unhealthy => {
-                // Check if we're within restart window
-                if let Some(start) = self.restart_window_start {
-                    let elapsed = start.elapsed().as_secs();
-                    if elapsed > window_seconds {
-                        // Window expired, reset count
-                        return true;
-                    }
+                if self.restart_window_start.is_some() {
                     // Within window, check count
                     self.restart_count < max_restarts
                 } else {
@@ -335,7 +335,7 @@ impl ServerHealth {
     }
 
     /// Reset restart window if expired
-    pub fn maybe_reset_window(&mut self, window_seconds: u64) {
+    fn maybe_reset_window(&mut self, window_seconds: u64) {
         if let Some(start) = self.restart_window_start {
             if start.elapsed().as_secs() > window_seconds {
                 self.restart_count = 0;

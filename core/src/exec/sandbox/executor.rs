@@ -88,7 +88,7 @@ impl SandboxManager {
                 }
             }
             Err(AlephError::ExecutionTimeout { timeout_secs }) => ExecutionStatus::Timeout {
-                duration_ms: timeout_secs * 1000,
+                duration_ms: timeout_secs.saturating_mul(1000),
             },
             Err(e) => ExecutionStatus::Error {
                 error: e.to_string(),
@@ -102,8 +102,11 @@ impl SandboxManager {
             self.adapter.platform_name().to_string(),
         );
 
-        // Cleanup profile (even if execution failed)
-        self.adapter.cleanup(&profile)?;
+        // Cleanup profile (even if execution failed).
+        // Log cleanup errors but don't let them override the execution result.
+        if let Err(e) = self.adapter.cleanup(&profile) {
+            tracing::warn!("Sandbox cleanup failed: {}", e);
+        }
 
         // Return result and audit log
         result.map(|r| (r, audit_log))

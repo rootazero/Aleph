@@ -2,7 +2,9 @@
 // Manages profile instances: registration, state tracking, idle reclamation.
 
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+
+use crate::sync_primitives::RwLock;
 
 use super::chrome_mcp::ChromeMcpDriver;
 use super::network_policy::{PolicyViolation, SsrfPolicy};

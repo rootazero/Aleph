@@ -83,10 +83,9 @@ impl SearchRegistry {
             }
         }
 
-        Err(AlephError::provider(format!(
-            "All search providers failed for query: {}",
-            query
-        )))
+        Err(AlephError::provider(
+            "All search providers failed".to_string(),
+        ))
     }
 
     /// Test a search provider connection
@@ -137,7 +136,7 @@ impl SearchRegistry {
         let start = Instant::now();
         let result = match provider.search("test", &test_options).await {
             Ok(_) => {
-                let latency = start.elapsed().as_millis() as u32;
+                let latency = start.elapsed().as_millis().min(u32::MAX as u128) as u32;
                 ProviderTestResult {
                     success: true,
                     latency_ms: latency,
@@ -280,10 +279,8 @@ mod tests {
         let result = registry.search("test", &options).await;
 
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("All search providers failed"));
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("All search providers failed"));
     }
 
     #[tokio::test]

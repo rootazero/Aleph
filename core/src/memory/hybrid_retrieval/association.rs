@@ -36,10 +36,12 @@ impl AssociationCluster {
 
     /// Add a related fact to the cluster
     pub fn add_related(&mut self, fact: MemoryFact, similarity: f32) {
+        // Running average including the center fact (counted as 1 element at similarity 1.0).
+        // Before push: n = related_facts.len() + 1 (for center)
+        let n = (self.related_facts.len() + 1) as f32;
         self.related_facts.push(fact);
-        // Update average similarity
-        let total = self.related_facts.len() as f32;
-        self.avg_similarity = (self.avg_similarity * (total - 1.0) + similarity) / total;
+        let total = (self.related_facts.len() + 1) as f32; // after push, +1 for center
+        self.avg_similarity = (self.avg_similarity * n + similarity) / total;
     }
 
     /// Set the cluster theme
@@ -260,7 +262,8 @@ mod tests {
         cluster.add_related(related, 0.9);
 
         assert_eq!(cluster.size(), 2);
-        assert!((cluster.avg_similarity - 0.9).abs() < 0.01);
+        // avg_similarity = (1.0 * 1 + 0.9) / 2 = 0.95 (center included)
+        assert!((cluster.avg_similarity - 0.95).abs() < 0.01);
     }
 
     #[test]

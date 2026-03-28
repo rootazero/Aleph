@@ -28,11 +28,11 @@ impl Default for PiiAllowlist {
         .collect();
 
         let system_email_patterns = vec![
-            Regex::new(r"(?i)^noreply@").unwrap(),
-            Regex::new(r"(?i)^no-reply@").unwrap(),
-            Regex::new(r"(?i)^donotreply@").unwrap(),
-            Regex::new(r"(?i)@(example|test|demo|sample|mock|localhost)\b").unwrap(),
-            Regex::new(r"(?i)\.(example|test|local|internal|invalid)$").unwrap(),
+            Regex::new(r"(?i)^noreply@").expect("valid regex literal"),
+            Regex::new(r"(?i)^no-reply@").expect("valid regex literal"),
+            Regex::new(r"(?i)^donotreply@").expect("valid regex literal"),
+            Regex::new(r"(?i)@(example|test|demo|sample|mock|localhost)\b").expect("valid regex literal"),
+            Regex::new(r"(?i)\.(example|test|local|internal|invalid)$").expect("valid regex literal"),
         ];
 
         let local_ips: HashSet<String> = [

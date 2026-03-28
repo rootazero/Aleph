@@ -136,13 +136,15 @@ impl McpPersistentConfig {
             ))
         })?;
 
-        tokio::fs::rename(&temp_path, path).await.map_err(|e| {
-            AlephError::IoError(format!(
+        if let Err(e) = tokio::fs::rename(&temp_path, path).await {
+            // Clean up orphaned temp file on rename failure
+            let _ = tokio::fs::remove_file(&temp_path).await;
+            return Err(AlephError::IoError(format!(
                 "Failed to rename temp config to {}: {}",
                 path.display(),
                 e
-            ))
-        })?;
+            )));
+        }
 
         tracing::debug!("Saved MCP config to {}", path.display());
         Ok(())
@@ -228,8 +230,11 @@ impl McpPersistentConfig {
 ///
 /// Unknown variables are left as-is.
 fn expand_env_var(s: &str) -> Option<String> {
-    // Match ${VAR_NAME} pattern
-    let re = Regex::new(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}").expect("Invalid regex pattern");
+    // Static regex compiled once, reused on every call
+    static ENV_VAR_RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    let re = ENV_VAR_RE.get_or_init(|| {
+        Regex::new(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}").expect("hardcoded regex is valid")
+    });
 
     let mut result = s.to_string();
     let mut found = false;

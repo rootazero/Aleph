@@ -167,12 +167,14 @@ impl SessionStore for LanceMemoryBackend {
         filter: &MemoryFilter,
         limit: usize,
     ) -> Result<Vec<MemoryEntry>, AlephError> {
-        // Query with filter, then sort by timestamp DESC in Rust
-        // (LanceDB sorting support is limited).
+        // Push a safety cap to LanceDB to avoid unbounded full-table scans.
+        // We fetch more than needed to account for ordering differences,
+        // then sort in Rust and truncate.
+        let fetch_limit = Some(limit.saturating_mul(10).max(100));
         let mut entries = scan_memories(
             &self.memories_table,
             filter.to_lance_filter().as_deref(),
-            None,
+            fetch_limit,
         )
         .await?;
 
@@ -282,8 +284,10 @@ impl SessionStore for LanceMemoryBackend {
         // externally. We return memories since the given timestamp.
         let filter = format!("timestamp >= {}", since_timestamp);
 
+        // Push a safety cap to avoid unbounded scans
+        let fetch_limit = Some(limit.saturating_mul(10).max(100));
         let mut entries =
-            scan_memories(&self.memories_table, Some(&filter), None).await?;
+            scan_memories(&self.memories_table, Some(&filter), fetch_limit).await?;
 
         // Sort by timestamp ascending so oldest are processed first.
         entries.sort_by(|a, b| a.context.timestamp.cmp(&b.context.timestamp));
@@ -308,26 +312,25 @@ impl SessionStore for LanceMemoryBackend {
 #[async_trait]
 impl DreamStore for LanceMemoryBackend {
     async fn get_dream_status(&self) -> Result<DreamStatus, AlephError> {
-        // TODO: Store dream status in a dedicated metadata table or KV store.
-        // For now, return a default (no previous run).
+        // NOTE: DreamStore is not yet persisted to LanceDB. Status resets on
+        // restart, meaning the DreamDaemon will run again on the first eligible
+        // window. This is safe but wasteful — a dedicated metadata table should
+        // be added when dream persistence becomes important.
         Ok(DreamStatus::default())
     }
 
     async fn set_dream_status(&self, _status: DreamStatus) -> Result<(), AlephError> {
-        // TODO: Persist dream status to a dedicated metadata table or KV store.
-        // For now, this is a no-op; the status is ephemeral.
+        // No-op: dream status is ephemeral (see get_dream_status note).
         Ok(())
     }
 
     async fn upsert_daily_insight(&self, _insight: DailyInsight) -> Result<(), AlephError> {
-        // TODO: Store daily insights in a dedicated LanceDB table or metadata store.
-        // For now, this is a no-op.
+        // No-op: daily insights are not yet persisted.
         Ok(())
     }
 
     async fn get_daily_insight(&self, _date: &str) -> Result<Option<DailyInsight>, AlephError> {
-        // TODO: Query daily insights from a dedicated table.
-        // For now, return None (no insight found).
+        // No-op: daily insights are not yet persisted.
         Ok(None)
     }
 }

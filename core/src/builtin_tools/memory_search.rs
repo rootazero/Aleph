@@ -353,7 +353,9 @@ impl MemorySearchTool {
                         AgentEnvFilter::Single(ws) => ws.as_str(),
                         _ => unreachable!(),
                     };
-                    let config = smart_recall_cfg.as_ref().unwrap();
+                    let config = smart_recall_cfg.as_ref().ok_or_else(|| {
+                        ToolError::Execution("Smart recall config disappeared".into())
+                    })?;
                     debug!(workspace = %workspace_label, "Performing Smart Recall retrieval");
                     let smart_result = self
                         .fact_retrieval

@@ -59,11 +59,11 @@ impl SkillWatcher {
     ///
     /// # Arguments
     /// * `skills_dir` - Directory to watch for SKILL.md files
-    /// * `reload_callback` - Callback to invoke when skills need reloading
     /// * `config` - Watcher configuration
+    ///
+    /// The reload callback is passed to [`run()`] when starting the event loop.
     pub fn new(
         skills_dir: impl AsRef<Path>,
-        _reload_callback: ReloadCallback,
         config: SkillWatcherConfig,
     ) -> Result<Self> {
         let skills_dir = skills_dir.as_ref().to_path_buf();
@@ -79,9 +79,10 @@ impl SkillWatcher {
                 match result {
                     Ok(events) => {
                         for event in events {
-                            // Send event through channel
-                            if let Err(e) = event_tx.blocking_send(event) {
-                                error!(error = %e, "Failed to send file event");
+                            // Use try_send to avoid blocking the OS watcher thread
+                            // when the channel is full — drop overflow events gracefully
+                            if let Err(e) = event_tx.try_send(event) {
+                                error!(error = %e, "File event dropped (channel full or closed)");
                             }
                         }
                     }
@@ -180,11 +181,14 @@ impl SkillWatcher {
         skill_events
     }
 
-    /// Check if a path is a SKILL.md file
+    /// Check if a path is a SKILL.md file (matches both SKILL.md and *.skill.md)
     fn is_skill_file(path: &Path) -> bool {
         path.file_name()
             .and_then(|n| n.to_str())
-            .map(|name| name.eq_ignore_ascii_case("SKILL.md"))
+            .map(|name| {
+                name.eq_ignore_ascii_case("SKILL.md")
+                    || name.to_lowercase().ends_with(".skill.md")
+            })
             .unwrap_or(false)
     }
 
@@ -250,7 +254,6 @@ impl SkillWatcher {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sync_primitives::Mutex;
     use tempfile::TempDir;
 
     #[test]
@@ -258,6 +261,8 @@ mod tests {
         assert!(SkillWatcher::is_skill_file(Path::new("SKILL.md")));
         assert!(SkillWatcher::is_skill_file(Path::new("/path/to/SKILL.md")));
         assert!(SkillWatcher::is_skill_file(Path::new("skill.md")));
+        assert!(SkillWatcher::is_skill_file(Path::new("github-pr.skill.md")));
+        assert!(SkillWatcher::is_skill_file(Path::new("/path/to/foo.SKILL.MD")));
         assert!(!SkillWatcher::is_skill_file(Path::new("README.md")));
         assert!(!SkillWatcher::is_skill_file(Path::new("skill.txt")));
     }
@@ -267,15 +272,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let skills_dir = temp_dir.path().to_path_buf();
 
-        let reload_count = Arc::new(Mutex::new(0));
-        let reload_count_clone = reload_count.clone();
-
-        let callback: ReloadCallback = Arc::new(move |tools| {
-            *reload_count_clone.lock().unwrap() += tools.len();
-            Ok(())
-        });
-
-        let result = SkillWatcher::new(&skills_dir, callback, Default::default());
+        let result = SkillWatcher::new(&skills_dir, Default::default());
         assert!(result.is_ok());
     }
 }

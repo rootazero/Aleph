@@ -110,7 +110,8 @@ pub fn calculate_delay(
     }
 
     // Exponential backoff: initial * factor^(attempt-1)
-    let delay_ms = (RETRY_INITIAL_DELAY_MS as f64) * RETRY_BACKOFF_FACTOR.powi((attempt - 1) as i32);
+    let exponent = attempt.saturating_sub(1);
+    let delay_ms = (RETRY_INITIAL_DELAY_MS as f64) * RETRY_BACKOFF_FACTOR.powi(exponent as i32);
     let capped_ms = (delay_ms as u64).min(RETRY_MAX_DELAY_NO_HEADERS_MS);
     Duration::from_millis(capped_ms)
 }
@@ -206,8 +207,9 @@ where
                     return Err(last_error.unwrap_or(error));
                 }
 
-                // Calculate backoff duration (exponential: 1s, 2s, 4s)
-                let backoff = INITIAL_BACKOFF * 2_u32.pow(attempt - 1);
+                // Calculate backoff duration (exponential: 1s, 2s, 4s) with overflow protection
+                let backoff_secs = INITIAL_BACKOFF.as_secs_f64() * 2_f64.powi(attempt as i32 - 1);
+                let backoff = Duration::from_secs_f64(backoff_secs.min(30.0));
 
                 warn!(
                     attempt,
@@ -280,10 +282,10 @@ where
                     return Err(last_error.unwrap_or(error));
                 }
 
-                // Calculate backoff duration using policy multiplier
+                // Calculate backoff duration using policy multiplier (with overflow protection)
                 let backoff_secs =
                     initial_backoff.as_secs_f64() * multiplier.powi(attempt as i32 - 1);
-                let backoff = Duration::from_secs_f64(backoff_secs);
+                let backoff = Duration::from_secs_f64(backoff_secs.min(300.0));
 
                 warn!(
                     attempt,

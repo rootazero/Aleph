@@ -163,14 +163,17 @@ impl CapabilityLedger {
     pub fn build_path(&self) -> String {
         let mut paths: Vec<PathBuf> = Vec::new();
 
-        // Collect bin directories from Ready entries
-        for entry in self.entries.values() {
-            if entry.status == CapabilityStatus::Ready {
-                if let Some(parent) = entry.bin_path.parent() {
-                    // Avoid duplicates
-                    if !paths.contains(&parent.to_path_buf()) {
-                        paths.push(parent.to_path_buf());
-                    }
+        // Collect bin directories from Ready entries (sorted by name for deterministic PATH order)
+        let mut ready_entries: Vec<&CapabilityEntry> = self.entries.values()
+            .filter(|e| e.status == CapabilityStatus::Ready)
+            .collect();
+        ready_entries.sort_by_key(|e| &e.name);
+
+        for entry in ready_entries {
+            if let Some(parent) = entry.bin_path.parent() {
+                // Avoid duplicates
+                if !paths.contains(&parent.to_path_buf()) {
+                    paths.push(parent.to_path_buf());
                 }
             }
         }
@@ -191,10 +194,12 @@ impl CapabilityLedger {
 
     /// Return all entries that are currently `Ready`.
     pub fn list_ready(&self) -> Vec<&CapabilityEntry> {
-        self.entries
+        let mut entries: Vec<&CapabilityEntry> = self.entries
             .values()
             .filter(|e| e.status == CapabilityStatus::Ready)
-            .collect()
+            .collect();
+        entries.sort_by_key(|e| &e.name);
+        entries
     }
 
     /// Persist the ledger to its JSON file.

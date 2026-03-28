@@ -358,18 +358,11 @@ where
                     }
                 };
 
-                let source_str = match source {
-                    DirectToolSource::SlashCommand => "slash_command",
-                    DirectToolSource::Skill => "skill",
-                    DirectToolSource::Mcp => "mcp",
-                    DirectToolSource::Custom => "custom",
-                };
-
                 if let Ok(mode_json) = serde_json::to_string(&serde_json::json!({
                     "type": "direct_tool",
                     "tool_id": tool_id,
                     "args": parsed.arguments.as_deref().unwrap_or(""),
-                    "source": source_str,
+                    "source": source.as_str(),
                 })) {
                     tracing::info!(
                         "[chat.send] Slash command resolved: tool_id={}, args={:?}",

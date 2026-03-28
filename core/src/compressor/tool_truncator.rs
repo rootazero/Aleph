@@ -44,7 +44,7 @@ pub struct TruncatedOutput {
 impl TruncatedOutput {
     /// Create a new TruncatedOutput indicating no truncation occurred
     fn unchanged(content: String) -> Self {
-        let len = content.len();
+        let len = content.chars().count();
         Self {
             content,
             summary: String::new(),
@@ -116,7 +116,7 @@ impl ToolTruncator {
     ///
     /// ```rust,ignore
     /// let truncator = ToolTruncator::new(2000)
-    ///     .with_summary_template("[{tool_name}: {original_len}B truncated to {truncated_len}B]");
+    ///     .with_summary_template("[{tool_name}: {original_len} truncated to {truncated_len} chars]");
     /// ```
     pub fn with_summary_template(mut self, template: impl Into<String>) -> Self {
         self.summary_template = template.into();
@@ -159,7 +159,7 @@ impl ToolTruncator {
     ///
     /// A `TruncatedOutput` containing the result and metadata.
     pub fn truncate(&self, output: &str, tool_name: &str) -> TruncatedOutput {
-        let original_len = output.len();
+        let original_len = output.chars().count();
 
         if !self.should_truncate(output) {
             return TruncatedOutput::unchanged(output.to_string());
@@ -168,8 +168,8 @@ impl ToolTruncator {
         // Generate summary
         let summary = self.generate_summary(output, tool_name, self.max_chars);
 
-        // Calculate space for content after summary
-        let summary_len = summary.len();
+        // Calculate space for content after summary (use char count for UTF-8 safety)
+        let summary_len = summary.chars().count();
         let separator_len = 1; // newline between summary and content
         let remaining_space = self.max_chars.saturating_sub(summary_len + separator_len);
 
@@ -189,7 +189,7 @@ impl ToolTruncator {
     ///
     /// Uses the configured template with placeholder substitution.
     fn generate_summary(&self, output: &str, tool_name: &str, truncated_len: usize) -> String {
-        let original_len = output.len();
+        let original_len = output.chars().count();
 
         // Extract first line as preview (up to 50 characters)
         let preview: String = output
@@ -392,8 +392,8 @@ mod tests {
         let result = truncator.truncate(&output, "my_custom_tool");
 
         assert!(result.summary.contains("my_custom_tool"));
-        assert!(result.summary.contains("500B"));
-        assert!(result.summary.contains("100B"));
+        assert!(result.summary.contains("500"));
+        assert!(result.summary.contains("100"));
     }
 
     #[test]

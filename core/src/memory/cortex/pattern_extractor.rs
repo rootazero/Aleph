@@ -226,20 +226,27 @@ Provide ONLY the JSON object, no additional text."#,
         })
     }
 
-    /// Generate pattern hash for deduplication
+    /// Generate pattern hash for deduplication (deterministic across runs)
     fn generate_pattern_hash(&self, pattern: &ExtractedPatternRaw) -> String {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-
-        let mut hasher = DefaultHasher::new();
-
-        // Hash the description and key steps
-        pattern.description.hash(&mut hasher);
+        // Use FNV-1a with a fixed seed for deterministic hashing across runs.
+        // DefaultHasher is NOT stable across Rust versions.
+        let mut hash: u64 = 0xcbf29ce484222325; // FNV offset basis
+        let prime: u64 = 0x100000001b3;          // FNV prime
+        for byte in pattern.description.as_bytes() {
+            hash ^= *byte as u64;
+            hash = hash.wrapping_mul(prime);
+        }
         for step in &pattern.key_steps {
-            step.hash(&mut hasher);
+            for byte in step.as_bytes() {
+                hash ^= *byte as u64;
+                hash = hash.wrapping_mul(prime);
+            }
+            // Separator to avoid "ab"+"c" == "a"+"bc"
+            hash ^= 0xff;
+            hash = hash.wrapping_mul(prime);
         }
 
-        format!("{:x}", hasher.finish())
+        format!("{:016x}", hash)
     }
 }
 

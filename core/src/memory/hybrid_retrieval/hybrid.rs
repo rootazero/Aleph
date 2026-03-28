@@ -162,6 +162,7 @@ pub struct HybridRetrieval {
     config: HybridSearchConfig,
     database: MemoryBackend,
     scoring_pipeline: Option<ScoringPipeline>,
+    scoring_config: ScoringPipelineConfig,
 }
 
 impl HybridRetrieval {
@@ -177,10 +178,17 @@ impl HybridRetrieval {
         database: MemoryBackend,
         scoring_config: Option<ScoringPipelineConfig>,
     ) -> Self {
+        let resolved_config = scoring_config.unwrap_or_default();
+        let pipeline = if resolved_config.enabled {
+            Some(ScoringPipeline::from_config(&resolved_config))
+        } else {
+            None
+        };
         Self {
             config,
             database,
-            scoring_pipeline: scoring_config.map(|cfg| ScoringPipeline::from_config(&cfg)),
+            scoring_pipeline: pipeline,
+            scoring_config: resolved_config,
         }
     }
 
@@ -310,7 +318,7 @@ impl HybridRetrieval {
                         .duration_since(std::time::UNIX_EPOCH)
                         .unwrap_or_default()
                         .as_secs() as i64,
-                    config: ScoringPipelineConfig::default(),
+                    config: self.scoring_config.clone(),
                 };
                 pipeline.run(scored, &ctx)
             }

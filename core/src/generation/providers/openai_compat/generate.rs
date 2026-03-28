@@ -105,7 +105,15 @@ impl GenerationProvider for OpenAiCompatProvider {
 
                 info!(provider = %self.name, task_id = %submit.task_id, "Async task submitted, starting poll");
 
-                let poll_url = format!("{}/{}", url.trim_end_matches('/'), submit.task_id);
+                // Validate task_id to prevent URL injection from untrusted API responses
+                let task_id = &submit.task_id;
+                if task_id.contains("..") || task_id.contains('?') || task_id.contains('#') || task_id.starts_with('/') {
+                    return Err(GenerationError::serialization(format!(
+                        "Invalid task_id format: {}",
+                        task_id
+                    )));
+                }
+                let poll_url = format!("{}/{}", url.trim_end_matches('/'), task_id);
                 self.poll_async_task(&poll_url).await?
             } else {
                 // === Synchronous mode (OpenAI standard) ===

@@ -102,7 +102,7 @@ impl McpSubAgent {
         let params = tool
             .parameters_schema
             .as_ref()
-            .map(|s| serde_json::to_string_pretty(s).unwrap_or_default())
+            .map(|s| serde_json::to_string_pretty(s).unwrap_or_else(|_| "{}".to_string()))
             .unwrap_or_else(|| "{}".to_string());
 
         format!(

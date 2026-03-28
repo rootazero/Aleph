@@ -57,9 +57,9 @@ impl A2AError {
             Self::UnsupportedContentType => -32004,
             Self::Unauthorized => -32000,
             Self::Forbidden => -32005,
-            Self::AgentUnreachable(_) => -32603,
-            Self::NoMatchingAgent => -32603,
-            Self::Timeout(_) => -32603,
+            Self::AgentUnreachable(_) => -32010,
+            Self::NoMatchingAgent => -32011,
+            Self::Timeout(_) => -32012,
         }
     }
 
@@ -109,12 +109,12 @@ mod tests {
     fn error_code_client() {
         assert_eq!(
             A2AError::AgentUnreachable("host".into()).error_code(),
-            -32603
+            -32010
         );
-        assert_eq!(A2AError::NoMatchingAgent.error_code(), -32603);
+        assert_eq!(A2AError::NoMatchingAgent.error_code(), -32011);
         assert_eq!(
             A2AError::Timeout(Duration::from_secs(30)).error_code(),
-            -32603
+            -32012
         );
     }
 

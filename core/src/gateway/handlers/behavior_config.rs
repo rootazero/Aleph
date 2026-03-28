@@ -30,7 +30,10 @@ pub async fn handle_get(
         typing_speed: behavior.typing_speed,
     };
 
-    JsonRpcResponse::success(request.id, serde_json::to_value(dto).unwrap())
+    match serde_json::to_value(dto) {
+        Ok(v) => JsonRpcResponse::success(request.id, v),
+        Err(e) => JsonRpcResponse::error(request.id, INTERNAL_ERROR, format!("Failed to serialize config: {}", e)),
+    }
 }
 
 /// Update behavior configuration

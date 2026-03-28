@@ -194,7 +194,7 @@ impl Channel for FeishuChannel {
                 api.send_image(chat_id, &image_key, reply_to).await
                     .map_err(map_send_error)?
             } else {
-                unreachable!()
+                return Err(ChannelError::SendFailed("Image attachment not found".to_string()));
             }
         } else {
             if message.text.is_empty() {

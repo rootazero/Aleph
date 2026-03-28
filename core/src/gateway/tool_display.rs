@@ -122,7 +122,7 @@ fn format_generic_params(params: &Value) -> String {
 }
 
 fn shorten_path(path: &str) -> String {
-    if path.len() <= 40 {
+    if path.chars().count() <= 40 {
         return path.to_string();
     }
 
@@ -135,15 +135,16 @@ fn shorten_path(path: &str) -> String {
     format!(".../{}", last_two.join("/"))
 }
 
-fn truncate_str(s: &str, max_len: usize) -> String {
-    if s.len() <= max_len {
+fn truncate_str(s: &str, max_chars: usize) -> String {
+    if s.chars().count() <= max_chars {
         s.to_string()
     } else {
-        let end = max_len.saturating_sub(3);
-        let mut boundary = end;
-        while boundary > 0 && !s.is_char_boundary(boundary) {
-            boundary -= 1;
-        }
+        let end_chars = max_chars.saturating_sub(3);
+        let boundary = s
+            .char_indices()
+            .nth(end_chars)
+            .map(|(i, _)| i)
+            .unwrap_or(s.len());
         format!("{}...", &s[..boundary])
     }
 }
@@ -167,9 +168,12 @@ pub fn group_paths(paths: &[&str]) -> String {
         }
     }
 
-    groups
+    let mut sorted_dirs: Vec<&&str> = groups.keys().collect();
+    sorted_dirs.sort();
+    sorted_dirs
         .iter()
-        .map(|(dir, files)| {
+        .map(|dir| {
+            let files = &groups[*dir];
             if files.len() == 1 {
                 format!("{}{}", dir, files[0])
             } else {

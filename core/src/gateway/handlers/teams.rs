@@ -14,7 +14,7 @@ use tracing::debug;
 use crate::sync_primitives::Arc;
 use crate::teams::TeamStore;
 
-use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR};
+use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, RESOURCE_NOT_FOUND};
 use super::parse_params;
 
 // =============================================================================
@@ -69,7 +69,7 @@ pub async fn handle_get(
         Ok(None) => {
             return JsonRpcResponse::error(
                 request.id,
-                INTERNAL_ERROR,
+                RESOURCE_NOT_FOUND,
                 format!("Team '{}' not found", params.team_id),
             )
         }

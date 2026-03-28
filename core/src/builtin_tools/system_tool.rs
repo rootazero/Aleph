@@ -275,7 +275,7 @@ Examples:
                 message: Some(format!(
                     "Unknown action: '{unknown}'. Valid actions: launch_app, quit_app, \
                      list_running_apps, send_notification, clipboard_read, clipboard_write, \
-                     system_info"
+                     system_info, user_idle_time"
                 )),
             }),
         }

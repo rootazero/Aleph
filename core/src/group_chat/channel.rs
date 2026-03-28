@@ -130,6 +130,11 @@ fn parse_start_command(args: &str) -> Option<GroupChatRequest> {
 
     let initial_message = message_parts.join(" ");
 
+    // Require at least one persona
+    if personas.is_empty() {
+        return None;
+    }
+
     Some(GroupChatRequest::Start {
         personas,
         topic,
@@ -338,6 +343,14 @@ mod tests {
         assert!(result.is_some());
         let request = result.unwrap();
         assert!(matches!(request, GroupChatRequest::Start { .. }));
+    }
+
+    #[test]
+    fn test_parse_start_no_personas_returns_none() {
+        let parser = DefaultGroupChatCommandParser;
+        // No --preset or --role flags → empty personas → None
+        let result = parser.parse_group_chat_command("/groupchat start just some message");
+        assert!(result.is_none(), "should return None when no personas specified");
     }
 
     #[test]

@@ -67,10 +67,11 @@ impl A2AClient {
     /// Fetch the remote agent's Agent Card
     pub async fn fetch_agent_card(&self) -> A2AResult<AgentCard> {
         let url = format!("{}/.well-known/agent-card.json", self.base_url);
-        let response = self
-            .http
-            .get(&url)
-            .timeout(Duration::from_secs(10))
+        let mut req = self.http.get(&url).timeout(Duration::from_secs(10));
+        if let Some(ref token) = self.auth_token {
+            req = req.bearer_auth(token);
+        }
+        let response = req
             .send()
             .await
             .map_err(|e| A2AError::AgentUnreachable(e.to_string()))?;
@@ -166,12 +167,9 @@ impl A2AClient {
 
     /// List tasks
     pub async fn list_tasks(&self, params: &ListTasksParams) -> A2AResult<ListTasksResult> {
-        let result = self
-            .rpc_call(
-                "tasks/list",
-                serde_json::to_value(params).unwrap_or_default(),
-            )
-            .await?;
+        let params_value = serde_json::to_value(params)
+            .map_err(|e| A2AError::InternalError(format!("Failed to serialize params: {}", e)))?;
+        let result = self.rpc_call("tasks/list", params_value).await?;
         serde_json::from_value(result).map_err(|e| A2AError::ParseError(e.to_string()))
     }
 

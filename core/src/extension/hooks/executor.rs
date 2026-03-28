@@ -5,6 +5,7 @@ use super::{
 };
 use crate::extension::types::{HookAction, HookConfig, HookEvent, HookKind};
 use crate::extension::ExtensionError;
+use std::collections::HashMap;
 use std::path::Path;
 use std::process::Stdio;
 use std::time::Duration;
@@ -17,14 +18,18 @@ pub struct HookExecutor {
     pub(super) hooks: Vec<HookConfig>,
     /// Command timeout in seconds
     pub(super) command_timeout: Duration,
+    /// Compiled regex cache: matcher string -> compiled Regex (None if invalid)
+    regex_cache: HashMap<String, Option<regex::Regex>>,
 }
 
 impl HookExecutor {
     /// Create a new hook executor
     pub fn new(hooks: Vec<HookConfig>) -> Self {
+        let regex_cache = Self::build_regex_cache(&hooks);
         Self {
             hooks,
             command_timeout: Duration::from_secs(DEFAULT_COMMAND_TIMEOUT_SECS),
+            regex_cache,
         }
     }
 
@@ -41,7 +46,42 @@ impl HookExecutor {
 
     /// Add a hook to the executor
     pub fn add_hook(&mut self, hook: HookConfig) {
+        if let Some(ref matcher) = hook.matcher {
+            self.cache_regex(matcher);
+        }
         self.hooks.push(hook);
+    }
+
+    /// Build regex cache from all hooks
+    fn build_regex_cache(hooks: &[HookConfig]) -> HashMap<String, Option<regex::Regex>> {
+        let mut cache = HashMap::new();
+        for hook in hooks {
+            if let Some(ref matcher) = hook.matcher {
+                if !cache.contains_key(matcher) {
+                    match regex::Regex::new(matcher) {
+                        Ok(re) => { cache.insert(matcher.clone(), Some(re)); }
+                        Err(e) => {
+                            warn!("Invalid hook matcher regex '{}': {}", matcher, e);
+                            cache.insert(matcher.clone(), None);
+                        }
+                    }
+                }
+            }
+        }
+        cache
+    }
+
+    /// Cache a single regex pattern
+    fn cache_regex(&mut self, pattern: &str) {
+        if !self.regex_cache.contains_key(pattern) {
+            match regex::Regex::new(pattern) {
+                Ok(re) => { self.regex_cache.insert(pattern.to_string(), Some(re)); }
+                Err(e) => {
+                    warn!("Invalid hook matcher regex '{}': {}", pattern, e);
+                    self.regex_cache.insert(pattern.to_string(), None);
+                }
+            }
+        }
     }
 
     /// Get the number of hooks
@@ -95,7 +135,7 @@ impl HookExecutor {
                                     if output.trim().to_lowercase().starts_with("block:") {
                                         result.blocked = true;
                                         result.block_reason =
-                                            Some(output.trim()[6..].trim().to_string());
+                                            Some(output.trim().get(6..).unwrap_or("").trim().to_string());
                                     }
                                 }
                             }
@@ -138,12 +178,19 @@ impl HookExecutor {
             None => return false, // No tool name, can't match
         };
 
-        // Try regex match
-        match regex::Regex::new(matcher) {
-            Ok(re) => re.is_match(tool_name),
-            Err(e) => {
-                warn!("Invalid hook matcher regex '{}': {}", matcher, e);
-                false
+        // Look up compiled regex from cache
+        match self.regex_cache.get(matcher.as_str()) {
+            Some(Some(re)) => re.is_match(tool_name),
+            Some(None) => false, // Invalid regex, logged at cache time
+            None => {
+                // Fallback: compile on the fly (should not happen if add_hook was used)
+                match regex::Regex::new(matcher) {
+                    Ok(re) => re.is_match(tool_name),
+                    Err(e) => {
+                        warn!("Invalid hook matcher regex '{}': {}", matcher, e);
+                        false
+                    }
+                }
             }
         }
     }
@@ -338,7 +385,7 @@ impl HookExecutor {
                         if let HookAction::Command { .. } = action {
                             if let Some(ref output) = ar.output {
                                 if output.trim().to_lowercase().starts_with("block:") {
-                                    let reason = output.trim()[6..].trim().to_string();
+                                    let reason = output.trim().get(6..).unwrap_or("").trim().to_string();
                                     return Ok((current_context, Some(reason)));
                                 }
                             }
@@ -361,7 +408,8 @@ impl HookExecutor {
 
     /// Execute observer hooks for an event
     ///
-    /// Observers run in parallel and cannot block or modify the context.
+    /// Different observers run in parallel, but actions within each observer
+    /// run sequentially. Observers cannot block or modify the context.
     /// Errors are logged but do not propagate.
     pub async fn execute_observers(&self, event: HookEvent, context: &HookContext) {
         // Filter hooks by event and kind == Observer

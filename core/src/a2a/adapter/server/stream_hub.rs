@@ -30,6 +30,8 @@ impl StreamHub {
     }
 
     pub fn with_capacity(capacity: usize) -> Self {
+        // broadcast::channel panics if capacity is 0
+        let capacity = capacity.max(1);
         Self {
             channels: RwLock::new(HashMap::new()),
             capacity,

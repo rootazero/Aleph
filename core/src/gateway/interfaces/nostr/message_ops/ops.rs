@@ -39,7 +39,7 @@ impl NostrMessageOps {
         let max_backoff = Duration::from_secs(60);
         let mut backoff = initial_backoff;
 
-        let sub_id = format!("aleph-{}", &own_pubkey[..8.min(own_pubkey.len())]);
+        let sub_id = format!("aleph-{}", own_pubkey.get(..8).unwrap_or(&own_pubkey));
 
         loop {
             if *shutdown_rx.borrow() {
@@ -140,7 +140,7 @@ impl NostrMessageOps {
                 let relay_msg = match parse_relay_message(&text) {
                     Some(m) => m,
                     None => {
-                        tracing::debug!("Nostr: unrecognized relay message: {}", &text[..text.len().min(100)]);
+                        tracing::debug!("Nostr: unrecognized relay message: {}", text.get(..100).unwrap_or(&text));
                         continue;
                     }
                 };
@@ -154,7 +154,7 @@ impl NostrMessageOps {
                         if !config.is_pubkey_allowed(&event.pubkey) {
                             tracing::debug!(
                                 "Nostr: ignoring event from non-allowed pubkey {}",
-                                &event.pubkey[..16.min(event.pubkey.len())]
+                                event.pubkey.get(..16).unwrap_or(&event.pubkey)
                             );
                             continue;
                         }
@@ -165,8 +165,8 @@ impl NostrMessageOps {
                             tracing::debug!(
                                 "Nostr event kind={} from {}: {}",
                                 event.kind,
-                                &event.pubkey[..16.min(event.pubkey.len())],
-                                &inbound.text[..inbound.text.len().min(50)]
+                                event.pubkey.get(..16).unwrap_or(&event.pubkey),
+                                inbound.text.get(..50).unwrap_or(&inbound.text)
                             );
                             if inbound_tx.send(inbound).await.is_err() {
                                 tracing::error!("Nostr: inbound channel closed");

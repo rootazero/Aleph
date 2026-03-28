@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
 use crate::gateway::media::MediaItem;
+use crate::security::ssrf::{validate_url, SsrfPolicy};
 use crate::tools::AlephTool;
 
 /// Input arguments for media_send tool.
@@ -69,6 +70,17 @@ impl AlephTool for MediaSendTool {
     type Output = MediaSendOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
+        // SSRF protection: validate all URLs before processing
+        let ssrf_policy = SsrfPolicy::default();
+        for item in &args.items {
+            if let Err(e) = validate_url(&item.url, &ssrf_policy) {
+                return Err(crate::error::AlephError::tool(format!(
+                    "SSRF blocked for URL '{}': {}",
+                    item.url, e
+                )));
+            }
+        }
+
         let count = args.items.len();
         let media: Vec<MediaItem> = args
             .items

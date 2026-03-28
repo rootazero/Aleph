@@ -35,7 +35,10 @@ impl A2AClientPool {
         }
 
         // Slow path: create new client under write lock
-        let client = Arc::new(A2AClient::new(&agent.base_url));
+        let client = Arc::new(match &agent.auth_token {
+            Some(token) => A2AClient::with_auth(&agent.base_url, token),
+            None => A2AClient::new(&agent.base_url),
+        });
         let mut clients = self.clients.write().await;
         // Double-check: another task may have inserted while we waited
         if let Some(existing) = clients.get(&agent.card.id) {
@@ -110,6 +113,7 @@ mod tests {
             base_url: url.to_string(),
             last_seen: Utc::now(),
             health: AgentHealth::Healthy,
+            auth_token: None,
         }
     }
 

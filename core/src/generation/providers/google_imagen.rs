@@ -136,18 +136,18 @@ impl GoogleImagenProvider {
         api_key: S,
         base_url: Option<String>,
         model: Option<String>,
-    ) -> Self {
+    ) -> GenerationResult<Self> {
         let client = Client::builder()
             .timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
             .build()
-            .expect("Failed to build HTTP client");
+            .map_err(|e| GenerationError::network(format!("Failed to build HTTP client: {}", e)))?;
 
-        Self {
+        Ok(Self {
             client,
             api_key: api_key.into(),
             endpoint: base_url.unwrap_or_else(|| DEFAULT_ENDPOINT.to_string()),
             model: model.unwrap_or_else(|| DEFAULT_MODEL.to_string()),
-        }
+        })
     }
 
     /// Get the full URL for the predict endpoint
@@ -215,6 +215,9 @@ impl GoogleImagenProvider {
 
         // If width and height provided, calculate aspect ratio
         if let (Some(w), Some(h)) = (request.params.width, request.params.height) {
+            if h == 0 {
+                return DEFAULT_ASPECT_RATIO.to_string();
+            }
             let ratio = w as f32 / h as f32;
             return match ratio {
                 r if (r - 1.0).abs() < 0.1 => "1:1".to_string(),
@@ -545,7 +548,7 @@ mod tests {
 
     #[test]
     fn test_new_with_defaults() {
-        let provider = GoogleImagenProvider::new("test-api-key", None, None);
+        let provider = GoogleImagenProvider::new("test-api-key", None, None).unwrap();
 
         assert_eq!(provider.api_key, "test-api-key");
         assert_eq!(provider.endpoint, DEFAULT_ENDPOINT);
@@ -558,7 +561,7 @@ mod tests {
             "test-api-key",
             Some("https://custom.googleapis.com".to_string()),
             None,
-        );
+        ).unwrap();
 
         assert_eq!(provider.endpoint, "https://custom.googleapis.com");
     }
@@ -569,14 +572,14 @@ mod tests {
             "test-api-key",
             None,
             Some("imagen-4.0-generate-001".to_string()),
-        );
+        ).unwrap();
 
         assert_eq!(provider.model, "imagen-4.0-generate-001");
     }
 
     #[test]
     fn test_predict_url() {
-        let provider = GoogleImagenProvider::new("test-api-key", None, None);
+        let provider = GoogleImagenProvider::new("test-api-key", None, None).unwrap();
         assert_eq!(
             provider.predict_url(),
             "https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-002:predict"
@@ -586,7 +589,7 @@ mod tests {
             "test-api-key",
             Some("https://api.example.com".to_string()),
             Some("custom-model".to_string()),
-        );
+        ).unwrap();
         assert_eq!(
             custom_provider.predict_url(),
             "https://api.example.com/v1beta/models/custom-model:predict"
@@ -597,13 +600,13 @@ mod tests {
 
     #[test]
     fn test_name() {
-        let provider = GoogleImagenProvider::new("test-api-key", None, None);
+        let provider = GoogleImagenProvider::new("test-api-key", None, None).unwrap();
         assert_eq!(provider.name(), "google-imagen");
     }
 
     #[test]
     fn test_supported_types() {
-        let provider = GoogleImagenProvider::new("test-api-key", None, None);
+        let provider = GoogleImagenProvider::new("test-api-key", None, None).unwrap();
         let types = provider.supported_types();
 
         assert_eq!(types.len(), 1);
@@ -612,14 +615,14 @@ mod tests {
 
     #[test]
     fn test_supports_image() {
-        let provider = GoogleImagenProvider::new("test-api-key", None, None);
+        let provider = GoogleImagenProvider::new("test-api-key", None, None).unwrap();
 
         assert!(provider.supports(GenerationType::Image));
     }
 
     #[test]
     fn test_does_not_support_other_types() {
-        let provider = GoogleImagenProvider::new("test-api-key", None, None);
+        let provider = GoogleImagenProvider::new("test-api-key", None, None).unwrap();
 
         assert!(!provider.supports(GenerationType::Speech));
         assert!(!provider.supports(GenerationType::Video));
@@ -628,20 +631,20 @@ mod tests {
 
     #[test]
     fn test_color() {
-        let provider = GoogleImagenProvider::new("test-api-key", None, None);
+        let provider = GoogleImagenProvider::new("test-api-key", None, None).unwrap();
         assert_eq!(provider.color(), "#4285F4");
     }
 
     #[test]
     fn test_default_model() {
-        let provider = GoogleImagenProvider::new("test-api-key", None, None);
+        let provider = GoogleImagenProvider::new("test-api-key", None, None).unwrap();
         assert_eq!(provider.default_model(), Some("imagen-3.0-generate-002"));
 
         let custom_provider = GoogleImagenProvider::new(
             "test-api-key",
             None,
             Some("imagen-4.0-ultra-generate-001".to_string()),
-        );
+        ).unwrap();
         assert_eq!(
             custom_provider.default_model(),
             Some("imagen-4.0-ultra-generate-001")
@@ -652,7 +655,7 @@ mod tests {
 
     #[test]
     fn test_build_request_body_minimal() {
-        let provider = GoogleImagenProvider::new("test-api-key", None, None);
+        let provider = GoogleImagenProvider::new("test-api-key", None, None).unwrap();
         let request = GenerationRequest::image("A beautiful sunset");
 
         let body = provider.build_request_body(&request);
@@ -665,7 +668,7 @@ mod tests {
 
     #[test]
     fn test_build_request_body_with_params() {
-        let provider = GoogleImagenProvider::new("test-api-key", None, None);
+        let provider = GoogleImagenProvider::new("test-api-key", None, None).unwrap();
         let request = GenerationRequest::image("A beautiful sunset").with_params(
             GenerationParams::builder()
                 .n(4)
@@ -683,7 +686,7 @@ mod tests {
 
     #[test]
     fn test_determine_aspect_ratio_from_style() {
-        let provider = GoogleImagenProvider::new("test-api-key", None, None);
+        let provider = GoogleImagenProvider::new("test-api-key", None, None).unwrap();
         let request = GenerationRequest::image("Test")
             .with_params(GenerationParams::builder().style("9:16").build());
 
@@ -693,7 +696,7 @@ mod tests {
 
     #[test]
     fn test_determine_aspect_ratio_from_dimensions() {
-        let provider = GoogleImagenProvider::new("test-api-key", None, None);
+        let provider = GoogleImagenProvider::new("test-api-key", None, None).unwrap();
 
         // 16:9 ratio
         let request = GenerationRequest::image("Test")
@@ -841,7 +844,7 @@ mod tests {
         use crate::sync_primitives::Arc;
 
         let provider: Arc<dyn GenerationProvider> =
-            Arc::new(GoogleImagenProvider::new("test-key", None, None));
+            Arc::new(GoogleImagenProvider::new("test-key", None, None).unwrap());
 
         assert_eq!(provider.name(), "google-imagen");
         assert!(provider.supports(GenerationType::Image));

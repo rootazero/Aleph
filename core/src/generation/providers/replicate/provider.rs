@@ -255,7 +255,12 @@ impl GenerationProvider for ReplicateProvider {
     }
 
     fn default_model(&self) -> Option<&str> {
-        // Return the first model in mappings if available
-        self.model_mappings.values().next().map(|s| s.as_str())
+        // Prefer explicit "default" alias, otherwise return deterministic (sorted) first model
+        self.model_mappings
+            .get("default")
+            .or_else(|| {
+                self.model_mappings.keys().min().and_then(|k| self.model_mappings.get(k))
+            })
+            .map(|s| s.as_str())
     }
 }

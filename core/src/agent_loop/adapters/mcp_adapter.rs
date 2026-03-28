@@ -5,7 +5,7 @@
 
 use async_trait::async_trait;
 use serde_json::Value;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use super::super::tool::{LoopTool, ToolResult};
 use crate::security::content_sanitizer::{wrap_external_content, ContentSource};

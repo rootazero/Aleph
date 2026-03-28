@@ -150,18 +150,18 @@ impl StabilityImageProvider {
         api_key: S,
         base_url: Option<String>,
         model: Option<String>,
-    ) -> Self {
+    ) -> GenerationResult<Self> {
         let client = Client::builder()
             .timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
             .build()
-            .expect("Failed to build HTTP client");
+            .map_err(|e| GenerationError::network(format!("Failed to build HTTP client: {}", e)))?;
 
-        Self {
+        Ok(Self {
             client,
             api_key: api_key.into(),
             endpoint: base_url.unwrap_or_else(|| DEFAULT_ENDPOINT.to_string()),
             model: model.unwrap_or_else(|| DEFAULT_MODEL.to_string()),
-        }
+        })
     }
 
     /// Get the full URL for the text-to-image endpoint
@@ -516,7 +516,7 @@ mod tests {
 
     #[test]
     fn test_new_with_defaults() {
-        let provider = StabilityImageProvider::new("sk-test-key", None, None);
+        let provider = StabilityImageProvider::new("sk-test-key", None, None).unwrap();
 
         assert_eq!(provider.api_key, "sk-test-key");
         assert_eq!(provider.endpoint, DEFAULT_ENDPOINT);
@@ -529,7 +529,7 @@ mod tests {
             "sk-test-key",
             Some("https://custom.stability.ai".to_string()),
             None,
-        );
+        ).unwrap();
 
         assert_eq!(provider.endpoint, "https://custom.stability.ai");
     }
@@ -540,14 +540,14 @@ mod tests {
             "sk-test-key",
             None,
             Some("stable-diffusion-v1-6".to_string()),
-        );
+        ).unwrap();
 
         assert_eq!(provider.model, "stable-diffusion-v1-6");
     }
 
     #[test]
     fn test_text_to_image_url() {
-        let provider = StabilityImageProvider::new("sk-test-key", None, None);
+        let provider = StabilityImageProvider::new("sk-test-key", None, None).unwrap();
         assert_eq!(
             provider.text_to_image_url(),
             "https://api.stability.ai/v1/generation/stable-diffusion-xl-1024-v1-0/text-to-image"
@@ -557,7 +557,7 @@ mod tests {
             "sk-test-key",
             Some("https://api.example.com".to_string()),
             Some("custom-model".to_string()),
-        );
+        ).unwrap();
         assert_eq!(
             custom_provider.text_to_image_url(),
             "https://api.example.com/v1/generation/custom-model/text-to-image"
@@ -568,13 +568,13 @@ mod tests {
 
     #[test]
     fn test_name() {
-        let provider = StabilityImageProvider::new("sk-test-key", None, None);
+        let provider = StabilityImageProvider::new("sk-test-key", None, None).unwrap();
         assert_eq!(provider.name(), "stability-image");
     }
 
     #[test]
     fn test_supported_types() {
-        let provider = StabilityImageProvider::new("sk-test-key", None, None);
+        let provider = StabilityImageProvider::new("sk-test-key", None, None).unwrap();
         let types = provider.supported_types();
 
         assert_eq!(types.len(), 1);
@@ -583,14 +583,14 @@ mod tests {
 
     #[test]
     fn test_supports_image() {
-        let provider = StabilityImageProvider::new("sk-test-key", None, None);
+        let provider = StabilityImageProvider::new("sk-test-key", None, None).unwrap();
 
         assert!(provider.supports(GenerationType::Image));
     }
 
     #[test]
     fn test_does_not_support_speech() {
-        let provider = StabilityImageProvider::new("sk-test-key", None, None);
+        let provider = StabilityImageProvider::new("sk-test-key", None, None).unwrap();
 
         assert!(!provider.supports(GenerationType::Speech));
         assert!(!provider.supports(GenerationType::Video));
@@ -599,13 +599,13 @@ mod tests {
 
     #[test]
     fn test_color() {
-        let provider = StabilityImageProvider::new("sk-test-key", None, None);
+        let provider = StabilityImageProvider::new("sk-test-key", None, None).unwrap();
         assert_eq!(provider.color(), "#8b5cf6");
     }
 
     #[test]
     fn test_default_model() {
-        let provider = StabilityImageProvider::new("sk-test-key", None, None);
+        let provider = StabilityImageProvider::new("sk-test-key", None, None).unwrap();
         assert_eq!(
             provider.default_model(),
             Some("stable-diffusion-xl-1024-v1-0")
@@ -615,7 +615,7 @@ mod tests {
             "sk-test-key",
             None,
             Some("stable-diffusion-v1-6".to_string()),
-        );
+        ).unwrap();
         assert_eq!(
             custom_provider.default_model(),
             Some("stable-diffusion-v1-6")
@@ -626,7 +626,7 @@ mod tests {
 
     #[test]
     fn test_build_request_body_minimal() {
-        let provider = StabilityImageProvider::new("sk-test-key", None, None);
+        let provider = StabilityImageProvider::new("sk-test-key", None, None).unwrap();
         let request = GenerationRequest::image("A beautiful sunset");
 
         let body = provider.build_request_body(&request);
@@ -645,7 +645,7 @@ mod tests {
 
     #[test]
     fn test_build_request_body_with_params() {
-        let provider = StabilityImageProvider::new("sk-test-key", None, None);
+        let provider = StabilityImageProvider::new("sk-test-key", None, None).unwrap();
         let request = GenerationRequest::image("A beautiful sunset").with_params(
             GenerationParams::builder()
                 .width(512)
@@ -671,7 +671,7 @@ mod tests {
 
     #[test]
     fn test_build_request_body_with_negative_prompt() {
-        let provider = StabilityImageProvider::new("sk-test-key", None, None);
+        let provider = StabilityImageProvider::new("sk-test-key", None, None).unwrap();
         let request = GenerationRequest::image("A beautiful sunset").with_params(
             GenerationParams::builder()
                 .negative_prompt("blurry, low quality")
@@ -712,7 +712,7 @@ mod tests {
 
     #[test]
     fn test_invalid_style_preset_ignored() {
-        let provider = StabilityImageProvider::new("sk-test-key", None, None);
+        let provider = StabilityImageProvider::new("sk-test-key", None, None).unwrap();
         let request = GenerationRequest::image("Test").with_params(
             GenerationParams::builder()
                 .style("invalid-style-that-doesnt-exist")
@@ -903,7 +903,7 @@ mod tests {
         use crate::sync_primitives::Arc;
 
         let provider: Arc<dyn GenerationProvider> =
-            Arc::new(StabilityImageProvider::new("sk-test", None, None));
+            Arc::new(StabilityImageProvider::new("sk-test", None, None).unwrap());
 
         assert_eq!(provider.name(), "stability-image");
         assert!(provider.supports(GenerationType::Image));

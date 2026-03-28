@@ -6,7 +6,7 @@
 
 use async_trait::async_trait;
 use serde_json::{json, Value};
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use super::super::tool::{LoopTool, ToolResult};
 
@@ -222,10 +222,13 @@ mod tests {
         }
 
         async fn store(&self, content: &str, metadata: Option<Value>) -> anyhow::Result<String> {
+            let id = {
+                let mut next_id = self.next_id.lock().await;
+                let id = format!("mem-{}", *next_id);
+                *next_id += 1;
+                id
+            };
             let mut entries = self.entries.lock().await;
-            let mut next_id = self.next_id.lock().await;
-            let id = format!("mem-{}", *next_id);
-            *next_id += 1;
             entries.push(MemoryEntry {
                 id: id.clone(),
                 content: content.to_string(),

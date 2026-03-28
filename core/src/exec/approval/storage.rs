@@ -67,7 +67,7 @@ impl ApprovalAuditStorage {
             params![tool_name],
             |row| row.get(0),
         )?;
-        Ok(count as u32)
+        Ok(u32::try_from(count).unwrap_or(0))
     }
 
     /// Get execution count for a tool
@@ -78,7 +78,7 @@ impl ApprovalAuditStorage {
             params![tool_name],
             |row| row.get(0),
         )?;
-        Ok(count as u32)
+        Ok(u32::try_from(count).unwrap_or(0))
     }
 
     /// Get last execution timestamp for a tool

@@ -284,16 +284,15 @@ impl CompressionService {
         }
 
         // 5. Update compression timestamp
+        // Use the max memory timestamp + 1 so that the next query with
+        // `timestamp >= last_compression_ts` does not re-process the same
+        // batch. Adding 1 avoids off-by-one on the `>=` boundary.
         let latest_timestamp = memories
             .iter()
             .map(|m| m.context.timestamp)
             .max()
-            .unwrap_or_else(|| {
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-                    .as_secs() as i64
-            });
+            .unwrap_or(0)
+            + 1;
 
         self.database
             .set_last_compression_timestamp(latest_timestamp)
@@ -492,11 +491,13 @@ impl CompressionService {
     /// and if so, spawns a compression task immediately instead of waiting
     /// for the next hourly background check.
     pub fn record_turn_and_check(self: &Arc<Self>) {
-        self.scheduler.increment_turns();
-        let turns = self.scheduler.get_pending_turns();
+        // Use the return value of fetch_add to trigger exactly once when
+        // the threshold is crossed, avoiding race conditions.
+        let old_turns = self.scheduler.pending_turns.fetch_add(1, crate::sync_primitives::Ordering::AcqRel);
+        let turns = old_turns + 1;
         let threshold = self.config.scheduler.turn_threshold;
 
-        if turns >= threshold {
+        if old_turns < threshold && turns >= threshold {
             tracing::info!(
                 turns = turns,
                 threshold = threshold,

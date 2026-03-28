@@ -1,8 +1,0 @@
----
-test: l2_read_then_write
-source: Cargo.toml
-package_name: 未找到
-package_version: 未找到
-timestamp: 2025-02-14T00:00:00Z
-status: passed
----

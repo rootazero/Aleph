@@ -37,7 +37,20 @@ impl TaskState {
 
     /// Returns true if the task can be canceled from this state
     pub fn is_cancelable(&self) -> bool {
-        matches!(self, Self::Submitted | Self::Working | Self::InputRequired)
+        matches!(
+            self,
+            Self::Submitted | Self::Working | Self::InputRequired | Self::AuthRequired
+        )
+    }
+
+    /// Returns true if transitioning from this state to `target` is valid.
+    /// Terminal states (Completed, Canceled, Failed, Rejected) cannot transition further.
+    pub fn can_transition_to(&self, _target: &TaskState) -> bool {
+        if self.is_terminal() {
+            return false;
+        }
+        // Non-terminal states can transition to any other state
+        true
     }
 }
 
@@ -143,7 +156,7 @@ mod tests {
         assert!(!TaskState::Canceled.is_cancelable());
         assert!(!TaskState::Failed.is_cancelable());
         assert!(!TaskState::Rejected.is_cancelable());
-        assert!(!TaskState::AuthRequired.is_cancelable());
+        assert!(TaskState::AuthRequired.is_cancelable());
     }
 
     #[test]

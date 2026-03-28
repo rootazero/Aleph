@@ -212,7 +212,10 @@ pub async fn handle_start(
                 step: first_result.step,
                 status: first_result.status,
             };
-            JsonRpcResponse::success(req.id, serde_json::to_value(response).unwrap())
+            match serde_json::to_value(response) {
+                Ok(v) => JsonRpcResponse::success(req.id, v),
+                Err(e) => JsonRpcResponse::error(req.id, INTERNAL_ERROR, format!("Failed to serialize response: {}", e)),
+            }
         }
         Err(e) => {
             JsonRpcResponse::error(req.id, INTERNAL_ERROR, e.to_string())
@@ -264,7 +267,10 @@ pub async fn handle_answer(
     // Get the next step
     match manager.next(&params.session_id, None).await {
         Ok(result) => {
-            JsonRpcResponse::success(req.id, serde_json::to_value(result).unwrap())
+            match serde_json::to_value(result) {
+                Ok(v) => JsonRpcResponse::success(req.id, v),
+                Err(e) => JsonRpcResponse::error(req.id, INTERNAL_ERROR, format!("Failed to serialize response: {}", e)),
+            }
         }
         Err(e) => {
             JsonRpcResponse::error(req.id, INTERNAL_ERROR, e.to_string())
@@ -299,7 +305,10 @@ pub async fn handle_next(
 
     match manager.next(&params.session_id, params.answer).await {
         Ok(result) => {
-            JsonRpcResponse::success(req.id, serde_json::to_value(result).unwrap())
+            match serde_json::to_value(result) {
+                Ok(v) => JsonRpcResponse::success(req.id, v),
+                Err(e) => JsonRpcResponse::error(req.id, INTERNAL_ERROR, format!("Failed to serialize response: {}", e)),
+            }
         }
         Err(e) => {
             JsonRpcResponse::error(req.id, INTERNAL_ERROR, e.to_string())
@@ -334,7 +343,10 @@ pub async fn handle_cancel(
 
     let cancelled = manager.cancel(&params.session_id);
     let response = WizardCancelResponse { cancelled };
-    JsonRpcResponse::success(req.id, serde_json::to_value(response).unwrap())
+    match serde_json::to_value(response) {
+        Ok(v) => JsonRpcResponse::success(req.id, v),
+        Err(e) => JsonRpcResponse::error(req.id, INTERNAL_ERROR, format!("Failed to serialize response: {}", e)),
+    }
 }
 
 /// Handle wizard.status

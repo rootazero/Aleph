@@ -81,13 +81,9 @@ impl A2AAuthenticator for TieredAuthenticator {
                 // Invalid token — fall through to reject
             }
             Credentials::OAuth2Token(_token) => {
-                // OAuth2 validation would go here (e.g. JWKS verification)
-                // For now, accept any OAuth2 token at Public level
-                return Ok(A2AAuthPrincipal {
-                    agent_id: None,
-                    trust_level: TrustLevel::Public,
-                    permissions: self.permissions_for(&TrustLevel::Public),
-                });
+                // OAuth2 validation requires JWKS verification — reject until implemented.
+                // Accepting unvalidated tokens is a security bypass.
+                return Err(A2AError::Unauthorized);
             }
             Credentials::None => {}
         }
@@ -99,15 +95,19 @@ impl A2AAuthenticator for TieredAuthenticator {
     async fn authorize(
         &self,
         principal: &A2AAuthPrincipal,
-        _action: &A2AAction,
+        action: &A2AAction,
     ) -> A2AResult<bool> {
         // Wildcard grants all actions
         if principal.permissions.iter().any(|p| p == "*") {
             return Ok(true);
         }
-        // Any non-empty permission list allows access for now;
-        // fine-grained per-action authorization can be added later
-        Ok(!principal.permissions.is_empty())
+        // Map actions to required permission
+        let required = match action {
+            A2AAction::GetTask | A2AAction::ListTasks => "read",
+            A2AAction::SendMessage | A2AAction::CancelTask | A2AAction::Subscribe => "write",
+            A2AAction::ManagePushConfig => "admin",
+        };
+        Ok(principal.permissions.iter().any(|p| p == required))
     }
 
     fn supported_schemes(&self) -> Vec<SecurityScheme> {
@@ -192,15 +192,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn oauth2_token_grants_public() {
+    async fn oauth2_token_rejected_until_jwks_implemented() {
         let auth = TieredAuthenticator::new(false, vec![]);
         let ctx = make_context(
             remote_addr(),
             Credentials::OAuth2Token("oauth-token".to_string()),
         );
-        let principal = auth.authenticate(&ctx).await.unwrap();
-        assert_eq!(principal.trust_level, TrustLevel::Public);
-        assert!(principal.permissions.contains(&"read".to_string()));
+        let result = auth.authenticate(&ctx).await;
+        assert!(matches!(result.unwrap_err(), A2AError::Unauthorized));
     }
 
     #[tokio::test]
@@ -235,7 +234,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn authorize_non_wildcard_non_empty_allows() {
+    async fn authorize_read_permission_allows_get_task() {
         let principal = A2AAuthPrincipal {
             agent_id: None,
             trust_level: TrustLevel::Public,
@@ -243,6 +242,35 @@ mod tests {
         };
         let auth = TieredAuthenticator::new(true, vec![]);
         assert!(auth.authorize(&principal, &A2AAction::GetTask).await.unwrap());
+        assert!(auth.authorize(&principal, &A2AAction::ListTasks).await.unwrap());
+        // read permission should NOT allow write actions
+        assert!(!auth.authorize(&principal, &A2AAction::SendMessage).await.unwrap());
+        assert!(!auth.authorize(&principal, &A2AAction::CancelTask).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn authorize_write_permission_allows_send_and_cancel() {
+        let principal = A2AAuthPrincipal {
+            agent_id: None,
+            trust_level: TrustLevel::Trusted,
+            permissions: vec!["write".to_string()],
+        };
+        let auth = TieredAuthenticator::new(true, vec![]);
+        assert!(auth.authorize(&principal, &A2AAction::SendMessage).await.unwrap());
+        assert!(auth.authorize(&principal, &A2AAction::CancelTask).await.unwrap());
+        // write should NOT allow read
+        assert!(!auth.authorize(&principal, &A2AAction::GetTask).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn authorize_admin_permission_allows_push_config() {
+        let principal = A2AAuthPrincipal {
+            agent_id: None,
+            trust_level: TrustLevel::Local,
+            permissions: vec!["admin".to_string()],
+        };
+        let auth = TieredAuthenticator::new(true, vec![]);
+        assert!(auth.authorize(&principal, &A2AAction::ManagePushConfig).await.unwrap());
     }
 
     #[tokio::test]
@@ -263,10 +291,9 @@ mod tests {
         let p = auth.authenticate(&ctx).await.unwrap();
         assert_eq!(p.permissions, vec!["read".to_string(), "write".to_string()]);
 
-        // Public
+        // Public (OAuth2 rejected until JWKS implemented)
         let ctx = make_context(remote_addr(), Credentials::OAuth2Token("x".to_string()));
-        let p = auth.authenticate(&ctx).await.unwrap();
-        assert_eq!(p.permissions, vec!["read".to_string()]);
+        assert!(auth.authenticate(&ctx).await.is_err());
     }
 
     #[tokio::test]

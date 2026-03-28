@@ -232,7 +232,7 @@ impl XmppMessageOps {
                         while let Some((stanza, remaining)) = extract_stanza(&buffer) {
                             buffer = remaining;
 
-                            tracing::debug!("XMPP < {}", &stanza[..stanza.len().min(200)]);
+                            tracing::debug!("XMPP < {}", stanza.get(..200).unwrap_or(&stanza));
 
                             // Handle based on connection phase
                             if !authenticated {
@@ -308,7 +308,7 @@ impl XmppMessageOps {
                                         tracing::debug!(
                                             "XMPP message from {}: {}",
                                             inbound.sender_id.as_str(),
-                                            &inbound.text[..inbound.text.len().min(50)]
+                                            inbound.text.get(..50).unwrap_or(&inbound.text)
                                         );
                                         if inbound_tx.send(inbound).await.is_err() {
                                             tracing::error!("XMPP: inbound channel closed");

@@ -74,10 +74,19 @@ pub fn github_markdown_css() -> &'static str {
     "#
 }
 
+/// Escape special HTML characters to prevent injection.
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#x27;")
+}
+
 /// Wrap HTML content with full document structure and CSS.
 pub fn wrap_html_with_styles(html_body: &str, title: Option<&str>) -> String {
     let css = github_markdown_css();
-    let title_str = title.unwrap_or("Document");
+    let title_str = html_escape(title.unwrap_or("Document"));
     format!(
         r#"<!DOCTYPE html>
 <html lang="zh-CN">

@@ -104,19 +104,24 @@ impl BrowserBackend for ManagedBackend {
     ) -> Result<(), BrowserError> {
         // BrowserRuntime doesn't have a select method yet.
         // Implement via JS evaluation as a reasonable fallback.
+        let escaped_value = serde_json::to_string(value).map_err(|e| {
+            BrowserError::ActionFailed(format!("Failed to escape select value: {e}"))
+        })?;
         let js = match &target {
             ActionTarget::Ref { ref_id } => {
+                let escaped_ref = serde_json::to_string(ref_id).map_err(|e| {
+                    BrowserError::ActionFailed(format!("Failed to escape ref_id: {e}"))
+                })?;
                 format!(
-                    r#"(() => {{ const el = document.querySelector('[data-ref="{ref_id}"]'); if (el) {{ el.value = '{value}'; el.dispatchEvent(new Event('change')); return true; }} return false; }})()"#,
-                    ref_id = ref_id,
-                    value = value,
+                    r#"(() => {{ const el = document.querySelector('[data-ref=' + {escaped_ref} + ']'); if (el) {{ el.value = {escaped_value}; el.dispatchEvent(new Event('change')); return true; }} return false; }})()"#
                 )
             }
             ActionTarget::Selector { css } => {
+                let escaped_css = serde_json::to_string(css).map_err(|e| {
+                    BrowserError::ActionFailed(format!("Failed to escape CSS selector: {e}"))
+                })?;
                 format!(
-                    r#"(() => {{ const el = document.querySelector('{css}'); if (el) {{ el.value = '{value}'; el.dispatchEvent(new Event('change')); return true; }} return false; }})()"#,
-                    css = css,
-                    value = value,
+                    r#"(() => {{ const el = document.querySelector({escaped_css}); if (el) {{ el.value = {escaped_value}; el.dispatchEvent(new Event('change')); return true; }} return false; }})()"#
                 )
             }
             ActionTarget::Coordinates { .. } => {

@@ -239,6 +239,15 @@ impl DreamDaemon {
             return Ok(());
         }
 
+        // RAII guard: ensures is_running is reset even on early ? returns
+        struct RunGuard<'a>(&'a AtomicBool);
+        impl Drop for RunGuard<'_> {
+            fn drop(&mut self) {
+                self.0.store(false, Ordering::SeqCst);
+            }
+        }
+        let _guard = RunGuard(&self.is_running);
+
         let run_start = now_timestamp();
         let run_date = Local::now().format("%Y-%m-%d").to_string();
 
@@ -249,7 +258,6 @@ impl DreamDaemon {
                     if last_date.format("%Y-%m-%d").to_string() == run_date
                         && status.last_status.as_deref() == Some("success")
                     {
-                        self.is_running.store(false, Ordering::SeqCst);
                         return Ok(());
                     }
                 }
@@ -276,7 +284,7 @@ impl DreamDaemon {
         match run_result {
             Ok(Ok(report)) => {
                 if let Some(insight) = report.insight.clone() {
-                    self.database.upsert_daily_insight(insight).await?;
+                    let _ = self.database.upsert_daily_insight(insight).await;
                 }
 
                 if report.status == DreamRunStatus::Cancelled {
@@ -297,37 +305,37 @@ impl DreamDaemon {
                     );
                 }
 
-                self.database
+                let _ = self.database
                     .set_dream_status(DreamStatus {
                         last_run_at: Some(run_start),
                         last_status: Some(report.status.as_str().to_string()),
                         last_duration_ms: Some(duration_ms),
                     })
-                    .await?;
+                    .await;
             }
             Ok(Err(err)) => {
                 warn!(error = %err, "DreamDaemon run failed");
-                self.database
+                let _ = self.database
                     .set_dream_status(DreamStatus {
                         last_run_at: Some(run_start),
                         last_status: Some("error".to_string()),
                         last_duration_ms: Some(duration_ms),
                     })
-                    .await?;
+                    .await;
             }
             Err(_) => {
                 warn!("DreamDaemon run timed out");
-                self.database
+                let _ = self.database
                     .set_dream_status(DreamStatus {
                         last_run_at: Some(run_start),
                         last_status: Some("timeout".to_string()),
                         last_duration_ms: Some(duration_ms),
                     })
-                    .await?;
+                    .await;
             }
         }
 
-        self.is_running.store(false, Ordering::SeqCst);
+        // _guard dropped here, resetting is_running to false
         Ok(())
     }
 
@@ -444,10 +452,10 @@ impl DreamDaemon {
                     let last_access = fact.last_accessed_at.unwrap_or(fact.updated_at);
                     let days_since_access = (now_ts - last_access) as f64 / 86400.0;
                     let decay = (-(days_since_access) * (2.0_f64.ln()) / half_life_days as f64).exp() as f32;
-                    let new_conf = fact.confidence * decay;
+                    let new_strength = fact.strength * decay;
                     // Only record facts that actually change.
-                    if (new_conf - fact.confidence).abs() > f32::EPSILON {
-                        Some((fact.id.clone(), fact.confidence, new_conf))
+                    if (new_strength - fact.strength).abs() > f32::EPSILON {
+                        Some((fact.id.clone(), fact.strength, new_strength))
                     } else {
                         None
                     }
@@ -459,7 +467,7 @@ impl DreamDaemon {
                 let _ = handler
                     .apply_decay(ApplyDecayCommand {
                         fact_ids_with_strength: decay_tuples,
-                        decay_factor: half_life_days,
+                        decay_factor: (-(2.0_f64.ln()) / half_life_days as f64).exp() as f32,
                         correlation_id: None,
                     })
                     .await?;

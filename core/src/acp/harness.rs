@@ -17,6 +17,14 @@ pub enum HarnessMode {
 }
 
 impl HarnessMode {
+    /// Return a stable string representation (matches serde rename).
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            HarnessMode::NativeAcp => "native_acp",
+            HarnessMode::Oneshot => "oneshot",
+        }
+    }
+
     /// Convert to the serde-friendly config enum.
     pub fn to_serde(&self) -> crate::config::types::acp::HarnessModeSerde {
         match self {

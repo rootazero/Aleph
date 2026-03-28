@@ -5,6 +5,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
+use crate::builtin_tools::agent_manage::create::validate_agent_id;
 use crate::config::agent_manager::AgentManager;
 use crate::config::types::agents_def::AgentDefinition;
 use crate::error::{AlephError, Result};
@@ -160,6 +161,9 @@ impl TeamCreateTool {
     /// If an agent with the same ID already exists, silently reuse it
     /// instead of creating a duplicate (prevents registry pollution).
     async fn create_inline_agent(&self, spec: &CreateAgentSpec) -> Result<String> {
+        validate_agent_id(&spec.id)
+            .map_err(|e| AlephError::other(format!("Invalid agent ID '{}': {}", spec.id, e)))?;
+
         if self.registry.get(&spec.id).await.is_some() {
             info!(agent_id = %spec.id, "team_create: reusing existing agent");
             return Ok(spec.id.clone());
@@ -193,7 +197,7 @@ impl TeamCreateTool {
             ))
         })?;
 
-        std::fs::create_dir_all(&workspace_path).map_err(|e| {
+        tokio::fs::create_dir_all(&workspace_path).await.map_err(|e| {
             AlephError::other(format!(
                 "Failed to create workspace for '{}': {}",
                 spec.id, e
@@ -203,7 +207,7 @@ impl TeamCreateTool {
         // Write custom SOUL.md if profile provided
         if let Some(ref profile) = spec.profile {
             let soul_path = agent_state_dir.join("SOUL.md");
-            std::fs::write(&soul_path, profile).map_err(|e| {
+            tokio::fs::write(&soul_path, profile).await.map_err(|e| {
                 AlephError::other(format!("Failed to write SOUL.md for '{}': {}", spec.id, e))
             })?;
         }
@@ -302,6 +306,15 @@ impl AlephTool for TeamCreateTool {
             .await?;
 
         info!(team_id = %team.id, leader = %leader_id, "team_create: team created");
+
+        // Auto-enroll the leader as a member (role = "leader")
+        self.store
+            .add_member(NewTeamMember {
+                team_id: team.id.clone(),
+                agent_id: leader_id.clone(),
+                role: "leader".to_string(),
+            })
+            .await?;
 
         // Enroll members
         let mut enrolled: Vec<EnrolledMember> = Vec::new();

@@ -136,6 +136,5 @@ impl CompressionDaemon {
     }
 }
 
-// Implement Send + Sync for CompressionDaemon
-unsafe impl Send for CompressionDaemon {}
-unsafe impl Sync for CompressionDaemon {}
+// All fields are Send+Sync: Arc, AtomicBool, AtomicI64, CompressionDaemonConfig.
+// No manual unsafe impl needed — the compiler derives Send+Sync automatically.

@@ -579,7 +579,7 @@ impl JobRun {
         let now = chrono::Utc::now().timestamp();
         self.status = RunStatus::Ok;
         self.ended_at = now;
-        self.duration_ms = ((now - self.started_at) * 1000) as u64;
+        self.duration_ms = now.saturating_sub(self.started_at).saturating_mul(1000) as u64;
         self.response = response.map(|r| truncate_string(&r, 1000));
         self
     }
@@ -589,7 +589,7 @@ impl JobRun {
         let now = chrono::Utc::now().timestamp();
         self.status = RunStatus::Error;
         self.ended_at = now;
-        self.duration_ms = ((now - self.started_at) * 1000) as u64;
+        self.duration_ms = now.saturating_sub(self.started_at).saturating_mul(1000) as u64;
         self.error = Some(truncate_string(&error, 500));
         self
     }
@@ -599,7 +599,7 @@ impl JobRun {
         let now = chrono::Utc::now().timestamp();
         self.status = RunStatus::Timeout;
         self.ended_at = now;
-        self.duration_ms = ((now - self.started_at) * 1000) as u64;
+        self.duration_ms = now.saturating_sub(self.started_at).saturating_mul(1000) as u64;
         self.error = Some("Job execution timed out".to_string());
         self
     }

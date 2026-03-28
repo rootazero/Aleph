@@ -59,7 +59,9 @@ pub async fn execute_batch_move(
             Ok(path) => {
                 if path.is_file() {
                     let file_name = path.file_name().unwrap_or_default();
-                    let dest_path = dest_canonical.join(file_name);
+                    // Sanitize filename to prevent path traversal via "../" in names
+                    let safe_name = file_name.to_string_lossy().replace(['/', '\\'], "_");
+                    let dest_path = dest_canonical.join(&safe_name);
 
                     match fs::rename(&path, &dest_path) {
                         Ok(_) => {

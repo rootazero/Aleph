@@ -55,7 +55,7 @@ impl AlephTool for BrowserEvaluateTool {
                     result: Some(value),
                     message: Some(format!(
                         "Evaluated {} chars of JS in profile '{}'",
-                        args.script.len(), args.profile
+                        args.script.chars().count(), args.profile
                     )),
                 }),
                 Err(e) => Ok(BrowserEvaluateOutput {

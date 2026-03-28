@@ -189,7 +189,10 @@ impl Default for SearchTool {
 
 impl Clone for SearchTool {
     fn clone(&self) -> Self {
-        Self::new()
+        Self {
+            client: Client::new(),
+            api_key: self.api_key.clone(),
+        }
     }
 }
 

@@ -1,5 +1,0 @@
----
-test: l1_file_ops_write
-timestamp: 2025-02-14 00:00:00
-status: passed
----

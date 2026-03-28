@@ -87,12 +87,12 @@ impl ChromeMcpBackend {
             let line = line.trim();
             // Match lines like "1: https://example.com [selected]" or "2: https://example.com"
             if let Some(colon_pos) = line.find(": ") {
-                let id_str = line[..colon_pos].trim();
+                let id_str = line.get(..colon_pos).unwrap_or("").trim();
                 // Verify it starts with a number
                 if id_str.chars().all(|c| c.is_ascii_digit()) && !id_str.is_empty() {
-                    let rest = &line[colon_pos + 2..];
+                    let rest = line.get(colon_pos + 2..).unwrap_or("");
                     let (url, _selected) = if let Some(bracket_pos) = rest.rfind(" [") {
-                        (&rest[..bracket_pos], true)
+                        (rest.get(..bracket_pos).unwrap_or(rest), true)
                     } else {
                         (rest, false)
                     };

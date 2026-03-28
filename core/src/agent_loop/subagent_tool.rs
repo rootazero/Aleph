@@ -179,7 +179,7 @@ impl LoopTool for SubagentTool {
 
                 ToolResult::Error {
                     error: format!("sub-agent failed: {}", e),
-                    retryable: true,
+                    retryable: false,
                 }
             }
         }

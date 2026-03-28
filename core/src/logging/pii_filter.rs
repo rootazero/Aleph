@@ -185,10 +185,10 @@ impl Visit for StringVisitor {
 
         if field.name() == "message" {
             // For the special "message" field, just append the value
-            write!(&mut self.message, "{:?}", value).unwrap();
+            let _ = write!(&mut self.message, "{:?}", value);
         } else {
             // For other fields, include the field name
-            write!(&mut self.message, "{}={:?}", field.name(), value).unwrap();
+            let _ = write!(&mut self.message, "{}={:?}", field.name(), value);
         }
     }
 }
@@ -263,7 +263,7 @@ mod tests {
         impl std::io::Write for CaptureWriter {
             fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
                 let s = String::from_utf8_lossy(buf);
-                self.captured.lock().unwrap().push_str(&s);
+                self.captured.lock().unwrap_or_else(|e| e.into_inner()).push_str(&s);
                 Ok(buf.len())
             }
 
@@ -290,7 +290,7 @@ mod tests {
         });
 
         // Verify output has PII scrubbed
-        let output = captured.lock().unwrap();
+        let output = captured.lock().unwrap_or_else(|e| e.into_inner());
         assert!(output.contains("[EMAIL]"), "Output: {}", &*output);
         assert!(!output.contains("john@example.com"), "Output: {}", &*output);
     }

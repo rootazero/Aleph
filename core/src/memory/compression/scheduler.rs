@@ -63,7 +63,7 @@ impl SchedulerConfig {
 pub struct CompressionScheduler {
     config: SchedulerConfig,
     last_activity: Mutex<Instant>,
-    pending_turns: AtomicU32,
+    pub(crate) pending_turns: AtomicU32,
 }
 
 impl CompressionScheduler {

@@ -27,6 +27,8 @@ pub struct StdioTransport {
     server_name: String,
     /// Request timeout
     timeout: Duration,
+    /// Whether the transport is poisoned (e.g., after a timeout that may have lost buffered data)
+    poisoned: std::sync::atomic::AtomicBool,
 }
 
 impl StdioTransport {
@@ -89,6 +91,7 @@ impl StdioTransport {
             child: Mutex::new(child),
             server_name: name,
             timeout: Duration::from_secs(DEFAULT_TIMEOUT_SECS),
+            poisoned: std::sync::atomic::AtomicBool::new(false),
         })
     }
 
@@ -100,6 +103,14 @@ impl StdioTransport {
 
     /// Send a JSON-RPC request and wait for response
     pub async fn send(&self, request: &JsonRpcRequest) -> Result<JsonRpcResponse> {
+        // Check if transport was poisoned by a previous timeout
+        if self.poisoned.load(std::sync::atomic::Ordering::Acquire) {
+            return Err(AlephError::IoError(format!(
+                "MCP server '{}' transport is poisoned after a previous timeout — restart the server",
+                self.server_name
+            )));
+        }
+
         let request_id = request.id;
         let method = &request.method;
 
@@ -187,18 +198,18 @@ impl StdioTransport {
                 if let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) {
                     if let Some(id_val) = value.get("id") {
                         // Has "id" — this is a response. Check if it matches our request.
-                        if let Some(id_num) = id_val.as_u64() {
-                            if id_num == request_id {
-                                // Parse as proper response
-                                let response: JsonRpcResponse =
-                                    serde_json::from_value(value).map_err(|e| {
-                                        std::io::Error::new(
-                                            std::io::ErrorKind::InvalidData,
-                                            format!("Failed to parse response: {} (raw: {})", e, trimmed),
-                                        )
-                                    })?;
-                                return Ok(response);
-                            }
+                        // Compare as Value to support both numeric and string IDs per JSON-RPC 2.0
+                        let expected_id = serde_json::Value::from(request_id);
+                        if *id_val == expected_id {
+                            // Parse as proper response
+                            let response: JsonRpcResponse =
+                                serde_json::from_value(value).map_err(|e| {
+                                    std::io::Error::new(
+                                        std::io::ErrorKind::InvalidData,
+                                        format!("Failed to parse response: {} (raw: {})", e, trimmed),
+                                    )
+                                })?;
+                            return Ok(response);
                         }
                         // Response with different id — log warning and continue
                         tracing::warn!(
@@ -246,11 +257,15 @@ impl StdioTransport {
                 self.server_name, e
             ))),
             Err(_) => {
+                // Mark transport as poisoned: the cancelled BufReader may have
+                // consumed bytes into its internal buffer that are now lost,
+                // making future reads unreliable.
+                self.poisoned.store(true, std::sync::atomic::Ordering::Release);
                 tracing::warn!(
                     server = %self.server_name,
                     method = %method,
                     timeout_secs = self.timeout.as_secs(),
-                    "MCP request timed out"
+                    "MCP request timed out — transport poisoned, server needs restart"
                 );
                 Err(AlephError::McpTimeout)
             }

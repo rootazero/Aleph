@@ -107,17 +107,11 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             }
 
             "skill" => {
-                // For skills, construct a focused prompt and route through a single-step agent loop
                 let skill_name = mode["display_name"].as_str().unwrap_or("skill");
-                let instructions = mode["instructions"].as_str().unwrap_or("");
-                let args = mode["args"].as_str().unwrap_or("");
-
-                // For skills we fall through to the agent loop with modified input
-                // since skills need LLM processing with injected instructions
-                Err(ExecutionError::Failed(format!(
-                    "SKILL_FALLTHROUGH:{}:{}:{}",
-                    skill_name, instructions, args
-                )))
+                // Skills need LLM processing with injected instructions — fall through
+                Err(ExecutionError::Fallthrough {
+                    reason: format!("skill '{}'", skill_name),
+                })
             }
 
             "mcp" => {
@@ -126,7 +120,9 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
 
             "custom" => {
                 // Custom commands need LLM with a custom system prompt — fall through
-                Err(ExecutionError::Failed("CUSTOM_FALLTHROUGH".to_string()))
+                Err(ExecutionError::Fallthrough {
+                    reason: "custom command".to_string(),
+                })
             }
 
             _ => {
@@ -357,6 +353,7 @@ fn build_tool_arguments(tool_id: &str, args_str: &str, raw_input: &str) -> serde
 /// Parse CLI-style `--key value` arguments into a JSON object.
 ///
 /// Handles: `--name foo --leader main --blocked_by id1,id2`
+/// Quoted values: `--name "My Team"` or `--name 'My Team'`
 /// Special: values containing `{` are parsed as JSON (for --variables, --metadata)
 /// Arrays: comma-separated values for known array fields (blocked_by)
 fn parse_cli_args(args_str: &str) -> serde_json::Value {
@@ -393,18 +390,58 @@ fn parse_cli_args(args_str: &str) -> serde_json::Value {
         }
     };
 
-    for token in args_str.split_whitespace() {
+    // Tokenize with quote awareness: "My Team" and 'My Team' become single tokens
+    let tokens = tokenize_with_quotes(args_str);
+    for token in &tokens {
         if let Some(key) = token.strip_prefix("--") {
             flush(&mut map, &current_key, &current_vals);
             current_key = Some(key.to_string());
             current_vals.clear();
         } else {
-            current_vals.push(token.to_string());
+            current_vals.push(token.clone());
         }
     }
     flush(&mut map, &current_key, &current_vals);
 
     serde_json::Value::Object(map)
+}
+
+/// Split a string into tokens, respecting double and single quotes.
+///
+/// `--name "My Team" --flag` → `["--name", "My Team", "--flag"]`
+///
+/// Note: escaped quotes (`\"`) inside quoted strings are not supported.
+fn tokenize_with_quotes(input: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut in_quote: Option<char> = None;
+
+    for ch in input.chars() {
+        match in_quote {
+            Some(q) if ch == q => {
+                // Closing quote — don't include the quote char itself
+                in_quote = None;
+            }
+            Some(_) => {
+                current.push(ch);
+            }
+            None if ch == '"' || ch == '\'' => {
+                in_quote = Some(ch);
+            }
+            None if ch.is_whitespace() => {
+                if !current.is_empty() {
+                    tokens.push(std::mem::take(&mut current));
+                }
+            }
+            None => {
+                current.push(ch);
+            }
+        }
+    }
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+    tokens
 }
 
 /// Extract a human-readable response from a tool result.

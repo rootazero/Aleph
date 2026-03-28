@@ -78,7 +78,7 @@ impl ReplicateProviderBuilder {
         let client = Client::builder()
             .timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
             .build()
-            .expect("Failed to build HTTP client");
+            .unwrap_or_default();
 
         ReplicateProvider {
             client,

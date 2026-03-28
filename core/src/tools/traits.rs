@@ -129,7 +129,15 @@ pub trait AlephTool: Clone + Send + Sync + 'static {
     /// Override only if custom schema handling is needed.
     fn definition(&self) -> ToolDefinition {
         let schema = schema_for!(Self::Args);
-        let parameters = serde_json::to_value(&schema).unwrap_or_default();
+        let parameters = serde_json::to_value(&schema)
+            .inspect_err(|e| {
+                tracing::error!(
+                    tool = Self::NAME,
+                    error = %e,
+                    "Failed to serialize JSON Schema for tool definition"
+                );
+            })
+            .unwrap_or_default();
 
         let mut def = ToolDefinition::new(Self::NAME, Self::DESCRIPTION, parameters, self.category())
             .with_confirmation(self.requires_confirmation())

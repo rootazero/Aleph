@@ -51,7 +51,7 @@ pub fn facts_to_record_batch(facts: &[MemoryFact]) -> Result<RecordBatch, AlephE
 
     // Numeric columns
     let confidence_arr = Float32Array::from_iter_values(facts.iter().map(|f| f.confidence));
-    let decay_score_arr = Float32Array::from_iter_values(facts.iter().map(|_| 1.0_f32));
+    let decay_score_arr = Float32Array::from_iter_values(facts.iter().map(|f| f.strength));
     let created_at_arr = Int64Array::from_iter_values(facts.iter().map(|f| f.created_at));
     let updated_at_arr = Int64Array::from_iter_values(facts.iter().map(|f| f.updated_at));
     let version_arr = Int32Array::from_iter_values(facts.iter().map(|_| 1_i32));
@@ -104,7 +104,7 @@ pub fn facts_to_record_batch(facts: &[MemoryFact]) -> Result<RecordBatch, AlephE
     );
     let strength_arr = Float32Array::from_iter_values(facts.iter().map(|f| f.strength));
     let access_count_arr =
-        Int32Array::from_iter_values(facts.iter().map(|f| f.access_count as i32));
+        Int32Array::from_iter_values(facts.iter().map(|f| f.access_count.min(i32::MAX as u32) as i32));
     let last_accessed_at_arr = Int64Array::from(
         facts
             .iter()

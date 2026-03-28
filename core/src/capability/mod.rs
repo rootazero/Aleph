@@ -64,20 +64,6 @@ pub struct CapabilityExecutor {
     mcp_client: Option<Arc<McpClient>>,
     /// MCP configuration
     mcp_config: Option<Arc<McpConfig>>,
-
-    // AI Memory Retrieval Configuration
-    /// AI provider for memory selection (required for AI retrieval)
-    ai_provider: Option<Arc<dyn crate::providers::AiProvider>>,
-    /// Exclusion set for current conversation (to avoid duplicate context)
-    memory_exclusion_set: Vec<String>,
-    /// Enable AI-based memory retrieval (vs embedding-based)
-    use_ai_retrieval: bool,
-    /// AI retrieval timeout in milliseconds
-    ai_retrieval_timeout_ms: u64,
-    /// Maximum candidates to send to AI for selection
-    ai_retrieval_max_candidates: u32,
-    /// Fallback count when AI fails
-    ai_retrieval_fallback_count: u32,
 }
 
 impl CapabilityExecutor {
@@ -99,13 +85,6 @@ impl CapabilityExecutor {
             skills_config: None,
             mcp_client: None,
             mcp_config: None,
-            // AI Memory Retrieval defaults
-            ai_provider: None,
-            memory_exclusion_set: Vec::new(),
-            use_ai_retrieval: false,
-            ai_retrieval_timeout_ms: 3000,
-            ai_retrieval_max_candidates: 20,
-            ai_retrieval_fallback_count: 3,
         }
     }
 
@@ -144,41 +123,6 @@ impl CapabilityExecutor {
     ) -> Self {
         self.skill_system = skill_system;
         self.skills_config = skills_config;
-        self
-    }
-
-    /// Configure AI-based memory retrieval
-    ///
-    /// # Arguments
-    ///
-    /// * `provider` - AI provider for memory selection
-    /// * `enabled` - Whether to use AI retrieval (vs embedding-based)
-    /// * `timeout_ms` - Timeout for AI retrieval in milliseconds
-    /// * `max_candidates` - Maximum candidates to send to AI
-    /// * `fallback_count` - Number of memories to return on fallback
-    pub fn with_ai_retrieval(
-        mut self,
-        provider: Option<Arc<dyn crate::providers::AiProvider>>,
-        enabled: bool,
-        timeout_ms: u64,
-        max_candidates: u32,
-        fallback_count: u32,
-    ) -> Self {
-        self.ai_provider = provider;
-        self.use_ai_retrieval = enabled;
-        self.ai_retrieval_timeout_ms = timeout_ms;
-        self.ai_retrieval_max_candidates = max_candidates;
-        self.ai_retrieval_fallback_count = fallback_count;
-        self
-    }
-
-    /// Set exclusion set for memory retrieval (to avoid duplicate context)
-    ///
-    /// # Arguments
-    ///
-    /// * `exclusion_set` - Strings to exclude from memory retrieval
-    pub fn with_memory_exclusion_set(mut self, exclusion_set: Vec<String>) -> Self {
-        self.memory_exclusion_set = exclusion_set;
         self
     }
 

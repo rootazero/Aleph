@@ -105,7 +105,10 @@ pub async fn handle_get(
             pii_scrub_credit_card: pii.map(|p| p.scrub_credit_card).unwrap_or(true),
             backends,
         };
-        JsonRpcResponse::success(request.id, serde_json::to_value(dto).unwrap())
+        match serde_json::to_value(dto) {
+            Ok(v) => JsonRpcResponse::success(request.id, v),
+            Err(e) => JsonRpcResponse::error(request.id, INTERNAL_ERROR, format!("Failed to serialize config: {}", e)),
+        }
     } else {
         // Return default values — no provider active by default
         let dto = SearchConfigDto {
@@ -120,7 +123,10 @@ pub async fn handle_get(
             pii_scrub_credit_card: true,
             backends: Vec::new(),
         };
-        JsonRpcResponse::success(request.id, serde_json::to_value(dto).unwrap())
+        match serde_json::to_value(dto) {
+            Ok(v) => JsonRpcResponse::success(request.id, v),
+            Err(e) => JsonRpcResponse::error(request.id, INTERNAL_ERROR, format!("Failed to serialize config: {}", e)),
+        }
     }
 }
 
@@ -316,10 +322,7 @@ pub async fn handle_test(
             let Some(ref api_key) = params.api_key else {
                 return JsonRpcResponse::success(
                     request.id,
-                    serde_json::to_value(SearchTestResult {
-                        success: false,
-                        message: "API key is required for Tavily".to_string(),
-                    }).unwrap(),
+                    serde_json::json!({"success": false, "message": "API key is required for Tavily"}),
                 );
             };
             match TavilyProvider::new(api_key.clone()) {
@@ -337,10 +340,7 @@ pub async fn handle_test(
             let Some(ref api_key) = params.api_key else {
                 return JsonRpcResponse::success(
                     request.id,
-                    serde_json::to_value(SearchTestResult {
-                        success: false,
-                        message: "API key is required for Brave".to_string(),
-                    }).unwrap(),
+                    serde_json::json!({"success": false, "message": "API key is required for Brave"}),
                 );
             };
             match BraveProvider::new(api_key.clone()) {
@@ -371,19 +371,13 @@ pub async fn handle_test(
             let Some(ref api_key) = params.api_key else {
                 return JsonRpcResponse::success(
                     request.id,
-                    serde_json::to_value(SearchTestResult {
-                        success: false,
-                        message: "API key is required for Google".to_string(),
-                    }).unwrap(),
+                    serde_json::json!({"success": false, "message": "API key is required for Google"}),
                 );
             };
             let Some(ref engine_id) = params.engine_id else {
                 return JsonRpcResponse::success(
                     request.id,
-                    serde_json::to_value(SearchTestResult {
-                        success: false,
-                        message: "Engine ID (cx) is required for Google CSE".to_string(),
-                    }).unwrap(),
+                    serde_json::json!({"success": false, "message": "Engine ID (cx) is required for Google CSE"}),
                 );
             };
             match GoogleProvider::new(api_key.clone(), engine_id.clone()) {
@@ -401,10 +395,7 @@ pub async fn handle_test(
             let Some(ref api_key) = params.api_key else {
                 return JsonRpcResponse::success(
                     request.id,
-                    serde_json::to_value(SearchTestResult {
-                        success: false,
-                        message: "API key is required for Bing".to_string(),
-                    }).unwrap(),
+                    serde_json::json!({"success": false, "message": "API key is required for Bing"}),
                 );
             };
             match BingProvider::new(api_key.clone()) {
@@ -422,10 +413,7 @@ pub async fn handle_test(
             let Some(ref api_key) = params.api_key else {
                 return JsonRpcResponse::success(
                     request.id,
-                    serde_json::to_value(SearchTestResult {
-                        success: false,
-                        message: "API key is required for Exa".to_string(),
-                    }).unwrap(),
+                    serde_json::json!({"success": false, "message": "API key is required for Exa"}),
                 );
             };
             match ExaProvider::new(api_key.clone()) {
@@ -460,7 +448,10 @@ pub async fn handle_test(
         }
     }
 
-    JsonRpcResponse::success(request.id, serde_json::to_value(test_result).unwrap())
+    match serde_json::to_value(test_result) {
+        Ok(v) => JsonRpcResponse::success(request.id, v),
+        Err(e) => JsonRpcResponse::error(request.id, INTERNAL_ERROR, format!("Failed to serialize result: {}", e)),
+    }
 }
 
 // ============================================================================

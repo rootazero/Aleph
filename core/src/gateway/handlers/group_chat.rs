@@ -37,6 +37,22 @@ fn extract_str(request: &JsonRpcRequest, key: &str) -> Option<String> {
     }
 }
 
+/// Extract a string array parameter from a JSON-RPC request
+fn extract_str_array(request: &JsonRpcRequest, key: &str) -> Vec<String> {
+    match &request.params {
+        Some(Value::Object(map)) => map
+            .get(key)
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect()
+            })
+            .unwrap_or_default(),
+        _ => Vec::new(),
+    }
+}
+
 /// Serialize a GroupChatMessage to JSON
 fn message_to_json(msg: &GroupChatMessage) -> Value {
     json!({
@@ -126,7 +142,7 @@ pub async fn handle_start(
     // If initial_message provided, execute the first round (only session locked)
     if let Some(msg) = initial_message {
         let mut session = session_handle.lock().await;
-        match executor.execute_round(&mut session, &msg).await {
+        match executor.execute_round(&mut session, &msg, &[]).await {
             Ok(messages) => {
                 let messages_json: Vec<Value> = messages.iter().map(message_to_json).collect();
                 JsonRpcResponse::success(
@@ -160,6 +176,16 @@ pub async fn handle_continue(
     request: JsonRpcRequest,
     orch: SharedOrchestrator,
     executor: Arc<GroupChatExecutor>,
+) -> JsonRpcResponse {
+    handle_continue_with_targets(request, orch, executor, &[]).await
+}
+
+/// Internal handler for continue/mention with optional targets.
+async fn handle_continue_with_targets(
+    request: JsonRpcRequest,
+    orch: SharedOrchestrator,
+    executor: Arc<GroupChatExecutor>,
+    targets: &[String],
 ) -> JsonRpcResponse {
     let session_id = match extract_str(&request, "session_id") {
         Some(id) => id,
@@ -205,7 +231,7 @@ pub async fn handle_continue(
         );
     }
 
-    match executor.execute_round(&mut session, &message).await {
+    match executor.execute_round(&mut session, &message, targets).await {
         Ok(messages) => {
             let messages_json: Vec<Value> = messages.iter().map(message_to_json).collect();
             JsonRpcResponse::success(
@@ -226,14 +252,15 @@ pub async fn handle_continue(
 
 /// Handle group_chat.mention RPC request (real)
 ///
-/// Same as continue — the coordinator decides who responds based on message content.
+/// Like continue, but extracts `targets` and passes them to the coordinator
+/// so it prioritizes the mentioned personas.
 pub async fn handle_mention(
     request: JsonRpcRequest,
     orch: SharedOrchestrator,
     executor: Arc<GroupChatExecutor>,
 ) -> JsonRpcResponse {
-    // Mention works the same as continue: the coordinator decides who responds
-    handle_continue(request, orch, executor).await
+    let targets = extract_str_array(&request, "targets");
+    handle_continue_with_targets(request, orch, executor, &targets).await
 }
 
 /// Handle group_chat.end RPC request (real)
@@ -247,10 +274,10 @@ pub async fn handle_end(request: JsonRpcRequest, orch: SharedOrchestrator) -> Js
         }
     };
 
-    // Brief orch lock: get session handle
+    // Lock orchestrator: end session and remove from map
     let session_handle = {
-        let orch_guard = orch.lock().await;
-        match orch_guard.get_session(&session_id) {
+        let mut orch_guard = orch.lock().await;
+        match orch_guard.end_session(&session_id) {
             Some(h) => h,
             None => {
                 return JsonRpcResponse::error(
@@ -262,7 +289,7 @@ pub async fn handle_end(request: JsonRpcRequest, orch: SharedOrchestrator) -> Js
         }
     }; // orch lock dropped
 
-    // Lock session, end it
+    // Mark session as ended
     let mut session = session_handle.lock().await;
     session.end();
 

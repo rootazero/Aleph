@@ -77,7 +77,7 @@ impl CortexValueEstimator {
         // If experience has been used (usage_count > 1), use actual success rate
         // Otherwise, use the initial success_score
         let success_rate = if experience.usage_count > 1 {
-            experience.success_count as f64 / experience.usage_count as f64
+            (experience.success_count as f64 / experience.usage_count as f64).clamp(0.0, 1.0)
         } else {
             experience.success_score
         };
@@ -146,8 +146,10 @@ impl CortexValueEstimator {
 
 /// Calculate Levenshtein distance between two strings
 fn levenshtein_distance(s1: &str, s2: &str) -> usize {
-    let len1 = s1.len();
-    let len2 = s2.len();
+    let chars1: Vec<char> = s1.chars().collect();
+    let chars2: Vec<char> = s2.chars().collect();
+    let len1 = chars1.len();
+    let len2 = chars2.len();
 
     if len1 == 0 {
         return len2;
@@ -167,8 +169,8 @@ fn levenshtein_distance(s1: &str, s2: &str) -> usize {
     }
 
     // Fill matrix
-    for (i, c1) in s1.chars().enumerate() {
-        for (j, c2) in s2.chars().enumerate() {
+    for (i, c1) in chars1.iter().enumerate() {
+        for (j, c2) in chars2.iter().enumerate() {
             let cost = if c1 == c2 { 0 } else { 1 };
             matrix[i + 1][j + 1] = (matrix[i][j + 1] + 1) // deletion
                 .min(matrix[i + 1][j] + 1) // insertion

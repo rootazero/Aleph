@@ -3,7 +3,7 @@
 //! Location: `~/.aleph/skills/manifest.json`
 
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 use tracing::{debug, warn};
 
@@ -84,7 +84,7 @@ impl SkillManifest {
     /// - Manifest entries without directories → remove
     pub fn reconcile(&mut self, skills_dir: &Path) {
         // Find directories on disk
-        let on_disk: Vec<String> = match std::fs::read_dir(skills_dir) {
+        let on_disk: HashSet<String> = match std::fs::read_dir(skills_dir) {
             Ok(entries) => entries
                 .filter_map(|e| e.ok())
                 .filter(|e| e.path().is_dir())

@@ -6,8 +6,6 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-const MAX_SYSTEM_PROMPT_LEN: usize = 2000;
-
 /// Group Chat Configuration
 ///
 /// Controls the behavior of multi-agent group chat sessions including
@@ -20,7 +18,6 @@ const MAX_SYSTEM_PROMPT_LEN: usize = 2000;
 /// max_personas_per_session = 6
 /// max_rounds = 10
 /// coordinator_visible = false
-/// default_coordinator_model = "claude-sonnet-4-20250514"
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct GroupChatConfig {
@@ -34,14 +31,12 @@ pub struct GroupChatConfig {
     #[serde(default = "default_max_rounds")]
     pub max_rounds: usize,
 
-    /// Whether the coordinator's internal messages are visible to the user
+    /// Whether the coordinator's plan messages are visible to the user.
+    /// When true, the coordinator's JSON plan is included as a Speaker::Coordinator
+    /// message at the beginning of each round's output.
     /// Default: false
     #[serde(default)]
     pub coordinator_visible: bool,
-
-    /// Default model to use for the coordinator (if not specified per-session)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub default_coordinator_model: Option<String>,
 }
 
 fn default_max_personas_per_session() -> usize {
@@ -58,7 +53,6 @@ impl Default for GroupChatConfig {
             max_personas_per_session: default_max_personas_per_session(),
             max_rounds: default_max_rounds(),
             coordinator_visible: false,
-            default_coordinator_model: None,
         }
     }
 }
@@ -123,6 +117,7 @@ pub struct PersonaConfig {
 impl PersonaConfig {
     /// Validate the persona configuration
     pub fn validate(&self) -> Result<(), String> {
+        const MAX_PROMPT_LEN: usize = 2000;
         if self.id.is_empty() {
             return Err("persona id must not be empty".to_string());
         }
@@ -132,10 +127,10 @@ impl PersonaConfig {
         if self.system_prompt.is_empty() {
             return Err("persona system_prompt must not be empty".to_string());
         }
-        if self.system_prompt.len() > MAX_SYSTEM_PROMPT_LEN {
+        if self.system_prompt.chars().count() > MAX_PROMPT_LEN {
             return Err(format!(
                 "persona system_prompt exceeds maximum length of {} characters",
-                MAX_SYSTEM_PROMPT_LEN
+                MAX_PROMPT_LEN
             ));
         }
         Ok(())
@@ -152,7 +147,6 @@ mod tests {
         assert_eq!(config.max_personas_per_session, 6);
         assert_eq!(config.max_rounds, 10);
         assert!(!config.coordinator_visible);
-        assert!(config.default_coordinator_model.is_none());
     }
 
     #[test]
@@ -233,6 +227,5 @@ mod tests {
         assert_eq!(config.max_personas_per_session, 4);
         assert_eq!(config.max_rounds, 5);
         assert!(config.coordinator_visible);
-        assert!(config.default_coordinator_model.is_none());
     }
 }

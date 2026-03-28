@@ -36,66 +36,61 @@ pub struct WrittenFile {
 /// Set the working directory for the current session
 /// Relative paths will be resolved to this directory
 pub fn set_working_dir(dir: Option<PathBuf>) {
-    if let Ok(mut wd) = CURRENT_WORKING_DIR.lock() {
-        *wd = dir;
-    }
+    let mut wd = CURRENT_WORKING_DIR.lock().unwrap_or_else(|e| e.into_inner());
+    *wd = dir;
 }
 
 /// Get the working directory for the current session
 pub fn get_working_dir() -> Option<PathBuf> {
-    CURRENT_WORKING_DIR.lock().ok().and_then(|wd| wd.clone())
+    let wd = CURRENT_WORKING_DIR.lock().unwrap_or_else(|e| e.into_inner());
+    wd.clone()
 }
 
 /// Clear the written files registry for a new session
 pub fn clear_written_files() {
-    if let Ok(mut files) = WRITTEN_FILES.lock() {
-        files.clear();
-        info!("Cleared written files registry");
-    }
+    let mut files = WRITTEN_FILES.lock().unwrap_or_else(|e| e.into_inner());
+    files.clear();
+    info!("Cleared written files registry");
 }
 
 /// Record a file that was written during tool execution
 pub fn record_written_file(path: PathBuf, size: u64, operation: &str) {
-    if let Ok(mut files) = WRITTEN_FILES.lock() {
-        info!(
-            path = %path.display(),
-            size = size,
-            operation = operation,
-            current_count = files.len(),
-            "Recording written file to global registry"
-        );
-        files.push(WrittenFile {
-            path,
-            size,
-            operation: operation.to_string(),
-        });
-    }
+    let mut files = WRITTEN_FILES.lock().unwrap_or_else(|e| e.into_inner());
+    info!(
+        path = %path.display(),
+        size = size,
+        operation = operation,
+        current_count = files.len(),
+        "Recording written file to global registry"
+    );
+    files.push(WrittenFile {
+        path,
+        size,
+        operation: operation.to_string(),
+    });
 }
 
 /// Get all files written during the current session and clear the registry
 pub fn take_written_files() -> Vec<WrittenFile> {
-    if let Ok(mut files) = WRITTEN_FILES.lock() {
-        let result = std::mem::take(&mut *files);
-        info!(file_count = result.len(), "Taking written files from global registry");
-        result
-    } else {
-        Vec::new()
-    }
+    let mut files = WRITTEN_FILES.lock().unwrap_or_else(|e| e.into_inner());
+    let result = std::mem::take(&mut *files);
+    info!(file_count = result.len(), "Taking written files from global registry");
+    result
 }
 
 /// Get all files written during the current session without clearing
 pub fn get_written_files() -> Vec<WrittenFile> {
-    WRITTEN_FILES.lock().ok().map(|f| f.clone()).unwrap_or_default()
+    let files = WRITTEN_FILES.lock().unwrap_or_else(|e| e.into_inner());
+    files.clone()
 }
 
 /// Mark the start of a new session for file tracking
 /// This records the current time as the baseline for detecting newly created files
 pub fn mark_session_start() {
-    if let Ok(mut start_time) = SESSION_START_TIME.lock() {
-        let now = SystemTime::now();
-        *start_time = Some(now);
-        info!("Marked session start time for file tracking");
-    }
+    let mut start_time = SESSION_START_TIME.lock().unwrap_or_else(|e| e.into_inner());
+    let now = SystemTime::now();
+    *start_time = Some(now);
+    info!("Marked session start time for file tracking");
 }
 
 /// Scan the working directory for files created/modified after session start
@@ -109,7 +104,7 @@ pub fn scan_new_files_in_working_dir() -> Vec<WrittenFile> {
         }
     };
 
-    let start_time = match SESSION_START_TIME.lock().ok().and_then(|t| *t) {
+    let start_time = match *SESSION_START_TIME.lock().unwrap_or_else(|e| e.into_inner()) {
         Some(time) => time,
         None => {
             info!("No session start time set, skipping file scan");

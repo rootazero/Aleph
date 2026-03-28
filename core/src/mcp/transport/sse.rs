@@ -26,7 +26,7 @@ use crate::security::ssrf::{validate_url, SsrfPolicy};
 use super::sse_events::SseEvent;
 
 /// Callback type for server-initiated requests (sampling, etc.)
-pub type RequestCallback = Box<dyn Fn(u64, &str, Option<serde_json::Value>) + Send + Sync>;
+pub type RequestCallback = Box<dyn Fn(serde_json::Value, &str, Option<serde_json::Value>) + Send + Sync>;
 
 /// SSE transport configuration
 #[derive(Debug, Clone)]
@@ -109,13 +109,13 @@ impl SseTransport {
     ///
     /// After creating the transport, call `start_event_listener()` to begin
     /// receiving server-sent notifications.
-    pub fn new(name: impl Into<String>, config: SseTransportConfig) -> Self {
+    pub fn new(name: impl Into<String>, config: SseTransportConfig) -> Result<Self> {
         let client = Client::builder()
             .timeout(config.timeout)
             .build()
-            .expect("Failed to create HTTP client");
+            .map_err(|e| AlephError::IoError(format!("Failed to create HTTP client: {}", e)))?;
 
-        Self {
+        Ok(Self {
             server_name: name.into(),
             config,
             client,
@@ -123,7 +123,7 @@ impl SseTransport {
             notification_handler: Arc::new(RwLock::new(None)),
             request_handler: Arc::new(TokioMutex::new(None)),
             shutdown_tx: RwLock::new(None),
-        }
+        })
     }
 
     /// Start the SSE event listener
@@ -164,9 +164,13 @@ impl SseTransport {
             );
 
             // Create a client specifically for SSE (no timeout for long-lived connection)
-            let sse_client = Client::builder()
-                .build()
-                .expect("Failed to create SSE client");
+            let sse_client = match Client::builder().build() {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::error!(server = %server_name, error = %e, "Failed to create SSE client");
+                    return;
+                }
+            };
 
             loop {
                 tokio::select! {
@@ -243,14 +247,10 @@ impl SseTransport {
                     .await;
                 }
                 Err(e) => {
-                    // Check if it's a fatal error
-                    let error_str = e.to_string();
-                    if error_str.contains("connection") || error_str.contains("closed") {
-                        tracing::warn!(server = %server_name, error = %e, "SSE connection error");
-                        return Err(AlephError::IoError(format!("SSE connection error: {}", e)));
-                    } else {
-                        tracing::debug!(server = %server_name, error = %e, "SSE non-fatal error");
-                    }
+                    // All SSE errors are treated as connection-level failures.
+                    // The reconnect loop in start_event_listener handles retries.
+                    tracing::warn!(server = %server_name, error = %e, "SSE stream error");
+                    return Err(AlephError::IoError(format!("SSE stream error: {}", e)));
                 }
             }
         }
@@ -289,7 +289,7 @@ impl SseTransport {
                 tracing::debug!(
                     server = %server_name,
                     method = %req.method,
-                    id = req.id,
+                    id = %req.id,
                     "Received SSE request (server-initiated RPC)"
                 );
 
@@ -388,6 +388,12 @@ impl McpTransport for SseTransport {
     }
 
     async fn send_notification(&self, notification: &JsonRpcNotification) -> Result<()> {
+        // SSRF protection: validate the target URL before sending
+        let ssrf_policy = SsrfPolicy::default();
+        validate_url(&self.config.url, &ssrf_policy).map_err(|e| {
+            AlephError::IoError(format!("SSRF blocked for '{}': {}", self.server_name, e))
+        })?;
+
         let body = serde_json::to_string(notification).map_err(|e| {
             AlephError::IoError(format!("Failed to serialize notification: {}", e))
         })?;
@@ -441,23 +447,26 @@ impl McpTransport for SseTransport {
             "Setting SSE notification handler"
         );
 
-        // Store handler for SSE events
-        // Use try_write to avoid blocking - if we can't get the lock immediately,
-        // spawn a task to set it
-        if let Ok(mut h) = self.notification_handler.try_write() {
-            *h = Some(handler);
-        } else {
-            // If we can't get the lock, spawn a task to set it later
-            let notification_handler = Arc::clone(&self.notification_handler);
-            let server_name = self.server_name.clone();
-            tokio::spawn(async move {
-                let mut h = notification_handler.write().await;
+        // Use try_write — this should always succeed since set_notification_handler
+        // is called during setup before start_event_listener spawns background tasks.
+        // If it fails (unexpected contention), block synchronously since this is a
+        // short critical section and the handler MUST be set before events arrive.
+        match self.notification_handler.try_write() {
+            Ok(mut h) => {
                 *h = Some(handler);
-                tracing::debug!(
-                    server = %server_name,
-                    "SSE notification handler set via background task"
-                );
-            });
+            }
+            Err(_) => {
+                // Fallback: block on the lock. This is acceptable because
+                // set_notification_handler is only called during initialization.
+                let notification_handler = Arc::clone(&self.notification_handler);
+                tokio::task::block_in_place(|| {
+                    let rt = tokio::runtime::Handle::current();
+                    rt.block_on(async {
+                        let mut h = notification_handler.write().await;
+                        *h = Some(handler);
+                    });
+                });
+            }
         }
     }
 
@@ -468,17 +477,33 @@ impl McpTransport for SseTransport {
 
 impl SseTransport {
     /// Set handler for server-initiated requests (like sampling/createMessage)
+    ///
+    /// Installs the handler synchronously to guarantee it is set before
+    /// `start_event_listener()` begins dispatching incoming requests.
     pub fn set_request_handler(&self, handler: RequestCallback) {
         tracing::debug!(
             server = %self.server_name,
             "Setting SSE request handler"
         );
 
-        let request_handler = Arc::clone(&self.request_handler);
-        tokio::spawn(async move {
-            let mut h = request_handler.lock().await;
-            *h = Some(handler);
-        });
+        // Install synchronously — mirrors set_notification_handler pattern.
+        // The handler MUST be set before start_event_listener spawns background
+        // tasks, otherwise server-initiated requests are silently dropped.
+        match self.request_handler.try_lock() {
+            Ok(mut h) => {
+                *h = Some(handler);
+            }
+            Err(_) => {
+                let request_handler = Arc::clone(&self.request_handler);
+                tokio::task::block_in_place(|| {
+                    let rt = tokio::runtime::Handle::current();
+                    rt.block_on(async {
+                        let mut h = request_handler.lock().await;
+                        *h = Some(handler);
+                    });
+                });
+            }
+        }
     }
 
     /// Send a response to a server-initiated request
@@ -591,7 +616,7 @@ mod tests {
             timeout: Duration::from_secs(300),
         };
 
-        let transport = SseTransport::new("test-sse", config);
+        let transport = SseTransport::new("test-sse", config).unwrap();
         assert_eq!(transport.server_name(), "test-sse");
         assert!(transport.is_alive().await);
     }
@@ -599,7 +624,7 @@ mod tests {
     #[tokio::test]
     async fn test_sse_transport_close() {
         let config = SseTransportConfig::default();
-        let transport = SseTransport::new("test", config);
+        let transport = SseTransport::new("test", config).unwrap();
 
         assert!(transport.is_alive().await);
         transport.close().await.unwrap();
@@ -632,7 +657,7 @@ mod tests {
         };
 
         // Verify it can be used as a trait object
-        let transport: Box<dyn McpTransport> = Box::new(SseTransport::new("test", config));
+        let transport: Box<dyn McpTransport> = Box::new(SseTransport::new("test", config).unwrap());
 
         assert!(transport.is_alive().await);
         assert_eq!(transport.server_name(), "test");
@@ -648,7 +673,7 @@ mod tests {
             timeout: Duration::from_secs(300),
         };
 
-        let transport = SseTransport::new("test-sse", config);
+        let transport = SseTransport::new("test-sse", config).unwrap();
 
         // Starting the event listener should not fail
         transport.start_event_listener().await.unwrap();
@@ -661,7 +686,7 @@ mod tests {
     #[tokio::test]
     async fn test_sse_transport_set_notification_handler() {
         let config = SseTransportConfig::default();
-        let transport = SseTransport::new("test", config);
+        let transport = SseTransport::new("test", config).unwrap();
 
         // Should not panic when setting notification handler
         transport.set_notification_handler(Box::new(|notification| {
@@ -675,11 +700,11 @@ mod tests {
     #[tokio::test]
     async fn test_sse_transport_set_request_handler() {
         let config = SseTransportConfig::default();
-        let transport = SseTransport::new("test", config);
+        let transport = SseTransport::new("test", config).unwrap();
 
         // Should not panic when setting request handler
         transport.set_request_handler(Box::new(|id, method, _params| {
-            tracing::info!(id = id, method = method, "Received request");
+            tracing::info!(id = %id, method = method, "Received request");
         }));
 
         // Transport should still work

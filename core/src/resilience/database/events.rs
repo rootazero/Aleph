@@ -12,6 +12,20 @@ use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 
 static FIRST_EVENT_LOGGED: AtomicBool = AtomicBool::new(false);
 
+/// Construct AgentEvent from a rusqlite row.
+/// Expected column order: id, task_id, seq, event_type, payload_json, is_structural, timestamp
+fn agent_event_from_row(row: &rusqlite::Row) -> rusqlite::Result<AgentEvent> {
+    Ok(AgentEvent {
+        id: row.get(0)?,
+        task_id: row.get(1)?,
+        seq: row.get(2)?,
+        event_type: row.get(3)?,
+        payload_json: row.get(4)?,
+        is_structural: row.get::<_, i32>(5)? != 0,
+        timestamp: row.get(6)?,
+    })
+}
+
 impl StateDatabase {
     // =========================================================================
     // Agent Events CRUD
@@ -95,17 +109,7 @@ impl StateDatabase {
             .map_err(|e| AlephError::config(format!("Failed to prepare query: {}", e)))?;
 
         let events = stmt
-            .query_map(params![task_id], |row| {
-                Ok(AgentEvent {
-                    id: row.get(0)?,
-                    task_id: row.get(1)?,
-                    seq: row.get(2)?,
-                    event_type: row.get(3)?,
-                    payload_json: row.get(4)?,
-                    is_structural: row.get::<_, i32>(5)? != 0,
-                    timestamp: row.get(6)?,
-                })
-            })
+            .query_map(params![task_id], agent_event_from_row)
             .map_err(|e| AlephError::config(format!("Failed to query events: {}", e)))?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| AlephError::config(format!("Failed to collect events: {}", e)))?;
@@ -132,17 +136,7 @@ impl StateDatabase {
             .map_err(|e| AlephError::config(format!("Failed to prepare query: {}", e)))?;
 
         let events = stmt
-            .query_map(params![task_id, since_seq], |row| {
-                Ok(AgentEvent {
-                    id: row.get(0)?,
-                    task_id: row.get(1)?,
-                    seq: row.get(2)?,
-                    event_type: row.get(3)?,
-                    payload_json: row.get(4)?,
-                    is_structural: row.get::<_, i32>(5)? != 0,
-                    timestamp: row.get(6)?,
-                })
-            })
+            .query_map(params![task_id, since_seq], agent_event_from_row)
             .map_err(|e| AlephError::config(format!("Failed to query events: {}", e)))?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| AlephError::config(format!("Failed to collect events: {}", e)))?;
@@ -170,17 +164,7 @@ impl StateDatabase {
             .map_err(|e| AlephError::config(format!("Failed to prepare query: {}", e)))?;
 
         let events = stmt
-            .query_map(params![task_id, from_seq, to_seq], |row| {
-                Ok(AgentEvent {
-                    id: row.get(0)?,
-                    task_id: row.get(1)?,
-                    seq: row.get(2)?,
-                    event_type: row.get(3)?,
-                    payload_json: row.get(4)?,
-                    is_structural: row.get::<_, i32>(5)? != 0,
-                    timestamp: row.get(6)?,
-                })
-            })
+            .query_map(params![task_id, from_seq, to_seq], agent_event_from_row)
             .map_err(|e| AlephError::config(format!("Failed to query events: {}", e)))?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| AlephError::config(format!("Failed to collect events: {}", e)))?;
@@ -206,17 +190,7 @@ impl StateDatabase {
             .map_err(|e| AlephError::config(format!("Failed to prepare query: {}", e)))?;
 
         let events = stmt
-            .query_map(params![task_id], |row| {
-                Ok(AgentEvent {
-                    id: row.get(0)?,
-                    task_id: row.get(1)?,
-                    seq: row.get(2)?,
-                    event_type: row.get(3)?,
-                    payload_json: row.get(4)?,
-                    is_structural: true,
-                    timestamp: row.get(6)?,
-                })
-            })
+            .query_map(params![task_id], agent_event_from_row)
             .map_err(|e| AlephError::config(format!("Failed to query events: {}", e)))?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| AlephError::config(format!("Failed to collect events: {}", e)))?;

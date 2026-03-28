@@ -177,10 +177,22 @@ impl AlephTool for TaskWaitTool {
             // Wait for an event or timeout
             tokio::select! {
                 event = receiver.recv() => {
-                    // Any event triggers a re-check
-                    let _ = event;
-                    debug!("Task wait: event received, re-checking task states");
-                    continue;
+                    match event {
+                        Ok(_) => {
+                            debug!("Task wait: event received, re-checking task states");
+                            continue;
+                        }
+                        Err(_) => {
+                            // Channel closed, no more events will arrive
+                            debug!("Task wait: event channel closed, breaking out");
+                            let tasks = fetch_tasks(
+                                self.store.as_ref(),
+                                &args.task_ids,
+                                &args.team_id,
+                            ).await?;
+                            return Ok(build_summary(&tasks, false));
+                        }
+                    }
                 }
                 _ = tokio::time::sleep_until(deadline) => {
                     let tasks = fetch_tasks(

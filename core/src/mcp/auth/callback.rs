@@ -245,29 +245,63 @@ async fn handle_connection(mut stream: tokio::net::TcpStream) -> Option<Callback
 }
 
 /// Simple URL decoding (percent-decoding)
+///
+/// Correctly handles multi-byte UTF-8 sequences by collecting consecutive
+/// percent-encoded bytes and decoding them as a UTF-8 sequence.
 fn url_decode(s: &str) -> String {
     let mut result = String::with_capacity(s.len());
-    let mut chars = s.chars().peekable();
+    let mut bytes = s.as_bytes().iter().copied();
+    let mut encoded_buf = Vec::new();
 
-    while let Some(c) = chars.next() {
-        if c == '%' {
-            // Try to decode percent-encoded character
-            let hex: String = chars.by_ref().take(2).collect();
-            if hex.len() == 2 {
-                if let Ok(byte) = u8::from_str_radix(&hex, 16) {
-                    result.push(byte as char);
-                    continue;
+    while let Some(b) = bytes.next() {
+        if b == b'%' {
+            // Collect percent-encoded byte
+            let h1 = bytes.next();
+            let h2 = bytes.next();
+            if let (Some(h1), Some(h2)) = (h1, h2) {
+                let hex = [h1, h2];
+                if let Ok(s) = std::str::from_utf8(&hex) {
+                    if let Ok(byte) = u8::from_str_radix(s, 16) {
+                        encoded_buf.push(byte);
+                        continue;
+                    }
+                }
+                // Invalid hex digits — flush and emit as literal
+                if !encoded_buf.is_empty() {
+                    result.push_str(&String::from_utf8_lossy(&encoded_buf));
+                    encoded_buf.clear();
+                }
+                result.push('%');
+                result.push(h1 as char);
+                result.push(h2 as char);
+            } else {
+                // Truncated sequence at end of input
+                if !encoded_buf.is_empty() {
+                    result.push_str(&String::from_utf8_lossy(&encoded_buf));
+                    encoded_buf.clear();
+                }
+                result.push('%');
+                if let Some(h) = h1 {
+                    result.push(h as char);
                 }
             }
-            // If decoding failed, keep the original
-            result.push('%');
-            result.push_str(&hex);
-        } else if c == '+' {
-            // Plus signs are spaces in form data
-            result.push(' ');
         } else {
-            result.push(c);
+            // Flush any pending encoded bytes
+            if !encoded_buf.is_empty() {
+                result.push_str(&String::from_utf8_lossy(&encoded_buf));
+                encoded_buf.clear();
+            }
+            if b == b'+' {
+                result.push(' ');
+            } else {
+                result.push(b as char);
+            }
         }
+    }
+
+    // Flush remaining encoded bytes
+    if !encoded_buf.is_empty() {
+        result.push_str(&String::from_utf8_lossy(&encoded_buf));
     }
 
     result
@@ -276,6 +310,13 @@ fn url_decode(s: &str) -> String {
 /// Send an HTTP error response
 async fn send_error_response(stream: &mut tokio::net::TcpStream, status: u16, message: &str) {
     use tokio::io::AsyncWriteExt;
+
+    // HTML-escape message to prevent XSS
+    let safe_message = message
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;");
 
     let body = format!(
         r#"<!DOCTYPE html>
@@ -286,13 +327,21 @@ async fn send_error_response(stream: &mut tokio::net::TcpStream, status: u16, me
 <p>{}</p>
 </body>
 </html>"#,
-        status, message
+        status, safe_message
     );
+
+    // Use standard reason phrase for status line (not user-controlled message)
+    let reason = match status {
+        400 => "Bad Request",
+        404 => "Not Found",
+        500 => "Internal Server Error",
+        _ => "Error",
+    };
 
     let response = format!(
         "HTTP/1.1 {} {}\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
         status,
-        message,
+        reason,
         body.len(),
         body
     );

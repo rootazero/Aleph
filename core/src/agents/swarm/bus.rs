@@ -111,7 +111,12 @@ impl AgentMessageBus {
                 Ok(())
             }
             Err(broadcast::error::SendError(_)) => {
-                // No subscribers - this is not an error
+                // No subscribers - not an error, but track the drop
+                match tier {
+                    EventTier::Critical => stats.critical_dropped += 1,
+                    EventTier::Important => stats.important_dropped += 1,
+                    EventTier::Info => stats.info_dropped += 1,
+                }
                 debug!("Published {} event with no subscribers", tier);
                 Ok(())
             }

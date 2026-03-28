@@ -415,7 +415,7 @@ async fn when_start_watcher(w: &mut AlephWorld) {
     let config = ctx.watcher_config.clone().unwrap_or_default();
     let callback = ctx.create_reload_callback();
 
-    let watcher = SkillWatcher::new(&skills_dir, callback.clone(), config).unwrap();
+    let watcher = SkillWatcher::new(&skills_dir, config).unwrap();
 
     let task = tokio::spawn(async move { watcher.run(skills_dir, callback).await });
 
@@ -432,7 +432,7 @@ async fn when_start_counting_watcher(w: &mut AlephWorld) {
     let config = ctx.watcher_config.clone().unwrap_or_default();
     let callback = ctx.create_counting_callback();
 
-    let watcher = SkillWatcher::new(&skills_dir, callback.clone(), config).unwrap();
+    let watcher = SkillWatcher::new(&skills_dir, config).unwrap();
 
     let task = tokio::spawn(async move { watcher.run(skills_dir, callback).await });
 

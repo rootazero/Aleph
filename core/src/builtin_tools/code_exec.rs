@@ -11,11 +11,11 @@
 //! - Environment variables are filtered
 //! - Dangerous command blocking is handled by ExecSecurityGate at the executor layer
 
+use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use regex::Regex;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncReadExt;
@@ -83,38 +83,6 @@ pub struct CodeExecOutput {
     pub language: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub truncated: Option<bool>,
-}
-
-/// Expand environment variables in shell code
-///
-/// This function performs basic environment variable expansion:
-/// - $VAR and ${VAR} patterns are replaced with their values
-/// - Unknown variables are left as-is
-/// - Handles common cases but not all shell expansion edge cases
-///
-/// This ensures that when LLM generates commands like:
-///   python3 $HOME/.claude/skills/xxx.py
-/// The $HOME variable is properly expanded even if the LLM mistakenly
-/// puts it in single quotes or other contexts where bash wouldn't expand it.
-fn expand_env_vars(code: &str) -> String {
-    use std::sync::LazyLock;
-    static VAR_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)").unwrap()
-    });
-
-    VAR_PATTERN.replace_all(code, |caps: &regex::Captures| {
-        // Try ${VAR} format first, then $VAR format
-        let var_name = match caps.get(1).or_else(|| caps.get(2)) {
-            Some(m) => m.as_str(),
-            None => return caps.get(0).map(|m| m.as_str()).unwrap_or("").to_string(),
-        };
-
-        // Get environment variable value, or keep original if not found
-        match std::env::var(var_name) {
-            Ok(value) => value,
-            Err(_) => caps.get(0).map(|m| m.as_str()).unwrap_or("").to_string(),
-        }
-    }).to_string()
 }
 
 /// Code execution tool
@@ -205,26 +173,72 @@ Examples:
 
         let start = Instant::now();
 
-        // CRITICAL FIX: Expand environment variables in shell commands
-        // This ensures $HOME, $USER, etc. are properly expanded even if LLM puts them in quotes
-        let expanded_code = if matches!(args.language, Language::Shell) {
-            expand_env_vars(&args.code)
-        } else {
-            args.code.clone()
-        };
-
         // Build command
+        // NOTE: No manual env var expansion — bash/python/node handle their own
+        // variable expansion natively. Manual expansion was removed because it:
+        // 1. Created a TOCTOU gap with ExecSecurityGate (gate saw raw $VAR, bash saw expanded value)
+        // 2. Ignored shell quoting semantics (expanded $VAR inside single quotes)
+        // 3. Was redundant — `bash -c "echo $HOME"` already expands $HOME
         let mut cmd = Command::new(runtime);
-        cmd.arg(code_flag).arg(&expanded_code);
+        cmd.arg(code_flag).arg(&args.code);
 
-        // Set working directory
+        // Set working directory (validated to be within home or temp)
         if let Some(ref dir) = args.working_dir {
             let path = std::path::Path::new(dir);
-            // Ensure directory exists (agent workspace may not be created yet)
+            let home = dirs::home_dir().unwrap_or_default();
+            let tmp = std::env::temp_dir();
+
+            // Create directory first if it doesn't exist (agent workspace may not be created yet)
             if !path.exists() {
-                let _ = std::fs::create_dir_all(path);
+                if let Err(e) = std::fs::create_dir_all(path) {
+                    warn!(dir = %dir, error = %e, "Failed to create working_dir");
+                    return Ok(CodeExecOutput {
+                        success: false,
+                        exit_code: -1,
+                        stdout: String::new(),
+                        stderr: format!("Failed to create working_dir '{}': {}", dir, e),
+                        duration_ms: 0,
+                        language: format!("{:?}", args.language).to_lowercase(),
+                        truncated: None,
+                    });
+                }
             }
-            cmd.current_dir(path);
+
+            // Canonicalize AFTER ensuring the directory exists to get a real resolved path
+            let canonical = match std::fs::canonicalize(path) {
+                Ok(c) => c,
+                Err(e) => {
+                    return Ok(CodeExecOutput {
+                        success: false,
+                        exit_code: -1,
+                        stdout: String::new(),
+                        stderr: format!("Cannot resolve working_dir '{}': {}", dir, e),
+                        duration_ms: 0,
+                        language: format!("{:?}", args.language).to_lowercase(),
+                        truncated: None,
+                    });
+                }
+            };
+
+            if !canonical.starts_with(&home)
+                && !canonical.starts_with(&tmp)
+                && !canonical.starts_with("/tmp")
+            {
+                return Ok(CodeExecOutput {
+                    success: false,
+                    exit_code: -1,
+                    stdout: String::new(),
+                    stderr: format!(
+                        "working_dir '{}' must be within home ({}) or temp directory",
+                        dir,
+                        home.display()
+                    ),
+                    duration_ms: 0,
+                    language: format!("{:?}", args.language).to_lowercase(),
+                    truncated: None,
+                });
+            }
+            cmd.current_dir(&canonical);
         } else {
             // Use temp directory as default
             cmd.current_dir(std::env::temp_dir());

@@ -203,6 +203,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     request: request.clone(),
                     state: RunState::Running,
                     started_at: chrono::Utc::now(),
+                    completed_at: None,
                     steps_completed: 0,
                     current_tool: None,
                     cancel_tx: Some(cancel_tx),
@@ -327,27 +328,24 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                         .finalize_fast_path_success(&run_id, &request, &agent, &emitter, response)
                         .await;
                 }
-                Err(ref e) => {
-                    let error_msg = e.to_string();
-                    let is_skill_fallthrough = error_msg.contains("SKILL_FALLTHROUGH:");
-
-                    if is_skill_fallthrough {
-                        // Skills need LLM processing — fall through to agent loop
-                        let mut runs = self.active_runs.write().await;
-                        if let Some(run) = runs.get_mut(&run_id) {
-                            run.state = RunState::Running;
-                        }
-                        warn!(
-                            run_id = %run_id,
-                            "Skill command falling through to agent loop"
-                        );
-                        // Fall through to normal agent loop
-                    } else {
-                        // Direct tool errors: return error response, do NOT fall through
-                        return self
-                            .finalize_fast_path_error(&run_id, &request, &agent, &emitter, &error_msg)
-                            .await;
+                Err(ExecutionError::Fallthrough { ref reason }) => {
+                    // Skills/custom commands need LLM processing — fall through to agent loop
+                    let mut runs = self.active_runs.write().await;
+                    if let Some(run) = runs.get_mut(&run_id) {
+                        run.state = RunState::Running;
                     }
+                    warn!(
+                        run_id = %run_id,
+                        reason = %reason,
+                        "Command falling through to agent loop"
+                    );
+                    // Fall through to normal agent loop
+                }
+                Err(ref e) => {
+                    // Direct tool errors: return error response, do NOT fall through
+                    return self
+                        .finalize_fast_path_error(&run_id, &request, &agent, &emitter, &e.to_string())
+                        .await;
                 }
             }
         }
@@ -406,6 +404,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             let mut runs = active_runs.write().await;
             if let Some(run) = runs.get_mut(&run_id) {
                 run.state = final_state.clone();
+                run.completed_at = Some(chrono::Utc::now());
                 run.cancel_tx = None;
                 (run.started_at, run.steps_completed, run.next_seq())
             } else {
@@ -494,7 +493,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                             let topic_text = topic_text.unwrap_or_else(|| {
                                 let msg = topic_message.trim();
                                 let truncated: String = msg.chars().take(20).collect();
-                                if truncated.len() < msg.len() {
+                                if msg.chars().count() > 20 {
                                     format!("{}…", truncated)
                                 } else {
                                     truncated
@@ -564,6 +563,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     ExecutionError::RunNotFound(_) => "RUN_NOT_FOUND",
                     ExecutionError::RunNotActive(_) => "RUN_NOT_ACTIVE",
                     ExecutionError::Escalated { .. } => "ESCALATED",
+                    ExecutionError::Fallthrough { .. } => "FALLTHROUGH",
                 };
                 let _ = emitter
                     .emit(StreamEvent::RunError {
@@ -600,12 +600,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             run_id: run_id.to_string(),
             state: run.state.clone(),
             started_at: Some(run.started_at),
-            completed_at: match run.state {
-                RunState::Completed | RunState::Cancelled | RunState::Failed { .. } => {
-                    Some(chrono::Utc::now())
-                }
-                _ => None,
-            },
+            completed_at: run.completed_at,
             steps_completed: run.steps_completed,
             current_tool: run.current_tool.clone(),
         })
@@ -613,19 +608,20 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
 
     /// Cancel a run
     pub async fn cancel(&self, run_id: &str) -> Result<(), ExecutionError> {
-        let runs = self.active_runs.read().await;
-
-        if let Some(run) = runs.get(run_id) {
-            if let Some(ref cancel_tx) = run.cancel_tx {
-                let _ = cancel_tx.send(()).await;
-                info!("Sent cancellation signal for run {}", run_id);
-                return Ok(());
-            } else {
-                return Err(ExecutionError::RunNotActive(run_id.to_string()));
+        let cancel_tx = {
+            let runs = self.active_runs.read().await;
+            match runs.get(run_id) {
+                Some(run) => match run.cancel_tx {
+                    Some(ref tx) => tx.clone(),
+                    None => return Err(ExecutionError::RunNotActive(run_id.to_string())),
+                },
+                None => return Err(ExecutionError::RunNotFound(run_id.to_string())),
             }
-        }
-
-        Err(ExecutionError::RunNotFound(run_id.to_string()))
+        };
+        // Lock released before await
+        let _ = cancel_tx.send(()).await;
+        info!("Sent cancellation signal for run {}", run_id);
+        Ok(())
     }
 
     // ================================================================
@@ -645,6 +641,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             let mut runs = self.active_runs.write().await;
             if let Some(run) = runs.get_mut(run_id) {
                 run.state = RunState::Completed;
+                run.completed_at = Some(chrono::Utc::now());
                 run.cancel_tx = None;
                 (run.started_at, run.steps_completed, run.next_seq())
             } else {
@@ -700,7 +697,10 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         let (started_at, final_seq) = {
             let mut runs = self.active_runs.write().await;
             if let Some(run) = runs.get_mut(run_id) {
-                run.state = RunState::Completed;
+                run.state = RunState::Failed {
+                    error: error_msg.to_string(),
+                };
+                run.completed_at = Some(chrono::Utc::now());
                 run.cancel_tx = None;
                 (run.started_at, run.next_seq())
             } else {

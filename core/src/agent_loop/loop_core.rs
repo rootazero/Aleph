@@ -720,7 +720,7 @@ mod tests {
     use crate::providers::adapter::{NativeToolCall, ProviderResponse, TokenUsage};
     use crate::providers::message::ContentBlock;
     use serde_json::json;
-    use std::sync::{Arc, Mutex};
+    use crate::sync_primitives::{Arc, Mutex};
 
     struct MockProvider {
         responses: Mutex<Vec<ProviderResponse>>,

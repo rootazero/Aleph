@@ -6,6 +6,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
+use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
 use reqwest::Client;
 use tracing::{debug, warn};
 
@@ -15,6 +16,15 @@ use super::types::*;
 
 const DEFAULT_REGISTRY: &str = "https://clawhub.ai";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Percent-encode a slug for use in URL path segments.
+/// Encodes everything except alphanumerics, `-`, `_`, `.`, and `/` (slug separator).
+fn encode_slug_path(slug: &str) -> String {
+    slug.split('/')
+        .map(|segment| utf8_percent_encode(segment, NON_ALPHANUMERIC).to_string())
+        .collect::<Vec<_>>()
+        .join("/")
+}
 
 /// HTTP client for ClawHub skill registry.
 ///
@@ -27,16 +37,21 @@ pub struct ClawHubClient {
 }
 
 impl ClawHubClient {
-    /// Create a new client with default registry (clawhub.ai)
+    /// Create a new client, honoring `CLAWHUB_REGISTRY` env var if set.
     pub fn new() -> Self {
-        Self::with_registry(DEFAULT_REGISTRY)
+        let registry = std::env::var("CLAWHUB_REGISTRY")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| DEFAULT_REGISTRY.to_string());
+        Self::with_registry(&registry)
     }
 
     /// Create a client pointing to a custom registry URL
     pub fn with_registry(url: &str) -> Self {
+        let ua = format!("aleph/{}", env!("ALEPH_VERSION"));
         let http = Client::builder()
             .timeout(REQUEST_TIMEOUT)
-            .user_agent("aleph/0.1")
+            .user_agent(ua)
             .build()
             .unwrap_or_default();
 
@@ -66,7 +81,7 @@ impl ClawHubClient {
             .await
             .map_err(|e| AlephError::network(format!("ClawHub {} failed: {}", context, e)))?;
 
-        let resp = Self::check_status(resp, context)?;
+        let resp = Self::check_status(resp, context).await?;
 
         resp.json()
             .await
@@ -146,7 +161,7 @@ impl ClawHubClient {
     /// The API returns a nested response `{ skill, latestVersion, owner, moderation }`.
     /// We flatten it into our internal `SkillDetail` type.
     pub async fn get_skill(&self, slug: &str) -> Result<SkillDetail> {
-        let url = format!("{}/api/v1/skills/{}", self.base_url, slug);
+        let url = format!("{}/api/v1/skills/{}", self.base_url, encode_slug_path(slug));
         debug!(slug, "ClawHub get_skill");
         let raw: DetailApiResponse = self.get_json(&url, &[], "get_skill").await?;
         Ok(SkillDetail::from(raw))
@@ -156,7 +171,11 @@ impl ClawHubClient {
     ///
     /// The API returns `{ items: [{version, createdAt, changelog}], nextCursor }`.
     pub async fn get_versions(&self, slug: &str) -> Result<Vec<VersionInfo>> {
-        let url = format!("{}/api/v1/skills/{}/versions", self.base_url, slug);
+        let url = format!(
+            "{}/api/v1/skills/{}/versions",
+            self.base_url,
+            encode_slug_path(slug)
+        );
         debug!(slug, "ClawHub get_versions");
         let data: VersionsResponse = self.get_json(&url, &[], "get_versions").await?;
         Ok(data.items.into_iter().map(VersionInfo::from).collect())
@@ -180,15 +199,17 @@ impl ClawHubClient {
             .await
             .map_err(|e| AlephError::network(format!("ClawHub download failed: {}", e)))?;
 
-        let resp = Self::check_status(resp, "download")?;
+        let resp = Self::check_status(resp, "download").await?;
 
         let bytes = resp
             .bytes()
             .await
             .map_err(|e| AlephError::network(format!("ClawHub download read error: {}", e)))?;
 
+        // Sanitize slug for filename: "owner/skill" → "owner-skill"
+        let safe_slug = slug.replace('/', "-");
         let temp_path =
-            std::env::temp_dir().join(format!("clawhub-{}-{}.zip", slug, uuid::Uuid::new_v4()));
+            std::env::temp_dir().join(format!("clawhub-{}-{}.zip", safe_slug, uuid::Uuid::new_v4()));
 
         std::fs::write(&temp_path, &bytes)
             .map_err(|e| AlephError::config(format!("Failed to write temp ZIP: {}", e)))?;
@@ -215,7 +236,8 @@ impl ClawHubClient {
     }
 
     /// Check HTTP response status. Consumes and returns the response on success.
-    fn check_status(resp: reqwest::Response, context: &str) -> Result<reqwest::Response> {
+    /// For known error codes, returns a descriptive message; for others, reads the body.
+    async fn check_status(resp: reqwest::Response, context: &str) -> Result<reqwest::Response> {
         let status = resp.status();
         if status.is_success() {
             return Ok(resp);
@@ -236,7 +258,18 @@ impl ClawHubClient {
                     retry_after
                 )
             }
-            _ => format!("ClawHub API error: HTTP {} ({})", status, context),
+            _ => {
+                let body = resp
+                    .text()
+                    .await
+                    .unwrap_or_default();
+                let detail = if body.is_empty() {
+                    String::new()
+                } else {
+                    format!(": {}", body.chars().take(200).collect::<String>())
+                };
+                format!("ClawHub API error: HTTP {} ({}){}", status, context, detail)
+            }
         };
 
         Err(AlephError::network(err_msg))

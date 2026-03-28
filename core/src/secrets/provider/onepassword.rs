@@ -44,8 +44,12 @@ impl OnePasswordProvider {
     }
 
     /// Classify stderr output into a typed `SecretError`.
+    ///
+    /// Returns sanitized user-facing messages without raw stderr content
+    /// (which may contain vault names, account emails, or internal debug output).
     fn classify_error(stderr: &str) -> SecretError {
         let lower = stderr.to_lowercase();
+        debug!("1Password stderr: {}", stderr.trim());
         if lower.contains("not signed in")
             || lower.contains("session expired")
             || lower.contains("authorization prompt")
@@ -53,20 +57,17 @@ impl OnePasswordProvider {
         {
             SecretError::ProviderAuthRequired {
                 provider: "1password".into(),
-                message: format!(
-                    "1Password session expired or not signed in. Run `op signin`. Details: {}",
-                    stderr.trim()
-                ),
+                message: "1Password session expired or not signed in. Run `op signin`.".into(),
             }
         } else if lower.contains("not found")
             || lower.contains("doesn't exist")
             || lower.contains("no item")
         {
-            SecretError::NotFound(stderr.trim().to_string())
+            SecretError::NotFound("Item not found in 1Password vault".into())
         } else {
             SecretError::ProviderError {
                 provider: "1password".into(),
-                message: stderr.trim().to_string(),
+                message: "1Password CLI returned an error. Check logs for details.".into(),
             }
         }
     }
@@ -130,11 +131,11 @@ impl SecretProvider for OnePasswordProvider {
         if output.status.success() {
             Ok(ProviderStatus::Ready)
         } else {
+            // Don't leak raw stderr (may contain account emails, vault names).
+            // classify_error logs the raw stderr via tracing::debug.
+            let _err = Self::classify_error(&String::from_utf8_lossy(&output.stderr));
             Ok(ProviderStatus::NeedsAuth {
-                message: format!(
-                    "Run `op signin` to authenticate. Error: {}",
-                    String::from_utf8_lossy(&output.stderr).trim()
-                ),
+                message: "Run `op signin` to authenticate with 1Password.".into(),
             })
         }
     }
@@ -150,8 +151,13 @@ impl SecretProvider for OnePasswordProvider {
 
         if output.status.success() {
             let stdout = String::from_utf8_lossy(&output.stdout);
-            let items: Vec<serde_json::Value> =
-                serde_json::from_str(&stdout).unwrap_or_default();
+            let items: Vec<serde_json::Value> = match serde_json::from_str(&stdout) {
+                Ok(v) => v,
+                Err(e) => {
+                    debug!("Failed to parse `op item list` JSON output: {}", e);
+                    return Ok(vec![]);
+                }
+            };
             Ok(items
                 .iter()
                 .filter_map(|item| {

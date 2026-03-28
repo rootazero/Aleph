@@ -64,15 +64,9 @@ impl ImageData {
     pub fn from_base64(data_uri: &str) -> Result<Self> {
         use base64::{engine::general_purpose, Engine as _};
 
-        let parts: Vec<&str> = data_uri.split(',').collect();
-        if parts.len() != 2 {
-            return Err(crate::error::AlephError::other(
-                "Invalid Base64 data URI format".to_string(),
-            ));
-        }
-
-        let header = parts[0];
-        let base64_data = parts[1];
+        let (header, base64_data) = data_uri.split_once(',').ok_or_else(|| {
+            crate::error::AlephError::other("Invalid Base64 data URI format".to_string())
+        })?;
 
         let format = if header.contains("image/png") {
             ImageFormat::Png

@@ -10,6 +10,7 @@ use super::provider::MidjourneyProvider;
 use super::types::{
     MidjourneyMode, DEFAULT_COLOR, DEFAULT_ENDPOINT, DEFAULT_REQUEST_TIMEOUT_SECS, PROVIDER_NAME,
 };
+use crate::generation::{GenerationError, GenerationResult};
 
 /// Builder for MidjourneyProvider
 ///
@@ -98,22 +99,24 @@ impl MidjourneyProviderBuilder {
     }
 
     /// Build the MidjourneyProvider
-    pub fn build(self) -> MidjourneyProvider {
+    pub fn build(self) -> GenerationResult<MidjourneyProvider> {
         let client = Client::builder()
             .timeout(Duration::from_secs(self.timeout_secs))
             .build()
-            .expect("Failed to build HTTP client");
+            .map_err(|e| {
+                GenerationError::network(format!("Failed to build HTTP client: {}", e))
+            })?;
 
         // Normalize endpoint (remove trailing slash)
         let endpoint = self.endpoint.trim_end_matches('/').to_string();
 
-        MidjourneyProvider {
+        Ok(MidjourneyProvider {
             name: PROVIDER_NAME.to_string(),
             client,
             api_key: self.api_key,
             endpoint,
             mode: self.mode,
             color: self.color,
-        }
+        })
     }
 }

@@ -215,9 +215,9 @@ impl SmartCompactionStrategy {
             return CompactionAction::Keep;
         }
 
-        // Rule 3: Truncate large outputs
+        // Rule 3: Truncate large outputs (use char count for UTF-8 safety)
         if let Some(ref output) = tool_call.output {
-            if output.len() > self.tool_output_max_chars {
+            if output.chars().count() > self.tool_output_max_chars {
                 let summary = self.generate_truncation_summary(output, &tool_call.tool_name);
                 return CompactionAction::Truncate {
                     max_chars: self.tool_output_max_chars,
@@ -232,7 +232,7 @@ impl SmartCompactionStrategy {
 
     /// Generate a summary for truncated output
     fn generate_truncation_summary(&self, output: &str, tool_name: &str) -> String {
-        let original_size = output.len();
+        let original_size = output.chars().count();
         let truncated_size = self.tool_output_max_chars;
 
         // Extract first line or first N characters as preview
@@ -245,7 +245,7 @@ impl SmartCompactionStrategy {
             .collect::<String>();
 
         format!(
-            "[Truncated {}: {}B -> {}B] {}...",
+            "[Truncated {}: {} -> {} chars] {}...",
             tool_name, original_size, truncated_size, preview
         )
     }
@@ -254,14 +254,14 @@ impl SmartCompactionStrategy {
     ///
     /// Returns the truncated output string with a summary prefix.
     pub fn truncate_output(&self, output: &str, tool_name: &str) -> String {
-        if output.len() <= self.tool_output_max_chars {
+        if output.chars().count() <= self.tool_output_max_chars {
             return output.to_string();
         }
 
         let summary = self.generate_truncation_summary(output, tool_name);
 
-        // Calculate how much of the original we can keep after the summary
-        let summary_len = summary.len();
+        // Calculate how much of the original we can keep after the summary (char count for UTF-8 safety)
+        let summary_len = summary.chars().count();
         let remaining_space = self.tool_output_max_chars.saturating_sub(summary_len + 1);
 
         if remaining_space > 0 {
@@ -624,7 +624,7 @@ mod tests {
 
         assert!(summary.contains("Truncated read_file"));
         assert!(summary.contains("First line"));
-        assert!(summary.contains("B -> 100B")); // Size info
+        assert!(summary.contains(" -> 100 chars")); // Size info
     }
 
     // =========================================================================

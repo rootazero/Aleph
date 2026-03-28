@@ -154,7 +154,13 @@ fn get_runtime_path(cmd: &str) -> Option<String> {
         .output()
         .ok()
         .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .and_then(|o| {
+            // Take only the first line — `where` on Windows may return multiple paths
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .next()
+                .map(|line| line.trim().to_string())
+        })
 }
 
 /// Check multiple runtimes at once

@@ -2,7 +2,6 @@
 //!
 //! Defines the Policy trait, action types, risk levels, and the PolicyEngine.
 
-use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -13,7 +12,6 @@ use crate::daemon::worldmodel::WorldModel;
 use crate::daemon::error::Result;
 
 /// Policy trait - evaluates context and events to propose actions
-#[async_trait]
 pub trait Policy: Send + Sync {
     /// Policy name for identification
     fn name(&self) -> &str;

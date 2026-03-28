@@ -106,6 +106,31 @@ pub fn is_blocked_ip(ip: IpAddr) -> bool {
     }
 }
 
+// --- Policy-aware IP check ------------------------------------------------
+
+/// Returns true if the IP should be blocked under the given policy.
+///
+/// When `allow_private_network` is true, only loopback and cloud metadata
+/// (169.254.169.254) are blocked.  Otherwise the full `is_blocked_ip` check
+/// applies.
+fn is_ip_blocked_by_policy(ip: IpAddr, policy: &SsrfPolicy) -> bool {
+    if policy.allow_private_network {
+        match ip {
+            IpAddr::V4(v4) => {
+                v4.is_loopback() || v4 == Ipv4Addr::new(169, 254, 169, 254)
+            }
+            IpAddr::V6(v6) => {
+                v6.is_loopback()
+                    || v6.to_ipv4_mapped().map_or(false, |m| {
+                        m.is_loopback() || m == Ipv4Addr::new(169, 254, 169, 254)
+                    })
+            }
+        }
+    } else {
+        is_blocked_ip(ip)
+    }
+}
+
 // --- Allowlist matching ---
 
 /// Returns true if the hostname matches any entry in the allowlist.
@@ -176,23 +201,7 @@ pub fn validate_url(url_str: &str, policy: &SsrfPolicy) -> Result<Url, SsrfError
     };
 
     if let Some(ip) = ip_from_url {
-        if policy.allow_private_network {
-            // Even with allow_private_network, block loopback and cloud metadata.
-            let block = match ip {
-                IpAddr::V4(v4) => {
-                    v4.is_loopback() || v4 == Ipv4Addr::new(169, 254, 169, 254)
-                }
-                IpAddr::V6(v6) => {
-                    v6.is_loopback()
-                        || v6.to_ipv4_mapped().map_or(false, |m| {
-                            m.is_loopback() || m == Ipv4Addr::new(169, 254, 169, 254)
-                        })
-                }
-            };
-            if block {
-                return Err(SsrfError::BlockedAddress(ip.to_string()));
-            }
-        } else if is_blocked_ip(ip) {
+        if is_ip_blocked_by_policy(ip, policy) {
             return Err(SsrfError::BlockedAddress(ip.to_string()));
         }
     }
@@ -228,22 +237,7 @@ pub async fn validate_url_async(url_str: &str, policy: &SsrfPolicy) -> Result<Ur
     };
 
     if let Some(ip) = ip_from_url {
-        if policy.allow_private_network {
-            let block = match ip {
-                IpAddr::V4(v4) => {
-                    v4.is_loopback() || v4 == Ipv4Addr::new(169, 254, 169, 254)
-                }
-                IpAddr::V6(v6) => {
-                    v6.is_loopback()
-                        || v6.to_ipv4_mapped().map_or(false, |m| {
-                            m.is_loopback() || m == Ipv4Addr::new(169, 254, 169, 254)
-                        })
-                }
-            };
-            if block {
-                return Err(SsrfError::BlockedAddress(ip.to_string()));
-            }
-        } else if is_blocked_ip(ip) {
+        if is_ip_blocked_by_policy(ip, policy) {
             return Err(SsrfError::BlockedAddress(ip.to_string()));
         }
         return Ok(url);
@@ -261,23 +255,7 @@ pub async fn validate_url_async(url_str: &str, policy: &SsrfPolicy) -> Result<Ur
 
     for socket_addr in addrs {
         let ip = socket_addr.ip();
-
-        if policy.allow_private_network {
-            let block = match ip {
-                IpAddr::V4(v4) => {
-                    v4.is_loopback() || v4 == Ipv4Addr::new(169, 254, 169, 254)
-                }
-                IpAddr::V6(v6) => {
-                    v6.is_loopback()
-                        || v6.to_ipv4_mapped().map_or(false, |m| {
-                            m.is_loopback() || m == Ipv4Addr::new(169, 254, 169, 254)
-                        })
-                }
-            };
-            if block {
-                return Err(SsrfError::BlockedAddress(ip.to_string()));
-            }
-        } else if is_blocked_ip(ip) {
+        if is_ip_blocked_by_policy(ip, policy) {
             return Err(SsrfError::BlockedAddress(ip.to_string()));
         }
     }

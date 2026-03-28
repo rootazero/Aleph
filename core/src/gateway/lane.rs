@@ -158,11 +158,10 @@ impl LaneManager {
     /// or `LaneError::Congested` if the timeout elapses.
     pub async fn acquire(&self, method: &str) -> Result<OwnedSemaphorePermit, LaneError> {
         let lane = Lane::for_method(method);
-        let semaphore = self
-            .lanes
-            .get(&lane)
-            .expect("all lanes are initialized in new()")
-            .clone();
+        let semaphore = match self.lanes.get(&lane) {
+            Some(s) => s.clone(),
+            None => return Err(LaneError::Congested(lane)),
+        };
 
         match tokio::time::timeout(self.timeout, semaphore.acquire_owned()).await {
             Ok(Ok(permit)) => Ok(permit),

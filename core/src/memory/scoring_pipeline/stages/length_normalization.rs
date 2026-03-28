@@ -17,10 +17,10 @@ impl ScoringStage for LengthNormalizationStage {
     }
 
     fn apply(&self, mut candidates: Vec<ScoredFact>, ctx: &ScoringContext) -> Vec<ScoredFact> {
-        let anchor = ctx.config.length_norm_anchor as f32;
+        let anchor = ctx.config.length_norm_anchor.max(1) as f32;
 
         for c in &mut candidates {
-            let ratio = (c.fact.content.len() as f32 / anchor).max(1.0);
+            let ratio = (c.fact.content.chars().count() as f32 / anchor).max(1.0);
             let factor = 1.0 / (1.0 + 0.5 * ratio.log2());
             c.score *= factor;
         }

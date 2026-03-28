@@ -53,7 +53,7 @@ impl SearchProvider for BraveProvider {
             .client
             .get("https://api.search.brave.com/res/v1/web/search")
             .header("X-Subscription-Token", &self.api_key)
-            .query(&[("q", query)])
+            .query(&[("q", query), ("count", &options.max_results.to_string())])
             .timeout(std::time::Duration::from_secs(options.timeout_seconds))
             .send()
             .await

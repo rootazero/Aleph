@@ -854,6 +854,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         let persona_configs = app_cfg.personas.clone();
         drop(app_cfg);
 
+        let coordinator_visible = gc_config.coordinator_visible;
         let orchestrator = GroupChatOrchestrator::new(gc_config, &persona_configs);
         let shared_orch: alephcore::gateway::handlers::group_chat::SharedOrchestrator =
             Arc::new(tokio::sync::Mutex::new(orchestrator));
@@ -862,7 +863,12 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         let gc_executor: Option<Arc<GroupChatExecutor>> = if can_create_provider_from_env() {
             create_provider_registry_from_env()
                 .ok()
-                .map(|reg| Arc::new(GroupChatExecutor::new(reg.default_provider())))
+                .map(|reg| {
+                    Arc::new(
+                        GroupChatExecutor::new(reg.default_provider())
+                            .with_coordinator_visible(coordinator_visible),
+                    )
+                })
         } else {
             None
         };

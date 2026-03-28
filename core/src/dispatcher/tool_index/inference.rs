@@ -130,10 +130,11 @@ impl SemanticPurposeInferrer {
         let words: Vec<&str> = name.split('_').collect();
         if words.len() > 1 {
             let result: Vec<String> = words.iter().map(|w| w.to_lowercase()).collect();
-            let mut humanized = result.join(" ");
-            // Capitalize first letter
-            if let Some(first) = humanized.get_mut(0..1) {
-                first.make_ascii_uppercase();
+            let humanized = result.join(" ");
+            // Capitalize first letter (Unicode-safe)
+            let mut chars = humanized.chars();
+            if let Some(first) = chars.next() {
+                return first.to_uppercase().collect::<String>() + chars.as_str();
             }
             return humanized;
         }

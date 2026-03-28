@@ -37,8 +37,8 @@ pub struct SseNotification {
 pub struct SseRequest {
     /// JSON-RPC version
     pub jsonrpc: String,
-    /// Request ID for response correlation
-    pub id: u64,
+    /// Request ID for response correlation (JSON-RPC allows number, string, or null)
+    pub id: Value,
     /// Method name
     pub method: String,
     /// Parameters
@@ -101,7 +101,7 @@ mod tests {
         let event = SseEvent::parse("message", data);
         assert!(matches!(event, SseEvent::Request(_)));
         if let SseEvent::Request(r) = event {
-            assert_eq!(r.id, 1);
+            assert_eq!(r.id, serde_json::json!(1));
             assert_eq!(r.method, "sampling/createMessage");
         }
     }

@@ -69,12 +69,12 @@ impl InboundMessageRouter {
                 }
                 GroupChatRequest::Continue { session_id, message } => {
                     return Some(self.handle_group_chat_continue(
-                        orch, executor, msg, &session_id, &message,
+                        orch, executor, msg, &session_id, &message, &[],
                     ).await);
                 }
-                GroupChatRequest::Mention { session_id, message, .. } => {
+                GroupChatRequest::Mention { session_id, message, targets } => {
                     return Some(self.handle_group_chat_continue(
-                        orch, executor, msg, &session_id, &message,
+                        orch, executor, msg, &session_id, &message, &targets,
                     ).await);
                 }
             }
@@ -101,7 +101,7 @@ impl InboundMessageRouter {
 
                 if is_active {
                     return Some(self.handle_group_chat_continue(
-                        orch, executor, msg, &session_id, &msg.text,
+                        orch, executor, msg, &session_id, &msg.text, &[],
                     ).await);
                 } else {
                     // Session ended, clean up tracking
@@ -172,7 +172,7 @@ impl InboundMessageRouter {
         // Execute first round if initial_message is not empty
         if !initial_message.is_empty() {
             let mut session = session_handle.lock().await;
-            match executor.execute_round(&mut session, &initial_message).await {
+            match executor.execute_round(&mut session, &initial_message, &[]).await {
                 Ok(messages) => {
                     self.send_group_chat_messages(msg, &messages).await;
                 }
@@ -214,10 +214,10 @@ impl InboundMessageRouter {
             session_id_hint.to_string()
         };
 
-        // End the session
+        // End the session via orchestrator (removes from map + persists)
         let session_handle = {
-            let orch_guard = orch.lock().await;
-            orch_guard.get_session(&session_id)
+            let mut orch_guard = orch.lock().await;
+            orch_guard.end_session(&session_id)
         };
 
         if let Some(handle) = session_handle {
@@ -258,6 +258,7 @@ impl InboundMessageRouter {
         msg: &InboundMessage,
         session_id: &str,
         user_message: &str,
+        targets: &[String],
     ) -> Result<(), String> {
         let (session_handle, max_rounds) = {
             let orch_guard = orch.lock().await;
@@ -273,6 +274,12 @@ impl InboundMessageRouter {
             let conversation_key = format!("{}:{}", msg.channel_id.as_str(), msg.conversation_id.as_str());
             session.end();
             drop(session);
+
+            // Remove from orchestrator and tracking
+            {
+                let mut orch_guard = orch.lock().await;
+                orch_guard.end_session(session_id);
+            }
             {
                 let mut sessions = self.active_group_sessions.lock().await;
                 sessions.remove(&conversation_key);
@@ -286,7 +293,7 @@ impl InboundMessageRouter {
         }
 
         // Execute the round
-        match executor.execute_round(&mut session, user_message).await {
+        match executor.execute_round(&mut session, user_message, targets).await {
             Ok(messages) => {
                 drop(session);
                 self.send_group_chat_messages(msg, &messages).await;

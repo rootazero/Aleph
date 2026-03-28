@@ -4,7 +4,7 @@
 //! letting users manage ClawHub skills through natural language.
 
 use std::io::Read as IoRead;
-use std::path::PathBuf;
+use std::path::{Component, PathBuf};
 
 use async_trait::async_trait;
 use schemars::JsonSchema;
@@ -15,6 +15,43 @@ use crate::clawhub::client::ClawHubClient;
 use crate::clawhub::types::{BrowseResponse, ClawHubMeta, SkillSearchResult, SortOrder};
 use crate::error::{AlephError, Result};
 use crate::tools::AlephTool;
+
+/// Validate and sanitize a slug's directory name component.
+/// Returns the last segment of the slug (after `/`), rejecting dangerous names.
+fn sanitize_skill_name(slug: &str) -> Result<&str> {
+    let name = slug.split('/').next_back().unwrap_or(slug);
+    if name.is_empty()
+        || name == "."
+        || name == ".."
+        || name.contains('/')
+        || name.contains('\\')
+        || name.contains('\0')
+    {
+        return Err(AlephError::tool(format!(
+            "Invalid skill slug '{}': directory name '{}' is not allowed",
+            slug, name
+        )));
+    }
+    Ok(name)
+}
+
+/// Lexically normalize a path and check it stays within `base`.
+/// Does NOT touch the filesystem (no symlink TOCTOU).
+fn is_path_within(base: &std::path::Path, target: &std::path::Path) -> bool {
+    let mut normalized = PathBuf::new();
+    for component in target.components() {
+        match component {
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            Component::Normal(c) => normalized.push(c),
+            Component::RootDir => normalized.push(Component::RootDir),
+            Component::Prefix(p) => normalized.push(p.as_os_str()),
+            Component::CurDir => {}
+        }
+    }
+    normalized.starts_with(base)
+}
 
 // =============================================================================
 // Args
@@ -128,6 +165,11 @@ impl ClawHubTool {
         }
     }
 
+    /// Access the underlying HTTP client (for gateway handlers to reuse).
+    pub fn client(&self) -> &ClawHubClient {
+        &self.client
+    }
+
     /// Skills installation directory: ~/.aleph/skills/
     fn skills_dir() -> PathBuf {
         dirs::home_dir()
@@ -140,34 +182,44 @@ impl ClawHubTool {
     ///
     /// Extracts the ZIP, validates SKILL.md, writes `.clawhub.json` metadata.
     /// Returns the installed version string.
+    /// Always cleans up the temp ZIP file, even on error.
     fn install_from_zip(
         zip_path: &std::path::Path,
         slug: &str,
         version: &str,
         registry_url: &str,
     ) -> Result<String> {
-        let file = std::fs::File::open(zip_path).map_err(|e| {
-            AlephError::tool(format!("Failed to open ZIP file: {}", e))
-        })?;
-        let mut archive = zip::ZipArchive::new(file).map_err(|e| {
-            AlephError::tool(format!("Failed to read ZIP archive: {}", e))
-        })?;
+        let result = Self::install_from_zip_inner(zip_path, slug, version, registry_url);
+        // Always clean up temp ZIP regardless of success/failure
+        let _ = std::fs::remove_file(zip_path);
+        result
+    }
 
-        // Determine the skill directory name from slug (e.g. "owner/skill-name" -> "skill-name")
-        let skill_name = slug.split('/').next_back().unwrap_or(slug);
+    fn install_from_zip_inner(
+        zip_path: &std::path::Path,
+        slug: &str,
+        version: &str,
+        registry_url: &str,
+    ) -> Result<String> {
+        let file = std::fs::File::open(zip_path)
+            .map_err(|e| AlephError::tool(format!("Failed to open ZIP file: {}", e)))?;
+        let mut archive = zip::ZipArchive::new(file)
+            .map_err(|e| AlephError::tool(format!("Failed to read ZIP archive: {}", e)))?;
+
+        // Validate and sanitize the skill directory name
+        let skill_name = sanitize_skill_name(slug)?;
         let dest_dir = Self::skills_dir().join(skill_name);
 
         // Create destination directory
-        std::fs::create_dir_all(&dest_dir).map_err(|e| {
-            AlephError::tool(format!("Failed to create skill directory: {}", e))
-        })?;
+        std::fs::create_dir_all(&dest_dir)
+            .map_err(|e| AlephError::tool(format!("Failed to create skill directory: {}", e)))?;
 
         let mut found_skill_md = false;
 
         for i in 0..archive.len() {
-            let mut entry = archive.by_index(i).map_err(|e| {
-                AlephError::tool(format!("Failed to read ZIP entry: {}", e))
-            })?;
+            let mut entry = archive
+                .by_index(i)
+                .map_err(|e| AlephError::tool(format!("Failed to read ZIP entry: {}", e)))?;
 
             let entry_name = entry.name().to_string();
 
@@ -189,7 +241,15 @@ impl ClawHubTool {
 
             let out_path = dest_dir.join(relative_path);
 
-            // Create parent directories
+            // Lexical path traversal check BEFORE creating any directories
+            if !is_path_within(&dest_dir, &out_path) {
+                tracing::warn!(
+                    "ZIP entry escapes target directory, skipping: {}",
+                    entry_name
+                );
+                continue;
+            }
+
             if let Some(parent) = out_path.parent() {
                 std::fs::create_dir_all(parent).map_err(|e| {
                     AlephError::tool(format!("Failed to create directory: {}", e))
@@ -198,12 +258,12 @@ impl ClawHubTool {
 
             // Read and write the file
             let mut content = Vec::new();
-            entry.read_to_end(&mut content).map_err(|e| {
-                AlephError::tool(format!("Failed to read ZIP entry content: {}", e))
-            })?;
+            entry
+                .read_to_end(&mut content)
+                .map_err(|e| AlephError::tool(format!("Failed to read ZIP entry content: {}", e)))?;
 
             // Validate SKILL.md if found
-            if relative_path == "SKILL.md" || relative_path.ends_with("/SKILL.md") {
+            if relative_path == "SKILL.md" {
                 let text = String::from_utf8_lossy(&content);
                 crate::skill::parse_skill_content(
                     &text,
@@ -213,13 +273,11 @@ impl ClawHubTool {
                 found_skill_md = true;
             }
 
-            std::fs::write(&out_path, &content).map_err(|e| {
-                AlephError::tool(format!("Failed to write file: {}", e))
-            })?;
+            std::fs::write(&out_path, &content)
+                .map_err(|e| AlephError::tool(format!("Failed to write file: {}", e)))?;
         }
 
         if !found_skill_md {
-            // Clean up the directory if no SKILL.md found
             let _ = std::fs::remove_dir_all(&dest_dir);
             return Err(AlephError::tool(
                 "Package does not contain a valid SKILL.md file",
@@ -235,15 +293,10 @@ impl ClawHubTool {
             owner: slug.split('/').next().unwrap_or("").to_string(),
         };
         let meta_path = dest_dir.join(".clawhub.json");
-        let meta_json = serde_json::to_string_pretty(&meta).map_err(|e| {
-            AlephError::tool(format!("Failed to serialize metadata: {}", e))
-        })?;
-        std::fs::write(&meta_path, meta_json).map_err(|e| {
-            AlephError::tool(format!("Failed to write .clawhub.json: {}", e))
-        })?;
-
-        // Clean up temp ZIP
-        let _ = std::fs::remove_file(zip_path);
+        let meta_json = serde_json::to_string_pretty(&meta)
+            .map_err(|e| AlephError::tool(format!("Failed to serialize metadata: {}", e)))?;
+        std::fs::write(&meta_path, meta_json)
+            .map_err(|e| AlephError::tool(format!("Failed to write .clawhub.json: {}", e)))?;
 
         info!(slug, version, dir = %dest_dir.display(), "ClawHub skill installed");
         Ok(version.to_string())
@@ -324,19 +377,31 @@ impl AlephTool for ClawHubTool {
                 })?;
                 let version_arg = args.version.as_deref();
 
-                // Download the ZIP
-                let zip_path = self.client.download(&slug, version_arg).await?;
+                // Fetch detail first: determine version and check moderation
+                let detail = self.client.get_skill(&slug).await?;
 
-                // Determine actual version — use provided or fetch latest
+                // Block malware-flagged skills
+                if let Some(ref moderation) = detail.moderation {
+                    if moderation.is_malware_blocked() {
+                        return Err(AlephError::tool(format!(
+                            "Skill '{}' is blocked by ClawHub (malware detected). Reason: {}",
+                            slug,
+                            moderation.reason_codes.join(", ")
+                        )));
+                    }
+                }
+
                 let version = if let Some(v) = version_arg {
                     v.to_string()
                 } else {
-                    let detail = self.client.get_skill(&slug).await?;
                     detail
                         .latest_version
                         .map(|v| v.number)
                         .unwrap_or_else(|| "unknown".to_string())
                 };
+
+                // Download the ZIP (after version is known)
+                let zip_path = self.client.download(&slug, Some(&version)).await?;
 
                 let installed_version = Self::install_from_zip(
                     &zip_path,
@@ -346,7 +411,10 @@ impl AlephTool for ClawHubTool {
                 )?;
 
                 Ok(ClawHubOutput {
-                    message: format!("Skill '{}' v{} installed successfully", slug, installed_version),
+                    message: format!(
+                        "Skill '{}' v{} installed successfully",
+                        slug, installed_version
+                    ),
                     skills: None,
                     cursor: None,
                     has_more: None,
@@ -360,8 +428,8 @@ impl AlephTool for ClawHubTool {
                     AlephError::tool("clawhub update: 'slug' is required")
                 })?;
 
-                // Check installed version
-                let skill_name = slug.split('/').next_back().unwrap_or(&slug);
+                // Check installed version (sanitize to prevent path traversal)
+                let skill_name = sanitize_skill_name(&slug)?;
                 let meta_path = Self::skills_dir().join(skill_name).join(".clawhub.json");
 
                 let local_meta: ClawHubMeta = if meta_path.exists() {
@@ -378,8 +446,18 @@ impl AlephTool for ClawHubTool {
                     )));
                 };
 
-                // Fetch remote latest version
+                // Fetch remote latest version and check moderation
                 let detail = self.client.get_skill(&slug).await?;
+
+                if let Some(ref moderation) = detail.moderation {
+                    if moderation.is_malware_blocked() {
+                        return Err(AlephError::tool(format!(
+                            "Skill '{}' is now blocked by ClawHub (malware detected). Update aborted.",
+                            slug
+                        )));
+                    }
+                }
+
                 let remote_version = detail
                     .latest_version
                     .map(|v| v.number)
@@ -475,5 +553,61 @@ mod tests {
     fn test_sort_order_conversion() {
         let sort: SortOrder = ClawHubSortOrder::Trending.into();
         assert_eq!(sort.as_api_str(), "trending");
+    }
+
+    // ── sanitize_skill_name tests ──
+
+    #[test]
+    fn test_sanitize_normal_slug() {
+        assert_eq!(sanitize_skill_name("owner/my-skill").unwrap(), "my-skill");
+        assert_eq!(sanitize_skill_name("simple-skill").unwrap(), "simple-skill");
+    }
+
+    #[test]
+    fn test_sanitize_rejects_dotdot() {
+        assert!(sanitize_skill_name("owner/..").is_err());
+        assert!(sanitize_skill_name("..").is_err());
+    }
+
+    #[test]
+    fn test_sanitize_rejects_dot() {
+        assert!(sanitize_skill_name("owner/.").is_err());
+        assert!(sanitize_skill_name(".").is_err());
+    }
+
+    #[test]
+    fn test_sanitize_rejects_empty() {
+        assert!(sanitize_skill_name("owner/").is_err());
+        assert!(sanitize_skill_name("").is_err());
+    }
+
+    // ── is_path_within tests ──
+
+    #[test]
+    fn test_path_within_normal() {
+        let base = PathBuf::from("/home/user/.aleph/skills/my-skill");
+        let target = base.join("SKILL.md");
+        assert!(is_path_within(&base, &target));
+    }
+
+    #[test]
+    fn test_path_within_nested() {
+        let base = PathBuf::from("/home/user/.aleph/skills/my-skill");
+        let target = base.join("sub/dir/file.txt");
+        assert!(is_path_within(&base, &target));
+    }
+
+    #[test]
+    fn test_path_escapes_with_dotdot() {
+        let base = PathBuf::from("/home/user/.aleph/skills/my-skill");
+        let target = base.join("../../etc/passwd");
+        assert!(!is_path_within(&base, &target));
+    }
+
+    #[test]
+    fn test_path_escapes_single_dotdot() {
+        let base = PathBuf::from("/home/user/.aleph/skills/my-skill");
+        let target = base.join("../other-skill/SKILL.md");
+        assert!(!is_path_within(&base, &target));
     }
 }

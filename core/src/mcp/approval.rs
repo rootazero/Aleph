@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use crate::sync_primitives::Arc;
 use std::time::Duration;
 
+
 use tokio::sync::{oneshot, RwLock};
 use tokio::time::timeout;
 
@@ -30,8 +31,8 @@ struct PendingApproval {
 pub struct ApprovalHandler {
     /// Pending approvals by request ID
     pending: Arc<RwLock<HashMap<String, PendingApproval>>>,
-    /// Callback to present requests to UI
-    present_callback: Arc<RwLock<Option<ApprovalPresentCallback>>>,
+    /// Callback to present requests to UI (Arc-wrapped for cheap cloning out of lock)
+    present_callback: Arc<RwLock<Option<Arc<ApprovalPresentCallback>>>>,
     /// Default timeout for approvals
     default_timeout: Duration,
 }
@@ -62,7 +63,7 @@ impl ApprovalHandler {
         Fut: std::future::Future<Output = ()> + Send + 'static,
     {
         let mut cb = self.present_callback.write().await;
-        *cb = Some(Box::new(move |req| Box::pin(callback(req))));
+        *cb = Some(Arc::new(Box::new(move |req| Box::pin(callback(req)))));
     }
 
     /// Request approval from the user
@@ -90,19 +91,22 @@ impl ApprovalHandler {
             );
         }
 
-        // Present to user
-        {
+        // Clone callback ref under lock, then release before awaiting UI interaction
+        let cb = {
             let callback = self.present_callback.read().await;
-            if let Some(ref cb) = *callback {
-                cb(request).await;
-            } else {
-                tracing::warn!("No approval callback registered, auto-rejecting");
-                // Clean up and return rejected
-                let mut pending = self.pending.write().await;
-                pending.remove(&request_id);
-                return Ok(ApprovalDecision::Rejected);
+            match callback.as_ref() {
+                Some(cb) => Arc::clone(cb),
+                None => {
+                    tracing::warn!("No approval callback registered, auto-rejecting");
+                    let mut pending = self.pending.write().await;
+                    pending.remove(&request_id);
+                    return Ok(ApprovalDecision::Rejected);
+                }
             }
-        }
+        };
+
+        // Present to user (lock released)
+        cb(request).await;
 
         // Wait for response with timeout
         match timeout(timeout_duration, rx).await {
@@ -118,7 +122,8 @@ impl ApprovalHandler {
                 }
             }
             Ok(Err(_)) => {
-                // Channel closed (shouldn't happen)
+                // Channel closed unexpectedly — sender dropped without responding
+                tracing::warn!(request_id = %request_id, "Approval channel closed without response, treating as rejected");
                 let mut pending = self.pending.write().await;
                 pending.remove(&request_id);
                 Ok(ApprovalDecision::Rejected)

@@ -72,8 +72,6 @@ impl ContextAnchor {
     pub fn new(window_title: Option<String>) -> Self {
         Self { window_title }
     }
-
-
 }
 
 /// Payload configuration

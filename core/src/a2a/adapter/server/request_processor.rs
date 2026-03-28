@@ -107,17 +107,9 @@ impl A2ARequestProcessor {
             "tasks/get" => self.handle_tasks_get(request, auth).await,
             "tasks/cancel" => self.handle_tasks_cancel(request, auth).await,
             "tasks/list" => self.handle_tasks_list(request, auth).await,
-            "tasks/pushNotificationConfig/set" => {
-                self.handle_push_config_set(request, auth).await
-            }
-            "tasks/pushNotificationConfig/get" => {
-                self.handle_push_config_get(request, auth).await
-            }
-            "tasks/pushNotificationConfig/list" => {
-                self.handle_push_config_list(request, auth).await
-            }
-            "tasks/pushNotificationConfig/delete" => {
-                self.handle_push_config_delete(request, auth).await
+            "tasks/pushNotificationConfig/set" | "tasks/pushNotificationConfig/get"
+            | "tasks/pushNotificationConfig/list" | "tasks/pushNotificationConfig/delete" => {
+                self.handle_push_config(request, auth).await
             }
             _ => JsonRpcResponse::error(
                 request.id,
@@ -207,7 +199,7 @@ impl A2ARequestProcessor {
             .params
             .get("historyLength")
             .and_then(|v| v.as_u64())
-            .map(|v| v as usize);
+            .map(|v| usize::try_from(v).unwrap_or(usize::MAX));
 
         match self.state.task_manager.get_task(id, history_length).await {
             Ok(task) => match serde_json::to_value(&task) {
@@ -264,8 +256,19 @@ impl A2ARequestProcessor {
             return resp;
         }
 
-        let params: ListTasksParams = if request.params.is_null() || request.params.is_object() {
-            serde_json::from_value(request.params.clone()).unwrap_or_default()
+        let params: ListTasksParams = if request.params.is_null() {
+            ListTasksParams::default()
+        } else if request.params.is_object() {
+            match serde_json::from_value(request.params.clone()) {
+                Ok(p) => p,
+                Err(e) => {
+                    return JsonRpcResponse::error(
+                        request.id,
+                        -32602,
+                        &format!("Invalid params: {}", e),
+                    );
+                }
+            }
         } else {
             ListTasksParams::default()
         };
@@ -283,118 +286,97 @@ impl A2ARequestProcessor {
         }
     }
 
-    async fn handle_push_config_set(
+    /// Dispatch push notification config operations — all require ManagePushConfig permission
+    async fn handle_push_config(
         &self,
         request: JsonRpcRequest,
         auth: A2AAuthPrincipal,
     ) -> JsonRpcResponse {
-        if let Err(resp) = self.authorize(&request, &auth, &A2AAction::SendMessage).await {
+        if let Err(resp) = self
+            .authorize(&request, &auth, &A2AAction::ManagePushConfig)
+            .await
+        {
             return resp;
         }
 
-        let config: crate::a2a::service::notification::PushNotificationConfig =
-            match serde_json::from_value(request.params.clone()) {
-                Ok(c) => c,
-                Err(e) => {
-                    return JsonRpcResponse::error(
-                        request.id,
-                        -32602,
-                        &format!("Invalid params: {}", e),
-                    );
+        match request.method.as_str() {
+            "tasks/pushNotificationConfig/set" => {
+                let config: crate::a2a::service::notification::PushNotificationConfig =
+                    match serde_json::from_value(request.params.clone()) {
+                        Ok(c) => c,
+                        Err(e) => {
+                            return JsonRpcResponse::error(
+                                request.id,
+                                -32602,
+                                &format!("Invalid params: {}", e),
+                            );
+                        }
+                    };
+                match self.state.notification.set_config(config).await {
+                    Ok(c) => match serde_json::to_value(&c) {
+                        Ok(v) => JsonRpcResponse::success(request.id, v),
+                        Err(e) => JsonRpcResponse::error(
+                            request.id,
+                            -32603,
+                            &format!("Internal error: {}", e),
+                        ),
+                    },
+                    Err(e) => JsonRpcResponse::from_a2a_error(request.id, &e),
                 }
-            };
-
-        match self.state.notification.set_config(config).await {
-            Ok(c) => match serde_json::to_value(&c) {
-                Ok(v) => JsonRpcResponse::success(request.id, v),
-                Err(e) => JsonRpcResponse::error(
-                    request.id,
-                    -32603,
-                    &format!("Internal error: {}", e),
-                ),
-            },
-            Err(e) => JsonRpcResponse::from_a2a_error(request.id, &e),
-        }
-    }
-
-    async fn handle_push_config_get(
-        &self,
-        request: JsonRpcRequest,
-        auth: A2AAuthPrincipal,
-    ) -> JsonRpcResponse {
-        if let Err(resp) = self.authorize(&request, &auth, &A2AAction::GetTask).await {
-            return resp;
-        }
-
-        let task_id = match request.params.get("taskId").and_then(|v| v.as_str()) {
-            Some(id) => id,
-            None => {
-                return JsonRpcResponse::error(
-                    request.id,
-                    -32602,
-                    "Invalid params: missing 'taskId'",
-                );
             }
-        };
-
-        match self.state.notification.get_config(task_id).await {
-            Ok(config) => match serde_json::to_value(&config) {
-                Ok(v) => JsonRpcResponse::success(request.id, v),
-                Err(e) => JsonRpcResponse::error(
-                    request.id,
-                    -32603,
-                    &format!("Internal error: {}", e),
-                ),
-            },
-            Err(e) => JsonRpcResponse::from_a2a_error(request.id, &e),
-        }
-    }
-
-    async fn handle_push_config_list(
-        &self,
-        request: JsonRpcRequest,
-        auth: A2AAuthPrincipal,
-    ) -> JsonRpcResponse {
-        if let Err(resp) = self.authorize(&request, &auth, &A2AAction::ListTasks).await {
-            return resp;
-        }
-
-        match self.state.notification.list_configs().await {
-            Ok(configs) => match serde_json::to_value(&configs) {
-                Ok(v) => JsonRpcResponse::success(request.id, v),
-                Err(e) => JsonRpcResponse::error(
-                    request.id,
-                    -32603,
-                    &format!("Internal error: {}", e),
-                ),
-            },
-            Err(e) => JsonRpcResponse::from_a2a_error(request.id, &e),
-        }
-    }
-
-    async fn handle_push_config_delete(
-        &self,
-        request: JsonRpcRequest,
-        auth: A2AAuthPrincipal,
-    ) -> JsonRpcResponse {
-        if let Err(resp) = self.authorize(&request, &auth, &A2AAction::SendMessage).await {
-            return resp;
-        }
-
-        let task_id = match request.params.get("taskId").and_then(|v| v.as_str()) {
-            Some(id) => id,
-            None => {
-                return JsonRpcResponse::error(
-                    request.id,
-                    -32602,
-                    "Invalid params: missing 'taskId'",
-                );
+            "tasks/pushNotificationConfig/get" => {
+                let task_id = match request.params.get("taskId").and_then(|v| v.as_str()) {
+                    Some(id) => id,
+                    None => {
+                        return JsonRpcResponse::error(
+                            request.id,
+                            -32602,
+                            "Invalid params: missing 'taskId'",
+                        );
+                    }
+                };
+                match self.state.notification.get_config(task_id).await {
+                    Ok(config) => match serde_json::to_value(&config) {
+                        Ok(v) => JsonRpcResponse::success(request.id, v),
+                        Err(e) => JsonRpcResponse::error(
+                            request.id,
+                            -32603,
+                            &format!("Internal error: {}", e),
+                        ),
+                    },
+                    Err(e) => JsonRpcResponse::from_a2a_error(request.id, &e),
+                }
             }
-        };
-
-        match self.state.notification.delete_config(task_id).await {
-            Ok(()) => JsonRpcResponse::success(request.id, Value::Null),
-            Err(e) => JsonRpcResponse::from_a2a_error(request.id, &e),
+            "tasks/pushNotificationConfig/list" => {
+                match self.state.notification.list_configs().await {
+                    Ok(configs) => match serde_json::to_value(&configs) {
+                        Ok(v) => JsonRpcResponse::success(request.id, v),
+                        Err(e) => JsonRpcResponse::error(
+                            request.id,
+                            -32603,
+                            &format!("Internal error: {}", e),
+                        ),
+                    },
+                    Err(e) => JsonRpcResponse::from_a2a_error(request.id, &e),
+                }
+            }
+            "tasks/pushNotificationConfig/delete" => {
+                let task_id = match request.params.get("taskId").and_then(|v| v.as_str()) {
+                    Some(id) => id,
+                    None => {
+                        return JsonRpcResponse::error(
+                            request.id,
+                            -32602,
+                            "Invalid params: missing 'taskId'",
+                        );
+                    }
+                };
+                match self.state.notification.delete_config(task_id).await {
+                    Ok(()) => JsonRpcResponse::success(request.id, Value::Null),
+                    Err(e) => JsonRpcResponse::from_a2a_error(request.id, &e),
+                }
+            }
+            _ => JsonRpcResponse::error(request.id, -32601, "Unknown push config method"),
         }
     }
 

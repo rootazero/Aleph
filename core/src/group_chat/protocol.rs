@@ -4,6 +4,9 @@
 //! They define speakers, personas, requests, messages, and coordination plans
 //! used across all group chat interactions regardless of the underlying transport.
 
+use std::fmt;
+use std::str::FromStr;
+
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -44,6 +47,9 @@ impl Speaker {
 // Persona
 // =============================================================================
 
+/// Maximum number of characters allowed in a persona's system_prompt.
+const MAX_SYSTEM_PROMPT_LEN: usize = 2000;
+
 /// Defines a persona that can participate in group chat discussions.
 ///
 /// Each persona has a unique identity, a system prompt that shapes its behavior,
@@ -62,6 +68,31 @@ pub struct Persona {
     pub model: Option<String>,
     /// Optional thinking level override (e.g., "low", "medium", "high").
     pub thinking_level: Option<String>,
+}
+
+impl Persona {
+    /// Validate persona fields.
+    ///
+    /// Returns `Err` if the id, name, or system_prompt is empty, or if the
+    /// system_prompt exceeds the maximum length.
+    pub fn validate(&self) -> Result<(), GroupChatError> {
+        if self.id.is_empty() {
+            return Err(GroupChatError::InvalidPersona("persona id must not be empty".into()));
+        }
+        if self.name.is_empty() {
+            return Err(GroupChatError::InvalidPersona("persona name must not be empty".into()));
+        }
+        if self.system_prompt.is_empty() {
+            return Err(GroupChatError::InvalidPersona("persona system_prompt must not be empty".into()));
+        }
+        if self.system_prompt.chars().count() > MAX_SYSTEM_PROMPT_LEN {
+            return Err(GroupChatError::InvalidPersona(format!(
+                "persona system_prompt exceeds maximum length of {} characters",
+                MAX_SYSTEM_PROMPT_LEN
+            )));
+        }
+        Ok(())
+    }
 }
 
 // =============================================================================
@@ -167,16 +198,23 @@ impl GroupChatStatus {
             GroupChatStatus::Ended => "ended",
         }
     }
+}
 
-    /// Parses a status from a string.
-    ///
-    /// Returns `None` if the string doesn't match any known status.
-    pub fn parse(s: &str) -> Option<Self> {
+impl fmt::Display for GroupChatStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for GroupChatStatus {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "active" => Some(GroupChatStatus::Active),
-            "paused" => Some(GroupChatStatus::Paused),
-            "ended" => Some(GroupChatStatus::Ended),
-            _ => None,
+            "active" => Ok(GroupChatStatus::Active),
+            "paused" => Ok(GroupChatStatus::Paused),
+            "ended" => Ok(GroupChatStatus::Ended),
+            _ => Err(format!("unknown group chat status: '{}'", s)),
         }
     }
 }
@@ -310,6 +348,10 @@ pub enum GroupChatError {
     /// The requested AI provider is unavailable.
     #[error("provider unavailable: {0}")]
     ProviderUnavailable(String),
+
+    /// A persona definition is invalid.
+    #[error("invalid persona: {0}")]
+    InvalidPersona(String),
 }
 
 // =============================================================================
@@ -355,20 +397,54 @@ mod tests {
     }
 
     #[test]
-    fn test_group_chat_status_display() {
-        // Test as_str()
+    fn test_group_chat_status_display_and_fromstr() {
+        // Test as_str() and Display
         assert_eq!(GroupChatStatus::Active.as_str(), "active");
         assert_eq!(GroupChatStatus::Paused.as_str(), "paused");
         assert_eq!(GroupChatStatus::Ended.as_str(), "ended");
+        assert_eq!(format!("{}", GroupChatStatus::Active), "active");
 
-        // Test from_str() roundtrip
-        assert_eq!(GroupChatStatus::parse("active"), Some(GroupChatStatus::Active));
-        assert_eq!(GroupChatStatus::parse("paused"), Some(GroupChatStatus::Paused));
-        assert_eq!(GroupChatStatus::parse("ended"), Some(GroupChatStatus::Ended));
+        // Test FromStr roundtrip
+        assert_eq!("active".parse::<GroupChatStatus>().unwrap(), GroupChatStatus::Active);
+        assert_eq!("paused".parse::<GroupChatStatus>().unwrap(), GroupChatStatus::Paused);
+        assert_eq!("ended".parse::<GroupChatStatus>().unwrap(), GroupChatStatus::Ended);
 
         // Test invalid input
-        assert_eq!(GroupChatStatus::parse("unknown"), None);
-        assert_eq!(GroupChatStatus::parse(""), None);
+        assert!("unknown".parse::<GroupChatStatus>().is_err());
+        assert!("".parse::<GroupChatStatus>().is_err());
+    }
+
+    #[test]
+    fn test_persona_validate() {
+        let valid = Persona {
+            id: "arch".into(),
+            name: "Architect".into(),
+            system_prompt: "You are an architect".into(),
+            provider: None,
+            model: None,
+            thinking_level: None,
+        };
+        assert!(valid.validate().is_ok());
+
+        // Empty id
+        let mut invalid = valid.clone();
+        invalid.id = String::new();
+        assert!(invalid.validate().is_err());
+
+        // Empty name
+        let mut invalid = valid.clone();
+        invalid.name = String::new();
+        assert!(invalid.validate().is_err());
+
+        // Empty system_prompt
+        let mut invalid = valid.clone();
+        invalid.system_prompt = String::new();
+        assert!(invalid.validate().is_err());
+
+        // Prompt too long
+        let mut invalid = valid.clone();
+        invalid.system_prompt = "x".repeat(2001);
+        assert!(invalid.validate().is_err());
     }
 
     #[test]

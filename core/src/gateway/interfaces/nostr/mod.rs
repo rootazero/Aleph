@@ -127,8 +127,8 @@ impl Channel for NostrChannel {
 
         tracing::info!(
             "Nostr identity: {}...{}",
-            &own_pubkey[..8.min(own_pubkey.len())],
-            &own_pubkey[own_pubkey.len().saturating_sub(8)..]
+            own_pubkey.get(..8).unwrap_or(&own_pubkey),
+            own_pubkey.get(own_pubkey.len().saturating_sub(8)..).unwrap_or("")
         );
 
         // Create shutdown channel

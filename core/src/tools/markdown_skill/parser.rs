@@ -7,8 +7,10 @@ use super::spec::AlephSkillSpec;
 
 /// Parse a SKILL.md file into AlephSkillSpec
 pub fn parse_skill_file(content: &str) -> Result<AlephSkillSpec> {
+    // Normalize Windows line endings so "\n---\n" delimiter matching works
+    let content = content.replace("\r\n", "\n");
     // 1. Split frontmatter and content
-    let (frontmatter, markdown) = extract_frontmatter(content)?;
+    let (frontmatter, markdown) = extract_frontmatter(&content)?;
 
     // 2. Parse YAML frontmatter
     let mut spec: AlephSkillSpec = serde_yaml::from_str(frontmatter)
@@ -32,15 +34,34 @@ fn extract_frontmatter(content: &str) -> Result<(&str, &str)> {
         anyhow::bail!("Skill file must start with YAML frontmatter (---)");
     }
 
-    // Find closing delimiter
-    let after_first = &content[3..];
-    if let Some(end_pos) = after_first.find("\n---\n") {
-        let frontmatter = &after_first[..end_pos].trim();
-        let markdown = &after_first[end_pos + 5..].trim();
-        Ok((frontmatter, markdown))
+    // Find closing delimiter ("---" is ASCII, so byte offset 3 is always a char boundary)
+    let after_first = content.get(3..)
+        .ok_or_else(|| anyhow::anyhow!("Frontmatter too short"))?;
+
+    // Try "\n---\n" first, then "\n---" at end-of-string (no trailing newline)
+    let end_pos = after_first.find("\n---\n")
+        .or_else(|| {
+            let suffix = "\n---";
+            if after_first.ends_with(suffix) {
+                Some(after_first.len() - suffix.len())
+            } else {
+                None
+            }
+        })
+        .ok_or_else(|| anyhow::anyhow!("Frontmatter must be closed with --- on a new line"))?;
+
+    let frontmatter = after_first.get(..end_pos)
+        .ok_or_else(|| anyhow::anyhow!("Invalid frontmatter boundary"))?
+        .trim();
+    // After "\n---\n" there are 5 bytes; after "\n---" at EOF there may be nothing
+    let markdown_start = end_pos + 4; // skip "\n---"
+    let markdown_start = if after_first.get(markdown_start..markdown_start + 1) == Some("\n") {
+        markdown_start + 1
     } else {
-        anyhow::bail!("Frontmatter must be closed with --- on a new line");
-    }
+        markdown_start
+    };
+    let markdown = after_first.get(markdown_start..).unwrap_or("").trim();
+    Ok((frontmatter, markdown))
 }
 
 /// Validate spec has required fields
@@ -119,6 +140,14 @@ gh pr list
         assert_eq!(spec.name, "test-tool");
         assert_eq!(spec.description, "A test tool");
         assert!(spec.markdown_content.contains("Use this tool"));
+    }
+
+    #[test]
+    fn test_parse_windows_line_endings() {
+        let content = "---\r\nname: win-tool\r\ndescription: A Windows-authored tool\r\nmetadata:\r\n  requires:\r\n    bins: [\"gh\"]\r\n---\r\n# Win Tool\r\nWorks on Windows.\r\n";
+        let spec = parse_skill_file(content).unwrap();
+        assert_eq!(spec.name, "win-tool");
+        assert!(spec.markdown_content.contains("Works on Windows"));
     }
 
     #[test]

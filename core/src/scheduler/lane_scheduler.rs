@@ -160,9 +160,11 @@ impl LaneScheduler {
     /// where no guard was acquired, e.g., recursion tracking cleanup).
     pub async fn on_run_complete(&self, run_id: &str, lane: Lane, guard: Option<ScheduleGuard>) {
         if let Some(state) = self.lanes.get(&lane) {
+            let was_running = state.is_running(run_id).await;
             state.complete(run_id).await;
-            // If no guard, manually release permits (cleanup path)
-            if guard.is_none() {
+            // Only release permits manually if the run was actually running
+            // (i.e., permits were acquired but guard was lost/not provided)
+            if guard.is_none() && was_running {
                 self.global_semaphore.add_permits(1);
                 state.semaphore().add_permits(1);
             }

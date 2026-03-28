@@ -13,8 +13,8 @@ use super::events::{FileOperation, ImportantEvent, InfoEvent};
 pub struct AggregationRule {
     /// Pattern to match
     pub pattern: EventPattern,
-    /// Time window in milliseconds
-    pub window_ms: u64,
+    /// Time window in seconds (timestamps use second-level granularity)
+    pub window_secs: u64,
     /// Minimum number of matching events
     pub threshold: usize,
     /// Function to create aggregated event
@@ -121,7 +121,7 @@ impl RuleEngine {
                     .into_iter()
                     .filter(|e| {
                         rule.pattern.matches(e) &&
-                        (now - e.timestamp()) * 1000 <= rule.window_ms
+                        now.saturating_sub(e.timestamp()) <= rule.window_secs
                     })
                     .cloned()
                     .collect::<Vec<_>>()
@@ -133,7 +133,7 @@ impl RuleEngine {
                 let mut matches = self.recent_matches.write().await;
 
                 if let Some(&last_fire) = matches.get(&rule_key) {
-                    if (now - last_fire) * 1000 < rule.window_ms {
+                    if now.saturating_sub(last_fire) < rule.window_secs {
                         // Too soon to fire again
                         continue;
                     }
@@ -158,7 +158,7 @@ fn default_rules() -> Vec<AggregationRule> {
                 path_prefix: None,
                 operation: Some(FileOperation::Read),
             },
-            window_ms: 1000,
+            window_secs: 1,
             threshold: 3,
             output: |events| {
                 // Extract common path prefix
@@ -191,7 +191,7 @@ fn default_rules() -> Vec<AggregationRule> {
         // Rule 2: Multiple symbol searches -> Confirmed Insight
         AggregationRule {
             pattern: EventPattern::SymbolSearch { symbol: None },
-            window_ms: 2000,
+            window_secs: 2,
             threshold: 2,
             output: |events| {
                 // Find most searched symbol

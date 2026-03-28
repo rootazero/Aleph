@@ -83,8 +83,7 @@ impl MediaCache {
             if size > MAX_FILE_SIZE {
                 return Err(CacheError::TooLarge { size });
             }
-            let dir = session_dir(session_id);
-            std::fs::create_dir_all(&dir)?;
+            let dir = ensure_session_dir(session_id)?;
             let filename = attachment
                 .filename
                 .as_deref()
@@ -116,8 +115,7 @@ impl MediaCache {
 
         // Priority 3: URL download
         if let Some(ref url) = attachment.url {
-            let dir = session_dir(session_id);
-            std::fs::create_dir_all(&dir)?;
+            let dir = ensure_session_dir(session_id)?;
 
             let resp = self
                 .client
@@ -177,6 +175,9 @@ impl MediaCache {
     }
 
     /// Remove session directories older than 1 hour (call at startup).
+    ///
+    /// Uses the `.created_at` marker file written at session creation time
+    /// to determine age, falling back to directory `modified` time.
     pub fn cleanup_stale() {
         let base = base_dir();
         let entries = match std::fs::read_dir(&base) {
@@ -192,9 +193,16 @@ impl MediaCache {
             if !meta.is_dir() {
                 continue;
             }
-            let age = meta
-                .modified()
-                .ok()
+            // Prefer .created_at marker over directory mtime (mtime updates on every write)
+            let created = entry.path().join(".created_at");
+            let timestamp = if created.exists() {
+                std::fs::metadata(&created)
+                    .ok()
+                    .and_then(|m| m.modified().ok())
+            } else {
+                meta.modified().ok()
+            };
+            let age = timestamp
                 .and_then(|t| now.duration_since(t).ok())
                 .unwrap_or(Duration::ZERO);
             if age > STALE_THRESHOLD {
@@ -236,15 +244,15 @@ impl MediaCache {
                 Ok((decoded_mime, bytes)) => Attachment {
                     id: id.clone(),
                     mime_type: decoded_mime.unwrap_or_else(|| mime.clone()),
-                    filename: item.filename.clone().or_else(|| Some(format!("{}.bin", &id[..8]))),
+                    filename: item.filename.clone().or_else(|| Some(format!("{}.bin", id.get(..8).unwrap_or(&id)))),
                     size: Some(bytes.len() as u64),
                     url: None,
                     path: None,
                     data: Some(bytes),
                 },
                 Err(e) => {
-                    let prefix_len = item.url.len().min(30);
-                    warn!(url_prefix = &item.url[..prefix_len], error = %e, "Failed to decode data URL, falling back to URL-only");
+                    let url_prefix: String = item.url.chars().take(30).collect();
+                    warn!(url_prefix = %url_prefix, error = %e, "Failed to decode data URL, falling back to URL-only");
                     return Self::url_only_attachment(&id, &item.url, &mime, &item.filename);
                 }
             }
@@ -264,7 +272,7 @@ impl MediaCache {
             Attachment {
                 id: id.clone(),
                 mime_type: mime.clone(),
-                filename: item.filename.clone().or_else(|| Some(format!("{}.bin", &id[..8]))),
+                filename: item.filename.clone().or_else(|| Some(format!("{}.bin", id.get(..8).unwrap_or(&id)))),
                 size: None,
                 url: Some(item.url.clone()),
                 path: None,
@@ -344,6 +352,19 @@ fn base_dir() -> PathBuf {
 /// Per-session directory: `<temp_dir>/aleph/media/<session_id>`
 fn session_dir(session_id: &str) -> PathBuf {
     base_dir().join(session_id)
+}
+
+/// Ensure session directory exists and write a `.created_at` marker
+/// (only on first creation) so `cleanup_stale` can use a stable timestamp.
+fn ensure_session_dir(session_id: &str) -> Result<PathBuf, std::io::Error> {
+    let dir = session_dir(session_id);
+    let marker = dir.join(".created_at");
+    if !dir.exists() {
+        std::fs::create_dir_all(&dir)?;
+        // Best-effort marker — if it fails, cleanup_stale falls back to mtime
+        let _ = std::fs::write(&marker, "");
+    }
+    Ok(dir)
 }
 
 // =============================================================================

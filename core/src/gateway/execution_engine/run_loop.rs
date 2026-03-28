@@ -220,9 +220,9 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // If attachments are present and a media processor is available,
         // process them into multimodal content blocks and use the
         // pre-built message path.
-        let has_attachments = !request.attachments.is_empty() && self.media_processor.is_some();
-        let loop_result = if has_attachments {
-            let media_processor = self.media_processor.as_ref().unwrap();
+        let loop_result = if let (false, Some(media_processor)) =
+            (request.attachments.is_empty(), self.media_processor.as_ref())
+        {
 
             // TODO: Query ProviderModelInfo.supports_vision properly
             let supports_vision = true;
@@ -318,7 +318,8 @@ async fn build_loop_history(
     let history_slice = if session_history.last().map(|m| {
         m.role == MessageRole::User && m.content == current_input
     }).unwrap_or(false) {
-        &session_history[..session_history.len() - 1]
+        // safe: last() returned Some, so len() >= 1
+        &session_history[..session_history.len().saturating_sub(1)]
     } else {
         &session_history
     };

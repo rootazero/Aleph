@@ -34,6 +34,12 @@ impl A2ATaskManager for TaskStore {
     async fn create_task(&self, task_id: &str, context_id: &str) -> A2AResult<A2ATask> {
         let task = A2ATask::new(task_id, context_id);
         let mut tasks = self.tasks.write().await;
+        if tasks.contains_key(task_id) {
+            return Err(A2AError::InvalidRequest(format!(
+                "Task already exists: {}",
+                task_id
+            )));
+        }
         tasks.insert(task_id.to_string(), task.clone());
         Ok(task)
     }
@@ -63,6 +69,12 @@ impl A2ATaskManager for TaskStore {
         let task = tasks
             .get_mut(task_id)
             .ok_or_else(|| A2AError::TaskNotFound(task_id.to_string()))?;
+        if !task.status.state.can_transition_to(&state) {
+            return Err(A2AError::InvalidRequest(format!(
+                "Cannot transition task {} from {:?} to {:?}",
+                task_id, task.status.state, state
+            )));
+        }
         task.status = TaskStatus {
             state,
             message: message.clone(),
@@ -109,8 +121,11 @@ impl A2ATaskManager for TaskStore {
             })
             .cloned()
             .collect();
-        // Sort by timestamp descending for deterministic output
-        result.sort_by(|a, b| b.status.timestamp.cmp(&a.status.timestamp));
+        // Sort by timestamp descending, then by ID ascending for deterministic output
+        result.sort_by(|a, b| {
+            b.status.timestamp.cmp(&a.status.timestamp)
+                .then_with(|| a.id.cmp(&b.id))
+        });
         let limit = params.limit.unwrap_or(100);
         result.truncate(limit);
         Ok(ListTasksResult {

@@ -75,7 +75,7 @@ impl UserProfile {
         // Try to extract YAML frontmatter
         if let Some(after_first) = trimmed.strip_prefix("---") {
             if let Some(end_pos) = after_first.find("\n---") {
-                let frontmatter = &after_first[..end_pos];
+                let frontmatter = after_first.get(..end_pos).unwrap_or_default();
                 return serde_yaml::from_str(frontmatter.trim()).ok();
             }
         }

@@ -34,7 +34,8 @@ impl DeviceFingerprint {
         use sha2::Digest;
         let hash = Sha256::digest(public_key);
         let hex = hex::encode(hash);
-        Self(hex[..16].to_string())
+        // hex::encode output is pure ASCII, but use .get() for UTF-8 safety convention
+        Self(hex.get(..16).unwrap_or(&hex).to_string())
     }
 }
 

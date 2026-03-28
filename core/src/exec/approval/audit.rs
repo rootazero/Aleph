@@ -1,5 +1,6 @@
 use crate::exec::approval::types::EscalationReason;
 use crate::exec::approval::storage::ApprovalAuditStorage;
+use tracing::warn;
 use crate::exec::sandbox::capabilities::{Capabilities, FileSystemCapability, NetworkCapability};
 use rusqlite::Result as SqliteResult;
 use std::collections::HashMap;
@@ -42,29 +43,29 @@ impl AuditQuery {
         capabilities: &Capabilities,
         escalation_count: u32,
     ) -> u32 {
-        let mut score = 10; // Base score
+        let mut score: u32 = 10; // Base score
 
         // Check filesystem capabilities
         for fs_cap in &capabilities.filesystem {
             if let FileSystemCapability::ReadWrite { .. } = fs_cap {
-                score += 20;
+                score = score.saturating_add(20);
             }
         }
 
         // Check network capability
         match &capabilities.network {
-            NetworkCapability::AllowAll => score += 30,
-            NetworkCapability::AllowDomains(_) => score += 15,
+            NetworkCapability::AllowAll => score = score.saturating_add(30),
+            NetworkCapability::AllowDomains(_) => score = score.saturating_add(15),
             NetworkCapability::Deny => {}
         }
 
         // Check process capability (exec)
         if !capabilities.process.no_fork {
-            score += 40;
+            score = score.saturating_add(40);
         }
 
         // Add escalation penalty
-        score += escalation_count * 10;
+        score = score.saturating_add(escalation_count.saturating_mul(10));
 
         score
     }
@@ -172,7 +173,10 @@ fn parse_escalation_reason(reason: &str) -> EscalationReason {
         "sensitive_directory" => EscalationReason::SensitiveDirectory,
         "undeclared_binding" => EscalationReason::UndeclaredBinding,
         "first_execution" => EscalationReason::FirstExecution,
-        _ => EscalationReason::FirstExecution, // Default fallback
+        other => {
+            warn!("Unknown escalation reason in audit DB: {:?}, defaulting to FirstExecution", other);
+            EscalationReason::FirstExecution
+        }
     }
 }
 

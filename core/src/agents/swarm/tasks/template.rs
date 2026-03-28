@@ -119,7 +119,10 @@ pub fn parse_template(content: &str) -> Result<ParsedTemplate> {
 /// user-defined variables.
 pub fn substitute_variables(text: &str, variables: &HashMap<String, String>) -> String {
     let mut result = text.to_string();
-    for (key, value) in variables {
+    // Sort keys for deterministic replacement order (HashMap iteration is non-deterministic)
+    let mut sorted_vars: Vec<(&String, &String)> = variables.iter().collect();
+    sorted_vars.sort_by_key(|(k, _)| k.as_str());
+    for (key, value) in sorted_vars {
         let placeholder = format!("{{{}}}", key);
         result = result.replace(&placeholder, value);
     }

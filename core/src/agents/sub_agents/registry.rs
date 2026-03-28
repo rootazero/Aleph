@@ -217,14 +217,22 @@ impl SubAgentRegistry {
             )));
         }
 
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as i64;
+        let now = i64::try_from(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis(),
+        )
+        .unwrap_or(i64::MAX);
 
         // Update timestamps based on transition
         match new_status {
-            RunStatus::Running => run.started_at = Some(now),
+            RunStatus::Running => {
+                // Only set started_at on first entry; re-entries (Idle->Running) preserve original
+                if run.started_at.is_none() {
+                    run.started_at = Some(now);
+                }
+            }
             RunStatus::Completed | RunStatus::Failed | RunStatus::Cancelled => {
                 run.ended_at = Some(now);
             }

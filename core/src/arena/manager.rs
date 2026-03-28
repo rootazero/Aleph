@@ -94,7 +94,7 @@ impl ArenaManager {
 
     /// Returns arena IDs where the given agent is a participant and the arena is not Archived.
     pub fn active_arenas_for(&self, agent_id: &AgentId) -> Vec<ArenaId> {
-        self.arenas
+        let mut result: Vec<ArenaId> = self.arenas
             .iter()
             .filter_map(|(arena_id, shared)| {
                 let arena = shared.read().unwrap_or_else(|e| e.into_inner());
@@ -112,7 +112,9 @@ impl ArenaManager {
                     None
                 }
             })
-            .collect()
+            .collect();
+        result.sort();
+        result
     }
 
     /// Query arena state as a JSON snapshot (for RPC handlers).
@@ -122,9 +124,10 @@ impl ArenaManager {
         let shared = self.arenas.get(arena_id)?;
         let arena = shared.read().unwrap_or_else(|e| e.into_inner());
 
-        let slot_summaries: Vec<Value> = arena
-            .slots()
-            .values()
+        let mut slot_entries: Vec<_> = arena.slots().values().collect();
+        slot_entries.sort_by(|a, b| a.agent_id.cmp(&b.agent_id));
+        let slot_summaries: Vec<Value> = slot_entries
+            .iter()
             .map(|slot| {
                 json!({
                     "agent_id": slot.agent_id,
@@ -183,12 +186,18 @@ impl ArenaManager {
         // Transition to Archived
         arena.archive()?;
 
+        // Release the write guard before removing from map
+        drop(arena);
+
         let report = SettleReport {
             arena_id: arena_id.clone(),
             facts_persisted: facts.len(),
             artifacts_archived,
             events_cleared: 0,
         };
+
+        // Remove archived arena from map to prevent unbounded memory growth
+        self.arenas.remove(arena_id);
 
         Ok((report, facts))
     }

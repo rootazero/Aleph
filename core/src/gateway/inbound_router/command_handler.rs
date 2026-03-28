@@ -50,17 +50,11 @@ pub(super) fn serialize_intent_result(result: &IntentResult) -> Option<String> {
             args,
             source,
         } => {
-            let source_str = match source {
-                DirectToolSource::SlashCommand => "slash_command",
-                DirectToolSource::Skill => "skill",
-                DirectToolSource::Mcp => "mcp",
-                DirectToolSource::Custom => "custom",
-            };
             serde_json::to_string(&serde_json::json!({
                 "type": "direct_tool",
                 "tool_id": tool_id,
                 "args": args,
-                "source": source_str,
+                "source": source.as_str(),
             }))
             .ok()
         }

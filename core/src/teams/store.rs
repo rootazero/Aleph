@@ -16,6 +16,34 @@ use super::types::{
 use crate::error::AlephError;
 
 // ---------------------------------------------------------------------------
+// FromSql implementations — propagate parse errors instead of unwrap_or_default
+// ---------------------------------------------------------------------------
+
+impl rusqlite::types::FromSql for TeamStatus {
+    fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
+        let s = value.as_str()?;
+        s.parse::<TeamStatus>().map_err(|e| {
+            rusqlite::types::FromSqlError::Other(Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                e,
+            )))
+        })
+    }
+}
+
+impl rusqlite::types::FromSql for TeamTaskStatus {
+    fn column_result(value: rusqlite::types::ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
+        let s = value.as_str()?;
+        s.parse::<TeamTaskStatus>().map_err(|e| {
+            rusqlite::types::FromSqlError::Other(Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                e,
+            )))
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -148,13 +176,12 @@ impl SqliteTeamStore {
 // ---------------------------------------------------------------------------
 
 fn read_team_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Team> {
-    let status_str: String = row.get(4)?;
     Ok(Team {
         id: row.get(0)?,
         name: row.get(1)?,
         description: row.get(2)?,
         leader_id: row.get(3)?,
-        status: TeamStatus::from_str(&status_str).unwrap_or_default(),
+        status: row.get(4)?,
         created_at: row.get(5)?,
         disbanded_at: row.get(6)?,
     })
@@ -170,56 +197,30 @@ fn read_member_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TeamMember> {
 }
 
 fn read_task_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TeamTask> {
-    let status_str: String = row.get(4)?;
     Ok(TeamTask {
         id: row.get(0)?,
         team_id: row.get(1)?,
         agent_id: row.get(2)?,
         subject: row.get(3)?,
-        status: TeamTaskStatus::from_str(&status_str).unwrap_or_default(),
+        status: row.get(4)?,
         result: row.get(5)?,
         created_at: row.get(6)?,
         completed_at: row.get(7)?,
     })
 }
 
-/// Build a `TeamSummary` by loading team row + counting members and tasks.
-fn load_summary(conn: &Connection, team_id: &str) -> rusqlite::Result<Option<TeamSummary>> {
-    let team_opt: Option<Team> = conn
-        .prepare_cached(
-            "SELECT id, name, description, leader_id, status, created_at, disbanded_at FROM teams WHERE id = ?1",
-        )?
-        .query_row(params![team_id], read_team_row)
-        .optional()?;
-
-    let team = match team_opt {
-        Some(t) => t,
-        None => return Ok(None),
-    };
-
-    let member_count: u64 = conn.query_row(
-        "SELECT COUNT(*) FROM team_members WHERE team_id = ?1",
-        params![team_id],
-        |r| r.get(0),
-    )?;
-
-    let task_count: u64 = conn.query_row(
-        "SELECT COUNT(*) FROM team_tasks WHERE team_id = ?1",
-        params![team_id],
-        |r| r.get(0),
-    )?;
-
-    Ok(Some(TeamSummary {
-        id: team.id,
-        name: team.name,
-        description: team.description,
-        leader_id: team.leader_id,
-        status: team.status,
-        member_count,
-        task_count,
-        created_at: team.created_at,
-        disbanded_at: team.disbanded_at,
-    }))
+fn read_summary_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TeamSummary> {
+    Ok(TeamSummary {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        description: row.get(2)?,
+        leader_id: row.get(3)?,
+        status: row.get(4)?,
+        created_at: row.get(5)?,
+        disbanded_at: row.get(6)?,
+        member_count: row.get(7)?,
+        task_count: row.get(8)?,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -268,20 +269,28 @@ impl TeamStore for SqliteTeamStore {
     async fn list_teams(&self) -> crate::error::Result<Vec<TeamSummary>> {
         let conn = self.conn.lock().await;
 
-        let ids: Vec<String> = conn
-            .prepare("SELECT id FROM teams ORDER BY created_at ASC")
-            .map_err(db_err)?
-            .query_map([], |row| row.get(0))
+        let mut stmt = conn
+            .prepare_cached(
+                r#"
+                SELECT t.id, t.name, t.description, t.leader_id, t.status,
+                       t.created_at, t.disbanded_at,
+                       COUNT(DISTINCT m.agent_id) AS member_count,
+                       COUNT(DISTINCT k.id) AS task_count
+                FROM teams t
+                LEFT JOIN team_members m ON m.team_id = t.id
+                LEFT JOIN team_tasks k ON k.team_id = t.id
+                GROUP BY t.id
+                ORDER BY t.created_at ASC
+                "#,
+            )
+            .map_err(db_err)?;
+
+        let summaries = stmt
+            .query_map([], read_summary_row)
             .map_err(db_err)?
             .collect::<rusqlite::Result<Vec<_>>>()
             .map_err(db_err)?;
 
-        let mut summaries = Vec::new();
-        for id in ids {
-            if let Some(s) = load_summary(&conn, &id).map_err(db_err)? {
-                summaries.push(s);
-            }
-        }
         Ok(summaries)
     }
 
@@ -343,16 +352,49 @@ impl TeamStore for SqliteTeamStore {
 
     async fn add_member(&self, input: NewTeamMember) -> crate::error::Result<TeamMember> {
         let conn = self.conn.lock().await;
+
+        // Reject adding members to disbanded teams
+        let status: Option<String> = conn
+            .prepare_cached("SELECT status FROM teams WHERE id = ?1")
+            .map_err(db_err)?
+            .query_row(params![input.team_id], |r| r.get(0))
+            .optional()
+            .map_err(db_err)?;
+
+        match status.as_deref() {
+            None => return Err(db_err(format!("team not found: {}", input.team_id))),
+            Some("disbanded") => {
+                return Err(db_err(format!(
+                    "cannot add member to disbanded team: {}",
+                    input.team_id
+                )))
+            }
+            _ => {}
+        }
+
         let now = now_epoch();
 
-        conn.execute(
-            r#"
-            INSERT OR REPLACE INTO team_members (team_id, agent_id, role, joined_at)
+        let affected = conn
+            .execute(
+                r#"
+            INSERT OR IGNORE INTO team_members (team_id, agent_id, role, joined_at)
             VALUES (?1, ?2, ?3, ?4)
             "#,
-            params![input.team_id, input.agent_id, input.role, now],
-        )
-        .map_err(db_err)?;
+                params![input.team_id, input.agent_id, input.role, now],
+            )
+            .map_err(db_err)?;
+
+        if affected == 0 {
+            // Already a member — return the existing record
+            let member = conn
+                .prepare_cached(
+                    "SELECT team_id, agent_id, role, joined_at FROM team_members WHERE team_id = ?1 AND agent_id = ?2",
+                )
+                .map_err(db_err)?
+                .query_row(params![input.team_id, input.agent_id], read_member_row)
+                .map_err(db_err)?;
+            return Ok(member);
+        }
 
         Ok(TeamMember {
             team_id: input.team_id,
@@ -381,32 +423,56 @@ impl TeamStore for SqliteTeamStore {
     async fn get_agent_teams(&self, agent_id: &str) -> crate::error::Result<Vec<TeamSummary>> {
         let conn = self.conn.lock().await;
 
-        let ids: Vec<String> = conn
-            .prepare(
+        // Single query: find teams where agent is leader or member, with counts
+        let mut stmt = conn
+            .prepare_cached(
                 r#"
-                SELECT DISTINCT t.id FROM teams t
-                LEFT JOIN team_members m ON m.team_id = t.id
-                WHERE t.leader_id = ?1 OR m.agent_id = ?1
+                SELECT t.id, t.name, t.description, t.leader_id, t.status,
+                       t.created_at, t.disbanded_at,
+                       COUNT(DISTINCT am.agent_id) AS member_count,
+                       COUNT(DISTINCT k.id) AS task_count
+                FROM teams t
+                LEFT JOIN team_members fm ON fm.team_id = t.id AND fm.agent_id = ?1
+                LEFT JOIN team_members am ON am.team_id = t.id
+                LEFT JOIN team_tasks k ON k.team_id = t.id
+                WHERE t.leader_id = ?1 OR fm.agent_id IS NOT NULL
+                GROUP BY t.id
                 ORDER BY t.created_at ASC
                 "#,
             )
-            .map_err(db_err)?
-            .query_map(params![agent_id], |row| row.get(0))
+            .map_err(db_err)?;
+
+        let summaries = stmt
+            .query_map(params![agent_id], read_summary_row)
             .map_err(db_err)?
             .collect::<rusqlite::Result<Vec<_>>>()
             .map_err(db_err)?;
 
-        let mut summaries = Vec::new();
-        for id in ids {
-            if let Some(s) = load_summary(&conn, &id).map_err(db_err)? {
-                summaries.push(s);
-            }
-        }
         Ok(summaries)
     }
 
     async fn create_task(&self, input: NewTeamTask) -> crate::error::Result<TeamTask> {
         let conn = self.conn.lock().await;
+
+        // Reject creating tasks on disbanded teams
+        let status: Option<String> = conn
+            .prepare_cached("SELECT status FROM teams WHERE id = ?1")
+            .map_err(db_err)?
+            .query_row(params![input.team_id], |r| r.get(0))
+            .optional()
+            .map_err(db_err)?;
+
+        match status.as_deref() {
+            None => return Err(db_err(format!("team not found: {}", input.team_id))),
+            Some("disbanded") => {
+                return Err(db_err(format!(
+                    "cannot create task on disbanded team: {}",
+                    input.team_id
+                )))
+            }
+            _ => {}
+        }
+
         let id = uuid::Uuid::new_v4().to_string();
         let now = now_epoch();
 

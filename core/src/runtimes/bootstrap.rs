@@ -92,7 +92,9 @@ pub fn bootstrap(capability: &str) -> Result<BootstrapResult, AlephError> {
                 return Ok(BootstrapResult::Success { bin_path: expanded });
             }
         }
-        let expected = expand_tilde(spec.expected_paths[0]);
+        let expected = spec.expected_paths.first()
+            .map(|p| expand_tilde(p))
+            .unwrap_or_else(|| PathBuf::from(format!("<unknown path for {}>", capability)));
         Ok(BootstrapResult::PathNotFound { expected })
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();

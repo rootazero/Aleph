@@ -80,17 +80,8 @@ pub fn check_and_resolve_path(
             result = result.replace("$USER", &user);
         }
 
-        // Expand other common environment variables.
-        // Sort by key length (longest first) to prevent shorter names
-        // matching as prefixes of longer ones (e.g., $HOME before $HOMEDIR).
-        let mut env_vars: Vec<(String, String)> = std::env::vars().collect();
-        env_vars.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
-        for (key, value) in env_vars {
-            let pattern = format!("${}", key);
-            if result.contains(&pattern) {
-                result = result.replace(&pattern, &value);
-            }
-        }
+        // Only expand $HOME and $USER for security — arbitrary env var expansion
+        // could allow path injection via attacker-controlled environment variables.
 
         info!(original = %path_str, expanded = %result, "check_path: expanded environment variables");
         PathBuf::from(result)
@@ -103,7 +94,7 @@ pub fn check_and_resolve_path(
         let home = dirs::home_dir().ok_or_else(|| {
             ToolError::InvalidArgs("Cannot determine home directory".to_string())
         })?;
-        home.join(expanded_str.strip_prefix("~").unwrap())
+        home.join(expanded_str.strip_prefix("~").unwrap_or_else(|_| std::path::Path::new("")))
     } else if expanded_str.is_relative() {
         // Relative paths are resolved to:
         // 1. ToolContext output_dir override (workspace-scoped, set by ExecutionEngine)
@@ -135,21 +126,10 @@ pub fn check_and_resolve_path(
             .canonicalize()
             .map_err(|e| ToolError::Execution(format!("Failed to resolve path: {}", e)))?
     } else {
-        // Normalize path components without filesystem access
-        use std::path::Component;
-        let mut normalized = PathBuf::new();
-        for component in expanded.components() {
-            match component {
-                Component::ParentDir => {
-                    normalized.pop();
-                }
-                Component::CurDir => {}
-                _ => {
-                    normalized.push(component);
-                }
-            }
-        }
-        normalized
+        // For non-existent paths, canonicalize the longest existing ancestor
+        // then append remaining components. This prevents symlink-based traversal
+        // that pure component normalization would miss.
+        safe_normalize(&expanded)
     };
 
     info!(canonical = %canonical.display(), "check_path: canonical path");
@@ -185,4 +165,29 @@ pub fn check_and_resolve_path(
 
     info!(canonical = %canonical.display(), "check_path: path allowed");
     Ok(canonical)
+}
+
+/// Normalize a non-existent path by canonicalizing the longest existing ancestor,
+/// then appending the remaining components. This prevents symlink-based path traversal
+/// that pure component-level normalization would miss.
+fn safe_normalize(path: &Path) -> PathBuf {
+    let mut existing = path.to_path_buf();
+    let mut remaining = Vec::new();
+    while !existing.exists() {
+        if let Some(file_name) = existing.file_name() {
+            remaining.push(file_name.to_owned());
+            existing.pop();
+        } else {
+            break;
+        }
+    }
+    let mut result = existing.canonicalize().unwrap_or(existing);
+    for component in remaining.into_iter().rev() {
+        if component == ".." {
+            result.pop();
+        } else if component != "." {
+            result.push(component);
+        }
+    }
+    result
 }

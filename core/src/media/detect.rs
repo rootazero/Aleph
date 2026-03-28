@@ -63,7 +63,10 @@ pub fn detect_by_magic(bytes: &[u8]) -> MediaType {
     if bytes.starts_with(b"%PDF") {
         return MediaType::Document { format: DocFormat::Pdf, pages: None };
     }
-    // ZIP-based (DOCX/XLSX): PK\x03\x04
+    // ZIP-based (DOCX/XLSX/PPTX/JAR/etc): PK\x03\x04
+    // Cannot distinguish DOCX from XLSX/PPTX/ZIP by magic bytes alone;
+    // precise detection requires parsing the ZIP's [Content_Types].xml.
+    // Default to Docx as the most common document format.
     if bytes.starts_with(&[0x50, 0x4B, 0x03, 0x04]) {
         return MediaType::Document { format: DocFormat::Docx, pages: None };
     }
@@ -105,10 +108,15 @@ pub fn detect_by_magic(bytes: &[u8]) -> MediaType {
 /// Detect from file path: try magic bytes first, fall back to extension.
 pub fn detect_from_path(path: &std::path::Path) -> Result<MediaType, MediaError> {
     if path.exists() {
-        if let Ok(bytes) = std::fs::read(path).map(|b| b.into_iter().take(16).collect::<Vec<_>>()) {
-            let magic_result = detect_by_magic(&bytes);
-            if magic_result != MediaType::Unknown {
-                return Ok(magic_result);
+        if let Ok(mut f) = std::fs::File::open(path) {
+            use std::io::Read;
+            let mut buf = [0u8; 16];
+            let n = f.read(&mut buf).unwrap_or(0);
+            if n >= 4 {
+                let magic_result = detect_by_magic(&buf[..n]);
+                if magic_result != MediaType::Unknown {
+                    return Ok(magic_result);
+                }
             }
         }
     }

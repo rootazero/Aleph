@@ -5,17 +5,23 @@
 /// for automatic conversion to Swift/Kotlin exceptions.
 use thiserror::Error;
 
-/// Safely truncate a string at character boundaries (UTF-8 safe)
+/// Safely truncate a string at character boundaries (UTF-8 safe, single pass)
 fn truncate_str(s: &str, max_chars: usize) -> String {
-    if s.chars().count() <= max_chars {
+    let mut end_byte = s.len();
+    let mut exceeded = false;
+    for (i, (byte_pos, _)) in s.char_indices().enumerate() {
+        if i == max_chars {
+            end_byte = byte_pos;
+            exceeded = true;
+            break;
+        }
+    }
+    if !exceeded {
         return s.to_string();
     }
-    let end_byte = s
-        .char_indices()
-        .nth(max_chars)
-        .map(|(i, _)| i)
-        .unwrap_or(s.len());
-    format!("{}...", &s[..end_byte])
+    // Use .get() for defensive UTF-8 safety per project convention (P7)
+    let truncated = s.get(..end_byte).unwrap_or(s);
+    format!("{}...", truncated)
 }
 
 #[derive(Debug, Error)]
@@ -247,15 +253,16 @@ impl AlephError {
     }
 
     /// Create an authentication error with a message and provider
-    pub fn authentication<S: Into<String>>(provider: S, msg: S) -> Self {
+    pub fn authentication<S: Into<String>, M: Into<String>>(provider: S, msg: M) -> Self {
         let provider_name = provider.into();
+        let suggestion = format!(
+            "Verify your {} API key in Settings → Providers → {}",
+            provider_name, provider_name
+        );
         AlephError::AuthenticationError {
             message: msg.into(),
-            provider: provider_name.clone(),
-            suggestion: Some(format!(
-                "Verify your {} API key in Settings → Providers → {}",
-                provider_name, provider_name
-            )),
+            provider: provider_name,
+            suggestion: Some(suggestion),
         }
     }
 

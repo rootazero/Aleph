@@ -249,7 +249,7 @@ pub fn match_path(pattern: &str, path: &str) -> Option<HashMap<String, String>> 
     for (pattern_seg, path_seg) in pattern_segments.iter().zip(path_segments.iter()) {
         if pattern_seg.starts_with('{') && pattern_seg.ends_with('}') {
             // This is a parameter segment - extract the parameter name
-            let param_name = &pattern_seg[1..pattern_seg.len() - 1];
+            let param_name = pattern_seg.get(1..pattern_seg.len() - 1).unwrap_or("");
             params.insert(param_name.to_string(), (*path_seg).to_string());
         } else if pattern_seg != path_seg {
             // Literal segment that doesn't match

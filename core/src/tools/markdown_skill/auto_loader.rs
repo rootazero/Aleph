@@ -136,7 +136,14 @@ impl EvolutionAutoLoader {
 
         for suggestion in suggestions {
             match self.load_from_suggestion(suggestion).await {
-                Ok(count) => loaded += count,
+                Ok(count) if count > 0 => loaded += count,
+                Ok(_) => {
+                    warn!(
+                        pattern_id = %suggestion.pattern_id,
+                        "Suggestion generated SKILL.md but loaded 0 tools"
+                    );
+                    failed += 1;
+                }
                 Err(e) => {
                     warn!(
                         error = %e,

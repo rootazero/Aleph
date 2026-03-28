@@ -8,10 +8,31 @@ use crate::memory::context::{FactType, MemoryEntry};
 use crate::memory::store::{self, MemoryBackend};
 use crate::memory::store::GraphStore as StoreGraphStore;
 use chrono::Utc;
+use once_cell::sync::Lazy;
 use regex::Regex;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
+
+// Pre-compiled regexes for entity extraction (avoid re-compiling on every call)
+static RE_QUOTED: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r#"[\"\u{201C}《]([^\"\u{201D}》]{2,60})[\"\u{201D}》]"#).expect("valid regex")
+});
+static RE_PROJECT: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(?i)project\s+([A-Za-z0-9_-]{2,40})").expect("valid regex")
+});
+static RE_HAN_PROJECT: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"项目[:：]?([\p{Han}A-Za-z0-9_-]{2,40})").expect("valid regex")
+});
+static RE_PROPER: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"\b([A-Z][a-z0-9]+(?:\s+[A-Z][a-z0-9]+)*)\b").expect("valid regex")
+});
+static RE_TAG: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"[@#]([A-Za-z0-9_\-\p{Han}]{2,40})").expect("valid regex")
+});
+static RE_EXPLICIT_ENTITY: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(?i)entity\s*[:：]\s*([^\s,;]+)").expect("valid regex")
+});
 
 /// Graph node representation (local type, bridges to store::GraphNode).
 #[derive(Debug, Clone)]
@@ -168,30 +189,26 @@ impl GraphStore {
     pub fn extract_entities_from_text(text: &str) -> Vec<String> {
         let mut candidates = Vec::new();
 
-        let quote_re = Regex::new(r#"[\"\u{201C}《]([^\"\u{201D}》]{2,60})[\"\u{201D}》]"#).unwrap();
-        for cap in quote_re.captures_iter(text) {
+        for cap in RE_QUOTED.captures_iter(text) {
             if let Some(m) = cap.get(1) {
                 candidates.push(m.as_str().trim().to_string());
             }
         }
 
-        let project_re = Regex::new(r"(?i)project\s+([A-Za-z0-9_-]{2,40})").unwrap();
-        for cap in project_re.captures_iter(text) {
+        for cap in RE_PROJECT.captures_iter(text) {
             if let Some(m) = cap.get(1) {
                 candidates.push(format!("Project {}", m.as_str().trim()));
             }
         }
 
-        let han_project_re = Regex::new(r"项目[:：]?([\p{Han}A-Za-z0-9_-]{2,40})").unwrap();
-        for cap in han_project_re.captures_iter(text) {
+        for cap in RE_HAN_PROJECT.captures_iter(text) {
             if let Some(m) = cap.get(1) {
                 candidates.push(format!("项目{}", m.as_str().trim()));
             }
         }
 
-        let proper_re = Regex::new(r"\b([A-Z][a-z0-9]+(?:\s+[A-Z][a-z0-9]+)*)\b").unwrap();
         let stopwords = ["The", "A", "An", "And", "Or", "But", "User"];
-        for cap in proper_re.captures_iter(text) {
+        for cap in RE_PROPER.captures_iter(text) {
             if let Some(m) = cap.get(1) {
                 let name = m.as_str().trim();
                 if stopwords.contains(&name) {
@@ -226,15 +243,13 @@ impl GraphStore {
     /// Extract explicit entity hints from a query (e.g. @Entity, #Entity, entity:Entity).
     pub fn extract_query_hints(query: &str) -> Vec<String> {
         let mut hints = Vec::new();
-        let tag_re = Regex::new(r"[@#]([A-Za-z0-9_\-\p{Han}]{2,40})").unwrap();
-        for cap in tag_re.captures_iter(query) {
+        for cap in RE_TAG.captures_iter(query) {
             if let Some(m) = cap.get(1) {
                 hints.push(m.as_str().trim().to_string());
             }
         }
 
-        let explicit_re = Regex::new(r"(?i)entity\s*[:：]\s*([^\s,;]+)").unwrap();
-        for cap in explicit_re.captures_iter(query) {
+        for cap in RE_EXPLICIT_ENTITY.captures_iter(query) {
             if let Some(m) = cap.get(1) {
                 hints.push(m.as_str().trim().to_string());
             }

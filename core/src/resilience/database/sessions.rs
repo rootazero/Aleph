@@ -9,6 +9,23 @@ use super::StateDatabase;
 use rusqlite::params;
 use rusqlite::OptionalExtension;
 
+/// Construct SubagentSession from a rusqlite row.
+/// Expected column order: id, agent_type, status, context_path, parent_session_id,
+///     created_at, last_active_at, total_tokens_used, total_tool_calls
+fn subagent_session_from_row(row: &rusqlite::Row) -> rusqlite::Result<SubagentSession> {
+    Ok(SubagentSession {
+        id: row.get(0)?,
+        agent_type: row.get(1)?,
+        status: SessionStatus::from_str_or_default(&row.get::<_, String>(2)?),
+        context_path: row.get(3)?,
+        parent_session_id: row.get(4)?,
+        created_at: row.get(5)?,
+        last_active_at: row.get(6)?,
+        total_tokens_used: row.get(7)?,
+        total_tool_calls: row.get(8)?,
+    })
+}
+
 impl StateDatabase {
     // =========================================================================
     // Subagent Sessions CRUD
@@ -57,19 +74,7 @@ impl StateDatabase {
             .map_err(|e| AlephError::config(format!("Failed to prepare query: {}", e)))?;
 
         let result = stmt
-            .query_row(params![session_id], |row| {
-                Ok(SubagentSession {
-                    id: row.get(0)?,
-                    agent_type: row.get(1)?,
-                    status: SessionStatus::from_str_or_default(&row.get::<_, String>(2)?),
-                    context_path: row.get(3)?,
-                    parent_session_id: row.get(4)?,
-                    created_at: row.get(5)?,
-                    last_active_at: row.get(6)?,
-                    total_tokens_used: row.get(7)?,
-                    total_tool_calls: row.get(8)?,
-                })
-            })
+            .query_row(params![session_id], subagent_session_from_row)
             .optional()
             .map_err(|e| AlephError::config(format!("Failed to get session: {}", e)))?;
 
@@ -116,19 +121,7 @@ impl StateDatabase {
             .map_err(|e| AlephError::config(format!("Failed to prepare query: {}", e)))?;
 
         let sessions = stmt
-            .query_map(params![parent_session_id], |row| {
-                Ok(SubagentSession {
-                    id: row.get(0)?,
-                    agent_type: row.get(1)?,
-                    status: SessionStatus::from_str_or_default(&row.get::<_, String>(2)?),
-                    context_path: row.get(3)?,
-                    parent_session_id: row.get(4)?,
-                    created_at: row.get(5)?,
-                    last_active_at: row.get(6)?,
-                    total_tokens_used: row.get(7)?,
-                    total_tool_calls: row.get(8)?,
-                })
-            })
+            .query_map(params![parent_session_id], subagent_session_from_row)
             .map_err(|e| AlephError::config(format!("Failed to query sessions: {}", e)))?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| AlephError::config(format!("Failed to collect sessions: {}", e)))?;
@@ -153,19 +146,7 @@ impl StateDatabase {
             .map_err(|e| AlephError::config(format!("Failed to prepare query: {}", e)))?;
 
         let sessions = stmt
-            .query_map(params![limit], |row| {
-                Ok(SubagentSession {
-                    id: row.get(0)?,
-                    agent_type: row.get(1)?,
-                    status: SessionStatus::Idle,
-                    context_path: row.get(3)?,
-                    parent_session_id: row.get(4)?,
-                    created_at: row.get(5)?,
-                    last_active_at: row.get(6)?,
-                    total_tokens_used: row.get(7)?,
-                    total_tool_calls: row.get(8)?,
-                })
-            })
+            .query_map(params![limit], subagent_session_from_row)
             .map_err(|e| AlephError::config(format!("Failed to query sessions: {}", e)))?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| AlephError::config(format!("Failed to collect sessions: {}", e)))?;

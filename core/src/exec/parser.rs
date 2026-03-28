@@ -311,19 +311,11 @@ fn resolve_executable(
         return CommandResolution::not_found(executable);
     }
 
-    // Search PATH
-    let path_var = env
+    // Search PATH: prefer env map, fall back to system PATH
+    let actual_path = env
         .and_then(|e| e.get("PATH"))
-        .map(|s| s.as_str())
-        .or_else(|| std::env::var("PATH").ok().as_deref().map(|_| ""))
-        .unwrap_or("");
-
-    // Use system PATH if env doesn't have it
-    let actual_path = if path_var.is_empty() {
-        std::env::var("PATH").unwrap_or_default()
-    } else {
-        path_var.to_string()
-    };
+        .cloned()
+        .unwrap_or_else(|| std::env::var("PATH").unwrap_or_default());
 
     for dir in actual_path.split(':') {
         let path = PathBuf::from(dir).join(executable);

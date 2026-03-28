@@ -55,6 +55,7 @@ impl LazyDecayEngine {
                     );
                 }
             }
+            tracing::debug!("LazyDecayEngine invalidation channel closed, background task exiting");
         });
 
         Self {
@@ -134,18 +135,23 @@ impl LazyDecayEngine {
         }
     }
 
-    /// Batch update access timestamps (call after retrieval completes)
+    /// Batch update access timestamps (call after retrieval completes).
     ///
-    /// TODO: `update_fact_access` is not yet available in MemoryStore trait.
-    /// This method currently updates each fact's content as a workaround.
-    /// A dedicated `update_fact_access` method should be added to MemoryStore.
+    /// NOTE: This is currently a no-op because `MemoryStore` does not have a
+    /// dedicated `update_fact_access` method yet. As a result, `access_count`
+    /// and `last_accessed_at` are never updated, and lazy decay treats all
+    /// facts as never-accessed. Adding `update_fact_access` to `MemoryStore`
+    /// will fix this.
     pub async fn apply_access_updates(
         &self,
-        _updates: Vec<(String, i64)>,
+        updates: Vec<(String, i64)>,
     ) -> Result<(), AlephError> {
-        // TODO: MemoryStore trait does not have `update_fact_access`.
-        // Once added, iterate over updates and call it.
-        // For now, this is a no-op.
+        if !updates.is_empty() {
+            tracing::debug!(
+                count = updates.len(),
+                "apply_access_updates is a no-op — access counts not yet persisted"
+            );
+        }
         Ok(())
     }
 }

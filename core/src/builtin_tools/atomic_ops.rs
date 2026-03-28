@@ -137,16 +137,18 @@ impl AtomicOpsTool {
     }
 
     /// Build search scope from args
-    fn build_scope(&self, args: &AtomicOpsArgs) -> SearchScope {
+    fn build_scope(&self, args: &AtomicOpsArgs) -> std::result::Result<SearchScope, ToolError> {
         match args.scope.as_str() {
-            "workspace" => SearchScope::Workspace,
-            "directory" => SearchScope::Directory {
+            "workspace" => Ok(SearchScope::Workspace),
+            "directory" => Ok(SearchScope::Directory {
                 path: self.workspace_root.clone(),
                 recursive: true,
-            },
-            path => SearchScope::File {
-                path: PathBuf::from(path),
-            },
+            }),
+            path => {
+                let file_path = PathBuf::from(path);
+                validate_within_workspace(&file_path, &self.workspace_root)?;
+                Ok(SearchScope::File { path: file_path })
+            }
         }
     }
 
@@ -186,7 +188,7 @@ impl AtomicOpsTool {
         let result: std::result::Result<AtomicOpsOutput, ToolError> = match args.operation {
             AtomicOperation::Search => {
                 let pattern = self.build_pattern(&args)?;
-                let scope = self.build_scope(&args);
+                let scope = self.build_scope(&args)?;
                 let filters = self.build_filters(&args);
 
                 let action = AtomicAction::Search {
@@ -216,7 +218,7 @@ impl AtomicOpsTool {
                 let pattern = self.build_pattern(&args)?;
                 let replacement = args.replacement.as_ref()
                     .ok_or_else(|| ToolError::InvalidArgs("replacement is required".to_string()))?;
-                let scope = self.build_scope(&args);
+                let scope = self.build_scope(&args)?;
 
                 let action = AtomicAction::Replace {
                     search: Box::new(pattern),
@@ -253,9 +255,15 @@ impl AtomicOpsTool {
                 let destination = args.destination.as_ref()
                     .ok_or_else(|| ToolError::InvalidArgs("destination is required".to_string()))?;
 
+                // Validate source and destination are within workspace boundary
+                let source_path = PathBuf::from(source);
+                let dest_path = PathBuf::from(destination);
+                validate_within_workspace(&source_path, &self.workspace_root)?;
+                validate_within_workspace(&dest_path, &self.workspace_root)?;
+
                 let action = AtomicAction::Move {
-                    source: PathBuf::from(source),
-                    destination: PathBuf::from(destination),
+                    source: source_path,
+                    destination: dest_path,
                     update_imports: args.update_imports,
                     create_parent: true,
                 };
@@ -287,6 +295,31 @@ impl AtomicOpsTool {
 
         result
     }
+}
+
+/// Validate that a path resolves within the workspace boundary
+fn validate_within_workspace(
+    path: &std::path::Path,
+    workspace_root: &std::path::Path,
+) -> std::result::Result<(), ToolError> {
+    let canonical = std::fs::canonicalize(path).or_else(|_| {
+        // For non-existent paths, canonicalize parent
+        path.parent()
+            .and_then(|p| p.canonicalize().ok())
+            .map(|p| p.join(path.file_name().unwrap_or_default()))
+            .ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::NotFound, "Cannot resolve path")
+            })
+    }).map_err(|e| ToolError::InvalidArgs(format!("Cannot resolve path '{}': {}", path.display(), e)))?;
+
+    let canonical_root = workspace_root.canonicalize().unwrap_or_else(|_| workspace_root.to_path_buf());
+    if !canonical.starts_with(&canonical_root) {
+        return Err(ToolError::InvalidArgs(format!(
+            "Path '{}' is outside workspace boundary",
+            path.display()
+        )));
+    }
+    Ok(())
 }
 
 impl Default for AtomicOpsTool {

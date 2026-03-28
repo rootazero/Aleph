@@ -253,10 +253,7 @@ impl ChannelManager {
 
         // Check if channel exists
         if !self.channels.contains_key(&key) {
-            return Err(ExtensionError::PluginNotFound(format!(
-                "Channel not found: {}",
-                key
-            )));
+            return Err(ExtensionError::ChannelNotFound(key));
         }
 
         // Call plugin's disconnect handler

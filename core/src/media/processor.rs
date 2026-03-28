@@ -303,7 +303,7 @@ impl MediaProcessor {
             "Media attachment resolved"
         );
 
-        match transcription.transcribe(&cached).await {
+        match transcription.transcribe(&cached, None).await {
             Ok(result) => {
                 debug!(
                     attachment_id = %attachment.id,

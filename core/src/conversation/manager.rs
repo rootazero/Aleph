@@ -143,38 +143,36 @@ impl ConversationManager {
             return String::new();
         }
 
-        let mut history = String::from("Previous conversation:\n");
+        let prefix = "Previous conversation:\n";
 
-        // Build history from oldest to newest, but may need to truncate older turns
-        let mut turns_to_include: Vec<&ConversationTurn> = Vec::new();
-        let mut total_chars = history.len();
+        // Format all turns, then select from most recent within char budget
+        let formatted: Vec<String> = session
+            .turns
+            .iter()
+            .map(|t| format!("User: {}\nAssistant: {}\n\n", t.user_input, t.ai_response))
+            .collect();
 
-        // Start from most recent and work backwards
-        for turn in session.turns.iter().rev() {
-            let turn_text = format!(
-                "User: {}\nAssistant: {}\n\n",
-                turn.user_input, turn.ai_response
-            );
-            let turn_len = turn_text.len();
+        // Walk backwards, accumulating turns that fit within the budget
+        let mut total_chars = prefix.len();
+        let start = formatted
+            .iter()
+            .enumerate()
+            .rev()
+            .take_while(|(_, text)| {
+                let fits = total_chars + text.len() <= self.config.max_history_chars;
+                if fits {
+                    total_chars += text.len();
+                }
+                fits
+            })
+            .last()
+            .map(|(i, _)| i)
+            .unwrap_or(formatted.len());
 
-            if total_chars + turn_len > self.config.max_history_chars {
-                // Would exceed limit, stop adding
-                break;
-            }
-
-            turns_to_include.push(turn);
-            total_chars += turn_len;
-        }
-
-        // Reverse to get chronological order
-        turns_to_include.reverse();
-
-        // Build final history string
-        for turn in turns_to_include {
-            history.push_str(&format!(
-                "User: {}\nAssistant: {}\n\n",
-                turn.user_input, turn.ai_response
-            ));
+        let mut history = String::with_capacity(total_chars);
+        history.push_str(prefix);
+        for text in &formatted[start..] {
+            history.push_str(text);
         }
 
         history

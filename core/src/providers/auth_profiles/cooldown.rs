@@ -54,10 +54,10 @@ pub fn calculate_cooldown_ms(error_count: u32) -> u64 {
 pub fn calculate_billing_cooldown_ms(error_count: u32, config: &CooldownConfig) -> u64 {
     let normalized = error_count.max(1);
     let exponent = (normalized - 1).min(10);
-    let base_ms = config.billing_backoff.as_millis() as u64;
-    let max_ms = config.billing_max.as_millis() as u64;
+    let base_ms = u64::try_from(config.billing_backoff.as_millis()).unwrap_or(u64::MAX);
+    let max_ms = u64::try_from(config.billing_max.as_millis()).unwrap_or(u64::MAX);
 
-    (base_ms * 2u64.pow(exponent)).min(max_ms)
+    base_ms.saturating_mul(2u64.pow(exponent)).min(max_ms)
 }
 
 /// Mark a profile as successfully used
@@ -96,7 +96,7 @@ pub fn mark_profile_failure(
         .unwrap_or_default()
         .as_millis() as u64;
 
-    let window_ms = config.failure_window.as_millis() as u64;
+    let window_ms = u64::try_from(config.failure_window.as_millis()).unwrap_or(u64::MAX);
     let stats = store.get_or_create_usage_stats(profile_id);
 
     // Check if failure window expired (reset counters)

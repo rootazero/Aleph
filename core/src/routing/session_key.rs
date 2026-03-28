@@ -387,6 +387,15 @@ impl SessionKey {
                 thread_id: Some(thread_id.to_string()),
             }),
 
+            // agent:id:channel:thread:peer:thread:tid
+            [channel, "thread", peer_id, "thread", thread_id] => Some(Self::Group {
+                agent_id,
+                channel: channel.to_string(),
+                peer_kind: PeerKind::Thread,
+                peer_id: peer_id.to_string(),
+                thread_id: Some(thread_id.to_string()),
+            }),
+
             // agent:id:channel:group:peer
             [channel, "group", peer_id] => Some(Self::Group {
                 agent_id,
@@ -401,6 +410,15 @@ impl SessionKey {
                 agent_id,
                 channel: channel.to_string(),
                 peer_kind: PeerKind::Channel,
+                peer_id: peer_id.to_string(),
+                thread_id: None,
+            }),
+
+            // agent:id:channel:thread:peer
+            [channel, "thread", peer_id] => Some(Self::Group {
+                agent_id,
+                channel: channel.to_string(),
+                peer_kind: PeerKind::Thread,
                 peer_id: peer_id.to_string(),
                 thread_id: None,
             }),

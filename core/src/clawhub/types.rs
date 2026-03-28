@@ -2,6 +2,16 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Convert unix milliseconds timestamp to RFC 3339 string.
+/// Returns empty string if the timestamp is invalid.
+pub(crate) fn unix_ms_to_rfc3339(ms: u64) -> String {
+    let secs = (ms / 1000) as i64;
+    let nanos = ((ms % 1000) * 1_000_000) as u32;
+    chrono::DateTime::from_timestamp(secs, nanos)
+        .map(|dt| dt.to_rfc3339())
+        .unwrap_or_default()
+}
+
 /// Sort order for browsing skills
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -135,14 +145,7 @@ impl From<RawVersionItem> for VersionInfo {
     fn from(item: RawVersionItem) -> Self {
         let published_at = item
             .created_at
-            .map(|ms| {
-                // Convert unix ms to RFC 3339 string
-                let secs = (ms / 1000) as i64;
-                let nanos = ((ms % 1000) * 1_000_000) as u32;
-                chrono::DateTime::from_timestamp(secs, nanos)
-                    .map(|dt| dt.to_rfc3339())
-                    .unwrap_or_default()
-            })
+            .map(unix_ms_to_rfc3339)
             .unwrap_or_default();
         Self {
             number: item.version,
@@ -326,16 +329,7 @@ impl From<DetailApiResponse> for SkillDetail {
         };
 
         let latest_version = resp.latest_version.map(|v| {
-            let published_at = v
-                .created_at
-                .map(|ms| {
-                    let secs = (ms / 1000) as i64;
-                    let nanos = ((ms % 1000) * 1_000_000) as u32;
-                    chrono::DateTime::from_timestamp(secs, nanos)
-                        .map(|dt| dt.to_rfc3339())
-                        .unwrap_or_default()
-                })
-                .unwrap_or_default();
+            let published_at = v.created_at.map(unix_ms_to_rfc3339).unwrap_or_default();
             VersionInfo {
                 number: v.version,
                 changelog: v.changelog.unwrap_or_default(),

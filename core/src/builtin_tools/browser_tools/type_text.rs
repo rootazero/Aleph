@@ -68,7 +68,7 @@ impl AlephTool for BrowserTypeTool {
                     success: true,
                     message: Some(format!(
                         "Typed {} chars in profile '{}'",
-                        args.text.len(), args.profile
+                        args.text.chars().count(), args.profile
                     )),
                 }),
                 Err(e) => Ok(BrowserTypeOutput {

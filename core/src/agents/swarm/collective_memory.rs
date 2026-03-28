@@ -38,7 +38,7 @@ impl EventDatabase {
     fn store_event(&mut self, event: InfoEvent) {
         if self.events.len() >= self.max_events {
             // Remove oldest events
-            self.events.drain(0..self.max_events / 10);
+            self.events.drain(0..std::cmp::max(1, self.max_events / 10));
         }
         self.events.push(event);
     }
@@ -127,6 +127,10 @@ impl CollectiveMemory {
                         db.store_event(info_event);
                         debug!("Stored event in collective memory");
                     }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    warn!("Collective memory lagged, skipped {} events", n);
+                    continue;
                 }
                 Err(e) => {
                     warn!("Error receiving Info event: {}", e);

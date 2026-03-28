@@ -90,8 +90,11 @@ Examples:\n\
 
         if let Some(s) = output_path.to_str() {
             if s.starts_with('~') {
+                let home = dirs::home_dir().ok_or_else(|| {
+                    ToolError::Execution("Cannot resolve '~': home directory not found".to_string())
+                })?;
                 return Ok(PathBuf::from(
-                    s.replace('~', dirs::home_dir().unwrap_or_default().to_str().unwrap_or("")),
+                    s.replacen('~', &home.to_string_lossy(), 1),
                 ));
             }
         }
@@ -102,7 +105,7 @@ Examples:\n\
             ctx.output_dir.join("documents")
         } else {
             dirs::home_dir()
-                .unwrap_or_default()
+                .ok_or_else(|| ToolError::Execution("Cannot determine home directory for output path".to_string()))?
                 .join(".aleph")
                 .join("workspaces")
                 .join("main")

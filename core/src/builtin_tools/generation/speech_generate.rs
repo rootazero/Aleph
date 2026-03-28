@@ -128,10 +128,7 @@ impl SpeechGenerateTool {
 
         // Find provider — lock must be dropped before any .await call
         let (provider_name, provider) = {
-            let reg = self.registry.read().map_err(|e| {
-                let error_msg = format!("Failed to acquire registry lock: {}", e);
-                ToolError::Execution(error_msg)
-            })?;
+            let reg = self.registry.read().unwrap_or_else(|e| e.into_inner());
 
             if let Some(name) = &args.provider {
                 let provider = reg

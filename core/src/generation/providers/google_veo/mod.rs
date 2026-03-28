@@ -23,7 +23,7 @@
 //! use alephcore::generation::{GenerationProvider, GenerationRequest};
 //! use alephcore::generation::providers::GoogleVeoProvider;
 //!
-//! let provider = GoogleVeoProvider::new("your-api-key", None, None);
+//! let provider = GoogleVeoProvider::new("your-api-key", None, None).unwrap();
 //!
 //! let request = GenerationRequest::video("A majestic lion walking through savannah")
 //!     .with_params(GenerationParams::builder()
@@ -63,7 +63,7 @@ mod tests {
 
     #[test]
     fn test_new_with_defaults() {
-        let provider = GoogleVeoProvider::new("test-api-key", None, None);
+        let provider = GoogleVeoProvider::new("test-api-key", None, None).unwrap();
 
         assert_eq!(provider.name(), "google-veo");
     }
@@ -74,7 +74,7 @@ mod tests {
             "test-api-key",
             Some("https://custom.googleapis.com".to_string()),
             None,
-        );
+        ).unwrap();
 
         assert_eq!(provider.name(), "google-veo");
     }
@@ -85,14 +85,14 @@ mod tests {
             "test-api-key",
             None,
             Some("veo-3.1-generate-preview".to_string()),
-        );
+        ).unwrap();
 
         assert!(provider.is_veo3());
     }
 
     #[test]
     fn test_predict_url() {
-        let provider = GoogleVeoProvider::new("test-api-key", None, None);
+        let provider = GoogleVeoProvider::new("test-api-key", None, None).unwrap();
         assert_eq!(
             provider.predict_url(),
             "https://generativelanguage.googleapis.com/v1beta/models/veo-2.0-generate-001:predictLongRunning"
@@ -101,7 +101,7 @@ mod tests {
 
     #[test]
     fn test_operation_url() {
-        let provider = GoogleVeoProvider::new("test-api-key", None, None);
+        let provider = GoogleVeoProvider::new("test-api-key", None, None).unwrap();
         assert_eq!(
             provider.operation_url("operations/12345"),
             "https://generativelanguage.googleapis.com/v1beta/operations/12345"
@@ -112,13 +112,13 @@ mod tests {
 
     #[test]
     fn test_name() {
-        let provider = GoogleVeoProvider::new("test-api-key", None, None);
+        let provider = GoogleVeoProvider::new("test-api-key", None, None).unwrap();
         assert_eq!(provider.name(), "google-veo");
     }
 
     #[test]
     fn test_supported_types() {
-        let provider = GoogleVeoProvider::new("test-api-key", None, None);
+        let provider = GoogleVeoProvider::new("test-api-key", None, None).unwrap();
         let types = provider.supported_types();
 
         assert_eq!(types.len(), 1);
@@ -127,14 +127,14 @@ mod tests {
 
     #[test]
     fn test_supports_video() {
-        let provider = GoogleVeoProvider::new("test-api-key", None, None);
+        let provider = GoogleVeoProvider::new("test-api-key", None, None).unwrap();
 
         assert!(provider.supports(GenerationType::Video));
     }
 
     #[test]
     fn test_does_not_support_other_types() {
-        let provider = GoogleVeoProvider::new("test-api-key", None, None);
+        let provider = GoogleVeoProvider::new("test-api-key", None, None).unwrap();
 
         assert!(!provider.supports(GenerationType::Image));
         assert!(!provider.supports(GenerationType::Speech));
@@ -143,13 +143,13 @@ mod tests {
 
     #[test]
     fn test_color() {
-        let provider = GoogleVeoProvider::new("test-api-key", None, None);
+        let provider = GoogleVeoProvider::new("test-api-key", None, None).unwrap();
         assert_eq!(provider.color(), "#4285F4");
     }
 
     #[test]
     fn test_default_model() {
-        let provider = GoogleVeoProvider::new("test-api-key", None, None);
+        let provider = GoogleVeoProvider::new("test-api-key", None, None).unwrap();
         assert_eq!(provider.default_model(), Some("veo-2.0-generate-001"));
     }
 
@@ -159,7 +159,7 @@ mod tests {
     fn test_build_request_body_minimal() {
         use crate::generation::GenerationRequest;
 
-        let provider = GoogleVeoProvider::new("test-api-key", None, None);
+        let provider = GoogleVeoProvider::new("test-api-key", None, None).unwrap();
         let request = GenerationRequest::video("A cat playing piano");
 
         let body = provider.build_request_body(&request);
@@ -181,7 +181,7 @@ mod tests {
             "test-api-key",
             None,
             Some("veo-3.1-generate-preview".to_string()),
-        );
+        ).unwrap();
         let request = GenerationRequest::video("A sunset timelapse").with_params(
             GenerationParams::builder()
                 .style("9:16")
@@ -202,7 +202,7 @@ mod tests {
     fn test_determine_aspect_ratio_from_style() {
         use crate::generation::GenerationRequest;
 
-        let provider = GoogleVeoProvider::new("test-api-key", None, None);
+        let provider = GoogleVeoProvider::new("test-api-key", None, None).unwrap();
         let request = GenerationRequest::video("Test")
             .with_params(GenerationParams::builder().style("9:16").build());
 
@@ -214,7 +214,7 @@ mod tests {
     fn test_determine_duration_veo2() {
         use crate::generation::GenerationRequest;
 
-        let provider = GoogleVeoProvider::new("test-api-key", None, None);
+        let provider = GoogleVeoProvider::new("test-api-key", None, None).unwrap();
 
         // Valid duration
         let request = GenerationRequest::video("Test")
@@ -240,7 +240,7 @@ mod tests {
             "test-api-key",
             None,
             Some("veo-3.1-generate-preview".to_string()),
-        );
+        ).unwrap();
 
         // Exact match
         let request = GenerationRequest::video("Test")
@@ -387,7 +387,7 @@ mod tests {
         use crate::sync_primitives::Arc;
 
         let provider: Arc<dyn GenerationProvider> =
-            Arc::new(GoogleVeoProvider::new("test-key", None, None));
+            Arc::new(GoogleVeoProvider::new("test-key", None, None).unwrap());
 
         assert_eq!(provider.name(), "google-veo");
         assert!(provider.supports(GenerationType::Video));

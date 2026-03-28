@@ -56,6 +56,13 @@ impl AlephTool for SkillManageTool {
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         let skill_id = SkillId::new(&args.skill_id);
 
+        if args.enabled.is_none() && args.scope.is_none() {
+            return Ok(SkillManageOutput {
+                success: false,
+                message: "No changes requested. Provide 'enabled' or 'scope' to update.".to_string(),
+            });
+        }
+
         if let Some(enabled) = args.enabled {
             self.system
                 .update_config(&skill_id, SkillConfigUpdate::SetEnabled(enabled))

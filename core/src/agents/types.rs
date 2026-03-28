@@ -62,16 +62,16 @@ impl AgentDef {
     /// Check if a tool is allowed for this agent
     pub fn is_tool_allowed(&self, tool_name: &str) -> bool {
         // Check denied list first
-        if self.denied_tools.contains(&tool_name.to_string()) {
+        if self.denied_tools.iter().any(|t| t == tool_name) {
             return false;
         }
 
         // Check allowed list
-        if self.allowed_tools.contains(&"*".to_string()) {
+        if self.allowed_tools.iter().any(|t| t == "*") {
             return true;
         }
 
-        self.allowed_tools.contains(&tool_name.to_string())
+        self.allowed_tools.iter().any(|t| t == tool_name)
     }
 }
 

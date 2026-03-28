@@ -31,16 +31,10 @@ pub fn format_timestamp(timestamp: i64) -> String {
 /// # Returns
 /// Original text if under limit, or truncated text with "..."
 pub fn truncate_text(text: &str, max_chars: usize) -> String {
-    let char_count = text.chars().count();
-    if char_count <= max_chars {
-        text.to_string()
-    } else {
-        let truncate_at = text
-            .char_indices()
-            .nth(max_chars)
-            .map(|(idx, _)| idx)
-            .unwrap_or(text.len());
-        format!("{}...", &text[..truncate_at])
+    // Single-pass: find the byte offset of the (max_chars)th character
+    match text.char_indices().nth(max_chars) {
+        None => text.to_string(),                          // under limit
+        Some((idx, _)) => format!("{}...", &text[..idx]),  // truncate
     }
 }
 

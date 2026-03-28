@@ -5,9 +5,10 @@
 //! LLM calls — those happen at a higher layer that consumes the orchestrator.
 
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use crate::config::types::{GroupChatConfig, PersonaConfig};
+use crate::resilience::database::StateDatabase;
+use crate::sync_primitives::Arc;
 
 use super::persona::PersonaRegistry;
 use super::protocol::{GroupChatError, PersonaSource};
@@ -21,12 +22,15 @@ pub type SharedSession = Arc<tokio::sync::Mutex<GroupChatSession>>;
 
 /// Orchestrator for multi-agent group chat sessions.
 ///
-/// Owns the persona registry and a map of active/ended sessions.
+/// Owns the persona registry and a map of active sessions.
 /// Enforces configuration limits and provides session lifecycle management.
+///
+/// Optionally persists sessions and turns to a [`StateDatabase`].
 pub struct GroupChatOrchestrator {
     config: GroupChatConfig,
     persona_registry: PersonaRegistry,
     sessions: HashMap<String, SharedSession>,
+    db: Option<Arc<StateDatabase>>,
 }
 
 impl GroupChatOrchestrator {
@@ -36,7 +40,14 @@ impl GroupChatOrchestrator {
             config,
             persona_registry: PersonaRegistry::from_configs(persona_configs),
             sessions: HashMap::new(),
+            db: None,
         }
+    }
+
+    /// Set the database for session persistence (optional).
+    pub fn with_database(mut self, db: Arc<StateDatabase>) -> Self {
+        self.db = Some(db);
+        self
     }
 
     /// Returns a reference to the current configuration.
@@ -60,6 +71,7 @@ impl GroupChatOrchestrator {
     ///   exceeds `config.max_personas_per_session`.
     /// - [`GroupChatError::PersonaNotFound`] if a `Preset` source references
     ///   a persona ID that is not in the registry.
+    /// - [`GroupChatError::InvalidPersona`] if an inline persona fails validation.
     pub fn create_session(
         &mut self,
         sources: Vec<PersonaSource>,
@@ -78,21 +90,43 @@ impl GroupChatOrchestrator {
 
         // 2. Resolve personas (validates that all presets exist)
         let participants = self.persona_registry.resolve(&sources)?;
+
+        // 3. Validate all resolved personas
+        for persona in &participants {
+            persona.validate()?;
+        }
+
         let participant_count = participants.len();
 
-        // 3. Generate session ID
+        // 4. Generate session ID
         let session_id = uuid::Uuid::new_v4().to_string();
 
-        // 4. Create and store the session
+        // 5. Create and store the session
         let session = GroupChatSession::new(
             session_id.clone(),
-            topic,
+            topic.clone(),
             participants,
-            source_channel,
-            source_session_key,
+            source_channel.clone(),
+            source_session_key.clone(),
         );
         let handle = Arc::new(tokio::sync::Mutex::new(session));
         self.sessions.insert(session_id.clone(), Arc::clone(&handle));
+
+        // 6. Persist to database if available
+        if let Some(db) = &self.db {
+            if let Err(e) = db.insert_group_chat_session(
+                &session_id,
+                topic.as_deref(),
+                &source_channel,
+                &source_session_key,
+            ) {
+                tracing::warn!(
+                    subsystem = "group_chat",
+                    error = %e,
+                    "failed to persist group chat session to database"
+                );
+            }
+        }
 
         tracing::info!(
             subsystem = "group_chat",
@@ -102,7 +136,6 @@ impl GroupChatOrchestrator {
             "group chat session created"
         );
 
-        // 5. Return both the session ID and the handle
         Ok((session_id, handle))
     }
 
@@ -114,6 +147,40 @@ impl GroupChatOrchestrator {
         self.sessions.get(session_id).cloned()
     }
 
+    /// End a session and remove it from the active sessions map.
+    ///
+    /// Returns the [`SharedSession`] handle if the session existed, so the
+    /// caller can still read its final state. Returns `None` if the session
+    /// was not found.
+    pub fn end_session(&mut self, session_id: &str) -> Option<SharedSession> {
+        let handle = self.sessions.remove(session_id)?;
+
+        // Persist status change to database
+        if let Some(db) = &self.db {
+            if let Err(e) = db.update_group_chat_session_status(session_id, "ended") {
+                tracing::warn!(
+                    subsystem = "group_chat",
+                    error = %e,
+                    "failed to persist group chat session end to database"
+                );
+            }
+        }
+
+        tracing::info!(
+            subsystem = "group_chat",
+            event = "session_ended",
+            session_id = %session_id,
+            "group chat session ended and removed"
+        );
+
+        Some(handle)
+    }
+
+    /// Returns a reference to the optional database.
+    pub fn database(&self) -> Option<&Arc<StateDatabase>> {
+        self.db.as_ref()
+    }
+
     /// Check whether a session has exceeded the configured maximum number of rounds.
     ///
     /// The caller provides the session's `current_round` (read while holding the
@@ -123,7 +190,7 @@ impl GroupChatOrchestrator {
     ///
     /// - [`GroupChatError::MaxRoundsReached`] if `current_round >= max_rounds`.
     pub fn check_round_limit(&self, current_round: u32) -> Result<(), GroupChatError> {
-        let max_rounds = self.config.max_rounds as u32;
+        let max_rounds = u32::try_from(self.config.max_rounds).unwrap_or(u32::MAX);
         if current_round >= max_rounds {
             return Err(GroupChatError::MaxRoundsReached(max_rounds));
         }
@@ -132,10 +199,10 @@ impl GroupChatOrchestrator {
 
     /// Returns the configured `max_rounds` value.
     pub fn max_rounds(&self) -> u32 {
-        self.config.max_rounds as u32
+        u32::try_from(self.config.max_rounds).unwrap_or(u32::MAX)
     }
 
-    /// Return handles to all sessions (both active and ended).
+    /// Return handles to all active sessions.
     ///
     /// The caller can then lock each session individually to inspect status.
     pub fn all_sessions(&self) -> Vec<(String, SharedSession)> {
@@ -276,6 +343,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_create_session_invalid_inline_persona() {
+        let mut orch = GroupChatOrchestrator::new(test_config(), &test_personas());
+
+        let sources = vec![PersonaSource::Inline(crate::group_chat::protocol::Persona {
+            id: "".into(), // empty id -> invalid
+            name: "Bad".into(),
+            system_prompt: "prompt".into(),
+            provider: None,
+            model: None,
+            thinking_level: None,
+        })];
+        let result = orch.create_session(sources, None, "cli".into(), "cli:1".into());
+        assert!(matches!(result.unwrap_err(), GroupChatError::InvalidPersona(_)));
+    }
+
+    #[tokio::test]
     async fn test_end_session() {
         let mut orch = GroupChatOrchestrator::new(test_config(), &test_personas());
 
@@ -284,22 +367,24 @@ mod tests {
             .create_session(sources, None, "cli".into(), "cli:1".into())
             .unwrap();
 
-        let handle = orch.get_session(&session_id).expect("session should exist");
-        {
-            let mut session = handle.lock().await;
-            assert_eq!(session.status, GroupChatStatus::Active);
-            session.end();
-        }
+        assert_eq!(orch.all_sessions().len(), 1);
+
+        // End session via orchestrator — removes from map
+        let handle = orch.end_session(&session_id).expect("session should exist");
+        assert_eq!(orch.all_sessions().len(), 0, "session should be removed from map");
 
         let session = handle.lock().await;
-        assert_eq!(session.status, GroupChatStatus::Ended);
+        // Note: end_session removes from map but doesn't call session.end() —
+        // the caller should end the session before calling end_session, or
+        // end it after via the returned handle.
+        drop(session);
     }
 
     #[tokio::test]
     async fn test_end_session_not_found() {
-        let orch = GroupChatOrchestrator::new(test_config(), &test_personas());
+        let mut orch = GroupChatOrchestrator::new(test_config(), &test_personas());
 
-        assert!(orch.get_session("nonexistent-session").is_none());
+        assert!(orch.end_session("nonexistent-session").is_none());
     }
 
     #[tokio::test]
@@ -317,24 +402,15 @@ mod tests {
             .create_session(sources_b, Some("Session B".into()), "cli".into(), "cli:b".into())
             .unwrap();
 
-        let all = orch.all_sessions();
-        assert_eq!(all.len(), 2);
+        assert_eq!(orch.all_sessions().len(), 2);
 
-        // End session A
-        let handle_a = orch.get_session(&id_a).unwrap();
-        handle_a.lock().await.end();
+        // End session A — removes from map
+        orch.end_session(&id_a);
+        assert_eq!(orch.all_sessions().len(), 1);
 
-        // Count active sessions
-        let mut active_count = 0;
-        let mut active_topic = None;
-        for (_, handle) in orch.all_sessions() {
-            let s = handle.lock().await;
-            if s.status == GroupChatStatus::Active {
-                active_count += 1;
-                active_topic = s.topic.clone();
-            }
-        }
-        assert_eq!(active_count, 1);
-        assert_eq!(active_topic, Some("Session B".to_string()));
+        // Remaining session should be Session B
+        let remaining = orch.all_sessions();
+        let session = remaining[0].1.lock().await;
+        assert_eq!(session.topic, Some("Session B".to_string()));
     }
 }

@@ -122,7 +122,6 @@ impl Default for RerankConfig {
 impl RerankConfig {
     /// Returns the active model (first in the list)
     pub fn default_model(&self) -> &str {
-        debug_assert!(!self.models.is_empty());
-        &self.models[0]
+        self.models.first().map(|s| s.as_str()).unwrap_or("jina-reranker-v2-base-multilingual")
     }
 }

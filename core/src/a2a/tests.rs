@@ -626,13 +626,13 @@ impl AiProvider for MockRoutingProvider {
 
 /// Mock AgentResolver returning a configurable list of agents.
 struct MockAgentResolver {
-    agents: std::sync::Mutex<Vec<RegisteredAgent>>,
+    agents: crate::sync_primitives::Mutex<Vec<RegisteredAgent>>,
 }
 
 impl MockAgentResolver {
     fn new(agents: Vec<RegisteredAgent>) -> Self {
         Self {
-            agents: std::sync::Mutex::new(agents),
+            agents: crate::sync_primitives::Mutex::new(agents),
         }
     }
 }
@@ -712,6 +712,7 @@ fn e2e_make_agent(
         base_url: format!("http://localhost:9000/{}", id),
         last_seen: Utc::now(),
         health: AgentHealth::Healthy,
+        auth_token: None,
     }
 }
 
@@ -909,15 +910,15 @@ async fn test_full_routing_chain_exact_match() {
     sub_agent.refresh_agent_names().await;
 
     // Step 1: Verify can_handle matches the agent name
-    let request = SubAgentRequest::new("ask DataAnalyzer to process my CSV");
+    let request = SubAgentRequest::new("ask \"DataAnalyzer\" to process my CSV");
     assert!(
         sub_agent.can_handle(&request),
         "can_handle should match 'DataAnalyzer' in prompt"
     );
 
-    // Step 2: Verify SmartRouter produces correct routing decision
+    // Step 2: Verify SmartRouter produces correct routing decision (quoted name)
     let decision = router
-        .route("ask DataAnalyzer to process my CSV")
+        .route("ask \"DataAnalyzer\" to process my CSV")
         .await
         .unwrap();
 
@@ -933,14 +934,15 @@ async fn test_full_routing_chain_exact_match() {
 
     // Step 3: Execute will attempt HTTP call to the mock URL and fail,
     // but we verify the routing part completes and returns a structured result.
-    let request = SubAgentRequest::new("ask DataAnalyzer to process my CSV");
+    let request = SubAgentRequest::new("ask \"DataAnalyzer\" to process my CSV");
     let result = sub_agent.execute(request).await.unwrap();
 
     // The result will be a failure because no real HTTP server is running,
     // but this confirms the full routing chain (can_handle → route → execute) works.
     // The routing succeeded; only the HTTP call fails.
+    // HTTP call will fail since no real server is running, but routing succeeded
     assert!(
-        !result.success || result.success,
-        "execute should return a SubAgentResult (success or failure)"
+        !result.success,
+        "execute should fail because no real HTTP server is running"
     );
 }

@@ -131,15 +131,30 @@ pub async fn handle_settle(
     let mut mgr = manager.write().unwrap_or_else(|e| e.into_inner());
 
     match mgr.settle_with_facts(&arena_id) {
-        Ok((report, _facts)) => JsonRpcResponse::success(
-            request.id,
-            json!({
-                "arena_id": report.arena_id.as_str(),
-                "facts_persisted": report.facts_persisted,
-                "artifacts_archived": report.artifacts_archived,
-                "events_cleared": report.events_cleared,
-            }),
-        ),
+        Ok((report, facts)) => {
+            let fact_summaries: Vec<serde_json::Value> = facts
+                .into_iter()
+                .map(|f| {
+                    json!({
+                        "content": f.content,
+                        "source_agent": f.source_agent,
+                        "confidence": f.confidence,
+                        "tags": f.tags,
+                    })
+                })
+                .collect();
+
+            JsonRpcResponse::success(
+                request.id,
+                json!({
+                    "arena_id": report.arena_id.as_str(),
+                    "facts_count": report.facts_persisted,
+                    "facts": fact_summaries,
+                    "artifacts_archived": report.artifacts_archived,
+                    "events_cleared": report.events_cleared,
+                }),
+            )
+        }
         Err(e) => JsonRpcResponse::error(request.id, INTERNAL_ERROR, e),
     }
 }
@@ -271,7 +286,8 @@ mod tests {
 
         let result = resp.result.unwrap();
         assert_eq!(result["arena_id"], arena_id);
-        assert_eq!(result["facts_persisted"], 0);
+        assert_eq!(result["facts_count"], 0);
+        assert_eq!(result["facts"].as_array().unwrap().len(), 0);
     }
 
     #[tokio::test]

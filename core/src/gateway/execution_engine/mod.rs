@@ -100,6 +100,7 @@ pub(crate) struct ActiveRun {
     pub(crate) request: RunRequest,
     pub(crate) state: RunState,
     pub(crate) started_at: chrono::DateTime<chrono::Utc>,
+    pub(crate) completed_at: Option<chrono::DateTime<chrono::Utc>>,
     pub(crate) steps_completed: u32,
     pub(crate) current_tool: Option<String>,
     pub(crate) cancel_tx: Option<mpsc::Sender<()>>,
@@ -140,6 +141,9 @@ pub enum ExecutionError {
 
     #[error("Execution failed: {0}")]
     Failed(String),
+
+    #[error("Command requires LLM processing: {reason}")]
+    Fallthrough { reason: String },
 
     #[error("Escalated to {route_label} after {completed_steps} steps")]
     Escalated {

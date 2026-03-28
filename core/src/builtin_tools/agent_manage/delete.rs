@@ -131,6 +131,29 @@ impl AlephTool for AgentDeleteTool {
                     );
                 }
             }
+
+            // Also archive agent state directory (~/.aleph/agents/{id}/)
+            let agent_state_dir = dirs::home_dir()
+                .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
+                .join(".aleph")
+                .join("agents")
+                .join(&args.agent_id);
+            if agent_state_dir.exists() {
+                let archived_state = agent_state_dir.with_extension("archived");
+                if let Err(e) = std::fs::rename(&agent_state_dir, &archived_state) {
+                    warn!(
+                        agent_id = %args.agent_id,
+                        error = %e,
+                        "Failed to archive agent state directory"
+                    );
+                } else {
+                    info!(
+                        agent_id = %args.agent_id,
+                        archived_path = %archived_state.display(),
+                        "Agent state directory archived"
+                    );
+                }
+            }
         }
 
         let deleted = removed.is_some();

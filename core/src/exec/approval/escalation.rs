@@ -42,17 +42,27 @@ pub fn check_path_escalation(
             // Check if normalized path is within approved paths.
             // Approved path prefixes are also resolved through symlinks so that
             // both sides use the same canonical form (e.g. /tmp → /private/tmp on macOS).
+            // Guard: reject empty paths before scope checking
+            if value.is_empty() || normalized_value.is_empty() {
+                return Some(EscalationTrigger {
+                    reason: EscalationReason::PathOutOfScope,
+                    requested_path: Some(path),
+                    approved_paths: approved_paths.to_vec(),
+                });
+            }
+
+            // Use Path::starts_with (component-based) instead of string starts_with
+            // to prevent prefix confusion attacks (e.g. /tmp-evil matching /tmp/*)
             let is_approved = approved_paths.iter().any(|approved| {
                 if approved.ends_with("/*") {
                     let prefix = approved.trim_end_matches("/*");
                     let resolved_prefix = resolve_path_with_symlinks(&PathBuf::from(prefix));
-                    let resolved_prefix_str = resolved_prefix.to_string_lossy();
-                    normalized_value.starts_with(resolved_prefix_str.as_ref())
-                        || normalized_value.starts_with(prefix)
+                    path.starts_with(&resolved_prefix)
+                        || path.starts_with(Path::new(prefix))
                 } else {
                     let resolved_approved = resolve_path_with_symlinks(&PathBuf::from(approved));
-                    *normalized_value == *resolved_approved.to_string_lossy()
-                        || *normalized_value == *approved
+                    path == resolved_approved
+                        || path == Path::new(approved.as_str())
                 }
             });
 

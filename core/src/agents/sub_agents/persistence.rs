@@ -15,21 +15,29 @@ pub struct SubAgentRunFact;
 
 impl SubAgentRunFact {
     /// Convert a SubAgentRun to a MemoryFact for storage
-    pub fn from_run(run: &SubAgentRun) -> MemoryFact {
-        let content = serde_json::to_string(run).unwrap_or_default();
+    ///
+    /// Returns `Err` if serialization fails (avoids storing empty content
+    /// that would corrupt the FactsDB on deserialization).
+    pub fn from_run(run: &SubAgentRun) -> Result<MemoryFact> {
+        let content = serde_json::to_string(run).map_err(|e| {
+            AlephError::config(format!("Failed to serialize SubAgentRun: {}", e))
+        })?;
         let id = format!("subagent:run:{}", run.run_id);
 
-        MemoryFact {
+        Ok(MemoryFact {
             id,
             content,
             fact_type: FactType::SubagentRun,
             embedding: None,
             source_memory_ids: vec![],
             created_at: run.created_at / 1000, // Convert ms to seconds
-            updated_at: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-                .as_secs() as i64,
+            updated_at: i64::try_from(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs(),
+            )
+            .unwrap_or(i64::MAX),
             confidence: 1.0,
             is_valid: true,
             invalidation_reason: None,
@@ -52,7 +60,7 @@ impl SubAgentRunFact {
             strength: 1.0,
             access_count: 0,
             last_accessed_at: None,
-        }
+        })
     }
 
     /// Convert a MemoryFact back to SubAgentRun
@@ -80,7 +88,7 @@ mod tests {
             "Test task",
             "explore",
         );
-        let fact = SubAgentRunFact::from_run(&run);
+        let fact = SubAgentRunFact::from_run(&run).unwrap();
 
         assert!(fact.id.starts_with("subagent:run:"));
         assert_eq!(fact.fact_type, FactType::SubagentRun);
@@ -97,7 +105,7 @@ mod tests {
             "Test task",
             "explore",
         );
-        let fact = SubAgentRunFact::from_run(&run);
+        let fact = SubAgentRunFact::from_run(&run).unwrap();
         let restored = SubAgentRunFact::to_run(&fact).unwrap();
 
         assert_eq!(restored.run_id, run.run_id);

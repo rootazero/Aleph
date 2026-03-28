@@ -12,8 +12,7 @@ pub struct ProviderInfo {
     pub model: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provider_type: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub api_key: Option<String>,
+    pub has_api_key: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub base_url: Option<String>,
     pub color: String,

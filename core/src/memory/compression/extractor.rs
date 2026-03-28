@@ -162,9 +162,10 @@ EXAMPLE OUTPUT:
             ));
             prompt.push_str(&format!("User: {}\n", memory.user_input));
 
-            // Truncate long AI responses
+            // Truncate long AI responses (use char count, not byte count for CJK safety)
+            let char_count = memory.ai_output.chars().count();
             let ai_output: String = memory.ai_output.chars().take(500).collect();
-            let truncated = if memory.ai_output.len() > 500 {
+            let truncated = if char_count > 500 {
                 format!("{}...", ai_output)
             } else {
                 ai_output

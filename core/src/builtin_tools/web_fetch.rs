@@ -43,6 +43,8 @@ pub struct WebFetchTool {
     min_content_length: usize,
     /// User agent string (from policy)
     user_agent: String,
+    /// Request timeout in seconds (preserved across clones)
+    timeout_secs: u64,
 }
 
 impl WebFetchTool {
@@ -64,6 +66,9 @@ impl WebFetchTool {
     /// Default request timeout in seconds (used when no policy provided)
     const DEFAULT_TIMEOUT_SECS: u64 = 30;
 
+    /// Maximum response body size in bytes (10 MB)
+    const MAX_RESPONSE_BYTES: usize = 10 * 1024 * 1024;
+
     /// Create a new WebFetchTool with default settings
     pub fn new() -> Self {
         let client = Client::builder()
@@ -76,6 +81,7 @@ impl WebFetchTool {
             max_content_length: Self::DEFAULT_MAX_CONTENT_LENGTH,
             min_content_length: Self::DEFAULT_MIN_CONTENT_LENGTH,
             user_agent: Self::DEFAULT_USER_AGENT.to_string(),
+            timeout_secs: Self::DEFAULT_TIMEOUT_SECS,
         }
     }
 
@@ -91,6 +97,7 @@ impl WebFetchTool {
             max_content_length: policy.max_content_length as usize,
             min_content_length: policy.min_content_length as usize,
             user_agent: policy.user_agent.clone(),
+            timeout_secs: policy.timeout_seconds,
         }
     }
 
@@ -147,12 +154,24 @@ impl WebFetchTool {
             return Err(ToolError::Network(error_msg));
         }
 
-        // Get HTML content
-        let html_content = response.text().await.map_err(|e| {
+        // Get HTML content with size limit to prevent memory exhaustion
+        let bytes = response.bytes().await.map_err(|e| {
             let error_msg = format!("Failed to read response body: {}", e);
             notify_tool_result(Self::NAME, &error_msg, false);
             ToolError::Network(error_msg)
         })?;
+
+        if bytes.len() > Self::MAX_RESPONSE_BYTES {
+            let error_msg = format!(
+                "Response too large: {} bytes (max {} bytes)",
+                bytes.len(),
+                Self::MAX_RESPONSE_BYTES,
+            );
+            notify_tool_result(Self::NAME, &error_msg, false);
+            return Err(ToolError::Execution(error_msg));
+        }
+
+        let html_content = String::from_utf8_lossy(&bytes).to_string();
 
         debug!("Fetched {} bytes from {}", html_content.len(), args.url);
 
@@ -268,10 +287,9 @@ impl Default for WebFetchTool {
 
 impl Clone for WebFetchTool {
     fn clone(&self) -> Self {
-        // Rebuild client with same settings is tricky, use default timeout for now
-        // The policy values are preserved
+        // Rebuild client preserving the configured timeout
         let client = Client::builder()
-            .timeout(std::time::Duration::from_secs(Self::DEFAULT_TIMEOUT_SECS))
+            .timeout(std::time::Duration::from_secs(self.timeout_secs))
             .build()
             .unwrap_or_else(|_| Client::new());
 
@@ -280,6 +298,7 @@ impl Clone for WebFetchTool {
             max_content_length: self.max_content_length,
             min_content_length: self.min_content_length,
             user_agent: self.user_agent.clone(),
+            timeout_secs: self.timeout_secs,
         }
     }
 }

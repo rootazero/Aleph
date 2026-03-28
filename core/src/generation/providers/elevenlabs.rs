@@ -210,7 +210,7 @@ impl ElevenLabsProvider {
         let client = Client::builder()
             .timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
             .build()
-            .expect("Failed to build HTTP client");
+            .map_err(|e| GenerationError::network(format!("Failed to build HTTP client: {}", e)))?;
 
         Ok(Self {
             client,

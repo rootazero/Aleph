@@ -121,7 +121,7 @@ impl InboundMessageRouter {
 
         let emitter: Arc<dyn crate::gateway::event_emitter::EventEmitter + Send + Sync> = if is_feishu {
             // Try to create FeishuEventEmitter with streaming + typing
-            match self.try_create_feishu_emitter(ctx, &run_id, reply_config.clone()).await {
+            match self.try_create_feishu_emitter(ctx, &run_id, reply_config.clone(), pending_media.clone()).await {
                 Some(fe) => Arc::new(fe),
                 None => {
                     let re = ReplyEmitter::with_config(
@@ -237,6 +237,7 @@ impl InboundMessageRouter {
         ctx: &InboundContext,
         run_id: &str,
         reply_config: ReplyEmitterConfig,
+        pending_media: crate::gateway::media::PendingMedia,
     ) -> Option<crate::gateway::interfaces::feishu::streaming::FeishuEventEmitter> {
         use crate::gateway::interfaces::feishu::FeishuConfig;
         use crate::gateway::interfaces::feishu::streaming::FeishuEventEmitter;
@@ -270,7 +271,7 @@ impl InboundMessageRouter {
             ctx.reply_route.clone(),
             run_id.to_string(),
             reply_config,
-            std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            pending_media,
         );
 
         let chat_id = ctx.message.conversation_id.as_str().to_string();

@@ -170,11 +170,8 @@ impl DirectoryScanner {
                     for entry in entries.filter_map(|e| e.ok()) {
                         let path = entry.path();
                         if path.is_dir() {
-                            // Skip hidden directories
-                            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                                if name.starts_with('.') {
-                                    continue;
-                                }
+                            if is_hidden(&path) {
+                                continue;
                             }
 
                             // Skip directories without a marker file for the component type.
@@ -252,11 +249,8 @@ impl DirectoryScanner {
                         continue;
                     }
 
-                    // Skip hidden directories
-                    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                        if name.starts_with('.') {
-                            continue;
-                        }
+                    if is_hidden(&path) {
+                        continue;
                     }
 
                     if has_plugin_manifest(&path) {
@@ -274,10 +268,8 @@ impl DirectoryScanner {
                                 if !sub_path.is_dir() {
                                     continue;
                                 }
-                                if let Some(name) = sub_path.file_name().and_then(|n| n.to_str()) {
-                                    if name.starts_with('.') {
-                                        continue;
-                                    }
+                                if is_hidden(&sub_path) {
+                                    continue;
                                 }
                                 if has_plugin_manifest(&sub_path) {
                                     discovered.push(DiscoveredPath::new(
@@ -299,6 +291,13 @@ impl DirectoryScanner {
         trace!("Discovered {} plugins", discovered.len());
         Ok(discovered)
     }
+}
+
+/// Check if a path represents a hidden directory (name starts with '.')
+fn is_hidden(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|name| name.starts_with('.'))
 }
 
 /// Return the expected marker file for a component type directory.
@@ -340,7 +339,8 @@ fn has_plugin_manifest(path: &Path) -> bool {
         || path.join("skills").is_dir()
         || path.join("commands").is_dir()
         || path.join("agents").is_dir()
-        || path.join(".mcp.json").exists()
+        || path.join("hooks").is_dir()
+        || path.join(MCP_CONFIG_FILE).exists()
 }
 
 #[cfg(test)]

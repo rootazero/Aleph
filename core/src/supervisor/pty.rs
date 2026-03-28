@@ -34,8 +34,6 @@ pub struct ClaudeSupervisor {
     config: SupervisorConfig,
     master: Option<Box<dyn MasterPty + Send>>,
     writer: Option<Box<dyn Write + Send>>,
-    #[allow(dead_code)]
-    child: Option<Box<dyn portable_pty::Child + Send + Sync>>,
     running: Arc<AtomicBool>,
     masker: SecretMasker,
 }
@@ -47,7 +45,6 @@ impl ClaudeSupervisor {
             config,
             master: None,
             writer: None,
-            child: None,
             running: Arc::new(AtomicBool::new(false)),
             masker: SecretMasker::new(),
         }
@@ -55,7 +52,7 @@ impl ClaudeSupervisor {
 
     /// Check if the supervised process is currently running.
     pub fn is_running(&self) -> bool {
-        self.running.load(Ordering::SeqCst)
+        self.running.load(Ordering::Acquire)
     }
 
     /// Spawn the supervised process and return an event receiver.
@@ -100,7 +97,7 @@ impl ClaudeSupervisor {
         self.master = Some(pair.master);
         self.writer = Some(writer);
         // Move child into the reader thread so it can retrieve the actual exit code
-        self.running.store(true, Ordering::SeqCst);
+        self.running.store(true, Ordering::Release);
 
         // Create event channel
         let (tx, rx) = mpsc::unbounded_channel();
@@ -128,7 +125,7 @@ impl ClaudeSupervisor {
                     Err(_) => break,
                 }
             }
-            running.store(false, Ordering::SeqCst);
+            running.store(false, Ordering::Release);
             // Retrieve the actual exit code from the child process
             let exit_code = match child.wait() {
                 Ok(status) => status.exit_code() as i32,

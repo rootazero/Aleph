@@ -479,7 +479,16 @@ pub async fn handle_update_tool_permissions(
         info!(agent_id = %params.agent_id, "Agent tool permissions updated successfully");
 
         // Re-find the agent immutably for the response
-        let agent = cfg.agents.list.iter().find(|a| a.id == params.agent_id).unwrap();
+        let agent = match cfg.agents.list.iter().find(|a| a.id == params.agent_id) {
+            Some(a) => a,
+            None => {
+                return JsonRpcResponse::error(
+                    request.id,
+                    INTERNAL_ERROR,
+                    format!("Agent '{}' disappeared unexpectedly", params.agent_id),
+                );
+            }
+        };
         let global = &cfg.policies.tool_permissions;
         build_tool_permissions_response(global, agent.tool_permissions.as_ref())
     };

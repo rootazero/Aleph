@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 use super::coordinator::{CoordinatorConfig, ExecutionCoordinator, ExecutionError, ToolCallSummary};
 use super::result_collector::ResultCollector;
@@ -191,58 +191,8 @@ impl SubAgentDispatcher {
             "Dispatching sub-agent request"
         );
 
-        // 1. Check for explicit agent_id in context
-        if let Some(agent_id) = request.context.get("agent_id").and_then(|v| v.as_str()) {
-            if let Some(agent) = self.agents.get(agent_id) {
-                return agent.execute(request).await;
-            }
-            warn!(agent_id, "Explicit agent_id not found in registry");
-        }
-
-        // 2. Try to match by agent type in context
-        if let Some(agent_type) = request.context.get("agent_type").and_then(|v| v.as_str()) {
-            if let Ok(agent_type) = agent_type.parse::<SubAgentType>() {
-                let agent_id = match agent_type {
-                    SubAgentType::Mcp => "mcp_agent",
-                    SubAgentType::Skill => "skill_agent",
-                    SubAgentType::Custom => "custom_agent",
-                };
-                if let Some(agent) = self.agents.get(agent_id) {
-                    return agent.execute(request).await;
-                }
-            }
-        }
-
-        // 3. Find agents that can handle this request
-        let mut capable_agents: Vec<_> = self
-            .agents
-            .values()
-            .filter(|agent| agent.can_handle(&request))
-            .collect();
-
-        if !capable_agents.is_empty() {
-            // Prefer more specific agents (fewer capabilities = more specialized)
-            // Break ties by name for deterministic selection
-            capable_agents.sort_by(|a, b| {
-                a.capabilities().len().cmp(&b.capabilities().len())
-                    .then_with(|| a.name().cmp(b.name()))
-            });
-            let agent = capable_agents[0];
-            return agent.execute(request).await;
-        }
-
-        // 4. Try default agent
-        if let Some(ref default_id) = self.default_agent {
-            if let Some(agent) = self.agents.get(default_id) {
-                return agent.execute(request).await;
-            }
-        }
-
-        // No suitable agent found
-        Err(AlephError::NotFound(format!(
-            "No sub-agent found to handle request: {}",
-            request.prompt.chars().take(50).collect::<String>()
-        )))
+        let agent = Self::select_agent(&self.agents, &self.default_agent, &request)?;
+        agent.execute(request).await
     }
 
     /// Dispatch by agent type
@@ -470,10 +420,27 @@ impl SubAgentDispatcher {
         default_agent: &Option<String>,
         request: SubAgentRequest,
     ) -> Result<SubAgentResult> {
+        // Reuse the shared routing logic
+        let agent = Self::select_agent(agents, default_agent, &request)?;
+        agent.execute(request).await
+    }
+
+    /// Shared agent selection logic used by both `dispatch` and `execute_dispatch`.
+    ///
+    /// Selection order:
+    /// 1. Explicit agent_id in context
+    /// 2. Agent type in context
+    /// 3. `can_handle()` check with deterministic tie-breaking
+    /// 4. Default agent
+    fn select_agent<'a>(
+        agents: &'a HashMap<String, Arc<dyn SubAgent>>,
+        default_agent: &Option<String>,
+        request: &SubAgentRequest,
+    ) -> Result<&'a Arc<dyn SubAgent>> {
         // 1. Check for explicit agent_id in context
         if let Some(agent_id) = request.context.get("agent_id").and_then(|v| v.as_str()) {
             if let Some(agent) = agents.get(agent_id) {
-                return agent.execute(request).await;
+                return Ok(agent);
             }
         }
 
@@ -486,7 +453,7 @@ impl SubAgentDispatcher {
                     SubAgentType::Custom => "custom_agent",
                 };
                 if let Some(agent) = agents.get(agent_id) {
-                    return agent.execute(request).await;
+                    return Ok(agent);
                 }
             }
         }
@@ -494,18 +461,23 @@ impl SubAgentDispatcher {
         // 3. Find agents that can handle this request
         let mut capable_agents: Vec<_> = agents
             .values()
-            .filter(|agent| agent.can_handle(&request))
+            .filter(|agent| agent.can_handle(request))
             .collect();
 
         if !capable_agents.is_empty() {
-            capable_agents.sort_by_key(|agent| agent.capabilities().len());
-            return capable_agents[0].execute(request).await;
+            // Prefer more specific agents (fewer capabilities = more specialized)
+            // Break ties by name for deterministic selection
+            capable_agents.sort_by(|a, b| {
+                a.capabilities().len().cmp(&b.capabilities().len())
+                    .then_with(|| a.name().cmp(b.name()))
+            });
+            return Ok(capable_agents[0]);
         }
 
         // 4. Try default agent
         if let Some(ref default_id) = default_agent {
             if let Some(agent) = agents.get(default_id) {
-                return agent.execute(request).await;
+                return Ok(agent);
             }
         }
 
@@ -518,18 +490,21 @@ impl SubAgentDispatcher {
 
     /// Get dispatcher info for prompt/context
     pub fn get_info(&self) -> DispatcherInfo {
+        let mut agents: Vec<AgentInfo> = self
+            .agents
+            .values()
+            .map(|agent| AgentInfo {
+                id: agent.id().to_string(),
+                name: agent.name().to_string(),
+                description: agent.description().to_string(),
+                capabilities: agent.capabilities(),
+            })
+            .collect();
+        // Sort for deterministic iteration order (HashMap is non-deterministic)
+        agents.sort_by(|a, b| a.id.cmp(&b.id));
         DispatcherInfo {
-            agent_count: self.agents.len(),
-            agents: self
-                .agents
-                .values()
-                .map(|agent| AgentInfo {
-                    id: agent.id().to_string(),
-                    name: agent.name().to_string(),
-                    description: agent.description().to_string(),
-                    capabilities: agent.capabilities(),
-                })
-                .collect(),
+            agent_count: agents.len(),
+            agents,
             default_agent: self.default_agent.clone(),
         }
     }

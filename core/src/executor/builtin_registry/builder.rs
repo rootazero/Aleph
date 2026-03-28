@@ -673,7 +673,8 @@ impl BuiltinToolRegistry {
                 info!("Registered image.generate tool in BuiltinToolRegistry");
             }
 
-            if let Ok(reg_inner) = registry.read() {
+            {
+                let reg_inner = registry.read().unwrap_or_else(|e| e.into_inner());
                 use crate::generation::GenerationType;
 
                 if reg_inner.first_for_type(GenerationType::Video).is_some() {

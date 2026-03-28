@@ -106,11 +106,11 @@ async fn scan_edges(
 #[async_trait]
 impl GraphStore for LanceMemoryBackend {
     async fn upsert_node(&self, node: &GraphNode, workspace: &str) -> Result<(), AlephError> {
-        // Delete existing node with same ID if present, then insert.
+        // Delete existing node with same ID in this workspace, then insert.
         let existing = self.get_node(&node.id, workspace).await?;
         if existing.is_some() {
             self.nodes_table
-                .delete(&format!("id = '{}'", escape_sql_string(&node.id)))
+                .delete(&format!("id = '{}' AND agent = '{}'", escape_sql_string(&node.id), escape_sql_string(workspace)))
                 .await
                 .map_err(super::lance_err)?;
         }
@@ -126,12 +126,12 @@ impl GraphStore for LanceMemoryBackend {
     }
 
     async fn upsert_edge(&self, edge: &GraphEdge, workspace: &str) -> Result<(), AlephError> {
-        // Delete existing edge with same ID if present, then insert.
+        // Delete existing edge with same ID in this workspace, then insert.
         let filter = format!("id = '{}' AND agent = '{}'", escape_sql_string(&edge.id), escape_sql_string(workspace));
         let existing = scan_edges(&self.edges_table, Some(&filter), Some(1)).await?;
         if !existing.is_empty() {
             self.edges_table
-                .delete(&format!("id = '{}'", escape_sql_string(&edge.id)))
+                .delete(&filter)
                 .await
                 .map_err(super::lance_err)?;
         }
@@ -239,7 +239,7 @@ impl GraphStore for LanceMemoryBackend {
 
         for node in all_nodes {
             let days_since_update =
-                (now - node.updated_at) as f64 / seconds_per_day;
+                (now - node.updated_at).max(0) as f64 / seconds_per_day;
             let new_score = node.decay_score - (days_since_update as f32 * policy.node_decay_per_day);
 
             if new_score < policy.min_score {
@@ -253,18 +253,19 @@ impl GraphStore for LanceMemoryBackend {
             }
         }
 
-        // Delete pruned nodes
+        // Delete pruned nodes (scoped to workspace)
+        let ws_safe = escape_sql_string(workspace);
         for id in &nodes_to_prune {
             self.nodes_table
-                .delete(&format!("id = '{}'", escape_sql_string(id)))
+                .delete(&format!("id = '{}' AND agent = '{}'", escape_sql_string(id), ws_safe))
                 .await
                 .map_err(super::lance_err)?;
         }
 
-        // Update decayed nodes (delete + re-insert)
+        // Update decayed nodes (delete + re-insert, scoped to workspace)
         for node in &nodes_to_update {
             self.nodes_table
-                .delete(&format!("id = '{}'", escape_sql_string(&node.id)))
+                .delete(&format!("id = '{}' AND agent = '{}'", escape_sql_string(&node.id), ws_safe))
                 .await
                 .map_err(super::lance_err)?;
             let batch = graph_nodes_to_record_batch(std::slice::from_ref(node))?;
@@ -278,7 +279,7 @@ impl GraphStore for LanceMemoryBackend {
 
         for edge in all_edges {
             let days_since_update =
-                (now - edge.updated_at) as f64 / seconds_per_day;
+                (now - edge.updated_at).max(0) as f64 / seconds_per_day;
             let new_score = edge.decay_score - (days_since_update as f32 * policy.edge_decay_per_day);
 
             if new_score < policy.min_score {
@@ -292,18 +293,18 @@ impl GraphStore for LanceMemoryBackend {
             }
         }
 
-        // Delete pruned edges
+        // Delete pruned edges (scoped to workspace)
         for id in &edges_to_prune {
             self.edges_table
-                .delete(&format!("id = '{}'", escape_sql_string(id)))
+                .delete(&format!("id = '{}' AND agent = '{}'", escape_sql_string(id), ws_safe))
                 .await
                 .map_err(super::lance_err)?;
         }
 
-        // Update decayed edges (delete + re-insert)
+        // Update decayed edges (delete + re-insert, scoped to workspace)
         for edge in &edges_to_update {
             self.edges_table
-                .delete(&format!("id = '{}'", escape_sql_string(&edge.id)))
+                .delete(&format!("id = '{}' AND agent = '{}'", escape_sql_string(&edge.id), ws_safe))
                 .await
                 .map_err(super::lance_err)?;
             let batch = graph_edges_to_record_batch(std::slice::from_ref(edge))?;

@@ -135,8 +135,9 @@ mod tests {
         if chunks.len() > 1 {
             // Check that consecutive chunks have overlap
             for i in 0..chunks.len() - 1 {
-                let current_end = &chunks[i][chunks[i].len().saturating_sub(40)..];
-                let next_start = &chunks[i + 1][..40.min(chunks[i + 1].len())];
+                // Use char-based slicing to avoid panics on multi-byte chars
+                let current_end: String = chunks[i].chars().rev().take(40).collect::<Vec<_>>().into_iter().rev().collect();
+                let next_start: String = chunks[i + 1].chars().take(40).collect();
 
                 // There should be some common text
                 let has_overlap = current_end.chars().any(|c| next_start.contains(c));
@@ -183,10 +184,16 @@ mod tests {
             if current_tokens + sentence_tokens > config.max_tokens_per_chunk && !current_chunk.is_empty() {
                 chunks.push(current_chunk.clone());
 
-                // Add overlap from previous chunk
-                let overlap_chars = config.overlap_tokens * 4;
-                if current_chunk.len() > overlap_chars {
-                    current_chunk = current_chunk[current_chunk.len() - overlap_chars..].to_string();
+                // Add overlap from previous chunk (UTF-8 safe)
+                let overlap_char_count = config.overlap_tokens * 4;
+                let total_chars = current_chunk.chars().count();
+                if total_chars > overlap_char_count {
+                    let skip = total_chars - overlap_char_count;
+                    current_chunk = current_chunk
+                        .char_indices()
+                        .nth(skip)
+                        .map(|(pos, _)| current_chunk[pos..].to_string())
+                        .unwrap_or_default();
                     current_tokens = estimate_tokens_helper(&current_chunk);
                 } else {
                     current_chunk.clear();

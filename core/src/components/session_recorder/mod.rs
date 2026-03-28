@@ -255,7 +255,7 @@ impl SessionRecorder {
                 params![session_id],
                 |row| row.get(0),
             )
-            .unwrap_or(1);
+            .map_err(|e| RecorderError::Database(e.to_string()))?;
 
         // Serialize part to JSON
         let part_type = part.type_name();

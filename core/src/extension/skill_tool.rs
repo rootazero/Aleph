@@ -68,12 +68,17 @@ fn evaluate_permission_rule(rule: &PermissionRule, skill_name: &str) -> Permissi
             }
 
             // Check for prefix matches (e.g., "plugin:*") - more specific than wildcard
-            for (pattern, action) in patterns {
-                if pattern.ends_with('*') && pattern != "*" {
-                    let prefix = &pattern[..pattern.len() - 1];
-                    if skill_name.starts_with(prefix) {
-                        return *action;
-                    }
+            // Sort patterns by length (longest first) for deterministic matching
+            let mut prefix_patterns: Vec<_> = patterns
+                .iter()
+                .filter(|(p, _)| p.ends_with('*') && *p != "*")
+                .collect();
+            prefix_patterns.sort_by(|(a, _), (b, _)| b.len().cmp(&a.len()));
+
+            for (pattern, action) in prefix_patterns {
+                let prefix = pattern.get(..pattern.len() - 1).unwrap_or("");
+                if skill_name.starts_with(prefix) {
+                    return *action;
                 }
             }
 

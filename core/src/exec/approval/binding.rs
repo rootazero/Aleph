@@ -116,7 +116,7 @@ fn matches_pattern(value: &str, pattern: &str) -> bool {
                     regex_pattern.push_str("[^/]*");
                 }
             }
-            '?' => regex_pattern.push('.'),
+            '?' => regex_pattern.push_str("[^/]"),
             '.' | '(' | ')' | '[' | ']' | '{' | '}' | '^' | '$' | '|' | '+' | '\\' => {
                 regex_pattern.push('\\');
                 regex_pattern.push(ch);

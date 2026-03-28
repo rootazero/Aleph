@@ -5,6 +5,7 @@
 //! preserves actionable information while drastically reducing token count.
 
 use serde_json::Value;
+use tracing::debug;
 
 /// Known Chrome DevTools Protocol tool names.
 const DEVTOOLS_TOOLS: &[&str] = &[
@@ -59,7 +60,7 @@ const INTERACTIVE_ROLES: &[&str] = &[
 ];
 
 /// Check whether a tool name belongs to the Chrome DevTools MCP toolset.
-pub fn is_devtools_tool(name: &str) -> bool {
+fn is_devtools_tool(name: &str) -> bool {
     DEVTOOLS_TOOLS.contains(&name)
 }
 
@@ -84,8 +85,29 @@ pub fn compress_tool_output(tool_name: &str, output: &str) -> String {
 }
 
 /// Replace screenshot output (typically base64) with a short confirmation.
-fn compress_screenshot(_output: &str) -> String {
-    "[Screenshot captured successfully]".to_owned()
+///
+/// If the output looks like base64 data, replaces it entirely.
+/// Otherwise keeps the first few lines as metadata.
+fn compress_screenshot(output: &str) -> String {
+    // Pure base64 or data URI — discard entirely
+    if output.starts_with("data:image/")
+        || (output.len() > 100
+            && output
+                .bytes()
+                .take(128)
+                .all(|b| b.is_ascii_alphanumeric() || b == b'+' || b == b'/' || b == b'='))
+    {
+        return "[Screenshot captured successfully]".to_owned();
+    }
+    // May contain metadata lines before or instead of base64 — keep first 5 lines
+    let lines: Vec<&str> = output.lines().collect();
+    let total = lines.len();
+    let kept = &lines[..total.min(5)];
+    let mut result = kept.join("\n");
+    if total > 5 {
+        result.push_str(&format!("\n[... {} more lines omitted]", total - 5));
+    }
+    result
 }
 
 /// Compress accessibility snapshot by keeping only interactive elements.
@@ -135,10 +157,16 @@ fn compress_network_requests(output: &str) -> String {
     let parsed: Result<Vec<Value>, _> = serde_json::from_str(output);
     let entries = match parsed {
         Ok(v) => v,
-        Err(_) => return compress_generic(output, 3 * 1024),
+        Err(e) => {
+            debug!("Failed to parse network requests as JSON, falling back to generic compression: {e}");
+            return compress_generic(output, 3 * 1024);
+        }
     };
 
     let total = entries.len();
+    if total == 0 {
+        return "[No network requests captured]".to_owned();
+    }
     let limit = 30;
     let mut lines: Vec<String> = Vec::with_capacity(limit.min(total));
 
@@ -201,7 +229,7 @@ fn compress_generic(output: &str, max_bytes: usize) -> String {
         end -= 1;
     }
 
-    let mut result = output[..end].to_owned();
+    let mut result = output.get(..end).unwrap_or(output).to_owned();
     result.push_str(&format!(
         "\n[... output truncated, showing first {} bytes of {} total]",
         end, total,
@@ -246,11 +274,40 @@ mod tests {
     // --- screenshot ---
 
     #[test]
-    fn test_compress_screenshot_replaces_base64() {
+    fn test_compress_screenshot_replaces_base64_data_uri() {
         let base64_data = format!("data:image/png;base64,{}", "A".repeat(50_000));
         let result = compress_tool_output("take_screenshot", &base64_data);
         assert_eq!(result, "[Screenshot captured successfully]");
-        assert!(result.len() < 100);
+    }
+
+    #[test]
+    fn test_compress_screenshot_replaces_raw_base64() {
+        let raw_b64 = "A".repeat(50_000);
+        let result = compress_tool_output("take_screenshot", &raw_b64);
+        assert_eq!(result, "[Screenshot captured successfully]");
+    }
+
+    #[test]
+    fn test_compress_screenshot_short_text_not_treated_as_base64() {
+        // Short ASCII text should NOT be detected as base64
+        let output = "OK";
+        let result = compress_tool_output("take_screenshot", output);
+        assert_eq!(result, "OK");
+    }
+
+    #[test]
+    fn test_compress_screenshot_empty_string() {
+        let result = compress_tool_output("take_screenshot", "");
+        assert_eq!(result, "");
+    }
+
+    #[test]
+    fn test_compress_screenshot_keeps_metadata() {
+        let output = "width: 1920\nheight: 1080\nformat: png\nsome extra info\nmore info\nbase64 data here";
+        let result = compress_tool_output("take_screenshot", output);
+        assert!(result.contains("width: 1920"));
+        assert!(result.contains("format: png"));
+        assert!(result.contains("1 more lines omitted"));
     }
 
     // --- snapshot ---
@@ -334,6 +391,12 @@ mod tests {
         assert!(result.contains("https://example.com/api/0"));
         assert!(result.contains("https://example.com/api/29"));
         assert!(!result.contains("https://example.com/api/50"));
+    }
+
+    #[test]
+    fn test_compress_network_requests_empty_array() {
+        let result = compress_tool_output("list_network_requests", "[]");
+        assert_eq!(result, "[No network requests captured]");
     }
 
     // --- console messages ---

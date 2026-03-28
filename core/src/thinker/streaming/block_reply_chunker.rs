@@ -141,7 +141,7 @@ impl BlockReplyChunker {
                 None => {
                     if self.buffer.len() >= self.config.max_block_size {
                         // Force split at max size, handling fences
-                        let split_pos = self.config.max_block_size;
+                        let split_pos = Self::snap_char_boundary(&self.buffer, self.config.max_block_size);
 
                         if self.config.fence_aware {
                             if let Some(split) = get_fence_split(&spans, split_pos) {
@@ -172,9 +172,21 @@ impl BlockReplyChunker {
         blocks.into_iter().filter(|b| !b.is_empty()).collect()
     }
 
+    /// Snap a byte index to the nearest char boundary at or before `index`.
+    fn snap_char_boundary(s: &str, index: usize) -> usize {
+        if index >= s.len() {
+            return s.len();
+        }
+        let mut i = index;
+        while i > 0 && !s.is_char_boundary(i) {
+            i -= 1;
+        }
+        i
+    }
+
     /// Find the best boundary position for splitting
     fn find_boundary(&self, spans: &[FenceSpan]) -> Option<BreakPoint> {
-        let search_range = self.buffer.len().min(self.config.max_block_size);
+        let search_range = Self::snap_char_boundary(&self.buffer, self.buffer.len().min(self.config.max_block_size));
         let search_str = &self.buffer[..search_range];
 
         // Priority 1: Paragraph break (outside fences)

@@ -261,8 +261,14 @@ impl OAuthProvider {
             AlephError::IoError("No code verifier found".to_string())
         })?;
 
-        // Verify state matches
-        if stored_state != received_state {
+        // Verify state matches (constant-time comparison to prevent timing oracle)
+        use subtle::ConstantTimeEq;
+        if stored_state
+            .as_bytes()
+            .ct_eq(received_state.as_bytes())
+            .unwrap_u8()
+            == 0
+        {
             return Err(AlephError::IoError(
                 "State mismatch - possible CSRF attack".to_string(),
             ));

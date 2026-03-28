@@ -120,11 +120,11 @@ impl OpenAiImageProvider {
         base_url: Option<String>,
         model: Option<String>,
         resolved_url: Option<ResolvedUrl>,
-    ) -> Self {
+    ) -> GenerationResult<Self> {
         let client = Client::builder()
             .timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
             .build()
-            .expect("Failed to build HTTP client");
+            .map_err(|e| GenerationError::network(format!("Failed to build HTTP client: {}", e)))?;
 
         // Use pre-resolved URL if available, otherwise resolve from base_url
         let resolved = resolved_url.unwrap_or_else(|| {
@@ -133,13 +133,13 @@ impl OpenAiImageProvider {
         });
         let endpoint = resolved.primary_endpoint(GenerationType::Image);
 
-        Self {
+        Ok(Self {
             client,
             api_key: api_key.into(),
             endpoint,
             model: model.unwrap_or_else(|| DEFAULT_MODEL.to_string()),
             resolved,
-        }
+        })
     }
 
     /// Get the full URL for the images/generations endpoint
@@ -479,7 +479,7 @@ mod tests {
 
     #[test]
     fn test_new_with_defaults() {
-        let provider = OpenAiImageProvider::new("sk-test-key", None, None, None);
+        let provider = OpenAiImageProvider::new("sk-test-key", None, None, None).unwrap();
 
         assert_eq!(provider.api_key, "sk-test-key");
         assert_eq!(provider.endpoint, format!("{}/v1/images/generations", DEFAULT_ENDPOINT));
@@ -493,21 +493,21 @@ mod tests {
             Some("https://custom.openai.com".to_string()),
             None,
             None,
-        );
+        ).unwrap();
 
         assert_eq!(provider.endpoint, "https://custom.openai.com/v1/images/generations");
     }
 
     #[test]
     fn test_new_with_custom_model() {
-        let provider = OpenAiImageProvider::new("sk-test-key", None, Some("dall-e-2".to_string()), None);
+        let provider = OpenAiImageProvider::new("sk-test-key", None, Some("dall-e-2".to_string()), None).unwrap();
 
         assert_eq!(provider.model, "dall-e-2");
     }
 
     #[test]
     fn test_generations_url() {
-        let provider = OpenAiImageProvider::new("sk-test-key", None, None, None);
+        let provider = OpenAiImageProvider::new("sk-test-key", None, None, None).unwrap();
         assert_eq!(
             provider.generations_url(),
             "https://api.openai.com/v1/images/generations"
@@ -518,7 +518,7 @@ mod tests {
             Some("https://api.example.com".to_string()),
             None,
             None,
-        );
+        ).unwrap();
         assert_eq!(
             custom_provider.generations_url(),
             "https://api.example.com/v1/images/generations"
@@ -533,7 +533,7 @@ mod tests {
             Some("https://ai.t8star.cn/v1".to_string()),
             None,
             None,
-        );
+        ).unwrap();
         assert_eq!(provider.endpoint, "https://ai.t8star.cn/v1/images/generations");
         assert_eq!(
             provider.generations_url(),
@@ -548,7 +548,7 @@ mod tests {
             Some("https://api.example.com/".to_string()),
             None,
             None,
-        );
+        ).unwrap();
         assert_eq!(provider.endpoint, "https://api.example.com/v1/images/generations");
         assert_eq!(
             provider.generations_url(),
@@ -563,7 +563,7 @@ mod tests {
             Some("https://api.example.com/v1/".to_string()),
             None,
             None,
-        );
+        ).unwrap();
         assert_eq!(provider.endpoint, "https://api.example.com/v1/images/generations");
         assert_eq!(
             provider.generations_url(),
@@ -575,13 +575,13 @@ mod tests {
 
     #[test]
     fn test_name() {
-        let provider = OpenAiImageProvider::new("sk-test-key", None, None, None);
+        let provider = OpenAiImageProvider::new("sk-test-key", None, None, None).unwrap();
         assert_eq!(provider.name(), "openai-image");
     }
 
     #[test]
     fn test_supported_types() {
-        let provider = OpenAiImageProvider::new("sk-test-key", None, None, None);
+        let provider = OpenAiImageProvider::new("sk-test-key", None, None, None).unwrap();
         let types = provider.supported_types();
 
         assert_eq!(types.len(), 1);
@@ -590,7 +590,7 @@ mod tests {
 
     #[test]
     fn test_supports() {
-        let provider = OpenAiImageProvider::new("sk-test-key", None, None, None);
+        let provider = OpenAiImageProvider::new("sk-test-key", None, None, None).unwrap();
 
         assert!(provider.supports(GenerationType::Image));
         assert!(!provider.supports(GenerationType::Video));
@@ -600,17 +600,17 @@ mod tests {
 
     #[test]
     fn test_color() {
-        let provider = OpenAiImageProvider::new("sk-test-key", None, None, None);
+        let provider = OpenAiImageProvider::new("sk-test-key", None, None, None).unwrap();
         assert_eq!(provider.color(), "#10a37f");
     }
 
     #[test]
     fn test_default_model() {
-        let provider = OpenAiImageProvider::new("sk-test-key", None, None, None);
+        let provider = OpenAiImageProvider::new("sk-test-key", None, None, None).unwrap();
         assert_eq!(provider.default_model(), Some("dall-e-3"));
 
         let custom_provider =
-            OpenAiImageProvider::new("sk-test-key", None, Some("dall-e-2".to_string()), None);
+            OpenAiImageProvider::new("sk-test-key", None, Some("dall-e-2".to_string()), None).unwrap();
         assert_eq!(custom_provider.default_model(), Some("dall-e-2"));
     }
 
@@ -618,7 +618,7 @@ mod tests {
 
     #[test]
     fn test_build_request_body_minimal() {
-        let provider = OpenAiImageProvider::new("sk-test-key", None, None, None);
+        let provider = OpenAiImageProvider::new("sk-test-key", None, None, None).unwrap();
         let request = GenerationRequest::image("A beautiful sunset");
 
         let body = provider.build_request_body(&request);
@@ -634,7 +634,7 @@ mod tests {
 
     #[test]
     fn test_build_request_body_with_params() {
-        let provider = OpenAiImageProvider::new("sk-test-key", None, None, None);
+        let provider = OpenAiImageProvider::new("sk-test-key", None, None, None).unwrap();
         let request = GenerationRequest::image("A beautiful sunset")
             .with_params(
                 GenerationParams::builder()
@@ -660,7 +660,7 @@ mod tests {
 
     #[test]
     fn test_build_request_body_with_custom_model() {
-        let provider = OpenAiImageProvider::new("sk-test-key", None, None, None);
+        let provider = OpenAiImageProvider::new("sk-test-key", None, None, None).unwrap();
         let request = GenerationRequest::image("A test prompt")
             .with_params(GenerationParams::builder().model("dall-e-2").build());
 
@@ -845,7 +845,7 @@ mod tests {
         use crate::sync_primitives::Arc;
 
         let provider: Arc<dyn GenerationProvider> =
-            Arc::new(OpenAiImageProvider::new("sk-test", None, None, None));
+            Arc::new(OpenAiImageProvider::new("sk-test", None, None, None).unwrap());
 
         assert_eq!(provider.name(), "openai-image");
         assert!(provider.supports(GenerationType::Image));

@@ -378,7 +378,7 @@ mod tests {
 
         let _sub = global_bus
             .subscribe_async(EventFilter::all(), move |event| {
-                seq_clone.lock().unwrap().push(event.sequence);
+                seq_clone.lock().unwrap_or_else(|e| e.into_inner()).push(event.sequence);
             })
             .await;
 
@@ -394,7 +394,7 @@ mod tests {
 
         tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
-        let seqs = sequences.lock().unwrap();
+        let seqs = sequences.lock().unwrap_or_else(|e| e.into_inner());
         assert_eq!(seqs.len(), 5);
 
         // Verify sequences are monotonically increasing

@@ -38,7 +38,7 @@ pub fn truncate_and_normalize(embedding: Vec<f32>, target_dim: usize) -> Vec<f32
     }
     let truncated = &embedding[..target_dim];
     let norm: f32 = truncated.iter().map(|x| x * x).sum::<f32>().sqrt();
-    if norm > 0.0 {
+    if norm > 0.0 && norm.is_finite() {
         truncated.iter().map(|x| x / norm).collect()
     } else {
         truncated.to_vec()

@@ -4,7 +4,7 @@
 //! Compatible with OpenClaw SKILL.md format while adding Aleph-specific extensions.
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 /// Aleph Skill Specification (parsed from SKILL.md frontmatter)
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -55,9 +55,13 @@ pub struct AlephExtensions {
     #[serde(default)]
     pub security: SecuritySpec,
 
-    /// Type hints for input validation
+    /// Type hints for input validation (BTreeMap for deterministic CLI arg ordering)
     #[serde(default)]
-    pub input_hints: HashMap<String, InputHint>,
+    pub input_hints: BTreeMap<String, InputHint>,
+
+    /// Execution timeout in seconds (overrides the default 300s).
+    #[serde(default)]
+    pub timeout_secs: Option<u64>,
 
     /// Evolution metadata (auto-generated)
     #[serde(default)]

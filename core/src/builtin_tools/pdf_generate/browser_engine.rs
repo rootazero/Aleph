@@ -69,8 +69,13 @@ pub async fn generate(
         }
     };
 
-    // Step 2: Write HTML to temp file
-    let temp_path = std::env::temp_dir().join(format!("aleph_pdf_{}.html", std::process::id()));
+    // Step 2: Write HTML to temp file (use atomic counter to avoid race between concurrent calls)
+    static PDF_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let temp_path = std::env::temp_dir().join(format!(
+        "aleph_pdf_{}_{}.html",
+        std::process::id(),
+        PDF_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+    ));
     std::fs::write(&temp_path, &html_doc).map_err(|e| {
         ToolError::Execution(format!("Failed to write temp HTML file: {}", e))
     })?;
@@ -211,7 +216,10 @@ fn estimate_page_count(pdf_bytes: &[u8]) -> usize {
     let mut max_count = 0usize;
 
     for cap_start in haystack.match_indices("/Count ") {
-        let after = &haystack[cap_start.0 + 7..];
+        let after = match haystack.get(cap_start.0 + 7..) {
+            Some(s) => s,
+            None => continue,
+        };
         let num_str: String = after.chars().take_while(|c| c.is_ascii_digit()).collect();
         if let Ok(n) = num_str.parse::<usize>() {
             if n > max_count {

@@ -89,49 +89,31 @@ impl SmartRouter {
         Ok(None)
     }
 
-    /// Tier 1: Extract quoted names or direct name references
+    /// Tier 1: Extract quoted names only (no substring matching per R8 LLM Sovereignty)
     fn try_exact_name(&self, intent: &str, agents: &[RegisteredAgent]) -> Option<RoutingDecision> {
-        // Try quoted names first: 「xxx」, "xxx"
-        let quoted = extract_quoted_name(intent);
-        let intent_lower = intent.to_lowercase();
+        let quoted = extract_quoted_name(intent)?;
+        let quoted_lower = quoted.to_lowercase();
 
         for agent in agents {
-            let name_lower = agent.card.name.to_lowercase();
-
-            // Check quoted match
-            if let Some(ref q) = quoted {
-                if q.to_lowercase() == name_lower {
-                    return Some(RoutingDecision {
-                        agent: agent.clone(),
-                        confidence: 1.0,
-                        method: RoutingMethod::ExactName,
-                        reason: Some(format!("Exact name match: {}", agent.card.name)),
-                    });
-                }
-            }
-
-            // Check if agent name appears in intent (require minimum 2 chars to avoid false matches)
-            if name_lower.len() >= 2 && intent_lower.contains(&name_lower) {
+            if agent.card.name.to_lowercase() == quoted_lower {
                 return Some(RoutingDecision {
                     agent: agent.clone(),
-                    confidence: 0.9,
+                    confidence: 1.0,
                     method: RoutingMethod::ExactName,
-                    reason: Some(format!("Name found in intent: {}", agent.card.name)),
+                    reason: Some(format!("Exact quoted name match: {}", agent.card.name)),
                 });
             }
 
-            // Check skill aliases
+            // Check quoted name against aliases
             for skill in &agent.card.skills {
                 if let Some(ref aliases) = skill.aliases {
-                    for alias in aliases {
-                        if intent_lower.contains(&alias.to_lowercase()) {
-                            return Some(RoutingDecision {
-                                agent: agent.clone(),
-                                confidence: 0.85,
-                                method: RoutingMethod::ExactName,
-                                reason: Some(format!("Alias match: {}", alias)),
-                            });
-                        }
+                    if aliases.iter().any(|a| a.to_lowercase() == quoted_lower) {
+                        return Some(RoutingDecision {
+                            agent: agent.clone(),
+                            confidence: 0.95,
+                            method: RoutingMethod::ExactName,
+                            reason: Some(format!("Quoted alias match: {}", quoted)),
+                        });
                     }
                 }
             }
@@ -201,7 +183,7 @@ mod tests {
     use super::*;
     use crate::a2a::domain::*;
     use chrono::Utc;
-    use std::sync::Mutex;
+    use crate::sync_primitives::Mutex;
 
     // --- Mock AgentResolver ---
 
@@ -275,6 +257,7 @@ mod tests {
             base_url: format!("http://localhost:8080/{}", name.to_lowercase()),
             last_seen: Utc::now(),
             health,
+            auth_token: None,
         }
     }
 
@@ -331,25 +314,23 @@ mod tests {
     }
 
     #[test]
-    fn try_exact_name_in_text() {
+    fn try_exact_name_unquoted_no_match() {
+        // Unquoted names no longer match (R8 LLM Sovereignty — no substring matching)
         let agent = make_agent("CodeBot", vec![], AgentHealth::Healthy);
         let router = SmartRouter::new(Arc::new(MockResolver::new(vec![])));
         let result = router.try_exact_name("ask codebot to review", &[agent]);
-        assert!(result.is_some());
-        let decision = result.unwrap();
-        assert_eq!(decision.confidence, 0.9);
-        assert_eq!(decision.method, RoutingMethod::ExactName);
+        assert!(result.is_none());
     }
 
     #[test]
-    fn try_exact_name_alias_match() {
+    fn try_exact_name_quoted_alias_match() {
         let skill = make_skill("s1", "Skill", Some(vec!["reviewer".to_string()]));
         let agent = make_agent("Agent", vec![skill], AgentHealth::Healthy);
         let router = SmartRouter::new(Arc::new(MockResolver::new(vec![])));
-        let result = router.try_exact_name("ask the reviewer to help", &[agent]);
+        let result = router.try_exact_name("ask \"reviewer\" to help", &[agent]);
         assert!(result.is_some());
         let decision = result.unwrap();
-        assert_eq!(decision.confidence, 0.85);
+        assert_eq!(decision.confidence, 0.95);
     }
 
     // --- route() integration tests ---
@@ -407,7 +388,7 @@ mod tests {
         let resolver = Arc::new(MockResolver::new(vec![agent]));
         let router = SmartRouter::new(resolver);
 
-        let result = router.route("ask slowbot").await.unwrap();
+        let result = router.route("ask \"SlowBot\"").await.unwrap();
         assert!(result.is_some());
     }
 

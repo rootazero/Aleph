@@ -213,7 +213,7 @@ impl DeltaSink for NoopSink {
 // response_to_delta_stream
 // =============================================================================
 
-/// Convert a completed [`ProviderResponse`] into a delta stream.
+/// Collect delta events from a completed [`ProviderResponse`].
 ///
 /// Emission order:
 /// 1. `ThinkingDelta` (if `thinking` is present)
@@ -221,43 +221,50 @@ impl DeltaSink for NoopSink {
 /// 3. For each tool call: `ToolCallStart` → `ToolCallArgDelta` → `ToolCallEnd`
 /// 4. `Usage` (if present)
 /// 5. `Done`
+fn collect_response_deltas(response: ProviderResponse) -> Vec<ProviderDelta> {
+    let mut events = Vec::new();
+
+    if let Some(thinking) = response.thinking {
+        events.push(ProviderDelta::ThinkingDelta(thinking));
+    }
+
+    if let Some(text) = response.text {
+        events.push(ProviderDelta::TextDelta(text));
+    }
+
+    for tc in response.tool_calls {
+        let args_str = tc.arguments.to_string();
+        events.push(ProviderDelta::ToolCallStart {
+            id: tc.id.clone(),
+            name: tc.name,
+        });
+        if !args_str.is_empty() && args_str != "null" {
+            events.push(ProviderDelta::ToolCallArgDelta {
+                id: tc.id.clone(),
+                delta: args_str,
+            });
+        }
+        events.push(ProviderDelta::ToolCallEnd { id: tc.id });
+    }
+
+    if let Some(usage) = response.usage {
+        events.push(ProviderDelta::Usage(usage));
+    }
+
+    events.push(ProviderDelta::Done(response.stop_reason));
+
+    events
+}
+
+/// Convert a completed [`ProviderResponse`] into a delta stream.
 ///
 /// This is primarily used to bridge non-streaming adapters into the stream-first
 /// pipeline, so downstream consumers always see the same event sequence.
 pub fn response_to_delta_stream(
     response: ProviderResponse,
 ) -> BoxStream<'static, anyhow::Result<ProviderDelta>> {
-    let mut events: Vec<anyhow::Result<ProviderDelta>> = Vec::new();
-
-    if let Some(thinking) = response.thinking {
-        events.push(Ok(ProviderDelta::ThinkingDelta(thinking)));
-    }
-
-    if let Some(text) = response.text {
-        events.push(Ok(ProviderDelta::TextDelta(text)));
-    }
-
-    for tc in response.tool_calls {
-        let args_str = tc.arguments.to_string();
-        events.push(Ok(ProviderDelta::ToolCallStart {
-            id: tc.id.clone(),
-            name: tc.name,
-        }));
-        if !args_str.is_empty() && args_str != "null" {
-            events.push(Ok(ProviderDelta::ToolCallArgDelta {
-                id: tc.id.clone(),
-                delta: args_str,
-            }));
-        }
-        events.push(Ok(ProviderDelta::ToolCallEnd { id: tc.id }));
-    }
-
-    if let Some(usage) = response.usage {
-        events.push(Ok(ProviderDelta::Usage(usage)));
-    }
-
-    events.push(Ok(ProviderDelta::Done(response.stop_reason)));
-
+    let events: Vec<anyhow::Result<ProviderDelta>> =
+        collect_response_deltas(response).into_iter().map(Ok).collect();
     Box::pin(stream::iter(events))
 }
 
@@ -268,37 +275,8 @@ pub fn response_to_delta_stream(
 pub fn response_to_delta_stream_result(
     response: ProviderResponse,
 ) -> BoxStream<'static, crate::error::Result<ProviderDelta>> {
-    let mut events: Vec<crate::error::Result<ProviderDelta>> = Vec::new();
-
-    if let Some(thinking) = response.thinking {
-        events.push(Ok(ProviderDelta::ThinkingDelta(thinking)));
-    }
-
-    if let Some(text) = response.text {
-        events.push(Ok(ProviderDelta::TextDelta(text)));
-    }
-
-    for tc in response.tool_calls {
-        let args_str = tc.arguments.to_string();
-        events.push(Ok(ProviderDelta::ToolCallStart {
-            id: tc.id.clone(),
-            name: tc.name,
-        }));
-        if !args_str.is_empty() && args_str != "null" {
-            events.push(Ok(ProviderDelta::ToolCallArgDelta {
-                id: tc.id.clone(),
-                delta: args_str,
-            }));
-        }
-        events.push(Ok(ProviderDelta::ToolCallEnd { id: tc.id }));
-    }
-
-    if let Some(usage) = response.usage {
-        events.push(Ok(ProviderDelta::Usage(usage)));
-    }
-
-    events.push(Ok(ProviderDelta::Done(response.stop_reason)));
-
+    let events: Vec<crate::error::Result<ProviderDelta>> =
+        collect_response_deltas(response).into_iter().map(Ok).collect();
     Box::pin(stream::iter(events))
 }
 

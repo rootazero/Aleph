@@ -129,6 +129,10 @@ impl ContextInjector {
                         debug!("Added event to context window");
                     }
                 }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    warn!("Context injector lagged, skipped {} events", n);
+                    continue;
+                }
                 Err(e) => {
                     warn!("Error receiving Important event: {}", e);
                     break;

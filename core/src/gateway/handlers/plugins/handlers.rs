@@ -689,7 +689,14 @@ pub async fn handle_execute_command(request: JsonRpcRequest) -> JsonRpcResponse 
         .await
     {
         Ok(cmd_result) => {
-            JsonRpcResponse::success(request.id, serde_json::to_value(cmd_result).unwrap())
+            match serde_json::to_value(cmd_result) {
+                Ok(v) => JsonRpcResponse::success(request.id, v),
+                Err(e) => JsonRpcResponse::error(
+                    request.id,
+                    INTERNAL_ERROR,
+                    format!("Failed to serialize command result: {}", e),
+                ),
+            }
         }
         Err(e) => JsonRpcResponse::error(
             request.id,

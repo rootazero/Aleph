@@ -73,7 +73,7 @@ impl MidjourneyProvider {
     /// let provider = MidjourneyProvider::new("your-api-key");
     /// assert_eq!(provider.name(), "midjourney");
     /// ```
-    pub fn new<S: Into<String>>(api_key: S) -> Self {
+    pub fn new<S: Into<String>>(api_key: S) -> GenerationResult<Self> {
         MidjourneyProviderBuilder::new(api_key).build()
     }
 

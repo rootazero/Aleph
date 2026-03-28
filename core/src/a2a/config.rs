@@ -51,7 +51,7 @@ pub struct A2AServerConfig {
 }
 
 /// A2A security settings
-#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct A2ASecurityConfig {
     /// Allow unauthenticated access from localhost
     #[serde(default = "default_true")]
@@ -60,6 +60,15 @@ pub struct A2ASecurityConfig {
     /// API tokens for trusted-level authentication
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tokens: Vec<String>,
+}
+
+impl Default for A2ASecurityConfig {
+    fn default() -> Self {
+        Self {
+            local_bypass: true,
+            tokens: Vec::new(),
+        }
+    }
 }
 
 fn default_true() -> bool {

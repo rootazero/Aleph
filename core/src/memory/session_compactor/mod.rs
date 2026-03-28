@@ -353,7 +353,7 @@ impl SessionCompactor {
 
         // Count existing d0 facts to determine next sequence number
         let existing_d0 = self.count_valid_facts_at_depth(&session_id, 0).await?;
-        let mut next_seq = existing_d0 as u32;
+        let mut next_seq = existing_d0.min(u32::MAX as usize) as u32;
         let mut d0_created = 0u32;
 
         // Generate d0 summaries for each chunk
@@ -603,7 +603,7 @@ impl SessionCompactor {
         let existing_target = self
             .count_valid_facts_at_depth(session_id, target_depth)
             .await?;
-        let seq = existing_target as u32;
+        let seq = existing_target.min(u32::MAX as usize) as u32;
 
         let source_tokens: usize = messages
             .iter()

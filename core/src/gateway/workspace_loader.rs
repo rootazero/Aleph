@@ -84,12 +84,16 @@ impl WorkspaceFileLoader {
     /// truncated to the largest valid char boundary at or before `max_chars`.
     pub fn load_memory_md(&mut self, workspace: &Path, max_chars: usize) -> Option<String> {
         let content = self.load(workspace, "MEMORY.md")?;
-        if content.len() <= max_chars {
+        if content.chars().count() <= max_chars {
             Some(content)
         } else {
-            // Truncate at char boundary
-            let truncated = &content[..content.floor_char_boundary(max_chars)];
-            Some(truncated.to_string())
+            // Truncate at the char boundary corresponding to max_chars characters
+            let byte_offset = content
+                .char_indices()
+                .nth(max_chars)
+                .map(|(i, _)| i)
+                .unwrap_or(content.len());
+            Some(content[..byte_offset].to_string())
         }
     }
 

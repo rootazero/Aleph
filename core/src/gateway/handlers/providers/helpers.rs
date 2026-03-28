@@ -14,7 +14,19 @@ pub(super) fn vault_key(provider_name: &str) -> String {
     format!("ai:{}", provider_name)
 }
 
-/// Resolve API key from vault into a ProviderInfo response
+/// Check whether an API key exists in the vault for a provider (never exposes the key)
+pub(super) fn has_api_key(name: &str, vault: &SharedTokenManager) -> bool {
+    match vault.get_secret(&vault_key(name)) {
+        Ok(Some(_)) => true,
+        Ok(None) => false,
+        Err(e) => {
+            warn!(provider = %name, error = %e, "Failed to read API key from vault");
+            false
+        }
+    }
+}
+
+/// Resolve the actual API key from vault (for internal use like test/create-provider, never serialized to responses)
 pub(super) fn resolve_api_key(name: &str, vault: &SharedTokenManager) -> Option<String> {
     match vault.get_secret(&vault_key(name)) {
         Ok(Some(secret)) => Some(secret.expose().to_string()),

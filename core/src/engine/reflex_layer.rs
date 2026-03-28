@@ -79,20 +79,20 @@ impl ReflexLayer {
     pub fn try_reflex(&self, input: &str) -> Option<AtomicAction> {
         // L1: Exact match
         if let Some(action) = self.exact_cache.get(input) {
-            if let Ok(mut stats) = self.stats.write() { stats.l1_hits += 1; }
+            self.stats.write().unwrap_or_else(|e| e.into_inner()).l1_hits += 1;
             debug!(input = %input, "L1 cache hit");
             return Some(action.clone());
         }
 
         // L2: Keyword routing
         if let Some(action) = self.route_by_keywords(input) {
-            if let Ok(mut stats) = self.stats.write() { stats.l2_hits += 1; }
+            self.stats.write().unwrap_or_else(|e| e.into_inner()).l2_hits += 1;
             debug!(input = %input, action = ?action, "L2 keyword routing hit");
             return Some(action);
         }
 
         // Need L3 reasoning
-        if let Ok(mut stats) = self.stats.write() { stats.l3_fallbacks += 1; }
+        self.stats.write().unwrap_or_else(|e| e.into_inner()).l3_fallbacks += 1;
         debug!(input = %input, "Falling back to L3 reasoning");
         None
     }
@@ -374,7 +374,9 @@ impl ParamExtractor for LsCommandExtractor {
         let command = if path.is_empty() || path == "." {
             "ls -la".to_string()
         } else {
-            format!("ls -la {}", path)
+            // Shell-escape path to prevent command injection
+            let safe_path = path.replace('\'', "'\\''");
+            format!("ls -la '{}'", safe_path)
         };
 
         let mut params = HashMap::new();
@@ -612,7 +614,7 @@ mod tests {
         let result = reflex.try_reflex("ls src/");
         assert!(result.is_some());
         if let Some(AtomicAction::Bash { command, .. }) = result {
-            assert_eq!(command, "ls -la src/");
+            assert_eq!(command, "ls -la 'src/'");
         }
     }
 

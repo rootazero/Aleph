@@ -36,14 +36,21 @@ pub fn resolve_command(name: &str, registry: &SkillRegistry) -> Option<SkillComm
         }
     }
 
-    // 2. Try match on skill_name() part
-    for (_id, manifest) in registry.iter() {
-        if manifest.id().skill_name() == name && manifest.is_user_invocable() {
-            return Some(spec_from_manifest(manifest));
-        }
-    }
+    // 2. Try match on skill_name() part — collect all matches and pick highest priority
+    //    for deterministic results across HashMap iteration orders.
+    let mut candidates: Vec<&SkillManifest> = registry
+        .iter()
+        .filter(|(_, m)| m.id().skill_name() == name && m.is_user_invocable())
+        .map(|(_, m)| m)
+        .collect();
+    // Sort by priority descending, then by id for deterministic tie-breaking
+    candidates.sort_by(|a, b| {
+        b.priority()
+            .cmp(&a.priority())
+            .then_with(|| a.id().as_str().cmp(b.id().as_str()))
+    });
 
-    None
+    candidates.first().map(|m| spec_from_manifest(m))
 }
 
 /// List all available slash commands from the registry.

@@ -10,40 +10,6 @@ use crate::wizard::{
     RpcPrompter, WizardFlow, WizardOption, WizardPrompter, WizardSessionError,
 };
 
-/// Provider choice
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Provider {
-    Anthropic,
-    OpenAI,
-    Google,
-    Ollama,
-    OpenRouter,
-}
-
-/// Messaging app choice
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "lowercase")]
-pub enum MessagingApp {
-    Telegram,
-    Discord,
-    Slack,
-    IMessage,
-    None,
-}
-
-/// Thinking level
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ThinkingLevel {
-    Off,
-    Minimal,
-    Low,
-    Medium,
-    High,
-    XHigh,
-}
-
 /// Collected onboarding data
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct OnboardingData {

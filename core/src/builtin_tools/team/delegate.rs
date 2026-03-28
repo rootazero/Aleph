@@ -223,20 +223,24 @@ impl AlephTool for TeamDelegateTool {
             pending_media: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
         };
 
-        let execution_adapter = context.execution_adapter();
+        let execution_adapter = Arc::clone(context.execution_adapter());
         let emitter: Arc<dyn crate::gateway::event_emitter::EventEmitter + Send + Sync> =
             Arc::new(NoOpEventEmitter::new());
 
-        // 5. Execute with timeout
+        // 5. Spawn execution so we can abort on timeout (prevents resource leak)
+        let agent_for_exec = target_agent.clone();
+        let handle = tokio::spawn(async move {
+            execution_adapter
+                .execute(request, agent_for_exec, emitter)
+                .await
+        });
+        let abort_handle = handle.abort_handle();
+
         let timeout_duration = std::time::Duration::from_secs(args.timeout_secs);
-        let execution_result = tokio::time::timeout(
-            timeout_duration,
-            execution_adapter.execute(request, target_agent.clone(), emitter),
-        )
-        .await;
+        let execution_result = tokio::time::timeout(timeout_duration, handle).await;
 
         match execution_result {
-            Ok(Ok(())) => {
+            Ok(Ok(Ok(()))) => {
                 // Execution completed — fetch the last assistant message
                 let reply = Self::fetch_last_reply(&target_agent, &session_key).await;
                 let reply_text = reply.unwrap_or_else(|| "(No reply content)".to_string());
@@ -262,7 +266,7 @@ impl AlephTool for TeamDelegateTool {
                     error: None,
                 })
             }
-            Ok(Err(e)) => {
+            Ok(Ok(Err(e))) => {
                 let error_msg = format!("Execution failed: {}", e);
                 warn!(
                     task_id = %task.id,
@@ -285,12 +289,34 @@ impl AlephTool for TeamDelegateTool {
                     error: Some(error_msg),
                 })
             }
+            Ok(Err(join_err)) => {
+                let error_msg = format!("Task panicked: {}", join_err);
+                warn!(task_id = %task.id, "team_delegate: task panicked");
+
+                self.store
+                    .update_task_status(
+                        &task.id,
+                        TeamTaskStatus::Failed,
+                        Some(error_msg.clone()),
+                    )
+                    .await?;
+
+                Ok(TeamDelegateOutput {
+                    task_id: task.id,
+                    status: DelegateStatus::Failed,
+                    reply: None,
+                    error: Some(error_msg),
+                })
+            }
             Err(_) => {
+                // Timeout — abort the spawned task to free resources
+                abort_handle.abort();
+
                 let error_msg = format!("Timed out after {} seconds", args.timeout_secs);
                 warn!(
                     task_id = %task.id,
                     timeout_secs = args.timeout_secs,
-                    "team_delegate: timed out"
+                    "team_delegate: timed out, task aborted"
                 );
 
                 self.store

@@ -145,7 +145,7 @@ impl LlmScorer {
                 let mut metrics = self.metrics.write().await;
                 metrics.total_calls += 1;
                 metrics.cache_hits += 1;
-                metrics.total_latency_ms += start.elapsed().as_millis() as u64;
+                metrics.total_latency_ms += start.elapsed().as_millis().min(u64::MAX as u128) as u64;
 
                 debug!(
                     "LLM scorer cache hit for key: {} (score: {})",
@@ -162,7 +162,7 @@ impl LlmScorer {
                 // Update metrics - success
                 let mut metrics = self.metrics.write().await;
                 metrics.total_calls += 1;
-                metrics.total_latency_ms += start.elapsed().as_millis() as u64;
+                metrics.total_latency_ms += start.elapsed().as_millis().min(u64::MAX as u128) as u64;
 
                 info!(
                     "LLM scored memory entry: {} (latency: {}ms)",
@@ -182,7 +182,7 @@ impl LlmScorer {
                 let mut metrics = self.metrics.write().await;
                 metrics.total_calls += 1;
                 metrics.errors += 1;
-                metrics.total_latency_ms += start.elapsed().as_millis() as u64;
+                metrics.total_latency_ms += start.elapsed().as_millis().min(u64::MAX as u128) as u64;
 
                 warn!("LLM scoring failed: {}", e);
                 return Err(e);
@@ -222,9 +222,9 @@ impl LlmScorer {
         let system_prompt = self.build_system_prompt();
 
         // Call LLM
-        let __msgs = [UnifiedMessage::user(&prompt)];
+        let msgs = [UnifiedMessage::user(&prompt)];
         let response = self.provider.process(
-            RequestPayload::new(&__msgs).with_system(Some(&system_prompt))
+            RequestPayload::new(&msgs).with_system(Some(&system_prompt))
         ).await?;
 
         // Parse response

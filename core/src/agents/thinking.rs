@@ -504,7 +504,9 @@ fn extract_supported_values(message: &str) -> Vec<String> {
     };
 
     // Extract until end of line or period
-    let fragment = &message[start_idx..];
+    // Use `lower` consistently to avoid UTF-8 index mismatch when
+    // to_lowercase() changes byte lengths (e.g. Turkish İ → i)
+    let fragment = &lower[start_idx..];
     let end_idx = fragment
         .find('\n')
         .or_else(|| fragment.find('.'))

@@ -173,7 +173,7 @@ impl AnchorRetriever {
         Self {
             anchor_store,
             tag_extractor,
-            cache: LruCache::new(NonZeroUsize::new(cache_size).unwrap()),
+            cache: LruCache::new(NonZeroUsize::new(cache_size).unwrap_or(NonZeroUsize::new(1).unwrap())),
         }
     }
 
@@ -210,12 +210,7 @@ impl AnchorRetriever {
         let tags = self.tag_extractor.extract_tags(intent)?;
 
         // Query anchor store for anchors matching any of the tags
-        let store = self.anchor_store.read().map_err(|e| {
-            AlephError::Other {
-                message: format!("Failed to acquire read lock on anchor store: {}", e),
-                suggestion: None,
-            }
-        })?;
+        let store = self.anchor_store.read().unwrap_or_else(|e| e.into_inner());
 
         let all_anchors = store.list_all().map_err(|e| {
             AlephError::Other {

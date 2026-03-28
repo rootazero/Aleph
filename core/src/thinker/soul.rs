@@ -237,10 +237,10 @@ impl SoulManifest {
         }
 
         // Find the closing ---
-        let after_first = &trimmed[3..];
+        let after_first = trimmed.get(3..).unwrap_or_default();
         if let Some(end_pos) = after_first.find("\n---") {
-            let frontmatter = after_first[..end_pos].trim().to_string();
-            let body = after_first[end_pos + 4..].trim_start().to_string();
+            let frontmatter = after_first.get(..end_pos).unwrap_or_default().trim().to_string();
+            let body = after_first.get(end_pos + 4..).unwrap_or_default().trim_start().to_string();
             Ok((frontmatter, body))
         } else {
             Err(SoulLoadError::Parse(

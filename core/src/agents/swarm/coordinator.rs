@@ -6,6 +6,13 @@ use crate::sync_primitives::Arc;
 use std::time::Duration;
 use tracing::info;
 
+fn now_epoch() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
 use super::aggregator::{IntelligenceLayer, SemanticAggregator};
 use super::bus::AgentMessageBus;
 use super::collective_memory::CollectiveMemory;
@@ -144,13 +151,17 @@ impl SwarmCoordinator {
     ///
     /// Rebuilds the context injector so it includes task context in prompts.
     /// Must be called before `start()` (i.e. before the Arc is shared).
-    pub fn with_task_store(mut self, store: Arc<dyn CoordTaskStore>) -> Self {
-        // Safe to unwrap: called during builder phase before Arc is shared
-        let inner = Arc::try_unwrap(self.injector)
-            .unwrap_or_else(|_| panic!("with_task_store must be called before start()"));
+    ///
+    /// Returns `Err` if the injector Arc has already been cloned (e.g. after `start()`).
+    pub fn with_task_store(mut self, store: Arc<dyn CoordTaskStore>) -> Result<Self> {
+        let inner = Arc::try_unwrap(self.injector).map_err(|_| {
+            crate::error::AlephError::config(
+                "with_task_store must be called before start() — injector Arc already shared",
+            )
+        })?;
         self.injector = Arc::new(inner.with_task_store(store.clone()));
         self.task_store = Some(store);
-        self
+        Ok(self)
     }
 
     /// Start all background tasks
@@ -205,7 +216,7 @@ impl SwarmCoordinator {
                 agent_id,
                 action_type,
                 target: Some(target),
-                timestamp: chrono::Utc::now().timestamp() as u64,
+                timestamp: now_epoch(),
             }),
             AgentLoopEvent::ActionCompleted {
                 agent_id,
@@ -217,7 +228,7 @@ impl SwarmCoordinator {
                 tool_name: action_type,
                 result: format!("{:?}", result),
                 duration_ms,
-                timestamp: chrono::Utc::now().timestamp() as u64,
+                timestamp: now_epoch(),
             }),
             AgentLoopEvent::DecisionMade {
                 agent_id,
@@ -227,7 +238,7 @@ impl SwarmCoordinator {
                 agent_id,
                 decision,
                 affected_files,
-                timestamp: chrono::Utc::now().timestamp() as u64,
+                timestamp: now_epoch(),
             }),
             AgentLoopEvent::InsightCaptured {
                 agent_id,
@@ -237,12 +248,12 @@ impl SwarmCoordinator {
                 InsightSeverity::Critical => AgentEvent::Critical(CriticalEvent::ErrorDetected {
                     agent_id,
                     error_message: insight,
-                    timestamp: chrono::Utc::now().timestamp() as u64,
+                    timestamp: now_epoch(),
                 }),
                 _ => AgentEvent::Info(InfoEvent::InsightCaptured {
                     agent_id,
                     insight,
-                    timestamp: chrono::Utc::now().timestamp() as u64,
+                    timestamp: now_epoch(),
                 }),
             },
         };

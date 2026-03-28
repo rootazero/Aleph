@@ -91,10 +91,13 @@ pub async fn refresh_token(cred: &OAuthCredential) -> Result<OAuthCredential> {
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
+        debug!("Token refresh error body: {}", body);
+        // Truncate body to avoid leaking credentials (some providers echo back client_secret)
+        let body_preview: String = body.chars().take(200).collect();
         return Err(anyhow::anyhow!(
             "Token refresh failed: {} — {}",
             status,
-            body
+            body_preview
         ));
     }
 

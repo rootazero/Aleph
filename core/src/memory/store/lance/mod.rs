@@ -106,21 +106,70 @@ impl LanceMemoryBackend {
                 if missing.is_empty() {
                     Ok(table)
                 } else {
-                    tracing::warn!(
+                    // Add missing columns with default values instead of
+                    // dropping and recreating (which destroys all data).
+                    tracing::info!(
                         table = name,
                         missing_columns = ?missing,
-                        "Table schema outdated, dropping and recreating"
+                        "Table schema outdated, adding missing columns"
                     );
-                    drop(table);
-                    db.drop_table(name, &[]).await.map_err(lance_err)?;
-                    db.create_empty_table(name, schema)
-                        .execute()
-                        .await
-                        .map_err(|e| {
-                            AlephError::config(format!(
-                                "Failed to recreate table '{}': {}", name, e
-                            ))
-                        })
+
+                    for field in schema.fields() {
+                        if table_schema.field_with_name(field.name()).is_err() {
+                            use arrow_schema::DataType;
+                            let default_value = match field.data_type() {
+                                DataType::Utf8 | DataType::LargeUtf8 => "''",
+                                DataType::Int32 | DataType::Int64 => "0",
+                                DataType::Float32 | DataType::Float64 => "0.0",
+                                DataType::Boolean => "true",
+                                _ => {
+                                    // For complex types (FixedSizeList/List), skip —
+                                    // they will be NULL by default in LanceDB.
+                                    tracing::debug!(
+                                        table = name,
+                                        column = field.name().as_str(),
+                                        "Skipping complex column migration (will be NULL)"
+                                    );
+                                    continue;
+                                }
+                            };
+
+                            let alter_sql = format!(
+                                "CAST({} AS {})",
+                                default_value,
+                                Self::arrow_type_to_sql(field.data_type())
+                            );
+
+                            match table
+                                .add_columns(
+                                    lancedb::table::NewColumnTransform::SqlExpressions(vec![(
+                                        field.name().to_string(),
+                                        alter_sql,
+                                    )]),
+                                    None,
+                                )
+                                .await
+                            {
+                                Ok(_) => {
+                                    tracing::info!(
+                                        table = name,
+                                        column = field.name().as_str(),
+                                        "Added missing column"
+                                    );
+                                }
+                                Err(e) => {
+                                    tracing::warn!(
+                                        table = name,
+                                        column = field.name().as_str(),
+                                        error = %e,
+                                        "Failed to add column (may already exist or be unsupported)"
+                                    );
+                                }
+                            }
+                        }
+                    }
+
+                    Ok(table)
                 }
             }
             Err(_) => db
@@ -130,6 +179,22 @@ impl LanceMemoryBackend {
                 .map_err(|e| {
                     AlephError::config(format!("Failed to create table '{}': {}", name, e))
                 }),
+        }
+    }
+}
+
+impl LanceMemoryBackend {
+    /// Map Arrow DataType to a SQL type string for LanceDB `add_columns` expressions.
+    fn arrow_type_to_sql(dt: &arrow_schema::DataType) -> &'static str {
+        use arrow_schema::DataType;
+        match dt {
+            DataType::Utf8 | DataType::LargeUtf8 => "string",
+            DataType::Int32 => "int",
+            DataType::Int64 => "bigint",
+            DataType::Float32 => "float",
+            DataType::Float64 => "double",
+            DataType::Boolean => "boolean",
+            _ => "string", // fallback
         }
     }
 }

@@ -166,15 +166,15 @@ pub fn parse_file_size(s: &str) -> Result<u64, String> {
         return Ok(n);
     }
 
-    // Parse with suffix
-    let (num_part, suffix) = if s.ends_with("GB") {
-        (&s[..s.len() - 2], 1024 * 1024 * 1024)
-    } else if s.ends_with("MB") {
-        (&s[..s.len() - 2], 1024 * 1024)
-    } else if s.ends_with("KB") {
-        (&s[..s.len() - 2], 1024)
-    } else if s.ends_with('B') {
-        (&s[..s.len() - 1], 1)
+    // Parse with suffix (use strip_suffix for UTF-8 safety)
+    let (num_part, multiplier) = if let Some(n) = s.strip_suffix("GB") {
+        (n, 1024 * 1024 * 1024)
+    } else if let Some(n) = s.strip_suffix("MB") {
+        (n, 1024 * 1024)
+    } else if let Some(n) = s.strip_suffix("KB") {
+        (n, 1024)
+    } else if let Some(n) = s.strip_suffix('B') {
+        (n, 1)
     } else {
         return Err(format!(
             "Invalid file size format: '{}'. Use formats like '100MB', '1GB', etc.",
@@ -187,7 +187,7 @@ pub fn parse_file_size(s: &str) -> Result<u64, String> {
         .parse()
         .map_err(|_| format!("Invalid number in file size: '{}'", num_part))?;
 
-    Ok(num * suffix)
+    Ok(num * multiplier)
 }
 
 // =============================================================================

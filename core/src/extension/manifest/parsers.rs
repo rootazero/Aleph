@@ -114,7 +114,9 @@ fn parse_frontmatter<T: serde::de::DeserializeOwned + Default>(content: &str) ->
     // Safe: "---" is ASCII so byte offset 3 is always a valid char boundary.
     // Using .get() for defensive consistency per project UTF-8 convention.
     let rest = content.get(3..).unwrap_or("");
-    let end_pos = rest.find("\n---").or_else(|| rest.find("\r\n---"));
+    // Note: "\n---" matches inside "\r\n---" too, so no separate \r\n branch needed.
+    // The trailing \r (if any) is stripped by trim() on fm_str.
+    let end_pos = rest.find("\n---");
 
     match end_pos {
         Some(pos) => {
@@ -138,6 +140,88 @@ fn parse_frontmatter<T: serde::de::DeserializeOwned + Default>(content: &str) ->
 // Public parser functions
 // ============================================================================
 
+/// Configuration for scanning a component directory.
+struct ComponentScanConfig {
+    /// Name of the component type (for logging)
+    component_name: &'static str,
+    /// Filename to look for inside subdirectories (e.g., "SKILL.md", "agent.md")
+    dir_entry_file: &'static str,
+}
+
+/// Generic component directory scanner.
+///
+/// Scans `{base}/{rel_path}/*.md` (file-based) and
+/// `{base}/{rel_path}/*/{dir_entry_file}` (directory-based).
+///
+/// The `parse_fn` is called for each discovered `.md` file with
+/// `(md_path, default_name, plugin_id)` and should return a single capability.
+fn scan_component_dir<F>(
+    base: &Path,
+    rel_path: &str,
+    plugin_id: &str,
+    config: &ComponentScanConfig,
+    parse_fn: F,
+) -> Result<Vec<CapabilityDeclaration>>
+where
+    F: Fn(&Path, &str, &str) -> Result<CapabilityDeclaration>,
+{
+    let dir = base.join(rel_path);
+    if !dir.exists() || !dir.is_dir() {
+        return Ok(Vec::new());
+    }
+
+    // Security: verify the resolved directory is inside the base path
+    if !is_path_inside(base, &dir) {
+        warn!(
+            "{} directory {:?} escapes plugin root {:?}, skipping",
+            config.component_name, dir, base
+        );
+        return Ok(Vec::new());
+    }
+
+    let mut caps = Vec::new();
+    let entries = std::fs::read_dir(&dir)
+        .with_context(|| format!("Failed to read {} dir: {}", config.component_name, dir.display()))?;
+
+    for entry in entries {
+        let entry = entry?;
+        let path = entry.path();
+
+        if is_hidden(&path) {
+            continue;
+        }
+
+        let result = if path.is_dir() {
+            let entry_file = path.join(config.dir_entry_file);
+            if !entry_file.exists() {
+                continue;
+            }
+            let dir_name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("unknown")
+                .to_string();
+            parse_fn(&entry_file, &dir_name, plugin_id)
+        } else if path.extension().map(|e| e == "md").unwrap_or(false) {
+            let file_name = path
+                .file_stem()
+                .and_then(|n| n.to_str())
+                .unwrap_or("unknown")
+                .to_string();
+            parse_fn(&path, &file_name, plugin_id)
+        } else {
+            continue;
+        };
+
+        match result {
+            Ok(cap) => caps.push(cap),
+            Err(e) => warn!("Failed to parse {} from {:?}: {}", config.component_name, path, e),
+        }
+    }
+
+    Ok(caps)
+}
+
 /// Parse all skills from a directory, returning `CapabilityDeclaration::Skill` values.
 ///
 /// Scans `{base}/{rel_path}/*/SKILL.md` (directory-based skills) and
@@ -147,64 +231,16 @@ pub fn parse_skills_dir(
     rel_path: &str,
     plugin_id: &str,
 ) -> Result<Vec<CapabilityDeclaration>> {
-    let dir = base.join(rel_path);
-    if !dir.exists() || !dir.is_dir() {
-        return Ok(Vec::new());
-    }
-
-    // Security: verify the resolved directory is inside the base path
-    if !is_path_inside(base, &dir) {
-        warn!(
-            "Skills directory {:?} escapes plugin root {:?}, skipping",
-            dir, base
-        );
-        return Ok(Vec::new());
-    }
-
-    let mut caps = Vec::new();
-    let entries = std::fs::read_dir(&dir)
-        .with_context(|| format!("Failed to read skills dir: {}", dir.display()))?;
-
-    for entry in entries {
-        let entry = entry?;
-        let path = entry.path();
-
-        // Skip hidden entries
-        if is_hidden(&path) {
-            continue;
-        }
-
-        let result = if path.is_dir() {
-            // Directory-based skill: look for SKILL.md
-            let skill_md = path.join("SKILL.md");
-            if !skill_md.exists() {
-                continue;
-            }
-            let dir_name = path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("unknown")
-                .to_string();
-            parse_single_skill(&skill_md, &dir_name, plugin_id)
-        } else if path.extension().map(|e| e == "md").unwrap_or(false) {
-            // File-based skill: use filename stem as default name
-            let file_name = path
-                .file_stem()
-                .and_then(|n| n.to_str())
-                .unwrap_or("unknown")
-                .to_string();
-            parse_single_skill(&path, &file_name, plugin_id)
-        } else {
-            continue;
-        };
-
-        match result {
-            Ok(cap) => caps.push(cap),
-            Err(e) => warn!("Failed to parse skill from {:?}: {}", path, e),
-        }
-    }
-
-    Ok(caps)
+    scan_component_dir(
+        base,
+        rel_path,
+        plugin_id,
+        &ComponentScanConfig {
+            component_name: "Skills",
+            dir_entry_file: "SKILL.md",
+        },
+        parse_single_skill,
+    )
 }
 
 /// Parse a single skill markdown file into a `CapabilityDeclaration::Skill`.
@@ -229,9 +265,7 @@ fn parse_single_skill(
     }))
 }
 
-/// Parse all commands from a directory, returning `CapabilityDeclaration::Skill` values
-/// (commands are skills with `SkillType::Command` semantics, but in the capability
-/// model they share the same `SkillRegistration` type).
+/// Parse all commands from a directory, returning `CapabilityDeclaration::Command` values.
 ///
 /// Scans `{base}/{rel_path}/*.md` files and `{base}/{rel_path}/*/SKILL.md` directories.
 pub fn parse_commands_dir(
@@ -239,61 +273,16 @@ pub fn parse_commands_dir(
     rel_path: &str,
     plugin_id: &str,
 ) -> Result<Vec<CapabilityDeclaration>> {
-    let dir = base.join(rel_path);
-    if !dir.exists() || !dir.is_dir() {
-        return Ok(Vec::new());
-    }
-
-    // Security: verify the resolved directory is inside the base path
-    if !is_path_inside(base, &dir) {
-        warn!(
-            "Commands directory {:?} escapes plugin root {:?}, skipping",
-            dir, base
-        );
-        return Ok(Vec::new());
-    }
-
-    let mut caps = Vec::new();
-    let entries = std::fs::read_dir(&dir)
-        .with_context(|| format!("Failed to read commands dir: {}", dir.display()))?;
-
-    for entry in entries {
-        let entry = entry?;
-        let path = entry.path();
-
-        if is_hidden(&path) {
-            continue;
-        }
-
-        let result = if path.is_dir() {
-            let skill_md = path.join("SKILL.md");
-            if !skill_md.exists() {
-                continue;
-            }
-            let dir_name = path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("unknown")
-                .to_string();
-            parse_single_command(&skill_md, &dir_name, plugin_id)
-        } else if path.extension().map(|e| e == "md").unwrap_or(false) {
-            let file_name = path
-                .file_stem()
-                .and_then(|n| n.to_str())
-                .unwrap_or("unknown")
-                .to_string();
-            parse_single_command(&path, &file_name, plugin_id)
-        } else {
-            continue;
-        };
-
-        match result {
-            Ok(cap) => caps.push(cap),
-            Err(e) => warn!("Failed to parse command from {:?}: {}", path, e),
-        }
-    }
-
-    Ok(caps)
+    scan_component_dir(
+        base,
+        rel_path,
+        plugin_id,
+        &ComponentScanConfig {
+            component_name: "Commands",
+            dir_entry_file: "SKILL.md",
+        },
+        parse_single_command,
+    )
 }
 
 /// Parse a single command markdown file into a `CapabilityDeclaration::Command`.
@@ -330,61 +319,16 @@ pub fn parse_agents_dir(
     rel_path: &str,
     plugin_id: &str,
 ) -> Result<Vec<CapabilityDeclaration>> {
-    let dir = base.join(rel_path);
-    if !dir.exists() || !dir.is_dir() {
-        return Ok(Vec::new());
-    }
-
-    // Security: verify the resolved directory is inside the base path
-    if !is_path_inside(base, &dir) {
-        warn!(
-            "Agents directory {:?} escapes plugin root {:?}, skipping",
-            dir, base
-        );
-        return Ok(Vec::new());
-    }
-
-    let mut caps = Vec::new();
-    let entries = std::fs::read_dir(&dir)
-        .with_context(|| format!("Failed to read agents dir: {}", dir.display()))?;
-
-    for entry in entries {
-        let entry = entry?;
-        let path = entry.path();
-
-        if is_hidden(&path) {
-            continue;
-        }
-
-        let result = if path.is_dir() {
-            let agent_md = path.join("agent.md");
-            if !agent_md.exists() {
-                continue;
-            }
-            let dir_name = path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("unknown")
-                .to_string();
-            parse_single_agent(&agent_md, &dir_name, plugin_id)
-        } else if path.extension().map(|e| e == "md").unwrap_or(false) {
-            let file_name = path
-                .file_stem()
-                .and_then(|n| n.to_str())
-                .unwrap_or("unknown")
-                .to_string();
-            parse_single_agent(&path, &file_name, plugin_id)
-        } else {
-            continue;
-        };
-
-        match result {
-            Ok(cap) => caps.push(cap),
-            Err(e) => warn!("Failed to parse agent from {:?}: {}", path, e),
-        }
-    }
-
-    Ok(caps)
+    scan_component_dir(
+        base,
+        rel_path,
+        plugin_id,
+        &ComponentScanConfig {
+            component_name: "Agents",
+            dir_entry_file: "agent.md",
+        },
+        parse_single_agent,
+    )
 }
 
 /// Parse a single agent markdown file into a `CapabilityDeclaration::Agent`.

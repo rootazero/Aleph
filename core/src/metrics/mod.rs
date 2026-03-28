@@ -203,18 +203,20 @@ impl Drop for StageTimer {
 
         // Check if we exceeded the target (if set) and warnings are enabled
         if let Some(target_ms) = self.target_ms {
-            let threshold_ms = (target_ms as f64 * self.warning_multiplier) as u64;
-            if elapsed_ms > threshold_ms && self.enable_warnings {
-                tracing::warn!(
-                    stage = %self.name,
-                    actual_ms = %elapsed_ms,
-                    target_ms = %target_ms,
-                    threshold_ms = %threshold_ms,
-                    ratio = %(elapsed_ms as f64 / target_ms as f64),
-                    metadata = ?self.metadata,
-                    "Slow operation detected (exceeds threshold)"
-                );
-                return;
+            if target_ms > 0 {
+                let threshold_ms = (target_ms as f64 * self.warning_multiplier) as u64;
+                if elapsed_ms > threshold_ms && self.enable_warnings {
+                    tracing::warn!(
+                        stage = %self.name,
+                        actual_ms = %elapsed_ms,
+                        target_ms = %target_ms,
+                        threshold_ms = %threshold_ms,
+                        ratio = %(elapsed_ms as f64 / target_ms as f64),
+                        metadata = ?self.metadata,
+                        "Slow operation detected (exceeds threshold)"
+                    );
+                    return;
+                }
             }
         }
 

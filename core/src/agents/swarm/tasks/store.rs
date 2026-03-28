@@ -4,7 +4,7 @@
 //! async access. The `Blocked` status is never stored — it is derived at
 //! query time from unresolved dependency edges.
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use async_trait::async_trait;
 use rusqlite::{params, Connection, OptionalExtension};
@@ -181,12 +181,14 @@ impl CoordTaskStore for SqliteCoordTaskStore {
         // Generate the id before cycle-check so we can pass it as the new node.
         let id = uuid::Uuid::new_v4().to_string();
 
-        // Verify that the proposed edges would not introduce a cycle.
-        // This must happen BEFORE acquiring the connection lock to avoid a
-        // deadlock (check_no_cycle calls get_dependencies which also locks).
-        super::dag::check_no_cycle(self, &id, &input.blocked_by).await?;
-
+        // Acquire the lock FIRST, then run cycle check synchronously inside
+        // the same lock scope. This eliminates the TOCTOU race where two
+        // concurrent create_task calls could each pass the cycle check before
+        // either inserts, forming a cycle together.
         let conn = self.conn.lock().await;
+
+        // Verify that the proposed edges would not introduce a cycle.
+        super::dag::check_no_cycle_sync(&conn, &id, &input.blocked_by)?;
         let now = now_epoch();
         let metadata_json = serde_json::to_string(&input.metadata).unwrap_or_else(|_| "{}".into());
 

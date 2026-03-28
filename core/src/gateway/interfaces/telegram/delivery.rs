@@ -288,7 +288,9 @@ pub(crate) async fn send_message(
         }
     }
 
-    let sent = first_msg.expect("at least one chunk must be sent");
+    let sent = first_msg.ok_or_else(|| {
+        ChannelError::SendFailed("No message chunks to send (empty formatted text)".into())
+    })?;
 
     // Send attachments if any
     for attachment in &message.attachments {

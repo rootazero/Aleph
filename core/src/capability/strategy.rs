@@ -372,45 +372,9 @@ impl CompositeCapabilityExecutor {
     /// A list of `CapabilityHealth` structs with full status information.
     pub async fn health_check_all(&self) -> Vec<CapabilityHealth> {
         let mut results = Vec::new();
-
         for strategy in &self.strategies {
-            let capability = strategy.capability_type();
-            let name = strategy.name().to_string();
-
-            // Validate config
-            let (config_valid, config_error) = match strategy.validate_config() {
-                Ok(()) => (true, None),
-                Err(e) => (false, Some(e.to_string())),
-            };
-
-            // Check availability
-            let available = strategy.is_available();
-
-            // Health check (only if available)
-            let (healthy, health_error) = if available {
-                match strategy.health_check().await {
-                    Ok(h) => (h, None),
-                    Err(e) => (false, Some(e.to_string())),
-                }
-            } else {
-                (false, None)
-            };
-
-            // Get status info
-            let status_info = strategy.status_info();
-
-            results.push(CapabilityHealth {
-                capability,
-                name,
-                config_valid,
-                config_error,
-                available,
-                healthy,
-                health_error,
-                status_info,
-            });
+            results.push(Self::build_health(strategy.as_ref()).await);
         }
-
         results
     }
 
@@ -422,20 +386,21 @@ impl CompositeCapabilityExecutor {
     /// - `None` if capability is not registered
     pub async fn health_check(&self, capability: &Capability) -> Option<CapabilityHealth> {
         let strategy = self.get_strategy(capability)?;
+        Some(Self::build_health(strategy).await)
+    }
 
+    /// Build health status for a single strategy
+    async fn build_health(strategy: &dyn CapabilityStrategy) -> CapabilityHealth {
+        let capability = strategy.capability_type();
         let name = strategy.name().to_string();
-        let cap = strategy.capability_type();
 
-        // Validate config
         let (config_valid, config_error) = match strategy.validate_config() {
             Ok(()) => (true, None),
             Err(e) => (false, Some(e.to_string())),
         };
 
-        // Check availability
         let available = strategy.is_available();
 
-        // Health check (only if available)
         let (healthy, health_error) = if available {
             match strategy.health_check().await {
                 Ok(h) => (h, None),
@@ -445,11 +410,10 @@ impl CompositeCapabilityExecutor {
             (false, None)
         };
 
-        // Get status info
         let status_info = strategy.status_info();
 
-        Some(CapabilityHealth {
-            capability: cap,
+        CapabilityHealth {
+            capability,
             name,
             config_valid,
             config_error,
@@ -457,7 +421,7 @@ impl CompositeCapabilityExecutor {
             healthy,
             health_error,
             status_info,
-        })
+        }
     }
 
     /// Get the number of operational (fully working) capabilities

@@ -232,7 +232,7 @@ impl GuestActivityLogger {
     pub fn mark_session_ended(&self, session_id: &str) {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_millis() as i64;
 
         self.session_end_times
@@ -245,7 +245,7 @@ impl GuestActivityLogger {
     pub fn cleanup_expired_logs(&self) {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_millis() as i64;
 
         let mut expired_sessions = Vec::new();

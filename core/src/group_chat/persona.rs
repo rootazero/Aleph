@@ -70,11 +70,12 @@ impl PersonaRegistry {
         }
     }
 
-    /// Return all preset personas in the registry.
-    ///
-    /// The order is not guaranteed (HashMap iteration order).
+    /// Return all preset personas in the registry, sorted by ID for
+    /// deterministic output.
     pub fn list_presets(&self) -> Vec<&Persona> {
-        self.presets.values().collect()
+        let mut presets: Vec<&Persona> = self.presets.values().collect();
+        presets.sort_by(|a, b| a.id.cmp(&b.id));
+        presets
     }
 }
 
@@ -250,11 +251,8 @@ mod tests {
         let presets = registry.list_presets();
         assert_eq!(presets.len(), 2);
 
-        let ids: Vec<&str> = {
-            let mut v: Vec<&str> = presets.iter().map(|p| p.id.as_str()).collect();
-            v.sort();
-            v
-        };
+        // list_presets returns sorted by ID
+        let ids: Vec<&str> = presets.iter().map(|p| p.id.as_str()).collect();
         assert_eq!(ids, vec!["architect", "pm"]);
     }
 }

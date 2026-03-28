@@ -37,6 +37,11 @@ impl MemoryStrength {
     pub fn calculate_strength(&self, config: &DecayConfig, now: i64) -> f32 {
         let days_since_access = (now - self.last_accessed) as f32 / 86400.0;
 
+        // Guard: zero or negative half-life would cause division issues
+        if config.half_life_days <= 0.0 {
+            return 1.0;
+        }
+
         // Base decay: exponential decay curve
         // strength = 0.5 ^ (days / half_life)
         let base_decay = 0.5_f32.powf(days_since_access / config.half_life_days);
@@ -71,6 +76,10 @@ impl MemoryStrength {
             days_since_access,
             &params.reinforcement,
         );
+        // Guard: zero half-life would cause division by zero
+        if eff_hl <= 0.0 {
+            return 1.0;
+        }
         0.5_f32.powf(days_since_access / eff_hl).min(1.0)
     }
 
@@ -100,8 +109,8 @@ impl MemoryStrength {
         let effective_half_life = config.effective_half_life(fact_type);
         let days_since_access = (now - self.last_accessed) as f32 / 86400.0;
 
-        // Handle infinite half-life
-        if effective_half_life.is_infinite() {
+        // Handle infinite or non-positive half-life
+        if effective_half_life.is_infinite() || effective_half_life <= 0.0 {
             return 1.0;
         }
 
@@ -385,11 +394,13 @@ pub fn effective_half_life(
     days_since_last_access: f32,
     config: &AccessReinforcementConfig,
 ) -> f32 {
-    if access_count == 0 {
+    if access_count == 0 || base <= 0.0 {
         return base;
     }
 
-    let freshness = (-days_since_last_access * 2.0_f32.ln() / config.access_decay_days).exp();
+    // Guard: zero access_decay_days would cause division by zero
+    let access_decay = if config.access_decay_days <= 0.0 { 30.0 } else { config.access_decay_days };
+    let freshness = (-days_since_last_access * 2.0_f32.ln() / access_decay).exp();
     let effective_count = access_count as f32 * freshness;
     let extension = base * config.factor * (1.0 + effective_count).ln();
     let result = base + extension;

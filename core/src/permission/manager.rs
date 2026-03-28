@@ -79,7 +79,11 @@ impl PermissionManager {
     pub async fn ask(&self, request: PermissionRequest) -> Result<(), PermissionError> {
         let approved = self.approved_rules.read().await;
 
-        // Evaluate each pattern
+        // Evaluate ALL patterns first — deny takes priority over ask.
+        // Without this two-pass approach, a request with patterns ["safe", "rm -rf /"]
+        // could fall through to Ask if "safe" evaluates to Ask before "rm -rf /" is checked.
+        let mut needs_ask = false;
+
         for pattern in &request.patterns {
             let rule = self.evaluator.evaluate(
                 &request.permission,
@@ -100,11 +104,16 @@ impl PermissionManager {
                     return Err(PermissionError::denied(&request.permission, pattern, rule));
                 }
                 PermissionAction::Ask => {
-                    // Need to drop the read lock before asking user
-                    drop(approved);
-                    return self.ask_user(request).await;
+                    needs_ask = true;
                 }
             }
+        }
+
+        // Drop the read lock before the potentially long-lived ask_user call
+        drop(approved);
+
+        if needs_ask {
+            return self.ask_user(request).await;
         }
 
         Ok(())
@@ -114,7 +123,6 @@ impl PermissionManager {
     async fn ask_user(&self, request: PermissionRequest) -> Result<(), PermissionError> {
         let (tx, rx) = oneshot::channel();
         let request_id = request.id.clone();
-        let _session_id = request.session_id.clone();
 
         // Store pending request
         {

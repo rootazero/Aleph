@@ -4,8 +4,6 @@
 
 use serde::Serialize;
 use serde_json::{json, Value};
-use crate::sync_primitives::Arc;
-use crate::sync_primitives::AtomicBool;
 use tracing::warn;
 
 use crate::dispatcher::{ToolCategory, ToolDefinition};
@@ -19,17 +17,12 @@ use super::spec::{AlephSkillSpec, SandboxMode};
 #[derive(Clone)]
 pub struct MarkdownCliTool {
     pub spec: AlephSkillSpec,
-    /// Whether usage examples have been injected in current session (kept for session lifecycle)
-    _context_injected: Arc<AtomicBool>,
 }
 
 impl MarkdownCliTool {
     /// Create a new Markdown CLI tool
     pub fn new(spec: AlephSkillSpec) -> Self {
-        Self {
-            spec,
-            _context_injected: Arc::new(AtomicBool::new(false)),
-        }
+        Self { spec }
     }
 
     /// Build JSON Schema from input_hints
@@ -100,19 +93,15 @@ impl MarkdownCliTool {
     }
 }
 
-/// Normalize type names to valid JSON Schema types
-fn normalize_json_schema_type(hint_type: &str) -> &str {
+/// Normalize type names to valid JSON Schema types (always lowercase).
+fn normalize_json_schema_type(hint_type: &str) -> &'static str {
     match hint_type.to_lowercase().as_str() {
-        // Aliases first
-        "str" | "text" => "string",
-        "int" => "integer",
-        "num" | "float" => "number",
-        "bool" => "boolean",
-        "arr" | "list" => "array",
-        "obj" | "dict" => "object",
-        // Already valid (exact matches)
-        "string" | "integer" | "number" | "boolean" | "array" | "object" => hint_type,
-        // Unknown: default to string for safety
+        "str" | "text" | "string" => "string",
+        "int" | "integer" => "integer",
+        "num" | "float" | "number" => "number",
+        "bool" | "boolean" => "boolean",
+        "arr" | "list" | "array" => "array",
+        "obj" | "dict" | "object" => "object",
         _ => {
             warn!("Unknown type hint '{}', defaulting to 'string'", hint_type);
             "string"
@@ -231,9 +220,8 @@ impl MarkdownCliTool {
 
             let mut cli_args = Vec::new();
 
-            // Try to preserve order from input_hints definition
+            // Preserve deterministic order from input_hints (BTreeMap — sorted by key)
             if let Some(hints) = hints {
-                // Ordered by hint definition
                 for key in hints.keys() {
                     if let Some(value) = obj.get(key) {
                         self.append_flag_arg(&mut cli_args, key, value);
@@ -250,7 +238,9 @@ impl MarkdownCliTool {
                 let mut keys: Vec<_> = obj.keys().collect();
                 keys.sort();
                 for key in keys {
-                    self.append_flag_arg(&mut cli_args, key, obj.get(key).unwrap());
+                    if let Some(value) = obj.get(key) {
+                        self.append_flag_arg(&mut cli_args, key, value);
+                    }
                 }
             }
 
@@ -263,24 +253,27 @@ impl MarkdownCliTool {
     /// Append a single flag argument (simple --key value format)
     fn append_flag_arg(&self, cli_args: &mut Vec<String>, key: &str, value: &Value) {
         let flag = format!("--{}", key.replace('_', "-"));
-        cli_args.push(flag);
 
         // Skip value for boolean true
         if let Some(true) = value.as_bool() {
+            cli_args.push(flag);
             return;
         }
 
         // Add value
         if let Some(s) = value.as_str() {
+            cli_args.push(flag);
             cli_args.push(s.to_string());
         } else if let Some(arr) = value.as_array() {
             // Repeated flags: --tag v1 --tag v2
             for item in arr {
                 if let Some(s) = item.as_str() {
+                    cli_args.push(flag.clone());
                     cli_args.push(s.to_string());
                 }
             }
         } else {
+            cli_args.push(flag);
             cli_args.push(value.to_string());
         }
     }

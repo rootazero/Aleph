@@ -34,7 +34,6 @@ mod cache_config;
 mod cache_store;
 mod single_step;
 mod types;
-// atomic_action_executor removed (depended on old OTAF agent_loop types)
 mod exec_security_gate;
 
 pub use builtin_registry::{
@@ -47,5 +46,4 @@ pub use single_step::{SingleStepConfig, SingleStepExecutor, ToolRegistry};
 pub use types::{
     ExecutionContext, ExecutionResult, ExecutorError, TaskExecutionResult, ToolCallRecord,
 };
-// AtomicActionExecutor removed (old OTAF type)
 pub use exec_security_gate::{ExecSecurityGate, PreExecDecision};

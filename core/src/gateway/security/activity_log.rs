@@ -45,7 +45,7 @@ impl GuestActivityLog {
             activity_type,
             timestamp: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
-                .unwrap()
+                .unwrap_or_default()
                 .as_millis() as i64,
             details,
             status,
@@ -68,7 +68,7 @@ impl GuestActivityLog {
             activity_type,
             timestamp: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
-                .unwrap()
+                .unwrap_or_default()
                 .as_millis() as i64,
             details,
             status: ActivityStatus::Failed,

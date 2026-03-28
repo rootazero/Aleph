@@ -75,7 +75,7 @@ mod tests {
         fn insert(&self, name: &str, value: &str) {
             self.secrets
                 .lock()
-                .unwrap()
+                .unwrap_or_else(|e| e.into_inner())
                 .insert(name.to_string(), value.to_string());
         }
     }
@@ -87,7 +87,7 @@ mod tests {
         }
 
         async fn get(&self, reference: &str) -> Result<DecryptedSecret, SecretError> {
-            let map = self.secrets.lock().unwrap();
+            let map = self.secrets.lock().unwrap_or_else(|e| e.into_inner());
             map.get(reference)
                 .map(|v| DecryptedSecret::new(v.as_str()))
                 .ok_or_else(|| SecretError::NotFound(reference.to_string()))
@@ -98,7 +98,7 @@ mod tests {
         }
 
         async fn list(&self) -> Result<Vec<SecretMetadata>, SecretError> {
-            let map = self.secrets.lock().unwrap();
+            let map = self.secrets.lock().unwrap_or_else(|e| e.into_inner());
             Ok(map
                 .keys()
                 .map(|k| SecretMetadata {

@@ -186,7 +186,13 @@ impl AcpSession {
         self.state = AcpSessionState::Busy;
 
         // Ensure we have an ACP session
-        let session_id = self.create_acp_session(cwd, timeout).await?;
+        let session_id = match self.create_acp_session(cwd, timeout).await {
+            Ok(sid) => sid,
+            Err(e) => {
+                self.state = AcpSessionState::Error;
+                return Err(e);
+            }
+        };
 
         let req = AcpRequest::prompt(&session_id, text);
         match self.transport.request(&req, timeout).await {
@@ -226,10 +232,22 @@ impl AcpSession {
     }
 
     /// Send a cancel request to interrupt the current operation.
+    ///
+    /// No-op if no ACP session has been created yet (nothing to cancel).
     pub async fn cancel(&mut self) -> Result<()> {
-        let session_id = self.acp_session_id.as_deref().unwrap_or("unknown");
+        let session_id = match self.acp_session_id.as_deref() {
+            Some(id) => id,
+            None => {
+                debug!(harness_id = %self.harness_id, "ACP cancel: no session yet, skipping");
+                self.state = AcpSessionState::Idle;
+                return Ok(());
+            }
+        };
         let req = AcpRequest::cancel(session_id);
-        self.transport.send(&req).await?;
+        if let Err(e) = self.transport.send(&req).await {
+            self.state = AcpSessionState::Error;
+            return Err(e);
+        }
         self.state = AcpSessionState::Idle;
         debug!(harness_id = %self.harness_id, "ACP cancel sent");
         Ok(())

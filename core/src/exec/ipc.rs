@@ -200,13 +200,15 @@ impl IpcServer {
             }
         };
 
-        // Step 3: Verify HMAC
-        let expected = Self::compute_hmac(token, &nonce);
+        // Step 3: Verify HMAC using constant-time comparison to prevent timing attacks
         let response_bytes = hex::decode(&response_hex).map_err(|e| {
             IpcError::AuthFailed(format!("Invalid response format: {}", e))
         })?;
 
-        if expected != response_bytes {
+        let mut mac = HmacSha256::new_from_slice(token)
+            .map_err(|e| IpcError::AuthFailed(format!("Invalid HMAC key: {}", e)))?;
+        mac.update(&nonce);
+        if mac.verify_slice(&response_bytes).is_err() {
             let err = IpcMessage::AuthResult {
                 success: false,
                 error: Some("Invalid HMAC".to_string()),
@@ -281,10 +283,15 @@ impl IpcServer {
     }
 
     /// Compute HMAC-SHA256
-    fn compute_hmac(key: &[u8], data: &[u8]) -> Vec<u8> {
-        let mut mac = HmacSha256::new_from_slice(key).expect("HMAC key size issue");
+    ///
+    /// HMAC-SHA256 accepts any key length, so `new_from_slice` only fails
+    /// on zero-length keys in edge-case implementations. We propagate the
+    /// error instead of panicking to avoid crashing spawned async tasks.
+    pub(crate) fn compute_hmac(key: &[u8], data: &[u8]) -> Result<Vec<u8>, IpcError> {
+        let mut mac = HmacSha256::new_from_slice(key)
+            .map_err(|e| IpcError::AuthFailed(format!("Invalid HMAC key: {}", e)))?;
         mac.update(data);
-        mac.finalize().into_bytes().to_vec()
+        Ok(mac.finalize().into_bytes().to_vec())
     }
 
     /// Send a message
@@ -346,7 +353,7 @@ impl IpcClient {
         // Compute response
         let nonce = hex::decode(&nonce_hex)
             .map_err(|e| IpcError::AuthFailed(format!("Invalid nonce: {}", e)))?;
-        let hmac = IpcServer::compute_hmac(&self.token, &nonce);
+        let hmac = IpcServer::compute_hmac(&self.token, &nonce)?;
         let response_hex = hex::encode(&hmac);
 
         // Send response
@@ -464,11 +471,11 @@ mod tests {
     fn test_compute_hmac() {
         let key = b"secret";
         let data = b"hello";
-        let hmac1 = IpcServer::compute_hmac(key, data);
-        let hmac2 = IpcServer::compute_hmac(key, data);
+        let hmac1 = IpcServer::compute_hmac(key, data).unwrap();
+        let hmac2 = IpcServer::compute_hmac(key, data).unwrap();
         assert_eq!(hmac1, hmac2);
 
-        let hmac3 = IpcServer::compute_hmac(key, b"world");
+        let hmac3 = IpcServer::compute_hmac(key, b"world").unwrap();
         assert_ne!(hmac1, hmac3);
     }
 

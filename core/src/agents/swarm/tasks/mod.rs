@@ -85,10 +85,14 @@ impl CoordTaskStatus {
         }
     }
 
+    /// Deserialize from a stored string value.
+    ///
+    /// `"blocked"` is intentionally excluded — `Blocked` is derived dynamically
+    /// at query time and should never appear in persistent storage.
     pub fn from_stored(s: &str) -> Option<Self> {
         match s {
             "pending" => Some(Self::Pending),
-            "blocked" => Some(Self::Blocked),
+            // "blocked" is never stored — it is derived at query time
             "in_progress" => Some(Self::InProgress),
             "completed" => Some(Self::Completed),
             "failed" => Some(Self::Failed),

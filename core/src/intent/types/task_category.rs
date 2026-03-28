@@ -24,8 +24,6 @@ pub enum TaskCategory {
     AppAutomation,
     /// Document generation
     DocumentGeneration,
-    /// Document generation (alias for compatibility)
-    DocumentGenerate,
     /// Image generation
     ImageGeneration,
     /// Video generation
@@ -60,7 +58,7 @@ impl TaskCategory {
             Self::CodeExecution => "code_execution",
             Self::AppLaunch => "app_launch",
             Self::AppAutomation => "app_automation",
-            Self::DocumentGeneration | Self::DocumentGenerate => "document_generation",
+            Self::DocumentGeneration => "document_generation",
             Self::ImageGeneration => "image_generation",
             Self::VideoGeneration => "video_generation",
             Self::AudioGeneration => "audio_generation",
@@ -91,7 +89,6 @@ impl TaskCategory {
                 | Self::AudioGeneration
                 | Self::SpeechGeneration
                 | Self::DocumentGeneration
-                | Self::DocumentGenerate
         )
     }
 
@@ -118,13 +115,8 @@ mod tests {
         assert_eq!(TaskCategory::CodeExecution.as_str(), "code_execution");
         assert_eq!(TaskCategory::AppLaunch.as_str(), "app_launch");
         assert_eq!(TaskCategory::AppAutomation.as_str(), "app_automation");
-        // Both DocumentGeneration and DocumentGenerate map to same string
         assert_eq!(
             TaskCategory::DocumentGeneration.as_str(),
-            "document_generation"
-        );
-        assert_eq!(
-            TaskCategory::DocumentGenerate.as_str(),
             "document_generation"
         );
         assert_eq!(TaskCategory::ImageGeneration.as_str(), "image_generation");

@@ -91,27 +91,17 @@ async fn a2a_stream_handler(
     let principal = match state.authenticator.authenticate(&auth_context).await {
         Ok(p) => p,
         Err(e) => {
-            let resp = JsonRpcResponse::from_a2a_error(request.id.clone(), &e);
-            let json = serde_json::to_string(&resp).unwrap_or_default();
-            let stream = futures::stream::once(async move {
-                Ok::<_, Infallible>(Event::default().event("error").data(json))
-            });
-            return Sse::new(stream).into_response();
+            return sse_error(JsonRpcResponse::from_a2a_error(request.id.clone(), &e));
         }
     };
 
     // Only message/send supports streaming
     if request.method != "message/send" {
-        let resp = JsonRpcResponse::error(
+        return sse_error(JsonRpcResponse::error(
             request.id.clone(),
             -32601,
             "Only message/send supports streaming",
-        );
-        let json = serde_json::to_string(&resp).unwrap_or_default();
-        let stream = futures::stream::once(async move {
-            Ok::<_, Infallible>(Event::default().event("error").data(json))
-        });
-        return Sse::new(stream).into_response();
+        ));
     }
 
     // Authorize
@@ -119,23 +109,13 @@ async fn a2a_stream_handler(
     match state.authenticator.authorize(&principal, &action).await {
         Ok(true) => {}
         Ok(false) => {
-            let resp = JsonRpcResponse::from_a2a_error(
+            return sse_error(JsonRpcResponse::from_a2a_error(
                 request.id.clone(),
                 &crate::a2a::domain::A2AError::Forbidden,
-            );
-            let json = serde_json::to_string(&resp).unwrap_or_default();
-            let stream = futures::stream::once(async move {
-                Ok::<_, Infallible>(Event::default().event("error").data(json))
-            });
-            return Sse::new(stream).into_response();
+            ));
         }
         Err(e) => {
-            let resp = JsonRpcResponse::from_a2a_error(request.id.clone(), &e);
-            let json = serde_json::to_string(&resp).unwrap_or_default();
-            let stream = futures::stream::once(async move {
-                Ok::<_, Infallible>(Event::default().event("error").data(json))
-            });
-            return Sse::new(stream).into_response();
+            return sse_error(JsonRpcResponse::from_a2a_error(request.id.clone(), &e));
         }
     }
 
@@ -145,16 +125,11 @@ async fn a2a_stream_handler(
     ) {
         Ok(m) => m,
         Err(e) => {
-            let resp = JsonRpcResponse::error(
+            return sse_error(JsonRpcResponse::error(
                 request.id.clone(),
                 -32602,
                 &format!("Invalid params: missing or invalid 'message': {}", e),
-            );
-            let json = serde_json::to_string(&resp).unwrap_or_default();
-            let stream = futures::stream::once(async move {
-                Ok::<_, Infallible>(Event::default().event("error").data(json))
-            });
-            return Sse::new(stream).into_response();
+            ));
         }
     };
 
@@ -179,12 +154,7 @@ async fn a2a_stream_handler(
     {
         Ok(stream) => stream,
         Err(e) => {
-            let resp = JsonRpcResponse::from_a2a_error(request.id.clone(), &e);
-            let json = serde_json::to_string(&resp).unwrap_or_default();
-            let stream = futures::stream::once(async move {
-                Ok::<_, Infallible>(Event::default().event("error").data(json))
-            });
-            return Sse::new(stream).into_response();
+            return sse_error(JsonRpcResponse::from_a2a_error(request.id.clone(), &e));
         }
     };
 
@@ -227,16 +197,25 @@ async fn a2a_stream_handler(
     Sse::new(sse_stream).into_response()
 }
 
+/// Build an SSE error response from a JsonRpcResponse
+fn sse_error(resp: JsonRpcResponse) -> axum::response::Response {
+    let json = serde_json::to_string(&resp).unwrap_or_default();
+    let stream = futures::stream::once(async move {
+        Ok::<_, Infallible>(Event::default().event("error").data(json))
+    });
+    Sse::new(stream).into_response()
+}
+
 // --- Helpers ---
 
 /// Extract credentials from HTTP headers
 fn extract_credentials(headers: &HeaderMap) -> Credentials {
     if let Some(auth) = headers.get("authorization").and_then(|v| v.to_str().ok()) {
-        if let Some(token) = auth.strip_prefix("Bearer ") {
-            return Credentials::BearerToken(token.to_string());
-        }
-        if let Some(token) = auth.strip_prefix("bearer ") {
-            return Credentials::BearerToken(token.to_string());
+        // RFC 7235: auth-scheme is case-insensitive
+        if let Some(prefix) = auth.get(..7) {
+            if prefix.eq_ignore_ascii_case("bearer ") {
+                return Credentials::BearerToken(auth[7..].to_string());
+            }
         }
     }
     if let Some(key) = headers.get("x-api-key").and_then(|v| v.to_str().ok()) {
@@ -254,8 +233,14 @@ fn headers_to_map(headers: &HeaderMap) -> HashMap<String, String> {
 }
 
 /// Fallback socket address when ConnectInfo is not available.
-/// Task 16 (Server Startup) will wire ConnectInfo properly.
+/// WARNING: All remote requests appear as loopback — IP-based access control is ineffective.
+/// ConnectInfo must be wired via `.into_make_service_with_connect_info::<SocketAddr>()`.
 fn fallback_addr() -> SocketAddr {
+    use std::sync::Once;
+    static WARN: Once = Once::new();
+    WARN.call_once(|| {
+        tracing::warn!("A2A routes using fallback loopback address — IP-based auth is disabled");
+    });
     SocketAddr::from(([127, 0, 0, 1], 0))
 }
 
@@ -280,6 +265,16 @@ mod tests {
         headers.insert("authorization", HeaderValue::from_static("bearer xyz789"));
         match extract_credentials(&headers) {
             Credentials::BearerToken(t) => assert_eq!(t, "xyz789"),
+            other => panic!("Expected BearerToken, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn extract_credentials_bearer_mixed_case() {
+        let mut headers = HeaderMap::new();
+        headers.insert("authorization", HeaderValue::from_static("BEARER upper123"));
+        match extract_credentials(&headers) {
+            Credentials::BearerToken(t) => assert_eq!(t, "upper123"),
             other => panic!("Expected BearerToken, got {:?}", other),
         }
     }

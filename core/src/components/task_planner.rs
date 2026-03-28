@@ -3,6 +3,8 @@
 //! Subscribes to: PlanRequested
 //! Publishes: PlanCreated
 
+use std::collections::HashMap;
+
 use async_trait::async_trait;
 use serde_json::Value;
 
@@ -229,27 +231,27 @@ impl TaskPlanner {
     /// Returns a list of step ID groups, where each group can execute simultaneously
     pub fn identify_parallel_groups(&self, steps: &[PlanStep]) -> Vec<Vec<String>> {
         let mut groups: Vec<Vec<String>> = Vec::new();
+        let mut depth_map: HashMap<String, usize> = HashMap::new();
 
-        // Simple algorithm: group steps by their dependency depth
+        // Group steps by their dependency depth:
         // Steps with no dependencies are depth 0
         // Steps depending on depth N steps are depth N+1
+        // This correctly handles transitive chains (A→B→C → depths 0,1,2)
 
         for step in steps {
-            // Calculate the depth based on dependencies
             let depth = if step.depends_on.is_empty() {
                 0
             } else {
-                // Find the max depth of dependencies and add 1
+                // Find the max depth among all dependencies, then add 1
                 step.depends_on
                     .iter()
-                    .filter_map(|dep_id| steps.iter().position(|s| &s.id == dep_id))
-                    .map(|_pos| {
-                        // For sequential dependencies, depth = position
-                        step.depends_on.len()
-                    })
+                    .filter_map(|dep_id| depth_map.get(dep_id))
                     .max()
+                    .map(|d| d + 1)
                     .unwrap_or(0)
             };
+
+            depth_map.insert(step.id.clone(), depth);
 
             // Ensure we have enough groups
             while groups.len() <= depth {

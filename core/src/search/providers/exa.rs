@@ -68,7 +68,6 @@ impl SearchProvider for ExaProvider {
             .client
             .post("https://api.exa.ai/search")
             .header("x-api-key", &self.api_key)
-            .header("Content-Type", "application/json")
             .json(&request_body)
             .timeout(std::time::Duration::from_secs(options.timeout_seconds))
             .send()

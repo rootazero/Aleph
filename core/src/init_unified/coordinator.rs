@@ -85,7 +85,7 @@ impl InitializationCoordinator {
         ];
 
         let total = phases.len() as u32;
-        let mut completed_phases = Vec::new();
+        let mut completed_phases: Vec<InitPhase> = Vec::new();
 
         for (i, phase) in phases.iter().enumerate() {
             let current = (i + 1) as u32;
@@ -98,7 +98,7 @@ impl InitializationCoordinator {
             // Execute phase
             match self.run_phase(phase).await {
                 Ok(()) => {
-                    completed_phases.push(phase.name().to_string());
+                    completed_phases.push(phase.clone());
                     if let Some(h) = &self.handler {
                         h.on_phase_completed(phase.name().to_string());
                     }
@@ -117,7 +117,7 @@ impl InitializationCoordinator {
 
                     return InitializationResult {
                         success: false,
-                        completed_phases,
+                        completed_phases: completed_phases.iter().map(|p| p.name().to_string()).collect(),
                         error_phase: Some(e.phase),
                         error_message: Some(e.message),
                     };
@@ -128,7 +128,7 @@ impl InitializationCoordinator {
         info!("Initialization completed successfully");
         InitializationResult {
             success: true,
-            completed_phases,
+            completed_phases: completed_phases.iter().map(|p| p.name().to_string()).collect(),
             error_phase: None,
             error_message: None,
         }
@@ -146,12 +146,12 @@ impl InitializationCoordinator {
     }
 
     /// Rollback completed phases in reverse order
-    async fn rollback(&self, completed_phases: &[String]) -> Result<(), InitError> {
+    async fn rollback(&self, completed_phases: &[InitPhase]) -> Result<(), InitError> {
         info!(phases = ?completed_phases, "Rolling back initialization");
 
         for phase in completed_phases.iter().rev() {
-            match phase.as_str() {
-                "skills" => {
+            match phase {
+                InitPhase::Skills => {
                     let skills_dir = self.config_dir.join("skills");
                     if skills_dir.exists() {
                         if let Err(e) = tokio::fs::remove_dir_all(&skills_dir).await {
@@ -159,7 +159,7 @@ impl InitializationCoordinator {
                         }
                     }
                 }
-                "runtimes" => {
+                InitPhase::Runtimes => {
                     let runtimes_dir = self.config_dir.join("runtimes");
                     if runtimes_dir.exists() {
                         if let Err(e) = tokio::fs::remove_dir_all(&runtimes_dir).await {
@@ -167,15 +167,16 @@ impl InitializationCoordinator {
                         }
                     }
                 }
-                "database" => {
-                    let db_path = self.config_dir.join("memory.db");
+                InitPhase::Database => {
+                    // LanceDB creates a directory, not a single file
+                    let db_path = self.config_dir.join("memory.lance");
                     if db_path.exists() {
-                        if let Err(e) = tokio::fs::remove_file(&db_path).await {
+                        if let Err(e) = tokio::fs::remove_dir_all(&db_path).await {
                             warn!(error = %e, path = ?db_path, "Failed to remove database during rollback");
                         }
                     }
                 }
-                "config" => {
+                InitPhase::Config => {
                     let config_path = self.config_dir.join("config.toml");
                     if config_path.exists() {
                         if let Err(e) = tokio::fs::remove_file(&config_path).await {
@@ -183,10 +184,9 @@ impl InitializationCoordinator {
                         }
                     }
                 }
-                "directories" => {
+                InitPhase::Directories => {
                     // Don't remove entire config_dir to preserve user data
                 }
-                _ => {}
             }
         }
 
@@ -276,13 +276,15 @@ impl InitializationCoordinator {
             .map_err(|e| InitError::new("runtimes", format!("Failed to get runtimes dir: {}", e)))?;
 
         // Create directory if needed
-        if !runtimes_dir.exists() {
-            std::fs::create_dir_all(&runtimes_dir)
-                .map_err(|e| InitError::new("runtimes", format!("Failed to create runtimes dir: {}", e)))?;
-        }
+        tokio::fs::create_dir_all(&runtimes_dir).await
+            .map_err(|e| InitError::new("runtimes", format!("Failed to create runtimes dir: {}", e)))?;
 
         // Migrate from legacy manifest.json or create fresh ledger
-        let _ledger = migrate_from_legacy(&runtimes_dir)
+        // Run in spawn_blocking since migrate_from_legacy does sync file I/O
+        let dir = runtimes_dir.clone();
+        tokio::task::spawn_blocking(move || migrate_from_legacy(&dir))
+            .await
+            .map_err(|e| InitError::new("runtimes", format!("Runtime init task panicked: {}", e)))?
             .map_err(|e| InitError::new("runtimes", format!("Failed to initialize ledger: {}", e)))?;
 
         info!("Runtime ledger initialized (no downloads, runtimes provisioned on-demand)");

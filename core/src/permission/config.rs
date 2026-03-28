@@ -59,9 +59,11 @@ pub type PermissionConfigMap = HashMap<String, PermissionConfig>;
 
 /// Parse a permission config map into a ruleset
 pub fn config_to_ruleset(config: &PermissionConfigMap) -> Ruleset {
-    config
-        .iter()
-        .flat_map(|(permission, perm_config)| perm_config.to_rules(permission))
+    // Sort keys for deterministic rule ordering (security-critical: HashMap iteration is random)
+    let mut keys: Vec<_> = config.keys().collect();
+    keys.sort();
+    keys.into_iter()
+        .flat_map(|permission| config[permission].to_rules(permission))
         .collect()
 }
 

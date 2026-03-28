@@ -68,20 +68,30 @@ impl AlephToolDyn for McpReadResourceTool {
         Box::pin(async move {
             let args: McpReadResourceArgs = serde_json::from_value(args)?;
 
-            // Get client for the server
+            // Extract server_id from URI prefix (e.g., "server_name:file:///path")
+            // Try each colon position as a potential separator to handle server IDs
+            // that contain colons (e.g., "plugin:foo/bar")
             let uri = &args.uri;
-            let server_id = uri.split(':').next().unwrap_or("");
+            let (client, resource_uri) = {
+                let mut found = None;
+                for (idx, _) in uri.match_indices(':') {
+                    let candidate = &uri[..idx];
+                    if let Ok(Some(c)) = self.handle.get_client(candidate).await {
+                        found = Some((c, &uri[idx + 1..]));
+                        break;
+                    }
+                }
+                match found {
+                    Some(pair) => pair,
+                    None => {
+                        return Err(crate::error::AlephError::NotFound(
+                            format!("No MCP server found for URI: {}", uri)
+                        ).into());
+                    }
+                }
+            };
 
-            let client = self
-                .handle
-                .get_client(server_id)
-                .await
-                .map_err(|e| crate::error::AlephError::tool(format!("Failed to get client: {}", e)))?
-                .ok_or_else(|| crate::error::AlephError::NotFound(
-                    format!("MCP server not found: {}", server_id)
-                ))?;
-
-            let content = client.read_resource(uri).await?;
+            let content = client.read_resource(resource_uri).await?;
 
             let output = match content {
                 ResourceContent::Text(text) => McpReadResourceOutput {

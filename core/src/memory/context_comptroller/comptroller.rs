@@ -152,11 +152,11 @@ impl ContextComptroller {
         let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
         let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
 
-        if norm_a == 0.0 || norm_b == 0.0 {
+        if !norm_a.is_finite() || !norm_b.is_finite() || norm_a == 0.0 || norm_b == 0.0 {
             return 0.0;
         }
 
-        dot_product / (norm_a * norm_b)
+        (dot_product / (norm_a * norm_b)).clamp(-1.0, 1.0)
     }
 
     /// Estimate tokens (4 chars per token)

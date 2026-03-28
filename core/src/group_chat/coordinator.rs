@@ -15,11 +15,15 @@ const SYSTEM_PROMPT_TRUNCATE_LEN: usize = 120;
 /// The coordinator receives a list of available personas (with truncated system
 /// prompts), the conversation history so far, and the user's latest message.
 /// It must return a JSON plan specifying which personas should respond.
+///
+/// When `targets` is non-empty, the coordinator is instructed to prioritize
+/// those personas (used by the Mention action).
 pub fn build_coordinator_prompt(
     personas: &[Persona],
     user_message: &str,
     history: &str,
     topic: &Option<String>,
+    targets: &[String],
 ) -> String {
     let mut prompt = String::new();
 
@@ -51,6 +55,15 @@ pub fn build_coordinator_prompt(
 
     // User message
     prompt.push_str(&format!("User message: {user_message}\n\n"));
+
+    // Mention targets
+    if !targets.is_empty() {
+        prompt.push_str(&format!(
+            "The user specifically mentioned these personas: {}\n\
+             You MUST include all mentioned personas in the respondents list.\n\n",
+            targets.join(", ")
+        ));
+    }
 
     // Output instruction
     prompt.push_str(
@@ -115,12 +128,8 @@ pub fn build_persona_prompt(
 ) -> String {
     let mut prompt = String::new();
 
-    // Identity and system prompt
-    prompt.push_str(&format!(
-        "You are \"{name}\". {system_prompt}\n\n",
-        name = persona.name,
-        system_prompt = persona.system_prompt,
-    ));
+    // Identity (system_prompt is passed separately via the system parameter)
+    prompt.push_str(&format!("You are \"{name}\".\n\n", name = persona.name));
 
     // Coordinator guidance
     if !guidance.is_empty() {
@@ -151,14 +160,10 @@ pub fn build_persona_prompt(
 // Helpers
 // =============================================================================
 
-/// Truncate a string to at most `max_len` characters, appending "..." if truncated.
+/// Truncate a string to at most `max_len` characters.
 ///
 /// Uses `char_indices` to avoid panicking on multi-byte UTF-8 boundaries.
 fn truncate_str(s: &str, max_len: usize) -> &str {
-    if s.len() <= max_len {
-        return s;
-    }
-    // Find the byte index of the char boundary at or before max_len chars.
     match s.char_indices().nth(max_len) {
         Some((byte_idx, _)) => &s[..byte_idx],
         None => s, // fewer than max_len chars — return as-is
@@ -223,6 +228,7 @@ mod tests {
             "How should we design the authentication system?",
             "[Alice]: We discussed OAuth earlier.\n\n",
             &Some("System Architecture Review".to_string()),
+            &[],
         );
 
         // Contains persona names and IDs
@@ -244,6 +250,21 @@ mod tests {
         assert!(prompt.contains("respondents"));
         assert!(prompt.contains("persona_id"));
         assert!(prompt.contains("need_summary"));
+    }
+
+    #[test]
+    fn test_build_coordinator_prompt_with_targets() {
+        let personas = test_personas();
+        let prompt = build_coordinator_prompt(
+            &personas,
+            "What does the architect think?",
+            "",
+            &None,
+            &["arch".to_string()],
+        );
+        assert!(prompt.contains("specifically mentioned"));
+        assert!(prompt.contains("arch"));
+        assert!(prompt.contains("MUST include"));
     }
 
     #[test]
@@ -309,10 +330,6 @@ mod tests {
 
         // Contains persona identity
         assert!(prompt.contains("Architect"), "should contain persona name");
-        assert!(
-            prompt.contains("senior software architect"),
-            "should contain system prompt content"
-        );
 
         // Contains user message
         assert!(prompt.contains("How should we handle rate limiting?"));

@@ -14,6 +14,7 @@ use crate::acp::session::AcpSession;
 use crate::acp::AcpChunkCallback;
 use crate::config::types::acp::AcpHarnessEntry;
 use crate::error::{AlephError, Result};
+use crate::sync_primitives::Arc;
 
 // =============================================================================
 // SessionKey
@@ -67,7 +68,7 @@ pub struct AcpManagerConfig {
 ///
 /// All harness and config state is behind `RwLock` for runtime dynamic management.
 pub struct AcpHarnessManager {
-    harnesses: RwLock<HashMap<String, Box<dyn AcpHarness>>>,
+    harnesses: RwLock<HashMap<String, Arc<dyn AcpHarness>>>,
     configs: RwLock<HashMap<String, AcpHarnessEntry>>,
     /// Active sessions for NativeAcp harnesses, keyed by (harness_id, cwd).
     sessions: RwLock<HashMap<SessionKey, AcpSession>>,
@@ -95,7 +96,7 @@ impl AcpHarnessManager {
     ///   with `entry.executable` as override.
     /// - Otherwise, uses `CustomHarness`.
     pub fn from_entries(entries: HashMap<String, AcpHarnessEntry>) -> Self {
-        let mut harnesses: HashMap<String, Box<dyn AcpHarness>> = HashMap::new();
+        let mut harnesses: HashMap<String, Arc<dyn AcpHarness>> = HashMap::new();
         let mut configs: HashMap<String, AcpHarnessEntry> = HashMap::new();
 
         for (id, entry) in entries {
@@ -140,22 +141,22 @@ impl AcpHarnessManager {
     }
 
     /// Factory: build the right harness implementation from an entry.
-    fn build_harness(id: &str, entry: &AcpHarnessEntry) -> Box<dyn AcpHarness> {
+    fn build_harness(id: &str, entry: &AcpHarnessEntry) -> Arc<dyn AcpHarness> {
         let default_mode = HarnessMode::from_serde(&entry.default_mode);
         let preset = entry.preset.as_deref().unwrap_or("");
         match preset {
             "claude-code" => {
-                Box::new(ClaudeCodeHarness::new(entry.executable.clone(), default_mode))
+                Arc::new(ClaudeCodeHarness::new(entry.executable.clone(), default_mode))
             }
             "codex" => {
-                Box::new(CodexHarness::new(entry.executable.clone(), default_mode))
+                Arc::new(CodexHarness::new(entry.executable.clone(), default_mode))
             }
             "gemini" => {
-                Box::new(GeminiHarness::new(entry.executable.clone(), default_mode))
+                Arc::new(GeminiHarness::new(entry.executable.clone(), default_mode))
             }
             _ => {
                 // Custom or unknown preset — use CustomHarness
-                Box::new(CustomHarness::new(id.to_string(), entry.clone()))
+                Arc::new(CustomHarness::new(id.to_string(), entry.clone()))
             }
         }
     }
@@ -192,11 +193,17 @@ impl AcpHarnessManager {
 
     /// Return IDs of harnesses whose executables are available on this system.
     pub async fn available_harnesses(&self) -> Vec<String> {
-        let harnesses = self.harnesses.read().await;
+        // Clone Arc refs under brief read lock, then check availability without holding the lock.
+        // Each is_available() can take up to 5s — holding the lock would block all writers.
+        let snapshot: Vec<(String, Arc<dyn AcpHarness>)> = {
+            let harnesses = self.harnesses.read().await;
+            harnesses.iter().map(|(id, h)| (id.clone(), Arc::clone(h))).collect()
+        };
+
         let mut available = Vec::new();
-        for (id, harness) in harnesses.iter() {
+        for (id, harness) in snapshot {
             if harness.is_available().await {
-                available.push(id.clone());
+                available.push(id);
             }
         }
         available.sort();
@@ -205,11 +212,14 @@ impl AcpHarnessManager {
 
     /// Check availability of a single harness by ID.
     pub async fn is_harness_available(&self, id: &str) -> bool {
-        let harnesses = self.harnesses.read().await;
-        if let Some(harness) = harnesses.get(id) {
-            harness.is_available().await
-        } else {
-            false
+        // Clone Arc ref under brief read lock, then check without holding the lock.
+        let harness = {
+            let harnesses = self.harnesses.read().await;
+            harnesses.get(id).map(Arc::clone)
+        };
+        match harness {
+            Some(h) => h.is_available().await,
+            None => false,
         }
     }
 
@@ -218,6 +228,9 @@ impl AcpHarnessManager {
     // =========================================================================
 
     /// Register a new harness at runtime.
+    ///
+    /// Lock ordering: harnesses → configs
+    /// (no sessions lock needed — new harness has no sessions yet)
     pub async fn register_harness(&self, id: String, entry: AcpHarnessEntry) -> Result<()> {
         if !entry.enabled {
             return Err(AlephError::tool(format!(
@@ -228,6 +241,9 @@ impl AcpHarnessManager {
 
         let harness = Self::build_harness(&id, &entry);
 
+        // For a new harness, we only need harnesses + configs (no sessions to kill).
+        // This is safe: register only inserts into harnesses/configs, and no other
+        // code path holds harnesses.write while waiting on configs.write.
         let mut harnesses = self.harnesses.write().await;
         let mut configs = self.configs.write().await;
 
@@ -247,6 +263,9 @@ impl AcpHarnessManager {
     /// Unregister a harness at runtime.
     ///
     /// Rejects preset harness IDs — use `update_harness` to disable them instead.
+    ///
+    /// Lock ordering: sessions → harnesses → configs
+    /// (matches `update_harness` and `ensure_session` to prevent deadlocks)
     pub async fn unregister_harness(&self, id: &str) -> Result<()> {
         if AcpHarnessEntry::is_preset_id(id) {
             return Err(AlephError::tool(format!(
@@ -255,6 +274,8 @@ impl AcpHarnessManager {
             )));
         }
 
+        // Acquire locks in consistent order: sessions → harnesses → configs
+        let mut sessions = self.sessions.write().await;
         let mut harnesses = self.harnesses.write().await;
         let mut configs = self.configs.write().await;
 
@@ -268,7 +289,6 @@ impl AcpHarnessManager {
         configs.remove(id);
 
         // Also kill any active sessions for this harness (all cwds)
-        let mut sessions = self.sessions.write().await;
         let keys_to_remove: Vec<SessionKey> = sessions
             .keys()
             .filter(|k| k.harness_id == id)
@@ -369,6 +389,10 @@ impl AcpHarnessManager {
     /// - If no session exists, a new one is spawned.
     ///
     /// Only meaningful for NativeAcp harnesses; oneshot harnesses don't need sessions.
+    ///
+    /// Race safety: after spawning (which happens without holding the session lock),
+    /// we re-check whether another task already inserted a live session for the same
+    /// key. If so, we drop our freshly spawned session instead of overwriting.
     pub async fn ensure_session(&self, harness_id: &str, cwd: &str) -> Result<()> {
         let key = SessionKey::new(harness_id, cwd);
 
@@ -385,17 +409,33 @@ impl AcpHarnessManager {
             }
         }
 
-        // Get harness reference and spawn outside the session lock
-        let harnesses = self.harnesses.read().await;
-        let harness = harnesses.get(harness_id).ok_or_else(|| {
-            AlephError::tool(format!("Unknown ACP harness: '{}'", harness_id))
-        })?;
+        // Clone Arc ref under brief read lock, then spawn without holding it.
+        // spawn_session may take seconds (process startup + initialize handshake).
+        let harness = {
+            let harnesses = self.harnesses.read().await;
+            Arc::clone(harnesses.get(harness_id).ok_or_else(|| {
+                AlephError::tool(format!("Unknown ACP harness: '{}'", harness_id))
+            })?)
+        };
 
-        let session = harness.spawn_session(Some(cwd)).await?;
+        let mut new_session = harness.spawn_session(Some(cwd)).await?;
+
+        // Re-check under write lock: another task may have raced us and already
+        // inserted a live session for the same key while we were spawning.
+        let mut sessions = self.sessions.write().await;
+        if let Some(existing) = sessions.get_mut(&key) {
+            if existing.is_alive() {
+                // Another task won the race — drop our session
+                debug!(harness_id, "ACP session race: another task already spawned, dropping ours");
+                new_session.kill().await;
+                return Ok(());
+            }
+            // Existing is dead — remove it
+            sessions.remove(&key);
+        }
+
         info!(harness_id, "ACP session started");
-        drop(harnesses);
-
-        self.sessions.write().await.insert(key, session);
+        sessions.insert(key, new_session);
         Ok(())
     }
 
@@ -478,10 +518,13 @@ impl AcpHarnessManager {
                 Ok(text)
             }
             HarnessMode::Oneshot => {
-                let harnesses = self.harnesses.read().await;
-                let harness = harnesses.get(harness_id).ok_or_else(|| {
-                    AlephError::tool(format!("Unknown ACP harness: '{}'", harness_id))
-                })?;
+                // Clone Arc ref under brief read lock; execute_oneshot may take minutes.
+                let harness = {
+                    let harnesses = self.harnesses.read().await;
+                    Arc::clone(harnesses.get(harness_id).ok_or_else(|| {
+                        AlephError::tool(format!("Unknown ACP harness: '{}'", harness_id))
+                    })?)
+                };
                 harness.execute_oneshot(prompt_text, cwd).await
             }
         }

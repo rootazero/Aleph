@@ -65,158 +65,93 @@ fn resolve_cwd(cwd: Option<&str>) -> String {
 }
 
 // =============================================================================
-// ClaudeCodeTool
+// ACP delegate tool macro — eliminates duplication across harnesses
 // =============================================================================
 
-/// Delegate a coding task to Claude Code CLI.
-#[derive(Clone)]
-pub struct ClaudeCodeTool {
-    manager: Arc<AcpHarnessManager>,
-}
+/// Generate an ACP delegate tool struct that forwards prompts to a specific harness.
+///
+/// Each invocation creates a `$struct_name` with `new()`, `Clone`, and `AlephTool` impl.
+macro_rules! acp_delegate_tool {
+    (
+        struct $struct_name:ident;
+        tool_name = $tool_name:literal;
+        harness_id = $harness_id:literal;
+        display_label = $display_label:literal;
+        description = $description:literal;
+    ) => {
+        #[derive(Clone)]
+        pub struct $struct_name {
+            manager: Arc<AcpHarnessManager>,
+        }
 
-impl ClaudeCodeTool {
-    pub fn new(manager: Arc<AcpHarnessManager>) -> Self {
-        Self { manager }
-    }
-}
-
-#[async_trait]
-impl AlephTool for ClaudeCodeTool {
-    const NAME: &'static str = "claude_code";
-    const DESCRIPTION: &'static str =
-        "Delegate a coding task to Claude Code CLI. Supports two modes: \
-         'oneshot' (fresh process per prompt, default) and 'native_acp' \
-         (persistent session with context continuity). Set reuse_session \
-         to maintain context across multi-step workflows.";
-
-    type Args = AcpDelegateArgs;
-    type Output = AcpDelegateOutput;
-
-    async fn call(&self, args: Self::Args) -> Result<Self::Output> {
-        let args_summary = format!("Claude Code: {}", truncate(&args.prompt, 80));
-        notify_tool_start(Self::NAME, &args_summary);
-
-        let cwd = resolve_cwd(args.cwd.as_deref());
-        let mode = args.mode.as_deref().map(parse_mode).transpose()?;
-        let reuse = args.reuse_session.unwrap_or(true);
-        let result = self.manager.prompt("claude-code", &args.prompt, &cwd, mode, reuse, None).await;
-
-        match result {
-            Ok(text) => {
-                notify_tool_result(Self::NAME, "completed", true);
-                Ok(AcpDelegateOutput {
-                    harness: "claude-code".to_string(),
-                    result: text,
-                })
-            }
-            Err(e) => {
-                notify_tool_result(Self::NAME, &e.to_string(), false);
-                Err(e)
+        impl $struct_name {
+            pub fn new(manager: Arc<AcpHarnessManager>) -> Self {
+                Self { manager }
             }
         }
-    }
-}
 
-// =============================================================================
-// CodexTool
-// =============================================================================
+        #[async_trait]
+        impl AlephTool for $struct_name {
+            const NAME: &'static str = $tool_name;
+            const DESCRIPTION: &'static str = $description;
 
-/// Delegate a coding task to OpenAI Codex CLI.
-#[derive(Clone)]
-pub struct CodexTool {
-    manager: Arc<AcpHarnessManager>,
-}
+            type Args = AcpDelegateArgs;
+            type Output = AcpDelegateOutput;
 
-impl CodexTool {
-    pub fn new(manager: Arc<AcpHarnessManager>) -> Self {
-        Self { manager }
-    }
-}
+            async fn call(&self, args: Self::Args) -> Result<Self::Output> {
+                let args_summary = format!("{}: {}", $display_label, truncate(&args.prompt, 80));
+                notify_tool_start(Self::NAME, &args_summary);
 
-#[async_trait]
-impl AlephTool for CodexTool {
-    const NAME: &'static str = "codex";
-    const DESCRIPTION: &'static str =
-        "Delegate a coding task to OpenAI Codex CLI. Supports 'oneshot' (default) \
-         and 'native_acp' modes. Set reuse_session for multi-step continuity.";
+                let cwd = resolve_cwd(args.cwd.as_deref());
+                let mode = args.mode.as_deref().map(parse_mode).transpose()?;
+                let reuse = args.reuse_session.unwrap_or(true);
+                let result = self.manager.prompt($harness_id, &args.prompt, &cwd, mode, reuse, None).await;
 
-    type Args = AcpDelegateArgs;
-    type Output = AcpDelegateOutput;
-
-    async fn call(&self, args: Self::Args) -> Result<Self::Output> {
-        let args_summary = format!("Codex: {}", truncate(&args.prompt, 80));
-        notify_tool_start(Self::NAME, &args_summary);
-
-        let cwd = resolve_cwd(args.cwd.as_deref());
-        let mode = args.mode.as_deref().map(parse_mode).transpose()?;
-        let reuse = args.reuse_session.unwrap_or(true);
-        let result = self.manager.prompt("codex", &args.prompt, &cwd, mode, reuse, None).await;
-
-        match result {
-            Ok(text) => {
-                notify_tool_result(Self::NAME, "completed", true);
-                Ok(AcpDelegateOutput {
-                    harness: "codex".to_string(),
-                    result: text,
-                })
-            }
-            Err(e) => {
-                notify_tool_result(Self::NAME, &e.to_string(), false);
-                Err(e)
+                match result {
+                    Ok(text) => {
+                        notify_tool_result(Self::NAME, "completed", true);
+                        Ok(AcpDelegateOutput {
+                            harness: $harness_id.to_string(),
+                            result: text,
+                        })
+                    }
+                    Err(e) => {
+                        notify_tool_result(Self::NAME, &e.to_string(), false);
+                        Err(e)
+                    }
+                }
             }
         }
-    }
+    };
 }
 
-// =============================================================================
-// GeminiCliTool
-// =============================================================================
-
-/// Delegate a task to Google Gemini CLI.
-#[derive(Clone)]
-pub struct GeminiCliTool {
-    manager: Arc<AcpHarnessManager>,
+acp_delegate_tool! {
+    struct ClaudeCodeTool;
+    tool_name = "claude_code";
+    harness_id = "claude-code";
+    display_label = "Claude Code";
+    description = "Delegate a coding task to Claude Code CLI. Supports two modes: \
+        'oneshot' (fresh process per prompt, default) and 'native_acp' \
+        (persistent session with context continuity). Set reuse_session \
+        to maintain context across multi-step workflows.";
 }
 
-impl GeminiCliTool {
-    pub fn new(manager: Arc<AcpHarnessManager>) -> Self {
-        Self { manager }
-    }
+acp_delegate_tool! {
+    struct CodexTool;
+    tool_name = "codex";
+    harness_id = "codex";
+    display_label = "Codex";
+    description = "Delegate a coding task to OpenAI Codex CLI. Supports 'oneshot' (default) \
+        and 'native_acp' modes. Set reuse_session for multi-step continuity.";
 }
 
-#[async_trait]
-impl AlephTool for GeminiCliTool {
-    const NAME: &'static str = "gemini_cli";
-    const DESCRIPTION: &'static str =
-        "Delegate a task to Google Gemini CLI. Supports 'native_acp' (default, persistent session) \
-         and 'oneshot' modes. Set reuse_session for multi-step continuity.";
-
-    type Args = AcpDelegateArgs;
-    type Output = AcpDelegateOutput;
-
-    async fn call(&self, args: Self::Args) -> Result<Self::Output> {
-        let args_summary = format!("Gemini: {}", truncate(&args.prompt, 80));
-        notify_tool_start(Self::NAME, &args_summary);
-
-        let cwd = resolve_cwd(args.cwd.as_deref());
-        let mode = args.mode.as_deref().map(parse_mode).transpose()?;
-        let reuse = args.reuse_session.unwrap_or(true);
-        let result = self.manager.prompt("gemini", &args.prompt, &cwd, mode, reuse, None).await;
-
-        match result {
-            Ok(text) => {
-                notify_tool_result(Self::NAME, "completed", true);
-                Ok(AcpDelegateOutput {
-                    harness: "gemini".to_string(),
-                    result: text,
-                })
-            }
-            Err(e) => {
-                notify_tool_result(Self::NAME, &e.to_string(), false);
-                Err(e)
-            }
-        }
-    }
+acp_delegate_tool! {
+    struct GeminiCliTool;
+    tool_name = "gemini_cli";
+    harness_id = "gemini";
+    display_label = "Gemini";
+    description = "Delegate a task to Google Gemini CLI. Supports 'native_acp' (default, persistent session) \
+        and 'oneshot' modes. Set reuse_session for multi-step continuity.";
 }
 
 // =============================================================================
@@ -240,6 +175,12 @@ pub struct AcpSwitchOutput {
 }
 
 /// Switch to direct conversation with an external CLI agent, or switch back to Aleph.
+///
+/// TODO: This tool currently validates the target and pre-spawns NativeAcp sessions,
+/// but does NOT actually change any active-agent state in the execution engine.
+/// The returned `target` must be consumed by the execution engine to route
+/// subsequent messages to the selected harness. Until that integration is done,
+/// this tool is effectively a no-op beyond session warm-up.
 #[derive(Clone)]
 pub struct AcpSwitchTool {
     manager: Arc<AcpHarnessManager>,
@@ -310,10 +251,7 @@ impl AlephTool for AcpSwitchTool {
 
 /// Truncate a string to at most `max_len` characters, appending "..." if truncated.
 fn truncate(s: &str, max_len: usize) -> String {
-    if s.len() <= max_len {
-        return s.to_string();
-    }
-    // Use char_indices for UTF-8 safety
+    // Use char_indices for UTF-8 safety (count chars, not bytes)
     match s.char_indices().nth(max_len) {
         Some((idx, _)) => format!("{}...", &s[..idx]),
         None => s.to_string(),

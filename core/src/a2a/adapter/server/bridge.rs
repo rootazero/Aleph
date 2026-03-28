@@ -57,7 +57,7 @@ impl AgentLoopBridge {
             timeout_secs: None,
             metadata: HashMap::new(),
             attachments: Vec::new(),
-            pending_media: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            pending_media: Arc::new(crate::sync_primitives::Mutex::new(Vec::new())),
         }
     }
 
@@ -82,9 +82,15 @@ impl A2AMessageHandler for AgentLoopBridge {
             ));
         }
 
-        // Create or reuse the task
+        // Create task (or get existing — ignore duplicate errors)
         let context_id = Self::context_id(task_id, session_id);
-        let _task = self.task_manager.create_task(task_id, context_id).await?;
+        match self.task_manager.create_task(task_id, context_id).await {
+            Ok(_) => {}
+            Err(A2AError::InvalidRequest(_)) => {
+                // Task already exists — continue with existing task
+            }
+            Err(e) => return Err(e),
+        }
 
         // Transition to Working
         self.task_manager
@@ -143,9 +149,15 @@ impl A2AMessageHandler for AgentLoopBridge {
             ));
         }
 
-        // Create or reuse the task
+        // Create task (or get existing — ignore duplicate errors)
         let context_id = Self::context_id(task_id, session_id);
-        let _task = self.task_manager.create_task(task_id, context_id).await?;
+        match self.task_manager.create_task(task_id, context_id).await {
+            Ok(_) => {}
+            Err(A2AError::InvalidRequest(_)) => {
+                // Task already exists — continue with existing task
+            }
+            Err(e) => return Err(e),
+        }
 
         // Subscribe to streaming updates BEFORE starting execution
         let stream = self.streaming.subscribe_all(task_id).await?;
@@ -259,7 +271,7 @@ impl A2AMessageHandler for AgentLoopBridge {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
+    use crate::sync_primitives::Mutex;
 
     use crate::a2a::adapter::server::StreamHub;
     use crate::a2a::adapter::server::TaskStore;

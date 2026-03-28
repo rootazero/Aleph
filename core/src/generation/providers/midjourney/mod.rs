@@ -63,7 +63,7 @@ mod tests {
 
     #[test]
     fn test_new_with_defaults() {
-        let provider = MidjourneyProvider::new("test-api-key");
+        let provider = MidjourneyProvider::new("test-api-key").unwrap();
 
         assert_eq!(provider.api_key, "test-api-key");
         assert_eq!(provider.endpoint, DEFAULT_ENDPOINT);
@@ -85,7 +85,8 @@ mod tests {
     fn test_builder_with_mode() {
         let provider = MidjourneyProviderBuilder::new("test-key")
             .mode(MidjourneyMode::Relax)
-            .build();
+            .build()
+            .unwrap();
 
         assert_eq!(provider.mode, MidjourneyMode::Relax);
     }
@@ -94,7 +95,8 @@ mod tests {
     fn test_builder_with_endpoint() {
         let provider = MidjourneyProviderBuilder::new("test-key")
             .endpoint("https://custom.api.com")
-            .build();
+            .build()
+            .unwrap();
 
         assert_eq!(provider.endpoint, "https://custom.api.com");
     }
@@ -103,7 +105,8 @@ mod tests {
     fn test_builder_with_color() {
         let provider = MidjourneyProviderBuilder::new("test-key")
             .color("#FF0000")
-            .build();
+            .build()
+            .unwrap();
 
         assert_eq!(provider.color, "#FF0000");
     }
@@ -112,7 +115,8 @@ mod tests {
     fn test_builder_normalizes_endpoint() {
         let provider = MidjourneyProviderBuilder::new("test-key")
             .endpoint("https://custom.api.com/")
-            .build();
+            .build()
+            .unwrap();
 
         assert_eq!(provider.endpoint, "https://custom.api.com");
     }
@@ -124,7 +128,8 @@ mod tests {
             .endpoint("https://custom.api.com")
             .color("#00FF00")
             .timeout_secs(60)
-            .build();
+            .build()
+            .unwrap();
 
         assert_eq!(provider.mode, MidjourneyMode::Relax);
         assert_eq!(provider.endpoint, "https://custom.api.com");
@@ -157,7 +162,8 @@ mod tests {
     fn test_submit_url_fast() {
         let provider = MidjourneyProviderBuilder::new("test-key")
             .mode(MidjourneyMode::Fast)
-            .build();
+            .build()
+            .unwrap();
 
         assert_eq!(
             provider.submit_url(),
@@ -169,7 +175,8 @@ mod tests {
     fn test_submit_url_relax() {
         let provider = MidjourneyProviderBuilder::new("test-key")
             .mode(MidjourneyMode::Relax)
-            .build();
+            .build()
+            .unwrap();
 
         assert_eq!(
             provider.submit_url(),
@@ -179,7 +186,7 @@ mod tests {
 
     #[test]
     fn test_task_url() {
-        let provider = MidjourneyProvider::new("test-key");
+        let provider = MidjourneyProvider::new("test-key").unwrap();
 
         assert_eq!(
             provider.task_url("abc123"),
@@ -191,7 +198,8 @@ mod tests {
     fn test_task_url_custom_endpoint() {
         let provider = MidjourneyProviderBuilder::new("test-key")
             .endpoint("https://custom.api.com")
-            .build();
+            .build()
+            .unwrap();
 
         assert_eq!(
             provider.task_url("task-001"),
@@ -203,13 +211,13 @@ mod tests {
 
     #[test]
     fn test_name() {
-        let provider = MidjourneyProvider::new("test-key");
+        let provider = MidjourneyProvider::new("test-key").unwrap();
         assert_eq!(provider.name(), "midjourney");
     }
 
     #[test]
     fn test_supported_types() {
-        let provider = MidjourneyProvider::new("test-key");
+        let provider = MidjourneyProvider::new("test-key").unwrap();
         let types = provider.supported_types();
 
         assert_eq!(types.len(), 1);
@@ -218,14 +226,14 @@ mod tests {
 
     #[test]
     fn test_supports_image() {
-        let provider = MidjourneyProvider::new("test-key");
+        let provider = MidjourneyProvider::new("test-key").unwrap();
 
         assert!(provider.supports(GenerationType::Image));
     }
 
     #[test]
     fn test_does_not_support_other_types() {
-        let provider = MidjourneyProvider::new("test-key");
+        let provider = MidjourneyProvider::new("test-key").unwrap();
 
         assert!(!provider.supports(GenerationType::Video));
         assert!(!provider.supports(GenerationType::Speech));
@@ -234,13 +242,13 @@ mod tests {
 
     #[test]
     fn test_color() {
-        let provider = MidjourneyProvider::new("test-key");
+        let provider = MidjourneyProvider::new("test-key").unwrap();
         assert_eq!(provider.color(), "#5865F2");
     }
 
     #[test]
     fn test_default_model() {
-        let provider = MidjourneyProvider::new("test-key");
+        let provider = MidjourneyProvider::new("test-key").unwrap();
         assert_eq!(provider.default_model(), Some("midjourney"));
     }
 
@@ -427,7 +435,7 @@ mod tests {
     fn test_provider_as_trait_object() {
         use crate::sync_primitives::Arc;
 
-        let provider: Arc<dyn GenerationProvider> = Arc::new(MidjourneyProvider::new("test-key"));
+        let provider: Arc<dyn GenerationProvider> = Arc::new(MidjourneyProvider::new("test-key").unwrap());
 
         assert_eq!(provider.name(), "midjourney");
         assert!(provider.supports(GenerationType::Image));

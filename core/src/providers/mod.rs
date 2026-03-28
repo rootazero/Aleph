@@ -138,12 +138,9 @@ pub fn create_mock_provider() -> Arc<dyn AiProvider> {
 /// - `"openai-responses"` - OpenAI Responses API (via HttpProvider), for OpenRouter etc.
 /// - `"ollama"` - Local Ollama models (native)
 pub fn create_provider(name: &str, mut config: ProviderConfig) -> Result<Arc<dyn AiProvider>> {
-    // Initialize protocol registry if not already done
+    // Get the global protocol registry (built-in protocols registered at init via Lazy)
     use crate::providers::protocols::ProtocolRegistry;
     let registry = ProtocolRegistry::global();
-    if registry.list_protocols().is_empty() {
-        registry.register_builtin();
-    }
 
     let name_lower = name.to_lowercase();
 

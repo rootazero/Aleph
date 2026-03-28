@@ -66,7 +66,7 @@ pub fn generate_agent_id_from_name(name: &str) -> String {
 }
 
 /// Validate an agent ID: `[a-z0-9][a-z0-9_-]*`, 1-64 characters.
-fn validate_agent_id(id: &str) -> std::result::Result<(), String> {
+pub fn validate_agent_id(id: &str) -> std::result::Result<(), String> {
     if id.is_empty() {
         return Err("Agent ID cannot be empty".to_string());
     }

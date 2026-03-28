@@ -33,12 +33,15 @@ impl TeamStatus {
             Self::Disbanded => "disbanded",
         }
     }
+}
 
-    pub fn from_str(s: &str) -> Option<Self> {
+impl std::str::FromStr for TeamStatus {
+    type Err = String;
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         match s {
-            "active" => Some(Self::Active),
-            "disbanded" => Some(Self::Disbanded),
-            _ => None,
+            "active" => Ok(Self::Active),
+            "disbanded" => Ok(Self::Disbanded),
+            _ => Err(format!("unknown TeamStatus: {s}")),
         }
     }
 }
@@ -66,14 +69,17 @@ impl TeamTaskStatus {
             Self::Failed => "failed",
         }
     }
+}
 
-    pub fn from_str(s: &str) -> Option<Self> {
+impl std::str::FromStr for TeamTaskStatus {
+    type Err = String;
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         match s {
-            "pending" => Some(Self::Pending),
-            "running" => Some(Self::Running),
-            "completed" => Some(Self::Completed),
-            "failed" => Some(Self::Failed),
-            _ => None,
+            "pending" => Ok(Self::Pending),
+            "running" => Ok(Self::Running),
+            "completed" => Ok(Self::Completed),
+            "failed" => Ok(Self::Failed),
+            _ => Err(format!("unknown TeamTaskStatus: {s}")),
         }
     }
 }

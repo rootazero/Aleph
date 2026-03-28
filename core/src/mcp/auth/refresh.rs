@@ -42,7 +42,7 @@ pub struct TokenRefreshManager {
     storage: Arc<OAuthStorage>,
     servers: RwLock<HashMap<String, TrackedServer>>,
     config: TokenRefreshConfig,
-    shutdown: RwLock<bool>,
+    shutdown: tokio_util::sync::CancellationToken,
 }
 
 impl TokenRefreshManager {
@@ -52,7 +52,7 @@ impl TokenRefreshManager {
             storage,
             servers: RwLock::new(HashMap::new()),
             config,
-            shutdown: RwLock::new(false),
+            shutdown: tokio_util::sync::CancellationToken::new(),
         }
     }
 
@@ -87,21 +87,21 @@ impl TokenRefreshManager {
         let mut ticker = interval(self.config.check_interval);
 
         loop {
-            ticker.tick().await;
-
-            if *self.shutdown.read().await {
-                tracing::info!("Token refresh manager shutting down");
-                break;
+            tokio::select! {
+                _ = ticker.tick() => {
+                    self.check_and_refresh_all().await;
+                }
+                _ = self.shutdown.cancelled() => {
+                    tracing::info!("Token refresh manager shutting down");
+                    break;
+                }
             }
-
-            self.check_and_refresh_all().await;
         }
     }
 
-    /// Stop the refresh manager
-    pub async fn shutdown(&self) {
-        let mut shutdown = self.shutdown.write().await;
-        *shutdown = true;
+    /// Stop the refresh manager (returns immediately, loop exits on next select cycle)
+    pub fn shutdown(&self) {
+        self.shutdown.cancel();
     }
 
     /// Check all servers and refresh tokens as needed
@@ -167,7 +167,7 @@ impl TokenRefreshManager {
                 .as_secs() as i64;
 
             let refresh_threshold = self.config.refresh_before_expiry.as_secs() as i64;
-            expires_at - refresh_threshold < now
+            expires_at.saturating_sub(refresh_threshold) < now
         } else {
             false // No expiration = no need to refresh
         }

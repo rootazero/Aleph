@@ -71,13 +71,18 @@ impl ApprovalBridge {
     /// Expected format: "approve:{id}:{decision}"
     /// where decision is "once", "always", or "deny"
     pub fn parse_callback(data: &str) -> Option<(String, ApprovalDecisionType)> {
-        let parts: Vec<&str> = data.split(':').collect();
-        if parts.len() != 3 || parts[0] != "approve" {
+        // Use split_once to be robust against IDs that might contain colons
+        let (prefix, rest) = data.split_once(':')?;
+        if prefix != "approve" {
+            return None;
+        }
+        let (id, decision_str) = rest.rsplit_once(':')?;
+        if id.is_empty() {
             return None;
         }
 
-        let approval_id = parts[1].to_string();
-        let decision = match parts[2] {
+        let approval_id = id.to_string();
+        let decision = match decision_str {
             "once" => ApprovalDecisionType::AllowOnce,
             "always" => ApprovalDecisionType::AllowAlways,
             "deny" => ApprovalDecisionType::Deny,

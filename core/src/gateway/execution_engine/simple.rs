@@ -58,6 +58,7 @@ impl SimpleExecutionEngine {
                     request: request.clone(),
                     state: RunState::Running,
                     started_at: chrono::Utc::now(),
+                    completed_at: None,
                     steps_completed: 0,
                     current_tool: None,
                     cancel_tx: Some(cancel_tx),
@@ -108,10 +109,18 @@ impl SimpleExecutionEngine {
         // Reset agent state
         agent.set_state(AgentState::Idle).await;
 
-        // Emit completion events
+        // Update run state and emit completion events
+        let final_state = match &result {
+            Ok(_) => RunState::Completed,
+            Err(ExecutionError::Cancelled) => RunState::Cancelled,
+            Err(e) => RunState::Failed { error: e.to_string() },
+        };
         let (started_at, steps_completed, final_seq) = {
-            let runs = self.active_runs.read().await;
-            if let Some(run) = runs.get(&run_id) {
+            let mut runs = self.active_runs.write().await;
+            if let Some(run) = runs.get_mut(&run_id) {
+                run.state = final_state;
+                run.completed_at = Some(chrono::Utc::now());
+                run.cancel_tx = None;
                 (run.started_at, run.steps_completed, run.next_seq())
             } else {
                 (chrono::Utc::now(), 0, 0)
@@ -120,7 +129,7 @@ impl SimpleExecutionEngine {
 
         let duration_ms = (chrono::Utc::now() - started_at).num_milliseconds().max(0) as u64;
 
-        match &result {
+        let final_result = match &result {
             Ok(response) => {
                 agent
                     .add_message(&request.session_key, MessageRole::Assistant, response)
@@ -156,7 +165,17 @@ impl SimpleExecutionEngine {
                     .await;
                 Err(ExecutionError::Failed(e.to_string()))
             }
-        }
+        };
+
+        // Remove from active runs after a short delay (for status queries)
+        let runs_clone = self.active_runs.clone();
+        let run_id_clone = run_id.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+            runs_clone.write().await.remove(&run_id_clone);
+        });
+
+        final_result
     }
 
     /// Simple loop that emits placeholder response
@@ -258,12 +277,7 @@ impl SimpleExecutionEngine {
             run_id: run_id.to_string(),
             state: run.state.clone(),
             started_at: Some(run.started_at),
-            completed_at: match run.state {
-                RunState::Completed | RunState::Cancelled | RunState::Failed { .. } => {
-                    Some(chrono::Utc::now())
-                }
-                _ => None,
-            },
+            completed_at: run.completed_at,
             steps_completed: run.steps_completed,
             current_tool: run.current_tool.clone(),
         })
@@ -271,19 +285,20 @@ impl SimpleExecutionEngine {
 
     /// Cancel a run
     pub async fn cancel(&self, run_id: &str) -> Result<(), ExecutionError> {
-        let runs = self.active_runs.read().await;
-
-        if let Some(run) = runs.get(run_id) {
-            if let Some(ref cancel_tx) = run.cancel_tx {
-                let _ = cancel_tx.send(()).await;
-                info!("Sent cancellation signal for run {}", run_id);
-                return Ok(());
-            } else {
-                return Err(ExecutionError::RunNotActive(run_id.to_string()));
+        let cancel_tx = {
+            let runs = self.active_runs.read().await;
+            match runs.get(run_id) {
+                Some(run) => match run.cancel_tx {
+                    Some(ref tx) => tx.clone(),
+                    None => return Err(ExecutionError::RunNotActive(run_id.to_string())),
+                },
+                None => return Err(ExecutionError::RunNotFound(run_id.to_string())),
             }
-        }
-
-        Err(ExecutionError::RunNotFound(run_id.to_string()))
+        };
+        // Lock released before await
+        let _ = cancel_tx.send(()).await;
+        info!("Sent cancellation signal for run {}", run_id);
+        Ok(())
     }
 }
 

@@ -13,27 +13,19 @@ use crate::error::Result;
 pub struct ToolContext {
     /// Workspace output directory (e.g. ~/.aleph/workspaces/{agent_id}/output/)
     pub output_dir: PathBuf,
-    /// Hidden tool output directory for truncation storage
-    /// (e.g. ~/.aleph/workspaces/{agent_id}/.tool_output/)
-    pub tool_output_dir: PathBuf,
 }
 
 impl ToolContext {
     /// Build from a resolved workspace path, creating directories if needed.
     pub fn from_workspace(workspace_path: &Path) -> Result<Self> {
         let output_dir = workspace_path.join("output");
-        let tool_output_dir = workspace_path.join(".tool_output");
 
         fs::create_dir_all(&output_dir)
             .map_err(|e| crate::error::AlephError::config(
                 format!("Failed to create output directory {}: {}", output_dir.display(), e)
             ))?;
-        fs::create_dir_all(&tool_output_dir)
-            .map_err(|e| crate::error::AlephError::config(
-                format!("Failed to create tool output directory {}: {}", tool_output_dir.display(), e)
-            ))?;
 
-        Ok(Self { output_dir, tool_output_dir })
+        Ok(Self { output_dir })
     }
 }
 
@@ -48,9 +40,15 @@ pub fn new_tool_context_handle() -> ToolContextHandle {
         .join("workspaces")
         .join("main");
     let ctx = ToolContext::from_workspace(&default_workspace)
-        .unwrap_or_else(|_| ToolContext {
-            output_dir: default_workspace.join("output"),
-            tool_output_dir: default_workspace.join(".tool_output"),
+        .unwrap_or_else(|e| {
+            tracing::warn!(
+                error = %e,
+                path = %default_workspace.display(),
+                "Failed to create default workspace output dir; tools may fail"
+            );
+            ToolContext {
+                output_dir: default_workspace.join("output"),
+            }
         });
     std::sync::Arc::new(tokio::sync::RwLock::new(ctx))
 }

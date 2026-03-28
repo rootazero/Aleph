@@ -61,7 +61,9 @@ impl NotificationService {
     /// List all registered push notification configs
     pub async fn list_configs(&self) -> A2AResult<Vec<PushNotificationConfig>> {
         let configs = self.configs.read().await;
-        Ok(configs.values().cloned().collect())
+        let mut result: Vec<_> = configs.values().cloned().collect();
+        result.sort_by(|a, b| a.task_id.cmp(&b.task_id));
+        Ok(result)
     }
 
     /// Send push notification for a status update
@@ -217,8 +219,7 @@ mod tests {
             .await
             .unwrap();
 
-        let mut configs = svc.list_configs().await.unwrap();
-        configs.sort_by(|a, b| a.task_id.cmp(&b.task_id));
+        let configs = svc.list_configs().await.unwrap();
         assert_eq!(configs.len(), 2);
         assert_eq!(configs[0].task_id, "task-1");
         assert_eq!(configs[1].task_id, "task-2");

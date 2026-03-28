@@ -8,6 +8,32 @@ use super::StateDatabase;
 use rusqlite::params;
 use rusqlite::OptionalExtension;
 
+/// Construct AgentTask from a rusqlite row.
+/// Expected column order: id, parent_session_id, agent_id, task_prompt, status,
+///     risk_level, lane, checkpoint_snapshot_path, last_tool_call_id,
+///     recursion_depth, parent_task_id, created_at, updated_at,
+///     started_at, completed_at, metadata_json
+fn agent_task_from_row(row: &rusqlite::Row) -> rusqlite::Result<AgentTask> {
+    Ok(AgentTask {
+        id: row.get(0)?,
+        parent_session_id: row.get(1)?,
+        agent_id: row.get(2)?,
+        task_prompt: row.get(3)?,
+        status: TaskStatus::from_str_or_default(&row.get::<_, String>(4)?),
+        risk_level: RiskLevel::from_str_or_default(&row.get::<_, String>(5)?),
+        lane: Lane::from_str_or_default(&row.get::<_, String>(6)?),
+        checkpoint_snapshot_path: row.get(7)?,
+        last_tool_call_id: row.get(8)?,
+        recursion_depth: row.get(9)?,
+        parent_task_id: row.get(10)?,
+        created_at: row.get(11)?,
+        updated_at: row.get(12)?,
+        started_at: row.get(13)?,
+        completed_at: row.get(14)?,
+        metadata_json: row.get(15)?,
+    })
+}
+
 impl StateDatabase {
     // =========================================================================
     // Agent Tasks CRUD
@@ -64,26 +90,7 @@ impl StateDatabase {
             .map_err(|e| AlephError::config(format!("Failed to prepare query: {}", e)))?;
 
         let result = stmt
-            .query_row(params![task_id], |row| {
-                Ok(AgentTask {
-                    id: row.get(0)?,
-                    parent_session_id: row.get(1)?,
-                    agent_id: row.get(2)?,
-                    task_prompt: row.get(3)?,
-                    status: TaskStatus::from_str_or_default(&row.get::<_, String>(4)?),
-                    risk_level: RiskLevel::from_str_or_default(&row.get::<_, String>(5)?),
-                    lane: Lane::from_str_or_default(&row.get::<_, String>(6)?),
-                    checkpoint_snapshot_path: row.get(7)?,
-                    last_tool_call_id: row.get(8)?,
-                    recursion_depth: row.get(9)?,
-                    parent_task_id: row.get(10)?,
-                    created_at: row.get(11)?,
-                    updated_at: row.get(12)?,
-                    started_at: row.get(13)?,
-                    completed_at: row.get(14)?,
-                    metadata_json: row.get(15)?,
-                })
-            })
+            .query_row(params![task_id], agent_task_from_row)
             .optional()
             .map_err(|e| AlephError::config(format!("Failed to get agent task: {}", e)))?;
 
@@ -152,26 +159,7 @@ impl StateDatabase {
             .map_err(|e| AlephError::config(format!("Failed to prepare query: {}", e)))?;
 
         let tasks = stmt
-            .query_map(params![session_id], |row| {
-                Ok(AgentTask {
-                    id: row.get(0)?,
-                    parent_session_id: row.get(1)?,
-                    agent_id: row.get(2)?,
-                    task_prompt: row.get(3)?,
-                    status: TaskStatus::from_str_or_default(&row.get::<_, String>(4)?),
-                    risk_level: RiskLevel::from_str_or_default(&row.get::<_, String>(5)?),
-                    lane: Lane::from_str_or_default(&row.get::<_, String>(6)?),
-                    checkpoint_snapshot_path: row.get(7)?,
-                    last_tool_call_id: row.get(8)?,
-                    recursion_depth: row.get(9)?,
-                    parent_task_id: row.get(10)?,
-                    created_at: row.get(11)?,
-                    updated_at: row.get(12)?,
-                    started_at: row.get(13)?,
-                    completed_at: row.get(14)?,
-                    metadata_json: row.get(15)?,
-                })
-            })
+            .query_map(params![session_id], agent_task_from_row)
             .map_err(|e| AlephError::config(format!("Failed to query tasks: {}", e)))?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| AlephError::config(format!("Failed to collect tasks: {}", e)))?;
@@ -197,26 +185,7 @@ impl StateDatabase {
             .map_err(|e| AlephError::config(format!("Failed to prepare query: {}", e)))?;
 
         let tasks = stmt
-            .query_map([], |row| {
-                Ok(AgentTask {
-                    id: row.get(0)?,
-                    parent_session_id: row.get(1)?,
-                    agent_id: row.get(2)?,
-                    task_prompt: row.get(3)?,
-                    status: TaskStatus::from_str_or_default(&row.get::<_, String>(4)?),
-                    risk_level: RiskLevel::from_str_or_default(&row.get::<_, String>(5)?),
-                    lane: Lane::from_str_or_default(&row.get::<_, String>(6)?),
-                    checkpoint_snapshot_path: row.get(7)?,
-                    last_tool_call_id: row.get(8)?,
-                    recursion_depth: row.get(9)?,
-                    parent_task_id: row.get(10)?,
-                    created_at: row.get(11)?,
-                    updated_at: row.get(12)?,
-                    started_at: row.get(13)?,
-                    completed_at: row.get(14)?,
-                    metadata_json: row.get(15)?,
-                })
-            })
+            .query_map([], agent_task_from_row)
             .map_err(|e| AlephError::config(format!("Failed to query tasks: {}", e)))?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| AlephError::config(format!("Failed to collect tasks: {}", e)))?;

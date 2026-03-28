@@ -204,7 +204,7 @@ impl MultiProviderRegistry {
         }
         let removed = state.providers.remove(name);
         if state.default_name == name {
-            if let Some(first) = state.providers.keys().next() {
+            if let Some(first) = state.providers.keys().min() {
                 state.default_name = first.clone();
             }
         }
@@ -235,7 +235,9 @@ impl MultiProviderRegistry {
     /// List all registered provider names (inherent method for direct access)
     pub fn list_providers(&self) -> Vec<String> {
         let state = self.state.read().unwrap_or_else(|e| e.into_inner());
-        state.providers.keys().cloned().collect()
+        let mut names: Vec<String> = state.providers.keys().cloned().collect();
+        names.sort();
+        names
     }
 }
 
@@ -260,14 +262,20 @@ impl ProviderRegistry for MultiProviderRegistry {
     fn default_provider(&self) -> Arc<dyn AiProvider> {
         let state = self.state.read().unwrap_or_else(|e| e.into_inner());
         state.providers.get(&state.default_name)
-            .or_else(|| state.providers.values().next())
+            .or_else(|| {
+                // Deterministic fallback: pick the lexicographically smallest key
+                state.providers.keys().min()
+                    .and_then(|k| state.providers.get(k))
+            })
             .cloned()
             .expect("registry must have at least one provider")
     }
 
     fn list_providers(&self) -> Vec<String> {
         let state = self.state.read().unwrap_or_else(|e| e.into_inner());
-        state.providers.keys().cloned().collect()
+        let mut names: Vec<String> = state.providers.keys().cloned().collect();
+        names.sort();
+        names
     }
 }
 

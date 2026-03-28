@@ -48,9 +48,9 @@ impl PlatformOcrProvider {
     /// - `Base64` variant: returned directly.
     /// - `FilePath` variant: read from disk and base64-encoded.
     /// - `Url` variant: not supported for platform OCR (would need HTTP fetch).
-    fn resolve_base64(image: &ImageInput) -> Result<Option<String>, VisionError> {
+    fn resolve_base64(image: &ImageInput) -> Result<String, VisionError> {
         match image {
-            ImageInput::Base64 { data, .. } => Ok(Some(data.clone())),
+            ImageInput::Base64 { data, .. } => Ok(data.clone()),
             ImageInput::FilePath { path } => {
                 let bytes = std::fs::read(path).map_err(|e| {
                     VisionError::ImageError(format!(
@@ -59,7 +59,7 @@ impl PlatformOcrProvider {
                         e
                     ))
                 })?;
-                Ok(Some(base64_encode(&bytes)))
+                Ok(base64_encode(&bytes))
             }
             ImageInput::Url { url } => Err(VisionError::ProviderError(format!(
                 "Platform OCR does not support URL images directly: {url}"
@@ -89,7 +89,7 @@ impl VisionProvider for PlatformOcrProvider {
     }
 
     async fn ocr(&self, image: &ImageInput) -> Result<OcrResult, VisionError> {
-        let image_base64 = Self::resolve_base64(image)?;
+        let image_base64 = Some(Self::resolve_base64(image)?);
 
         let request = DesktopRequest::Ocr { image_base64 };
 
@@ -220,7 +220,7 @@ mod tests {
             format: ImageFormat::Png,
         };
         let result = PlatformOcrProvider::resolve_base64(&image).unwrap();
-        assert_eq!(result, Some("abc123".to_string()));
+        assert_eq!(result, "abc123");
     }
 
     #[test]

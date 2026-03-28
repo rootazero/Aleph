@@ -36,10 +36,10 @@ pub type StreamingSamplingCallback = Box<
 
 /// Manages sampling requests from MCP servers
 pub struct SamplingHandler {
-    /// Callback to invoke for sampling requests
-    callback: Arc<RwLock<Option<SamplingCallback>>>,
+    /// Callback to invoke for sampling requests (Arc-wrapped for cheap cloning out of lock)
+    callback: Arc<RwLock<Option<Arc<SamplingCallback>>>>,
     /// Streaming callback (optional, for streaming responses)
-    streaming_callback: Arc<RwLock<Option<StreamingSamplingCallback>>>,
+    streaming_callback: Arc<RwLock<Option<Arc<StreamingSamplingCallback>>>>,
     /// Optional MCP client for context injection
     client: Arc<RwLock<Option<Arc<McpClient>>>>,
 }
@@ -70,7 +70,7 @@ impl SamplingHandler {
         Fut: std::future::Future<Output = Result<SamplingResponse>> + Send + 'static,
     {
         let mut cb = self.callback.write().await;
-        *cb = Some(Box::new(move |req| Box::pin(callback(req))));
+        *cb = Some(Arc::new(Box::new(move |req| Box::pin(callback(req)))));
     }
 
     /// Check if a callback is registered
@@ -85,7 +85,7 @@ impl SamplingHandler {
         S: Stream<Item = Result<SamplingChunk>> + Send + 'static,
     {
         let mut cb = self.streaming_callback.write().await;
-        *cb = Some(Box::new(move |req| Box::pin(callback(req))));
+        *cb = Some(Arc::new(Box::new(move |req| Box::pin(callback(req)))));
     }
 
     /// Check if streaming is available
@@ -104,7 +104,7 @@ impl SamplingHandler {
     /// * `requesting_server` - The name of the server making the request
     pub async fn handle_request(
         &self,
-        request_id: u64,
+        request_id: Value,
         params: Value,
         requesting_server: &str,
     ) -> Result<SamplingResponse> {
@@ -114,7 +114,7 @@ impl SamplingHandler {
         })?;
 
         tracing::debug!(
-            request_id = request_id,
+            request_id = %request_id,
             message_count = request.messages.len(),
             "Processing sampling request"
         );
@@ -128,7 +128,7 @@ impl SamplingHandler {
                     // Prepend context message to messages
                     request.messages.insert(0, context_msg);
                     tracing::debug!(
-                        request_id = request_id,
+                        request_id = %request_id,
                         mode = ?mode,
                         context_count = contexts.len(),
                         "Injected context into sampling request"
@@ -137,17 +137,19 @@ impl SamplingHandler {
             }
         }
 
-        // Get callback
-        let callback = self.callback.read().await;
-        let cb = callback.as_ref().ok_or_else(|| {
-            AlephError::IoError("No sampling callback registered".to_string())
-        })?;
+        // Clone callback ref under lock, then release before awaiting
+        let cb = {
+            let callback = self.callback.read().await;
+            Arc::clone(callback.as_ref().ok_or_else(|| {
+                AlephError::IoError("No sampling callback registered".to_string())
+            })?)
+        };
 
-        // Invoke callback
+        // Invoke callback (lock released)
         let response = cb(request).await?;
 
         tracing::debug!(
-            request_id = request_id,
+            request_id = %request_id,
             "Sampling request completed"
         );
 

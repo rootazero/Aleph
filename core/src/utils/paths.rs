@@ -93,10 +93,8 @@ pub fn get_cache_dir() -> Result<PathBuf> {
 /// Creates the directory if it doesn't exist.
 pub fn get_memory_db_path() -> Result<PathBuf> {
     let memory_dir = get_config_dir()?.join("memory");
-    if !memory_dir.exists() {
-        std::fs::create_dir_all(&memory_dir)
-            .map_err(|e| AlephError::config(format!("Failed to create memory directory: {}", e)))?;
-    }
+    std::fs::create_dir_all(&memory_dir)
+        .map_err(|e| AlephError::config(format!("Failed to create memory directory: {}", e)))?;
     Ok(memory_dir)
 }
 
@@ -126,10 +124,8 @@ pub fn get_runtimes_dir() -> Result<PathBuf> {
 /// Creates the directory if it doesn't exist.
 pub fn get_data_dir() -> Result<PathBuf> {
     let data_dir = get_config_dir()?.join("data");
-    if !data_dir.exists() {
-        std::fs::create_dir_all(&data_dir)
-            .map_err(|e| AlephError::config(format!("Failed to create data directory: {}", e)))?;
-    }
+    std::fs::create_dir_all(&data_dir)
+        .map_err(|e| AlephError::config(format!("Failed to create data directory: {}", e)))?;
     Ok(data_dir)
 }
 
@@ -327,10 +323,8 @@ pub fn get_agent_config_dir(agent_id: &str) -> Result<PathBuf> {
 
     let agent_dir = get_config_dir()?.join("agents").join(agent_id);
 
-    if !agent_dir.exists() {
-        std::fs::create_dir_all(&agent_dir)
-            .map_err(|e| AlephError::config(format!("Failed to create agent config directory: {}", e)))?;
-    }
+    std::fs::create_dir_all(&agent_dir)
+        .map_err(|e| AlephError::config(format!("Failed to create agent config directory: {}", e)))?;
 
     Ok(agent_dir)
 }

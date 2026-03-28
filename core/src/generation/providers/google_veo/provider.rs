@@ -83,18 +83,18 @@ impl GoogleVeoProvider {
         api_key: S,
         base_url: Option<String>,
         model: Option<String>,
-    ) -> Self {
+    ) -> GenerationResult<Self> {
         let client = Client::builder()
             .timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
             .build()
-            .expect("Failed to build HTTP client");
+            .map_err(|e| GenerationError::network(format!("Failed to build HTTP client: {}", e)))?;
 
-        Self {
+        Ok(Self {
             client,
             api_key: api_key.into(),
             endpoint: base_url.unwrap_or_else(|| DEFAULT_ENDPOINT.to_string()),
             model: model.unwrap_or_else(|| DEFAULT_MODEL.to_string()),
-        }
+        })
     }
 
     /// Get the full URL for the predictLongRunning endpoint
@@ -106,8 +106,19 @@ impl GoogleVeoProvider {
     }
 
     /// Get the URL for polling operation status
+    ///
+    /// Validates operation_name to prevent path traversal attacks from tampered API responses.
     pub(crate) fn operation_url(&self, operation_name: &str) -> String {
-        format!("{}/v1beta/{}", self.endpoint, operation_name)
+        // Validate: must not contain ".." or start with "/" (prevent path traversal)
+        debug_assert!(
+            !operation_name.contains("..") && !operation_name.starts_with('/'),
+            "Unexpected operation_name format: {}",
+            operation_name
+        );
+        let sanitized = operation_name
+            .trim_start_matches('/')
+            .replace("..", "");
+        format!("{}/v1beta/{}", self.endpoint, sanitized)
     }
 
     /// Check if using Veo 3 model
@@ -172,7 +183,7 @@ impl GoogleVeoProvider {
                 person_generation,
                 generate_audio,
                 sample_count,
-                seed: request.params.seed.map(|s| s as u32),
+                seed: request.params.seed.and_then(|s| u32::try_from(s).ok()),
                 enhance_prompt: if !self.is_veo3() { Some(true) } else { None },
             },
         }

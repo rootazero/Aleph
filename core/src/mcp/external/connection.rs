@@ -64,8 +64,9 @@ impl McpServerConnection {
     /// * `args` - Command arguments
     /// * `env` - Environment variables
     /// * `cwd` - Working directory
-    /// * `timeout` - Connection timeout (defaults to 30s). This covers the entire
-    ///   connection process: process spawn + initialize handshake + tools/list
+    /// * `timeout` - Per-request timeout (defaults to 30s for individual RPCs).
+    ///   The total connection timeout is always DEFAULT_CONNECT_TIMEOUT (300s)
+    ///   to allow for slow server startup.
     pub async fn connect(
         name: impl Into<String>,
         command: impl AsRef<str>,
@@ -75,7 +76,9 @@ impl McpServerConnection {
         timeout: Option<Duration>,
     ) -> Result<Self> {
         let name = name.into();
-        let connect_timeout = timeout.unwrap_or(DEFAULT_CONNECT_TIMEOUT);
+        // Total connection timeout is always the larger default (300s) to allow
+        // for slow server startup. Per-request timeout is set separately on the transport.
+        let connect_timeout = DEFAULT_CONNECT_TIMEOUT;
 
         // Wrap entire connection process with timeout
         tokio::time::timeout(

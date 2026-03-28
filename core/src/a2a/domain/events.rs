@@ -32,6 +32,25 @@ pub struct TaskArtifactUpdateEvent {
     pub metadata: Option<Map<String, serde_json::Value>>,
 }
 
+impl TaskStatusUpdateEvent {
+    /// Create a new event with `is_final` derived from state
+    pub fn new(
+        task_id: String,
+        context_id: String,
+        status: TaskStatus,
+        metadata: Option<Map<String, serde_json::Value>>,
+    ) -> Self {
+        let is_final = status.state.is_terminal();
+        Self {
+            task_id,
+            context_id,
+            is_final,
+            status,
+            metadata,
+        }
+    }
+}
+
 /// Unified update event — tagged by kind
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]

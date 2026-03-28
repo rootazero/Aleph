@@ -86,11 +86,7 @@ impl VideoGenerateTool {
 
         // Acquire lock in scoped block — drop before await
         let (provider_name, provider) = {
-            let reg = self.registry.read().map_err(|e| {
-                let error_msg = format!("Failed to acquire registry lock: {}", e);
-                notify_tool_result(Self::NAME, &error_msg, false);
-                ToolError::Execution(error_msg)
-            })?;
+            let reg = self.registry.read().unwrap_or_else(|e| e.into_inner());
 
             if let Some(ref name) = args.provider {
                 let p = reg.get(name).ok_or_else(|| {

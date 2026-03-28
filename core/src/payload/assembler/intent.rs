@@ -6,34 +6,7 @@ use crate::payload::{AgentContext, ContextFormat};
 use crate::prompt::{PromptBuilder, PromptConfig, ToolInfo};
 use crate::capability::CapabilityDeclaration;
 use super::context::format_context;
-use super::capability::format_capability_instructions;
-
-/// Build capability-aware prompt (helper function)
-fn build_capability_aware_prompt(
-    context_format: &ContextFormat,
-    base_prompt: &str,
-    capabilities: &[CapabilityDeclaration],
-    context: Option<&AgentContext>,
-) -> String {
-    let mut prompt = base_prompt.to_string();
-
-    // Add capability instructions if any capabilities are available
-    let available_caps: Vec<_> = capabilities.iter().filter(|c| c.available).collect();
-    if !available_caps.is_empty() {
-        prompt.push_str("\n\n");
-        prompt.push_str(&format_capability_instructions(&available_caps));
-    }
-
-    // Add existing context if provided
-    if let Some(ctx) = context {
-        if let Some(formatted_ctx) = format_context(context_format, ctx) {
-            prompt.push_str("\n\n");
-            prompt.push_str(&formatted_ctx);
-        }
-    }
-
-    prompt
-}
+use super::core::PromptAssembler;
 
 /// Build prompt with agent mode injection based on `IntentResult`.
 ///
@@ -49,7 +22,9 @@ pub fn build_prompt_with_intent_result(
     context: Option<&AgentContext>,
     result: Option<&IntentResult>,
 ) -> String {
-    let mut prompt = build_capability_aware_prompt(context_format, base_prompt, capabilities, context);
+    // Reuse PromptAssembler to avoid duplicating capability+context logic
+    let assembler = PromptAssembler::new(*context_format);
+    let mut prompt = assembler.build_capability_aware_prompt(base_prompt, capabilities, context);
 
     // Inject agent mode hint if intent is actionable
     if let Some(IntentResult::Execute { .. }) | Some(IntentResult::DirectTool { .. }) = result {

@@ -121,7 +121,7 @@ impl NoiseFilter {
         let trimmed = content.trim();
 
         // Too short
-        if trimmed.len() < self.config.min_content_length {
+        if trimmed.chars().count() < self.config.min_content_length {
             return false;
         }
 

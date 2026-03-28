@@ -9,6 +9,19 @@ use super::StateDatabase;
 use rusqlite::params;
 use rusqlite::OptionalExtension;
 
+/// Construct TaskTrace from a rusqlite row.
+/// Expected column order: id, task_id, step_index, role, content_json, timestamp
+fn task_trace_from_row(row: &rusqlite::Row) -> rusqlite::Result<TaskTrace> {
+    Ok(TaskTrace {
+        id: row.get(0)?,
+        task_id: row.get(1)?,
+        step_index: row.get(2)?,
+        role: TraceRole::from_str_or_default(&row.get::<_, String>(3)?),
+        content_json: row.get(4)?,
+        timestamp: row.get(5)?,
+    })
+}
+
 impl StateDatabase {
     // =========================================================================
     // Task Traces CRUD
@@ -80,16 +93,7 @@ impl StateDatabase {
             .map_err(|e| AlephError::config(format!("Failed to prepare query: {}", e)))?;
 
         let traces = stmt
-            .query_map(params![task_id], |row| {
-                Ok(TaskTrace {
-                    id: row.get(0)?,
-                    task_id: row.get(1)?,
-                    step_index: row.get(2)?,
-                    role: TraceRole::from_str_or_default(&row.get::<_, String>(3)?),
-                    content_json: row.get(4)?,
-                    timestamp: row.get(5)?,
-                })
-            })
+            .query_map(params![task_id], task_trace_from_row)
             .map_err(|e| AlephError::config(format!("Failed to query traces: {}", e)))?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| AlephError::config(format!("Failed to collect traces: {}", e)))?;
@@ -113,16 +117,7 @@ impl StateDatabase {
             .map_err(|e| AlephError::config(format!("Failed to prepare query: {}", e)))?;
 
         let result = stmt
-            .query_row(params![task_id], |row| {
-                Ok(TaskTrace {
-                    id: row.get(0)?,
-                    task_id: row.get(1)?,
-                    step_index: row.get(2)?,
-                    role: TraceRole::from_str_or_default(&row.get::<_, String>(3)?),
-                    content_json: row.get(4)?,
-                    timestamp: row.get(5)?,
-                })
-            })
+            .query_row(params![task_id], task_trace_from_row)
             .optional()
             .map_err(|e| AlephError::config(format!("Failed to get last trace: {}", e)))?;
 
@@ -148,16 +143,7 @@ impl StateDatabase {
             .map_err(|e| AlephError::config(format!("Failed to prepare query: {}", e)))?;
 
         let traces = stmt
-            .query_map(params![task_id, from_step], |row| {
-                Ok(TaskTrace {
-                    id: row.get(0)?,
-                    task_id: row.get(1)?,
-                    step_index: row.get(2)?,
-                    role: TraceRole::from_str_or_default(&row.get::<_, String>(3)?),
-                    content_json: row.get(4)?,
-                    timestamp: row.get(5)?,
-                })
-            })
+            .query_map(params![task_id, from_step], task_trace_from_row)
             .map_err(|e| AlephError::config(format!("Failed to query traces: {}", e)))?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| AlephError::config(format!("Failed to collect traces: {}", e)))?;

@@ -95,6 +95,14 @@ pub async fn handle_update(request: JsonRpcRequest, handle: McpManagerHandle) ->
 
     let server_id = params.config.id.clone();
 
+    // Save old config for rollback in case add fails
+    let old_config = handle
+        .get_status(&server_id)
+        .await
+        .ok()
+        .flatten()
+        .map(|s| s.config);
+
     // Remove old server (ignore if not found)
     let _ = handle.remove_server(&server_id).await;
 
@@ -104,7 +112,19 @@ pub async fn handle_update(request: JsonRpcRequest, handle: McpManagerHandle) ->
             tracing::info!(id = %server_id, "MCP server updated");
             JsonRpcResponse::success(request.id, json!({ "ok": true }))
         }
-        Err(e) => JsonRpcResponse::error(request.id, INTERNAL_ERROR, e.to_string()),
+        Err(e) => {
+            // Rollback: re-add old config if available
+            if let Some(old) = old_config {
+                if let Err(rollback_err) = handle.add_server(old).await {
+                    tracing::error!(
+                        id = %server_id,
+                        error = %rollback_err,
+                        "Failed to rollback server config after update failure"
+                    );
+                }
+            }
+            JsonRpcResponse::error(request.id, INTERNAL_ERROR, e.to_string())
+        }
     }
 }
 

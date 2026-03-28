@@ -10,11 +10,13 @@ use crate::skill::eligibility::current_os;
 ///
 /// Returns `None` for `Download` specs that have no URL.
 pub fn build_install_command(spec: &InstallSpec) -> Option<String> {
-    // Validate package name: reject shell metacharacters to prevent command injection
+    // Validate shell argument: allowlist of safe characters to prevent command injection.
+    // Permits alphanumeric, `-`, `_`, `.`, `/`, `@`, `:`, `+`, `=`, `~` (common in
+    // package names, Go import paths, and filesystem paths).
     fn is_safe_shell_arg(s: &str) -> bool {
-        !s.contains(';') && !s.contains('|') && !s.contains('&')
-            && !s.contains('`') && !s.contains("$(")
-            && !s.contains('\n') && !s.contains('\r')
+        !s.is_empty()
+            && s.chars()
+                .all(|c| c.is_ascii_alphanumeric() || "-_./:@+=~".contains(c))
     }
 
     if !is_safe_shell_arg(&spec.package) {
@@ -343,5 +345,49 @@ mod tests {
         let specs: Vec<InstallSpec> = vec![];
         let prefs = InstallPreferences::default();
         assert!(select_best_install(&specs, &prefs).is_none());
+    }
+
+    #[test]
+    fn rejects_shell_injection_in_package_name() {
+        let dangerous_names = [
+            "pkg; rm -rf /",
+            "pkg | cat /etc/passwd",
+            "pkg & echo pwned",
+            "pkg`whoami`",
+            "pkg$(id)",
+            "pkg > /tmp/out",
+            "pkg < /etc/passwd",
+            "pkg'injection'",
+            "pkg\"injection\"",
+            "pkg with spaces",
+            "",
+        ];
+        for name in &dangerous_names {
+            let spec = make_spec(InstallKind::Brew, name);
+            assert!(
+                build_install_command(&spec).is_none(),
+                "should reject dangerous package name: {:?}",
+                name
+            );
+        }
+    }
+
+    #[test]
+    fn accepts_legitimate_package_names() {
+        let good_names = [
+            "ripgrep",
+            "node@18",
+            "github.com/user/repo@latest",
+            "/usr/local/bin/tool",
+            "my-package_v2.0",
+        ];
+        for name in &good_names {
+            let spec = make_spec(InstallKind::Brew, name);
+            assert!(
+                build_install_command(&spec).is_some(),
+                "should accept legitimate package name: {:?}",
+                name
+            );
+        }
     }
 }

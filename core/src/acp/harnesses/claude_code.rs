@@ -52,13 +52,18 @@ impl AcpHarness for ClaudeCodeHarness {
     }
 
     fn build_config(&self, cwd: Option<&str>) -> HarnessConfig {
-        HarnessConfig {
-            executable: self.executable.clone(),
-            args: vec![
+        // Args depend on mode: --acp for NativeAcp, --print for Oneshot
+        let args = match self.default_mode {
+            HarnessMode::NativeAcp => vec!["--acp".to_string()],
+            HarnessMode::Oneshot => vec![
                 "--print".to_string(),
                 "--output-format".to_string(),
                 "json".to_string(),
             ],
+        };
+        HarnessConfig {
+            executable: self.executable.clone(),
+            args,
             cwd: cwd.map(String::from),
             ..Default::default()
         }

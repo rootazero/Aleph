@@ -113,13 +113,14 @@ impl FactRetrieval {
             })
             .collect();
 
-        // 2. If facts are insufficient, fallback to raw memories
+        // 2. If facts are insufficient, fallback to raw memories (scaled by deficit)
         let raw_memories = if facts.len() < self.config.max_facts as usize {
-            let remaining = self.config.max_raw_fallback;
+            let deficit = self.config.max_facts as usize - facts.len();
+            let remaining = deficit.min(self.config.max_raw_fallback as usize);
 
             if remaining > 0 {
                 self.database
-                    .search_memories(&query_embedding, &MemoryFilter::default(), remaining as usize)
+                    .search_memories(&query_embedding, &MemoryFilter::default(), remaining)
                     .await?
             } else {
                 Vec::new()
@@ -193,16 +194,17 @@ impl FactRetrieval {
             })
             .collect();
 
-        // Fallback to raw memories with same workspace filter
+        // Fallback to raw memories with same workspace filter (scaled by deficit)
         let raw_memories = if facts.len() < self.config.max_facts as usize {
-            let remaining = self.config.max_raw_fallback;
+            let deficit = self.config.max_facts as usize - facts.len();
+            let remaining = deficit.min(self.config.max_raw_fallback as usize);
             if remaining > 0 {
                 let mem_filter = MemoryFilter {
                     agent_filter: Some(filter),
                     ..Default::default()
                 };
                 self.database
-                    .search_memories(query_embedding, &mem_filter, remaining as usize)
+                    .search_memories(query_embedding, &mem_filter, remaining)
                     .await?
             } else {
                 Vec::new()

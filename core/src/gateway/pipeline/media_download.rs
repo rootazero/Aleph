@@ -8,6 +8,7 @@ use uuid::Uuid;
 
 use super::types::{LocalMedia, MediaCategory, MergedMessage};
 use crate::gateway::channel::Attachment;
+use crate::security::ssrf::{validate_url, SsrfPolicy};
 
 /// Default maximum file size for downloads (50 MB).
 const DEFAULT_MAX_FILE_SIZE: u64 = 50 * 1024 * 1024;
@@ -133,6 +134,10 @@ impl MediaDownloader {
         attachment: &Attachment,
         url: &str,
     ) -> Result<LocalMedia, String> {
+        // SSRF protection
+        let ssrf_policy = SsrfPolicy::default();
+        validate_url(url, &ssrf_policy).map_err(|e| format!("SSRF blocked: {e}"))?;
+
         let response = self
             .http_client
             .get(url)
@@ -183,6 +188,10 @@ impl MediaDownloader {
 
     /// Download an extracted URL (from message text) and create a Link entry.
     async fn download_url(&self, url: &str) -> Result<LocalMedia, String> {
+        // SSRF protection
+        let ssrf_policy = SsrfPolicy::default();
+        validate_url(url, &ssrf_policy).map_err(|e| format!("SSRF blocked: {e}"))?;
+
         let response = self
             .http_client
             .get(url)

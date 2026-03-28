@@ -10,20 +10,14 @@ use serde_json::json;
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR};
 use super::parse_params;
 use crate::builtin_tools::clawhub::{ClawHubAction, ClawHubArgs, ClawHubTool};
-use crate::clawhub::ClawHubClient;
+use crate::clawhub::types::SortOrder;
 use crate::tools::AlephTool;
 
 // =============================================================================
-// Shared singletons
+// Shared singleton
 // =============================================================================
 
-/// Shared `ClawHubClient` for search/browse/detail handlers.
-fn get_client() -> &'static ClawHubClient {
-    static CLIENT: OnceLock<ClawHubClient> = OnceLock::new();
-    CLIENT.get_or_init(ClawHubClient::new)
-}
-
-/// Shared `ClawHubTool` for the install handler (reuses the full tool logic).
+/// Shared `ClawHubTool` — also exposes the inner `ClawHubClient` for direct use.
 fn get_tool() -> &'static ClawHubTool {
     static TOOL: OnceLock<ClawHubTool> = OnceLock::new();
     TOOL.get_or_init(ClawHubTool::new)
@@ -51,7 +45,7 @@ pub async fn handle_search(request: JsonRpcRequest) -> JsonRpcResponse {
         Err(e) => return e,
     };
 
-    match get_client().search(&params.query, params.limit).await {
+    match get_tool().client().search(&params.query, params.limit).await {
         Ok(skills) => JsonRpcResponse::success(request.id, json!({ "skills": skills })),
         Err(e) => JsonRpcResponse::error(
             request.id,
@@ -83,13 +77,14 @@ pub async fn handle_browse(request: JsonRpcRequest) -> JsonRpcResponse {
     };
 
     let sort = match params.sort.as_deref() {
-        Some("stars") => crate::clawhub::types::SortOrder::Stars,
-        Some("updated") => crate::clawhub::types::SortOrder::Updated,
-        Some("trending") => crate::clawhub::types::SortOrder::Trending,
-        _ => crate::clawhub::types::SortOrder::Downloads,
+        Some("stars") => SortOrder::Stars,
+        Some("updated") => SortOrder::Updated,
+        Some("trending") => SortOrder::Trending,
+        _ => SortOrder::Downloads,
     };
 
-    match get_client()
+    match get_tool()
+        .client()
         .browse(sort, params.limit, params.cursor.as_deref())
         .await
     {
@@ -125,7 +120,7 @@ pub async fn handle_detail(request: JsonRpcRequest) -> JsonRpcResponse {
         Err(e) => return e,
     };
 
-    match get_client().get_skill(&params.slug).await {
+    match get_tool().client().get_skill(&params.slug).await {
         Ok(skill) => JsonRpcResponse::success(request.id, json!({ "skill": skill })),
         Err(e) => JsonRpcResponse::error(
             request.id,

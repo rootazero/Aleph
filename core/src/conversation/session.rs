@@ -75,7 +75,8 @@ impl ConversationSession {
         let turn = ConversationTurn::new(turn_id, user_input, ai_response);
         self.turns.push(turn);
         self.last_activity = chrono::Utc::now().timestamp();
-        self.turns.last().unwrap()
+        // SAFETY: just pushed, last() is guaranteed Some
+        self.turns.last().expect("non-empty after push")
     }
 
     /// Get the last turn in the session.

@@ -78,7 +78,7 @@ impl SkillSubAgent {
         let params = skill
             .parameters_schema
             .as_ref()
-            .map(|s| serde_json::to_string_pretty(s).unwrap_or_default())
+            .map(|s| serde_json::to_string_pretty(s).unwrap_or_else(|_| "{}".to_string()))
             .unwrap_or_else(|| "{}".to_string());
 
         format!(
@@ -108,10 +108,16 @@ impl SubAgent for SkillSubAgent {
 
     fn can_handle(&self, request: &SubAgentRequest) -> bool {
         // Can handle if:
-        // 1. Target is specified and is a skill ID
+        // 1. Target is specified and looks like a skill (not an MCP server)
         // 2. Prompt mentions skill-related keywords
-        if request.target.is_some() {
-            return true;
+        if let Some(ref target) = request.target {
+            // Skill IDs are simple kebab-case names (e.g. "github-pr", "pdf-gen").
+            // MCP targets use '/' (e.g. "org/server") or '::' (e.g. "ns::tool"),
+            // so we reject those to avoid claiming non-skill targets.
+            let t = target.to_lowercase();
+            if !t.contains('/') && !t.contains("::") {
+                return true;
+            }
         }
 
         let prompt_lower = request.prompt.to_lowercase();

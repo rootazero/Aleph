@@ -628,9 +628,18 @@ pub async fn handle_set_default(
             }
         };
 
-        let provider_config = get_typed_provider_map(&cfg.generation, &gen_type_str)
+        let provider_config = match get_typed_provider_map(&cfg.generation, &gen_type_str)
             .get(&params.name)
-            .expect("provider must exist after find_provider_type succeeded");
+        {
+            Some(c) => c,
+            None => {
+                return JsonRpcResponse::error(
+                    request.id,
+                    INTERNAL_ERROR,
+                    format!("Provider '{}' disappeared unexpectedly", params.name),
+                );
+            }
+        };
 
         if !provider_config.verified {
             return JsonRpcResponse::error(
@@ -756,7 +765,10 @@ pub async fn handle_test_connection(
         }
     };
 
-    JsonRpcResponse::success(request.id, serde_json::to_value(result).unwrap())
+    match serde_json::to_value(result) {
+        Ok(v) => JsonRpcResponse::success(request.id, v),
+        Err(e) => JsonRpcResponse::error(request.id, INTERNAL_ERROR, format!("Failed to serialize result: {}", e)),
+    }
 }
 
 /// Get voices for a generation provider

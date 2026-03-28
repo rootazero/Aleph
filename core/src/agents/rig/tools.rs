@@ -62,14 +62,10 @@ impl std::fmt::Debug for BuiltinToolConfig {
 /// Returns an `AlephToolServerHandle` that can be shared across threads.
 pub fn create_builtin_tool_server(config: Option<&BuiltinToolConfig>) -> AlephToolServerHandle {
     // Convert to unified config
-    let unified_config = config.map(|cfg| {
-        #[allow(unused_mut)]
-        let mut config = UnifiedBuiltinToolConfig {
-            tavily_api_key: cfg.tavily_api_key.clone(),
-            generation_registry: cfg.generation_registry.clone(),
-            ..Default::default()
-        };
-        config
+    let unified_config = config.map(|cfg| UnifiedBuiltinToolConfig {
+        tavily_api_key: cfg.tavily_api_key.clone(),
+        generation_registry: cfg.generation_registry.clone(),
+        ..Default::default()
     });
 
     let mut server = AlephToolServer::new();

@@ -206,25 +206,21 @@ fn test_create_openai_image_with_custom_base_url() {
 }
 
 #[test]
-fn test_create_tts_invalid_voice_fails() {
+fn test_create_tts_unknown_voice_succeeds_with_warning() {
+    // Unknown voices are now allowed (with a warning) to support newer
+    // OpenAI voices and third-party TTS proxy endpoints
     let config = GenerationProviderConfig {
         provider_type: "openai_tts".to_string(),
         api_key: Some("sk-test-key".to_string()),
         defaults: GenerationDefaults {
-            voice: Some("invalid-voice".to_string()),
+            voice: Some("unknown-voice".to_string()),
             ..Default::default()
         },
         ..Default::default()
     };
 
     let result = create_provider("tts", &config, GenerationType::Speech);
-
-    assert!(result.is_err());
-    match result {
-        Err(GenerationError::InvalidParametersError { .. }) => {}
-        Err(e) => panic!("Expected InvalidParametersError, got: {:?}", e),
-        Ok(_) => panic!("Expected error, got Ok"),
-    }
+    assert!(result.is_ok(), "Unknown voice should be accepted with a warning, got: {:?}", result.err());
 }
 
 #[test]

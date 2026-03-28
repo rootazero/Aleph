@@ -10,6 +10,7 @@
 
 use std::path::{Path, PathBuf};
 use crate::error::Result;
+use super::FileFilter;
 
 /// Shared execution context for atomic operations
 ///
@@ -81,6 +82,86 @@ impl ExecutorContext {
 
         // Otherwise, resolve relative to working directory
         Ok(self.working_dir.join(path))
+    }
+
+    /// Recursively collect files from directory with filters
+    ///
+    /// Shared implementation used by FileOps, EditOps, and SearchOps handlers.
+    pub fn collect_files_from_directory<'a>(
+        &'a self,
+        dir: &'a Path,
+        recursive: bool,
+        filters: &'a [FileFilter],
+        files: &'a mut Vec<PathBuf>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>> {
+        Box::pin(async move {
+            let mut entries = tokio::fs::read_dir(dir).await?;
+
+            while let Some(entry) = entries.next_entry().await? {
+                let path = entry.path();
+
+                if path.is_file() {
+                    if Self::should_include_file(&path, filters) {
+                        files.push(path);
+                    }
+                } else if path.is_dir() && recursive {
+                    // Skip hidden directories and common ignore patterns
+                    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                        if !name.starts_with('.') && name != "node_modules" && name != "target" {
+                            self.collect_files_from_directory(&path, recursive, filters, files)
+                                .await?;
+                        }
+                    }
+                }
+            }
+
+            Ok(())
+        })
+    }
+
+    /// Check if file should be included based on filters
+    ///
+    /// Shared implementation used by FileOps, EditOps, and SearchOps handlers.
+    pub fn should_include_file(path: &Path, filters: &[FileFilter]) -> bool {
+        // If no filters, include all files
+        if filters.is_empty() {
+            return true;
+        }
+
+        let extension = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+        let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+
+        for filter in filters {
+            match filter {
+                FileFilter::Code => {
+                    let code_exts = [
+                        "rs", "py", "js", "ts", "jsx", "tsx", "go", "java", "c", "cpp", "h",
+                        "hpp", "cs", "rb", "php", "swift", "kt", "scala", "sh", "bash",
+                    ];
+                    if !code_exts.contains(&extension) {
+                        return false;
+                    }
+                }
+                FileFilter::Text => {
+                    let text_exts = ["txt", "md", "rst", "log", "json", "yaml", "yml", "toml"];
+                    if !text_exts.contains(&extension) {
+                        return false;
+                    }
+                }
+                FileFilter::Extension(ext) => {
+                    if extension != ext {
+                        return false;
+                    }
+                }
+                FileFilter::Exclude(pattern) => {
+                    if filename.contains(pattern.trim_matches('*')) {
+                        return false;
+                    }
+                }
+            }
+        }
+
+        true
     }
 }
 

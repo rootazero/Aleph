@@ -47,7 +47,7 @@ use serde::{Deserialize, Serialize};
 use std::future::Future;
 use std::pin::Pin;
 use std::time::{Duration, Instant};
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 /// Default API endpoint for OpenAI
 const DEFAULT_ENDPOINT: &str = "https://api.openai.com";
@@ -163,36 +163,31 @@ impl OpenAiTtsProvider {
             ));
         }
 
-        // Validate voice if provided
+        // Warn (but allow) unknown voices — OpenAI adds new voices and third-party
+        // proxies may support different voice names
         let voice = default_voice.unwrap_or_else(|| DEFAULT_VOICE.to_string());
         if !AVAILABLE_VOICES.contains(&voice.as_str()) {
-            return Err(GenerationError::invalid_parameters(
-                format!(
-                    "Invalid voice '{}'. Available voices: {}",
-                    voice,
-                    AVAILABLE_VOICES.join(", ")
-                ),
-                Some("voice".to_string()),
-            ));
+            warn!(
+                voice = %voice,
+                known = ?AVAILABLE_VOICES,
+                "Unknown TTS voice — proceeding anyway (may be a newer or third-party voice)"
+            );
         }
 
-        // Validate model if provided
+        // Warn (but allow) unknown models — avoids breaking on newer API versions
         let model = model.unwrap_or_else(|| DEFAULT_MODEL.to_string());
         if !AVAILABLE_MODELS.contains(&model.as_str()) {
-            return Err(GenerationError::invalid_parameters(
-                format!(
-                    "Invalid model '{}'. Available models: {}",
-                    model,
-                    AVAILABLE_MODELS.join(", ")
-                ),
-                Some("model".to_string()),
-            ));
+            warn!(
+                model = %model,
+                known = ?AVAILABLE_MODELS,
+                "Unknown TTS model — proceeding anyway (may be a newer model)"
+            );
         }
 
         let client = Client::builder()
             .timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
             .build()
-            .expect("Failed to build HTTP client");
+            .map_err(|e| GenerationError::network(format!("Failed to build HTTP client: {}", e)))?;
 
         // Use pre-resolved URL if available, otherwise resolve from base_url
         let resolved = resolved_url.unwrap_or_else(|| {
@@ -599,29 +594,19 @@ mod tests {
     }
 
     #[test]
-    fn test_new_invalid_voice_fails() {
+    fn test_new_unknown_voice_succeeds() {
+        // Unknown voices are allowed (with warning) for third-party/newer voices
         let result =
-            OpenAiTtsProvider::new("sk-test-key", None, None, Some("invalid-voice".to_string()), None);
-
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert!(matches!(
-            err,
-            GenerationError::InvalidParametersError { .. }
-        ));
+            OpenAiTtsProvider::new("sk-test-key", None, None, Some("future-voice".to_string()), None);
+        assert!(result.is_ok());
     }
 
     #[test]
-    fn test_new_invalid_model_fails() {
+    fn test_new_unknown_model_succeeds() {
+        // Unknown models are allowed (with warning) for newer API versions
         let result =
-            OpenAiTtsProvider::new("sk-test-key", None, Some("invalid-model".to_string()), None, None);
-
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert!(matches!(
-            err,
-            GenerationError::InvalidParametersError { .. }
-        ));
+            OpenAiTtsProvider::new("sk-test-key", None, Some("gpt-4o-mini-tts".to_string()), None, None);
+        assert!(result.is_ok());
     }
 
     #[test]

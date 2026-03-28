@@ -61,6 +61,7 @@ pub enum SecurityScheme {
         )]
         bearer_format: Option<String>,
     },
+    #[serde(rename = "oauth2")]
     OAuth2 {
         flows: serde_json::Value,
     },
@@ -80,12 +81,23 @@ pub enum ApiKeyLocation {
 }
 
 /// Credentials extracted from an incoming request
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum Credentials {
     BearerToken(String),
     ApiKey(String),
     OAuth2Token(String),
     None,
+}
+
+impl std::fmt::Debug for Credentials {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::BearerToken(_) => f.write_str("BearerToken([REDACTED])"),
+            Self::ApiKey(_) => f.write_str("ApiKey([REDACTED])"),
+            Self::OAuth2Token(_) => f.write_str("OAuth2Token([REDACTED])"),
+            Self::None => f.write_str("None"),
+        }
+    }
 }
 
 fn is_private_ip(ip: &std::net::IpAddr) -> bool {
@@ -100,10 +112,12 @@ fn is_private_ip(ip: &std::net::IpAddr) -> bool {
 }
 
 fn is_private_hostname(host: &str) -> bool {
-    host.ends_with(".local")
-        || host.ends_with(".lan")
-        || host.starts_with("192.168.")
-        || host.starts_with("10.")
+    // Try parsing as IP address first — use proper IP classification
+    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        return is_private_ip(&ip);
+    }
+    // For non-IP hostnames, only check domain suffixes
+    host.ends_with(".local") || host.ends_with(".lan")
 }
 
 #[cfg(test)]

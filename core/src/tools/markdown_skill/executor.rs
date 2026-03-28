@@ -4,14 +4,26 @@
 
 use std::path::PathBuf;
 use std::process::Stdio;
+use std::time::Duration;
 use anyhow::Result;
 use tokio::process::Command;
 use tracing::{debug, info, warn};
+
+/// Default execution timeout for CLI skills (5 minutes).
+const DEFAULT_EXECUTION_TIMEOUT: Duration = Duration::from_secs(300);
 
 use super::spec::NetworkMode;
 use super::tool_adapter::{MarkdownCliTool, MarkdownToolOutput};
 
 impl MarkdownCliTool {
+    /// Resolve the execution timeout: skill-specific override or global default.
+    fn execution_timeout(&self) -> Duration {
+        self.spec.metadata.aleph.as_ref()
+            .and_then(|a| a.timeout_secs)
+            .map(Duration::from_secs)
+            .unwrap_or(DEFAULT_EXECUTION_TIMEOUT)
+    }
+
     /// Execute on host system (with SafetyGate if configured)
     pub(crate) async fn execute_on_host(
         &self,
@@ -52,8 +64,15 @@ impl MarkdownCliTool {
             }
         }
 
-        // Execute
-        let output = cmd.output().await?;
+        // Execute with timeout
+        let timeout = self.execution_timeout();
+        let output = tokio::time::timeout(timeout, cmd.output())
+            .await
+            .map_err(|_| anyhow::anyhow!(
+                "Skill '{}' timed out after {}s",
+                self.spec.name,
+                timeout.as_secs()
+            ))??;
 
         Ok(MarkdownToolOutput {
             stdout: String::from_utf8_lossy(&output.stdout).to_string(),
@@ -100,7 +119,26 @@ impl MarkdownCliTool {
         if let Some(aleph_meta) = &self.spec.metadata.aleph {
             if let Some(docker_cfg) = &aleph_meta.docker {
                 for env_var in &docker_cfg.env_vars {
+                    // Validate env var name: must be a valid identifier [A-Za-z_][A-Za-z0-9_]*
+                    if env_var.is_empty()
+                        || !env_var.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+                        || !env_var.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+                    {
+                        warn!(
+                            env_var = %env_var,
+                            "Skipping env var with invalid name (must match [A-Za-z_][A-Za-z0-9_]*)"
+                        );
+                        continue;
+                    }
                     if let Ok(value) = std::env::var(env_var) {
+                        // Sanitize: reject values containing newlines (could break Docker CLI parsing)
+                        if value.contains('\n') || value.contains('\r') {
+                            warn!(
+                                env_var = %env_var,
+                                "Skipping env var with newline characters (security risk)"
+                            );
+                            continue;
+                        }
                         docker_args.push("-e".to_string());
                         docker_args.push(format!("{}={}", env_var, value));
                         tracing::debug!(env_var = %env_var, "Passing env var to container");
@@ -112,8 +150,18 @@ impl MarkdownCliTool {
                     }
                 }
 
-                // Extra flags (e.g., volume mounts)
-                docker_args.extend(docker_cfg.extra_flags.clone());
+                // Extra flags — filtered through allowlist to prevent sandbox escape
+                for flag in &docker_cfg.extra_flags {
+                    if is_allowed_docker_flag(flag) {
+                        docker_args.push(flag.clone());
+                    } else {
+                        warn!(
+                            flag = %flag,
+                            tool = %self.spec.name,
+                            "Blocked disallowed Docker flag from skill config"
+                        );
+                    }
+                }
             }
         }
 
@@ -121,13 +169,22 @@ impl MarkdownCliTool {
         docker_args.push(bin.clone());
         docker_args.extend_from_slice(cli_args);
 
-        let output = Command::new("docker")
-            .args(&docker_args)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .stdin(Stdio::null())
-            .output()
-            .await?;
+        let timeout = self.execution_timeout();
+        let output = tokio::time::timeout(
+            timeout,
+            Command::new("docker")
+                .args(&docker_args)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .stdin(Stdio::null())
+                .output(),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!(
+            "Docker skill '{}' timed out after {}s",
+            self.spec.name,
+            timeout.as_secs()
+        ))??;
 
         // Enhanced exit code handling
         if !output.status.success() {
@@ -277,8 +334,15 @@ impl MarkdownCliTool {
             }
         }
 
-        // Execute
-        let output = cmd.output().await?;
+        // Execute with timeout
+        let timeout = self.execution_timeout();
+        let output = tokio::time::timeout(timeout, cmd.output())
+            .await
+            .map_err(|_| anyhow::anyhow!(
+                "VirtualFs skill '{}' timed out after {}s",
+                self.spec.name,
+                timeout.as_secs()
+            ))??;
 
         // Cleanup happens when sandbox is dropped
 
@@ -388,6 +452,56 @@ impl VirtualFsSandbox {
         );
     }
 
+}
+
+/// Allowlist of safe Docker flags that skills may use.
+///
+/// Only explicitly permitted flags pass through. Unknown flags are rejected
+/// to prevent sandbox escapes via novel or future Docker flags.
+fn is_allowed_docker_flag(flag: &str) -> bool {
+    // Reject flags containing whitespace — prevents "-v /host:/container" bypass
+    if flag.contains(char::is_whitespace) {
+        return false;
+    }
+
+    // Must start with '-' to be a flag
+    if !flag.starts_with('-') {
+        return false;
+    }
+
+    let flag_lower = flag.to_lowercase();
+
+    // Extract the flag name (before '=' if present)
+    let flag_name = flag_lower.split('=').next().unwrap_or(&flag_lower);
+    let flag_name = flag_name.trim_start_matches('-');
+
+    // Allowlist of safe flags — only these are permitted
+    const ALLOWED: &[&str] = &[
+        "memory", "m",
+        "cpus",
+        "cpu-shares", "c",
+        "cpu-period",
+        "cpu-quota",
+        "memory-swap",
+        "memory-reservation",
+        "workdir", "w",
+        "env", "e",
+        "env-file",
+        "label", "l",
+        "name",
+        "hostname", "h",
+        "tmpfs",
+        "read-only",
+        "rm",
+        "interactive", "i",
+        "tty", "t",
+        "detach", "d",
+        "stop-timeout",
+        "shm-size",
+        "log-opt",
+    ];
+
+    ALLOWED.iter().any(|a| flag_name == *a)
 }
 
 impl Drop for VirtualFsSandbox {

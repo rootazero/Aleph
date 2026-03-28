@@ -16,7 +16,7 @@ use crate::domain::ValueObject;
 // =============================================================================
 
 /// Unique identifier for an Arena instance.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct ArenaId(String);
 
 impl ArenaId {

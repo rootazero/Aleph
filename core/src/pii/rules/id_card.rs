@@ -38,48 +38,42 @@ impl IdCardRule {
 
     /// Validate region code (first 2 digits)
     fn is_valid_region(id: &str) -> bool {
-        if let Ok(region) = id[..2].parse::<u8>() {
-            VALID_REGIONS.contains(&region)
-        } else {
-            false
-        }
+        id.get(..2)
+            .and_then(|s| s.parse::<u8>().ok())
+            .map_or(false, |region| VALID_REGIONS.contains(&region))
     }
 
     /// Validate birth date (digits 6-13, YYYYMMDD)
     fn is_valid_date(id: &str) -> bool {
-        let year: u32 = match id[6..10].parse() {
-            Ok(y) => y,
-            Err(_) => return false,
+        let year: u32 = match id.get(6..10).and_then(|s| s.parse().ok()) {
+            Some(y) => y,
+            None => return false,
         };
-        let month: u32 = match id[10..12].parse() {
-            Ok(m) => m,
-            Err(_) => return false,
+        let month: u32 = match id.get(10..12).and_then(|s| s.parse().ok()) {
+            Some(m) => m,
+            None => return false,
         };
-        let day: u32 = match id[12..14].parse() {
-            Ok(d) => d,
-            Err(_) => return false,
+        let day: u32 = match id.get(12..14).and_then(|s| s.parse().ok()) {
+            Some(d) => d,
+            None => return false,
         };
 
-        if !(1900..=2100).contains(&year) {
-            return false;
-        }
-        if !(1..=12).contains(&month) {
-            return false;
-        }
-        if !(1..=31).contains(&day) {
-            return false;
-        }
-        true
+        (1900..=2100).contains(&year)
+            && (1..=12).contains(&month)
+            && (1..=31).contains(&day)
     }
 
     /// Validate ISO 7064 MOD 11-2 checksum
     fn is_valid_checksum(id: &str) -> bool {
         let bytes = id.as_bytes();
-        let mut sum: u32 = 0;
-        for (i, &weight) in WEIGHTS.iter().enumerate() {
-            let digit = (bytes[i] - b'0') as u32;
-            sum += digit * weight;
+        if bytes.len() < 18 {
+            return false;
         }
+        let sum: u32 = bytes
+            .iter()
+            .zip(WEIGHTS.iter())
+            .map(|(&b, &w)| (b - b'0') as u32 * w)
+            .sum();
         let expected = CHECK_CODES[(sum % 11) as usize];
         let last = match id.chars().last() {
             Some(c) => c.to_ascii_uppercase(),

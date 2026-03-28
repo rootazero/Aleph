@@ -25,6 +25,8 @@ pub fn parse_sse_response(
         let mut event_type = String::new();
         let mut data_buf = String::new();
         let mut line_buf = String::new();
+        // Carry buffer for incomplete UTF-8 trailing bytes across chunks
+        let mut carry: Vec<u8> = Vec::new();
 
         tokio::pin!(byte_stream);
 
@@ -37,8 +39,23 @@ pub fn parse_sse_response(
                 }
             };
 
-            let text = String::from_utf8_lossy(&chunk);
-            line_buf.push_str(&text);
+            // Prepend any incomplete bytes from the previous chunk
+            let mut raw_bytes: Vec<u8> = std::mem::take(&mut carry);
+            raw_bytes.extend_from_slice(&line_buf.into_bytes());
+            raw_bytes.extend_from_slice(&chunk);
+            // Decode as much valid UTF-8 as possible, keeping incomplete trailing bytes
+            match String::from_utf8(raw_bytes) {
+                Ok(s) => line_buf = s,
+                Err(e) => {
+                    let valid_up_to = e.utf8_error().valid_up_to();
+                    let bytes = e.into_bytes();
+                    // Safe: valid_up_to is guaranteed to be a valid UTF-8 boundary
+                    line_buf = String::from_utf8(bytes[..valid_up_to].to_vec())
+                        .unwrap_or_default();
+                    // Store incomplete trailing bytes for the next chunk
+                    carry = bytes[valid_up_to..].to_vec();
+                }
+            }
 
             while let Some(newline_pos) = line_buf.find('\n') {
                 let line = line_buf[..newline_pos].trim_end_matches('\r').to_string();

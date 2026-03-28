@@ -3,6 +3,7 @@
 //! Provides abstractions for collecting user input during wizard flows.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use crate::sync_primitives::{Arc, RwLock};
 
 use async_trait::async_trait;
@@ -74,7 +75,7 @@ pub(crate) struct PendingAnswer {
 pub struct RpcPrompter {
     step_tx: mpsc::Sender<WizardStep>,
     answers: Arc<RwLock<HashMap<String, PendingAnswer>>>,
-    step_counter: Arc<RwLock<u64>>,
+    step_counter: AtomicU64,
 }
 
 impl RpcPrompter {
@@ -86,15 +87,14 @@ impl RpcPrompter {
         Self {
             step_tx,
             answers,
-            step_counter: Arc::new(RwLock::new(0)),
+            step_counter: AtomicU64::new(0),
         }
     }
 
     /// Generate next step ID
     fn next_id(&self) -> String {
-        let mut counter = self.step_counter.write().unwrap_or_else(|e| e.into_inner());
-        *counter += 1;
-        format!("step-{}", *counter)
+        let id = self.step_counter.fetch_add(1, Ordering::Relaxed) + 1;
+        format!("step-{}", id)
     }
 
     /// Send a step and wait for answer
@@ -250,9 +250,10 @@ impl Default for CliPrompter {
 #[async_trait]
 impl WizardPrompter for CliPrompter {
     async fn intro(&self, title: &str) -> Result<(), WizardSessionError> {
-        println!("\n╭─────────────────────────────────────╮");
+        let pad = title.len() + 4;
+        println!("\n╭{}╮", "─".repeat(pad));
         println!("│  {}  │", title);
-        println!("╰─────────────────────────────────────╯\n");
+        println!("╰{}╯\n", "─".repeat(pad));
         Ok(())
     }
 

@@ -6,13 +6,13 @@
 
 use std::collections::{HashSet, VecDeque};
 
+use rusqlite::{params, Connection};
+
 use super::CoordTaskStore;
 
 /// Check if adding edges `new_task_id ← blocked_by[..]` would create a cycle.
 ///
-/// Performs a BFS walk starting from every node in `blocked_by`, traversing
-/// their transitive dependencies. If `new_task_id` is encountered during
-/// the walk, it means the new edges would close a cycle.
+/// Async version that uses the store trait. Kept for API compatibility.
 ///
 /// Returns `Err(AlephError)` if a cycle is detected, `Ok(())` otherwise.
 pub async fn check_no_cycle(
@@ -34,10 +34,61 @@ pub async fn check_no_cycle(
             )));
         }
         if !visited.insert(current.clone()) {
-            // Already expanded this node — skip to avoid redundant work
             continue;
         }
         let deps = store.get_dependencies(&current).await?;
+        for dep in deps {
+            queue.push_back(dep);
+        }
+    }
+
+    Ok(())
+}
+
+/// Synchronous cycle check that operates directly on a `rusqlite::Connection`.
+///
+/// This avoids the TOCTOU race in `create_task` by running the cycle check
+/// inside the same lock scope as the INSERT, ensuring no concurrent
+/// `create_task` can interleave edges between check and insert.
+pub fn check_no_cycle_sync(
+    conn: &Connection,
+    new_task_id: &str,
+    blocked_by: &[String],
+) -> crate::error::Result<()> {
+    if blocked_by.is_empty() {
+        return Ok(());
+    }
+
+    let mut visited: HashSet<String> = HashSet::new();
+    let mut queue: VecDeque<String> = blocked_by.iter().cloned().collect();
+
+    while let Some(current) = queue.pop_front() {
+        if current == new_task_id {
+            return Err(crate::error::AlephError::invalid_input(format!(
+                "Adding dependencies would create a cycle involving task '{new_task_id}'"
+            )));
+        }
+        if !visited.insert(current.clone()) {
+            continue;
+        }
+        // Query dependencies directly from the connection (no lock needed)
+        let mut stmt = conn
+            .prepare_cached("SELECT depends_on FROM coord_task_dependencies WHERE task_id = ?1")
+            .map_err(|e| crate::error::AlephError::ConfigError {
+                message: format!("CoordTaskStore: {e}"),
+                suggestion: None,
+            })?;
+        let deps: Vec<String> = stmt
+            .query_map(params![current], |row| row.get(0))
+            .map_err(|e| crate::error::AlephError::ConfigError {
+                message: format!("CoordTaskStore: {e}"),
+                suggestion: None,
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|e| crate::error::AlephError::ConfigError {
+                message: format!("CoordTaskStore: {e}"),
+                suggestion: None,
+            })?;
         for dep in deps {
             queue.push_back(dep);
         }

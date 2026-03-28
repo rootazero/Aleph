@@ -93,14 +93,12 @@ async fn build_harness_info(
     let mode = manager
         .harness_mode(id)
         .await
-        .map(|m| serde_json::to_value(m.to_serde())
-            .ok()
-            .and_then(|v| v.as_str().map(|s| s.to_string()))
-            .unwrap_or_else(|| format!("{:?}", m).to_lowercase()))
-        .unwrap_or_else(|| serde_json::to_value(&entry.default_mode)
-            .ok()
-            .and_then(|v| v.as_str().map(|s| s.to_string()))
-            .unwrap_or_else(|| "oneshot".to_string()));
+        .map(|m| m.as_str().to_string())
+        .unwrap_or_else(|| {
+            crate::acp::harness::HarnessMode::from_serde(&entry.default_mode)
+                .as_str()
+                .to_string()
+        });
 
     let executable = entry
         .executable
@@ -125,7 +123,8 @@ fn is_valid_harness_id(id: &str) -> bool {
         return false;
     }
     let mut chars = id.chars();
-    let first = chars.next().unwrap();
+    // Safety: id.is_empty() check above guarantees at least one char
+    let Some(first) = chars.next() else { return false };
     if !first.is_ascii_lowercase() && !first.is_ascii_digit() {
         return false;
     }

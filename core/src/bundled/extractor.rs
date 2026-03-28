@@ -19,8 +19,14 @@ pub fn extract_bundled_content(aleph_home: &Path) {
     let plugins_cache = aleph_home.join("plugins").join("cache").join("aleph-official");
 
     // Ensure directories exist
-    let _ = std::fs::create_dir_all(&skills_dir);
-    let _ = std::fs::create_dir_all(&plugins_cache);
+    if let Err(e) = std::fs::create_dir_all(&skills_dir) {
+        warn!(error = %e, path = %skills_dir.display(), "Failed to create skills directory");
+        return;
+    }
+    if let Err(e) = std::fs::create_dir_all(&plugins_cache) {
+        warn!(error = %e, path = %plugins_cache.display(), "Failed to create plugins cache directory");
+        return;
+    }
 
     // Load or create manifest
     let mut manifest = match SkillManifest::load(&skills_dir) {
@@ -158,13 +164,19 @@ fn extract_dir_recursive(dir: &Dir, target: &Path) -> std::io::Result<()> {
 /// Extract contents of a Dir (files + subdirs) into target path.
 fn extract_dir_contents(dir: &Dir, target: &Path) -> std::io::Result<()> {
     for file in dir.files() {
-        let file_path = target.join(file.path().file_name().unwrap_or_default());
-        std::fs::write(&file_path, file.contents())?;
+        let Some(name) = file.path().file_name() else {
+            warn!(path = ?file.path(), "Bundled file has no file_name, skipping");
+            continue;
+        };
+        std::fs::write(target.join(name), file.contents())?;
     }
 
     for subdir in dir.dirs() {
-        let subdir_name = subdir.path().file_name().unwrap_or_default();
-        let subdir_target = target.join(subdir_name);
+        let Some(name) = subdir.path().file_name() else {
+            warn!(path = ?subdir.path(), "Bundled dir has no file_name, skipping");
+            continue;
+        };
+        let subdir_target = target.join(name);
         std::fs::create_dir_all(&subdir_target)?;
         extract_dir_contents(subdir, &subdir_target)?;
     }

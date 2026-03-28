@@ -210,15 +210,15 @@ impl SearchFilter {
         }
 
         if let Some(ref ft) = self.fact_type {
-            clauses.push(format!("fact_type = '{}'", ft.as_str()));
+            clauses.push(format!("fact_type = '{}'", escape_sql_string(ft.as_str())));
         }
 
         if let Some(layer) = self.layer {
-            clauses.push(format!("layer = '{}'", layer.as_str()));
+            clauses.push(format!("layer = '{}'", escape_sql_string(layer.as_str())));
         }
 
         if let Some(category) = self.category {
-            clauses.push(format!("category = '{}'", category.as_str()));
+            clauses.push(format!("category = '{}'", escape_sql_string(category.as_str())));
         }
 
         if let Some(valid) = self.is_valid {
@@ -247,7 +247,7 @@ impl SearchFilter {
             clauses.push(clause.clone());
         } else {
             if let Some(ref scope) = self.scope {
-                clauses.push(format!("scope = '{}'", scope.as_str()));
+                clauses.push(format!("scope = '{}'", escape_sql_string(scope.as_str())));
             }
             if let Some(ref persona_id) = self.persona_id {
                 clauses.push(format!("persona_id = '{}'", escape_sql_string(persona_id)));
@@ -256,7 +256,7 @@ impl SearchFilter {
 
         // tier filter always applies (independent of scope stack)
         if let Some(ref tier) = self.tier {
-            clauses.push(format!("tier = '{}'", tier.as_str()));
+            clauses.push(format!("tier = '{}'", escape_sql_string(tier.as_str())));
         }
 
         if clauses.is_empty() {

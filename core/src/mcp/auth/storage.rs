@@ -33,8 +33,8 @@ impl OAuthTokens {
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_secs() as i64;
-            // Add 5 minute buffer
-            expires_at - 300 < now
+            // Add 5 minute buffer (saturating to prevent overflow on adversarial values)
+            expires_at.saturating_sub(300) < now
         } else {
             false
         }
@@ -146,14 +146,19 @@ impl OAuthStorage {
             }
         }
 
-        // Load from file
-        if !self.file_path.exists() {
-            return Ok(StorageFile::default());
-        }
-
-        let content = fs::read_to_string(&self.file_path).await.map_err(|e| {
-            AlephError::IoError(format!("Failed to read OAuth storage: {}", e))
-        })?;
+        // Load from file (no exists() check — match on error kind to avoid TOCTOU)
+        let content = match fs::read_to_string(&self.file_path).await {
+            Ok(c) => c,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(StorageFile::default());
+            }
+            Err(e) => {
+                return Err(AlephError::IoError(format!(
+                    "Failed to read OAuth storage: {}",
+                    e
+                )));
+            }
+        };
 
         let storage: StorageFile = serde_json::from_str(&content).map_err(|e| {
             AlephError::IoError(format!("Failed to parse OAuth storage: {}", e))
@@ -170,6 +175,19 @@ impl OAuthStorage {
 
     /// Save storage file with secure permissions
     async fn save(&self, storage: &StorageFile) -> Result<()> {
+        self.save_to_file(storage).await?;
+
+        // Update cache
+        {
+            let mut cache = self.cache.write().await;
+            *cache = Some(storage.clone());
+        }
+
+        Ok(())
+    }
+
+    /// Write storage to file without updating cache (caller manages cache lock)
+    async fn save_to_file(&self, storage: &StorageFile) -> Result<()> {
         // Create parent directory if needed
         if let Some(parent) = self.file_path.parent() {
             fs::create_dir_all(parent).await.map_err(|e| {
@@ -198,13 +216,21 @@ impl OAuthStorage {
             }
         }
 
-        // Update cache
-        {
-            let mut cache = self.cache.write().await;
-            *cache = Some(storage.clone());
-        }
-
         Ok(())
+    }
+
+    /// Load storage from file without using cache
+    async fn load_from_file(&self) -> Result<StorageFile> {
+        match fs::read_to_string(&self.file_path).await {
+            Ok(content) => serde_json::from_str(&content).map_err(|e| {
+                AlephError::IoError(format!("Failed to parse OAuth storage: {}", e))
+            }),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(StorageFile::default()),
+            Err(e) => Err(AlephError::IoError(format!(
+                "Failed to read OAuth storage: {}",
+                e
+            ))),
+        }
     }
 
     /// Get tokens for a server
@@ -214,8 +240,17 @@ impl OAuthStorage {
     }
 
     /// Save tokens for a server
+    ///
+    /// Uses the cache write lock to serialize load-modify-save and prevent
+    /// concurrent updates from overwriting each other.
     pub async fn save_tokens(&self, server: &str, tokens: &OAuthTokens) -> Result<()> {
-        let mut storage = self.load().await?;
+        let mut cache = self.cache.write().await;
+
+        // Load current state (from cache or file)
+        let mut storage = match cache.as_ref() {
+            Some(s) => s.clone(),
+            None => self.load_from_file().await?,
+        };
 
         let entry = storage
             .entries
@@ -223,7 +258,9 @@ impl OAuthStorage {
             .or_insert_with(OAuthEntry::default);
 
         entry.tokens = Some(tokens.clone());
-        self.save(&storage).await
+        self.save_to_file(&storage).await?;
+        *cache = Some(storage);
+        Ok(())
     }
 
     /// Get client info for a server
@@ -237,7 +274,11 @@ impl OAuthStorage {
 
     /// Save client info for a server
     pub async fn save_client_info(&self, server: &str, client_info: &ClientInfo) -> Result<()> {
-        let mut storage = self.load().await?;
+        let mut cache = self.cache.write().await;
+        let mut storage = match cache.as_ref() {
+            Some(s) => s.clone(),
+            None => self.load_from_file().await?,
+        };
 
         let entry = storage
             .entries
@@ -245,7 +286,9 @@ impl OAuthStorage {
             .or_insert_with(OAuthEntry::default);
 
         entry.client_info = Some(client_info.clone());
-        self.save(&storage).await
+        self.save_to_file(&storage).await?;
+        *cache = Some(storage);
+        Ok(())
     }
 
     /// Get the full OAuth entry for a server
@@ -256,16 +299,28 @@ impl OAuthStorage {
 
     /// Save a full OAuth entry
     pub async fn save_entry(&self, server: &str, entry: &OAuthEntry) -> Result<()> {
-        let mut storage = self.load().await?;
+        let mut cache = self.cache.write().await;
+        let mut storage = match cache.as_ref() {
+            Some(s) => s.clone(),
+            None => self.load_from_file().await?,
+        };
         storage.entries.insert(server.to_string(), entry.clone());
-        self.save(&storage).await
+        self.save_to_file(&storage).await?;
+        *cache = Some(storage);
+        Ok(())
     }
 
     /// Remove all credentials for a server
     pub async fn remove(&self, server: &str) -> Result<()> {
-        let mut storage = self.load().await?;
+        let mut cache = self.cache.write().await;
+        let mut storage = match cache.as_ref() {
+            Some(s) => s.clone(),
+            None => self.load_from_file().await?,
+        };
         storage.entries.remove(server);
-        self.save(&storage).await
+        self.save_to_file(&storage).await?;
+        *cache = Some(storage);
+        Ok(())
     }
 
     /// List all servers with stored credentials

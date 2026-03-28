@@ -142,6 +142,10 @@ impl SemanticAggregator {
                 Ok(_) => {
                     // Ignore non-Info events (shouldn't happen)
                 }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    warn!("Aggregator lagged, skipped {} events", n);
+                    continue;
+                }
                 Err(e) => {
                     warn!("Error receiving event: {}", e);
                     break;

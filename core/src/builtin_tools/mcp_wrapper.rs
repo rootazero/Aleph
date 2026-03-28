@@ -114,8 +114,22 @@ impl AlephToolDyn for McpToolWrapper {
 //   and McpClient uses RwLock for interior mutability which is Send + Sync)
 // - server_name (String) is Send + Sync
 // This is required by AlephToolDyn trait which has Send + Sync bounds.
+// The compile-time assertion below will fail if any field type changes to break this invariant.
 unsafe impl Send for McpToolWrapper {}
 unsafe impl Sync for McpToolWrapper {}
+
+// Compile-time assertion: if McpTool or McpClient ever stop being Send+Sync,
+// these will produce a build error, alerting us to revisit the unsafe impls above.
+const _: () = {
+    fn _assert_send<T: Send>() {}
+    fn _assert_sync<T: Sync>() {}
+    fn _check() {
+        _assert_send::<McpTool>();
+        _assert_sync::<McpTool>();
+        _assert_send::<Arc<McpClient>>();
+        _assert_sync::<Arc<McpClient>>();
+    }
+};
 
 #[cfg(test)]
 mod tests {

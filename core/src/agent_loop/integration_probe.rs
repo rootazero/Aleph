@@ -8,8 +8,6 @@
 mod tests {
     use std::future::Future;
     use std::pin::Pin;
-    use std::sync::Mutex;
-
     use serde_json::json;
 
     use crate::agent_loop::loop_core::{AgentLoop, LoopConfig, NoopCallback};
@@ -22,7 +20,7 @@ mod tests {
     };
     use crate::providers::message::{ContentBlock, UnifiedMessage};
     use crate::providers::AiProvider;
-    use crate::sync_primitives::Arc;
+    use crate::sync_primitives::{Arc, Mutex};
 
     // =========================================================================
     // Test infrastructure

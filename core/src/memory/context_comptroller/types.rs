@@ -17,6 +17,9 @@ impl TokenBudget {
     }
 
     pub fn usage_percent(&self) -> f32 {
+        if self.total == 0 {
+            return 0.0;
+        }
         (self.used as f32 / self.total as f32) * 100.0
     }
 }

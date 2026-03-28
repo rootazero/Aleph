@@ -52,12 +52,12 @@ use super::exec_security_gate::ExecSecurityGate;
 /// This function extracts the base tool name for registry lookup.
 fn normalize_tool_name(tool_name: &str) -> String {
     // Check for colon separator (e.g., "file_ops:mkdir")
-    if let Some(pos) = tool_name.find(':') {
-        return tool_name[..pos].to_string();
+    if let Some((base, _)) = tool_name.split_once(':') {
+        return base.to_string();
     }
     // Check for dot separator (e.g., "file_ops.write")
-    if let Some(pos) = tool_name.find('.') {
-        return tool_name[..pos].to_string();
+    if let Some((base, _)) = tool_name.split_once('.') {
+        return base.to_string();
     }
     // No separator found, return as-is
     tool_name.to_string()
@@ -436,7 +436,8 @@ impl<R: ToolRegistry> SingleStepExecutor<R> {
     pub fn requires_confirmation(&self, action: &Action) -> bool {
         if let Action::ToolCalls { calls: ref requests } = action {
             if let Some(req) = requests.first() {
-                if let Some(tool) = self.tool_registry.get_tool(&req.tool_name) {
+                let normalized = normalize_tool_name(&req.tool_name);
+                if let Some(tool) = self.tool_registry.get_tool(&normalized) {
                     return tool.requires_confirmation;
                 }
             }
@@ -524,7 +525,7 @@ impl MockToolRegistry {
     pub fn set_result(&self, tool_name: &str, result: Value) {
         self.results
             .lock()
-            .unwrap()
+            .unwrap_or_else(|e| e.into_inner())
             .insert(tool_name.to_string(), result);
     }
 }
@@ -543,7 +544,7 @@ impl ToolRegistry for MockToolRegistry {
         let result = self
             .results
             .lock()
-            .unwrap()
+            .unwrap_or_else(|e| e.into_inner())
             .get(tool_name)
             .cloned()
             .unwrap_or(serde_json::json!({"status": "ok"}));

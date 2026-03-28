@@ -320,9 +320,10 @@ impl ProviderRegistry for AuthProfileProviderRegistry {
             }
         }
 
-        // Fallback: return first available provider
+        // Fallback: return first available provider (sorted for deterministic selection)
         let providers = self.providers.read().unwrap_or_else(|e| e.into_inner());
-        if let Some((id, provider)) = providers.iter().next() {
+        let first = providers.keys().min().and_then(|k| providers.get_key_value(k));
+        if let Some((id, provider)) = first {
             warn!(
                 profile_id = %id,
                 "Falling back to first available provider (no healthy profiles)"

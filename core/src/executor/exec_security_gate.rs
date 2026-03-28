@@ -305,8 +305,7 @@ impl ExecSecurityGate {
                             output["stderr"] = serde_json::Value::String(masked);
                         }
                         // Mask plain string output if not an object
-                        if output.is_string() {
-                            let s = output.as_str().unwrap().to_string();
+                        if let Some(s) = output.as_str().map(String::from) {
                             let masked = self.masker.mask(&s);
                             *output = serde_json::Value::String(masked);
                         }

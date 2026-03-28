@@ -111,6 +111,18 @@ impl ArenaHandle {
         arena.add_shared_fact(fact)
     }
 
+    /// Returns the current arena status.
+    pub fn arena_status(&self) -> ArenaStatus {
+        let arena = self.arena.read().unwrap_or_else(|e| e.into_inner());
+        arena.status()
+    }
+
+    /// Returns the status of a specific agent's slot.
+    pub fn slot_status(&self, target_agent_id: &AgentId) -> Option<SlotStatus> {
+        let arena = self.arena.read().unwrap_or_else(|e| e.into_inner());
+        arena.slots().get(target_agent_id).map(|s| s.status)
+    }
+
     /// Create a snapshot of the arena state suitable for swarm context injection.
     ///
     /// Returns `(arena_id, goal, active_agents, completed_steps, total_steps, latest_artifacts)`.
@@ -120,15 +132,20 @@ impl ArenaHandle {
         let arena = self.arena.read().unwrap_or_else(|e| e.into_inner());
         let arena_id = arena.id().to_string();
         let goal = arena.manifest().goal.clone();
-        let active_agents: Vec<String> = arena.slots().keys().cloned().collect();
+        let mut active_agents: Vec<String> = arena.slots().keys().cloned().collect();
+        active_agents.sort();
         let completed = arena.progress().completed_steps;
         let total = arena.progress().total_steps;
-        let artifacts: Vec<String> = arena
+        let mut all_artifacts: Vec<_> = arena
             .slots()
             .values()
             .flat_map(|s| s.artifacts.iter())
+            .collect();
+        all_artifacts.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        let artifacts: Vec<String> = all_artifacts
+            .into_iter()
+            .take(5)
             .map(|a| format!("{:?}: {}", a.kind, a.id))
-            .take(5) // limit to 5 most recent
             .collect();
         (arena_id, goal, active_agents, completed, total, artifacts)
     }
