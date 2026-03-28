@@ -90,6 +90,26 @@ pub enum OutputFormatSerde {
 }
 
 // =============================================================================
+// TrustLevel
+// =============================================================================
+
+/// Trust level for LLM delegation to an ACP harness.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TrustLevel {
+    /// LLM can freely delegate without user confirmation
+    Full,
+    /// Each delegation requires user confirmation
+    Confirm,
+    /// Delegation disabled
+    Disabled,
+}
+
+fn default_trust_level() -> TrustLevel {
+    TrustLevel::Confirm
+}
+
+// =============================================================================
 // AcpHarnessEntry
 // =============================================================================
 
@@ -136,6 +156,11 @@ pub struct AcpHarnessEntry {
     /// missing fields are filled from the preset defaults
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preset: Option<String>,
+
+    /// Trust level for LLM delegation. Preset harnesses default to Full,
+    /// custom harnesses default to Confirm.
+    #[serde(default = "default_trust_level")]
+    pub trust_level: TrustLevel,
 }
 
 fn default_timeout() -> u64 {
@@ -155,6 +180,7 @@ impl Default for AcpHarnessEntry {
             timeout_seconds: default_timeout(),
             enabled: true,
             preset: None,
+            trust_level: default_trust_level(),
         }
     }
 }
@@ -184,6 +210,7 @@ impl AcpHarnessEntry {
                 field: "result".into(),
             },
             preset: Some(PRESET_CLAUDE_CODE.into()),
+            trust_level: TrustLevel::Full,
             ..Default::default()
         }
     }
@@ -197,6 +224,7 @@ impl AcpHarnessEntry {
             default_mode: HarnessModeSerde::Oneshot,
             output_format: OutputFormatSerde::PlainText,
             preset: Some(PRESET_CODEX.into()),
+            trust_level: TrustLevel::Full,
             ..Default::default()
         }
     }
@@ -210,6 +238,7 @@ impl AcpHarnessEntry {
             default_mode: HarnessModeSerde::NativeAcp,
             output_format: OutputFormatSerde::PlainText,
             preset: Some(PRESET_GEMINI.into()),
+            trust_level: TrustLevel::Full,
             ..Default::default()
         }
     }
@@ -237,6 +266,41 @@ impl AcpHarnessEntry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_trust_level_serde() {
+        let json = r#""full""#;
+        let t: TrustLevel = serde_json::from_str(json).unwrap();
+        assert_eq!(t, TrustLevel::Full);
+
+        let json = r#""confirm""#;
+        let t: TrustLevel = serde_json::from_str(json).unwrap();
+        assert_eq!(t, TrustLevel::Confirm);
+
+        let json = r#""disabled""#;
+        let t: TrustLevel = serde_json::from_str(json).unwrap();
+        assert_eq!(t, TrustLevel::Disabled);
+    }
+
+    #[test]
+    fn test_preset_trust_levels() {
+        assert_eq!(AcpHarnessEntry::preset_claude_code().trust_level, TrustLevel::Full);
+        assert_eq!(AcpHarnessEntry::preset_codex().trust_level, TrustLevel::Full);
+        assert_eq!(AcpHarnessEntry::preset_gemini().trust_level, TrustLevel::Full);
+    }
+
+    #[test]
+    fn test_custom_harness_default_trust() {
+        let entry = AcpHarnessEntry::default();
+        assert_eq!(entry.trust_level, TrustLevel::Confirm);
+    }
+
+    #[test]
+    fn test_trust_level_deserialize_missing() {
+        let json = r#"{"display_name":"Test","enabled":true}"#;
+        let entry: AcpHarnessEntry = serde_json::from_str(json).unwrap();
+        assert_eq!(entry.trust_level, TrustLevel::Confirm);
+    }
 
     #[test]
     fn test_preset_modes() {
