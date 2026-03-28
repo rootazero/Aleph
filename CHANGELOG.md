@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-03-28
+
+### Added
+- MS Teams channel configuration UI in Panel — brand card, 7-field config form (App ID, App Password, Tenant ID, Webhook Path, Group/Team toggle, Typing Indicator, Allowed Users)
+- MS Teams backend: Bot Framework REST API client, JWT validation, OAuth token cache, native streaming handler
+- MS Teams Channel trait implementation with WebhookHandler and access control (DM + group policy)
+- Teams Evolution: three-layer communication (messaging, collaborative sessions, task delegation) with role-based prompts
+- Teams tools: team_digest, message_send, inbox_read, session_collaborate, session_turn, review_score, task_submit
+- Collaborative sessions with SessionCoordinator and SQLite persistence
+- MessageRouter with TTL, escalation suggestions, and threaded inbox
+- TaskArtifact storage with auto-persist delegation results
+- Event log system with configurable retention policy
+- ACP (Agent Communication Protocol): file-based session persistence, unified acp_delegate tool with streaming + trust levels
+- ACP structured error types, notification parsing, and session loading
+- OpenAI Responses API passthrough handler (/v1/responses) and SSE formatter
+- OpenAI /v1/embeddings endpoint with provider wiring
+- Skill system unification: SkillManifest with primary_env/homepage/emoji, SkillsConfig TOML persistence, skill_status/install/manage LLM tools
+- Bundled skills: include_dir extractor replaces git-based updater, manifest-driven source classification
+- Panel skills view rewrite with status tabs, grouping, and detail dialog
+- Feishu channel overhaul: extract api.rs, auth.rs, config.rs, websocket.rs, dedup.rs, user_cache.rs, streaming.rs
+- Telegram channel overhaul: policy-based access control, HTML-safe chunking with tag balancing, extract handlers/polling/delivery modules
+- Gateway StreamingController state machine and real-time streaming in ReplyEmitter
+- Gateway semantic chunking in StreamingDeltaSink with accumulated text
+- Discord: edit/react in Channel trait, resolve helpers
+- Aleph E2E verification skill for production-level module testing via WebSocket
+- Full-project code review infrastructure with module-by-module results (65 modules reviewed)
+
+### Fixed
+- MS Teams: access control bypass and JWKS key staleness
+- MS Teams: 8 code review issues (dead fields, URL safety, eviction, retry-after)
+- Teams: intermediate message delivery and agent reuse fixes
+- Teams: WAL mode, TOCTOU race, N+1 queries, UTF-8 validation
+- Feishu: UTF-8 truncation, WebSocket endpoint dedup, executor improvements
+- Telegram: iterative chunking extracted to chunking.rs, dead code removal
+- Agent loop: 4 code logic issues from review
+- Router: use ResolvedRoute session_key, extract guild/team from raw message
+- Thinker: UTF-8 indexing, buffer ops, dead code, lock safety fixes
+- Gateway: ResponseChunk content→delta rename with compat alias
+- Full-project review fixes across 65 modules (lock safety, UTF-8, SQL injection prevention)
+
 ## [0.3.1] - 2026-03-26
 
 ### Added

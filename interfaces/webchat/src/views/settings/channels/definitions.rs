@@ -86,6 +86,8 @@ const ICON_NOSTR: &str = r#"<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2
 
 const ICON_FEISHU: &str = r#"<path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-3 12H7v-2h10v2zm0-3H7V9h10v2zm0-3H7V6h10v2z"/>"#;
 
+const ICON_MSTEAMS: &str = r#"<path d="M19.2 6.4a2.4 2.4 0 1 0 0-4.8 2.4 2.4 0 0 0 0 4.8zm3.6 5.6v-4a1.2 1.2 0 0 0-1.2-1.2h-4.8a3.58 3.58 0 0 1 .6 2v4a4.8 4.8 0 0 1-.86 2.74A3.6 3.6 0 0 0 20.4 12zM14.4 4a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4zM18 8.8a1.6 1.6 0 0 0-1.6-1.6H8.8A1.6 1.6 0 0 0 7.2 8.8v4a6 6 0 0 0 10.8 3.6A6 6 0 0 0 18 12.8v-4z"/>"#;
+
 // ---------------------------------------------------------------------------
 // Per-channel field definitions
 // ---------------------------------------------------------------------------
@@ -962,6 +964,79 @@ static FEISHU_FIELDS: &[FieldDef] = &[
     },
 ];
 
+static MSTEAMS_FIELDS: &[FieldDef] = &[
+    FieldDef {
+        key: "app_id",
+        label: "App ID",
+        kind: FieldKind::Text,
+        placeholder: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+        help: "Azure Bot registration App ID (from Azure Portal)",
+        required: true,
+        default_value: "",
+        options: &[],
+    },
+    FieldDef {
+        key: "app_password",
+        label: "App Password",
+        kind: FieldKind::Secret,
+        placeholder: "Enter client secret...",
+        help: "Azure Bot registration client secret",
+        required: true,
+        default_value: "",
+        options: &[],
+    },
+    FieldDef {
+        key: "tenant_id",
+        label: "Tenant ID",
+        kind: FieldKind::Text,
+        placeholder: "common",
+        help: "Azure AD Tenant ID (\"common\" for multi-tenant)",
+        required: false,
+        default_value: "common",
+        options: &[],
+    },
+    FieldDef {
+        key: "webhook_path",
+        label: "Webhook Path",
+        kind: FieldKind::Text,
+        placeholder: "/msteams/messages",
+        help: "Path where Teams sends incoming activities",
+        required: false,
+        default_value: "/msteams/messages",
+        options: &[],
+    },
+    FieldDef {
+        key: "groups_allowed",
+        label: "Allow Group/Team Chats",
+        kind: FieldKind::Toggle,
+        placeholder: "",
+        help: "Accept messages from group chats and team channels",
+        required: false,
+        default_value: "true",
+        options: &[],
+    },
+    FieldDef {
+        key: "send_typing",
+        label: "Send Typing Indicator",
+        kind: FieldKind::Toggle,
+        placeholder: "",
+        help: "Show typing indicator while processing",
+        required: false,
+        default_value: "true",
+        options: &[],
+    },
+    FieldDef {
+        key: "allowed_users",
+        label: "Allowed Users",
+        kind: FieldKind::TagList,
+        placeholder: "Add AAD user ID...",
+        help: "Azure AD user IDs allowed to interact (empty = all)",
+        required: false,
+        default_value: "",
+        options: &[],
+    },
+];
+
 // ---------------------------------------------------------------------------
 // Static channel registry
 // ---------------------------------------------------------------------------
@@ -1023,7 +1098,18 @@ pub static ALL_CHANNELS: &[ChannelDefinition] = &[
         fields: FEISHU_FIELDS,
         docs_url: "https://open.feishu.cn/document/home/index",
     },
-    // 6. Slack
+    // 6. MS Teams
+    ChannelDefinition {
+        id: "msteams",
+        name: "MS Teams",
+        description: "Connect to Microsoft Teams via Bot Framework",
+        icon_svg: ICON_MSTEAMS,
+        brand_color: "#6264A7",
+        config_section: "channels.msteams",
+        fields: MSTEAMS_FIELDS,
+        docs_url: "https://learn.microsoft.com/en-us/microsoftteams/platform/bots/what-are-bots",
+    },
+    // 7. Slack
     ChannelDefinition {
         id: "slack",
         name: "Slack",
@@ -1034,7 +1120,7 @@ pub static ALL_CHANNELS: &[ChannelDefinition] = &[
         fields: SLACK_FIELDS,
         docs_url: "https://api.slack.com/apis/socket-mode",
     },
-    // 7. Email
+    // 8. Email
     ChannelDefinition {
         id: "email",
         name: "Email",
@@ -1045,7 +1131,7 @@ pub static ALL_CHANNELS: &[ChannelDefinition] = &[
         fields: EMAIL_FIELDS,
         docs_url: "https://datatracker.ietf.org/doc/html/rfc3501",
     },
-    // 7. Matrix
+    // 9. Matrix
     ChannelDefinition {
         id: "matrix",
         name: "Matrix",
@@ -1056,7 +1142,7 @@ pub static ALL_CHANNELS: &[ChannelDefinition] = &[
         fields: MATRIX_FIELDS,
         docs_url: "https://spec.matrix.org/latest/client-server-api/",
     },
-    // 8. Signal
+    // 10. Signal
     ChannelDefinition {
         id: "signal",
         name: "Signal",
@@ -1067,7 +1153,7 @@ pub static ALL_CHANNELS: &[ChannelDefinition] = &[
         fields: SIGNAL_FIELDS,
         docs_url: "https://github.com/bbernhard/signal-cli-rest-api",
     },
-    // 9. Mattermost
+    // 11. Mattermost
     ChannelDefinition {
         id: "mattermost",
         name: "Mattermost",
@@ -1078,7 +1164,7 @@ pub static ALL_CHANNELS: &[ChannelDefinition] = &[
         fields: MATTERMOST_FIELDS,
         docs_url: "https://developers.mattermost.com/integrate/reference/bot/",
     },
-    // 10. IRC
+    // 12. IRC
     ChannelDefinition {
         id: "irc",
         name: "IRC",
@@ -1089,7 +1175,7 @@ pub static ALL_CHANNELS: &[ChannelDefinition] = &[
         fields: IRC_FIELDS,
         docs_url: "https://datatracker.ietf.org/doc/html/rfc2812",
     },
-    // 11. Webhook
+    // 13. Webhook
     ChannelDefinition {
         id: "webhook",
         name: "Webhook",
@@ -1100,7 +1186,7 @@ pub static ALL_CHANNELS: &[ChannelDefinition] = &[
         fields: WEBHOOK_FIELDS,
         docs_url: "https://en.wikipedia.org/wiki/Webhook",
     },
-    // 12. XMPP
+    // 14. XMPP
     ChannelDefinition {
         id: "xmpp",
         name: "XMPP",
@@ -1111,7 +1197,7 @@ pub static ALL_CHANNELS: &[ChannelDefinition] = &[
         fields: XMPP_FIELDS,
         docs_url: "https://xmpp.org/extensions/",
     },
-    // 13. Nostr
+    // 15. Nostr
     ChannelDefinition {
         id: "nostr",
         name: "Nostr",
@@ -1133,12 +1219,13 @@ pub static DISCORD: &ChannelDefinition = &ALL_CHANNELS[1];
 pub static WHATSAPP: &ChannelDefinition = &ALL_CHANNELS[2];
 pub static IMESSAGE: &ChannelDefinition = &ALL_CHANNELS[3];
 pub static FEISHU: &ChannelDefinition = &ALL_CHANNELS[4];
-pub static SLACK: &ChannelDefinition = &ALL_CHANNELS[5];
-pub static EMAIL: &ChannelDefinition = &ALL_CHANNELS[6];
-pub static MATRIX: &ChannelDefinition = &ALL_CHANNELS[7];
-pub static SIGNAL: &ChannelDefinition = &ALL_CHANNELS[8];
-pub static MATTERMOST: &ChannelDefinition = &ALL_CHANNELS[9];
-pub static IRC: &ChannelDefinition = &ALL_CHANNELS[10];
-pub static WEBHOOK: &ChannelDefinition = &ALL_CHANNELS[11];
-pub static XMPP: &ChannelDefinition = &ALL_CHANNELS[12];
-pub static NOSTR: &ChannelDefinition = &ALL_CHANNELS[13];
+pub static MSTEAMS: &ChannelDefinition = &ALL_CHANNELS[5];
+pub static SLACK: &ChannelDefinition = &ALL_CHANNELS[6];
+pub static EMAIL: &ChannelDefinition = &ALL_CHANNELS[7];
+pub static MATRIX: &ChannelDefinition = &ALL_CHANNELS[8];
+pub static SIGNAL: &ChannelDefinition = &ALL_CHANNELS[9];
+pub static MATTERMOST: &ChannelDefinition = &ALL_CHANNELS[10];
+pub static IRC: &ChannelDefinition = &ALL_CHANNELS[11];
+pub static WEBHOOK: &ChannelDefinition = &ALL_CHANNELS[12];
+pub static XMPP: &ChannelDefinition = &ALL_CHANNELS[13];
+pub static NOSTR: &ChannelDefinition = &ALL_CHANNELS[14];
