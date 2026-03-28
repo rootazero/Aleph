@@ -151,6 +151,60 @@ impl StdioTransport {
             ))),
         }
     }
+
+    /// Send a request and stream notifications via callback as they arrive.
+    ///
+    /// Unlike `request()`, notifications are forwarded immediately to the callback
+    /// instead of being collected. Only the final response (matching id) is returned.
+    ///
+    /// Use this for `session/prompt` where real-time streaming matters.
+    /// Use `request()` for `initialize` and `session/new` where it doesn't.
+    pub async fn request_streaming(
+        &mut self,
+        req: &AcpRequest,
+        timeout: Duration,
+        on_notification: impl Fn(&AcpResponse),
+    ) -> Result<AcpResponse> {
+        self.send(req).await?;
+        let expected_id = req.id;
+
+        let result = tokio::time::timeout(timeout, async {
+            loop {
+                match self.event_rx.recv().await {
+                    Some(Ok(resp)) => {
+                        if resp.id == Some(expected_id) {
+                            if let Some(ref err) = resp.error {
+                                return Err(crate::acp::protocol::AcpOperationError::with_remote(
+                                    crate::acp::protocol::AcpErrorCode::ProtocolError { code: err.code },
+                                    format!("ACP error {}: {}", err.code, err.message),
+                                    err.clone(),
+                                ).into());
+                            }
+                            return Ok(resp);
+                        }
+                        // Notification — forward immediately
+                        on_notification(&resp);
+                    }
+                    Some(Err(e)) => return Err(e),
+                    None => {
+                        return Err(crate::acp::protocol::AcpOperationError::new(
+                            crate::acp::protocol::AcpErrorCode::SessionDead,
+                            "ACP connection closed while waiting for response",
+                        ).into());
+                    }
+                }
+            }
+        })
+        .await;
+
+        match result {
+            Ok(inner) => inner,
+            Err(_elapsed) => Err(crate::acp::protocol::AcpOperationError::new(
+                crate::acp::protocol::AcpErrorCode::Timeout,
+                format!("ACP request timed out after {:?}", timeout),
+            ).into()),
+        }
+    }
 }
 
 #[cfg(test)]
