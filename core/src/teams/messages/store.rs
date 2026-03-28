@@ -4,7 +4,7 @@
 //! and unread counts. Uses the same `Arc<tokio::sync::Mutex<Connection>>`
 //! pattern as the sibling team and artifact stores.
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
@@ -423,7 +423,12 @@ impl MessageStore for SqliteMessageStore {
             result
         };
 
-        // Materialise each message with its relations
+        // Materialise each message with its relations.
+        // NOTE: This is an N+1 query pattern (2 sub-queries per message for recipients
+        // and attachments). This is acceptable because team inboxes are small (typically
+        // <50 unread messages) and all queries hit the same locked SQLite connection
+        // with prepare_cached, so overhead is minimal. Batching with IN(...) clauses
+        // would add complexity without meaningful benefit at this scale.
         let mut messages = Vec::with_capacity(ids.len());
         for id in &ids {
             let raw = conn
@@ -488,7 +493,7 @@ impl MessageStore for SqliteMessageStore {
             result
         };
 
-        // Phase 2: materialise with relations
+        // Phase 2: materialise with relations (N+1 pattern — see read_inbox comment)
         let mut messages = Vec::with_capacity(raws.len());
         for raw in raws {
             messages.push(Self::materialise(&conn, raw)?);

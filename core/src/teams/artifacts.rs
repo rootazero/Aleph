@@ -3,7 +3,7 @@
 //! Artifacts are rich outputs produced by agents during task execution —
 //! reports, code snippets, reviews, discoveries, etc.
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};

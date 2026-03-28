@@ -30,7 +30,11 @@ impl RecipientRole {
     pub fn from_stored(s: &str) -> Self {
         match s {
             "to" => Self::To,
-            "cc" | _ => Self::Cc,
+            "cc" => Self::Cc,
+            other => {
+                tracing::warn!("Unknown RecipientRole stored value: {other}, defaulting to Cc");
+                Self::Cc
+            }
         }
     }
 }
@@ -94,7 +98,10 @@ impl MessageType {
             "plan_approval_request" => Self::PlanApprovalRequest,
             "plan_approved" => Self::PlanApproved,
             "plan_rejected" => Self::PlanRejected,
-            _ => Self::Message,
+            other => {
+                tracing::warn!("Unknown MessageType stored value: {other}, defaulting to Message");
+                Self::Message
+            }
         }
     }
 }

@@ -68,6 +68,14 @@ impl TeamDigestTool {
     }
 }
 
+/// UTF-8 safe string truncation by character count.
+fn truncate_str(s: &str, max_chars: usize) -> &str {
+    match s.char_indices().nth(max_chars) {
+        Some((idx, _)) => &s[..idx],
+        None => s,
+    }
+}
+
 /// Format a single event into a readable line.
 fn format_event(event: &TeamEvent) -> String {
     let ts = event.timestamp.format("%Y-%m-%d %H:%M:%S UTC");
@@ -85,16 +93,18 @@ fn format_event(event: &TeamEvent) -> String {
             .map(|(k, v)| {
                 let val_str = match v {
                     serde_json::Value::String(s) => {
-                        if s.len() > 80 {
-                            format!("{}...", s.get(..80).unwrap_or(s))
+                        let truncated = truncate_str(s, 80);
+                        if truncated.len() < s.len() {
+                            format!("{truncated}...")
                         } else {
                             s.clone()
                         }
                     }
                     other => {
                         let s = other.to_string();
-                        if s.len() > 80 {
-                            format!("{}...", s.get(..80).unwrap_or(&s))
+                        let truncated = truncate_str(&s, 80);
+                        if truncated.len() < s.len() {
+                            format!("{truncated}...")
                         } else {
                             s
                         }
@@ -106,8 +116,9 @@ fn format_event(event: &TeamEvent) -> String {
         format!(" ({})", parts.join(", "))
     } else {
         let s = event.payload.to_string();
-        if s.len() > 100 {
-            format!(" ({}...)", s.get(..100).unwrap_or(&s))
+        let truncated = truncate_str(&s, 100);
+        if truncated.len() < s.len() {
+            format!(" ({truncated}...)")
         } else {
             format!(" ({s})")
         }

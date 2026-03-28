@@ -29,7 +29,10 @@ impl SessionStatus {
             "concluded" => Self::Concluded,
             "deadlocked" => Self::Deadlocked,
             "cancelled" => Self::Cancelled,
-            _ => Self::Active,
+            other => {
+                tracing::warn!("Unknown SessionStatus stored value: {other}, defaulting to Active");
+                Self::Active
+            }
         }
     }
 }

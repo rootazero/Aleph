@@ -173,7 +173,9 @@ impl AlephTool for ReviewScoreTool {
             })
             .await;
 
-        // Send ReviewResult message to the team via MessageRouter
+        // Send ReviewResult message to the artifact's original author so they
+        // are notified of the review outcome. We look up the reviewed artifact
+        // to find the submitter agent_id.
         let summary = if args.overall_pass {
             format!("Review PASSED for artifact {}", args.artifact_id)
         } else {
@@ -184,20 +186,24 @@ impl AlephTool for ReviewScoreTool {
             )
         };
 
-        let _ = self
-            .message_router
-            .send(SendRequest {
-                team_id: args.team_id,
-                from_agent: self.current_agent_id.clone(),
-                to: vec![], // broadcast — no specific target
-                cc: vec![],
-                msg_type: MessageType::ReviewResult,
-                subject: format!("Review: {}", args.task_id),
-                content: summary,
-                reply_to: None,
-                attachments: vec![artifact.id.clone()],
-            })
-            .await;
+        if let Ok(Some(reviewed_artifact)) =
+            self.artifact_store.get_artifact(&args.artifact_id).await
+        {
+            let _ = self
+                .message_router
+                .send(SendRequest {
+                    team_id: args.team_id,
+                    from_agent: self.current_agent_id.clone(),
+                    to: vec![reviewed_artifact.agent_id], // notify the artifact author
+                    cc: vec![],
+                    msg_type: MessageType::ReviewResult,
+                    subject: format!("Review: {}", args.task_id),
+                    content: summary,
+                    reply_to: None,
+                    attachments: vec![artifact.id.clone()],
+                })
+                .await;
+        }
 
         Ok(ReviewScoreOutput {
             accepted: true,

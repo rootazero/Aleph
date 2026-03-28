@@ -3,7 +3,7 @@
 //! Provides structured event types and a SQLite-backed store with retention
 //! policy (time-based pruning) for auditing team interactions.
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -312,7 +312,7 @@ impl EventLogStore for SqliteEventLogStore {
         let params_refs: Vec<&dyn rusqlite::types::ToSql> =
             dynamic_params.iter().map(|p| p.as_ref()).collect();
 
-        let mut stmt = conn.prepare_cached(&sql).map_err(db_err)?;
+        let mut stmt = conn.prepare(&sql).map_err(db_err)?;
         let events = stmt
             .query_map(params_refs.as_slice(), read_event_row)
             .map_err(db_err)?
@@ -381,19 +381,19 @@ mod tests {
     async fn test_prune_old_events() {
         let store = SqliteEventLogStore::new_in_memory().await;
 
-        store
-            .log_event(NewTeamEvent {
-                team_id: "team-2".into(),
-                event_type: TeamEventType::TaskCreated,
-                agent_id: "agent-b".into(),
-                payload: json!({}),
-            })
-            .await
-            .unwrap();
+        // Insert with an explicit past timestamp via direct SQL to avoid timing sensitivity
+        let past = (Utc::now() - chrono::Duration::seconds(10)).to_rfc3339();
+        {
+            let conn = store.conn.lock().await;
+            conn.execute(
+                "INSERT INTO team_events (id, team_id, event_type, agent_id, payload, timestamp) VALUES (?1,?2,?3,?4,?5,?6)",
+                params!["prune-evt", "team-2", "task_created", "agent-b", "{}", past],
+            ).unwrap();
+        }
 
-        // Prune with zero duration — everything older than "now" should be deleted
+        // Prune with 5-second max_age — the 10-second-old event should be deleted
         let pruned = store
-            .prune_events("team-2", chrono::Duration::zero())
+            .prune_events("team-2", chrono::Duration::seconds(5))
             .await
             .unwrap();
         assert_eq!(pruned, 1);

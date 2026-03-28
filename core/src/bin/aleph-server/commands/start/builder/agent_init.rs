@@ -141,6 +141,12 @@ pub(in crate::commands::start) async fn register_agent_handlers(
 
         match rusqlite::Connection::open(&db_path) {
             Ok(conn) => {
+                // Enable WAL mode + busy timeout for concurrent access to teams.db
+                if let Err(e) = conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;") {
+                    if !daemon {
+                        eprintln!("Warning: Failed to set WAL mode for team store: {e}");
+                    }
+                }
                 let store = Arc::new(SqliteTeamStore::new(conn));
                 let store_clone = Arc::clone(&store);
                 match tokio::task::block_in_place(|| {
@@ -192,6 +198,12 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             ($store_ty:ident, $trait_ty:ty, $label:expr, $db:expr) => {{
                 match rusqlite::Connection::open(&$db) {
                     Ok(conn) => {
+                        // Enable WAL mode + busy timeout for concurrent access to teams.db
+                        if let Err(e) = conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;") {
+                            if !daemon {
+                                eprintln!("Warning: Failed to set WAL mode for {}: {}", $label, e);
+                            }
+                        }
                         let store = Arc::new($store_ty::new(conn));
                         let sc = Arc::clone(&store);
                         match tokio::task::block_in_place(|| {

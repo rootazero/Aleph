@@ -3,7 +3,7 @@
 //! Uses `Arc<tokio::sync::Mutex<rusqlite::Connection>>` for thread-safe
 //! async access, consistent with the sibling team and message stores.
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -311,11 +311,22 @@ impl SessionStore for SqliteSessionStore {
             )));
         }
 
-        if turn.turn_number > max_rounds {
+        // Compute turn_number atomically within the locked connection to avoid TOCTOU races.
+        // The caller-supplied turn.turn_number is ignored; the authoritative value is derived
+        // from the current row count.
+        let current_count: u32 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM session_turns WHERE session_id = ?1",
+                params![session_id],
+                |row| row.get(0),
+            )
+            .map_err(db_err)?;
+        let turn_number = current_count + 1;
+
+        if turn_number > max_rounds {
             return Err(AlephError::ConfigError {
                 message: format!(
-                    "SessionStore: turn {} exceeds max_rounds {} for session {session_id}",
-                    turn.turn_number, max_rounds
+                    "SessionStore: turn {turn_number} exceeds max_rounds {max_rounds} for session {session_id}"
                 ),
                 suggestion: Some("conclude or cancel the session".into()),
             });
@@ -325,7 +336,7 @@ impl SessionStore for SqliteSessionStore {
         conn.execute(
             "INSERT INTO session_turns (session_id, turn_number, agent_id, content, timestamp) \
              VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![session_id, turn.turn_number, turn.agent_id, turn.content, ts_str],
+            params![session_id, turn_number, turn.agent_id, turn.content, ts_str],
         )
         .map_err(db_err)?;
 
@@ -363,14 +374,14 @@ impl SessionStore for SqliteSessionStore {
 
         let affected = conn
             .execute(
-                "UPDATE collaborative_sessions SET status = 'cancelled' WHERE id = ?1 AND status = 'active'",
+                "UPDATE collaborative_sessions SET status = 'cancelled' WHERE id = ?1 AND status IN ('active', 'deadlocked')",
                 params![session_id],
             )
             .map_err(db_err)?;
 
         if affected == 0 {
             return Err(db_err(format!(
-                "cannot cancel session (not found or not active): {session_id}"
+                "cannot cancel session (not found or not active/deadlocked): {session_id}"
             )));
         }
 
@@ -407,7 +418,7 @@ impl SessionStore for SqliteSessionStore {
 
         let affected = conn
             .execute(
-                "UPDATE collaborative_sessions SET status = 'cancelled' WHERE team_id = ?1 AND status = 'active'",
+                "UPDATE collaborative_sessions SET status = 'cancelled' WHERE team_id = ?1 AND status IN ('active', 'deadlocked')",
                 params![team_id],
             )
             .map_err(db_err)?;

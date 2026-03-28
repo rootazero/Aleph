@@ -35,9 +35,6 @@ pub struct InboxReadArgs {
     pub thread_id: Option<String>,
     /// Filter by message type (optional)
     pub msg_type: Option<MessageType>,
-    /// Only return unread messages (default: true)
-    #[serde(default = "default_true")]
-    pub unread_only: bool,
     /// Mark returned messages as read (default: true)
     #[serde(default = "default_true")]
     pub mark_read: bool,
@@ -84,7 +81,7 @@ impl AlephTool for InboxReadTool {
         Some(vec![
             "inbox_read(team_id='team-1')".to_string(),
             "inbox_read(team_id='team-1', mode='thread', thread_id='thr-abc123')".to_string(),
-            "inbox_read(team_id='team-1', msg_type='review_request', unread_only=true)".to_string(),
+            "inbox_read(team_id='team-1', msg_type='review_request')".to_string(),
         ])
     }
 
