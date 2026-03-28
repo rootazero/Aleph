@@ -345,10 +345,12 @@ impl ProviderRegistry for MultiProviderRegistry {
             candidates.push((provider, fb_model.clone()));
         }
 
-        // 3. Global fallbacks (use provider name as placeholder model)
+        // 3. Global fallbacks — model is empty string (sentinel for "use provider's configured default")
+        // When the caller sees an empty model, it should NOT set payload.model,
+        // letting the protocol adapter fall back to config.default_model().
         for fb_provider_name in &state.fallbacks {
             if state.providers.contains_key(fb_provider_name) {
-                candidates.push((fb_provider_name.clone(), fb_provider_name.clone()));
+                candidates.push((fb_provider_name.clone(), String::new()));
             }
         }
 
@@ -532,6 +534,7 @@ mod multi_registry_tests {
 
         assert_eq!(resolved.provider_name, "google");
         assert!(resolved.is_fallback);
+        assert!(resolved.model.is_empty(), "global fallback model should be empty (use provider default)");
         assert_eq!(resolved.original_model, "claude-opus-4-6");
     }
 
@@ -627,5 +630,30 @@ mod multi_registry_tests {
         assert_eq!(resolved.provider_name, "google");
         assert!(resolved.is_fallback);
         assert_eq!(resolved.original_model, "gpt-4o");
+    }
+
+    #[test]
+    fn resolve_uses_degraded_provider_after_cooldown_expires() {
+        use crate::providers::health::ProviderHealth;
+        use std::time::{Duration, Instant};
+
+        let r = MultiProviderRegistry::new("openai".into(), p("openai"));
+        r.register("anthropic".into(), p("anthropic"));
+
+        // Manually inject a Degraded state with an expired cooldown
+        {
+            let mut state = r.state.write().unwrap_or_else(|e| e.into_inner());
+            state.health.insert("openai".to_string(), ProviderHealth::Degraded {
+                since: Instant::now() - Duration::from_secs(120),
+                cooldown_until: Instant::now() - Duration::from_secs(1), // expired
+                consecutive_failures: 2,
+            });
+        }
+
+        // openai is Degraded but cooldown expired → should be selected (not fallback)
+        let resolved = r.resolve_with_fallback("gpt-4o", &["claude-opus-4-6".to_string()]).unwrap();
+        assert_eq!(resolved.provider_name, "openai");
+        assert_eq!(resolved.model, "gpt-4o");
+        assert!(!resolved.is_fallback, "degraded-past-cooldown provider should be primary, not fallback");
     }
 }
