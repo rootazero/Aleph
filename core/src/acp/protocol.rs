@@ -87,6 +87,20 @@ impl AcpRequest {
             })),
         }
     }
+
+    /// Create a `session/load` request (best-effort session restore).
+    pub fn load_session(session_id: &str, cwd: &str) -> Self {
+        Self {
+            jsonrpc: "2.0".to_string(),
+            id: next_id(),
+            method: "session/load".to_string(),
+            params: Some(serde_json::json!({
+                "sessionId": session_id,
+                "cwd": cwd,
+                "mcpServers": [],
+            })),
+        }
+    }
 }
 
 // =============================================================================
@@ -162,6 +176,47 @@ impl AcpResponse {
         None
     }
 
+    /// Extract thinking text from an `agent_thought_chunk` notification.
+    pub fn streaming_thought(&self) -> Option<String> {
+        if self.method.as_deref() != Some("session/update") {
+            return None;
+        }
+        let params = self.params.as_ref()?;
+        let update = params.get("update")?;
+        if update.get("sessionUpdate")?.as_str()? != "agent_thought_chunk" {
+            return None;
+        }
+        let content = update.get("content")?;
+        if content.get("type")?.as_str()? == "text" {
+            return content.get("text")?.as_str().map(String::from);
+        }
+        None
+    }
+
+    /// Extract tool call info from a `tool_call` or `tool_call_update` notification.
+    /// Returns (tool_name, status) if this is a tool-related notification.
+    pub fn tool_call_info(&self) -> Option<(String, String)> {
+        if self.method.as_deref() != Some("session/update") {
+            return None;
+        }
+        let params = self.params.as_ref()?;
+        let update = params.get("update")?;
+        let session_update = update.get("sessionUpdate")?.as_str()?;
+        if session_update != "tool_call" && session_update != "tool_call_update" {
+            return None;
+        }
+        let name = update.get("name")
+            .or_else(|| update.get("toolName"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown")
+            .to_string();
+        let status = update.get("status")
+            .and_then(|v| v.as_str())
+            .unwrap_or(session_update)
+            .to_string();
+        Some((name, status))
+    }
+
     /// Check if this notification signals that the agent's turn is complete.
     pub fn is_turn_complete(&self) -> bool {
         if self.method.as_deref() != Some("session/update") {
@@ -196,6 +251,56 @@ impl fmt::Display for AcpError {
 }
 
 impl std::error::Error for AcpError {}
+
+// =============================================================================
+// Structured ACP Errors
+// =============================================================================
+
+/// Classifies ACP operation failures for programmatic handling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AcpErrorCode {
+    HarnessNotFound,
+    HarnessUnavailable,
+    HarnessDenied,
+    SessionDead,
+    Timeout,
+    ProtocolError { code: i64 },
+    ModeUnsupported,
+    Cancelled,
+    SpawnFailed,
+}
+
+/// Structured ACP operation error with classification.
+#[derive(Debug)]
+pub struct AcpOperationError {
+    pub code: AcpErrorCode,
+    pub message: String,
+    pub remote_error: Option<AcpError>,
+}
+
+impl fmt::Display for AcpOperationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "ACP {:?}: {}", self.code, self.message)
+    }
+}
+
+impl std::error::Error for AcpOperationError {}
+
+impl From<AcpOperationError> for crate::error::AlephError {
+    fn from(e: AcpOperationError) -> Self {
+        crate::error::AlephError::tool(e.to_string())
+    }
+}
+
+impl AcpOperationError {
+    pub fn new(code: AcpErrorCode, message: impl Into<String>) -> Self {
+        Self { code, message: message.into(), remote_error: None }
+    }
+
+    pub fn with_remote(code: AcpErrorCode, message: impl Into<String>, remote: AcpError) -> Self {
+        Self { code, message: message.into(), remote_error: Some(remote) }
+    }
+}
 
 // =============================================================================
 // AcpSessionState
@@ -393,5 +498,76 @@ mod tests {
         let parsed: AcpRequest = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.method, "session/prompt");
         assert_eq!(parsed.id, req.id);
+    }
+
+    #[test]
+    fn test_acp_error_code_copy() {
+        let code = AcpErrorCode::Timeout;
+        let code2 = code;
+        assert_eq!(code, code2);
+
+        let proto = AcpErrorCode::ProtocolError { code: -32600 };
+        let proto2 = proto;
+        assert_eq!(proto, proto2);
+    }
+
+    #[test]
+    fn test_acp_operation_error_display() {
+        let err = AcpOperationError::new(AcpErrorCode::Timeout, "timed out after 5m");
+        assert!(err.to_string().contains("Timeout"));
+        assert!(err.to_string().contains("timed out"));
+    }
+
+    #[test]
+    fn test_acp_operation_error_into_aleph_error() {
+        let err = AcpOperationError::new(AcpErrorCode::HarnessNotFound, "not found");
+        let aleph_err: crate::error::AlephError = err.into();
+        assert!(aleph_err.to_string().contains("HarnessNotFound"));
+    }
+
+    #[test]
+    fn test_load_session_request() {
+        let req = AcpRequest::load_session("sess-42", "/tmp");
+        assert_eq!(req.method, "session/load");
+        let p = req.params.unwrap();
+        assert_eq!(p["sessionId"], "sess-42");
+        assert_eq!(p["cwd"], "/tmp");
+    }
+
+    #[test]
+    fn test_streaming_thought_extraction() {
+        let notif = AcpResponse {
+            jsonrpc: "2.0".to_string(),
+            id: None, result: None, error: None,
+            method: Some("session/update".to_string()),
+            params: Some(serde_json::json!({
+                "sessionId": "s1",
+                "update": {
+                    "sessionUpdate": "agent_thought_chunk",
+                    "content": {"type": "text", "text": "thinking..."}
+                }
+            })),
+        };
+        assert_eq!(notif.streaming_thought(), Some("thinking...".to_string()));
+    }
+
+    #[test]
+    fn test_tool_call_info_extraction() {
+        let notif = AcpResponse {
+            jsonrpc: "2.0".to_string(),
+            id: None, result: None, error: None,
+            method: Some("session/update".to_string()),
+            params: Some(serde_json::json!({
+                "sessionId": "s1",
+                "update": {
+                    "sessionUpdate": "tool_call",
+                    "name": "read_file",
+                    "status": "running"
+                }
+            })),
+        };
+        let (name, status) = notif.tool_call_info().unwrap();
+        assert_eq!(name, "read_file");
+        assert_eq!(status, "running");
     }
 }
