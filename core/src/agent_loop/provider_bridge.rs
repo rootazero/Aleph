@@ -25,12 +25,19 @@ use super::tool::ToolDefinition as LoopToolDefinition;
 /// for the underlying provider's `process` method.
 pub struct AiProviderBridge {
     provider: Arc<dyn AiProvider>,
+    model: Option<String>,
 }
 
 impl AiProviderBridge {
     /// Create a new bridge wrapping an existing AiProvider.
     pub fn new(provider: Arc<dyn AiProvider>) -> Self {
-        Self { provider }
+        Self { provider, model: None }
+    }
+
+    /// Set a per-request model override (takes precedence over provider config).
+    pub fn with_model(mut self, model: String) -> Self {
+        self.model = Some(model);
+        self
     }
 
     /// Convert a loop ToolDefinition to the dispatcher's ToolDefinition.
@@ -70,6 +77,7 @@ impl LoopProvider for AiProviderBridge {
             } else {
                 Some(&dispatcher_tools)
             },
+            model: self.model.clone(),
             ..Default::default()
         };
 

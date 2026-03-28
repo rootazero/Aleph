@@ -61,12 +61,31 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             }
         }
 
-        // Get provider
-        // TODO(P3): Use call_with_fallback() from thinker::fallback when the registry
-        // has fallbacks configured. This requires making AiProviderBridge registry-aware
-        // so it can retry with fallback providers on transient errors.
-        let provider = self.provider_registry.default_provider();
-        let bridge = AiProviderBridge::new(provider);
+        // Resolve model with health-aware fallback
+        let resolved = self.provider_registry
+            .resolve_with_fallback(&agent.config().model, &agent.config().fallback_models)
+            .map_err(|e| ExecutionError::Failed(e.to_string()))?;
+
+        if resolved.is_fallback {
+            info!(
+                run_id = run_id,
+                original = %resolved.original_model,
+                fallback_provider = %resolved.provider_name,
+                fallback_model = %resolved.model,
+                "Using fallback model"
+            );
+        }
+
+        let provider = self.provider_registry.get(&resolved.provider_name)
+            .unwrap_or_else(|| self.provider_registry.default_provider());
+
+        // Only set model override if resolved.model is non-empty
+        // (empty string = global fallback sentinel, use provider's configured default)
+        let bridge = if resolved.model.is_empty() {
+            AiProviderBridge::new(provider)
+        } else {
+            AiProviderBridge::new(provider).with_model(resolved.model.clone())
+        };
 
         // Build tool registry from UnifiedTool list (filtered by agent whitelist)
         let allowed_tools: Vec<crate::dispatcher::UnifiedTool> = self
@@ -265,6 +284,9 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
 
         match loop_result {
             Ok(result) => {
+                // Report success for health tracking
+                self.provider_registry.report_outcome(&resolved.provider_name, Ok(()));
+
                 info!(
                     run_id = run_id,
                     iterations = result.iterations,
@@ -296,6 +318,14 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 Ok(response)
             }
             Err(e) => {
+                // Report provider errors for health tracking
+                if let Some(aleph_err) = e.downcast_ref::<crate::error::AlephError>() {
+                    let provider_err: Option<crate::providers::health::ProviderError> = aleph_err.into();
+                    if let Some(pe) = provider_err {
+                        self.provider_registry.report_outcome(&resolved.provider_name, Err(pe));
+                    }
+                }
+
                 error!(run_id = run_id, error = %e, "Agent loop failed");
                 Err(ExecutionError::Failed(e.to_string()))
             }
