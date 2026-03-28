@@ -11,6 +11,7 @@ use crate::config::types::agents_def::AgentDefinition;
 use crate::error::{AlephError, Result};
 use crate::gateway::agent_instance::{AgentInstance, AgentInstanceConfig, AgentRegistry};
 use crate::sync_primitives::Arc;
+use crate::teams::roles::{role_prompt_template, AgentRole};
 use crate::teams::{NewTeam, NewTeamMember, TeamStore};
 use crate::tools::AlephTool;
 
@@ -35,6 +36,10 @@ pub struct CreateAgentSpec {
     /// Brief description of what this agent specializes in
     #[serde(default)]
     pub identity: Option<String>,
+    /// Team role for this agent. When set, the corresponding role prompt
+    /// template is automatically appended to the agent's system prompt.
+    #[serde(default)]
+    pub role: Option<AgentRole>,
 }
 
 // =============================================================================
@@ -57,6 +62,12 @@ pub struct MemberSpec {
     /// Role description for this member within the team (e.g. "researcher", "writer")
     #[serde(default)]
     pub role: String,
+
+    /// Typed team role. When set, the corresponding role prompt template is
+    /// automatically injected into the agent's system prompt at enroll time.
+    /// This is independent of `role` (which is a free-form description string).
+    #[serde(default)]
+    pub agent_role: Option<AgentRole>,
 }
 
 // =============================================================================
@@ -136,20 +147,40 @@ impl TeamCreateTool {
     }
 
     /// Resolve a MemberSpec to an agent_id, creating the agent if needed.
+    /// When `agent_role` is set on the spec, the corresponding role prompt
+    /// template is injected into the agent's system prompt.
     async fn resolve_member(&self, spec: &MemberSpec) -> Result<String> {
+        // Determine the effective AgentRole: prefer typed agent_role, fall back
+        // to parsing the free-form role string.
+        let effective_role = spec
+            .agent_role
+            .clone()
+            .or_else(|| {
+                if spec.role.is_empty() {
+                    None
+                } else {
+                    Some(AgentRole::from_stored(&spec.role))
+                }
+            });
+
         if let Some(ref agent_id) = spec.agent_id {
             // Verify the existing agent is present in the runtime registry
-            if self.registry.get(agent_id).await.is_none() {
-                return Err(AlephError::other(format!(
-                    "Agent '{}' not found in registry",
-                    agent_id
-                )));
+            let instance = self.registry.get(agent_id).await.ok_or_else(|| {
+                AlephError::other(format!("Agent '{}' not found in registry", agent_id))
+            })?;
+
+            // Inject role prompt for existing agents by appending to SOUL.md
+            if let Some(ref role) = effective_role {
+                if let Some(template) = role_prompt_template(role) {
+                    Self::append_role_prompt_to_soul(instance.agent_dir(), template).await;
+                }
             }
+
             return Ok(agent_id.clone());
         }
 
         if let Some(ref create_spec) = spec.create {
-            return self.create_inline_agent(create_spec).await;
+            return self.create_inline_agent(create_spec, effective_role.as_ref()).await;
         }
 
         Err(AlephError::other(
@@ -157,10 +188,43 @@ impl TeamCreateTool {
         ))
     }
 
+    /// Append a role prompt template section to the agent's SOUL.md.
+    /// Non-fatal: logs a warning on I/O failure.
+    async fn append_role_prompt_to_soul(agent_dir: &std::path::Path, template: &str) {
+        let soul_path = agent_dir.join("SOUL.md");
+        let section = format!("\n\n---\n\n## Team Role\n\n{}", template);
+
+        let result = if soul_path.exists() {
+            let existing = tokio::fs::read_to_string(&soul_path).await.unwrap_or_default();
+            // Avoid double-injection
+            if existing.contains("## Team Role") {
+                return;
+            }
+            tokio::fs::write(&soul_path, format!("{}{}", existing, section)).await
+        } else {
+            tokio::fs::write(&soul_path, section.trim_start()).await
+        };
+
+        if let Err(e) = result {
+            tracing::warn!(
+                path = %soul_path.display(),
+                error = %e,
+                "team_create: failed to append role prompt to SOUL.md"
+            );
+        }
+    }
+
     /// Create a new agent from an inline CreateAgentSpec and register it.
     /// If an agent with the same ID already exists, silently reuse it
     /// instead of creating a duplicate (prevents registry pollution).
-    async fn create_inline_agent(&self, spec: &CreateAgentSpec) -> Result<String> {
+    ///
+    /// When `role` is provided, the matching role prompt template is appended
+    /// to the agent's system prompt.
+    async fn create_inline_agent(
+        &self,
+        spec: &CreateAgentSpec,
+        role: Option<&AgentRole>,
+    ) -> Result<String> {
         validate_agent_id(&spec.id)
             .map_err(|e| AlephError::other(format!("Invalid agent ID '{}': {}", spec.id, e)))?;
 
@@ -204,10 +268,28 @@ impl TeamCreateTool {
             ))
         })?;
 
-        // Write custom SOUL.md if profile provided
-        if let Some(ref profile) = spec.profile {
+        // Determine the effective role: prefer the function parameter, fall back
+        // to spec.role if present.
+        let effective_role = role.cloned().or_else(|| spec.role.clone());
+
+        // Build the combined system prompt: user profile + role template
+        let role_template = effective_role
+            .as_ref()
+            .and_then(|r| role_prompt_template(r));
+
+        let combined_prompt = match (&spec.profile, role_template) {
+            (Some(profile), Some(tpl)) => {
+                Some(format!("{}\n\n---\n\n## Team Role\n\n{}", profile, tpl))
+            }
+            (Some(profile), None) => Some(profile.clone()),
+            (None, Some(tpl)) => Some(format!("## Team Role\n\n{}", tpl)),
+            (None, None) => None,
+        };
+
+        // Write SOUL.md with combined prompt
+        if let Some(ref prompt) = combined_prompt {
             let soul_path = agent_state_dir.join("SOUL.md");
-            tokio::fs::write(&soul_path, profile).await.map_err(|e| {
+            tokio::fs::write(&soul_path, prompt).await.map_err(|e| {
                 AlephError::other(format!("Failed to write SOUL.md for '{}': {}", spec.id, e))
             })?;
         }
@@ -218,7 +300,7 @@ impl TeamCreateTool {
             agent_id: spec.id.clone(),
             workspace: workspace_path.clone(),
             model: model.to_string(),
-            system_prompt: spec.profile.clone(),
+            system_prompt: combined_prompt,
             agent_dir: agents_state_root.join(&spec.id),
             ..Default::default()
         };
@@ -280,6 +362,13 @@ impl AlephTool for TeamCreateTool {
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         let leader_id = self.current_agent_id.clone();
+
+        // Inject leader role prompt for the calling agent
+        if let Some(instance) = self.registry.get(&leader_id).await {
+            if let Some(template) = role_prompt_template(&AgentRole::Leader) {
+                Self::append_role_prompt_to_soul(instance.agent_dir(), template).await;
+            }
+        }
 
         // Resolve all members first (fail fast before creating the team).
         // NOTE: Inline agent creation is not atomic with team creation. If an
