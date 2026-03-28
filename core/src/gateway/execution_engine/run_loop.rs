@@ -243,10 +243,18 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 let behavior_name = provider.model_behavior_override()
                     .map(|s| s.to_string())
                     .or_else(|| protocol_to_behavior(&provider.protocol().to_string()).map(|s| s.to_string()));
-                match behavior_name {
-                    Some(name) => load_model_behavior(&name).await,
+                let content = match behavior_name {
+                    Some(ref name) => load_model_behavior(name).await,
                     None => None,
-                }
+                };
+                info!(
+                    run_id = run_id,
+                    protocol = %provider.protocol(),
+                    behavior_name = ?behavior_name,
+                    loaded = content.is_some(),
+                    "Model behavior resolved"
+                );
+                content
             };
 
             // Build bridge with resolved provider
