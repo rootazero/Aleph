@@ -152,6 +152,10 @@ pub struct BuiltinToolRegistry {
     /// Team messaging tools (optional — require MessageRouter / Inbox)
     pub(crate) message_send_tool: Option<crate::builtin_tools::team::MessageSendTool>,
     pub(crate) inbox_read_tool: Option<crate::builtin_tools::team::InboxReadTool>,
+    /// Collaborative session tools (optional — require SessionCoordinator / SessionStore)
+    pub(crate) session_collaborate_tool: Option<crate::builtin_tools::team::SessionCollaborateTool>,
+    pub(crate) session_turn_tool: Option<crate::builtin_tools::team::SessionTurnTool>,
+    pub(crate) session_read_tool: Option<crate::builtin_tools::team::SessionReadTool>,
     /// Skill management tools — always available (SkillSystem is always initialized)
     pub(crate) skill_status_tool: crate::builtin_tools::skill_status::SkillStatusTool,
     pub(crate) skill_install_tool: crate::builtin_tools::skill_install::SkillInstallTool,
@@ -606,6 +610,20 @@ impl ToolRegistry for BuiltinToolRegistry {
             }),
             "inbox_read" => Box::pin(async move {
                 let tool = self.inbox_read_tool.as_ref().ok_or_else(|| AlephError::tool("inbox_read not available: no Inbox configured"))?;
+                tool.call_json(arguments).await
+            }),
+
+            // Collaborative session tools
+            "session_collaborate" => Box::pin(async move {
+                let tool = self.session_collaborate_tool.as_ref().ok_or_else(|| AlephError::tool("session_collaborate not available: no SessionCoordinator configured"))?;
+                tool.call_json(arguments).await
+            }),
+            "session_turn" => Box::pin(async move {
+                let tool = self.session_turn_tool.as_ref().ok_or_else(|| AlephError::tool("session_turn not available: no SessionCoordinator configured"))?;
+                tool.call_json(arguments).await
+            }),
+            "session_read" => Box::pin(async move {
+                let tool = self.session_read_tool.as_ref().ok_or_else(|| AlephError::tool("session_read not available: no SessionStore configured"))?;
                 tool.call_json(arguments).await
             }),
 

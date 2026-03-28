@@ -87,6 +87,7 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
             "message_send", "inbox_read",
             "task_create", "task_update", "task_list", "task_wait",
             "task_submit", "task_read_artifact",
+            "session_collaborate", "session_turn", "session_read",
         ],
     },
     // -- Infrastructure --

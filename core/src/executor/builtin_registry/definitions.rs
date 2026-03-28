@@ -366,6 +366,22 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         description: "Read artifacts submitted for a task",
         requires_config: true,
     },
+    // Collaborative session tools — require SessionCoordinator / SessionStore
+    BuiltinToolDefinition {
+        name: "session_collaborate",
+        description: "Start a collaborative session between team members for real-time multi-turn discussion",
+        requires_config: true,
+    },
+    BuiltinToolDefinition {
+        name: "session_turn",
+        description: "Respond in a collaborative session or propose its conclusion",
+        requires_config: true,
+    },
+    BuiltinToolDefinition {
+        name: "session_read",
+        description: "Read a collaborative session's transcript, status, and outcome",
+        requires_config: true,
+    },
     // Channel management tools — require ChannelRegistry
     BuiltinToolDefinition {
         name: "channel_pairing",
@@ -506,6 +522,9 @@ pub fn create_tool_boxed(
         // Task artifact tools require ArtifactStore + current_agent_id at runtime,
         // created dynamically in BuiltinToolRegistry::with_config().
         "task_submit" | "task_read_artifact" => None,
+        // Session collaboration tools require SessionCoordinator / SessionStore at runtime,
+        // created dynamically in BuiltinToolRegistry::with_config().
+        "session_collaborate" | "session_turn" | "session_read" => None,
         // Browser tools — create ProfileManager from config or use default
         "browser_open" | "browser_click" | "browser_type" | "browser_screenshot"
         | "browser_snapshot" | "browser_navigate" | "browser_tabs" | "browser_select"

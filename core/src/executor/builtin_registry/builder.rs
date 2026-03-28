@@ -501,6 +501,58 @@ impl BuiltinToolRegistry {
                 (None, None)
             };
 
+        // Add collaborative session tools (if SessionCoordinator / SessionStore are available)
+        let (session_collaborate_tool, session_turn_tool, session_read_tool) = {
+            let current_agent_id = config.current_agent_id.clone().unwrap_or_else(|| "main".to_string());
+
+            let collaborate = config.session_coordinator.as_ref().map(|coord| {
+                crate::builtin_tools::team::SessionCollaborateTool::new(
+                    Arc::clone(coord), current_agent_id.clone(),
+                )
+            });
+            let turn = config.session_coordinator.as_ref().map(|coord| {
+                crate::builtin_tools::team::SessionTurnTool::new(
+                    Arc::clone(coord), current_agent_id,
+                )
+            });
+            let read = config.session_store.as_ref().map(|store| {
+                crate::builtin_tools::team::SessionReadTool::new(Arc::clone(store))
+            });
+
+            // Register parameter schemas
+            {
+                use crate::tools::AlephTool;
+                let mut defs: Vec<crate::dispatcher::ToolDefinition> = Vec::new();
+                if let Some(ref c) = collaborate {
+                    defs.push(c.definition());
+                }
+                if let Some(ref t) = turn {
+                    defs.push(t.definition());
+                }
+                if let Some(ref r) = read {
+                    defs.push(r.definition());
+                }
+                for td in &defs {
+                    let mut ut = UnifiedTool::new(
+                        format!("builtin:{}", td.name),
+                        &td.name,
+                        &td.description,
+                        ToolSource::Builtin,
+                    );
+                    ut = ut.with_parameters_schema(td.parameters.clone());
+                    tools.insert(td.name.clone(), ut);
+                }
+            }
+
+            if collaborate.is_some() || read.is_some() {
+                info!(
+                    "Registered collaborative session tools (session_collaborate={}, session_turn={}, session_read={})",
+                    collaborate.is_some(), turn.is_some(), read.is_some()
+                );
+            }
+            (collaborate, turn, read)
+        };
+
         // Skill management tools — always available
         let skill_system = crate::skill::SkillSystem::new();
         let skill_status_tool = crate::builtin_tools::skill_status::SkillStatusTool::new(skill_system.clone());
@@ -640,6 +692,9 @@ impl BuiltinToolRegistry {
             team_digest_tool,
             message_send_tool,
             inbox_read_tool,
+            session_collaborate_tool,
+            session_turn_tool,
+            session_read_tool,
             skill_status_tool,
             skill_install_tool,
             skill_manage_tool,

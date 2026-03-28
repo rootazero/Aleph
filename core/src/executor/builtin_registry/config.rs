@@ -84,4 +84,8 @@ pub struct BuiltinToolConfig {
     pub message_router: Option<Arc<crate::teams::messages::MessageRouter>>,
     /// Inbox helper for inbox_read tool
     pub inbox: Option<Arc<crate::teams::messages::Inbox>>,
+    /// Session coordinator for collaborative session tools
+    pub session_coordinator: Option<Arc<crate::teams::sessions::SessionCoordinator>>,
+    /// Session store for session_read tool (read-only access)
+    pub session_store: Option<Arc<dyn crate::teams::sessions::SessionStore>>,
 }
