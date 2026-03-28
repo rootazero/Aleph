@@ -501,6 +501,41 @@ impl BuiltinToolRegistry {
                 (None, None)
             };
 
+        // Add review_score tool (if ArtifactStore + EventLogStore + MessageRouter are available)
+        let review_score_tool =
+            if let (Some(ref artifact_store), Some(ref event_store), Some(ref router)) =
+                (&config.artifact_store, &config.event_store, &config.message_router)
+            {
+                use crate::builtin_tools::team::ReviewScoreTool;
+
+                let current_agent_id = config.current_agent_id.clone().unwrap_or_else(|| "main".to_string());
+                let tool = ReviewScoreTool::new(
+                    Arc::clone(artifact_store),
+                    Arc::clone(event_store),
+                    Arc::clone(router),
+                    current_agent_id,
+                );
+
+                // Register parameter schema
+                {
+                    use crate::tools::AlephTool;
+                    let td = tool.definition();
+                    let mut ut = UnifiedTool::new(
+                        format!("builtin:{}", td.name),
+                        &td.name,
+                        &td.description,
+                        ToolSource::Builtin,
+                    );
+                    ut = ut.with_parameters_schema(td.parameters.clone());
+                    tools.insert(td.name.clone(), ut);
+                }
+
+                info!("Registered review_score tool");
+                Some(tool)
+            } else {
+                None
+            };
+
         // Add collaborative session tools (if SessionCoordinator / SessionStore are available)
         let (session_collaborate_tool, session_turn_tool, session_read_tool) = {
             let current_agent_id = config.current_agent_id.clone().unwrap_or_else(|| "main".to_string());
@@ -695,6 +730,7 @@ impl BuiltinToolRegistry {
             session_collaborate_tool,
             session_turn_tool,
             session_read_tool,
+            review_score_tool,
             skill_status_tool,
             skill_install_tool,
             skill_manage_tool,

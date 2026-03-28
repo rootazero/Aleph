@@ -5,6 +5,7 @@ mod delegate;
 mod disband;
 pub mod inbox_read;
 pub mod message_send;
+pub mod review_score;
 pub mod session_collaborate;
 pub mod session_read;
 pub mod session_turn;
@@ -29,5 +30,6 @@ pub use status::{
     MemberInfo, TaskInfo, TeamStatusArgs, TeamStatusOutput, TeamStatusTool,
 };
 pub use task_read_artifact::{TaskReadArtifactArgs, TaskReadArtifactOutput, TaskReadArtifactTool};
+pub use review_score::{ReviewScoreArgs, ReviewScoreOutput, ReviewScoreTool};
 pub use task_submit::{TaskSubmitArgs, TaskSubmitOutput, TaskSubmitTool};
 pub use team_digest::{TeamDigestArgs, TeamDigestOutput, TeamDigestTool};

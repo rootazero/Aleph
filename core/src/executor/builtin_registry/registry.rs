@@ -156,6 +156,8 @@ pub struct BuiltinToolRegistry {
     pub(crate) session_collaborate_tool: Option<crate::builtin_tools::team::SessionCollaborateTool>,
     pub(crate) session_turn_tool: Option<crate::builtin_tools::team::SessionTurnTool>,
     pub(crate) session_read_tool: Option<crate::builtin_tools::team::SessionReadTool>,
+    /// Review score tool (optional — requires ArtifactStore + EventLogStore + MessageRouter)
+    pub(crate) review_score_tool: Option<crate::builtin_tools::team::ReviewScoreTool>,
     /// Skill management tools — always available (SkillSystem is always initialized)
     pub(crate) skill_status_tool: crate::builtin_tools::skill_status::SkillStatusTool,
     pub(crate) skill_install_tool: crate::builtin_tools::skill_install::SkillInstallTool,
@@ -624,6 +626,12 @@ impl ToolRegistry for BuiltinToolRegistry {
             }),
             "session_read" => Box::pin(async move {
                 let tool = self.session_read_tool.as_ref().ok_or_else(|| AlephError::tool("session_read not available: no SessionStore configured"))?;
+                tool.call_json(arguments).await
+            }),
+
+            // Review score tool
+            "review_score" => Box::pin(async move {
+                let tool = self.review_score_tool.as_ref().ok_or_else(|| AlephError::tool("review_score not available: no ArtifactStore/EventLogStore/MessageRouter configured"))?;
                 tool.call_json(arguments).await
             }),
 

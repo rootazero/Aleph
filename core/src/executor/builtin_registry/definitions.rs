@@ -382,6 +382,11 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         description: "Read a collaborative session's transcript, status, and outcome",
         requires_config: true,
     },
+    BuiltinToolDefinition {
+        name: "review_score",
+        description: "Submit a structured review score for a task artifact with configurable validation thresholds",
+        requires_config: true,
+    },
     // Channel management tools — require ChannelRegistry
     BuiltinToolDefinition {
         name: "channel_pairing",
@@ -525,6 +530,9 @@ pub fn create_tool_boxed(
         // Session collaboration tools require SessionCoordinator / SessionStore at runtime,
         // created dynamically in BuiltinToolRegistry::with_config().
         "session_collaborate" | "session_turn" | "session_read" => None,
+        // Review score tool requires ArtifactStore + EventLogStore + MessageRouter at runtime,
+        // created dynamically in BuiltinToolRegistry::with_config().
+        "review_score" => None,
         // Browser tools — create ProfileManager from config or use default
         "browser_open" | "browser_click" | "browser_type" | "browser_screenshot"
         | "browser_snapshot" | "browser_navigate" | "browser_tabs" | "browser_select"
