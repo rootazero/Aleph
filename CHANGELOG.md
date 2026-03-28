@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.3.2] - 2026-03-28
+## [2026.03.29]
 
 ### Added
 - MS Teams channel configuration UI in Panel — brand card, 7-field config form (App ID, App Password, Tenant ID, Webhook Path, Group/Team toggle, Typing Indicator, Allowed Users)

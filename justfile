@@ -164,7 +164,7 @@ deps:
 
 # Release a new version: bump VERSION, commit, push, trigger workflow
 # CHANGELOG.md should be written by AI (Claude) BEFORE running this command.
-# Usage: just release 0.3.0
+# Usage: just release 2026.03.29
 release version:
     #!/usr/bin/env bash
     set -euo pipefail
