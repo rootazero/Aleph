@@ -17,6 +17,94 @@ use crate::error::{AlephError, Result};
 use crate::sync_primitives::Arc;
 
 // =============================================================================
+// Session persistence file I/O
+// =============================================================================
+
+/// Default persistence file path for ACP sessions.
+fn acp_sessions_path() -> std::path::PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join(".aleph")
+        .join("data")
+        .join("acp_sessions.json")
+}
+
+/// Load persisted ACP sessions from disk (best-effort).
+pub fn load_persisted_sessions() -> Vec<crate::acp::session::PersistedAcpSession> {
+    let path = acp_sessions_path();
+    match std::fs::read_to_string(&path) {
+        Ok(content) => {
+            serde_json::from_str(&content).unwrap_or_else(|e| {
+                warn!("Failed to parse ACP sessions file: {}", e);
+                Vec::new()
+            })
+        }
+        Err(_) => Vec::new(),
+    }
+}
+
+/// Save persisted ACP sessions to disk (atomic write).
+pub fn save_persisted_sessions(sessions: &[crate::acp::session::PersistedAcpSession]) {
+    let path = acp_sessions_path();
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let tmp = path.with_extension("json.tmp");
+    match serde_json::to_string_pretty(sessions) {
+        Ok(json) => {
+            if std::fs::write(&tmp, &json).is_ok() {
+                let _ = std::fs::rename(&tmp, &path);
+            }
+        }
+        Err(e) => warn!("Failed to serialize ACP sessions: {}", e),
+    }
+}
+
+/// Wire up file-based persistence for ACP sessions.
+/// Call this after creating the AcpHarnessManager at startup.
+pub async fn wire_persistence(manager: &AcpHarnessManager) {
+    use crate::sync_primitives::Arc;
+    use std::sync::Mutex;
+
+    let sessions = Arc::new(Mutex::new(load_persisted_sessions()));
+
+    let sessions_ref = Arc::clone(&sessions);
+    manager.set_persistence_hook(Arc::new(move |event: super::AcpSessionEvent| {
+        let mut store = sessions_ref.lock().unwrap_or_else(|e| e.into_inner());
+        match event {
+            super::AcpSessionEvent::Created { ref harness_id, ref acp_session_id, ref cwd } => {
+                store.retain(|s| !(s.harness_id == *harness_id && s.cwd == *cwd));
+                store.push(crate::acp::session::PersistedAcpSession {
+                    harness_id: harness_id.clone(),
+                    acp_session_id: acp_session_id.clone(),
+                    cwd: cwd.clone(),
+                    created_at: chrono::Utc::now(),
+                    last_used_at: chrono::Utc::now(),
+                });
+            }
+            super::AcpSessionEvent::Updated { ref harness_id, ref acp_session_id } => {
+                if let Some(entry) = store.iter_mut().find(|s| s.harness_id == *harness_id && s.acp_session_id == *acp_session_id) {
+                    entry.last_used_at = chrono::Utc::now();
+                }
+            }
+            super::AcpSessionEvent::Removed { ref harness_id, ref cwd } => {
+                store.retain(|s| !(s.harness_id == *harness_id && s.cwd == *cwd));
+            }
+        }
+        save_persisted_sessions(&store);
+    })).await;
+
+    // Restore existing sessions
+    let persisted = sessions.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    if !persisted.is_empty() {
+        let restored = manager.restore_sessions(persisted).await;
+        if !restored.is_empty() {
+            info!(count = restored.len(), "Restored ACP sessions from disk");
+        }
+    }
+}
+
+// =============================================================================
 // SessionKey
 // =============================================================================
 
@@ -536,8 +624,18 @@ impl AcpHarnessManager {
 
                 // Re-insert session if still alive
                 if session.is_alive() {
+                    if let Some(sid) = session.acp_session_id() {
+                        self.emit_persistence_event(super::AcpSessionEvent::Updated {
+                            harness_id: harness_id.to_string(),
+                            acp_session_id: sid.to_string(),
+                        }).await;
+                    }
                     self.sessions.write().await.insert(key, session);
                 } else {
+                    self.emit_persistence_event(super::AcpSessionEvent::Removed {
+                        harness_id: harness_id.to_string(),
+                        cwd: cwd.to_string(),
+                    }).await;
                     warn!(harness_id, "ACP session died after prompt, not re-inserting");
                 }
 
@@ -778,6 +876,12 @@ mod tests {
 
         let config = manager.get_config("nonexistent").await;
         assert!(config.is_none());
+    }
+
+    #[test]
+    fn test_acp_sessions_path() {
+        let path = acp_sessions_path();
+        assert!(path.to_string_lossy().contains("acp_sessions.json"));
     }
 
     #[test]

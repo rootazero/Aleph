@@ -463,7 +463,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 entries.insert(id.clone(), user_entry.clone());
             }
 
-            let manager = Arc::new(AcpHarnessManager::from_entries(entries));
+            let manager = AcpHarnessManager::from_entries(entries);
+            alephcore::acp::manager::wire_persistence(&manager).await;
+            let manager = Arc::new(manager);
             if !args.daemon {
                 println!("ACP harness manager initialized");
             }
