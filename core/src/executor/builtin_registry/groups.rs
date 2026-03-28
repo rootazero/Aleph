@@ -83,7 +83,8 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
         id: "team",
         name: "团队协调",
         tools: &[
-            "team_create", "team_delegate", "team_status", "team_disband",
+            "team_create", "team_delegate", "team_status", "team_disband", "team_digest",
+            "message_send", "inbox_read",
             "task_create", "task_update", "task_list", "task_wait",
             "task_submit", "task_read_artifact",
         ],
