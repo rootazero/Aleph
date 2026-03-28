@@ -9,6 +9,7 @@ use async_trait::async_trait;
 
 use crate::sync_primitives::Arc;
 use crate::teams::messages::Inbox;
+use crate::teams::sessions::SessionStore;
 use crate::teams::store::TeamStore;
 
 // ---------------------------------------------------------------------------
@@ -24,13 +25,16 @@ pub struct InboxContext {
     pub unread_cc: u32,
     /// One-line summary of urgent items (empty when nothing urgent).
     pub urgent_summary: String,
+    /// IDs of active collaborative sessions the agent participates in.
+    pub active_sessions: Vec<String>,
 }
 
 impl InboxContext {
     /// Format the inbox state as a short text block suitable for injection
-    /// into an agent's system prompt. Returns `None` when the inbox is empty.
+    /// into an agent's system prompt. Returns `None` when the inbox is empty
+    /// and there are no active sessions.
     pub fn to_injection_text(&self) -> Option<String> {
-        if self.unread_to == 0 && self.unread_cc == 0 {
+        if self.unread_to == 0 && self.unread_cc == 0 && self.active_sessions.is_empty() {
             return None;
         }
 
@@ -48,10 +52,20 @@ impl InboxContext {
             parts.push(self.urgent_summary.clone());
         }
 
-        Some(format!(
+        let mut text = format!(
             "[Team Inbox] {}\nUse inbox_read to view details.",
             parts.join("; ")
-        ))
+        );
+
+        if !self.active_sessions.is_empty() {
+            text.push_str(&format!(
+                "\n[Active Sessions] {} session(s): {}. Use session_read to view.",
+                self.active_sessions.len(),
+                self.active_sessions.join(", ")
+            ));
+        }
+
+        Some(text)
     }
 }
 
@@ -70,16 +84,27 @@ pub trait InboxContextProvider: Send + Sync {
 // TeamInboxContextProvider
 // ---------------------------------------------------------------------------
 
-/// Concrete provider that queries [`Inbox`] + [`TeamStore`] to build an
-/// aggregated [`InboxContext`] across every team the agent belongs to.
+/// Concrete provider that queries [`Inbox`] + [`TeamStore`] + [`SessionStore`]
+/// to build an aggregated [`InboxContext`] across every team the agent belongs to.
 pub struct TeamInboxContextProvider {
     inbox: Arc<Inbox>,
     team_store: Arc<dyn TeamStore>,
+    session_store: Option<Arc<dyn SessionStore>>,
 }
 
 impl TeamInboxContextProvider {
     pub fn new(inbox: Arc<Inbox>, team_store: Arc<dyn TeamStore>) -> Self {
-        Self { inbox, team_store }
+        Self {
+            inbox,
+            team_store,
+            session_store: None,
+        }
+    }
+
+    /// Set an optional session store for active-session awareness.
+    pub fn with_session_store(mut self, store: Arc<dyn SessionStore>) -> Self {
+        self.session_store = Some(store);
+        self
     }
 }
 
@@ -94,11 +119,23 @@ impl InboxContextProvider for TeamInboxContextProvider {
 
         let mut total_to: u32 = 0;
         let mut total_cc: u32 = 0;
+        let mut active_sessions = Vec::new();
 
         for team in &teams {
             if let Ok((to, cc)) = self.inbox.get_unread_counts(agent_id, &team.id).await {
                 total_to = total_to.saturating_add(to);
                 total_cc = total_cc.saturating_add(cc);
+            }
+
+            // Collect active sessions for this team
+            if let Some(ref ss) = self.session_store {
+                if let Ok(sessions) = ss.list_active_sessions(&team.id).await {
+                    for s in sessions {
+                        if s.participants.contains(&agent_id.to_string()) {
+                            active_sessions.push(s.id);
+                        }
+                    }
+                }
             }
         }
 
@@ -106,6 +143,7 @@ impl InboxContextProvider for TeamInboxContextProvider {
             unread_to: total_to,
             unread_cc: total_cc,
             urgent_summary: String::new(),
+            active_sessions,
         }
     }
 }
@@ -130,6 +168,7 @@ mod tests {
             unread_to: 3,
             unread_cc: 0,
             urgent_summary: String::new(),
+            active_sessions: vec![],
         };
         let text = ctx.to_injection_text().unwrap();
         assert!(text.contains("3 unread messages requiring your action"));
@@ -144,6 +183,7 @@ mod tests {
             unread_to: 0,
             unread_cc: 5,
             urgent_summary: String::new(),
+            active_sessions: vec![],
         };
         let text = ctx.to_injection_text().unwrap();
         assert!(text.contains("5 informational messages (cc)"));
@@ -155,6 +195,7 @@ mod tests {
             unread_to: 2,
             unread_cc: 1,
             urgent_summary: "Review request from agent-lead".into(),
+            active_sessions: vec![],
         };
         let text = ctx.to_injection_text().unwrap();
         assert!(text.contains("2 unread messages"));
