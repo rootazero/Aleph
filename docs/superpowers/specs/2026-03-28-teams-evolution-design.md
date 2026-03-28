@@ -15,16 +15,26 @@ Redesign Aleph's teams module from a leader-centric task delegation system into 
 - **Incremental delivery**: Layer 1 (enhance) -> Layer 2 (new) -> Layer 3 (new) -> Roles (prompt-based)
 - **Borrow concepts, not code**: ClawTeam's inbox/event-log separation and lifecycle messages inform the design, but implementation uses SQLite (not file-based inbox) since Aleph is a single-host application
 
+## Task System Unification
+
+**Decision**: Retire `TeamTask` (`teams/types.rs`) in favor of `CoordTask` (`agents/swarm/tasks/`).
+
+- `CoordTask` is strictly superior: DAG dependencies, priority, metadata, blocked_by
+- `TeamTask` is a simpler duplicate with no unique capabilities
+- `team_delegate` migrates from `TeamStore::create_task` to `CoordTaskStore::create`
+- All artifact references (`TaskArtifact.task_id`) point to `CoordTask.id`
+- `TeamStore` retains team/member management only; task storage moves entirely to `CoordTaskStore`
+
 ## Architecture: Three-Layer Model
 
 ```
 Layer 3: CollaborativeSession ──── Synchronous multi-turn dialogue, shared context
-         (new module)              Triggered by: explicit request OR auto-escalation
-              ^ escalation
+         (new module)              Triggered by: explicit request OR leader-approved escalation
+              ^ escalation suggestion
 Layer 2: MessageRouter ──────────── SQLite inbox, to/cc routing, threads
          (new module)               Async lightweight messages between any agents
               ^ auto-notifications on task events
-Layer 1: TaskCoordinator ────────── Existing CoordTask DAG + team_delegate
+Layer 1: TaskCoordinator ────────── CoordTask DAG (unified) + team_delegate
          (enhanced)                 + artifact system + lifecycle events
 ```
 
@@ -57,6 +67,7 @@ pub enum ArtifactType {
     Review,      // review opinions (Critic output)
     Discovery,   // exploration findings (Explorer output)
     Challenge,   // challenge documents (Critic output)
+    Custom(String), // extensible for new role types
 }
 ```
 
@@ -102,7 +113,9 @@ pub struct TeamMessage {
     pub thread_id: Option<String>,     // thread grouping
     pub attachments: Vec<String>,      // referenced artifact IDs
     pub created_at: DateTime<Utc>,
-    pub status: MessageStatus,
+    pub expires_at: Option<DateTime<Utc>>,  // computed at send time from TTL rules
+    // Note: message status (unread/read/expired) is derived from message_recipients.read_at
+    // and expires_at, not stored as a separate field
 }
 
 pub struct Recipient {
@@ -133,12 +146,10 @@ pub enum MessageType {
     PlanRejected,
 }
 
-pub enum MessageStatus {
-    Pending,
-    Delivered,
-    Read,
-    Expired,
-}
+// MessageStatus is derived, not stored:
+// - Unread: message_recipients.read_at IS NULL AND expires_at > now
+// - Read: message_recipients.read_at IS NOT NULL
+// - Expired: expires_at <= now AND read_at IS NULL
 ```
 
 ### 2.2 Inbox Mechanism
@@ -157,8 +168,12 @@ CREATE TABLE team_messages (
     reply_to TEXT,
     thread_id TEXT,
     created_at TEXT NOT NULL,
-    expires_at TEXT
+    expires_at TEXT  -- computed at send time: created_at + TTL based on recipient roles
 );
+
+-- Performance index for thread queries
+CREATE INDEX IF NOT EXISTS idx_team_messages_thread ON team_messages(thread_id);
+CREATE INDEX IF NOT EXISTS idx_team_messages_team ON team_messages(team_id, created_at);
 
 -- recipients table (to/cc routing)
 CREATE TABLE message_recipients (
@@ -190,7 +205,7 @@ CREATE TABLE message_attachments (
 
 Messages grouped by `thread_id`:
 - First message auto-creates thread (thread_id = message_id)
-- Replies inherit thread_id
+- Replies inherit thread_id — **invariant**: all messages in a thread share the same thread_id, which equals the first message's id
 - `inbox_thread` tool reads full thread context
 - Explorer<->Critic discussions form complete threads; leader or anyone can trace back
 
@@ -213,18 +228,21 @@ pub struct TeamDigest {
 }
 ```
 
-- Leader generates via `team_digest` tool (LLM reads event log, compresses to summary)
-- Broadcast as `SystemNotification` to all members (cc)
+- Any agent can generate via `team_digest` tool (LLM reads event log, compresses to summary)
+- When leader generates: broadcast as `SystemNotification` to all members (cc)
+- When non-leader generates: private digest for own understanding (no broadcast)
 - Also triggered at key milestones (phase completion, direction change)
+- `team_id` parameter required (agents may be members of multiple teams)
 
 ### 2.6 Tools
 
 | Tool | Description |
 |------|-------------|
 | `message_send` | Send message (to/cc/content/reply_to) |
-| `inbox_read` | Read inbox (filter by msg_type, unread, thread) |
-| `inbox_thread` | Read full thread |
+| `inbox_read` | Read inbox (filter by msg_type, unread) or read full thread (mode: inbox/thread, thread_id) |
 | `team_digest` | Generate team summary |
+
+Note: `inbox_read` with `mode: "thread"` + `thread_id` replaces a separate `inbox_thread` tool — fewer tools, better LLM tool selection accuracy.
 
 ---
 
@@ -279,14 +297,18 @@ pub struct SessionOutcome {
 
 ### 3.2 Execution Mechanism
 
-Reuses Layer 2 messaging with synchronous orchestration:
+**The leader agent orchestrates collaborative sessions via tools — there is no code-level orchestrator.**
 
-- `SessionCoordinator` creates session, notifies participants
-- Participants exchange messages within shared `thread_id`
-- Coordinator monitors round count; at `max_rounds`, forces convergence
-- On conclusion: `SessionOutcome` saved, transcript archived, conclusion becomes `TaskArtifact`
+`CollaborativeSession` is a data structure, not an active process. The leader:
+1. Creates session via `session_collaborate` tool (creates record, notifies participants)
+2. Participants exchange messages within shared `thread_id` using `session_respond`
+3. Leader monitors progress (via inbox) and decides when to prompt convergence
+4. Any participant proposes conclusion via `session_conclude`; others agree or dissent
+5. Leader finalizes: `SessionOutcome` saved, transcript archived, conclusion becomes `TaskArtifact`
 
-### 3.3 Auto-Escalation Rules
+Round counting (`max_rounds`) is a tool-level guardrail: `session_respond` rejects submissions beyond max_rounds and notifies participants "final round — submit your conclusion." This is a tool constraint (like review_score validation), not LLM reasoning replacement.
+
+### 3.3 Escalation Rules (Suggestion-Based)
 
 ```rust
 pub struct EscalationRule {
@@ -298,16 +320,19 @@ pub struct EscalationRule {
 
 - Configured by leader at team creation (or defaults)
 - MessageRouter checks after each message delivery
-- Triggered -> auto-create CollaborativeSession with thread participants
+- **Triggered → sends SystemNotification to leader**: "Thread X between Agent-A and Agent-B has N messages — consider starting a collaborative session"
+- **Leader decides** whether to actually escalate (R8 — LLM judges whether escalation is warranted based on content, not just count)
+- This avoids false escalations on productive back-and-forth that happens to exceed the threshold
 
 ### 3.4 Tools
 
 | Tool | Description |
 |------|-------------|
 | `session_collaborate` | Start collaborative session (participants, topic, max_rounds) |
-| `session_respond` | Speak in session |
-| `session_conclude` | Propose conclusion |
+| `session_turn` | Speak in session (mode: respond/conclude — conclude proposes ending with outcome) |
 | `session_read` | Read transcript/outcome |
+
+Note: `session_turn` merges respond + conclude into one tool with a `mode` parameter.
 
 ---
 
@@ -384,9 +409,12 @@ pub struct Challenge {
 }
 ```
 
-**System-level enforcement** (code-level, because these are tool constraints, not reasoning):
-- `review_score` rejects submission if `challenges.len() < 3`
-- `overall_pass = true` only allowed when all `scores >= 7`
+**System-level enforcement** (code-level tool constraints, not reasoning replacement):
+- `review_score` reads `min_challenges` and `min_score_threshold` from `TeamRoleConfig` for the Critic's role in this team
+- Rejects submission if `challenges.len() < config.min_challenges`
+- `overall_pass = true` only allowed when all `scores >= config.min_score_threshold`
+- Leader can override per-task or per-review-round via `TeamRoleConfig` update
+- Defaults: `min_challenges = 3`, `min_score_threshold = 7` — suitable for most tasks; leader should lower for trivial reviews or raise for security-critical ones
 
 ### Explorer <-> Critic Interaction Flow
 
@@ -441,16 +469,9 @@ pub struct InboxContext {
 
 ### Context Budget
 
-```rust
-pub struct TeamContextBudget {
-    pub max_inbox_tokens: usize,       // default: 500
-    pub max_thread_tokens: usize,      // default: 2000
-    pub max_digest_tokens: usize,      // default: 1000
-    pub max_transcript_tokens: usize,  // default: 3000
-}
-```
+Tools (`inbox_read`, `inbox_thread`, `session_read`) return full content. The existing agent loop context control strategy handles truncation — no pre-truncation at the tool level. This keeps context budget decisions in one place (the agent loop) rather than scattered across individual tools.
 
-Integrates with existing agent loop context control strategy. Budget applied at tool return time (inbox_read, inbox_thread). Stacks with existing forced truncation.
+The context priority list below informs the agent loop's truncation order when budget is tight.
 
 ### Context Priority (high to low)
 
@@ -464,15 +485,18 @@ Integrates with existing agent loop context control strategy. Budget applied at 
 ### Message Lifecycle
 
 ```
-Pending -> Delivered -> Read -> Expired/Archived
-                                ^
-                     TTL expiry (to: 2h, cc: 30m, system: 15m)
-                     or session end -> archived
+Unread -> Read      (agent calls inbox_read)
+Unread -> Expired   (TTL expiry: to 2h, cc 30m, system 15m — configurable)
+       -> Archived  (team disbanded or session ended)
 ```
+
+**TTL computation**: `MessageRouter` sets `expires_at = created_at + ttl` at send time. TTL determined by the highest-priority recipient role (to > cc > system). For messages with mixed to/cc recipients, use the longer TTL (to: 2h).
+
+**Team disbandment**: All pending messages marked expired; active collaborative sessions cancelled.
 
 ### Event Log (Audit Layer)
 
-All messages and operations persisted permanently:
+All messages and operations persisted in event log with retention policy:
 
 ```rust
 pub struct TeamEvent {
@@ -497,6 +521,8 @@ pub enum TeamEventType {
     DigestGenerated,
 }
 ```
+
+**Retention policy**: Event log entries pruned when team is disbanded (keep last 24h by default, configurable). For active teams, events older than `max_event_age` (default: 72h) are pruned on a lazy basis (checked during `team_digest` generation or periodic cleanup). This prevents unbounded growth while preserving enough history for digest generation and debugging.
 
 ---
 
@@ -528,17 +554,15 @@ core/src/teams/
 
 builtin_tools/team/
 ├── delegate.rs             // existing, enhanced with artifact persistence
-├── message_send.rs         // NEW
-├── inbox_read.rs           // NEW
-├── inbox_thread.rs         // NEW
-├── team_digest.rs          // NEW
-├── task_submit.rs          // NEW
-├── task_read_artifact.rs   // NEW
-├── review_score.rs         // NEW (with validation enforcement)
-├── session_collaborate.rs  // NEW
-├── session_respond.rs      // NEW
-├── session_conclude.rs     // NEW
-└── session_read.rs         // NEW
+├── message_send.rs         // NEW: send messages (to/cc routing)
+├── inbox_read.rs           // NEW: read inbox + thread mode
+├── team_digest.rs          // NEW: generate team summary
+├── task_submit.rs          // NEW: submit task artifacts
+├── task_read_artifact.rs   // NEW: read artifacts
+├── review_score.rs         // NEW: structured review with configurable validation
+├── session_collaborate.rs  // NEW: start collaborative session
+├── session_turn.rs         // NEW: respond or conclude in session
+└── session_read.rs         // NEW: read transcript/outcome
 ```
 
 ## Delivery Phases
@@ -570,9 +594,14 @@ builtin_tools/team/
 
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
+| Task system | Unify on CoordTask, retire TeamTask | CoordTask has DAG/priority/metadata; no reason for two systems |
 | Storage backend | SQLite (not file-based) | Single-host app; ACID; query capability; consistent with rest of Aleph |
 | Routing model | to + cc (no bcc) | Simplicity; agents don't need hidden information flows |
+| Message status | Derived from read_at + expires_at (not stored) | Avoids sync issues between message and recipient tables |
 | Role behavior | Prompt-based (not code) | R8 LLM sovereignty; R10 intelligence in prompts |
-| Escalation trigger | Explicit + rule-based (not LLM-judged) | LLM bad at meta-judgment of communication efficiency |
-| Context injection | Summary only, pull on demand | Prevent context pollution; R8 agent autonomy |
-| Critic validation | Code-enforced min challenges + score threshold | Tool constraint (empowerment), not reasoning replacement |
+| Escalation trigger | Suggestion to leader (not auto-action) | Leader (LLM) judges content quality, not just message count; R8 compliant |
+| Session orchestration | Leader agent via tools (not code-level orchestrator) | R8; session is a data structure, leader drives the process |
+| Context management | Tools return full content; agent loop truncates | Single truncation authority; no scattered pre-truncation |
+| Critic validation | Configurable thresholds from TeamRoleConfig | Tool constraint (empowerment); flexible per task complexity |
+| Tool consolidation | 9 new tools (merged inbox_read+thread, session_respond+conclude) | Fewer tools → better LLM tool selection accuracy |
+| Event log retention | 72h active / 24h post-disband, lazy GC | Prevents unbounded growth; enough history for digests |
