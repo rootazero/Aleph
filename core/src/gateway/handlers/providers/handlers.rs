@@ -403,6 +403,7 @@ async fn handle_test_inner(
         media_resolution: None,
         repeat_penalty: None,
         system_prompt_mode: None,
+        model_behavior: None,
         verified: false,
     };
 

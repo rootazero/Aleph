@@ -182,6 +182,7 @@ impl AuthProfileProviderRegistry {
             media_resolution: None,
             repeat_penalty: None,
             system_prompt_mode: None,
+            model_behavior: None,
             verified: false,
         };
 

@@ -134,6 +134,7 @@ fn new_provider_from_preset(provider_name: &str) -> ProviderConfig {
         media_resolution: None,
         repeat_penalty: None,
         system_prompt_mode: None,
+        model_behavior: None,
         verified: false,
     }
 }
