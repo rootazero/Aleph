@@ -169,6 +169,114 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         }
     };
 
+    // Create teams evolution stores (artifact, event log, message, session) sharing the same DB file.
+    // These stores power the team messaging, inbox, session coordination, and artifact tools.
+    let (artifact_store, event_store, message_store, session_store): (
+        Option<Arc<dyn alephcore::teams::artifacts::ArtifactStore>>,
+        Option<Arc<dyn alephcore::teams::events::EventLogStore>>,
+        Option<Arc<dyn alephcore::teams::messages::MessageStore>>,
+        Option<Arc<dyn alephcore::teams::sessions::SessionStore>>,
+    ) = {
+        use alephcore::teams::artifacts::SqliteArtifactStore;
+        use alephcore::teams::events::SqliteEventLogStore;
+        use alephcore::teams::messages::SqliteMessageStore;
+        use alephcore::teams::sessions::SqliteSessionStore;
+        use alephcore::utils::paths::get_data_dir;
+
+        let db_path = get_data_dir()
+            .unwrap_or_else(|_| std::env::temp_dir().join("aleph_data"))
+            .join("teams.db");
+
+        // Helper: open connection, create store, migrate. Returns None on failure.
+        macro_rules! init_store {
+            ($store_ty:ident, $trait_ty:ty, $label:expr, $db:expr) => {{
+                match rusqlite::Connection::open(&$db) {
+                    Ok(conn) => {
+                        let store = Arc::new($store_ty::new(conn));
+                        let sc = Arc::clone(&store);
+                        match tokio::task::block_in_place(|| {
+                            tokio::runtime::Handle::current().block_on(sc.migrate())
+                        }) {
+                            Ok(()) => {
+                                if !daemon {
+                                    println!("  {} initialized (SQLite)", $label);
+                                }
+                                Some(store as Arc<$trait_ty>)
+                            }
+                            Err(e) => {
+                                if !daemon {
+                                    eprintln!(
+                                        "Warning: {} migration failed: {}. Related tools disabled.",
+                                        $label, e
+                                    );
+                                }
+                                None
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        if !daemon {
+                            eprintln!(
+                                "Warning: Failed to open teams.db for {}: {}. Related tools disabled.",
+                                $label, e
+                            );
+                        }
+                        None
+                    }
+                }
+            }};
+        }
+
+        let a = init_store!(SqliteArtifactStore, dyn alephcore::teams::artifacts::ArtifactStore, "Artifact store", db_path);
+        let ev = init_store!(SqliteEventLogStore, dyn alephcore::teams::events::EventLogStore, "Event log store", db_path);
+        let m = init_store!(SqliteMessageStore, dyn alephcore::teams::messages::MessageStore, "Message store", db_path);
+        let s = init_store!(SqliteSessionStore, dyn alephcore::teams::sessions::SessionStore, "Session store", db_path);
+        (a, ev, m, s)
+    };
+
+    // Build higher-level team components from the stores above.
+    let message_router: Option<Arc<alephcore::teams::messages::MessageRouter>> =
+        match (message_store.as_ref(), event_store.as_ref()) {
+            (Some(ms), Some(es)) => {
+                use alephcore::teams::messages::{EscalationRule, MessageRouter};
+                Some(Arc::new(MessageRouter::new(
+                    ms.clone(),
+                    es.clone(),
+                    EscalationRule::default(),
+                    None,
+                )))
+            }
+            _ => None,
+        };
+
+    let inbox: Option<Arc<alephcore::teams::messages::Inbox>> =
+        match (message_store.as_ref(), event_store.as_ref()) {
+            (Some(ms), Some(es)) => {
+                use alephcore::teams::messages::Inbox;
+                Some(Arc::new(Inbox::new(ms.clone(), es.clone())))
+            }
+            _ => None,
+        };
+
+    let session_coordinator: Option<Arc<alephcore::teams::sessions::SessionCoordinator>> =
+        match (
+            session_store.as_ref(),
+            message_router.as_ref(),
+            event_store.as_ref(),
+            artifact_store.as_ref(),
+        ) {
+            (Some(ss), Some(mr), Some(es), Some(a_s)) => {
+                use alephcore::teams::sessions::SessionCoordinator;
+                Some(Arc::new(SessionCoordinator::new(
+                    ss.clone(),
+                    mr.clone(),
+                    es.clone(),
+                    a_s.clone(),
+                )))
+            }
+            _ => None,
+        };
+
     // Initialize SwarmCoordinator and attach the coord task store.
     let swarm_coordinator: Option<Arc<alephcore::agents::swarm::SwarmCoordinator>> = async {
         use alephcore::agents::swarm::{SwarmCoordinator, SwarmConfig};
@@ -469,6 +577,13 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             coord_task_store: coord_store.clone(),
             agent_message_bus: agent_message_bus.clone(),
             team_store: team_store.clone(),
+            artifact_store: artifact_store.clone(),
+            event_store: event_store.clone(),
+            message_store: message_store.clone(),
+            message_router: message_router.clone(),
+            inbox: inbox.clone(),
+            session_store: session_store.clone(),
+            session_coordinator: session_coordinator.clone(),
             browser_profile_manager: Some(std::sync::Arc::new(
                 alephcore::browser::manager::ProfileManager::new(app_config.general.browser.clone()),
             )),
