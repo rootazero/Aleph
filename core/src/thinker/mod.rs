@@ -632,6 +632,47 @@ mod multi_registry_tests {
     }
 
     #[test]
+    fn full_fallback_chain_all_layers() {
+        use crate::providers::health::{PermanentError, TransientError};
+
+        // Setup: 3 providers
+        let r = MultiProviderRegistry::new("claude".into(), p("claude"));
+        r.register("openai".into(), p("openai"));
+        r.register("deepseek".into(), p("deepseek"));
+        r.set_fallbacks(vec!["deepseek".into()]);
+
+        // Scenario 1: All healthy — primary wins
+        let resolved = r.resolve_with_fallback("claude-sonnet-4", &["gpt-4o".to_string()]).unwrap();
+        assert_eq!(resolved.provider_name, "claude");
+        assert!(!resolved.is_fallback);
+
+        // Scenario 2: Primary auth fails → agent fallback
+        r.report_outcome("claude", Err(ProviderError::Permanent(PermanentError::AuthFailed)));
+        let resolved = r.resolve_with_fallback("claude-sonnet-4", &["gpt-4o".to_string()]).unwrap();
+        assert_eq!(resolved.provider_name, "openai");
+        assert_eq!(resolved.model, "gpt-4o");
+        assert!(resolved.is_fallback);
+
+        // Scenario 3: Primary + agent fallback both down → global fallback
+        r.report_outcome("openai", Err(ProviderError::Transient(TransientError::Timeout)));
+        let resolved = r.resolve_with_fallback("claude-sonnet-4", &["gpt-4o".to_string()]).unwrap();
+        assert_eq!(resolved.provider_name, "deepseek");
+        assert!(resolved.is_fallback);
+        assert!(resolved.model.is_empty()); // global fallback = empty model sentinel
+
+        // Scenario 4: All down
+        r.report_outcome("deepseek", Err(ProviderError::Permanent(PermanentError::AuthFailed)));
+        let result = r.resolve_with_fallback("claude-sonnet-4", &["gpt-4o".to_string()]);
+        assert!(result.is_err());
+
+        // Scenario 5: Reset claude → works again
+        r.reset_health("claude");
+        let resolved = r.resolve_with_fallback("claude-sonnet-4", &["gpt-4o".to_string()]).unwrap();
+        assert_eq!(resolved.provider_name, "claude");
+        assert!(!resolved.is_fallback);
+    }
+
+    #[test]
     fn resolve_uses_degraded_provider_after_cooldown_expires() {
         use crate::providers::health::ProviderHealth;
         use std::time::{Duration, Instant};
