@@ -48,7 +48,29 @@ For each test phase, define:
 
 ### Step 6 detail: Generate Test Script
 
-Use `scripts/aleph_e2e_client.py` as the reusable client library. Import `AlephClient`, `print_test`, `print_section`, `get_shared_token`.
+Use `scripts/aleph_e2e_client.py` as the reusable client library:
+
+```python
+from aleph_e2e_client import (
+    AlephClient,          # WebSocket client: rpc(), slash(), chat()
+    check, section,       # pass/fail tracking with global counters
+    summary,              # print results + return bool for exit code
+    db_query_teams,       # SQLite: teams.db (messages, artifacts, events, sessions)
+    db_query_coord,       # SQLite: coord.db (tasks, dependencies)
+    get_shared_token,     # read token from security.db
+)
+```
+
+**Three interaction modes:**
+- `client.slash("/team create ...")` — fast-path commands, no LLM, <5ms
+- `client.chat("Do X...")` — LLM chat, returns `{text, tool_calls, completed}`
+- `client.rpc("teams.list")` — direct JSON-RPC
+
+**State verification** — prefer `db_query_teams()`/`db_query_coord()` over RPC for ground truth:
+```python
+rows = db_query_teams("SELECT * FROM team_messages WHERE team_id=?", (team_id,))
+check("Message stored", len(rows) == 1)
+```
 
 For WebSocket protocol details (event methods, field names, auth flow), read [references/websocket-protocol.md](references/websocket-protocol.md).
 
