@@ -385,16 +385,19 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 }
                 Err(e) => {
                     // Classify the error for health tracking and retry decisions
-                    let mut is_transient = false;
+                    let mut is_transient_or_permanent = false;
                     if let Some(aleph_err) = e.downcast_ref::<crate::error::AlephError>() {
                         let provider_err: Option<crate::providers::health::ProviderError> = aleph_err.into();
                         if let Some(pe) = provider_err {
-                            is_transient = matches!(pe, crate::providers::health::ProviderError::Transient(_));
+                            is_transient_or_permanent = true; // any classified provider error triggers fallback
                             self.provider_registry.report_outcome(&resolved.provider_name, Err(pe));
                         }
                     }
 
-                    if is_transient && attempt < MAX_FALLBACK_ATTEMPTS {
+                    // Retry with fallback on any provider-classified error (transient or permanent)
+                    // Transient: rate limit, 5xx, timeout — provider might recover
+                    // Permanent: auth failed, model not found — this provider is dead, try another
+                    if is_transient_or_permanent && attempt < MAX_FALLBACK_ATTEMPTS {
                         // Check if a different provider is available
                         match self.provider_registry.resolve_with_fallback(
                             &agent.config().model, &agent.config().fallback_models
