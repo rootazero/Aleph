@@ -63,6 +63,7 @@ pub use runtime_context::RuntimeContext;
 pub use identity::{IdentityResolver, IdentitySource, IdentitySourceType};
 
 use crate::providers::AiProvider;
+use crate::providers::health::{ProviderError, ProviderHealth, ResolvedModel};
 
 /// Provider registry for model routing
 pub trait ProviderRegistry: Send + Sync {
@@ -74,6 +75,26 @@ pub trait ProviderRegistry: Send + Sync {
 
     /// List all registered provider names
     fn list_providers(&self) -> Vec<String> { vec![] }
+
+    /// Resolve model to a healthy (provider, model) pair along the fallback chain.
+    fn resolve_with_fallback(&self, model: &str, _agent_fallbacks: &[String])
+        -> crate::error::Result<ResolvedModel>
+    {
+        // Default: no health tracking, just resolve to default
+        let provider = self.get(model).unwrap_or_else(|| self.default_provider());
+        Ok(ResolvedModel {
+            provider_name: provider.name().to_string(),
+            model: model.to_string(),
+            is_fallback: false,
+            original_model: model.to_string(),
+        })
+    }
+
+    /// Report request outcome to update provider health
+    fn report_outcome(&self, _provider: &str, _result: Result<(), ProviderError>) {}
+
+    /// Reset a provider's health to Healthy
+    fn reset_health(&self, _provider: &str) {}
 }
 
 /// Simple provider registry with single provider
@@ -174,6 +195,7 @@ struct RegistryState {
     providers: HashMap<String, Arc<dyn AiProvider>>,
     default_name: String,
     fallbacks: Vec<String>,
+    health: HashMap<String, ProviderHealth>,
 }
 
 /// Multi-provider registry: routes by provider name, supports runtime mutation and fallback.
@@ -185,16 +207,19 @@ impl MultiProviderRegistry {
     pub fn new(name: String, provider: Arc<dyn AiProvider>) -> Self {
         let mut providers = HashMap::new();
         providers.insert(name.clone(), provider);
+        let mut health = HashMap::new();
+        health.insert(name.clone(), ProviderHealth::default());
         Self {
             state: std::sync::RwLock::new(RegistryState {
-                providers, default_name: name, fallbacks: vec![],
+                providers, default_name: name, fallbacks: vec![], health,
             }),
         }
     }
 
     pub fn register(&self, name: String, provider: Arc<dyn AiProvider>) {
         let mut state = self.state.write().unwrap_or_else(|e| e.into_inner());
-        state.providers.insert(name, provider);
+        state.providers.insert(name.clone(), provider);
+        state.health.entry(name).or_insert_with(ProviderHealth::default);
     }
 
     pub fn remove(&self, name: &str) -> crate::error::Result<Option<Arc<dyn AiProvider>>> {
@@ -239,6 +264,28 @@ impl MultiProviderRegistry {
         names.sort();
         names
     }
+
+    /// Resolve model → provider name using slash syntax, prefix matching, or default.
+    fn resolve_model_to_provider(state: &RegistryState, model: &str) -> String {
+        // 1. Try "provider/model" slash syntax
+        if model.contains('/') {
+            if let Some(provider_name) = model.split('/').next() {
+                if state.providers.contains_key(provider_name) {
+                    return provider_name.to_string();
+                }
+            }
+        }
+
+        // 2. Try prefix-based resolution
+        if let Some(name) = crate::providers::resolve_provider_from_model(model) {
+            if state.providers.contains_key(&name) {
+                return name;
+            }
+        }
+
+        // 3. Fall back to default provider
+        state.default_name.clone()
+    }
 }
 
 impl ProviderRegistry for MultiProviderRegistry {
@@ -276,6 +323,73 @@ impl ProviderRegistry for MultiProviderRegistry {
         let mut names: Vec<String> = state.providers.keys().cloned().collect();
         names.sort();
         names
+    }
+
+    fn resolve_with_fallback(
+        &self,
+        model: &str,
+        agent_fallbacks: &[String],
+    ) -> crate::error::Result<ResolvedModel> {
+        let state = self.state.read().unwrap_or_else(|e| e.into_inner());
+
+        // Build candidate chain: (provider_name, model_name)
+        let mut candidates: Vec<(String, String)> = Vec::new();
+
+        // 1. Primary: resolve model → provider
+        let primary_provider = Self::resolve_model_to_provider(&state, model);
+        candidates.push((primary_provider, model.to_string()));
+
+        // 2. Agent-level fallbacks
+        for fb_model in agent_fallbacks {
+            let provider = Self::resolve_model_to_provider(&state, fb_model);
+            candidates.push((provider, fb_model.clone()));
+        }
+
+        // 3. Global fallbacks (use provider name as placeholder model)
+        for fb_provider_name in &state.fallbacks {
+            if state.providers.contains_key(fb_provider_name) {
+                candidates.push((fb_provider_name.clone(), fb_provider_name.clone()));
+            }
+        }
+
+        // Try each candidate
+        for (i, (provider_name, candidate_model)) in candidates.iter().enumerate() {
+            let health = state.health.get(provider_name)
+                .cloned()
+                .unwrap_or_default();
+            if !health.is_usable() {
+                continue;
+            }
+            if state.providers.contains_key(provider_name) {
+                return Ok(ResolvedModel {
+                    provider_name: provider_name.clone(),
+                    model: candidate_model.clone(),
+                    is_fallback: i > 0,
+                    original_model: model.to_string(),
+                });
+            }
+        }
+
+        Err(crate::error::AlephError::provider(
+            "All providers unavailable — no healthy provider found in fallback chain",
+        ))
+    }
+
+    fn report_outcome(&self, provider_name: &str, result: Result<(), ProviderError>) {
+        let mut state = self.state.write().unwrap_or_else(|e| e.into_inner());
+        if let Some(health) = state.health.get_mut(provider_name) {
+            match result {
+                Ok(()) => health.record_success(),
+                Err(ref err) => health.record_failure(err),
+            }
+        }
+    }
+
+    fn reset_health(&self, provider_name: &str) {
+        let mut state = self.state.write().unwrap_or_else(|e| e.into_inner());
+        if let Some(health) = state.health.get_mut(provider_name) {
+            health.reset();
+        }
     }
 }
 
@@ -359,5 +473,159 @@ mod multi_registry_tests {
         let mut list = r.list_providers();
         list.sort();
         assert_eq!(list, vec!["anthropic", "openai"]);
+    }
+
+    // --- resolve_with_fallback tests ---
+
+    #[test]
+    fn resolve_returns_requested_model_when_healthy() {
+        let r = MultiProviderRegistry::new("openai".into(), p("openai"));
+        r.register("anthropic".into(), p("anthropic"));
+
+        let resolved = r.resolve_with_fallback("claude-opus-4-6", &[]).unwrap();
+        assert_eq!(resolved.provider_name, "anthropic");
+        assert_eq!(resolved.model, "claude-opus-4-6");
+        assert!(!resolved.is_fallback);
+        assert_eq!(resolved.original_model, "claude-opus-4-6");
+    }
+
+    #[test]
+    fn resolve_uses_agent_fallback_when_primary_degraded() {
+        let r = MultiProviderRegistry::new("openai".into(), p("openai"));
+        r.register("anthropic".into(), p("anthropic"));
+
+        // Degrade anthropic
+        r.report_outcome("anthropic", Err(ProviderError::Transient(
+            crate::providers::health::TransientError::Timeout,
+        )));
+
+        let resolved = r.resolve_with_fallback(
+            "claude-opus-4-6",
+            &["gpt-4o".to_string()],
+        ).unwrap();
+
+        assert_eq!(resolved.provider_name, "openai");
+        assert_eq!(resolved.model, "gpt-4o");
+        assert!(resolved.is_fallback);
+        assert_eq!(resolved.original_model, "claude-opus-4-6");
+    }
+
+    #[test]
+    fn resolve_uses_global_fallback_when_agent_fallbacks_exhausted() {
+        let r = MultiProviderRegistry::new("openai".into(), p("openai"));
+        r.register("anthropic".into(), p("anthropic"));
+        r.register("google".into(), p("google"));
+        r.set_fallbacks(vec!["google".into()]);
+
+        // Degrade both primary and agent fallback providers
+        r.report_outcome("anthropic", Err(ProviderError::Transient(
+            crate::providers::health::TransientError::Timeout,
+        )));
+        r.report_outcome("openai", Err(ProviderError::Transient(
+            crate::providers::health::TransientError::Timeout,
+        )));
+
+        let resolved = r.resolve_with_fallback(
+            "claude-opus-4-6",
+            &["gpt-4o".to_string()],
+        ).unwrap();
+
+        assert_eq!(resolved.provider_name, "google");
+        assert!(resolved.is_fallback);
+        assert_eq!(resolved.original_model, "claude-opus-4-6");
+    }
+
+    #[test]
+    fn resolve_fails_when_all_unavailable() {
+        let r = MultiProviderRegistry::new("openai".into(), p("openai"));
+        r.register("anthropic".into(), p("anthropic"));
+
+        // Make both unavailable (permanent error)
+        r.report_outcome("openai", Err(ProviderError::Permanent(
+            crate::providers::health::PermanentError::AuthFailed,
+        )));
+        r.report_outcome("anthropic", Err(ProviderError::Permanent(
+            crate::providers::health::PermanentError::AuthFailed,
+        )));
+
+        let result = r.resolve_with_fallback("gpt-4o", &["claude-opus-4-6".to_string()]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn resolve_uses_provider_slash_model_syntax() {
+        let r = MultiProviderRegistry::new("openai".into(), p("openai"));
+        r.register("anthropic".into(), p("anthropic"));
+
+        let resolved = r.resolve_with_fallback("openai/gpt-4o", &[]).unwrap();
+        assert_eq!(resolved.provider_name, "openai");
+        assert_eq!(resolved.model, "openai/gpt-4o");
+        assert!(!resolved.is_fallback);
+    }
+
+    #[test]
+    fn report_success_resets_health() {
+        let r = MultiProviderRegistry::new("openai".into(), p("openai"));
+
+        // Degrade first
+        r.report_outcome("openai", Err(ProviderError::Transient(
+            crate::providers::health::TransientError::Timeout,
+        )));
+
+        // Should be in cooldown, but report success to reset
+        r.report_outcome("openai", Ok(()));
+
+        // Should be usable again as primary
+        let resolved = r.resolve_with_fallback("gpt-4o", &[]).unwrap();
+        assert_eq!(resolved.provider_name, "openai");
+        assert!(!resolved.is_fallback);
+    }
+
+    #[test]
+    fn resolve_unknown_model_uses_default_provider() {
+        let r = MultiProviderRegistry::new("openai".into(), p("openai"));
+
+        let resolved = r.resolve_with_fallback("totally-unknown-model", &[]).unwrap();
+        assert_eq!(resolved.provider_name, "openai");
+        assert_eq!(resolved.model, "totally-unknown-model");
+        assert!(!resolved.is_fallback);
+    }
+
+    #[test]
+    fn full_fallback_chain_agent_then_global() {
+        let r = MultiProviderRegistry::new("openai".into(), p("openai"));
+        r.register("anthropic".into(), p("anthropic"));
+        r.register("google".into(), p("google"));
+        r.set_fallbacks(vec!["google".into()]);
+
+        // Degrade openai (primary for gpt-4o)
+        r.report_outcome("openai", Err(ProviderError::Transient(
+            crate::providers::health::TransientError::ServerError { status: 500 },
+        )));
+
+        // Agent fallback "claude-opus-4-6" → anthropic (healthy) should be picked
+        let resolved = r.resolve_with_fallback(
+            "gpt-4o",
+            &["claude-opus-4-6".to_string()],
+        ).unwrap();
+
+        assert_eq!(resolved.provider_name, "anthropic");
+        assert_eq!(resolved.model, "claude-opus-4-6");
+        assert!(resolved.is_fallback);
+        assert_eq!(resolved.original_model, "gpt-4o");
+
+        // Now degrade anthropic too — should fall to global fallback "google"
+        r.report_outcome("anthropic", Err(ProviderError::Transient(
+            crate::providers::health::TransientError::Timeout,
+        )));
+
+        let resolved = r.resolve_with_fallback(
+            "gpt-4o",
+            &["claude-opus-4-6".to_string()],
+        ).unwrap();
+
+        assert_eq!(resolved.provider_name, "google");
+        assert!(resolved.is_fallback);
+        assert_eq!(resolved.original_model, "gpt-4o");
     }
 }
