@@ -6,6 +6,7 @@
 pub mod adapters;
 pub mod factory;
 mod loop_core;
+pub mod model_behaviors;
 mod prompt_builder;
 pub mod provider_bridge;
 mod safety;
