@@ -449,14 +449,19 @@ impl AcpHarnessManager {
         for entry in persisted {
             let key = SessionKey::new(&entry.harness_id, &entry.cwd);
 
-            let harnesses = self.harnesses.read().await;
-            let harness = match harnesses.get(&entry.harness_id) {
-                Some(h) => h,
-                None => {
-                    warn!(harness_id = %entry.harness_id, "Harness not found, skipping restore");
-                    continue;
+            // Clone Arc ref under brief read lock, then spawn without holding it.
+            // spawn_session may take seconds (process startup + initialize handshake).
+            let harness = {
+                let harnesses = self.harnesses.read().await;
+                match harnesses.get(&entry.harness_id) {
+                    Some(h) => Arc::clone(h),
+                    None => {
+                        warn!(harness_id = %entry.harness_id, "Harness not found, skipping restore");
+                        continue;
+                    }
                 }
             };
+            // read lock dropped — writers can proceed while we spawn
 
             let mut session = match harness.spawn_session(Some(&entry.cwd)).await {
                 Ok(s) => s,
@@ -465,7 +470,6 @@ impl AcpHarnessManager {
                     continue;
                 }
             };
-            drop(harnesses);
 
             let timeout = std::time::Duration::from_secs(30);
             if session.load_acp_session(&entry.acp_session_id, &entry.cwd, timeout).await.is_err() {
@@ -543,13 +547,9 @@ impl AcpHarnessManager {
         }
 
         info!(harness_id, "ACP session started");
-        if let Some(sid) = new_session.acp_session_id() {
-            self.emit_persistence_event(super::AcpSessionEvent::Created {
-                harness_id: harness_id.to_string(),
-                acp_session_id: sid.to_string(),
-                cwd: cwd.to_string(),
-            }).await;
-        }
+        // Note: Created persistence event is NOT emitted here because spawn_session
+        // only calls initialize(), not create_acp_session(). The session_id is None.
+        // The Created event fires in prompt() after create_acp_session() sets the ID.
         sessions.insert(key, new_session);
         Ok(())
     }
@@ -625,9 +625,12 @@ impl AcpHarnessManager {
                 // Re-insert session if still alive
                 if session.is_alive() {
                     if let Some(sid) = session.acp_session_id() {
-                        self.emit_persistence_event(super::AcpSessionEvent::Updated {
+                        // Use Created (idempotent: retain + push in hook) because
+                        // ensure_session cannot emit Created (session_id is None at spawn time).
+                        self.emit_persistence_event(super::AcpSessionEvent::Created {
                             harness_id: harness_id.to_string(),
                             acp_session_id: sid.to_string(),
+                            cwd: cwd.to_string(),
                         }).await;
                     }
                     self.sessions.write().await.insert(key, session);

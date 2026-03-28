@@ -239,8 +239,13 @@ pub fn notify_tool_result(tool_name: &str, result_summary: &str, success: bool) 
 /// Called by streaming tools (e.g., ACP delegate) to forward real-time output.
 /// If no handler is set, this is a no-op.
 pub fn notify_tool_streaming_chunk(tool_name: &str, chunk: &str) {
-    let callback = TOOL_PROGRESS_CALLBACK.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some(ref handler) = *callback {
-        handler.on_tool_streaming_chunk(tool_name, chunk);
+    // Clone Arc under brief lock, then call handler outside lock.
+    // This is a hot streaming path — don't hold the global Mutex during the callback.
+    let handler = {
+        let callback = TOOL_PROGRESS_CALLBACK.lock().unwrap_or_else(|e| e.into_inner());
+        callback.as_ref().map(Arc::clone)
+    };
+    if let Some(ref h) = handler {
+        h.on_tool_streaming_chunk(tool_name, chunk);
     }
 }
