@@ -5,6 +5,7 @@
 
 pub mod artifacts;
 pub mod events;
+pub mod messages;
 pub mod store;
 pub mod types;
 
