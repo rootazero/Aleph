@@ -3,7 +3,7 @@
 //! Covers protocol serialization/deserialization, NDJSON format,
 //! text_content extraction, streaming_text, and manager configuration.
 
-use super::manager::{AcpHarnessManager, AcpManagerConfig};
+use super::manager::AcpHarnessManager;
 use super::mock_server::mock::run_mock_inline;
 use super::protocol::{AcpError, AcpRequest, AcpResponse, AcpSessionState};
 
@@ -371,9 +371,9 @@ async fn manager_harness_modes_correct() {
 
 #[tokio::test]
 async fn manager_disable_single_harness() {
-    let mut config = AcpManagerConfig::default();
-    config.enabled.insert("codex".to_string(), false);
-    let mgr = AcpHarnessManager::with_config(config);
+    let mut entries: std::collections::HashMap<String, crate::config::types::acp::AcpHarnessEntry> = crate::config::types::acp::AcpHarnessEntry::all_presets().into_iter().collect();
+    entries.get_mut("codex").unwrap().enabled = false;
+    let mgr = AcpHarnessManager::from_entries(entries);
     assert!(!mgr.has_harness("codex").await);
     assert!(mgr.has_harness("claude-code").await);
     assert!(mgr.has_harness("gemini").await);
@@ -382,30 +382,27 @@ async fn manager_disable_single_harness() {
 
 #[tokio::test]
 async fn manager_disable_all_harnesses() {
-    let mut config = AcpManagerConfig::default();
-    config.enabled.insert("claude-code".to_string(), false);
-    config.enabled.insert("codex".to_string(), false);
-    config.enabled.insert("gemini".to_string(), false);
-    let mgr = AcpHarnessManager::with_config(config);
+    let mut entries: std::collections::HashMap<String, crate::config::types::acp::AcpHarnessEntry> = crate::config::types::acp::AcpHarnessEntry::all_presets().into_iter().collect();
+    entries.get_mut("claude-code").unwrap().enabled = false;
+    entries.get_mut("codex").unwrap().enabled = false;
+    entries.get_mut("gemini").unwrap().enabled = false;
+    let mgr = AcpHarnessManager::from_entries(entries);
     assert!(mgr.harness_ids().await.is_empty());
 }
 
 #[tokio::test]
 async fn manager_explicit_enable_is_noop() {
-    let mut config = AcpManagerConfig::default();
-    config.enabled.insert("claude-code".to_string(), true);
-    let mgr = AcpHarnessManager::with_config(config);
+    let entries: std::collections::HashMap<String, crate::config::types::acp::AcpHarnessEntry> = crate::config::types::acp::AcpHarnessEntry::all_presets().into_iter().collect();
+    let mgr = AcpHarnessManager::from_entries(entries);
     assert!(mgr.has_harness("claude-code").await);
     assert_eq!(mgr.harness_ids().await.len(), 3);
 }
 
 #[tokio::test]
 async fn manager_custom_executable_path() {
-    let mut config = AcpManagerConfig::default();
-    config
-        .executables
-        .insert("gemini".to_string(), "/opt/bin/gemini-custom".to_string());
-    let mgr = AcpHarnessManager::with_config(config);
+    let mut entries: std::collections::HashMap<String, crate::config::types::acp::AcpHarnessEntry> = crate::config::types::acp::AcpHarnessEntry::all_presets().into_iter().collect();
+    entries.get_mut("gemini").unwrap().executable = Some("/opt/bin/gemini-custom".to_string());
+    let mgr = AcpHarnessManager::from_entries(entries);
     assert!(mgr.has_harness("gemini").await);
     // Verify the override took effect via display_name (harness still registered)
     assert_eq!(mgr.display_name("gemini").await, Some("Gemini".to_string()));

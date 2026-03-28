@@ -40,21 +40,6 @@ impl SessionKey {
 }
 
 // =============================================================================
-// AcpManagerConfig (backward compat)
-// =============================================================================
-
-/// Legacy configuration for the ACP harness manager.
-///
-/// Prefer [`AcpHarnessManager::from_entries`] for new code.
-#[derive(Debug, Clone, Default)]
-pub struct AcpManagerConfig {
-    /// Per-harness executable path overrides (key = harness ID).
-    pub executables: HashMap<String, String>,
-    /// Per-harness enabled flags (key = harness ID). Defaults to true if absent.
-    pub enabled: HashMap<String, bool>,
-}
-
-// =============================================================================
 // AcpHarnessManager
 // =============================================================================
 
@@ -72,6 +57,8 @@ pub struct AcpHarnessManager {
     configs: RwLock<HashMap<String, AcpHarnessEntry>>,
     /// Active sessions for NativeAcp harnesses, keyed by (harness_id, cwd).
     sessions: RwLock<HashMap<SessionKey, AcpSession>>,
+    /// Optional persistence callback for session state changes.
+    persistence_hook: RwLock<Option<Arc<dyn Fn(super::AcpSessionEvent) + Send + Sync>>>,
 }
 
 impl Default for AcpHarnessManager {
@@ -112,32 +99,8 @@ impl AcpHarnessManager {
             harnesses: RwLock::new(harnesses),
             configs: RwLock::new(configs),
             sessions: RwLock::new(HashMap::new()),
+            persistence_hook: RwLock::new(None),
         }
-    }
-
-    /// Create a manager using the legacy configuration.
-    ///
-    /// Converts `AcpManagerConfig` to entries and delegates to `from_entries`.
-    pub fn with_config(config: AcpManagerConfig) -> Self {
-        let mut entries: HashMap<String, AcpHarnessEntry> = AcpHarnessEntry::all_presets()
-            .into_iter()
-            .collect();
-
-        // Apply enabled/disabled overrides
-        for (id, enabled) in &config.enabled {
-            if let Some(entry) = entries.get_mut(id) {
-                entry.enabled = *enabled;
-            }
-        }
-
-        // Apply executable overrides
-        for (id, exe) in &config.executables {
-            if let Some(entry) = entries.get_mut(id) {
-                entry.executable = Some(exe.clone());
-            }
-        }
-
-        Self::from_entries(entries)
     }
 
     /// Factory: build the right harness implementation from an entry.
@@ -378,6 +341,59 @@ impl AcpHarnessManager {
         result
     }
 
+    /// Set the persistence hook for session state changes.
+    pub async fn set_persistence_hook(&self, hook: Arc<dyn Fn(super::AcpSessionEvent) + Send + Sync>) {
+        let mut h = self.persistence_hook.write().await;
+        *h = Some(hook);
+    }
+
+    /// Emit a persistence event (no-op if no hook set).
+    async fn emit_persistence_event(&self, event: super::AcpSessionEvent) {
+        let hook = self.persistence_hook.read().await;
+        if let Some(ref h) = *hook {
+            h(event);
+        }
+    }
+
+    /// Restore sessions from persisted state. Returns list of successfully restored harness IDs.
+    pub async fn restore_sessions(&self, persisted: Vec<crate::acp::session::PersistedAcpSession>) -> Vec<String> {
+        let mut restored = Vec::new();
+        for entry in persisted {
+            let key = SessionKey::new(&entry.harness_id, &entry.cwd);
+
+            let harnesses = self.harnesses.read().await;
+            let harness = match harnesses.get(&entry.harness_id) {
+                Some(h) => h,
+                None => {
+                    warn!(harness_id = %entry.harness_id, "Harness not found, skipping restore");
+                    continue;
+                }
+            };
+
+            let mut session = match harness.spawn_session(Some(&entry.cwd)).await {
+                Ok(s) => s,
+                Err(e) => {
+                    warn!(harness_id = %entry.harness_id, error = %e, "Failed to spawn for restore");
+                    continue;
+                }
+            };
+            drop(harnesses);
+
+            let timeout = std::time::Duration::from_secs(30);
+            if session.load_acp_session(&entry.acp_session_id, &entry.cwd, timeout).await.is_err() {
+                if let Err(e) = session.create_acp_session(&entry.cwd, timeout).await {
+                    warn!(harness_id = %entry.harness_id, error = %e, "Failed to create new session on restore");
+                    continue;
+                }
+            }
+
+            info!(harness_id = %entry.harness_id, "Restored ACP session");
+            self.sessions.write().await.insert(key, session);
+            restored.push(entry.harness_id);
+        }
+        restored
+    }
+
     // =========================================================================
     // Session management
     // =========================================================================
@@ -405,6 +421,10 @@ impl AcpHarnessManager {
                 }
                 // Dead session — remove it
                 warn!(harness_id, "ACP session died, respawning");
+                self.emit_persistence_event(super::AcpSessionEvent::Removed {
+                    harness_id: harness_id.to_string(),
+                    cwd: cwd.to_string(),
+                }).await;
                 sessions.remove(&key);
             }
         }
@@ -435,6 +455,13 @@ impl AcpHarnessManager {
         }
 
         info!(harness_id, "ACP session started");
+        if let Some(sid) = new_session.acp_session_id() {
+            self.emit_persistence_event(super::AcpSessionEvent::Created {
+                harness_id: harness_id.to_string(),
+                acp_session_id: sid.to_string(),
+                cwd: cwd.to_string(),
+            }).await;
+        }
         sessions.insert(key, new_session);
         Ok(())
     }
@@ -580,9 +607,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_manager_disable_harness() {
-        let mut config = AcpManagerConfig::default();
-        config.enabled.insert("codex".to_string(), false);
-        let manager = AcpHarnessManager::with_config(config);
+        let mut entries: HashMap<String, AcpHarnessEntry> = AcpHarnessEntry::all_presets().into_iter().collect();
+        entries.get_mut("codex").unwrap().enabled = false;
+        let manager = AcpHarnessManager::from_entries(entries);
         assert!(!manager.has_harness("codex").await);
         assert!(manager.has_harness("claude-code").await);
         assert!(manager.has_harness("gemini").await);
@@ -607,11 +634,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_manager_executable_override() {
-        let mut config = AcpManagerConfig::default();
-        config.executables.insert("claude-code".to_string(), "/custom/claude".to_string());
-        let manager = AcpHarnessManager::with_config(config);
+        let mut entries: HashMap<String, AcpHarnessEntry> = AcpHarnessEntry::all_presets().into_iter().collect();
+        entries.get_mut("claude-code").unwrap().executable = Some("/custom/claude".to_string());
+        let manager = AcpHarnessManager::from_entries(entries);
         assert!(manager.has_harness("claude-code").await);
-        // Verify override is applied via build_config
         let harnesses = manager.harnesses.read().await;
         let harness = harnesses.get("claude-code").unwrap();
         let cfg = harness.build_config(None);
