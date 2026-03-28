@@ -44,6 +44,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             adapters::build_registry_from_tools,
             provider_bridge::AiProviderBridge,
         };
+        use crate::agent_loop::model_behaviors::{load_model_behavior, protocol_to_behavior};
 
         info!(run_id = run_id, "Starting agent loop (think->act)");
 
@@ -95,6 +96,12 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
 
         let provider = self.provider_registry.get(&resolved.provider_name)
             .unwrap_or_else(|| self.provider_registry.default_provider());
+
+        // Resolve model behavior from provider protocol
+        let behavior_content = {
+            let protocol_name = provider.protocol().to_string();
+            protocol_to_behavior(&protocol_name).and_then(load_model_behavior)
+        };
 
         // Only set model override if resolved.model is non-empty
         // (empty string = global fallback sentinel, use provider's configured default)
@@ -178,6 +185,13 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             } else {
                 prompt_builder
             }
+        } else {
+            prompt_builder
+        };
+
+        // Inject model behavior directives (after soul + skills)
+        let prompt_builder = if let Some(ref content) = behavior_content {
+            prompt_builder.with_model_behavior(content)
         } else {
             prompt_builder
         };
