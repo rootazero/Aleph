@@ -223,6 +223,14 @@ pub trait AiProvider: Send + Sync {
         false
     }
 
+    /// Protocol name for model behavior resolution.
+    ///
+    /// Returns the protocol identifier (e.g., "openai", "anthropic", "gemini", "ollama")
+    /// used to select appropriate model behavior directives.
+    fn protocol(&self) -> &str {
+        "unknown"
+    }
+
     /// Downcast to HttpProvider for streaming access.
     ///
     /// Returns Some(&HttpProvider) only for HttpProvider instances.

@@ -221,6 +221,10 @@ impl AiProvider for HttpProvider {
         &self.config.color
     }
 
+    fn protocol(&self) -> &str {
+        self.adapter.name()
+    }
+
     fn as_http_provider(&self) -> Option<&HttpProvider> {
         Some(self)
     }

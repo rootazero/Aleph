@@ -345,6 +345,10 @@ impl AiProvider for OllamaProvider {
     fn color(&self) -> &str {
         &self.color
     }
+
+    fn protocol(&self) -> &str {
+        "ollama"
+    }
 }
 
 #[async_trait::async_trait]
