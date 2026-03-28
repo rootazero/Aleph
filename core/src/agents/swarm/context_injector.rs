@@ -11,6 +11,7 @@ use super::bus::AgentMessageBus;
 use super::events::{CriticalEvent, EventTier, ImportantEvent};
 use super::tasks::CoordTaskStore;
 use crate::error::Result;
+use crate::teams::context::InboxContextProvider;
 
 /// Maximum number of swarm state entries to keep in context
 const DEFAULT_CONTEXT_WINDOW_SIZE: usize = 5;
@@ -28,6 +29,8 @@ pub struct ContextInjector {
     context_window: Arc<RwLock<ContextWindow>>,
     /// Optional task coordination store
     task_store: Option<Arc<dyn CoordTaskStore>>,
+    /// Optional inbox context provider for team message awareness
+    inbox_provider: Option<Arc<dyn InboxContextProvider>>,
 }
 
 /// Sliding context viewport for Tier 2 events
@@ -81,6 +84,7 @@ impl ContextInjector {
                 DEFAULT_CONTEXT_WINDOW_SIZE,
             ))),
             task_store: None,
+            inbox_provider: None,
         }
     }
 
@@ -90,12 +94,19 @@ impl ContextInjector {
             bus,
             context_window: Arc::new(RwLock::new(ContextWindow::new(window_size))),
             task_store: None,
+            inbox_provider: None,
         }
     }
 
     /// Attach a task coordination store for injecting task context into prompts
     pub fn with_task_store(mut self, store: Arc<dyn CoordTaskStore>) -> Self {
         self.task_store = Some(store);
+        self
+    }
+
+    /// Attach an inbox context provider for team message awareness
+    pub fn with_inbox_provider(mut self, provider: Arc<dyn InboxContextProvider>) -> Self {
+        self.inbox_provider = Some(provider);
         self
     }
 
@@ -178,6 +189,15 @@ impl ContextInjector {
         if let Some(task_ctx) = self.inject_task_context(agent_id).await {
             context.push_str("\n\n");
             context.push_str(&task_ctx);
+        }
+
+        // Append inbox context if provider is available
+        if let Some(ref provider) = self.inbox_provider {
+            let inbox_ctx = provider.get_inbox_context(agent_id).await;
+            if let Some(text) = inbox_ctx.to_injection_text() {
+                context.push_str("\n\n");
+                context.push_str(&text);
+            }
         }
 
         context

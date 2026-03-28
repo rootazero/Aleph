@@ -4,6 +4,7 @@
 //! team membership, and per-team task tracking.
 
 pub mod artifacts;
+pub mod context;
 pub mod events;
 pub mod messages;
 pub mod store;
