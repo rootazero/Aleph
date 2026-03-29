@@ -218,7 +218,7 @@ impl MultiProviderRegistry {
     pub fn register(&self, name: String, provider: Arc<dyn AiProvider>) {
         let mut state = self.state.write().unwrap_or_else(|e| e.into_inner());
         state.providers.insert(name.clone(), provider);
-        state.health.entry(name).or_insert_with(ProviderHealth::default);
+        state.health.entry(name).or_default();
     }
 
     pub fn remove(&self, name: &str) -> crate::error::Result<Option<Arc<dyn AiProvider>>> {
