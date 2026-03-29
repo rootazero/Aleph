@@ -57,14 +57,7 @@ fn vault_key(provider_name: &str) -> String {
 
 /// Resolve API key from vault for a generation provider
 fn resolve_api_key(name: &str, vault: &SharedTokenManager) -> Option<String> {
-    match vault.get_secret(&vault_key(name)) {
-        Ok(Some(secret)) => Some(secret.expose().to_string()),
-        Ok(None) => None,
-        Err(e) => {
-            warn!(provider = %name, error = %e, "Failed to read generation API key from vault");
-            None
-        }
-    }
+    super::resolve_vault_secret(&vault_key(name), vault)
 }
 
 fn build_generation_provider_for_persistence(

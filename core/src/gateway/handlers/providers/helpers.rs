@@ -1,7 +1,5 @@
 //! Provider handler helper functions.
 
-use tracing::warn;
-
 use crate::config::{Config, ProviderConfig};
 use crate::config::presets_override::PresetsOverride;
 use crate::providers::presets::get_merged_preset;
@@ -16,14 +14,7 @@ pub(super) fn vault_key(provider_name: &str) -> String {
 
 /// Resolve the actual API key from vault (for internal use like test/create-provider, never serialized to responses)
 pub(super) fn resolve_api_key(name: &str, vault: &SharedTokenManager) -> Option<String> {
-    match vault.get_secret(&vault_key(name)) {
-        Ok(Some(secret)) => Some(secret.expose().to_string()),
-        Ok(None) => None,
-        Err(e) => {
-            warn!(provider = %name, error = %e, "Failed to read API key from vault");
-            None
-        }
-    }
+    crate::gateway::handlers::resolve_vault_secret(&vault_key(name), vault)
 }
 
 pub(super) fn normalize_optional_string(value: Option<String>) -> Option<String> {

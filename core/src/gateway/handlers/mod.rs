@@ -104,6 +104,7 @@ pub mod execution_config;
 pub mod arena;
 pub mod teams;
 pub mod tools_visibility;
+pub mod secret_migration;
 
 pub use approval_bridge::{parse_session_target, get_forward_targets, ForwardMode};
 pub use identity::SharedIdentityResolver;
@@ -114,8 +115,21 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use crate::sync_primitives::Arc;
+use crate::gateway::security::SharedTokenManager;
 
 use super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS, METHOD_NOT_FOUND};
+
+/// Resolve a secret from the vault by its full key. Returns `None` on missing or error.
+pub(crate) fn resolve_vault_secret(key: &str, vault: &SharedTokenManager) -> Option<String> {
+    match vault.get_secret(key) {
+        Ok(Some(secret)) => Some(secret.expose().to_string()),
+        Ok(None) => None,
+        Err(e) => {
+            tracing::warn!(key = %key, error = %e, "Failed to read secret from vault");
+            None
+        }
+    }
+}
 
 /// Parse and deserialize JSON-RPC request params into a typed struct.
 ///

@@ -12,7 +12,7 @@
 //! | rerank_config.test | Test rerank provider connectivity |
 
 use serde_json::json;
-use tracing::{error, info, warn};
+use tracing::{error, info};
 
 use crate::config::Config;
 use crate::gateway::event_bus::{ConfigChangedEvent, GatewayEvent, GatewayEventBus};
@@ -39,14 +39,7 @@ fn provider_name(provider: &rerank::RerankProviderType) -> String {
 
 /// Resolve API key from vault for a rerank provider
 fn resolve_api_key(provider_name: &str, vault: &SharedTokenManager) -> Option<String> {
-    match vault.get_secret(&vault_key(provider_name)) {
-        Ok(Some(secret)) => Some(secret.expose().to_string()),
-        Ok(None) => None,
-        Err(e) => {
-            warn!(error = %e, "Failed to read rerank API key from vault");
-            None
-        }
-    }
+    super::resolve_vault_secret(&vault_key(provider_name), vault)
 }
 
 /// Handle rerank_config.get request
