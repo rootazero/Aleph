@@ -47,15 +47,6 @@ pub enum FeishuEvent {
     Unknown(String),
 }
 
-// ── WebSocket Frame Types ──
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WsFrameType {
-    Event,
-    Ping,
-    Pong,
-}
-
 // ── API Response Types ──
 
 #[derive(Debug, Deserialize)]
