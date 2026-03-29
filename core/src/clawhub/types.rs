@@ -96,10 +96,6 @@ impl ModerationInfo {
     pub fn is_malware_blocked(&self) -> bool {
         self.is_malware_blocked_flag || self.verdict == "malware"
     }
-
-    pub fn is_suspicious(&self) -> bool {
-        self.is_suspicious_flag || self.verdict == "suspicious"
-    }
 }
 
 /// Version info
