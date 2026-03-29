@@ -345,6 +345,9 @@ impl BuiltinToolRegistry {
                 (None, None, None, None)
             };
 
+        // Pre-compute current agent ID — used by team, messaging, and session tools
+        let current_agent_id = config.current_agent_id.clone().unwrap_or_else(|| "main".to_string());
+
         // Add team management tools (if TeamStore + CoordTaskStore are available)
         let (team_create_tool, team_delegate_tool, team_status_tool, team_disband_tool) =
             if let (Some(ref store), Some(ref coord_store)) = (&config.team_store, &config.coord_task_store) {
@@ -358,7 +361,7 @@ impl BuiltinToolRegistry {
                     Arc::clone(store),
                     agent_registry,
                     config.agent_manager.clone(),
-                    config.current_agent_id.clone().unwrap_or_else(|| "main".to_string()),
+                    current_agent_id.clone(),
                 );
                 let delegate = TeamDelegateTool::new(
                     Arc::clone(store),
@@ -405,7 +408,7 @@ impl BuiltinToolRegistry {
             if let (Some(ref event_store), Some(ref team_store)) = (&config.event_store, &config.team_store) {
                 use crate::builtin_tools::team::TeamDigestTool;
 
-                let current_agent_id = config.current_agent_id.clone().unwrap_or_else(|| "main".to_string());
+                let current_agent_id = current_agent_id.clone();
                 let digest = TeamDigestTool::new(
                     Arc::clone(team_store),
                     Arc::clone(event_store),
@@ -434,7 +437,7 @@ impl BuiltinToolRegistry {
 
         // Add message_send + inbox_read tools (if MessageRouter / Inbox are available)
         let (message_send_tool, inbox_read_tool) = {
-            let current_agent_id = config.current_agent_id.clone().unwrap_or_else(|| "main".to_string());
+            let current_agent_id = current_agent_id.clone();
             let send = config.message_router.as_ref().map(|router| {
                 use crate::builtin_tools::team::MessageSendTool;
                 MessageSendTool::new(Arc::clone(router), current_agent_id.clone())
@@ -477,7 +480,7 @@ impl BuiltinToolRegistry {
             if let Some(ref artifact_store) = config.artifact_store {
                 use crate::builtin_tools::team::{TaskSubmitTool, TaskReadArtifactTool};
 
-                let current_agent_id = config.current_agent_id.clone().unwrap_or_else(|| "main".to_string());
+                let current_agent_id = current_agent_id.clone();
                 let submit = TaskSubmitTool::new(Arc::clone(artifact_store), current_agent_id);
                 let read = TaskReadArtifactTool::new(Arc::clone(artifact_store));
 
@@ -513,7 +516,7 @@ impl BuiltinToolRegistry {
             {
                 use crate::builtin_tools::team::ReviewScoreTool;
 
-                let current_agent_id = config.current_agent_id.clone().unwrap_or_else(|| "main".to_string());
+                let current_agent_id = current_agent_id.clone();
                 let tool = ReviewScoreTool::new(
                     Arc::clone(artifact_store),
                     Arc::clone(event_store),
@@ -543,7 +546,7 @@ impl BuiltinToolRegistry {
 
         // Add collaborative session tools (if SessionCoordinator / SessionStore are available)
         let (session_collaborate_tool, session_turn_tool, session_read_tool) = {
-            let current_agent_id = config.current_agent_id.clone().unwrap_or_else(|| "main".to_string());
+            let current_agent_id = current_agent_id.clone();
 
             let collaborate = config.session_coordinator.as_ref().map(|coord| {
                 crate::builtin_tools::team::SessionCollaborateTool::new(
