@@ -80,7 +80,7 @@ pub mod search;
 pub mod skill;
 pub mod bundled;
 
-pub mod supervisor;
+pub(crate) mod supervisor;
 pub mod thinker;
 pub(crate) mod tool_output;
 pub mod tools;
