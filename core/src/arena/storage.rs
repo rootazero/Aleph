@@ -181,12 +181,8 @@ pub fn load_artifacts(
         })
         .map_err(|e| format!("load_artifacts query: {}", e))?;
 
-    let mut results = Vec::new();
-    for row in rows {
-        results.push(row.map_err(|e| format!("load_artifacts row: {}", e))?);
-    }
-
-    Ok(results)
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("load_artifacts row: {}", e))
 }
 
 // =============================================================================
