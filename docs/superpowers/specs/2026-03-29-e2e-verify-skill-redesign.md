@@ -119,7 +119,7 @@ Three-phase protocol for constructing failure conditions:
 
 **Phase B: Manipulate + Test + Collect**
 1. Modify environment per test card preconditions
-2. If service restart needed, restart (keep debug log level)
+2. If service restart needed, restart with the same debug log environment variable from Step 3 (e.g., `RUST_LOG=debug ./start-command &`)
 3. Wait for service ready
 4. Execute test card trigger actions
 5. **Collect all probe results NOW** — read log files, capture API responses, query state BEFORE Phase C
@@ -127,10 +127,10 @@ Three-phase protocol for constructing failure conditions:
 
 **Phase C: Restore (MUST execute regardless of test success/failure)**
 1. Restore all `.e2e.bak` files to original paths
-2. Delete `.e2e.bak` files
-3. Restore log level environment variable to original value
-4. If Phase B restarted service, restart again to restore normal state
-5. Verify restored files match backups
+2. Verify restored files match backups (compare checksums before deleting backups)
+3. Delete `.e2e.bak` files
+4. Restore log level environment variable to original value
+5. If Phase B restarted service, restart again with original environment (no debug log override)
 6. **On restore failure**: STOP immediately, print manual recovery commands (e.g., `cp ~/.aleph/config.toml.e2e.bak ~/.aleph/config.toml`), list all remaining `.e2e.bak` files on disk, do not continue subsequent tests
 
 **Manipulation methods**:
