@@ -69,7 +69,7 @@ fn is_devtools_tool(name: &str) -> bool {
 /// Non-DevTools tools are returned unchanged. Each DevTools tool gets a
 /// tailored compression that preserves actionable information while
 /// drastically reducing token count.
-pub fn compress_tool_output(tool_name: &str, output: &str) -> String {
+pub(crate) fn compress_tool_output(tool_name: &str, output: &str) -> String {
     if !is_devtools_tool(tool_name) {
         return output.to_owned();
     }

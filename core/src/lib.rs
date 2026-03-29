@@ -82,7 +82,7 @@ pub mod bundled;
 
 pub mod supervisor;
 pub mod thinker;
-pub mod tool_output;
+pub(crate) mod tool_output;
 pub mod tools;
 pub mod utils;
 pub mod vision;
