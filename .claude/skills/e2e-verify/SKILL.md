@@ -1,270 +1,158 @@
 ---
 name: e2e-verify
-description: |
-  End-to-end verification skill. Analyzes change intent from git diff and user instructions,
-  designs positive/negative/boundary test scenarios, manipulates environment to construct failure
-  conditions, and verifies with multi-probe evidence chains.
-  Triggers: "verify", "e2e test", "e2e verify", "production verify", "validate module",
-  "生产验证", "验证模块", and after completing a major feature.
-  Flags: --debug (verbose probe output), --skip-build (skip compilation step)
+description: >
+  E2E verification against a live server with intent-aware scenario design and
+  multi-probe evidence chains. Use when: (1) user says "verify", "e2e test",
+  "production verify", "validate module", "生产验证", "验证模块", (2) after
+  completing a major feature that adds endpoints, tools, or RPC methods, (3) user
+  runs /e2e-verify [target]. Analyzes git diff + user instructions to design
+  positive/negative/boundary scenarios, manipulates environment to construct
+  failure conditions, verifies with log + API + state + process probes.
+  Flags: --debug (verbose output), --skip-build (reuse last binary).
 ---
 
-# E2E Verify Skill
+# E2E Verify
 
-## Overview
+Eight steps. No skipping.
 
-| Step | Name | Action |
-|------|------|--------|
-| 0 | Intent Analysis | Read user instructions + git diff + related docs -> test target list |
-| 1 | Kill | Find and kill old server processes |
-| 2 | Build | Compile / build the project |
-| 3 | Start | Start service with elevated log level, capture stdout/stderr |
-| 4 | Verify | Confirm service is alive, port listening, auth working |
-| 5 | Scenario Design | Produce test cards: positive + negative + boundary per target |
-| 6 | Execute | Backup -> Manipulate + Test + Collect probes -> Restore |
+| # | Step | What happens |
+|---|------|-------------|
+| 0 | Intent Analysis | User instructions + git diff + commit messages → test target list |
+| 1 | Kill | Kill old server processes |
+| 2 | Build | Compile (skip with `--skip-build`) |
+| 3 | Start | Start with **elevated log level**, capture stdout/stderr to temp file |
+| 4 | Verify | Process alive + port listening + auth (use `scripts/` client if available) |
+| 5 | Scenario Design | Test cards: positive + negative + boundary per target |
+| 6 | Execute | Backup → manipulate → test → collect probes → restore |
 | 7 | Report | Evidence-based summary table |
-
----
 
 ## Step 0: Intent Analysis
 
-Cross-reference three sources to produce a test target list.
+Cross-reference three sources. Output a test target list.
 
-**Source 1: User Instructions**
-- Parse explicit target from user message (e.g., `/e2e-verify provider fallback`)
-- If no arguments: rely on Sources 2 and 3
+**Source 1 — User instructions**: Parse `/e2e-verify provider fallback` for explicit targets. No args → rely on sources 2+3.
 
-**Source 2: Git Diff Analysis**
-- Run `git diff HEAD~N..HEAD` with this N determination strategy:
-  - Default: N=1 (last commit)
-  - If diff is empty, scan `git log --oneline` and expand to last non-empty diff commit
-  - If still empty (no recent changes), rely on Source 1 and prompt user to specify scope
-- Extract from diff:
-  - New/modified functions and modules -> test targets
-  - New error handling paths -> **require negative scenarios**
-  - New config options / conditional branches -> **require boundary scenarios**
-  - New log/tracing statements -> available probes
+**Source 2 — Git diff**: `git diff HEAD~1..HEAD`. If empty, expand N until non-empty or prompt user.
+Extract: new/modified functions (→ test targets), new error handling (→ **negative scenarios required**), new config/branches (→ **boundary scenarios required**), new tracing (→ available probes).
 
-**Source 3: Related Documentation and Tests**
-- Read commit messages to understand change intent
-- Check for related unit/integration tests to find covered vs uncovered paths
+**Source 3 — Commit messages and existing tests**: Understand intent, find covered vs uncovered paths.
 
-**Output — Test Target List:**
-
+**Output format:**
 ```
 Test Targets:
-1. [positive] <description> — source: <user | diff | both>
-2. [negative] <description> — source: <diff (new error handling logic)>
-3. [boundary] <description> — source: <diff (conditional branch)>
+1. [positive] Normal request completes — source: user + diff
+2. [negative] Fallback on primary failure — source: diff (new error handling)
+3. [boundary] All options exhausted → graceful error — source: diff (conditional)
 ```
 
-Each target tagged `[positive]`/`[negative]`/`[boundary]` with source attribution. **Negative scenarios are NOT optional** — if diff contains error handling / fallback / degradation logic, corresponding negative scenarios are mandatory.
+**Negative scenarios are NOT optional.** If diff contains error handling / fallback / degradation logic, corresponding negative scenarios are mandatory.
 
----
+## Steps 1–4: Infrastructure
 
-## Step 1: Kill Old Processes
+Discover project specifics from CLAUDE.md, README, Makefile/justfile/package.json. Check `scripts/` and `references/` in this skill's directory for existing tools.
 
-1. Read CLAUDE.md for project-specific process management rules (kill order, wait times, safety checks)
-2. Discover the server process name from build config or CLAUDE.md
-3. Find and kill all running server instances
-4. Wait for processes to terminate (respect any documented wait times)
-5. Verify no server processes remain
-
----
-
-## Step 2: Build
-
-1. Discover the build command by reading Makefile / justfile / package.json / Cargo.toml / README
-2. If `--skip-build` flag is set, skip this step
-3. Run the build command (prefer release build for E2E accuracy)
-4. Record build duration for the report
-
----
-
-## Step 3: Start Service
-
-1. Determine the project's log-level environment variable by language stack:
-   - Rust: `RUST_LOG=debug`
-   - Python: `LOG_LEVEL=DEBUG`
-   - Node.js: `DEBUG=*` or `LOG_LEVEL=debug`
-   - Go: infer from code
-2. Start the service in background with elevated log level, redirecting stdout+stderr to a temp file:
-   ```
-   <LOG_ENV>=debug <start_command> > /tmp/e2e_server.log 2>&1 &
-   ```
-3. Record the original log level (if any) for restore in Step 6 Phase C
-4. Record the PID for later management
-
----
-
-## Step 4: Verify Service Ready
-
-1. Check `references/` and `scripts/` directories for existing readiness-check tools or client libraries
-2. If found, use them. If not, verify manually:
-   - Process is alive (`kill -0 $PID`)
-   - Port is listening (discover port from config, startup logs, or code)
-   - Optional: auth check if project uses authentication (discover auth method from code/config)
-3. Retry with backoff (up to 30s) until ready or timeout
-
----
+**Critical details only:**
+- **Step 1**: Read CLAUDE.md for process management rules before killing anything.
+- **Step 3**: Start with elevated log level (`RUST_LOG=debug` / `LOG_LEVEL=DEBUG` / equivalent). Redirect stdout+stderr to `/tmp/e2e_server.log`. Record original level for restore.
+- **Step 4**: If `scripts/` has a client library, use it. Otherwise: `kill -0 $PID` + port check + optional auth.
 
 ## Step 5: Scenario Design
 
-For each test target, produce a test card:
+For each target, produce a **test card**:
 
 ```
-Target: [type] <description>
+Target: [negative] Fallback on primary provider failure
 Preconditions:
-  - Environment manipulation: <what to change>
-  - Backup: <source_path> -> <source_path>.e2e.bak
-Trigger:
-  - <action to execute>
-Expected Behavior:
-  - Log probe: <pattern to match in logs>
-  - API probe: <expected response properties>
-  - State probe: <expected side effects>
-Restore:
-  - <restore instructions>
-Judgment:
-  - PASS: all probes satisfied
-  - FAIL: any probe fails, output actual value as evidence
+  - Backup: config.toml → config.toml.e2e.bak
+  - Manipulate: Change default provider API key to invalid value
+Trigger: Send chat request requiring LLM response
+Expected:
+  - Log probe: "fallback" or "retry" pattern in logs
+  - API probe: completed=true, text non-empty
+Restore: config.toml.e2e.bak → config.toml
 ```
 
 **Mandatory scenario rules:**
 
-| Type | When Required | Example |
+| Type | Required when | Example |
 |------|--------------|---------|
-| Positive | At least one per test target | Normal request completes successfully |
-| Negative | When diff has error handling / fallback / degradation code | Primary fails -> fallback triggers |
-| Boundary | When diff has conditional branches / thresholds / null handling | All options exhausted -> graceful error |
+| Positive | Always (≥1 per target) | Normal request completes |
+| Negative | Diff has error handling / fallback / degradation | Primary fails → fallback triggers |
+| Boundary | Diff has conditionals / thresholds / null handling | All exhausted → graceful error |
 
-**Enforcement** — Language-specific error-handling keywords that mandate negative/boundary scenarios:
+**Enforcement** — if diff adds any of these patterns, negative/boundary scenarios are mandatory:
+- `fallback`, `retry`, `timeout`, `degrade`, `error`, `recover` (all languages)
+- Rust: `?`, `unwrap_or`, `match Err`, `Option::None`
+- Python: `except`, `try/finally`, `raise`
+- Go: `if err != nil`
+- JS/TS: `.catch()`, `try/catch`, `??`
 
-- **Rust**: `fallback`, `retry`, `?`, `unwrap_or`, `match Err`, `Option::None`, `else`
-- **Python**: `except`, `try/finally`, `None`, `raise`, `fallback`
-- **Go**: `if err != nil`, `default:`, `fallback`
-- **JS/TS**: `.catch()`, `try/catch`, `null`, `undefined`, `??`, `fallback`
-- **General**: any word matching `fallback`, `retry`, `timeout`, `degrade`, `error`, `recover`
-
-**When no negative scenarios exist**: If diff genuinely contains no error-handling paths, only positive scenarios are required. Do NOT fabricate negative scenarios for completeness — test what actually changed.
-
----
+If diff genuinely has no error handling paths, only positive scenarios needed. Do NOT fabricate negative scenarios.
 
 ## Probe System
 
-**Four probe types:**
+| Probe | Method | Best for |
+|-------|--------|----------|
+| **Log** | grep `/tmp/e2e_server.log` for patterns | Code path verification (fallback triggered?) |
+| **API** | Check response content/status | Functional correctness |
+| **State** | Query DB / check filesystem | Side effects landed? |
+| **Process** | Check port/PID/files | Service behavior |
 
-| Probe | Collection Method | Best For |
-|-------|------------------|----------|
-| **Log** | Read service stdout/log file, pattern match | Verify code path executed (fallback triggered, retry attempted) |
-| **API** | Check API/WebSocket response content and status | Verify functional result correct |
-| **State** | Query database/filesystem state changes | Verify side effects landed |
-| **Process** | Check port/process/file changes | Verify service behavior |
+**Selection by scenario type:**
+- **Positive**: API + State
+- **Negative**: **Log REQUIRED** + API
+- **Boundary**: Log + API
 
-**Selection rules per scenario type:**
-
-- **Positive**: API probe (result correct) + State probe (side effects landed)
-- **Negative**: **Log probe REQUIRED** (prove error path taken) + API probe (result still correct or graceful error)
-- **Boundary**: Log probe + API probe (confirm no panic, no hang)
-
-**Critical constraint**: For negative scenarios, API probe showing "result correct" is INSUFFICIENT alone. Log probe must prove the fallback/error path was actually taken, not that the primary path happened to succeed.
-
----
+**The rule that matters most:** For negative scenarios, "API returned success" alone is NOT proof. Log probe must confirm the error/fallback path was actually taken. This is the single most common verification failure.
 
 ## Step 6: Execute
 
-Three-phase protocol per test card.
+Three-phase protocol per test card. **Phase C always executes.**
 
-### Phase A: Backup
+**Phase A — Backup**: Copy each file to `{name}.e2e.bak`. Verify backup exists and matches.
 
-1. Identify files to modify per test card preconditions
-2. Copy each to `{filename}.e2e.bak`
-3. Record all backup paths for Phase C
-4. Verify backup files exist and content matches originals
+**Phase B — Manipulate + Test + Collect**:
+1. Modify environment per test card
+2. Restart service if needed (keep elevated log level)
+3. Execute trigger
+4. **Collect ALL probe evidence NOW** (before Phase C)
 
-### Phase B: Manipulate + Test + Collect
-
-1. Modify environment per test card preconditions
-2. If service restart needed, restart with the same elevated log level from Step 3
-3. Wait for service ready (reuse Step 4 verification)
-4. Execute test card trigger actions
-5. **Collect all probe results NOW** — read log file, capture API responses, query state BEFORE Phase C
-6. Store probe evidence for Step 7 report
-
-### Phase C: Restore (MUST execute regardless of test success/failure)
-
-1. Restore all `.e2e.bak` files to original paths
-2. Verify restored file checksums match backups BEFORE deleting backups
+**Phase C — Restore** (mandatory, even on failure):
+1. Restore `.e2e.bak` → original path
+2. Verify checksum match **before** deleting backups
 3. Delete `.e2e.bak` files
-4. Restore log level environment variable to original value
-5. If Phase B restarted the service, restart again with original environment (no debug override)
-6. **On restore failure**: STOP immediately. Print manual recovery commands listing each `.e2e.bak` file and its restore target. Do not continue subsequent tests.
+4. Restore original log level; restart if Phase B restarted
+5. **On restore failure**: STOP. Print `cp <bak> <original>` commands for each file. Do not continue.
 
-**Manipulation methods:**
+**Manipulation methods**: modify config files, set env vars, send special inputs, change endpoints to unreachable addresses.
 
-| Method | Use Case | Example |
-|--------|----------|---------|
-| Modify config file | Test config-related fallback/degradation | Change API key to invalid value |
-| Set environment variable | Test environment-aware behavior | Set timeout to 1ms |
-| Send special input | Test input boundary handling | Overlong text, empty message, special chars |
-| Simulate external failure | Test network/service dependency | Change endpoint to unreachable address |
-
-**Safety redlines:**
-
-- NEVER modify database files (corruption risk)
-- NEVER delete any file (only modify content)
-- ALWAYS execute Phase C even if Phase B fails or panics
-
----
+**Safety**: never modify DB files, never delete files, always restore.
 
 ## Step 7: Report
 
 ```
 === E2E Verification Report ===
 Project: {name} | Build: {type} ({duration}) | Server: :{port}
-Log Level: debug | Config Backups: {count} files
+Intent: {sources} (commits {range})
 
-Intent Sources: {user instructions | git diff | both} (commits {range})
+| # | Type | Target | Result | Evidence |
+|---|------|--------|--------|----------|
+| 1 | positive | ... | PASS | API: completed=true |
+| 2 | negative | ... | PASS | Log: "fallback to X" (L847) + API: ok |
+| 3 | boundary | ... | FAIL | Expected: error msg / Actual: panic |
 
-| # | Type | Test Target | Result | Evidence |
-|---|------|------------|--------|----------|
-| 1 | positive | ... | PASS | API: ... |
-| 2 | negative | ... | PASS | Log: "..." (line N) + API: ... |
-| 3 | boundary | ... | FAIL | Expected: ... / Actual: ... |
-
-Environment Restore: {status}
-Summary: {pass_count}/{total} PASS
+Restore: {status} | Summary: {pass}/{total} PASS
 ```
 
-**On FAIL**: Cite actual log lines, show expected vs actual values, suggest possible causes based on the evidence.
+On FAIL: cite log lines, show expected vs actual, suggest causes.
 
----
+## Red Flags
 
-## Red Flags — Thinking Traps
-
-| Thinking Trap | Correct Action |
-|--------------|----------------|
-| "API returned success, fallback must have worked" | No log probe proving fallback path = unverified |
-| "No error handling code in diff, skip negative scenarios" | Look again — `?`, `unwrap_or`, `else`, `match Err` all count |
-| "Config too complex to modify, skip this negative scenario" | This is exactly the scenario most worth testing. Find minimum change point |
-| "Restored config, should be fine" | Must verify restored file content matches backup checksums |
-| "Unit tests already cover this path" | Unit test != E2E. Integration environment may behave differently |
-| "User didn't ask to test this" | Git diff did. Targets from change analysis are equally mandatory |
-
----
-
-## Project Discovery
-
-When first using this skill on a project, explore:
-
-1. Read README / Makefile / justfile / package.json -> build and start commands
-2. Read CLAUDE.md -> project constraints, process management rules, known ports
-3. Check `references/` directory in skill folder -> existing protocol docs or API specs
-4. Check `scripts/` directory in skill folder -> reusable test clients or helpers
-5. If none found -> write test scripts based on the project's language stack
-
-**Integration with flow steps when project-specific files exist:**
-
-- **Step 4 (Verify)**: If `scripts/` contains a client library, use it for readiness checks
-- **Step 5 (Scenario Design)**: If `references/` contains protocol docs, use them for correct trigger syntax (WebSocket message format, API structure, etc.)
-- **Step 6 (Execute)**: If `scripts/` contains a test client, import/use it instead of writing from scratch
+| Trap | Reality |
+|------|---------|
+| "API success = fallback worked" | No log probe = unverified |
+| "No error handling in diff" | `?`, `unwrap_or`, `else`, `match Err` count |
+| "Config too complex to modify" | That's the most important scenario to test |
+| "Config restored, should be fine" | Verify checksums |
+| "Unit tests cover this" | Unit ≠ E2E |
+| "User didn't ask to test this" | Git diff did |
