@@ -219,9 +219,6 @@ pub use crate::exec::{
 // Supervisor Exports
 // =============================================================================
 
-pub use crate::supervisor::{
-    ClaudeSupervisor, PtySize, SupervisorConfig, SupervisorError, SupervisorEvent,
-};
 
 // =============================================================================
 // Wizard Exports
