@@ -8,6 +8,16 @@ use crate::event::CompactionInfo;
 use super::config::{CompactionConfig, LlmCallback, PruneInfo, COMPACTION_PROMPT};
 use super::model_limits::TokenTracker;
 
+/// Truncate a string to `max_len` bytes on a valid UTF-8 boundary, appending "..." if truncated.
+fn truncate_preview(s: &str, max_len: usize) -> String {
+    if s.len() <= max_len {
+        s.to_string()
+    } else {
+        let end = (0..=max_len).rev().find(|&i| s.is_char_boundary(i)).unwrap_or(0);
+        format!("{}...", s.get(..end).unwrap_or(s))
+    }
+}
+
 /// Session Compactor - summarizes old parts when token limit approached
 ///
 /// This component:
@@ -273,12 +283,7 @@ impl SessionCompactor {
                 SessionPart::ToolCall(tc) => {
                     let status = if tc.error.is_some() { "failed" } else { "completed" };
                     let output_preview = tc.output.as_ref().map(|o| {
-                        if o.len() > 200 {
-                            let end = (0..=200).rev().find(|&i| o.is_char_boundary(i)).unwrap_or(0);
-                            format!("{}...", &o[..end])
-                        } else {
-                            o.clone()
-                        }
+                        truncate_preview(o, 200)
                     }).unwrap_or_default();
                     context_parts.push(format!("Tool {}: {} ({})", tc.tool_name, status, output_preview));
                 }
@@ -294,12 +299,7 @@ impl SessionCompactor {
                 }
                 SessionPart::SubAgentCall(sa) => {
                     let result = sa.result.as_ref().map(|r| {
-                        if r.len() > 200 {
-                            let end = (0..=200).rev().find(|&i| r.is_char_boundary(i)).unwrap_or(0);
-                            format!("{}...", &r[..end])
-                        } else {
-                            r.clone()
-                        }
+                        truncate_preview(r, 200)
                     }).unwrap_or_else(|| "[pending]".to_string());
                     context_parts.push(format!("[SubAgent {}]: {} -> {}", sa.agent_id, sa.prompt, result));
                 }

@@ -617,7 +617,7 @@ fn truncate_string(s: &str, max_len: usize) -> String {
             .take_while(|&i| i <= target)
             .last()
             .unwrap_or(0);
-        format!("{}...", &s[..boundary])
+        format!("{}...", s.get(..boundary).unwrap_or(s))
     }
 }
 
