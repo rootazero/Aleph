@@ -272,7 +272,7 @@ pub fn response_to_delta_stream(
 ///
 /// Used by `ProtocolAdapter` default bridge implementations that operate in
 /// the Aleph error domain.
-pub fn response_to_delta_stream_result(
+pub(crate) fn response_to_delta_stream_result(
     response: ProviderResponse,
 ) -> BoxStream<'static, crate::error::Result<ProviderDelta>> {
     let events: Vec<crate::error::Result<ProviderDelta>> =

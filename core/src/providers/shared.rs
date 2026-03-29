@@ -8,7 +8,7 @@ use crate::core::MediaAttachment;
 /// Separate attachments into images and documents.
 ///
 /// Returns a tuple of (images, documents) filtered from the input attachments.
-pub fn separate_attachments(
+pub(crate) fn separate_attachments(
     attachments: &[MediaAttachment],
 ) -> (Vec<&MediaAttachment>, Vec<&MediaAttachment>) {
     let images: Vec<_> = attachments
@@ -30,7 +30,7 @@ pub fn separate_attachments(
 /// # Returns
 ///
 /// Empty string if no documents provided, otherwise formatted document content.
-pub fn build_document_context(documents: &[&MediaAttachment]) -> String {
+pub(crate) fn build_document_context(documents: &[&MediaAttachment]) -> String {
     if documents.is_empty() {
         return String::new();
     }
@@ -49,7 +49,7 @@ pub fn build_document_context(documents: &[&MediaAttachment]) -> String {
 ///
 /// If document context is empty, returns the input unchanged.
 /// Otherwise, prepends the document context to the input.
-pub fn combine_with_document_context(doc_context: &str, input: &str) -> String {
+pub(crate) fn combine_with_document_context(doc_context: &str, input: &str) -> String {
     if doc_context.is_empty() {
         input.to_string()
     } else {
@@ -71,7 +71,7 @@ pub fn combine_with_document_context(doc_context: &str, input: &str) -> String {
 ///
 /// * `true` - Use prepend mode (default, for better compatibility)
 /// * `false` - Use standard mode (when explicitly set to "standard")
-pub fn should_use_prepend_mode(config: &ProviderConfig) -> bool {
+pub(crate) fn should_use_prepend_mode(config: &ProviderConfig) -> bool {
     config
         .system_prompt_mode
         .as_ref()

@@ -37,7 +37,7 @@ const UNSUPPORTED_KEYWORDS: &[&str] = &[
 /// 2. Strips unsupported keywords recursively
 /// 3. Flattens `anyOf`/`oneOf` unions where possible
 /// 4. Ensures top-level `type: "object"` if missing
-pub fn clean_schema_for_gemini(schema: &mut Value) {
+pub(crate) fn clean_schema_for_gemini(schema: &mut Value) {
     // Step 1: Resolve $ref before anything else (needs $defs intact)
     resolve_refs(schema);
 

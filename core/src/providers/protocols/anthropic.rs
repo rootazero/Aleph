@@ -513,7 +513,7 @@ impl ProtocolAdapter for AnthropicProtocol {
 /// - `content_block_stop`: emits `ToolCallEnd` for tool_use blocks
 /// - `message_delta`: emits `Usage` and `Done` from stop_reason
 /// - `error`: emits `Error`
-pub fn parse_anthropic_sse_event(
+pub(crate) fn parse_anthropic_sse_event(
     data: &str,
     block_ids: &mut IndexIdTracker,
     out: &mut VecDeque<Result<ProviderDelta>>,
