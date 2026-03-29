@@ -30,7 +30,7 @@ pub trait PiiRule: Send + Sync {
 }
 
 /// Build all rules ordered by severity (Critical first)
-pub fn build_rules() -> Vec<Box<dyn PiiRule>> {
+pub(crate) fn build_rules() -> Vec<Box<dyn PiiRule>> {
     vec![
         Box::new(api_key::ApiKeyRule::new()),
         Box::new(ssh_key::SshKeyRule::new()),

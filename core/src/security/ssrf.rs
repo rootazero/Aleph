@@ -213,7 +213,7 @@ pub fn validate_url(url_str: &str, policy: &SsrfPolicy) -> Result<Url, SsrfError
 ///
 /// Performs all sync checks, then resolves the hostname via DNS and validates
 /// every returned IP address against the blocklist.
-pub(crate) async fn validate_url_async(url_str: &str, policy: &SsrfPolicy) -> Result<Url, SsrfError> {
+pub async fn validate_url_async(url_str: &str, policy: &SsrfPolicy) -> Result<Url, SsrfError> {
     let url = Url::parse(url_str)
         .map_err(|e| SsrfError::InvalidUrl(e.to_string()))?;
 
