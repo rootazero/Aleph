@@ -6,7 +6,7 @@
 ///
 /// OpenAI API requires tool names to match `^[a-zA-Z0-9_-]+$`.
 /// Kept as a safety net for external/plugin tool names.
-pub fn sanitize_tool_name(name: &str) -> String {
+pub(crate) fn sanitize_tool_name(name: &str) -> String {
     name.chars()
         .map(|c| {
             if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
@@ -20,7 +20,7 @@ pub fn sanitize_tool_name(name: &str) -> String {
 
 /// Identity function — tool names now use underscores natively,
 /// so no reverse mapping is needed after sanitization.
-pub fn desanitize_tool_name(name: &str) -> String {
+pub(crate) fn desanitize_tool_name(name: &str) -> String {
     name.to_string()
 }
 
