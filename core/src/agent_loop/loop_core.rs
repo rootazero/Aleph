@@ -251,7 +251,7 @@ pub trait LoopCallback: Send {
 }
 
 /// No-op callback for when you don't need events.
-pub struct NoopCallback;
+pub(crate) struct NoopCallback;
 impl LoopCallback for NoopCallback {}
 
 // =============================================================================

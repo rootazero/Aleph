@@ -18,9 +18,9 @@ mod integration_probe;
 
 pub use factory::LoopFactory;
 pub use loop_core::{
-    AgentLoop, LoopCallback, LoopConfig, LoopProvider, LoopRunResult, NoopCallback,
-    ToolCompactorConfig,
+    AgentLoop, LoopCallback, LoopConfig, LoopProvider, LoopRunResult, ToolCompactorConfig,
 };
+pub(crate) use loop_core::NoopCallback;
 pub use prompt_builder::{PromptBuilder, ToolInfo};
 pub use provider_bridge::AiProviderBridge;
 pub use safety::{SafetyError, SafetyGuard, ToolCall as SafetyToolCall};
