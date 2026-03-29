@@ -124,34 +124,6 @@ impl Config {
             "Builtin rules merged, checking for migrations"
         );
 
-        // Migrate PII config from behavior to search (integrate-search-registry)
-        let pii_migrated = config.migrate_pii_config();
-        if pii_migrated {
-            info!("Migrated PII config from behavior.pii_scrubbing_enabled to search.pii.enabled");
-        }
-
-        // Auto-save if any migration was performed
-        // IMPORTANT: Use incremental save to preserve user's existing config
-        // This only updates the migrated sections without overwriting providers, rules, etc.
-        if pii_migrated {
-            let mut sections_to_save: Vec<&str> = Vec::new();
-
-            if pii_migrated {
-                sections_to_save.push("search");
-                sections_to_save.push("behavior");
-            }
-
-            if let Err(e) = config.save_incremental(&sections_to_save) {
-                warn!(error = %e, "Failed to auto-save migrated config (incremental)");
-                // Don't fall back to full save - that would overwrite user config
-            } else {
-                debug!(
-                    sections = ?sections_to_save,
-                    "Migration saved incrementally"
-                );
-            }
-        }
-
         // Validate config
         config.validate()?;
 
