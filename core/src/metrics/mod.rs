@@ -24,49 +24,8 @@ use crate::config::MetricsPolicy;
 use std::collections::HashMap;
 use std::time::Instant;
 
-/// Target latencies for performance monitoring (in milliseconds)
-///
-/// These values represent the expected maximum latency for each operation
-/// under normal conditions. Operations exceeding 2x these targets will
-/// trigger warnings in the logs.
-///
-/// These constants are kept for backward compatibility.
-/// For configurable values, use MetricsPolicy from config.
-pub(crate) const TARGET_HOTKEY_TO_CLIPBOARD_MS: u64 = 50;
-pub(crate) const TARGET_CLIPBOARD_TO_MEMORY_MS: u64 = 100;
-pub(crate) const TARGET_MEMORY_TO_AI_MS: u64 = 500;
-pub(crate) const TARGET_AI_TO_PASTE_MS: u64 = 50;
-pub(crate) const TARGET_PASTE_TO_COMPLETE_MS: u64 = 100;
-
-/// Default warning multiplier (hardcoded, for backward compatibility)
-pub(crate) const DEFAULT_WARNING_MULTIPLIER: f64 = 2.0;
-
-/// Get target latencies from policy or use defaults
-pub(crate) fn get_targets_from_policy(policy: Option<&MetricsPolicy>) -> (u64, u64, u64, u64, u64) {
-    match policy {
-        Some(p) => (
-            p.target_hotkey_to_clipboard_ms,
-            p.target_clipboard_to_memory_ms,
-            p.target_memory_to_ai_ms,
-            p.target_ai_to_paste_ms,
-            p.target_paste_to_complete_ms,
-        ),
-        None => (
-            TARGET_HOTKEY_TO_CLIPBOARD_MS,
-            TARGET_CLIPBOARD_TO_MEMORY_MS,
-            TARGET_MEMORY_TO_AI_MS,
-            TARGET_AI_TO_PASTE_MS,
-            TARGET_PASTE_TO_COMPLETE_MS,
-        ),
-    }
-}
-
-/// Get warning multiplier from policy or use default
-pub(crate) fn get_warning_multiplier(policy: Option<&MetricsPolicy>) -> f64 {
-    policy
-        .map(|p| p.warning_multiplier)
-        .unwrap_or(DEFAULT_WARNING_MULTIPLIER)
-}
+/// Default warning multiplier applied when no policy is configured.
+const DEFAULT_WARNING_MULTIPLIER: f64 = 2.0;
 
 /// A timer for measuring the duration of a specific stage in the pipeline
 ///
@@ -318,16 +277,6 @@ mod tests {
         {
             let _timer = StageTimer::start("test_stage").with_meta("test", "value");
         } // Timer drops here
-    }
-
-    #[test]
-    fn test_target_constants() {
-        // Verify target constants are sensible
-        assert_eq!(TARGET_HOTKEY_TO_CLIPBOARD_MS, 50);
-        assert_eq!(TARGET_CLIPBOARD_TO_MEMORY_MS, 100);
-        assert_eq!(TARGET_MEMORY_TO_AI_MS, 500);
-        assert_eq!(TARGET_AI_TO_PASTE_MS, 50);
-        assert_eq!(TARGET_PASTE_TO_COMPLETE_MS, 100);
     }
 
     #[test]
