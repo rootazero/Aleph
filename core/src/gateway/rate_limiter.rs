@@ -180,7 +180,7 @@ impl RateLimitError {
             Self::Exceeded { retry_after_ms, .. } => *retry_after_ms,
             Self::LockedOut { lockout_remaining_ms, .. } => *lockout_remaining_ms,
         };
-        (ms + 999) / 1000 // ceil division
+        ms.div_ceil(1000)
     }
 }
 

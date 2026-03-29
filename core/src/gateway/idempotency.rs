@@ -70,10 +70,8 @@ impl IdempotencySlot {
 
     fn do_discard(&mut self) {
         if let Some(cache) = self.guard.take() {
-            if let Some((_, entry)) = cache.remove(&self.key) {
-                if let CacheEntry::InFlight(tx) = entry {
-                    let _ = tx.send(None);
-                }
+            if let Some((_, CacheEntry::InFlight(tx))) = cache.remove(&self.key) {
+                let _ = tx.send(None);
             }
         }
     }

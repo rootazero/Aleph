@@ -322,19 +322,16 @@ pub struct ChannelCapabilities {
 }
 
 /// Streaming protocol supported by a channel
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StreamProtocol {
     /// No streaming — buffer and send on completion
+    #[default]
     None,
     /// Send initial message, then repeatedly edit it (Telegram, Discord)
     EditBased,
     /// Channel handles streaming natively (Teams streaminfo)
     Native,
-}
-
-impl Default for StreamProtocol {
-    fn default() -> Self { Self::None }
 }
 
 /// Channel connection status
