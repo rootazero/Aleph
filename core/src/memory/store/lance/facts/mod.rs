@@ -26,7 +26,7 @@ use super::LanceMemoryBackend;
 
 use helpers::{
     add_batch, collect_batches, distance_to_similarity, read_distance, read_relevance_score,
-    read_score, scan_facts, scan_facts_with_offset,
+    read_score, scan_facts,
 };
 
 use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};

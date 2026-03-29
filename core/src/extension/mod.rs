@@ -434,22 +434,11 @@ impl ExtensionManager {
 // Utility Functions
 // =============================================================================
 
-/// Check if a directory is a valid plugin directory
-pub fn is_valid_plugin_dir(path: &std::path::Path) -> bool {
-    path.join(".claude-plugin").join("plugin.json").exists()
-}
-
 /// Get the default plugins directory (user scope: ~/.aleph/plugins/installed/)
 pub fn default_plugins_dir() -> std::path::PathBuf {
     crate::discovery::aleph_plugins_dir()
         .map(|p| p.join("installed"))
         .unwrap_or_else(|_| std::path::PathBuf::from("~/.aleph/plugins/installed"))
-}
-
-/// Get the legacy plugins directory (~/.aleph/plugins/ — for backward compat scanning)
-pub fn legacy_plugins_dir() -> std::path::PathBuf {
-    crate::discovery::aleph_plugins_dir()
-        .unwrap_or_else(|_| std::path::PathBuf::from("~/.aleph/plugins"))
 }
 
 // =============================================================================

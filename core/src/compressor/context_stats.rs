@@ -39,15 +39,6 @@ impl ContextStats {
         }
     }
 
-    /// Check if context is running low
-    pub fn is_low(&self) -> bool {
-        self.usage_percent >= 75.0
-    }
-
-    /// Check if context is critically low
-    pub fn is_critical(&self) -> bool {
-        self.usage_percent >= 90.0
-    }
 }
 
 /// Breakdown of token usage by category
