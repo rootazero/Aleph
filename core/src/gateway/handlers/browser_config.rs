@@ -13,7 +13,7 @@ use tokio::sync::RwLock;
 
 /// Browser config for the Panel UI.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BrowserConfigResponse {
+pub(crate) struct BrowserConfigResponse {
     /// Default profile driver: "managed" (headless) or "existing_session" (Chrome DevTools)
     pub default_driver: String,
     /// Browser engine for managed mode: "chromium", "chrome", "brave", "edge"

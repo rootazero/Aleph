@@ -11,7 +11,7 @@ use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BehaviorConfigDto {
+pub(crate) struct BehaviorConfigDto {
     pub output_mode: String,
     pub typing_speed: u32,
 }

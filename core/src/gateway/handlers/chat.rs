@@ -66,14 +66,14 @@ pub struct SendResponse {
 
 /// Parameters for chat.abort request
 #[derive(Debug, Clone, Deserialize)]
-pub struct AbortParams {
+pub(crate) struct AbortParams {
     /// Run ID to abort
     pub run_id: String,
 }
 
 /// Parameters for chat.history request
 #[derive(Debug, Clone, Deserialize)]
-pub struct HistoryParams {
+pub(crate) struct HistoryParams {
     /// Session key to get history for
     pub session_key: String,
     /// Maximum number of messages to return

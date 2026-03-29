@@ -368,7 +368,7 @@ pub async fn handle_list(
 
 /// Parameters for agent.confirmPlan
 #[derive(Debug, Deserialize)]
-pub struct ConfirmPlanParams {
+pub(crate) struct ConfirmPlanParams {
     /// Plan ID to confirm/reject
     pub plan_id: String,
     /// Whether to confirm (true) or reject (false)
@@ -396,7 +396,7 @@ pub async fn handle_confirm_plan(request: JsonRpcRequest) -> JsonRpcResponse {
 
 /// Parameters for agent.respondToInput
 #[derive(Debug, Deserialize)]
-pub struct RespondToInputParams {
+pub(crate) struct RespondToInputParams {
     /// Request ID for the user input request
     pub request_id: String,
     /// User's response
@@ -424,7 +424,7 @@ pub async fn handle_respond_to_input(request: JsonRpcRequest) -> JsonRpcResponse
 
 /// Parameters for agent.generateTitle
 #[derive(Debug, Deserialize)]
-pub struct GenerateTitleParams {
+pub(crate) struct GenerateTitleParams {
     /// User's input message
     pub user_input: String,
     /// AI's response
