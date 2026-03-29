@@ -169,6 +169,7 @@ pub(in crate::commands::start) async fn initialize_channels(
     app_config_arc: &Arc<tokio::sync::RwLock<alephcore::Config>>,
     dispatch_registry: Option<Arc<alephcore::dispatcher::ToolRegistry>>,
     daemon: bool,
+    vault: Arc<alephcore::gateway::security::SharedTokenManager>,
 ) -> Arc<ChannelRegistry> {
     use alephcore::gateway::handlers::channel::create_channel_from_config;
 
@@ -220,7 +221,7 @@ pub(in crate::commands::start) async fn initialize_channels(
         }
     }
 
-    register_channel_handlers(server, &channel_registry, app_config_arc);
+    register_channel_handlers(server, &channel_registry, app_config_arc, &vault);
 
     // Auto-start all registered channels
     let start_results = channel_registry.start_all().await;
