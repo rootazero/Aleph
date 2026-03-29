@@ -49,40 +49,6 @@ pub fn escape_markdown(text: &str) -> String {
         .replace('`', "\\`")
 }
 
-/// Escape special XML/HTML characters
-///
-/// Escapes: & < > " '
-pub fn escape_xml(text: &str) -> String {
-    text.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&apos;")
-}
-
-/// Format a relevance score as a percentage string
-///
-/// # Arguments
-/// * `score` - Score between 0.0 and 1.0
-///
-/// # Returns
-/// Formatted string like "Relevance: 85%"
-pub fn format_relevance_score(score: f32) -> String {
-    format!("Relevance: {:.0}%", score * 100.0)
-}
-
-/// Format a confidence score as a percentage string
-///
-/// # Arguments
-/// * `score` - Score between 0.0 and 1.0
-///
-/// # Returns
-/// Formatted string like "85%"
-pub fn format_confidence_score(score: f32) -> String {
-    format!("{:.0}%", score * 100.0)
-}
-
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -132,23 +98,4 @@ mod tests {
         assert!(result.contains("\\*"));
     }
 
-    #[test]
-    fn test_escape_xml() {
-        let text = "<script>alert('xss')</script>";
-        let result = escape_xml(text);
-        assert!(!result.contains('<'));
-        assert!(result.contains("&lt;"));
-    }
-
-    #[test]
-    fn test_format_relevance_score() {
-        assert_eq!(format_relevance_score(0.85), "Relevance: 85%");
-        assert_eq!(format_relevance_score(1.0), "Relevance: 100%");
-        assert_eq!(format_relevance_score(0.0), "Relevance: 0%");
-    }
-
-    #[test]
-    fn test_format_confidence_score() {
-        assert_eq!(format_confidence_score(0.75), "75%");
-    }
 }
