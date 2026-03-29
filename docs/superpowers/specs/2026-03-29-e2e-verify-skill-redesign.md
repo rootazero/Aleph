@@ -43,7 +43,10 @@ Three information sources, cross-referenced to produce test target list:
 - If no arguments: rely entirely on sources 2 and 3
 
 **Source 2: Git Diff Analysis**
-- `git diff HEAD~N..HEAD` (N determined by recent meaningful change range)
+- `git diff HEAD~N..HEAD` — N determination strategy:
+  - Default: N=1 (last commit)
+  - If diff is empty, expand to last non-empty diff commit via `git log --oneline` scan
+  - If still empty (no recent changes), rely entirely on Source 1 (user instructions) and prompt user to specify test scope
 - Extract from diff:
   - New/modified functions and modules → test targets
   - New error handling paths → require negative scenarios
@@ -95,7 +98,14 @@ Judgment:
 | Negative | When diff has error handling / fallback / degradation code | Default provider fails → fallback triggers |
 | Boundary | When diff has conditional branches / thresholds / null handling | All providers unavailable → graceful error |
 
-**Enforcement**: If diff contains keywords like `fallback`, `retry`, `error`, `timeout`, `default`, `else`, `None`/`Option::None` in newly added logic, corresponding negative/boundary scenarios are mandatory.
+**Enforcement**: If diff contains error-handling patterns in newly added logic, corresponding negative/boundary scenarios are mandatory. Language-specific patterns to watch for:
+- **Rust**: `fallback`, `retry`, `?`, `unwrap_or`, `match Err`, `Option::None`, `else`
+- **Python**: `except`, `try/finally`, `None`, `raise`, `fallback`
+- **Go**: `if err != nil`, `default:`, `fallback`
+- **JS/TS**: `.catch()`, `try/catch`, `null`, `undefined`, `??`, `fallback`
+- **General**: any word matching `fallback`, `retry`, `timeout`, `degrade`, `error`, `recover`
+
+**When no negative scenarios exist**: If diff genuinely contains no error-handling paths, only positive scenarios are required. Do NOT fabricate negative scenarios for completeness — test what actually changed.
 
 ## Step 6: Environment Manipulation Protocol
 
@@ -107,18 +117,21 @@ Three-phase protocol for constructing failure conditions:
 3. Record all backup paths (for Phase C restore)
 4. Verify backup files exist and content matches
 
-**Phase B: Manipulate + Test**
+**Phase B: Manipulate + Test + Collect**
 1. Modify environment per test card preconditions
 2. If service restart needed, restart (keep debug log level)
 3. Wait for service ready
 4. Execute test card trigger actions
-5. Collect all probe results
+5. **Collect all probe results NOW** — read log files, capture API responses, query state BEFORE Phase C
+6. Store probe evidence for Step 7 report
 
 **Phase C: Restore (MUST execute regardless of test success/failure)**
 1. Restore all `.e2e.bak` files to original paths
 2. Delete `.e2e.bak` files
-3. If Phase B restarted service, restart again to restore normal state
-4. Verify restored files match backups
+3. Restore log level environment variable to original value
+4. If Phase B restarted service, restart again to restore normal state
+5. Verify restored files match backups
+6. **On restore failure**: STOP immediately, print manual recovery commands (e.g., `cp ~/.aleph/config.toml.e2e.bak ~/.aleph/config.toml`), list all remaining `.e2e.bak` files on disk, do not continue subsequent tests
 
 **Manipulation methods**:
 
@@ -132,7 +145,7 @@ Three-phase protocol for constructing failure conditions:
 **Safety redlines**:
 - NEVER modify database files (corruption risk)
 - NEVER delete any file (only modify content)
-- If restore fails, STOP immediately and report — do not continue subsequent tests
+- Restore failure handling is defined in Phase C step 6 above
 
 ## Probe System
 
@@ -184,6 +197,13 @@ Three-phase protocol for constructing failure conditions:
 **references/ folder**: stores project-specific reference materials. For Aleph project, retains:
 - `references/websocket-protocol.md` — Aleph WS protocol
 - `scripts/aleph_e2e_client.py` — Aleph Python client
+
+**Integration with flow steps** (when project-specific files exist):
+- **Step 4 (Verify)**: If `scripts/` contains a client library, use it for server readiness checks
+- **Step 5 (Scenario Design)**: If `references/` contains protocol docs, use them to determine correct trigger syntax (e.g., WebSocket message format, API call structure)
+- **Step 6 (Execute)**: If `scripts/` contains a test client, import it instead of writing from scratch
+
+When used on a project without these files, Claude explores the project's test infrastructure and writes its own.
 
 **Project discovery guidance in SKILL.md**:
 ```
