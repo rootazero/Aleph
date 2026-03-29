@@ -326,12 +326,6 @@ mod tests {
     use crate::sync_primitives::Arc;
     use crate::exec::ExecApprovalManager;
 
-    #[allow(dead_code)]
-    fn make_gate() -> ExecSecurityGate {
-        let manager = Arc::new(ExecApprovalManager::new());
-        ExecSecurityGate::new(manager, None)
-    }
-
     fn make_identity() -> aleph_protocol::IdentityContext {
         aleph_protocol::IdentityContext::owner("session:test".to_string(), "cli".to_string())
     }
