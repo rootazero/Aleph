@@ -241,10 +241,9 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             // Resolve model behavior: config override > protocol auto-mapping
             let behavior_content = {
                 let behavior_name = provider.model_behavior_override()
-                    .map(|s| s.to_string())
-                    .or_else(|| protocol_to_behavior(&provider.protocol().to_string()).map(|s| s.to_string()));
+                    .or_else(|| protocol_to_behavior(&provider.protocol().to_string()));
                 let content = match behavior_name {
-                    Some(ref name) => load_model_behavior(name).await,
+                    Some(name) => load_model_behavior(name).await,
                     None => None,
                 };
                 info!(
