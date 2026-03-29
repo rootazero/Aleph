@@ -49,7 +49,7 @@ pub enum SsrfError {
 
 /// Returns true if the IPv4 address falls in a private, loopback, link-local,
 /// CGNAT, or otherwise non-routable range.
-pub fn is_private_ipv4(ip: Ipv4Addr) -> bool {
+fn is_private_ipv4(ip: Ipv4Addr) -> bool {
     if ip.is_loopback() || ip.is_private() || ip.is_link_local() {
         return true;
     }
@@ -62,7 +62,7 @@ pub fn is_private_ipv4(ip: Ipv4Addr) -> bool {
 }
 
 /// Returns true if the IPv6 address is loopback, link-local, or unique-local.
-pub fn is_private_ipv6(ip: Ipv6Addr) -> bool {
+fn is_private_ipv6(ip: Ipv6Addr) -> bool {
     if ip.is_loopback() {
         return true;
     }
@@ -79,7 +79,7 @@ pub fn is_private_ipv6(ip: Ipv6Addr) -> bool {
 }
 
 /// Returns true if the IP address should be blocked (private ranges, cloud metadata, etc.).
-pub fn is_blocked_ip(ip: IpAddr) -> bool {
+fn is_blocked_ip(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => {
             if is_private_ipv4(v4) {
@@ -213,7 +213,7 @@ pub fn validate_url(url_str: &str, policy: &SsrfPolicy) -> Result<Url, SsrfError
 ///
 /// Performs all sync checks, then resolves the hostname via DNS and validates
 /// every returned IP address against the blocklist.
-pub async fn validate_url_async(url_str: &str, policy: &SsrfPolicy) -> Result<Url, SsrfError> {
+pub(crate) async fn validate_url_async(url_str: &str, policy: &SsrfPolicy) -> Result<Url, SsrfError> {
     let url = Url::parse(url_str)
         .map_err(|e| SsrfError::InvalidUrl(e.to_string()))?;
 
