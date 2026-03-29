@@ -17,6 +17,11 @@ pub(super) fn resolve_api_key(name: &str, vault: &SharedTokenManager) -> Option<
     crate::gateway::handlers::resolve_vault_secret(&vault_key(name), vault)
 }
 
+/// Check whether a provider has an API key stored in the vault.
+pub(super) fn has_api_key(name: &str, vault: &SharedTokenManager) -> bool {
+    resolve_api_key(name, vault).is_some()
+}
+
 pub(super) use crate::gateway::handlers::normalize_optional_string;
 
 pub(super) fn save_config(cfg: &Config, sections: &[&str]) -> Result<(), String> {

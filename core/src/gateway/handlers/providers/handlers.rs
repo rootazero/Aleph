@@ -39,6 +39,7 @@ pub async fn handle_list(request: JsonRpcRequest, config: Arc<RwLock<Config>>, v
             max_tokens: cfg.max_tokens,
             temperature: cfg.temperature,
             has_api_key: has_api_key(name, &vault),
+            api_key: None,
             is_default: default_provider.as_ref() == Some(name),
             verified: cfg.verified,
         })
@@ -74,6 +75,7 @@ pub async fn handle_get(request: JsonRpcRequest, config: Arc<RwLock<Config>>, va
                 max_tokens: cfg.max_tokens,
                 temperature: cfg.temperature,
                 has_api_key: has_api_key(&params.name, &vault),
+                api_key: None,
                 is_default: default_provider.as_ref() == Some(&params.name),
                 verified: cfg.verified,
             };
