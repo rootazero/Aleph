@@ -613,21 +613,17 @@ impl<P: LoopProvider> AgentLoop<P> {
                         callback.on_tool_done(&tc.name, &result);
 
                         let (output_text, is_error, should_stop) = match &result {
-                            ToolResult::Success { output } => {
+                            ToolResult::Success { output } | ToolResult::SuccessAndStopLoop { output } => {
+                                let stop = matches!(&result, ToolResult::SuccessAndStopLoop { .. });
+                                if stop {
+                                    tracing::info!(tool = %tc.name, "Tool returned SuccessAndStopLoop — will break loop");
+                                }
                                 consecutive_errors = 0;
                                 let text = serde_json::to_string(output).unwrap_or_else(|e| {
                                     tracing::error!(tool = %tc.name, error = %e, "Failed to serialize tool output");
                                     format!("[serialization error: {}]", e)
                                 });
-                                (text, false, false)
-                            },
-                            ToolResult::SuccessAndStopLoop { output } => {
-                                tracing::info!(tool = %tc.name, "Tool returned SuccessAndStopLoop — will break loop");
-                                let text = serde_json::to_string(output).unwrap_or_else(|e| {
-                                    tracing::error!(tool = %tc.name, error = %e, "Failed to serialize tool output");
-                                    format!("[serialization error: {}]", e)
-                                });
-                                (text, false, true)
+                                (text, false, stop)
                             },
                             ToolResult::Error { error, retryable } => {
                                 if !retryable {
