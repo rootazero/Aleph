@@ -32,17 +32,17 @@ use std::time::Instant;
 ///
 /// These constants are kept for backward compatibility.
 /// For configurable values, use MetricsPolicy from config.
-pub const TARGET_HOTKEY_TO_CLIPBOARD_MS: u64 = 50;
-pub const TARGET_CLIPBOARD_TO_MEMORY_MS: u64 = 100;
-pub const TARGET_MEMORY_TO_AI_MS: u64 = 500;
-pub const TARGET_AI_TO_PASTE_MS: u64 = 50;
-pub const TARGET_PASTE_TO_COMPLETE_MS: u64 = 100;
+pub(crate) const TARGET_HOTKEY_TO_CLIPBOARD_MS: u64 = 50;
+pub(crate) const TARGET_CLIPBOARD_TO_MEMORY_MS: u64 = 100;
+pub(crate) const TARGET_MEMORY_TO_AI_MS: u64 = 500;
+pub(crate) const TARGET_AI_TO_PASTE_MS: u64 = 50;
+pub(crate) const TARGET_PASTE_TO_COMPLETE_MS: u64 = 100;
 
 /// Default warning multiplier (hardcoded, for backward compatibility)
-pub const DEFAULT_WARNING_MULTIPLIER: f64 = 2.0;
+pub(crate) const DEFAULT_WARNING_MULTIPLIER: f64 = 2.0;
 
 /// Get target latencies from policy or use defaults
-pub fn get_targets_from_policy(policy: Option<&MetricsPolicy>) -> (u64, u64, u64, u64, u64) {
+pub(crate) fn get_targets_from_policy(policy: Option<&MetricsPolicy>) -> (u64, u64, u64, u64, u64) {
     match policy {
         Some(p) => (
             p.target_hotkey_to_clipboard_ms,
@@ -62,7 +62,7 @@ pub fn get_targets_from_policy(policy: Option<&MetricsPolicy>) -> (u64, u64, u64
 }
 
 /// Get warning multiplier from policy or use default
-pub fn get_warning_multiplier(policy: Option<&MetricsPolicy>) -> f64 {
+pub(crate) fn get_warning_multiplier(policy: Option<&MetricsPolicy>) -> f64 {
     policy
         .map(|p| p.warning_multiplier)
         .unwrap_or(DEFAULT_WARNING_MULTIPLIER)
