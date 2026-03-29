@@ -24,7 +24,6 @@ pub const PLUGINS_DIR: &str = "plugins";
 /// Configuration files
 pub const ALEPH_CONFIG_FILE: &str = "aleph.jsonc";
 pub const ALEPH_CONFIG_FILE_ALT: &str = "aleph.json";
-pub const PLUGIN_STATE_FILE: &str = "plugins.json";
 /// Legacy Claude plugin manifest directory (used by LegacyAdapter)
 pub const PLUGIN_MANIFEST_DIR: &str = ".claude-plugin";
 /// Legacy Claude plugin manifest file (used by LegacyAdapter)
@@ -83,15 +82,6 @@ pub fn aleph_plugins_dir() -> DiscoveryResult<PathBuf> {
 }
 
 /// Get the global config file path (~/.aleph/aleph.jsonc)
-pub fn global_config_path() -> DiscoveryResult<PathBuf> {
-    Ok(aleph_home_dir()?.join(ALEPH_CONFIG_FILE))
-}
-
-/// Get the plugin state file path (~/.aleph/plugins.json)
-pub fn plugin_state_path() -> DiscoveryResult<PathBuf> {
-    Ok(aleph_home_dir()?.join(PLUGIN_STATE_FILE))
-}
-
 /// Find the git root directory from a starting path
 ///
 /// Traverses upward until finding a .git directory or reaching filesystem root.
@@ -197,17 +187,6 @@ pub fn ensure_dir(path: &Path) -> DiscoveryResult<()> {
         std::fs::create_dir_all(path)?;
         tracing::info!("Created directory: {:?}", path);
     }
-    Ok(())
-}
-
-/// Ensure the Aleph home directory structure exists
-pub fn ensure_aleph_home() -> DiscoveryResult<()> {
-    let home = aleph_home_dir()?;
-    ensure_dir(&home)?;
-    ensure_dir(&home.join(SKILLS_DIR))?;
-    ensure_dir(&home.join(COMMANDS_DIR))?;
-    ensure_dir(&home.join(AGENTS_DIR))?;
-    ensure_dir(&home.join(PLUGINS_DIR))?;
     Ok(())
 }
 
