@@ -40,7 +40,3 @@ pub use worldmodel::{
     ActivityType, CoreState, EnhancedContext, InferenceCache, PendingAction, WorldModelConfig,
 };
 
-/// Initialize daemon subsystem
-pub fn init() -> Result<()> {
-    Ok(())
-}

@@ -23,13 +23,6 @@ pub fn init_file_logging() -> Result<(), Box<dyn std::error::Error>> {
     init_component_logging("server", 7, "info")
 }
 
-/// Initialize logging with custom retention policy (server defaults).
-pub fn init_file_logging_with_retention(
-    retention_days: u32,
-) -> Result<(), Box<dyn std::error::Error>> {
-    init_component_logging("server", retention_days, "info")
-}
-
 /// Get the log directory path: `~/.aleph/logs/`
 pub fn get_log_directory() -> Result<PathBuf, Box<dyn std::error::Error>> {
     aleph_logging::get_log_directory()

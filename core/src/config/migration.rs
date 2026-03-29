@@ -7,20 +7,6 @@ use crate::error::{AlephError, Result};
 use tracing::{info, warn};
 
 impl Config {
-    /// Migrate PII config from behavior to search (integrate-search-registry)
-    ///
-    /// NOTE: This migration is now a no-op as BehaviorConfig has been deprecated
-    /// and the pii_scrubbing_enabled field no longer exists. Old config files
-    /// with this field will have it silently ignored by serde.
-    ///
-    /// # Returns
-    /// * `false` - Always returns false (migration no longer applicable)
-    pub(crate) fn migrate_pii_config(&mut self) -> bool {
-        // BehaviorConfig deprecated - pii_scrubbing_enabled field removed
-        // Old configs will have the field ignored by serde
-        false
-    }
-
     /// Migrate [mcp.builtin] to [tools] in raw TOML
     ///
     /// This is a pre-parsing migration that handles the rename-builtin-to-system-tools

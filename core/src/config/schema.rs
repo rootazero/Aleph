@@ -4,7 +4,7 @@ use crate::config::Config;
 use schemars::{schema::RootSchema, schema_for};
 
 /// Generate JSON Schema for the main Config struct.
-pub fn generate_config_schema() -> RootSchema {
+pub(crate) fn generate_config_schema() -> RootSchema {
     schema_for!(Config)
 }
 
