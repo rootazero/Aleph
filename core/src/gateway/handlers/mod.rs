@@ -131,6 +131,18 @@ pub(crate) fn resolve_vault_secret(key: &str, vault: &SharedTokenManager) -> Opt
     }
 }
 
+/// Normalize an optional string: trim whitespace, return None if empty.
+pub(crate) fn normalize_optional_string(value: Option<String>) -> Option<String> {
+    value.and_then(|v| {
+        let trimmed = v.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    })
+}
+
 /// Parse and deserialize JSON-RPC request params into a typed struct.
 ///
 /// Returns `Err(JsonRpcResponse)` with `INVALID_PARAMS` on missing or

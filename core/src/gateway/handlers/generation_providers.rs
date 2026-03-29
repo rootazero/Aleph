@@ -35,16 +35,7 @@ pub struct TestConnectionResult {
     pub message: String,
 }
 
-fn normalize_optional_string(value: Option<String>) -> Option<String> {
-    value.and_then(|v| {
-        let trimmed = v.trim();
-        if trimmed.is_empty() {
-            None
-        } else {
-            Some(trimmed.to_string())
-        }
-    })
-}
+use super::normalize_optional_string;
 
 fn save_config(cfg: &Config) -> Result<(), String> {
     cfg.save_incremental(&["generation"]).map_err(|e| e.to_string())

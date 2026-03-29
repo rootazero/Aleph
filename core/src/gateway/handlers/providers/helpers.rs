@@ -17,16 +17,7 @@ pub(super) fn resolve_api_key(name: &str, vault: &SharedTokenManager) -> Option<
     crate::gateway::handlers::resolve_vault_secret(&vault_key(name), vault)
 }
 
-pub(super) fn normalize_optional_string(value: Option<String>) -> Option<String> {
-    value.and_then(|v| {
-        let trimmed = v.trim();
-        if trimmed.is_empty() {
-            None
-        } else {
-            Some(trimmed.to_string())
-        }
-    })
-}
+pub(super) use crate::gateway::handlers::normalize_optional_string;
 
 pub(super) fn save_config(cfg: &Config, sections: &[&str]) -> Result<(), String> {
     // api_key is #[serde(skip)] — never persisted to disk

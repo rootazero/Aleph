@@ -25,12 +25,7 @@ pub struct SearchBackendDto {
     pub verified: bool,
 }
 
-fn normalize_optional_string(value: Option<String>) -> Option<String> {
-    value.and_then(|v| {
-        let trimmed = v.trim();
-        if trimmed.is_empty() { None } else { Some(trimmed.to_string()) }
-    })
-}
+use super::normalize_optional_string;
 
 /// Vault key prefix for search provider API keys
 fn vault_key(backend_name: &str) -> String {
