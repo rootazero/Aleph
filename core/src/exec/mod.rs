@@ -29,32 +29,31 @@ pub mod socket;
 pub mod storage;
 
 pub use allowlist::match_allowlist;
-pub use analysis::{CommandAnalysis, CommandResolution, CommandSegment};
-pub use bridge::{ApprovalBridge, SentApprovalMessage};
-pub use config::{
-    AgentExecConfig, AllowlistEntry, ExecAsk, ExecApprovalsFile, ExecDefaults, ExecSecurity,
-    ResolvedExecConfig, SocketConfig,
-};
-pub use decision::{
-    decide_exec_approval, ApprovalDecision, ApprovalRequest, ExecContext, DEFAULT_SAFE_BINS,
-};
-pub use forwarder::{
-    ApprovalMessage, ExecApprovalForwarder, ForwardMode, ForwardTarget, ForwarderConfig,
-    ForwarderEvent,
-};
+pub use analysis::CommandAnalysis;
+pub(crate) use analysis::{CommandResolution, CommandSegment};
+pub use bridge::ApprovalBridge;
+pub(crate) use bridge::SentApprovalMessage;
+pub use config::{ExecAsk, ExecApprovalsFile, ExecSecurity, ResolvedExecConfig};
+pub(crate) use config::{AgentExecConfig, AllowlistEntry, ExecDefaults, SocketConfig};
+pub use decision::{decide_exec_approval, ApprovalDecision, ApprovalRequest, ExecContext};
+pub(crate) use decision::DEFAULT_SAFE_BINS;
+pub use forwarder::{ExecApprovalForwarder, ForwardMode, ForwardTarget};
+pub(crate) use forwarder::{ApprovalMessage, ForwarderConfig, ForwarderEvent};
 #[cfg(unix)]
-pub use ipc::{IpcClient, IpcConnection, IpcError, IpcMessage, IpcServer, PendingInfo};
-pub use kernel::{RiskAssessment, SecurityKernel};
-pub use manager::{ExecApprovalManager, ExecApprovalRecord, PendingApproval};
+pub use ipc::{IpcError, IpcServer};
+#[cfg(unix)]
+pub(crate) use ipc::{IpcClient, IpcConnection, IpcMessage, PendingInfo};
+pub use kernel::SecurityKernel;
+pub(crate) use kernel::RiskAssessment;
+pub use manager::{ExecApprovalManager, PendingApproval};
+pub(crate) use manager::ExecApprovalRecord;
 pub use masker::SecretMasker;
-pub use parser::{analyze_shell_command, tokenize_segment};
-pub use risk::{RiskLevel, BLOCKED_PATTERNS, DANGER_PATTERNS, SAFE_PATTERNS};
-pub use sanitize::{has_invisible_chars, sanitize_display_text};
-// Sandbox re-exports will be enabled as types are implemented
-// pub use sandbox::{
-//     Capabilities, EnvironmentCapability, ExecutionStatus, FallbackPolicy, FileSystemCapability,
-//     NetworkCapability, ProcessCapability, ProfileGenerator, SandboxAdapter, SandboxAuditLog,
-//     SandboxCommand, SandboxManager, SandboxProfile, SandboxViolation,
-// };
-pub use socket::{ApprovalDecisionType, ApprovalRequestPayload, SegmentInfo, SocketMessage};
+pub use parser::analyze_shell_command;
+pub(crate) use parser::tokenize_segment;
+pub use risk::{RiskLevel, BLOCKED_PATTERNS};
+pub(crate) use risk::{DANGER_PATTERNS, SAFE_PATTERNS};
+pub use sanitize::has_invisible_chars;
+pub(crate) use sanitize::sanitize_display_text;
+pub use socket::ApprovalDecisionType;
+pub(crate) use socket::{ApprovalRequestPayload, SegmentInfo, SocketMessage};
 pub use storage::{ConfigWithHash, ExecApprovalsStorage, StorageError};
