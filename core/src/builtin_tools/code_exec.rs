@@ -11,7 +11,6 @@
 //! - Environment variables are filtered
 //! - Dangerous command blocking is handled by ExecSecurityGate at the executor layer
 
-use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
