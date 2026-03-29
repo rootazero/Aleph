@@ -501,7 +501,7 @@ fn is_allowed_docker_flag(flag: &str) -> bool {
         "log-opt",
     ];
 
-    ALLOWED.iter().any(|a| flag_name == *a)
+    ALLOWED.contains(&flag_name)
 }
 
 impl Drop for VirtualFsSandbox {
