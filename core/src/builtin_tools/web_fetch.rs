@@ -15,11 +15,35 @@ use serde::{Deserialize, Serialize};
 use tracing::{debug, info};
 
 
+/// Content extraction mode
+#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum ExtractMode {
+    /// Structured Markdown output (default)
+    #[default]
+    Markdown,
+    /// Plain text output (legacy behavior)
+    Text,
+}
+
+/// Which extraction method produced the content
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Extractor {
+    /// Mozilla Readability algorithm
+    Readability,
+    /// CSS selector-based fallback
+    Selector,
+}
+
 /// Arguments for web fetch tool
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct WebFetchArgs {
     /// URL to fetch
     pub url: String,
+    /// Content extraction mode (default: markdown)
+    #[serde(default)]
+    pub extract_mode: ExtractMode,
 }
 
 /// Web fetch result containing extracted content
@@ -31,6 +55,8 @@ pub struct WebFetchResult {
     pub title: Option<String>,
     /// Main text content extracted from the page
     pub content: String,
+    /// Which extraction method was used
+    pub extractor: Extractor,
 }
 
 /// Web fetch tool for retrieving and extracting content from web pages
@@ -170,6 +196,7 @@ impl WebFetchTool {
             url: args.url,
             title,
             content: wrapped_content,
+            extractor: Extractor::Selector,
         })
     }
 
@@ -304,6 +331,7 @@ mod tests {
         let tool = WebFetchTool::new();
         let args = WebFetchArgs {
             url: "https://example.com".to_string(),
+            extract_mode: ExtractMode::Markdown,
         };
 
         // Use fully qualified syntax
@@ -325,6 +353,7 @@ mod tests {
         let tool = WebFetchTool::new();
         let args = WebFetchArgs {
             url: "not-a-valid-url".to_string(),
+            extract_mode: ExtractMode::Markdown,
         };
 
         // Use fully qualified syntax to avoid ambiguity
@@ -394,5 +423,31 @@ mod tests {
         let truncated = tool.truncate_content(long);
         assert!(truncated.len() <= WebFetchTool::DEFAULT_MAX_CONTENT_LENGTH + 3); // +3 for "..."
         assert!(truncated.ends_with("..."));
+    }
+
+    #[test]
+    fn test_extract_mode_defaults_to_markdown() {
+        let args: WebFetchArgs = serde_json::from_str(r#"{"url": "https://example.com"}"#).unwrap();
+        assert!(matches!(args.extract_mode, ExtractMode::Markdown));
+    }
+
+    #[test]
+    fn test_extract_mode_text() {
+        let args: WebFetchArgs = serde_json::from_str(
+            r#"{"url": "https://example.com", "extract_mode": "text"}"#
+        ).unwrap();
+        assert!(matches!(args.extract_mode, ExtractMode::Text));
+    }
+
+    #[test]
+    fn test_extractor_serialization() {
+        let result = WebFetchResult {
+            url: "https://example.com".to_string(),
+            title: Some("Test".to_string()),
+            content: "# Hello".to_string(),
+            extractor: Extractor::Readability,
+        };
+        let json = serde_json::to_value(&result).unwrap();
+        assert_eq!(json["extractor"], "readability");
     }
 }
