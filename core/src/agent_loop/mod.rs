@@ -24,6 +24,9 @@ pub use loop_core::{
     AgentLoop, LoopCallback, LoopConfig, LoopProvider, LoopRunResult,
 };
 pub use context_budget::{ContextBudget, ContextBudgetConfig, ContextPressure, LoopDirective, TurnMetrics};
+pub use context_budget::pressure::PressureSensor;
+pub use context_budget::pipeline::{CompactionPipeline, CompactionStage, PipelineResult};
+pub use context_budget::diagnostics::{ContextDiagnostics, DiagnosticsSnapshot};
 pub(crate) use loop_core::NoopCallback;
 pub use prompt_builder::{PromptBuilder, ToolInfo};
 pub use provider_bridge::AiProviderBridge;

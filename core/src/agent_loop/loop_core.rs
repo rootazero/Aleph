@@ -16,6 +16,11 @@ use futures::StreamExt;
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
+use super::context_budget::diagnostics::ContextDiagnostics;
+use super::context_budget::pipeline::{
+    CompactionPipeline, ImageStripper, MicroCompact, RoundDrop, ToolCompactStage,
+};
+use super::context_budget::pressure::PressureSensor;
 use super::prompt_builder::{PromptBuilder, ToolInfo};
 use super::safety::{SafetyError, SafetyGuard};
 use super::tool::{LoopToolRegistry, ToolDefinition, ToolResult};
@@ -28,10 +33,6 @@ use futures::stream::BoxStream;
 // Context limit enforcement
 // =============================================================================
 
-const TRUNCATION_NOTICE: &str =
-    "[SYSTEM] Earlier conversation history and memory context were truncated \
-     to fit the model's context window. Continue based on the remaining context.";
-
 const CRITICAL_CONTEXT_NOTICE: &str =
     "[SYSTEM] Context window is critically full. You MUST respond directly to the user now. \
      Do NOT call any tools. Summarize your progress and provide the best answer you can \
@@ -41,104 +42,6 @@ const DIMINISHING_RETURNS_NOTICE: &str =
     "[SYSTEM] Your recent iterations have produced minimal progress. Summarize: \
      (1) what you accomplished, (2) what you tried that didn't work, \
      (3) what the user should do next. Then stop.";
-
-/// Find a safe cut point that doesn't split ToolCall/ToolResult pairs.
-fn find_safe_cut_point(messages: &[UnifiedMessage], initial_cut: usize) -> usize {
-    let mut cut = initial_cut;
-    while cut > 0 {
-        if messages[cut].is_tool_result() {
-            cut -= 1;
-        } else {
-            break;
-        }
-    }
-    cut
-}
-
-/// Remove the oldest complete conversation round after the truncation notice.
-fn remove_oldest_complete_round(messages: &mut Vec<UnifiedMessage>) {
-    if messages.len() <= 2 {
-        return;
-    }
-
-    if messages[1].is_assistant() && messages[1].has_tool_calls() {
-        let mut end = 2;
-        while end < messages.len() && messages[end].is_tool_result() {
-            end += 1;
-        }
-        messages.drain(1..end);
-    } else {
-        messages.remove(1);
-    }
-}
-
-/// Hard safety net: truncate message history if total estimated tokens exceed budget.
-///
-/// This runs after the soft compactor and is the last line of defense before
-/// the LLM call. If context is still over budget, it aggressively drops old
-/// messages (session summaries, old turns) while keeping the fresh tail.
-///
-/// **Philosophy**: keep the agent running > preserve history.
-/// **Invariant**: never orphans ToolCall/ToolResult pairs.
-fn enforce_context_limit(
-    messages: &mut Vec<UnifiedMessage>,
-    system_prompt: &str,
-    tool_defs: &[ToolDefinition],
-    token_budget: usize,
-    fresh_tail_count: usize,
-    ratio: f64,
-) {
-    use crate::memory::session_compactor::context_window::{
-        estimate_tokens, estimate_total_tokens,
-    };
-
-    let prompt_tokens = estimate_tokens(system_prompt, ratio);
-    let tool_tokens: usize = tool_defs
-        .iter()
-        .map(|td| {
-            estimate_tokens(&td.name, ratio)
-                + estimate_tokens(&td.description, ratio)
-                + estimate_tokens(&td.parameters.to_string(), ratio)
-        })
-        .sum();
-    let overhead = prompt_tokens + tool_tokens;
-    let msg_budget = token_budget.saturating_sub(overhead);
-    let msg_tokens = estimate_total_tokens(messages, ratio);
-
-    if msg_tokens <= msg_budget {
-        return;
-    }
-
-    tracing::warn!(
-        target: "agent_loop",
-        msg_tokens, msg_budget, overhead,
-        total = msg_tokens + overhead,
-        budget = token_budget,
-        "Context exceeds budget after compaction — enforcing hard limit"
-    );
-
-    // Phase 1: Find safe cut point at round boundary
-    let tail_start = messages.len().saturating_sub(fresh_tail_count);
-    let cut = find_safe_cut_point(messages, tail_start);
-
-    if cut > 0 {
-        messages.drain(0..cut);
-        messages.insert(0, UnifiedMessage::user(TRUNCATION_NOTICE));
-    }
-
-    // Phase 2: If still over budget, remove oldest complete rounds one by one
-    while messages.len() > 2 && estimate_total_tokens(messages, ratio) > msg_budget {
-        remove_oldest_complete_round(messages);
-    }
-
-    let final_tokens = estimate_total_tokens(messages, ratio);
-    tracing::warn!(
-        target: "agent_loop",
-        remaining_messages = messages.len(),
-        final_tokens, msg_budget,
-        "Context limit enforced (pair-aware)"
-    );
-}
 
 // =============================================================================
 // LoopProvider trait
@@ -262,6 +165,12 @@ pub struct AgentLoop<P: LoopProvider> {
     /// Wrapped in `Mutex` for interior mutability — `run_with_history_messages`
     /// takes `&self` but the budget needs mutable state across turns.
     context_budget: Mutex<Option<super::context_budget::ContextBudget>>,
+    /// Pressure sensor anchored to API-reported token usage.
+    pressure_sensor: Mutex<PressureSensor>,
+    /// Pipeline of compaction stages (image strip → micro compact → tool compact → round drop).
+    compaction_pipeline: CompactionPipeline,
+    /// Diagnostics collector for pipeline run history.
+    diagnostics: Mutex<ContextDiagnostics>,
     /// Sink for streaming deltas during the Think step. Defaults to NoopSink.
     delta_sink: Box<dyn DeltaSink>,
     /// Token for cooperative cancellation of streaming and tool execution.
@@ -280,6 +189,19 @@ impl<P: LoopProvider> AgentLoop<P> {
         config: LoopConfig,
         cancel_token: CancellationToken,
     ) -> Self {
+        let pipeline = CompactionPipeline::new(vec![
+            Box::new(ImageStripper),
+            Box::new(MicroCompact),
+            Box::new(ToolCompactStage {
+                token_budget: config.token_budget as u64,
+                threshold: 0.70,
+                ratio: 3.5,
+            }),
+            Box::new(RoundDrop {
+                token_budget: config.token_budget as u64,
+                ratio: 3.5,
+            }),
+        ]);
         Self {
             provider,
             tool_registry,
@@ -287,6 +209,9 @@ impl<P: LoopProvider> AgentLoop<P> {
             safety_guard,
             config,
             context_budget: Mutex::new(None),
+            pressure_sensor: Mutex::new(PressureSensor::new(3.5)),
+            compaction_pipeline: pipeline,
+            diagnostics: Mutex::new(ContextDiagnostics::new()),
             delta_sink: Box::new(NoopSink),
             cancel_token,
         }
@@ -382,54 +307,48 @@ impl<P: LoopProvider> AgentLoop<P> {
 
             // --- Context budget evaluation (single lock scope) ---
             let mut budget_directive = super::context_budget::LoopDirective::Continue;
-            let (budget_fresh_tail, budget_ratio) = {
+            {
                 let mut ctx_budget_ref = self.context_budget.lock().unwrap_or_else(|e| e.into_inner());
                 if let Some(ref mut ctx_budget) = *ctx_budget_ref {
                     budget_directive = ctx_budget.before_turn(&messages, &system_prompt, &tool_defs);
 
                     match budget_directive {
                         super::context_budget::LoopDirective::CompactAndContinue => {
-                            // Snapshot pressure before compaction to measure effectiveness.
-                            let pre = super::context_budget::ContextPressure::compute(
-                                &messages,
-                                &system_prompt,
-                                &tool_defs,
-                                ctx_budget.token_budget(),
-                                ctx_budget.token_estimate_ratio(),
-                            );
-                            crate::memory::session_compactor::tool_compactor::compact_if_needed(
-                                &mut messages,
-                                ctx_budget.token_budget(),
-                                0.70,
-                                ctx_budget.token_estimate_ratio(),
-                                ctx_budget.fresh_tail_count(),
-                            );
-                            let post = super::context_budget::ContextPressure::compute(
-                                &messages,
-                                &system_prompt,
-                                &tool_defs,
-                                ctx_budget.token_budget(),
-                                ctx_budget.token_estimate_ratio(),
-                            );
-                            // Reset breaker if compaction reduced pressure — either below
-                            // warning threshold OR by a meaningful delta. This prevents
-                            // false circuit-breaker escalation when prompt/tool overhead
-                            // keeps the absolute ratio above threshold even after successful
-                            // message compaction.
-                            if post.ratio < ctx_budget.warning_threshold()
-                                || post.used_tokens + 500 < pre.used_tokens
+                            let result = {
+                                let sensor = self.pressure_sensor.lock().unwrap_or_else(|e| e.into_inner());
+                                self.compaction_pipeline.run(
+                                    &mut messages,
+                                    &sensor,
+                                    &system_prompt,
+                                    &tool_defs,
+                                    ctx_budget.token_budget(),
+                                    ctx_budget.warning_threshold(),
+                                    ctx_budget.fresh_tail_count(),
+                                )
+                            };
+                            if result.pressure_after.ratio < ctx_budget.warning_threshold()
+                                || result.tokens_freed > 500
                             {
                                 ctx_budget.notify_compaction_success();
                             }
+                            self.diagnostics.lock().unwrap_or_else(|e| e.into_inner())
+                                .record_pipeline(result);
                         }
                         super::context_budget::LoopDirective::FinalReply => {
-                            crate::memory::session_compactor::tool_compactor::compact_if_needed(
-                                &mut messages,
-                                ctx_budget.token_budget(),
-                                0.5,
-                                ctx_budget.token_estimate_ratio(),
-                                ctx_budget.fresh_tail_count(),
-                            );
+                            let result = {
+                                let sensor = self.pressure_sensor.lock().unwrap_or_else(|e| e.into_inner());
+                                self.compaction_pipeline.run(
+                                    &mut messages,
+                                    &sensor,
+                                    &system_prompt,
+                                    &tool_defs,
+                                    ctx_budget.token_budget(),
+                                    0.5,
+                                    ctx_budget.fresh_tail_count(),
+                                )
+                            };
+                            self.diagnostics.lock().unwrap_or_else(|e| e.into_inner())
+                                .record_pipeline(result);
                             messages.push(UnifiedMessage::user(CRITICAL_CONTEXT_NOTICE));
                         }
                         super::context_budget::LoopDirective::StopDiminishing => {
@@ -437,21 +356,8 @@ impl<P: LoopProvider> AgentLoop<P> {
                         }
                         super::context_budget::LoopDirective::Continue => {}
                     }
-                    (ctx_budget.fresh_tail_count(), ctx_budget.token_estimate_ratio())
-                } else {
-                    (6, 3.5)
                 }
             };
-
-            // Hard safety net: enforce context limit
-            enforce_context_limit(
-                &mut messages,
-                &system_prompt,
-                &tool_defs,
-                self.config.token_budget,
-                budget_fresh_tail,
-                budget_ratio,
-            );
 
             // Think: stream deltas with retry and cancellation
             let delta_stream = super::retry::retry_async(
@@ -493,6 +399,9 @@ impl<P: LoopProvider> AgentLoop<P> {
             // Track tokens
             if let Some(usage) = &response.usage {
                 total_tokens += (usage.input_tokens + usage.output_tokens) as usize;
+                // Anchor pressure sensor to API-reported usage
+                self.pressure_sensor.lock().unwrap_or_else(|e| e.into_inner())
+                    .update_anchor(usage.input_tokens as usize, messages.len());
             }
 
             // Process text output
@@ -2326,159 +2235,6 @@ mod tests {
 
         assert_eq!(result.iterations, 4);
         assert_eq!(result.final_text.as_deref(), Some("OK. <task-complete/>"));
-    }
-
-    // =========================================================================
-    // enforce_context_limit tests
-    // =========================================================================
-
-    #[test]
-    fn test_enforce_context_limit_no_op_under_budget() {
-        let mut msgs = vec![
-            UnifiedMessage::user("hello"),
-            UnifiedMessage::assistant("world"),
-        ];
-        let original_len = msgs.len();
-        enforce_context_limit(&mut msgs, "system", &[], 100_000, 6, 3.5);
-        assert_eq!(msgs.len(), original_len, "should not truncate under budget");
-    }
-
-    #[test]
-    fn test_enforce_context_limit_truncates_over_budget() {
-        // Create a large message list that exceeds a small budget
-        let mut msgs: Vec<UnifiedMessage> = (0..50)
-            .map(|i| UnifiedMessage::user(format!("Message {} with some content to use tokens", i)))
-            .collect();
-        // Small budget: only room for ~6 messages
-        enforce_context_limit(&mut msgs, "system prompt", &[], 200, 6, 3.5);
-        // Should have truncated to fresh_tail + notice
-        assert!(msgs.len() <= 8, "should truncate to ~7 messages, got {}", msgs.len());
-        // First message should be the truncation notice
-        let first_text = msgs[0].text_content();
-        assert!(first_text.contains("[SYSTEM]"), "first msg should be truncation notice");
-        assert!(first_text.contains("truncated"), "notice should mention truncation");
-    }
-
-    #[test]
-    fn test_enforce_context_limit_keeps_last_messages() {
-        let mut msgs: Vec<UnifiedMessage> = (0..20)
-            .map(|i| UnifiedMessage::user(format!("msg-{}", i)))
-            .collect();
-        // Budget allows ~10 messages worth of tokens
-        enforce_context_limit(&mut msgs, "", &[], 300, 4, 3.5);
-        // Last message should be preserved
-        let last = msgs.last().unwrap().text_content();
-        assert_eq!(last, "msg-19", "last message must be preserved");
-    }
-
-    #[test]
-    fn test_enforce_context_limit_extreme_single_huge_message() {
-        // One message that is way too big — should still keep at least 2 msgs
-        let huge = "x".repeat(1_000_000); // ~285K tokens at ratio 3.5
-        let mut msgs = vec![
-            UnifiedMessage::user(huge),
-            UnifiedMessage::user("final question"),
-        ];
-        enforce_context_limit(&mut msgs, "sys", &[], 10_000, 6, 3.5);
-        // Should keep at least 2 (notice + something) or the original 2
-        assert!(msgs.len() >= 2, "should keep at least 2 messages");
-    }
-
-    // =========================================================================
-    // Pair-aware truncation helpers
-    // =========================================================================
-
-    /// Test helper: create an Assistant message with tool calls
-    fn assistant_with_tool_calls(text: &str, calls: Vec<(&str, &str, Value)>) -> UnifiedMessage {
-        let mut content = vec![ContentBlock::Text { text: text.to_string() }];
-        for (id, name, args) in calls {
-            content.push(ContentBlock::ToolCall {
-                id: id.to_string(),
-                name: name.to_string(),
-                arguments: args,
-            });
-        }
-        UnifiedMessage::Assistant { content }
-    }
-
-    // --- find_safe_cut_point ---
-
-    #[test]
-    fn test_safe_cut_at_user_message() {
-        let msgs = vec![
-            UnifiedMessage::user("old"),
-            UnifiedMessage::user("recent"),
-            UnifiedMessage::assistant("reply"),
-        ];
-        assert_eq!(find_safe_cut_point(&msgs, 1), 1);
-    }
-
-    #[test]
-    fn test_safe_cut_skips_tool_result() {
-        let msgs = vec![
-            UnifiedMessage::user("query"),
-            assistant_with_tool_calls("thinking", vec![("tc1", "search", json!({}))]),
-            UnifiedMessage::tool_result("tc1", "search", "results", false),
-            UnifiedMessage::assistant("done"),
-            UnifiedMessage::user("followup"),
-        ];
-        // initial_cut = 2 lands on ToolResult → walk back to 1 (Assistant with tool calls) → break
-        assert_eq!(find_safe_cut_point(&msgs, 2), 1);
-    }
-
-    #[test]
-    fn test_safe_cut_at_plain_assistant() {
-        let msgs = vec![
-            UnifiedMessage::user("hi"),
-            UnifiedMessage::assistant("hello"),
-            UnifiedMessage::user("bye"),
-        ];
-        assert_eq!(find_safe_cut_point(&msgs, 2), 2);
-    }
-
-    #[test]
-    fn test_safe_cut_at_zero() {
-        let msgs = vec![
-            UnifiedMessage::tool_result("tc1", "t", "o", false),
-            UnifiedMessage::assistant("done"),
-        ];
-        assert_eq!(find_safe_cut_point(&msgs, 0), 0);
-    }
-
-    // --- remove_oldest_complete_round ---
-
-    #[test]
-    fn test_remove_round_user_message() {
-        let mut msgs = vec![
-            UnifiedMessage::user("[SYSTEM] Truncated"),
-            UnifiedMessage::user("old question"),
-            UnifiedMessage::assistant("answer"),
-        ];
-        remove_oldest_complete_round(&mut msgs);
-        assert_eq!(msgs.len(), 2);
-        assert!(msgs[1].is_assistant());
-    }
-
-    #[test]
-    fn test_remove_round_tool_group() {
-        let mut msgs = vec![
-            UnifiedMessage::user("[SYSTEM] Truncated"),
-            assistant_with_tool_calls("", vec![("tc1", "s", json!({}))]),
-            UnifiedMessage::tool_result("tc1", "s", "out", false),
-            UnifiedMessage::user("next"),
-        ];
-        remove_oldest_complete_round(&mut msgs);
-        assert_eq!(msgs.len(), 2); // notice + user("next")
-    }
-
-    #[test]
-    fn test_remove_round_preserves_minimum() {
-        let mut msgs = vec![
-            UnifiedMessage::user("[SYSTEM] Truncated"),
-            UnifiedMessage::user("last"),
-        ];
-        remove_oldest_complete_round(&mut msgs);
-        assert_eq!(msgs.len(), 2);
     }
 
     // =========================================================================
