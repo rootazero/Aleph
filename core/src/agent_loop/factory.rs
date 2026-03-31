@@ -35,8 +35,8 @@ impl LoopFactory {
         soul: Option<&SoulManifest>,
         config: LoopConfig,
     ) -> AgentLoop<AiProviderBridge> {
-        // Wrap provider via bridge
-        let bridge = AiProviderBridge::new(provider);
+        // Wrap provider via bridge (clone first — compactor also needs the provider)
+        let bridge = AiProviderBridge::new(provider.clone());
 
         // Adapt existing tools into LoopTool
         let mut registry = LoopToolRegistry::new();
@@ -53,7 +53,13 @@ impl LoopFactory {
         // Safety guard with sensible defaults
         let safety = SafetyGuard::default_guard();
 
+        let compactor = super::context_compactor::ContextCompactor::new(
+            provider.clone(),
+            super::context_compactor::CompactorConfig::default(),
+        );
+
         AgentLoop::new(bridge, registry, prompt_builder, safety, config, CancellationToken::new())
+            .with_context_compactor(compactor)
     }
 
     /// Build a `AgentLoop` from an `AlephToolServer`.
