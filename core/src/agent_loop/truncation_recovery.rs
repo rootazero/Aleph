@@ -89,7 +89,9 @@ impl TruncationRecovery {
             self.fragments.push(truncated_output.to_owned());
         }
 
-        // Check exhaustion.
+        // Global guard: regardless of which phase we're in, cap total attempts.
+        // This interacts with the per-phase MAX_CONTINUE_ATTEMPTS check below —
+        // both exist because the entry path into Continuing varies (from Idle or Escalated).
         if self.attempts > MAX_TOTAL_ATTEMPTS {
             self.phase = RecoveryPhase::Exhausted;
             return RecoveryAction {

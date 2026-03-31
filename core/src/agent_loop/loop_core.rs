@@ -486,15 +486,14 @@ impl<P: LoopProvider> AgentLoop<P> {
                 3,
             ).await?;
 
-            // Create streaming tool bridge — tools start executing as soon as
-            // they finish streaming, rather than waiting for all tool calls.
-            let noop_cb: Arc<Mutex<Box<dyn LoopCallback>>> =
-                Arc::new(Mutex::new(Box::new(NoopCallback)));
+            // The bridge+executor are created every iteration (even for pure text turns)
+            // because tools must start executing AS THEY STREAM — we cannot know whether
+            // tool calls will arrive until the stream completes. The overhead for non-tool
+            // turns is minimal: 1 mpsc channel + 1 tokio::spawn + 1 abort.
             let (mut bridge, executor) = super::streaming_bridge::StreamingToolBridge::new(
                 Arc::clone(&self.tool_registry),
                 Arc::clone(&self.safety_guard),
                 self.cancel_token.clone(),
-                noop_cb,
             );
             let executor_handle = tokio::spawn(executor.run());
 
