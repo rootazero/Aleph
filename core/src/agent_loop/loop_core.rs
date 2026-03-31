@@ -374,9 +374,9 @@ impl<P: LoopProvider> AgentLoop<P> {
         while iterations < self.config.max_iterations {
             iterations += 1;
 
-            // --- Context budget evaluation ---
+            // --- Context budget evaluation (single lock scope) ---
             let mut budget_directive = super::context_budget::LoopDirective::Continue;
-            {
+            let (budget_fresh_tail, budget_ratio) = {
                 let mut ctx_budget_ref = self.context_budget.lock().unwrap_or_else(|e| e.into_inner());
                 if let Some(ref mut ctx_budget) = *ctx_budget_ref {
                     budget_directive = ctx_budget.before_turn(&messages, &system_prompt, &tool_defs);
@@ -386,15 +386,13 @@ impl<P: LoopProvider> AgentLoop<P> {
                             crate::memory::session_compactor::tool_compactor::compact_if_needed(
                                 &mut messages,
                                 ctx_budget.token_budget(),
-                                ctx_budget.token_estimate_ratio().recip() * 0.70, // warning threshold
+                                0.70,
                                 ctx_budget.token_estimate_ratio(),
                                 ctx_budget.fresh_tail_count(),
                             );
-                            // Reset circuit breaker if compaction ran successfully
                             ctx_budget.notify_compaction_success();
                         }
                         super::context_budget::LoopDirective::FinalReply => {
-                            // Force compaction first as last-ditch effort
                             crate::memory::session_compactor::tool_compactor::compact_if_needed(
                                 &mut messages,
                                 ctx_budget.token_budget(),
@@ -409,24 +407,21 @@ impl<P: LoopProvider> AgentLoop<P> {
                         }
                         super::context_budget::LoopDirective::Continue => {}
                     }
+                    (ctx_budget.fresh_tail_count(), ctx_budget.token_estimate_ratio())
+                } else {
+                    (6, 3.5)
                 }
-            }
+            };
 
-            // Hard safety net: enforce context limit (unchanged logic)
-            {
-                let ctx_budget_ref = self.context_budget.lock().unwrap_or_else(|e| e.into_inner());
-                let fresh_tail = ctx_budget_ref.as_ref().map(|b| b.fresh_tail_count()).unwrap_or(6);
-                let ratio = ctx_budget_ref.as_ref().map(|b| b.token_estimate_ratio()).unwrap_or(3.5);
-                drop(ctx_budget_ref);
-                enforce_context_limit(
-                    &mut messages,
-                    &system_prompt,
-                    &tool_defs,
-                    self.config.token_budget,
-                    fresh_tail,
-                    ratio,
-                );
-            }
+            // Hard safety net: enforce context limit
+            enforce_context_limit(
+                &mut messages,
+                &system_prompt,
+                &tool_defs,
+                self.config.token_budget,
+                budget_fresh_tail,
+                budget_ratio,
+            );
 
             // Think: stream deltas from the provider and accumulate into ProviderResponse
             let delta_stream = self

@@ -260,7 +260,7 @@ impl ContextBudget {
                 target: "context_budget",
                 used = pressure.used_tokens,
                 budget = pressure.budget_tokens,
-                ratio = format!("{:.2}", pressure.ratio),
+                ratio = pressure.ratio,
                 "Critical context pressure — forcing final reply"
             );
             return LoopDirective::FinalReply;
@@ -279,7 +279,7 @@ impl ContextBudget {
                 target: "context_budget",
                 used = pressure.used_tokens,
                 budget = pressure.budget_tokens,
-                ratio = format!("{:.2}", pressure.ratio),
+                ratio = pressure.ratio,
                 "Warning context pressure — requesting compaction"
             );
             return LoopDirective::CompactAndContinue;
@@ -423,5 +423,71 @@ mod tests {
         budget.after_turn(TurnMetrics { output_tokens: 10, tool_calls: 1, productive: false });
         let directive = budget.after_turn(TurnMetrics { output_tokens: 10, tool_calls: 1, productive: false });
         assert_eq!(directive, LoopDirective::StopDiminishing);
+    }
+
+    // --- before_turn pressure path tests ---
+
+    #[test]
+    fn test_before_turn_warning_returns_compact() {
+        // token_estimate_ratio=1.0 → 1 char = 1 token, budget=1000
+        let config = ContextBudgetConfig {
+            token_budget: 1000,
+            warning_threshold: 0.70,
+            critical_threshold: 0.85,
+            token_estimate_ratio: 1.0,
+            ..default_config()
+        };
+        let mut budget = ContextBudget::new(&config);
+        // 750 chars = 75% usage → Warning zone
+        let msgs = vec![UnifiedMessage::user("x".repeat(750))];
+        let directive = budget.before_turn(&msgs, "", &[]);
+        assert_eq!(directive, LoopDirective::CompactAndContinue);
+    }
+
+    #[test]
+    fn test_before_turn_critical_returns_final_reply() {
+        let config = ContextBudgetConfig {
+            token_budget: 1000,
+            warning_threshold: 0.70,
+            critical_threshold: 0.85,
+            token_estimate_ratio: 1.0,
+            ..default_config()
+        };
+        let mut budget = ContextBudget::new(&config);
+        // 900 chars = 90% usage → Critical zone
+        let msgs = vec![UnifiedMessage::user("x".repeat(900))];
+        let directive = budget.before_turn(&msgs, "", &[]);
+        assert_eq!(directive, LoopDirective::FinalReply);
+    }
+
+    #[test]
+    fn test_before_turn_circuit_breaker_escalates_to_final_reply() {
+        let config = ContextBudgetConfig {
+            token_budget: 1000,
+            warning_threshold: 0.70,
+            critical_threshold: 0.85,
+            token_estimate_ratio: 1.0,
+            circuit_breaker_max: 2,
+            ..default_config()
+        };
+        let mut budget = ContextBudget::new(&config);
+        // 750 chars = Warning zone, stays in warning for 2+ turns → breaker trips
+        let msgs = vec![UnifiedMessage::user("x".repeat(750))];
+        let d1 = budget.before_turn(&msgs, "", &[]);
+        assert_eq!(d1, LoopDirective::CompactAndContinue);
+        let d2 = budget.before_turn(&msgs, "", &[]);
+        assert_eq!(d2, LoopDirective::FinalReply); // breaker tripped on 2nd attempt
+    }
+
+    #[test]
+    fn test_before_turn_zero_budget_is_critical() {
+        let config = ContextBudgetConfig {
+            token_budget: 0,
+            ..default_config()
+        };
+        let mut budget = ContextBudget::new(&config);
+        let msgs = vec![UnifiedMessage::user("hello")];
+        let directive = budget.before_turn(&msgs, "", &[]);
+        assert_eq!(directive, LoopDirective::FinalReply);
     }
 }
