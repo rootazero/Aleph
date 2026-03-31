@@ -1,0 +1,7 @@
+{
+  "tool_name": "Bash",
+  "tool_input_preview": "{\"command\":\"git merge 7b3b19b0 --no-edit 2>&1\",\"description\":\"Merge local main HEAD into worktree branch\"}",
+  "error": "Exit code 1\nAuto-merging core/src/agent_loop/loop_core.rs\nCONFLICT (content): Merge conflict in core/src/agent_loop/loop_core.rs\nAuto-merging core/src/agent_loop/mod.rs\nCONFLICT (content): Merge conflict in core/src/agent_loop/mod.rs\nAuto-merging core/src/gateway/execution_engine/engine.rs\nAuto-merging core/src/gateway/execution_engine/run_loop.rs\nAutomatic merge failed; fix conflicts and then commit the result.",
+  "timestamp": "2026-03-31T15:23:37.280Z",
+  "retry_count": 1
+}

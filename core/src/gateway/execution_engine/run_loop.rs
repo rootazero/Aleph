@@ -5,6 +5,7 @@
 //! `ExecutionAdapter` trait implementation, and background memory persistence.
 
 use async_trait::async_trait;
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -38,6 +39,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         agent: Arc<AgentInstance>,
         emitter: Arc<E>,
         deadline: Arc<tokio::sync::Mutex<tokio::time::Instant>>,
+        cancel_token: CancellationToken,
     ) -> Result<String, ExecutionError> {
         use crate::agent_loop::{
             AgentLoop, PromptBuilder, SafetyGuard, LoopConfig,
@@ -333,6 +335,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 prompt_builder,
                 safety,
                 loop_config,
+                cancel_token.clone(),
             )
             .with_delta_sink(Box::new(streaming_sink))
             .with_context_budget(context_budget);

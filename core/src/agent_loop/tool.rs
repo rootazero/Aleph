@@ -55,6 +55,12 @@ pub trait LoopTool: Send + Sync {
 
     /// Execute the tool with the given input.
     async fn execute(&self, input: Value) -> ToolResult;
+
+    /// Whether this tool can safely run concurrently with other concurrent-safe tools.
+    /// Returns true by default. Override to false for tools that mutate shared state.
+    fn is_concurrent_safe(&self, _input: &Value) -> bool {
+        true
+    }
 }
 
 // =============================================================================
@@ -254,6 +260,45 @@ mod tests {
             }
             ToolResult::Success { .. } | ToolResult::SuccessAndStopLoop { .. } => panic!("expected error"),
         }
+    }
+
+    #[test]
+    fn test_default_concurrent_safe() {
+        let tool = EchoTool;
+        // Default implementation should return true
+        assert!(tool.is_concurrent_safe(&json!({})));
+        assert!(tool.is_concurrent_safe(&json!({"message": "hello"})));
+    }
+
+    /// A tool that overrides is_concurrent_safe to return false.
+    struct ExclusiveTool;
+
+    #[async_trait]
+    impl LoopTool for ExclusiveTool {
+        fn name(&self) -> &str {
+            "exclusive"
+        }
+        fn description(&self) -> &str {
+            "A tool that mutates shared state"
+        }
+        fn schema(&self) -> Value {
+            json!({ "type": "object", "properties": {} })
+        }
+        async fn execute(&self, _input: Value) -> ToolResult {
+            ToolResult::Success {
+                output: json!("done"),
+            }
+        }
+        fn is_concurrent_safe(&self, _input: &Value) -> bool {
+            false
+        }
+    }
+
+    #[test]
+    fn test_exclusive_tool_not_concurrent_safe() {
+        let tool = ExclusiveTool;
+        assert!(!tool.is_concurrent_safe(&json!({})));
+        assert!(!tool.is_concurrent_safe(&json!({"key": "value"})));
     }
 
     #[tokio::test]

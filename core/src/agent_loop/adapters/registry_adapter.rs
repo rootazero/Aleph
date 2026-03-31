@@ -28,6 +28,25 @@ struct RegistryToolAdapter<R: ToolRegistry + 'static> {
 /// Tools that should have working_dir injected when not specified by LLM
 const WORKING_DIR_TOOLS: &[&str] = &["bash", "code_exec"];
 
+/// Tools that mutate state and must NOT run concurrently.
+pub(crate) const EXCLUSIVE_TOOLS: &[&str] = &[
+    "bash",
+    "code_exec",
+    "file_ops",
+    "self_manage",
+    "secret_vault",
+    "cron_manage",
+    "agent_create",
+    "agent_delete",
+    "team_create",
+    "team_delegate",
+    "heartbeat_create",
+    "heartbeat_delete",
+    "task_create",
+    "task_update",
+    "channel_manage",
+];
+
 #[async_trait]
 impl<R: ToolRegistry + 'static> LoopTool for RegistryToolAdapter<R> {
     fn name(&self) -> &str {
@@ -40,6 +59,10 @@ impl<R: ToolRegistry + 'static> LoopTool for RegistryToolAdapter<R> {
 
     fn schema(&self) -> Value {
         self.schema.clone()
+    }
+
+    fn is_concurrent_safe(&self, _input: &Value) -> bool {
+        !EXCLUSIVE_TOOLS.contains(&self.name.as_str())
     }
 
     async fn execute(&self, input: Value) -> ToolResult {
@@ -204,6 +227,63 @@ mod tests {
             ToolResult::Success { output } | ToolResult::SuccessAndStopLoop { output } => assert_eq!(output["found"], 42),
             ToolResult::Error { error, .. } => panic!("expected success: {}", error),
         }
+    }
+
+    #[test]
+    fn test_exclusive_tools_list() {
+        // Known write/mutating tools must be in the exclusive list
+        let write_tools = &[
+            "bash",
+            "code_exec",
+            "file_ops",
+            "self_manage",
+            "secret_vault",
+            "cron_manage",
+            "agent_create",
+            "agent_delete",
+            "team_create",
+            "team_delegate",
+            "channel_manage",
+        ];
+        for tool in write_tools {
+            assert!(
+                EXCLUSIVE_TOOLS.contains(tool),
+                "{} should be in EXCLUSIVE_TOOLS",
+                tool
+            );
+        }
+    }
+
+    #[test]
+    fn test_readonly_not_in_exclusive() {
+        // Read-only tools must NOT be in the exclusive list
+        let read_tools = &["search", "memory_recall", "web_fetch", "knowledge"];
+        for tool in read_tools {
+            assert!(
+                !EXCLUSIVE_TOOLS.contains(tool),
+                "{} should NOT be in EXCLUSIVE_TOOLS",
+                tool
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_adapter_concurrent_safe() {
+        let tool_registry = Arc::new(MockRegistry {
+            results: HashMap::new(),
+        });
+
+        // A read-only tool should be concurrent-safe
+        let read_tools = vec![make_unified_tool("search", "Search")];
+        let registry = build_registry_from_tools(tool_registry.clone(), &read_tools, None);
+        let search = registry.get("search").unwrap();
+        assert!(search.is_concurrent_safe(&json!({})));
+
+        // An exclusive tool should NOT be concurrent-safe
+        let write_tools = vec![make_unified_tool("bash", "Run commands")];
+        let registry = build_registry_from_tools(tool_registry, &write_tools, None);
+        let bash = registry.get("bash").unwrap();
+        assert!(!bash.is_concurrent_safe(&json!({})));
     }
 
     #[tokio::test]

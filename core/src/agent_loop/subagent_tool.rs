@@ -7,6 +7,7 @@
 
 use async_trait::async_trait;
 use serde_json::{json, Value};
+use tokio_util::sync::CancellationToken;
 
 use super::loop_core::{AgentLoop, LoopConfig, NoopCallback};
 use super::prompt_builder::PromptBuilder;
@@ -141,6 +142,7 @@ impl LoopTool for SubagentTool {
             prompt_builder,
             (self.safety_guard_factory)(),
             config,
+            CancellationToken::new(),
         );
 
         let mut callback = NoopCallback;
