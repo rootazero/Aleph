@@ -396,7 +396,19 @@ impl<P: LoopProvider> AgentLoop<P> {
                                 ctx_budget.token_estimate_ratio(),
                                 ctx_budget.fresh_tail_count(),
                             );
-                            ctx_budget.notify_compaction_success();
+                            // Only reset breaker if compaction actually reduced pressure
+                            // below warning threshold. Otherwise the breaker keeps counting
+                            // toward escalation as designed.
+                            let post = super::context_budget::ContextPressure::compute(
+                                &messages,
+                                &system_prompt,
+                                &tool_defs,
+                                ctx_budget.token_budget(),
+                                ctx_budget.token_estimate_ratio(),
+                            );
+                            if post.ratio < ctx_budget.warning_threshold() {
+                                ctx_budget.notify_compaction_success();
+                            }
                         }
                         super::context_budget::LoopDirective::FinalReply => {
                             crate::memory::session_compactor::tool_compactor::compact_if_needed(

@@ -24,7 +24,7 @@ pub struct ContextPressure {
 }
 
 impl ContextPressure {
-    fn compute(
+    pub(crate) fn compute(
         messages: &[UnifiedMessage],
         system_prompt: &str,
         tool_defs: &[ToolDefinition],
@@ -232,6 +232,11 @@ impl ContextBudget {
     /// Characters-per-token ratio.
     pub fn token_estimate_ratio(&self) -> f64 {
         self.token_estimate_ratio
+    }
+
+    /// Warning threshold fraction.
+    pub fn warning_threshold(&self) -> f64 {
+        self.warning_threshold
     }
 
     /// Fresh tail count for compaction.
