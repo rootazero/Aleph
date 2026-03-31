@@ -453,14 +453,7 @@ impl<P: LoopProvider> AgentLoop<P> {
                         .unwrap_or(false)
                 };
                 if should_llm_compact {
-                    let fresh_tail = {
-                        let budget = self.context_budget.lock()
-                            .unwrap_or_else(|e| e.into_inner());
-                        budget.as_ref()
-                            .map(|b| b.fresh_tail_count())
-                            .unwrap_or(6)
-                    };
-                    match compactor.compact(&mut messages, fresh_tail).await {
+                    match compactor.compact(&mut messages, budget_fresh_tail).await {
                         Ok(result) => {
                             tracing::info!(
                                 strategy = ?result.strategy_used,

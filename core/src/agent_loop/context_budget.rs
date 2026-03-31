@@ -205,6 +205,8 @@ pub struct ContextBudget {
     fresh_tail_count: usize,
     circuit_breaker: CompactionCircuitBreaker,
     diminishing: DiminishingReturnsDetector,
+    /// Last computed pressure snapshot, saved by `before_turn()`.
+    last_pressure: Option<ContextPressure>,
 }
 
 impl ContextBudget {
@@ -221,6 +223,7 @@ impl ContextBudget {
                 config.diminishing_window,
                 config.diminishing_threshold,
             ),
+            last_pressure: None,
         }
     }
 
@@ -239,6 +242,11 @@ impl ContextBudget {
         self.fresh_tail_count
     }
 
+    /// Last computed pressure snapshot from `before_turn()`.
+    pub fn last_pressure(&self) -> Option<&ContextPressure> {
+        self.last_pressure.as_ref()
+    }
+
     /// Evaluate context pressure before a turn and return a directive.
     pub fn before_turn(
         &mut self,
@@ -253,6 +261,7 @@ impl ContextBudget {
             self.token_budget,
             self.token_estimate_ratio,
         );
+        self.last_pressure = Some(pressure);
 
         if pressure.ratio >= self.critical_threshold {
             // Critical — force final reply regardless of circuit breaker
