@@ -193,40 +193,62 @@ pub async fn execute_tool_batch(
 
         match batch {
             Batch::Concurrent(indices) => {
-                // Execute all concurrently (safety checks happen inside execute_one).
-                let futures: Vec<_> = indices
-                    .iter()
-                    .map(|&idx| {
-                        let tc = &tool_calls[idx];
-                        execute_one(tc, registry, safety, cancel)
-                    })
-                    .collect();
-
-                // Fire on_tool_start only for non-safety-blocked tools before awaiting.
-                // Since we can't know safety status before execute_one, fire start for all
-                // that pass safety, and fire callbacks after execution completes.
-                let outcomes = futures::future::join_all(futures).await;
-
-                for (i, outcome) in outcomes.into_iter().enumerate() {
-                    let idx = indices[i];
+                // Pre-check safety and fire on_tool_start BEFORE execution begins,
+                // so streaming consumers see the "tool started" signal immediately.
+                let mut safe_indices: Vec<usize> = Vec::new();
+                for &idx in indices {
                     let tc = &tool_calls[idx];
-                    let is_safety_block = is_safety_blocked(&outcome);
-                    if !is_safety_block {
+                    let safety_call = crate::agent_loop::SafetyToolCall {
+                        name: tc.name.clone(),
+                        input: tc.arguments.clone(),
+                    };
+                    if safety.check(&safety_call).is_ok() {
                         callback.on_tool_start(&tc.name, &tc.arguments);
-                        let tool_result = outcome_to_tool_result(&outcome);
-                        callback.on_tool_done(&tc.name, &tool_result);
+                        safe_indices.push(idx);
+                    } else {
+                        // Safety-blocked: produce outcome directly, skip execution.
+                        let outcome = execute_one(tc, registry, safety, cancel).await;
+                        results.push((idx, outcome));
                     }
-                    results.push((idx, outcome));
+                }
+
+                // Execute only safety-cleared tools concurrently.
+                if !safe_indices.is_empty() {
+                    let futures: Vec<_> = safe_indices
+                        .iter()
+                        .map(|&idx| {
+                            let tc = &tool_calls[idx];
+                            execute_one(tc, registry, safety, cancel)
+                        })
+                        .collect();
+
+                    let outcomes = futures::future::join_all(futures).await;
+
+                    for (i, outcome) in outcomes.into_iter().enumerate() {
+                        let idx = safe_indices[i];
+                        let tool_result = outcome_to_tool_result(&outcome);
+                        callback.on_tool_done(&tool_calls[idx].name, &tool_result);
+                        results.push((idx, outcome));
+                    }
                 }
             }
             Batch::Exclusive(idx) => {
                 let idx = *idx;
                 let tc = &tool_calls[idx];
 
-                let outcome = execute_one(tc, registry, safety, cancel).await;
-                let is_safety_block = is_safety_blocked(&outcome);
-                if !is_safety_block {
+                // Pre-check safety to fire on_tool_start before execution.
+                let safety_call = crate::agent_loop::SafetyToolCall {
+                    name: tc.name.clone(),
+                    input: tc.arguments.clone(),
+                };
+                let is_safe = safety.check(&safety_call).is_ok();
+                if is_safe {
                     callback.on_tool_start(&tc.name, &tc.arguments);
+                }
+
+                let outcome = execute_one(tc, registry, safety, cancel).await;
+
+                if is_safe {
                     let tool_result = outcome_to_tool_result(&outcome);
                     callback.on_tool_done(&tc.name, &tool_result);
                 }
