@@ -4,6 +4,10 @@
 //! that tracks context window pressure across turns and issues directives to the
 //! agent loop (compact, force final reply, or stop on diminishing returns).
 
+pub mod pressure;
+pub mod pipeline;
+pub mod diagnostics;
+
 use crate::memory::session_compactor::context_window::{estimate_tokens, estimate_total_tokens};
 use crate::providers::message::UnifiedMessage;
 use super::tool::ToolDefinition;

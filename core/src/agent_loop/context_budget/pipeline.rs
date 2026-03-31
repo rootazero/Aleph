@@ -1,0 +1,1 @@
+//! CompactionPipeline — ordered strategy execution.
