@@ -389,6 +389,14 @@ impl<P: LoopProvider> AgentLoop<P> {
 
                     match budget_directive {
                         super::context_budget::LoopDirective::CompactAndContinue => {
+                            // Snapshot pressure before compaction to measure effectiveness.
+                            let pre = super::context_budget::ContextPressure::compute(
+                                &messages,
+                                &system_prompt,
+                                &tool_defs,
+                                ctx_budget.token_budget(),
+                                ctx_budget.token_estimate_ratio(),
+                            );
                             crate::memory::session_compactor::tool_compactor::compact_if_needed(
                                 &mut messages,
                                 ctx_budget.token_budget(),
@@ -396,9 +404,6 @@ impl<P: LoopProvider> AgentLoop<P> {
                                 ctx_budget.token_estimate_ratio(),
                                 ctx_budget.fresh_tail_count(),
                             );
-                            // Only reset breaker if compaction actually reduced pressure
-                            // below warning threshold. Otherwise the breaker keeps counting
-                            // toward escalation as designed.
                             let post = super::context_budget::ContextPressure::compute(
                                 &messages,
                                 &system_prompt,
@@ -406,7 +411,14 @@ impl<P: LoopProvider> AgentLoop<P> {
                                 ctx_budget.token_budget(),
                                 ctx_budget.token_estimate_ratio(),
                             );
-                            if post.ratio < ctx_budget.warning_threshold() {
+                            // Reset breaker if compaction reduced pressure — either below
+                            // warning threshold OR by a meaningful delta. This prevents
+                            // false circuit-breaker escalation when prompt/tool overhead
+                            // keeps the absolute ratio above threshold even after successful
+                            // message compaction.
+                            if post.ratio < ctx_budget.warning_threshold()
+                                || post.used_tokens + 500 < pre.used_tokens
+                            {
                                 ctx_budget.notify_compaction_success();
                             }
                         }
