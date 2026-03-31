@@ -476,7 +476,7 @@ impl SessionCompactor {
                 Ok(text)
                     if !text.is_empty() && estimate_tokens(&text, ratio) < source_token_count =>
                 {
-                    return text;
+                    return summary_engine::strip_analysis_block(&text);
                 }
                 Ok(_) => {
                     warn!(
@@ -505,7 +505,7 @@ impl SessionCompactor {
                 Ok(text)
                     if !text.is_empty() && estimate_tokens(&text, ratio) < source_token_count =>
                 {
-                    return text;
+                    return summary_engine::strip_analysis_block(&text);
                 }
                 Ok(_) => {
                     warn!(

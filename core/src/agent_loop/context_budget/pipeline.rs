@@ -274,7 +274,7 @@ impl CompactionStage for RoundDrop {
             .map(|m| estimate_tokens_smart(&m.text_content()))
             .sum();
 
-        let budget = (self.token_budget as f64 / self.ratio) as usize;
+        let budget = self.token_budget as usize;
         if total_tokens <= budget {
             return 0;
         }

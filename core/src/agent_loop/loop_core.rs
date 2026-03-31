@@ -373,6 +373,31 @@ impl<P: LoopProvider> AgentLoop<P> {
                         }
                         super::context_budget::LoopDirective::Continue => {}
                     }
+                } else {
+                    // No context budget configured — still enforce a hard limit
+                    // using the pipeline as a safety net against provider-side
+                    // context-length errors.
+                    let sensor = self
+                        .pressure_sensor
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner());
+                    let pressure = sensor.measure(
+                        &messages,
+                        &system_prompt,
+                        &tool_defs,
+                        self.config.token_budget as u64,
+                    );
+                    if pressure.ratio >= 0.85 {
+                        self.compaction_pipeline.run(
+                            &mut messages,
+                            &sensor,
+                            &system_prompt,
+                            &tool_defs,
+                            self.config.token_budget as u64,
+                            0.70,
+                            6, // default fresh tail
+                        );
+                    }
                 }
             };
 
