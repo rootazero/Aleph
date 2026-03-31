@@ -29,6 +29,7 @@ mod tests {
             id: "job-1".to_string(),
             agent_id: Some("agent-1".to_string()),
             source_channel_id: None,
+            source_conversation_id: None,
             prompt: "Summarize today".to_string(),
             model: None,
             timeout_ms: None,

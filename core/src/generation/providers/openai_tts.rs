@@ -374,17 +374,15 @@ impl GenerationProvider for OpenAiTtsProvider {
                 ));
             }
 
-            // Validate voice if provided in params
+            // Warn (but allow) unknown voices — third-party proxies and newer
+            // models may support different voice names
             if let Some(ref voice) = request.params.voice {
                 if !Self::validate_voice(voice) {
-                    return Err(GenerationError::invalid_parameters(
-                        format!(
-                            "Invalid voice '{}'. Available voices: {}",
-                            voice,
-                            AVAILABLE_VOICES.join(", ")
-                        ),
-                        Some("voice".to_string()),
-                    ));
+                    warn!(
+                        voice = %voice,
+                        known = ?AVAILABLE_VOICES,
+                        "Unknown TTS voice in request — proceeding anyway (may be a third-party voice)"
+                    );
                 }
             }
 

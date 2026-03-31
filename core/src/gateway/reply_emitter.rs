@@ -630,17 +630,64 @@ impl EventEmitter for ReplyEmitter {
             } => {
                 if is_intermediate {
                     if content.is_empty() {
-                        // Intermediate boundary marker from DeltaSink: flush
-                        // accumulated buffer as a standalone intermediate message,
-                        // then clear it so it doesn't pollute the final response.
-                        let mut buffer = self.buffer.lock().await;
-                        let accumulated = std::mem::take(&mut *buffer);
-                        drop(buffer);
-                        if !accumulated.is_empty() {
+                        // Intermediate boundary marker from DeltaSink: the LLM
+                        // finished one iteration (tool use) and will continue.
+                        if self.config.stream_enabled {
+                            // Voice mode: streaming was skipped, buffer holds
+                            // the text for RunComplete to convert to TTS.
+                            // Do NOT finalize or clear — just reset controller.
                             if self.should_voice().await {
-                                self.send_as_voice(&accumulated).await;
+                                let mut ctrl = self.streaming.lock().await;
+                                ctrl.reset();
                             } else {
-                                self.send_to_channel(&accumulated).await;
+                            // Streaming mode: the text was already delivered via
+                            // real-time edits.  Finalize the current streamed
+                            // message (perform any pending edit), then reset the
+                            // controller so the next iteration starts a fresh
+                            // message.  Do NOT send a new standalone message —
+                            // the text is already visible to the user.
+                            let mut ctrl = self.streaming.lock().await;
+                            match ctrl.finalize() {
+                                StreamAction::EditFinal(text) => {
+                                    if let Some(msg_id) = ctrl.message_id().cloned() {
+                                        let _ = self.channel_registry.edit(
+                                            &self.route.channel_id,
+                                            &self.route.conversation_id,
+                                            &msg_id, &text,
+                                        ).await;
+                                    }
+                                }
+                                StreamAction::SendFinal(text) => {
+                                    // Rare: text never reached initial threshold.
+                                    // Send it now as a new message.
+                                    drop(ctrl);
+                                    self.send_to_channel(&text).await;
+                                    // Re-acquire for reset below
+                                    let mut ctrl = self.streaming.lock().await;
+                                    ctrl.reset();
+                                    let mut buffer = self.buffer.lock().await;
+                                    let _ = std::mem::take(&mut *buffer);
+                                    return Ok(());
+                                }
+                                _ => {}
+                            }
+                            ctrl.reset();
+                            drop(ctrl);
+                            // Clear buffer (text was already streamed)
+                            let mut buffer = self.buffer.lock().await;
+                            let _ = std::mem::take(&mut *buffer);
+                            } // end else (non-voice)
+                        } else {
+                            // Non-streaming: flush buffer as standalone message
+                            let mut buffer = self.buffer.lock().await;
+                            let accumulated = std::mem::take(&mut *buffer);
+                            drop(buffer);
+                            if !accumulated.is_empty() {
+                                if self.should_voice().await {
+                                    self.send_as_voice(&accumulated).await;
+                                } else {
+                                    self.send_to_channel(&accumulated).await;
+                                }
                             }
                         }
                     } else {
@@ -665,7 +712,9 @@ impl EventEmitter for ReplyEmitter {
                     }
 
                     // Real-time streaming: push chunks to controller and act
-                    if self.config.stream_enabled && !content.is_empty() {
+                    // Skip streaming text when voice mode is active — buffer only,
+                    // voice reply will be sent on RunComplete.
+                    if self.config.stream_enabled && !content.is_empty() && !self.should_voice().await {
                         let mut ctrl = self.streaming.lock().await;
                         ctrl.push_chunk(&content);
                         match ctrl.poll_action() {

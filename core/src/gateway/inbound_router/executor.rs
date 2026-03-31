@@ -149,6 +149,7 @@ impl InboundMessageRouter {
         let mut metadata = HashMap::new();
         metadata.insert("channel_id".to_string(), ctx.message.channel_id.as_str().to_string());
         metadata.insert("sender_id".to_string(), ctx.sender_normalized.clone());
+        metadata.insert("conversation_id".to_string(), ctx.message.conversation_id.as_str().to_string());
 
         // Inject user locale for downstream i18n (run_loop, error messages)
         if let Some(ref cfg) = self.app_config {

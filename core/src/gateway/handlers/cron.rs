@@ -158,6 +158,25 @@ pub async fn handle_create(request: JsonRpcRequest, cron: SharedCronService) -> 
         }
     };
 
+    // Validate At timestamps: reject if in the past
+    if let ScheduleKind::At { at, .. } = &schedule_kind {
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        if *at <= now_ms {
+            let at_human = chrono::DateTime::from_timestamp_millis(*at)
+                .map(|dt| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
+                .unwrap_or_else(|| format!("{}ms", at));
+            let now_human = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC").to_string();
+            return JsonRpcResponse::error(
+                request.id,
+                INVALID_PARAMS,
+                format!(
+                    "Cannot schedule in the past. at={} resolves to {}, current time is {} (now_ms={})",
+                    at, at_human, now_human, now_ms
+                ),
+            );
+        }
+    }
+
     let mut job = CronJob::new(name, agent_id, prompt, schedule_kind);
 
     // Optional fields

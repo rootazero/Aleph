@@ -36,6 +36,12 @@ pub struct RuntimeContext {
     pub current_model: String,
     /// Machine hostname
     pub hostname: String,
+    /// Current local time as human-readable string, e.g. "2026-03-30 14:30:00"
+    pub current_time: String,
+    /// Current time in milliseconds since epoch (UTC), for precise scheduling
+    pub current_time_ms: i64,
+    /// Local timezone identifier, e.g. "Asia/Shanghai", "UTC+8"
+    pub timezone: String,
 }
 
 impl RuntimeContext {
@@ -60,6 +66,25 @@ impl RuntimeContext {
             .or_else(|_| std::env::var("COMPUTERNAME"))
             .unwrap_or_else(|_| "unknown".to_string());
 
+        // Collect current local time, epoch ms, and timezone
+        let now_local = chrono::Local::now();
+        let current_time = now_local.format("%Y-%m-%d %H:%M:%S").to_string();
+        let current_time_ms = now_local.timestamp_millis();
+        let timezone = {
+            let offset = now_local.offset();
+            // Try to get IANA timezone from TZ env var, fall back to UTC offset
+            std::env::var("TZ").unwrap_or_else(|_| {
+                let secs = offset.local_minus_utc();
+                let hours = secs / 3600;
+                let mins = (secs.abs() % 3600) / 60;
+                if mins == 0 {
+                    format!("UTC{:+}", hours)
+                } else {
+                    format!("UTC{:+}:{:02}", hours, mins)
+                }
+            })
+        };
+
         Self {
             os,
             arch,
@@ -68,6 +93,9 @@ impl RuntimeContext {
             repo_root: None,
             current_model: current_model.to_string(),
             hostname,
+            current_time,
+            current_time_ms,
+            timezone,
         }
     }
 
@@ -94,6 +122,8 @@ impl RuntimeContext {
 
         parts.push(format!("model={}", self.current_model));
         parts.push(format!("host={}", self.hostname));
+        parts.push(format!("time={} ({})", self.current_time, self.timezone));
+        parts.push(format!("time_ms={}", self.current_time_ms));
 
         format!("## Runtime Environment\n{}", parts.join(" | "))
     }
@@ -130,17 +160,24 @@ mod tests {
         assert!(!ctx.hostname.is_empty(), "hostname should not be empty");
     }
 
-    #[test]
-    fn test_to_prompt_section_format() {
-        let ctx = RuntimeContext {
+    fn make_test_ctx(repo_root: Option<PathBuf>) -> RuntimeContext {
+        RuntimeContext {
             os: "macos".to_string(),
             arch: "aarch64".to_string(),
             shell: "zsh".to_string(),
             working_dir: PathBuf::from("/workspace"),
-            repo_root: Some(PathBuf::from("/workspace")),
+            repo_root,
             current_model: "claude-opus-4-6".to_string(),
             hostname: "MacBook-Pro".to_string(),
-        };
+            current_time: "2026-03-30 14:30:00".to_string(),
+            current_time_ms: 1774852200000,
+            timezone: "Asia/Shanghai".to_string(),
+        }
+    }
+
+    #[test]
+    fn test_to_prompt_section_format() {
+        let ctx = make_test_ctx(Some(PathBuf::from("/workspace")));
 
         let section = ctx.to_prompt_section();
 
@@ -152,6 +189,8 @@ mod tests {
         assert!(section.contains("repo=/workspace"));
         assert!(section.contains("model=claude-opus-4-6"));
         assert!(section.contains("host=MacBook-Pro"));
+        assert!(section.contains("time=2026-03-30 14:30:00 (Asia/Shanghai)"));
+        assert!(section.contains("time_ms=1774852200000"));
 
         // Verify pipe-separated format on the data line
         let lines: Vec<&str> = section.lines().collect();
@@ -170,6 +209,9 @@ mod tests {
             repo_root: None,
             current_model: "gpt-4".to_string(),
             hostname: "server-01".to_string(),
+            current_time: "2026-03-30 02:30:00".to_string(),
+            current_time_ms: 1774852200000,
+            timezone: "UTC".to_string(),
         };
 
         let section = ctx.to_prompt_section();
@@ -185,5 +227,7 @@ mod tests {
         );
         assert!(section.contains("model=gpt-4"));
         assert!(section.contains("host=server-01"));
+        assert!(section.contains("time="));
+        assert!(section.contains("time_ms="));
     }
 }

@@ -588,6 +588,7 @@ pub fn get_builtin_tool_names() -> Vec<String> {
 }
 
 /// Check if a tool name is a builtin tool
+#[allow(dead_code)]
 pub fn is_builtin_tool(name: &str) -> bool {
     BUILTIN_TOOL_DEFINITIONS.iter().any(|def| def.name == name)
 }
