@@ -433,7 +433,7 @@ impl<P: LoopProvider> AgentLoop<P> {
                                 self.delta_sink.on_delta(&delta).await;
                                 collector.push(delta);
                             }
-                            Some(Err(e)) => return Err(e.into()),
+                            Some(Err(e)) => return Err(e),
                             None => break,
                         }
                     }

@@ -53,8 +53,7 @@ pub fn classify_error(err: &anyhow::Error) -> RetryVerdict {
 pub fn backoff_delay(base: Duration, attempt: u32, max_delay: Duration) -> Duration {
     let factor = 2u64.saturating_pow(attempt);
     let delay_ms = base.as_millis() as u64 * factor;
-    let capped = Duration::from_millis(delay_ms.min(max_delay.as_millis() as u64));
-    capped
+    Duration::from_millis(delay_ms.min(max_delay.as_millis() as u64))
 }
 
 /// Retry an async operation with error classification and exponential backoff.
