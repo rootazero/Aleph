@@ -109,6 +109,9 @@ fn test_build_system_prompt_with_context_includes_runtime_context() {
         repo_root: None,
         current_model: "gpt-4".to_string(),
         hostname: "server-01".to_string(),
+        current_time: "2026-03-30 02:30:00".to_string(),
+        current_time_ms: 1774852200000,
+        timezone: "UTC".to_string(),
     });
 
     let prompt = builder.build_system_prompt_with_context(&ctx);
@@ -172,6 +175,9 @@ fn test_full_prompt_with_all_enhancements_background_mode() {
         repo_root: Some(std::path::PathBuf::from("/workspace")),
         current_model: "claude-opus-4-6".to_string(),
         hostname: "test-host".to_string(),
+        current_time: "2026-03-30 14:30:00".to_string(),
+        current_time_ms: 1774852200000,
+        timezone: "Asia/Shanghai".to_string(),
     });
 
     let prompt = builder.build_system_prompt_with_context(&resolved);
@@ -272,6 +278,9 @@ fn test_interactive_prompt_minimal_token_overhead() {
         repo_root: None,
         current_model: "gpt-4".to_string(),
         hostname: "web-server".to_string(),
+        current_time: "2026-03-30 02:30:00".to_string(),
+        current_time_ms: 1774852200000,
+        timezone: "UTC".to_string(),
     });
 
     let prompt = builder.build_system_prompt_with_context(&resolved);

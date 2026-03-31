@@ -374,7 +374,30 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         }
 
         // Generation providers: vault key "gen:<name>"
+        // Legacy flat map
         for (name, provider_cfg) in loaded_app_config.generation.providers.iter_mut() {
+            if provider_cfg.api_key.is_none() {
+                if let Ok(Some(secret)) = vault.get_secret(&format!("gen:{}", name)) {
+                    provider_cfg.api_key = Some(secret.expose().to_string());
+                }
+            }
+        }
+        // Typed provider maps (image, video, speech)
+        for (name, provider_cfg) in loaded_app_config.generation.image_providers.iter_mut() {
+            if provider_cfg.api_key.is_none() {
+                if let Ok(Some(secret)) = vault.get_secret(&format!("gen:{}", name)) {
+                    provider_cfg.api_key = Some(secret.expose().to_string());
+                }
+            }
+        }
+        for (name, provider_cfg) in loaded_app_config.generation.video_providers.iter_mut() {
+            if provider_cfg.api_key.is_none() {
+                if let Ok(Some(secret)) = vault.get_secret(&format!("gen:{}", name)) {
+                    provider_cfg.api_key = Some(secret.expose().to_string());
+                }
+            }
+        }
+        for (name, provider_cfg) in loaded_app_config.generation.speech_providers.iter_mut() {
             if provider_cfg.api_key.is_none() {
                 if let Ok(Some(secret)) = vault.get_secret(&format!("gen:{}", name)) {
                     provider_cfg.api_key = Some(secret.expose().to_string());
@@ -737,9 +760,16 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 guard.state().clone()
             };
 
+            // Use the existing channel_registry_cell from agent_result for deferred injection.
+            // ChannelRegistry is initialized after this point; the cell is populated at line ~950.
+            let cron_channel_cell: alephcore::tasks::cron::executor::ChannelRegistryCell =
+                agent_result.channel_registry_cell.clone()
+                    .unwrap_or_else(|| Arc::new(tokio::sync::OnceCell::new()));
+
             let executor_fn = build_cron_executor_fn(
                 Arc::clone(exec_adapter),
                 Arc::clone(registry),
+                cron_channel_cell,
             );
 
             let cron_config = cron_state.config.clone();

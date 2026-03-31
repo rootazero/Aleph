@@ -1,212 +1,36 @@
-//! Context budget management for the agent loop.
+//! Context Budget — pressure sensing, compaction circuit breaker, and diminishing returns detection.
 //!
-//! Provides multi-tier pressure sensing, compaction circuit breaking,
-//! and per-turn diminishing returns detection. The [`ContextBudget`]
-//! orchestrator returns a [`LoopDirective`] each turn to guide the
-//! main loop's control flow.
+//! This module replaces the old `ToolCompactorConfig` with a richer abstraction
+//! that tracks context window pressure across turns and issues directives to the
+//! agent loop (compact, force final reply, or stop on diminishing returns).
 
-use std::collections::VecDeque;
-
-use crate::memory::session_compactor::context_window::estimate_tokens;
+use crate::memory::session_compactor::context_window::{estimate_tokens, estimate_total_tokens};
 use crate::providers::message::UnifiedMessage;
+use super::tool::ToolDefinition;
 
 // =============================================================================
-// ContextPressure + LoopDirective
+// ContextPressure
 // =============================================================================
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ContextPressure {
-    Normal,
-    Warning,
-    Critical,
+/// Snapshot of context window utilization at a point in time.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ContextPressure {
+    /// Estimated tokens currently consumed by messages.
+    pub used_tokens: usize,
+    /// Total token budget for the model.
+    pub budget_tokens: usize,
+    /// Ratio of used / budget (0.0 .. 1.0+).
+    pub ratio: f64,
 }
 
-fn evaluate_pressure(
-    used_tokens: usize,
-    budget: usize,
-    warning_threshold: f64,
-    critical_threshold: f64,
-) -> ContextPressure {
-    if budget == 0 {
-        return ContextPressure::Critical;
-    }
-    let ratio = used_tokens as f64 / budget as f64;
-    if ratio >= critical_threshold {
-        ContextPressure::Critical
-    } else if ratio >= warning_threshold {
-        ContextPressure::Warning
-    } else {
-        ContextPressure::Normal
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LoopDirective {
-    Continue,
-    CompactAndContinue,
-    FinalReply,
-    StopDiminishing,
-}
-
-// =============================================================================
-// CompactionCircuitBreaker
-// =============================================================================
-
-#[derive(Debug)]
-struct CompactionCircuitBreaker {
-    consecutive_failures: u32,
-    max_failures: u32,
-    tripped: bool,
-}
-
-impl CompactionCircuitBreaker {
-    fn new(max_failures: u32) -> Self {
-        Self {
-            consecutive_failures: 0,
-            max_failures,
-            tripped: false,
-        }
-    }
-
-    fn is_tripped(&self) -> bool {
-        self.tripped
-    }
-
-    fn record_failure(&mut self) {
-        self.consecutive_failures += 1;
-        if self.consecutive_failures >= self.max_failures {
-            self.tripped = true;
-            tracing::warn!(
-                target: "context_budget",
-                failures = self.consecutive_failures,
-                "Circuit breaker tripped — switching to deterministic compaction"
-            );
-        }
-    }
-
-    fn record_success(&mut self) {
-        self.consecutive_failures = 0;
-        self.tripped = false;
-    }
-}
-
-// =============================================================================
-// TurnMetrics + DiminishingReturnsDetector
-// =============================================================================
-
-#[derive(Debug, Clone)]
-pub struct TurnMetrics {
-    pub output_tokens: usize,
-    pub tool_calls: usize,
-    pub productive: bool,
-}
-
-#[derive(Debug)]
-struct DiminishingReturnsDetector {
-    window: VecDeque<TurnMetrics>,
-    window_size: usize,
-    low_output_threshold: usize,
-}
-
-impl DiminishingReturnsDetector {
-    fn new(window_size: usize, low_output_threshold: usize) -> Self {
-        Self {
-            window: VecDeque::with_capacity(window_size),
-            window_size,
-            low_output_threshold,
-        }
-    }
-
-    fn record(&mut self, metrics: TurnMetrics) {
-        if self.window.len() >= self.window_size {
-            self.window.pop_front();
-        }
-        self.window.push_back(metrics);
-    }
-
-    fn is_diminishing(&self) -> bool {
-        if self.window.len() < self.window_size {
-            return false;
-        }
-        let total_output: usize = self.window.iter().map(|m| m.output_tokens).sum();
-        let avg_output = total_output / self.window.len();
-        let unproductive_count = self.window.iter().filter(|m| !m.productive).count();
-        let unproductive_ratio = unproductive_count as f64 / self.window.len() as f64;
-        avg_output < self.low_output_threshold && unproductive_ratio >= 0.75
-    }
-}
-
-// =============================================================================
-// ContextBudgetConfig + ContextBudget
-// =============================================================================
-
-#[derive(Debug, Clone)]
-pub struct ContextBudgetConfig {
-    pub token_budget: u64,
-    pub warning_threshold: f64,
-    pub critical_threshold: f64,
-    pub token_estimate_ratio: f64,
-    pub fresh_tail_count: usize,
-    pub circuit_breaker_max: u32,
-    pub diminishing_window: usize,
-    pub diminishing_threshold: usize,
-}
-
-impl Default for ContextBudgetConfig {
-    fn default() -> Self {
-        Self {
-            token_budget: 500_000,
-            warning_threshold: 0.70,
-            critical_threshold: 0.85,
-            token_estimate_ratio: 3.5,
-            fresh_tail_count: 6,
-            circuit_breaker_max: 3,
-            diminishing_window: 4,
-            diminishing_threshold: 500,
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct ContextBudget {
-    token_budget: usize,
-    warning_threshold: f64,
-    critical_threshold: f64,
-    token_estimate_ratio: f64,
-    fresh_tail_count: usize,
-    circuit_breaker: CompactionCircuitBreaker,
-    diminishing: DiminishingReturnsDetector,
-    pressure: ContextPressure,
-}
-
-impl ContextBudget {
-    pub fn new(config: &ContextBudgetConfig) -> Self {
-        Self {
-            token_budget: config.token_budget as usize,
-            warning_threshold: config.warning_threshold,
-            critical_threshold: config.critical_threshold,
-            token_estimate_ratio: config.token_estimate_ratio,
-            fresh_tail_count: config.fresh_tail_count,
-            circuit_breaker: CompactionCircuitBreaker::new(config.circuit_breaker_max),
-            diminishing: DiminishingReturnsDetector::new(
-                config.diminishing_window,
-                config.diminishing_threshold,
-            ),
-            pressure: ContextPressure::Normal,
-        }
-    }
-
-    pub fn before_turn(
-        &mut self,
+impl ContextPressure {
+    fn compute(
         messages: &[UnifiedMessage],
         system_prompt: &str,
-        tool_defs: &[crate::agent_loop::tool::ToolDefinition],
-    ) -> LoopDirective {
-        let ratio = self.token_estimate_ratio;
-        let msg_tokens: usize = messages
-            .iter()
-            .map(|m| estimate_tokens(&m.text_content(), ratio))
-            .sum();
+        tool_defs: &[ToolDefinition],
+        token_budget: u64,
+        ratio: f64,
+    ) -> Self {
         let prompt_tokens = estimate_tokens(system_prompt, ratio);
         let tool_tokens: usize = tool_defs
             .iter()
@@ -216,77 +40,255 @@ impl ContextBudget {
                     + estimate_tokens(&td.parameters.to_string(), ratio)
             })
             .sum();
-        let total = msg_tokens + prompt_tokens + tool_tokens;
+        let msg_tokens = estimate_total_tokens(messages, ratio);
+        let used = prompt_tokens + tool_tokens + msg_tokens;
+        let budget = token_budget as usize;
+        Self {
+            used_tokens: used,
+            budget_tokens: budget,
+            ratio: if budget == 0 {
+                1.0
+            } else {
+                used as f64 / budget as f64
+            },
+        }
+    }
+}
 
-        self.pressure = evaluate_pressure(
-            total,
-            self.token_budget,
-            self.warning_threshold,
-            self.critical_threshold,
-        );
+// =============================================================================
+// LoopDirective
+// =============================================================================
 
-        match self.pressure {
-            ContextPressure::Normal => LoopDirective::Continue,
-            ContextPressure::Warning => {
-                tracing::warn!(
-                    target: "context_budget",
-                    total_tokens = total,
-                    budget = self.token_budget,
-                    "Context pressure: Warning — triggering compaction"
-                );
-                LoopDirective::CompactAndContinue
-            }
-            ContextPressure::Critical => {
-                tracing::warn!(
-                    target: "context_budget",
-                    total_tokens = total,
-                    budget = self.token_budget,
-                    "Context pressure: Critical — requesting final reply"
-                );
-                LoopDirective::FinalReply
-            }
+/// Directive issued by the context budget to the agent loop.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoopDirective {
+    /// Context is within budget — proceed normally.
+    Continue,
+    /// Context exceeds warning threshold — compact tool results before the next LLM call.
+    CompactAndContinue,
+    /// Context is critically full — force compaction, inject a system notice, skip tools.
+    FinalReply,
+    /// Diminishing returns detected — inject a notice and stop tool execution.
+    StopDiminishing,
+}
+
+// =============================================================================
+// TurnMetrics
+// =============================================================================
+
+/// Metrics collected after each turn for diminishing returns detection.
+#[derive(Debug, Clone)]
+pub struct TurnMetrics {
+    /// Number of output tokens the LLM produced this turn.
+    pub output_tokens: usize,
+    /// Number of tool calls the LLM requested this turn.
+    pub tool_calls: usize,
+    /// Whether the turn was considered productive (tools ran without errors).
+    pub productive: bool,
+}
+
+// =============================================================================
+// ContextBudgetConfig
+// =============================================================================
+
+/// Configuration for constructing a `ContextBudget`.
+#[derive(Debug, Clone)]
+pub struct ContextBudgetConfig {
+    /// Total token budget for the model context window.
+    pub token_budget: u64,
+    /// Fraction of budget at which compaction triggers (e.g. 0.70).
+    pub warning_threshold: f64,
+    /// Fraction of budget at which we force a final reply (e.g. 0.85).
+    pub critical_threshold: f64,
+    /// Characters-per-token ratio for estimation.
+    pub token_estimate_ratio: f64,
+    /// Number of recent messages to leave untouched during compaction.
+    pub fresh_tail_count: usize,
+    /// Max consecutive compaction attempts before circuit breaker trips.
+    pub circuit_breaker_max: usize,
+    /// Window size for diminishing returns detection.
+    pub diminishing_window: usize,
+    /// Minimum total output tokens in the window to be considered productive.
+    pub diminishing_threshold: usize,
+}
+
+// =============================================================================
+// CompactionCircuitBreaker
+// =============================================================================
+
+/// Tracks consecutive compaction attempts. If compaction keeps firing without
+/// the pressure dropping, we escalate to FinalReply instead of looping forever.
+#[derive(Debug)]
+struct CompactionCircuitBreaker {
+    max_consecutive: usize,
+    consecutive_count: usize,
+}
+
+impl CompactionCircuitBreaker {
+    fn new(max: usize) -> Self {
+        Self {
+            max_consecutive: max,
+            consecutive_count: 0,
         }
     }
 
-    pub fn after_turn(&mut self, metrics: TurnMetrics) -> LoopDirective {
-        self.diminishing.record(metrics);
-        if self.diminishing.is_diminishing() {
-            tracing::warn!(
-                target: "context_budget",
-                "Diminishing returns detected — recommending stop"
-            );
-            LoopDirective::StopDiminishing
-        } else {
-            LoopDirective::Continue
+    /// Record that compaction was triggered. Returns true if the breaker has tripped.
+    fn record_compaction(&mut self) -> bool {
+        self.consecutive_count += 1;
+        self.consecutive_count >= self.max_consecutive
+    }
+
+    /// Reset the counter (called when a turn completes without needing compaction).
+    fn reset(&mut self) {
+        self.consecutive_count = 0;
+    }
+}
+
+// =============================================================================
+// DiminishingReturnsDetector
+// =============================================================================
+
+/// Sliding window detector for unproductive turns.
+#[derive(Debug)]
+struct DiminishingReturnsDetector {
+    window_size: usize,
+    threshold: usize,
+    history: Vec<TurnMetrics>,
+}
+
+impl DiminishingReturnsDetector {
+    fn new(window_size: usize, threshold: usize) -> Self {
+        Self {
+            window_size,
+            threshold,
+            history: Vec::new(),
         }
     }
 
-    pub fn on_compaction_success(&mut self) {
-        self.circuit_breaker.record_success();
+    /// Record a turn's metrics and return true if diminishing returns detected.
+    fn record(&mut self, metrics: TurnMetrics) -> bool {
+        self.history.push(metrics);
+        if self.history.len() < self.window_size {
+            return false;
+        }
+        let window = &self.history[self.history.len() - self.window_size..];
+        let total_output: usize = window.iter().map(|m| m.output_tokens).sum();
+        let any_productive = window.iter().any(|m| m.productive);
+        // Diminishing if: no productive turns AND total output below threshold
+        !any_productive && total_output < self.threshold
+    }
+}
+
+// =============================================================================
+// ContextBudget
+// =============================================================================
+
+/// Orchestrator that combines pressure sensing, circuit breaking, and
+/// diminishing returns detection to issue directives to the agent loop.
+#[derive(Debug)]
+pub struct ContextBudget {
+    token_budget: u64,
+    warning_threshold: f64,
+    critical_threshold: f64,
+    token_estimate_ratio: f64,
+    fresh_tail_count: usize,
+    circuit_breaker: CompactionCircuitBreaker,
+    diminishing: DiminishingReturnsDetector,
+}
+
+impl ContextBudget {
+    /// Create a new context budget from configuration.
+    pub fn new(config: &ContextBudgetConfig) -> Self {
+        Self {
+            token_budget: config.token_budget,
+            warning_threshold: config.warning_threshold,
+            critical_threshold: config.critical_threshold,
+            token_estimate_ratio: config.token_estimate_ratio,
+            fresh_tail_count: config.fresh_tail_count,
+            circuit_breaker: CompactionCircuitBreaker::new(config.circuit_breaker_max),
+            diminishing: DiminishingReturnsDetector::new(
+                config.diminishing_window,
+                config.diminishing_threshold,
+            ),
+        }
     }
 
-    pub fn on_compaction_failure(&mut self) {
-        self.circuit_breaker.record_failure();
+    /// Total token budget.
+    pub fn token_budget(&self) -> u64 {
+        self.token_budget
     }
 
-    pub fn is_compaction_tripped(&self) -> bool {
-        self.circuit_breaker.is_tripped()
-    }
-
-    pub fn pressure(&self) -> ContextPressure {
-        self.pressure
-    }
-
+    /// Characters-per-token ratio.
     pub fn token_estimate_ratio(&self) -> f64 {
         self.token_estimate_ratio
     }
 
+    /// Fresh tail count for compaction.
     pub fn fresh_tail_count(&self) -> usize {
         self.fresh_tail_count
     }
 
-    pub fn token_budget(&self) -> u64 {
-        self.token_budget as u64
+    /// Evaluate context pressure before a turn and return a directive.
+    pub fn before_turn(
+        &mut self,
+        messages: &[UnifiedMessage],
+        system_prompt: &str,
+        tool_defs: &[ToolDefinition],
+    ) -> LoopDirective {
+        let pressure = ContextPressure::compute(
+            messages,
+            system_prompt,
+            tool_defs,
+            self.token_budget,
+            self.token_estimate_ratio,
+        );
+
+        if pressure.ratio >= self.critical_threshold {
+            // Critical — force final reply regardless of circuit breaker
+            tracing::warn!(
+                target: "context_budget",
+                used = pressure.used_tokens,
+                budget = pressure.budget_tokens,
+                ratio = format!("{:.2}", pressure.ratio),
+                "Critical context pressure — forcing final reply"
+            );
+            return LoopDirective::FinalReply;
+        }
+
+        if pressure.ratio >= self.warning_threshold {
+            // Warning — compact, but check circuit breaker
+            if self.circuit_breaker.record_compaction() {
+                tracing::warn!(
+                    target: "context_budget",
+                    "Compaction circuit breaker tripped — escalating to FinalReply"
+                );
+                return LoopDirective::FinalReply;
+            }
+            tracing::info!(
+                target: "context_budget",
+                used = pressure.used_tokens,
+                budget = pressure.budget_tokens,
+                ratio = format!("{:.2}", pressure.ratio),
+                "Warning context pressure — requesting compaction"
+            );
+            return LoopDirective::CompactAndContinue;
+        }
+
+        // Under threshold — reset circuit breaker
+        self.circuit_breaker.reset();
+        LoopDirective::Continue
+    }
+
+    /// Record post-turn metrics and return a directive if diminishing returns detected.
+    pub fn after_turn(&mut self, metrics: TurnMetrics) -> LoopDirective {
+        if self.diminishing.record(metrics) {
+            tracing::warn!(
+                target: "context_budget",
+                "Diminishing returns detected — requesting stop"
+            );
+            return LoopDirective::StopDiminishing;
+        }
+        LoopDirective::Continue
     }
 }
 
@@ -298,189 +300,12 @@ impl ContextBudget {
 mod tests {
     use super::*;
 
-    // -------------------------------------------------------------------------
-    // Pressure tests
-    // -------------------------------------------------------------------------
-
-    #[test]
-    fn pressure_normal_when_under_warning() {
-        assert_eq!(
-            evaluate_pressure(5000, 10000, 0.70, 0.85),
-            ContextPressure::Normal
-        );
-    }
-
-    #[test]
-    fn pressure_warning_at_boundary() {
-        assert_eq!(
-            evaluate_pressure(7000, 10000, 0.70, 0.85),
-            ContextPressure::Warning
-        );
-    }
-
-    #[test]
-    fn pressure_warning_between_thresholds() {
-        assert_eq!(
-            evaluate_pressure(8000, 10000, 0.70, 0.85),
-            ContextPressure::Warning
-        );
-    }
-
-    #[test]
-    fn pressure_critical_at_boundary() {
-        assert_eq!(
-            evaluate_pressure(8500, 10000, 0.70, 0.85),
-            ContextPressure::Critical
-        );
-    }
-
-    #[test]
-    fn pressure_critical_above() {
-        assert_eq!(
-            evaluate_pressure(9500, 10000, 0.70, 0.85),
-            ContextPressure::Critical
-        );
-    }
-
-    // -------------------------------------------------------------------------
-    // Circuit breaker tests
-    // -------------------------------------------------------------------------
-
-    #[test]
-    fn circuit_breaker_closed_initially() {
-        let cb = CompactionCircuitBreaker::new(3);
-        assert!(!cb.is_tripped());
-    }
-
-    #[test]
-    fn circuit_breaker_trips_after_max_failures() {
-        let mut cb = CompactionCircuitBreaker::new(3);
-        cb.record_failure();
-        cb.record_failure();
-        assert!(!cb.is_tripped());
-        cb.record_failure();
-        assert!(cb.is_tripped());
-    }
-
-    #[test]
-    fn circuit_breaker_resets_on_success() {
-        let mut cb = CompactionCircuitBreaker::new(3);
-        cb.record_failure();
-        cb.record_failure();
-        cb.record_failure();
-        assert!(cb.is_tripped());
-        cb.record_success();
-        assert!(!cb.is_tripped());
-    }
-
-    #[test]
-    fn circuit_breaker_stays_tripped_after_more_failures() {
-        let mut cb = CompactionCircuitBreaker::new(3);
-        cb.record_failure();
-        cb.record_failure();
-        cb.record_failure();
-        assert!(cb.is_tripped());
-        cb.record_failure();
-        assert!(cb.is_tripped());
-    }
-
-    // -------------------------------------------------------------------------
-    // Diminishing returns tests
-    // -------------------------------------------------------------------------
-
-    #[test]
-    fn diminishing_not_detected_when_window_not_full() {
-        let mut d = DiminishingReturnsDetector::new(4, 500);
-        d.record(TurnMetrics {
-            output_tokens: 10,
-            tool_calls: 0,
-            productive: false,
-        });
-        d.record(TurnMetrics {
-            output_tokens: 10,
-            tool_calls: 0,
-            productive: false,
-        });
-        assert!(!d.is_diminishing());
-    }
-
-    #[test]
-    fn diminishing_detected_when_all_turns_low_and_unproductive() {
-        let mut d = DiminishingReturnsDetector::new(4, 500);
-        for _ in 0..4 {
-            d.record(TurnMetrics {
-                output_tokens: 50,
-                tool_calls: 0,
-                productive: false,
-            });
-        }
-        assert!(d.is_diminishing());
-    }
-
-    #[test]
-    fn diminishing_not_detected_when_productive() {
-        // 50% productive — below the 75% unproductive threshold
-        let mut d = DiminishingReturnsDetector::new(4, 500);
-        for i in 0..4 {
-            d.record(TurnMetrics {
-                output_tokens: 50,
-                tool_calls: 0,
-                productive: i % 2 == 0,
-            });
-        }
-        assert!(!d.is_diminishing());
-    }
-
-    #[test]
-    fn diminishing_not_detected_when_high_output() {
-        // avg 1000 > threshold 500
-        let mut d = DiminishingReturnsDetector::new(4, 500);
-        for _ in 0..4 {
-            d.record(TurnMetrics {
-                output_tokens: 1000,
-                tool_calls: 0,
-                productive: false,
-            });
-        }
-        assert!(!d.is_diminishing());
-    }
-
-    #[test]
-    fn diminishing_sliding_window_evicts_old() {
-        let mut d = DiminishingReturnsDetector::new(4, 500);
-        // Fill with low unproductive turns
-        for _ in 0..4 {
-            d.record(TurnMetrics {
-                output_tokens: 10,
-                tool_calls: 0,
-                productive: false,
-            });
-        }
-        assert!(d.is_diminishing());
-
-        // Push 2 productive high-output turns — evicts 2 old ones
-        for _ in 0..2 {
-            d.record(TurnMetrics {
-                output_tokens: 2000,
-                tool_calls: 3,
-                productive: true,
-            });
-        }
-        // Now window has 2 low/unproductive + 2 high/productive
-        // unproductive_ratio = 0.50 < 0.75, so not diminishing
-        assert!(!d.is_diminishing());
-    }
-
-    // -------------------------------------------------------------------------
-    // ContextBudget integration tests
-    // -------------------------------------------------------------------------
-
-    fn make_config(budget: u64) -> ContextBudgetConfig {
+    fn default_config() -> ContextBudgetConfig {
         ContextBudgetConfig {
-            token_budget: budget,
+            token_budget: 10_000,
             warning_threshold: 0.70,
             critical_threshold: 0.85,
-            token_estimate_ratio: 1.0,
+            token_estimate_ratio: 3.5,
             fresh_tail_count: 6,
             circuit_breaker_max: 3,
             diminishing_window: 4,
@@ -488,81 +313,98 @@ mod tests {
         }
     }
 
-    fn make_messages(total_chars: usize) -> Vec<UnifiedMessage> {
-        // With ratio 1.0, estimate_tokens returns chars.len() / 1 (rounded)
-        // so we create a single message with the desired character count.
-        let text = "x".repeat(total_chars);
-        vec![UnifiedMessage::user(text)]
+    #[test]
+    fn test_context_pressure_compute() {
+        let msgs = vec![UnifiedMessage::user("Hello world")];
+        let pressure = ContextPressure::compute(&msgs, "system", &[], 1000, 3.5);
+        assert!(pressure.ratio < 1.0);
+        assert!(pressure.used_tokens > 0);
+        assert_eq!(pressure.budget_tokens, 1000);
     }
 
     #[test]
-    fn before_turn_returns_continue_when_normal() {
-        let config = make_config(10000);
+    fn test_loop_directive_continue_under_threshold() {
+        let config = default_config();
         let mut budget = ContextBudget::new(&config);
-        let msgs = make_messages(5000);
-        let directive = budget.before_turn(&msgs, "", &[]);
+        let msgs = vec![UnifiedMessage::user("short")];
+        let directive = budget.before_turn(&msgs, "sys", &[]);
         assert_eq!(directive, LoopDirective::Continue);
-        assert_eq!(budget.pressure(), ContextPressure::Normal);
     }
 
     #[test]
-    fn before_turn_returns_compact_when_warning() {
-        let config = make_config(10000);
-        let mut budget = ContextBudget::new(&config);
-        let msgs = make_messages(7500);
-        let directive = budget.before_turn(&msgs, "", &[]);
-        assert_eq!(directive, LoopDirective::CompactAndContinue);
-        assert_eq!(budget.pressure(), ContextPressure::Warning);
+    fn test_circuit_breaker_trips() {
+        let mut cb = CompactionCircuitBreaker::new(3);
+        assert!(!cb.record_compaction());
+        assert!(!cb.record_compaction());
+        assert!(cb.record_compaction()); // 3rd time trips
     }
 
     #[test]
-    fn before_turn_returns_final_reply_when_critical() {
-        let config = make_config(10000);
-        let mut budget = ContextBudget::new(&config);
-        let msgs = make_messages(9000);
-        let directive = budget.before_turn(&msgs, "", &[]);
-        assert_eq!(directive, LoopDirective::FinalReply);
-        assert_eq!(budget.pressure(), ContextPressure::Critical);
+    fn test_circuit_breaker_reset() {
+        let mut cb = CompactionCircuitBreaker::new(3);
+        cb.record_compaction();
+        cb.record_compaction();
+        cb.reset();
+        assert!(!cb.record_compaction()); // reset, so starts from 1
     }
 
     #[test]
-    fn after_turn_returns_stop_when_diminishing() {
-        let config = make_config(10000);
-        let mut budget = ContextBudget::new(&config);
+    fn test_diminishing_returns_not_enough_history() {
+        let mut dr = DiminishingReturnsDetector::new(4, 500);
+        // Only 2 unproductive turns — not enough for window of 4
+        assert!(!dr.record(TurnMetrics { output_tokens: 10, tool_calls: 1, productive: false }));
+        assert!(!dr.record(TurnMetrics { output_tokens: 10, tool_calls: 1, productive: false }));
+    }
+
+    #[test]
+    fn test_diminishing_returns_triggers() {
+        let mut dr = DiminishingReturnsDetector::new(4, 500);
         for _ in 0..4 {
-            let directive = budget.after_turn(TurnMetrics {
+            dr.record(TurnMetrics {
                 output_tokens: 50,
-                tool_calls: 0,
+                tool_calls: 1,
                 productive: false,
             });
-            // Only the 4th call should trigger StopDiminishing
-            if budget.diminishing.window.len() < 4 {
-                assert_eq!(directive, LoopDirective::Continue);
-            }
         }
-        // After 4 unproductive low-output turns
-        let directive = budget.after_turn(TurnMetrics {
+        // Window of 4 unproductive turns with 200 total tokens < 500 threshold
+        // The 4th call already returned the result, let's check with a 5th
+        let triggered = dr.record(TurnMetrics {
             output_tokens: 50,
-            tool_calls: 0,
+            tool_calls: 1,
             productive: false,
         });
-        assert_eq!(directive, LoopDirective::StopDiminishing);
+        assert!(triggered);
     }
 
     #[test]
-    fn circuit_breaker_exposed_via_budget() {
-        let config = make_config(10000);
+    fn test_diminishing_returns_productive_resets() {
+        let mut dr = DiminishingReturnsDetector::new(4, 500);
+        for _ in 0..3 {
+            dr.record(TurnMetrics {
+                output_tokens: 10,
+                tool_calls: 1,
+                productive: false,
+            });
+        }
+        // One productive turn in window prevents triggering
+        let triggered = dr.record(TurnMetrics {
+            output_tokens: 10,
+            tool_calls: 1,
+            productive: true,
+        });
+        assert!(!triggered);
+    }
+
+    #[test]
+    fn test_after_turn_diminishing() {
+        let config = ContextBudgetConfig {
+            diminishing_window: 2,
+            diminishing_threshold: 100,
+            ..default_config()
+        };
         let mut budget = ContextBudget::new(&config);
-        assert!(!budget.is_compaction_tripped());
-
-        // 3 failures → tripped
-        budget.on_compaction_failure();
-        budget.on_compaction_failure();
-        budget.on_compaction_failure();
-        assert!(budget.is_compaction_tripped());
-
-        // success → reset
-        budget.on_compaction_success();
-        assert!(!budget.is_compaction_tripped());
+        budget.after_turn(TurnMetrics { output_tokens: 10, tool_calls: 1, productive: false });
+        let directive = budget.after_turn(TurnMetrics { output_tokens: 10, tool_calls: 1, productive: false });
+        assert_eq!(directive, LoopDirective::StopDiminishing);
     }
 }

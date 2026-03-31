@@ -54,12 +54,28 @@ pub(crate) async fn run_polling_loop(
     mut shutdown_rx: oneshot::Receiver<()>,
 ) {
     tracing::info!("Starting Telegram long-polling...");
+
+    // Delete any existing webhook — polling and webhooks are mutually exclusive.
+    // If a webhook is set, getUpdates silently returns empty results.
+    // Also drop pending updates to reset the update queue.
+    match bot.delete_webhook().drop_pending_updates(true).await {
+        Ok(_) => tracing::info!("Telegram webhook cleared + pending updates dropped"),
+        Err(e) => tracing::warn!("Failed to delete Telegram webhook: {} (polling may not work)", e),
+    }
+
+    // Diagnostic: manually test getUpdates to verify polling works
+    match bot.get_updates().limit(1).timeout(5).await {
+        Ok(updates) => tracing::info!("Telegram getUpdates test: {} pending updates", updates.len()),
+        Err(e) => tracing::error!("Telegram getUpdates test FAILED: {} — polling will not work!", e),
+    }
+
     *status.write().await = ChannelStatus::Connected;
 
     let mut state = PollingState::new();
 
     loop {
         state.attempt += 1;
+        tracing::info!(attempt = state.attempt, "Telegram polling loop iteration starting");
 
         let mut dispatcher = Dispatcher::builder(bot.clone(), handler.clone())
             .build();
@@ -117,8 +133,12 @@ pub(crate) async fn run_polling_loop(
             }
         });
 
+        tracing::info!("Telegram dispatcher.dispatch() starting...");
         let which = tokio::select! {
-            _ = dispatcher.dispatch() => "stopped",
+            _ = dispatcher.dispatch() => {
+                tracing::warn!("Telegram dispatcher.dispatch() returned (stopped)");
+                "stopped"
+            },
             _ = &mut shutdown_rx => "shutdown",
             _ = stall_rx.recv() => "stall",
         };

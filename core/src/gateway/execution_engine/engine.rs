@@ -305,6 +305,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             sc.channel = request.metadata.get("channel_id").cloned().unwrap_or_default();
             sc.peer_id = request.metadata.get("sender_id").cloned().unwrap_or_default();
             sc.session_key_str = request.session_key.to_key_string();
+            sc.conversation_id = request.metadata.get("conversation_id").cloned().unwrap_or_default();
         }
 
         // Propagate session key to memory_search so scope=current_session works

@@ -28,7 +28,8 @@ use crate::thinker::soul::SoulManifest;
 const DEFAULT_BOOTSTRAP_MAX_CHARS: usize = 20_000;
 
 /// Fallback model when no model is specified at any level.
-const DEFAULT_MODEL: &str = "claude-opus-4-6";
+/// Empty string signals the provider registry to use the provider's own default model.
+const DEFAULT_MODEL: &str = "";
 
 // =============================================================================
 // ResolvedAgent

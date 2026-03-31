@@ -424,6 +424,7 @@ pub async fn handle_respond_to_input(request: JsonRpcRequest) -> JsonRpcResponse
 
 /// Parameters for agent.generateTitle
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub(crate) struct GenerateTitleParams {
     /// User's input message
     pub user_input: String,

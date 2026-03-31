@@ -73,6 +73,7 @@ pub(crate) struct AbortParams {
 
 /// Parameters for chat.history request
 #[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
 pub(crate) struct HistoryParams {
     /// Session key to get history for
     pub session_key: String,

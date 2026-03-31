@@ -180,7 +180,16 @@ impl TeamCreateTool {
         }
 
         if let Some(ref create_spec) = spec.create {
-            return self.create_inline_agent(create_spec, effective_role.as_ref()).await;
+            // Inherit the leader's model so inline agents use the same provider
+            let leader_model = self
+                .registry
+                .get(&self.current_agent_id)
+                .await
+                .map(|inst| inst.config().model.clone())
+                .unwrap_or_else(|| "claude-sonnet-4-5".to_string());
+            return self
+                .create_inline_agent(create_spec, effective_role.as_ref(), &leader_model)
+                .await;
         }
 
         Err(AlephError::other(
@@ -224,6 +233,7 @@ impl TeamCreateTool {
         &self,
         spec: &CreateAgentSpec,
         role: Option<&AgentRole>,
+        leader_model: &str,
     ) -> Result<String> {
         validate_agent_id(&spec.id)
             .map_err(|e| AlephError::other(format!("Invalid agent ID '{}': {}", spec.id, e)))?;
@@ -295,7 +305,7 @@ impl TeamCreateTool {
         }
 
         // Create AgentInstance
-        let model = spec.model.as_deref().unwrap_or("claude-sonnet-4-5");
+        let model = spec.model.as_deref().unwrap_or(leader_model);
         let config = AgentInstanceConfig {
             agent_id: spec.id.clone(),
             workspace: workspace_path.clone(),

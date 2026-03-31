@@ -278,7 +278,9 @@ impl Channel for TelegramChannel {
                     let chat_id = msg.chat.id.0;
 
                     match access.check_message(user_id, chat_id, is_group).await {
-                        AccessDecision::Allowed => {
+                        AccessDecision::Allowed | AccessDecision::NeedsPairing => {
+                            // NeedsPairing messages are forwarded to InboundMessageRouter
+                            // which handles pairing via PairingStore (SQLite).
                             if let Some(inbound) = handlers::convert_message(
                                 &msg, &bot, &channel_id,
                             ).await {
@@ -286,13 +288,6 @@ impl Channel for TelegramChannel {
                                     tracing::error!("Failed to send inbound message: {}", e);
                                 }
                             }
-                        }
-                        AccessDecision::NeedsPairing => {
-                            // Pairing is handled by InboundMessageRouter via
-                            // PairingStore (SQLite). This branch is only reached
-                            // for Allowlist policy (which never returns NeedsPairing),
-                            // so this is effectively dead code — kept for safety.
-                            tracing::debug!("NeedsPairing for user {} — should not happen with current policies", user_id);
                         }
                         AccessDecision::Denied => {
                             tracing::debug!("Access denied for user {} in chat {}", user_id, chat_id);
