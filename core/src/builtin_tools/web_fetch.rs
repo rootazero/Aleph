@@ -70,6 +70,8 @@ pub struct WebFetchTool {
     user_agent: String,
     /// Request timeout in seconds
     timeout_secs: u64,
+    /// Whether Readability extraction is enabled
+    enable_readability: bool,
 }
 
 impl WebFetchTool {
@@ -101,6 +103,7 @@ impl WebFetchTool {
             min_content_length: Self::DEFAULT_MIN_CONTENT_LENGTH,
             user_agent: Self::DEFAULT_USER_AGENT.to_string(),
             timeout_secs: Self::DEFAULT_TIMEOUT_SECS,
+            enable_readability: true,
         }
     }
 
@@ -111,6 +114,7 @@ impl WebFetchTool {
             min_content_length: policy.min_content_length as usize,
             user_agent: policy.user_agent.clone(),
             timeout_secs: policy.timeout_seconds,
+            enable_readability: policy.enable_readability,
         }
     }
 
@@ -168,26 +172,38 @@ impl WebFetchTool {
 
         debug!("Fetched {} bytes from {}", html_content.len(), args.url);
 
-        // Parse HTML
-        let document = Html::parse_document(&html_content);
+        // Safety gate: reject oversized HTML
+        Self::validate_html_safety(&html_content).map_err(|e| {
+            notify_tool_result(Self::NAME, &e.to_string(), false);
+            e
+        })?;
 
-        // Extract title
+        // Extract title from raw HTML (before pre-cleaning)
+        let document = Html::parse_document(&html_content);
         let title = self.extract_title(&document);
         debug!("Extracted title: {:?}", title);
 
-        // Extract main content
-        let content = self.extract_content(&document);
-        debug!("Extracted {} chars of content", content.len());
+        // Enhanced extraction: Readability + Markdown with selector fallback
+        let (content, extractor) = self.extract_content_enhanced(
+            &html_content,
+            &args.url,
+            &args.extract_mode,
+        );
+        debug!("Extracted {} chars via {:?} extractor", content.len(), extractor);
 
         // Notify success
+        let extractor_name = match &extractor {
+            Extractor::Readability => "readability",
+            Extractor::Selector => "selector",
+        };
         let result_summary = format!(
-            "已获取网页内容 ({} 字符)",
-            content.len()
+            "已获取网页内容 ({} 字符, {})",
+            content.len(),
+            extractor_name,
         );
         notify_tool_result(Self::NAME, &result_summary, true);
 
-        // Wrap fetched content with external content boundary markers to guard
-        // against prompt injection embedded in web page content.
+        // Wrap with external content boundary markers
         let wrapped_content = wrap_external_content(
             &content,
             ContentSource::WebFetch { url: args.url.clone() },
@@ -197,7 +213,7 @@ impl WebFetchTool {
             url: args.url,
             title,
             content: wrapped_content,
-            extractor: Extractor::Selector,
+            extractor,
         })
     }
 
@@ -384,16 +400,19 @@ impl WebFetchTool {
     ) -> (String, Extractor) {
         let cleaned_html = Self::pre_clean_html(raw_html);
 
-        if let Some(article_html) = self.extract_with_readability(&cleaned_html, url) {
-            let content = match mode {
-                ExtractMode::Markdown => self.html_to_markdown(&article_html),
-                ExtractMode::Text => {
-                    let text = self.strip_tags(&article_html);
-                    self.clean_text(&text)
-                }
-            };
-            let content = self.truncate_content(content);
-            return (content, Extractor::Readability);
+        // Try Readability extraction (if enabled)
+        if self.enable_readability {
+            if let Some(article_html) = self.extract_with_readability(&cleaned_html, url) {
+                let content = match mode {
+                    ExtractMode::Markdown => self.html_to_markdown(&article_html),
+                    ExtractMode::Text => {
+                        let text = self.strip_tags(&article_html);
+                        self.clean_text(&text)
+                    }
+                };
+                let content = self.truncate_content(content);
+                return (content, Extractor::Readability);
+            }
         }
 
         // Fallback: legacy CSS-selector-based extraction
@@ -417,6 +436,7 @@ impl Clone for WebFetchTool {
             min_content_length: self.min_content_length,
             user_agent: self.user_agent.clone(),
             timeout_secs: self.timeout_secs,
+            enable_readability: self.enable_readability,
         }
     }
 }
@@ -672,6 +692,23 @@ mod tests {
         let (_, extractor) = tool.extract_content_enhanced(html, "https://example.com", &ExtractMode::Markdown);
 
         assert!(matches!(extractor, Extractor::Selector), "Expected Selector fallback, got {:?}", extractor);
+    }
+
+    #[test]
+    fn test_readability_disabled_uses_selector() {
+        let html = r#"<!DOCTYPE html>
+        <html><head><title>Test</title></head>
+        <body><article>
+            <h1>Title</h1>
+            <p>Long enough paragraph for readability to normally extract this content from the article body with sufficient detail and words.</p>
+            <p>Another paragraph ensuring adequate length for the readability algorithm to process and recognize as valid content.</p>
+        </article></body></html>"#;
+
+        let mut tool = WebFetchTool::new();
+        tool.enable_readability = false;
+        let (_, extractor) = tool.extract_content_enhanced(html, "https://example.com", &ExtractMode::Markdown);
+
+        assert!(matches!(extractor, Extractor::Selector), "Should use Selector when readability disabled, got {:?}", extractor);
     }
 
     #[test]
