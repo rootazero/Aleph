@@ -1,9 +1,12 @@
 //! CompactionPipeline — ordered strategy execution.
 
-use crate::providers::message::UnifiedMessage;
+use crate::providers::message::{ContentBlock, UnifiedMessage};
 use crate::agent_loop::tool::ToolDefinition;
-use super::pressure::PressureSensor;
+use super::pressure::{PressureSensor, estimate_tokens_smart};
 use super::ContextPressure;
+use crate::memory::session_compactor::context_window::{
+    is_tool_result_consumed, partition_fresh_tail,
+};
 
 // =============================================================================
 // CompactionStage trait
@@ -119,6 +122,96 @@ impl CompactionPipeline {
 }
 
 // =============================================================================
+// Stage 0: ImageStripper
+// =============================================================================
+
+/// Replaces image content blocks in compressible messages with a lightweight
+/// text marker, freeing the token budget occupied by base64-encoded image data.
+pub struct ImageStripper;
+
+const IMAGE_TOKEN_ESTIMATE: usize = 2000;
+const IMAGE_MARKER: &str = "[image, ~2000 tokens]";
+
+impl CompactionStage for ImageStripper {
+    fn name(&self) -> &'static str {
+        "image_stripper"
+    }
+
+    fn compact(&self, messages: &mut [UnifiedMessage], fresh_tail_count: usize) -> usize {
+        let partition = partition_fresh_tail(messages, fresh_tail_count);
+        let mut total_freed: usize = 0;
+
+        for msg in messages[..partition].iter_mut() {
+            for block in msg.content_blocks_mut() {
+                if matches!(block, ContentBlock::Image { .. }) {
+                    *block = ContentBlock::Text {
+                        text: IMAGE_MARKER.to_string(),
+                    };
+                    total_freed += IMAGE_TOKEN_ESTIMATE;
+                }
+            }
+        }
+
+        total_freed
+    }
+}
+
+// =============================================================================
+// Stage 1: MicroCompact
+// =============================================================================
+
+/// Clears the text of old tool results that have already been consumed by the
+/// LLM (i.e. an assistant message follows them), replacing them with a small
+/// marker to reclaim token budget.
+pub struct MicroCompact;
+
+const CLEARED_MARKER: &str = "[Old result cleared]";
+
+impl CompactionStage for MicroCompact {
+    fn name(&self) -> &'static str {
+        "micro_compact"
+    }
+
+    fn compact(&self, messages: &mut [UnifiedMessage], fresh_tail_count: usize) -> usize {
+        let partition = partition_fresh_tail(messages, fresh_tail_count);
+
+        // Collect candidate indices: tool results in the compressible zone that
+        // have been consumed (an assistant turn follows them).
+        let candidates: Vec<usize> = (0..partition)
+            .filter(|&i| {
+                messages[i].is_tool_result()
+                    && is_tool_result_consumed(messages, i)
+            })
+            .collect();
+
+        let mut total_freed: usize = 0;
+
+        for idx in candidates {
+            let old_content = match messages[idx].tool_result_info() {
+                Some((_, content)) => content,
+                None => continue,
+            };
+
+            // Skip if already compacted.
+            if old_content == CLEARED_MARKER {
+                continue;
+            }
+
+            let old_tokens = estimate_tokens_smart(&old_content);
+            let marker_tokens = estimate_tokens_smart(CLEARED_MARKER);
+            messages[idx].replace_tool_result_content(CLEARED_MARKER.to_string());
+            // Count at least 1 freed token — replacing any content with the
+            // marker represents a real compaction action even if the content
+            // was already short.
+            let saved = old_tokens.saturating_sub(marker_tokens).max(1);
+            total_freed += saved;
+        }
+
+        total_freed
+    }
+}
+
+// =============================================================================
 // Tests
 // =============================================================================
 
@@ -180,5 +273,89 @@ mod tests {
         let sensor = PressureSensor::new(3.5);
         let result = pipeline.run(&mut msgs, &sensor, "", &[], 100, 0.0, 2);
         assert_eq!(result.tokens_freed, 350);
+    }
+
+    #[test]
+    fn image_stripper_replaces_image_blocks() {
+        use crate::providers::message::ContentBlock;
+        let mut msgs = vec![
+            UnifiedMessage::user_with_content(vec![
+                ContentBlock::Image {
+                    data: "base64data".repeat(100),
+                    mime_type: "image/png".into(),
+                },
+            ]),
+            UnifiedMessage::assistant("I see the image"),
+            UnifiedMessage::user("latest question"),
+        ];
+        let stage = ImageStripper;
+        let freed = stage.compact(&mut msgs, 1); // fresh_tail=1, protects last msg
+        let content = msgs[0].text_content();
+        assert!(content.contains("[image"), "image should be replaced, got: {content}");
+        assert!(freed > 0, "should have freed tokens");
+    }
+
+    #[test]
+    fn image_stripper_preserves_fresh_tail_images() {
+        use crate::providers::message::ContentBlock;
+        let mut msgs = vec![
+            UnifiedMessage::user("old text"),
+            UnifiedMessage::user_with_content(vec![
+                ContentBlock::Image {
+                    data: "base64data".repeat(100),
+                    mime_type: "image/png".into(),
+                },
+            ]),
+        ];
+        let stage = ImageStripper;
+        let freed = stage.compact(&mut msgs, 2); // all in fresh tail
+        assert_eq!(freed, 0, "should not touch fresh tail images");
+    }
+
+    #[test]
+    fn microcompact_clears_old_consumed_tool_results() {
+        let mut msgs = vec![
+            UnifiedMessage::user("do something"),
+            UnifiedMessage::tool_result("c1", "Bash", &"x".repeat(2000), false),
+            UnifiedMessage::assistant("I processed it"),
+            UnifiedMessage::user("latest"),
+        ];
+        let stage = MicroCompact;
+        let freed = stage.compact(&mut msgs, 1);
+        let (_, content) = msgs[1].tool_result_info().unwrap();
+        assert_eq!(content, "[Old result cleared]");
+        assert!(freed > 0);
+    }
+
+    #[test]
+    fn microcompact_preserves_unconsumed_tool_results() {
+        let mut msgs = vec![
+            UnifiedMessage::user("do something"),
+            UnifiedMessage::tool_result("c1", "Bash", &"x".repeat(2000), false),
+        ];
+        let stage = MicroCompact;
+        let freed = stage.compact(&mut msgs, 0);
+        let (_, content) = msgs[1].tool_result_info().unwrap();
+        assert_eq!(content, "x".repeat(2000));
+        assert_eq!(freed, 0);
+    }
+
+    #[test]
+    fn microcompact_preserves_fresh_tail() {
+        let mut msgs = vec![
+            UnifiedMessage::user("old"),
+            UnifiedMessage::tool_result("c1", "Bash", "old output", false),
+            UnifiedMessage::assistant("old reply"),
+            UnifiedMessage::user("new"),
+            UnifiedMessage::tool_result("c2", "Read", &"y".repeat(2000), false),
+            UnifiedMessage::assistant("new reply"),
+        ];
+        let stage = MicroCompact;
+        let freed = stage.compact(&mut msgs, 3); // last 3 are fresh
+        let (_, content) = msgs[4].tool_result_info().unwrap();
+        assert_eq!(content, "y".repeat(2000)); // fresh tail untouched
+        let (_, old) = msgs[1].tool_result_info().unwrap();
+        assert_eq!(old, "[Old result cleared]"); // old one cleared
+        assert!(freed > 0);
     }
 }
