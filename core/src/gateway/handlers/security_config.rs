@@ -63,6 +63,81 @@ fn read_gateway_host_from_config(patcher: &ConfigPatcher) -> String {
     "127.0.0.1".to_string() // default
 }
 
+/// Read SSRF settings from [security.ssrf] section in config TOML.
+fn read_ssrf_config_from_toml(patcher: &ConfigPatcher) -> (bool, bool, bool, u8, Vec<String>, Vec<String>) {
+    let config_path = patcher.config_path();
+    if let Ok(contents) = std::fs::read_to_string(config_path) {
+        if let Ok(table) = contents.parse::<toml::Table>() {
+            if let Some(security) = table.get("security").and_then(|v| v.as_table()) {
+                if let Some(ssrf) = security.get("ssrf").and_then(|v| v.as_table()) {
+                    let enabled = ssrf.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true);
+                    let tool_private = ssrf.get("allow_tool_private_network").and_then(|v| v.as_bool()).unwrap_or(false);
+                    let webhook_private = ssrf.get("allow_webhook_private_network").and_then(|v| v.as_bool()).unwrap_or(false);
+                    let max_redirects = ssrf.get("max_redirects").and_then(|v| v.as_integer()).unwrap_or(5) as u8;
+                    let allowed: Vec<String> = ssrf.get("allowed_hosts")
+                        .and_then(|v| v.as_array())
+                        .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                        .unwrap_or_default();
+                    let blocked: Vec<String> = ssrf.get("blocked_hosts")
+                        .and_then(|v| v.as_array())
+                        .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                        .unwrap_or_default();
+                    return (enabled, tool_private, webhook_private, max_redirects, allowed, blocked);
+                }
+            }
+        }
+    }
+    (true, false, false, 5, Vec::new(), Vec::new())
+}
+
+/// Write SSRF settings to [security.ssrf] section in config TOML.
+fn write_ssrf_config_to_toml(path: &std::path::Path, config: &SecurityConfig) -> Result<(), String> {
+    let contents = std::fs::read_to_string(path)
+        .map_err(|e| format!("Failed to read config: {e}"))?;
+    let mut doc: toml::Table = toml::from_str(&contents)
+        .map_err(|e| format!("Failed to parse config: {e}"))?;
+
+    // Create [security] if needed
+    let security = doc
+        .entry("security".to_string())
+        .or_insert_with(|| toml::Value::Table(toml::Table::new()));
+
+    if let toml::Value::Table(sec_table) = security {
+        // Create [security.ssrf] if needed
+        let ssrf = sec_table
+            .entry("ssrf".to_string())
+            .or_insert_with(|| toml::Value::Table(toml::Table::new()));
+
+        if let toml::Value::Table(ssrf_table) = ssrf {
+            ssrf_table.insert("enabled".to_string(), toml::Value::Boolean(config.ssrf_enabled));
+            ssrf_table.insert("allow_tool_private_network".to_string(), toml::Value::Boolean(config.ssrf_allow_tool_private_network));
+            ssrf_table.insert("allow_webhook_private_network".to_string(), toml::Value::Boolean(config.ssrf_allow_webhook_private_network));
+            ssrf_table.insert("max_redirects".to_string(), toml::Value::Integer(config.ssrf_max_redirects as i64));
+            ssrf_table.insert("allowed_hosts".to_string(), toml::Value::Array(
+                config.ssrf_allowed_hosts.iter().map(|s| toml::Value::String(s.clone())).collect()
+            ));
+            ssrf_table.insert("blocked_hosts".to_string(), toml::Value::Array(
+                config.ssrf_blocked_hosts.iter().map(|s| toml::Value::String(s.clone())).collect()
+            ));
+        }
+    }
+
+    let new_contents = toml::to_string_pretty(&doc)
+        .map_err(|e| format!("Failed to serialize config: {e}"))?;
+
+    // Atomic write
+    let temp_path = path.with_extension("ssrf_tmp");
+    std::fs::write(&temp_path, &new_contents)
+        .map_err(|e| format!("Failed to write temp: {e}"))?;
+    std::fs::rename(&temp_path, path)
+        .map_err(|e| {
+            let _ = std::fs::remove_file(&temp_path);
+            format!("Failed to rename: {e}")
+        })?;
+
+    Ok(())
+}
+
 /// Network access scope for gateway binding
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
@@ -102,11 +177,27 @@ pub struct SecurityConfig {
     /// Network access scope (localhost or lan)
     #[serde(default = "default_network_access")]
     pub network_access: NetworkAccess,
+    // SSRF outbound protection
+    #[serde(default = "default_true_ssrf")]
+    pub ssrf_enabled: bool,
+    #[serde(default)]
+    pub ssrf_allow_tool_private_network: bool,
+    #[serde(default)]
+    pub ssrf_allow_webhook_private_network: bool,
+    #[serde(default = "default_max_redirects")]
+    pub ssrf_max_redirects: u8,
+    #[serde(default)]
+    pub ssrf_allowed_hosts: Vec<String>,
+    #[serde(default)]
+    pub ssrf_blocked_hosts: Vec<String>,
 }
 
 fn default_network_access() -> NetworkAccess {
     NetworkAccess::Localhost
 }
+
+fn default_true_ssrf() -> bool { true }
+fn default_max_redirects() -> u8 { 5 }
 
 /// Device information
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -126,11 +217,20 @@ pub async fn handle_get(
     // Read gateway.host from config file to determine network access scope
     let host = read_gateway_host_from_config(&config_patcher);
 
+    let (ssrf_enabled, ssrf_tool_private, ssrf_webhook_private, ssrf_max_redirects, ssrf_allowed, ssrf_blocked) =
+        read_ssrf_config_from_toml(&config_patcher);
+
     let security_config = SecurityConfig {
         require_auth: false,
         enable_pairing: true,
         allow_guest: false,
         network_access: NetworkAccess::from_bind_address(&host),
+        ssrf_enabled,
+        ssrf_allow_tool_private_network: ssrf_tool_private,
+        ssrf_allow_webhook_private_network: ssrf_webhook_private,
+        ssrf_max_redirects,
+        ssrf_allowed_hosts: ssrf_allowed,
+        ssrf_blocked_hosts: ssrf_blocked,
     };
 
     let result = serde_json::to_value(&security_config)
@@ -173,6 +273,16 @@ pub async fn handle_update(
                 format!("Failed to save config: {}", e),
             );
         }
+    }
+
+    // Write SSRF config
+    let config_path = crate::config::Config::default_path();
+    if let Err(e) = write_ssrf_config_to_toml(&config_path, &security_config) {
+        return JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!("Failed to save SSRF config: {}", e),
+        );
     }
 
     // Broadcast event

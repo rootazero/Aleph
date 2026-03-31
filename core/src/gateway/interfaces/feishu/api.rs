@@ -42,11 +42,6 @@ impl FeishuApi {
         }
     }
 
-    /// Access the underlying TokenManager.
-    pub fn auth(&self) -> &TokenManager {
-        &self.auth
-    }
-
     pub async fn bot_open_id(&self) -> Option<String> {
         self.bot_open_id.read().await.clone()
     }
@@ -232,28 +227,6 @@ impl FeishuApi {
         upload_resp.data
             .and_then(|d| d.image_key)
             .ok_or_else(|| "No image_key in upload response".to_string())
-    }
-
-    pub async fn download_media(&self, message_id: &str, file_key: &str) -> Result<Vec<u8>, String> {
-        let token = self.auth.get_token().await?;
-        let url = format!(
-            "{}/open-apis/im/v1/messages/{}/resources/{}?type=image",
-            self.base_url, message_id, file_key
-        );
-
-        let resp = self.http.get(&url)
-            .header("Authorization", format!("Bearer {token}"))
-            .send()
-            .await
-            .map_err(|e| format!("Download media failed: {e}"))?;
-
-        if !resp.status().is_success() {
-            return Err(format!("Download media HTTP {}", resp.status()));
-        }
-
-        resp.bytes().await
-            .map(|b| b.to_vec())
-            .map_err(|e| format!("Download media read failed: {e}"))
     }
 
     // ── Card Kit (Streaming Cards) ──

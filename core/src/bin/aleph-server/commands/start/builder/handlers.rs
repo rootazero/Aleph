@@ -152,14 +152,15 @@ pub(in crate::commands::start) fn register_channel_handlers(
     server: &mut GatewayServer,
     channel_registry: &Arc<ChannelRegistry>,
     app_config: &Arc<tokio::sync::RwLock<alephcore::Config>>,
+    vault: &Arc<alephcore::gateway::security::SharedTokenManager>,
 ) {
     register_handler!(server, "channels.list", channel_handlers::handle_list, channel_registry, app_config);
     register_handler!(server, "channels.status", channel_handlers::handle_status, channel_registry);
-    register_handler!(server, "channel.start", channel_handlers::handle_start, channel_registry, app_config);
+    register_handler!(server, "channel.start", channel_handlers::handle_start, channel_registry, app_config, vault);
     register_handler!(server, "channel.stop", channel_handlers::handle_stop, channel_registry);
     register_handler!(server, "channel.pairing_data", channel_handlers::handle_pairing_data, channel_registry);
     register_handler!(server, "channel.send", channel_handlers::handle_send, channel_registry);
-    register_handler!(server, "channel.create", channel_handlers::handle_create, channel_registry, app_config);
+    register_handler!(server, "channel.create", channel_handlers::handle_create, channel_registry, app_config, vault);
     register_handler!(server, "channel.delete", channel_handlers::handle_delete, channel_registry, app_config);
 
     // ---- Discord Control Plane panel handlers ----
@@ -607,7 +608,7 @@ pub(in crate::commands::start) fn register_config_handlers(
     register_handler!(server, "generation_providers.delete", generation_providers::handle_delete, config, event_bus, shared_token_mgr);
     register_handler!(server, "generation_providers.setDefault", generation_providers::handle_set_default, config, event_bus);
     register_handler!(server, "generation_providers.test", generation_providers::handle_test_connection, config, shared_token_mgr);
-    register_handler!(server, "generation_providers.voices", generation_providers::handle_voices, config);
+    register_handler!(server, "generation_providers.voices", generation_providers::handle_voices, config, shared_token_mgr);
 
     // Embedding providers (vault-backed API key storage)
     register_handler!(server, "embedding_providers.list", embedding_providers::handle_list, config, shared_token_mgr);

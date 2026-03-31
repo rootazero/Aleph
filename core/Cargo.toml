@@ -111,6 +111,10 @@ schemars = "0.8"
 jsonschema = "0.29"
 # For HTML parsing in WebFetchTool
 scraper = "0.22"
+# For Readability content extraction (Mozilla algorithm)
+readability = "0.3"
+# For HTML to Markdown conversion
+htmd = "0.1"
 # For URL parsing and validation
 url = "2.5"
 # Rig framework - REMOVED (migrated to self-implemented tools)

@@ -169,8 +169,9 @@ pub(in crate::commands::start) async fn initialize_channels(
     app_config_arc: &Arc<tokio::sync::RwLock<alephcore::Config>>,
     dispatch_registry: Option<Arc<alephcore::dispatcher::ToolRegistry>>,
     daemon: bool,
+    vault: Arc<alephcore::gateway::security::SharedTokenManager>,
 ) -> Arc<ChannelRegistry> {
-    use alephcore::gateway::handlers::channel::create_channel_from_config;
+    use alephcore::gateway::handlers::channel::{create_channel_from_config, inject_channel_secrets};
 
     let channel_registry = Arc::new(ChannelRegistry::new());
 
@@ -200,10 +201,14 @@ pub(in crate::commands::start) async fn initialize_channels(
             continue;
         }
 
-        if let Some(mut channel) = create_channel_from_config(&inst.id, &inst.channel_type, inst.config.clone()) {
+        // Inject vault secrets (e.g. bot_token) back into config before deserialization
+        let mut config_with_secrets = inst.config.clone();
+        inject_channel_secrets(&inst.id, &mut config_with_secrets, &vault);
+
+        if let Some(mut channel) = create_channel_from_config(&inst.id, &inst.channel_type, config_with_secrets.clone()) {
             // Pass ToolRegistry to telegram instances so they self-register slash commands
             if inst.channel_type == "telegram" {
-                if let Ok(tg_config) = serde_json::from_value::<TelegramConfig>(inst.config.clone()) {
+                if let Ok(tg_config) = serde_json::from_value::<TelegramConfig>(config_with_secrets.clone()) {
                     let mut tg_channel = TelegramChannel::new(&inst.id, tg_config);
                     if let Some(ref reg) = dispatch_registry {
                         tg_channel.set_tool_registry(reg.clone());
@@ -220,7 +225,7 @@ pub(in crate::commands::start) async fn initialize_channels(
         }
     }
 
-    register_channel_handlers(server, &channel_registry, app_config_arc);
+    register_channel_handlers(server, &channel_registry, app_config_arc, &vault);
 
     // Auto-start all registered channels
     let start_results = channel_registry.start_all().await;

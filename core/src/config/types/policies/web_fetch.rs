@@ -46,6 +46,12 @@ pub struct WebFetchPolicy {
     /// Default: ["article", "main", ".content", ".post-content", "#content", "body"]
     #[serde(default = "default_content_selectors")]
     pub content_selectors: Vec<String>,
+
+    /// Whether to use Readability algorithm for content extraction
+    /// When false, falls back to CSS selector-based extraction
+    /// Default: true
+    #[serde(default = "default_enable_readability")]
+    pub enable_readability: bool,
 }
 
 impl Default for WebFetchPolicy {
@@ -58,6 +64,7 @@ impl Default for WebFetchPolicy {
             follow_redirects: default_follow_redirects(),
             max_redirects: default_max_redirects(),
             content_selectors: default_content_selectors(),
+            enable_readability: default_enable_readability(),
         }
     }
 }
@@ -84,6 +91,10 @@ fn default_follow_redirects() -> bool {
 
 fn default_max_redirects() -> u64 {
     10
+}
+
+fn default_enable_readability() -> bool {
+    true
 }
 
 fn default_content_selectors() -> Vec<String> {

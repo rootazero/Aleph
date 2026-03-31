@@ -1,16 +1,19 @@
 //! Webhook delivery target for cron job results.
 //!
-//! Sends job results to external HTTP endpoints.
+//! Sends job results to external HTTP endpoints with SSRF protection.
+
+use std::time::Duration;
 
 use async_trait::async_trait;
+use reqwest::header::{HeaderMap, HeaderValue};
+use reqwest::Method;
 
+use crate::security::ssrf::{safe_fetch, SafeFetchRequest, SsrfPolicy};
 use crate::tasks::shared::delivery::{
     DeliveryError, DeliveryOutcome, DeliveryPayload, DeliveryTarget, DeliveryTargetConfig,
 };
 
-pub struct WebhookTarget {
-    client: reqwest::Client,
-}
+pub struct WebhookTarget;
 
 impl Default for WebhookTarget {
     fn default() -> Self {
@@ -20,13 +23,7 @@ impl Default for WebhookTarget {
 
 impl WebhookTarget {
     pub fn new() -> Self {
-        Self {
-            client: reqwest::Client::builder()
-                .connect_timeout(std::time::Duration::from_secs(10))
-                .timeout(std::time::Duration::from_secs(30))
-                .build()
-                .unwrap_or_default(),
-        }
+        Self
     }
 }
 
@@ -59,33 +56,42 @@ impl DeliveryTarget for WebhookTarget {
             "metadata": payload.metadata,
         });
 
-        let method = method.as_deref().unwrap_or("POST");
-        let mut request = match method {
-            "PUT" => self.client.put(url),
-            _ => self.client.post(url),
-        };
+        let body_bytes =
+            serde_json::to_vec(&body).map_err(|e| DeliveryError::Failed(e.to_string()))?;
 
-        request = request
-            .header("Content-Type", "application/json")
-            .json(&body);
-
-        // Add custom headers
+        // Build headers
+        let mut header_map = HeaderMap::new();
+        header_map.insert("content-type", HeaderValue::from_static("application/json"));
         if let Some(hdrs) = headers {
             for (key, value) in hdrs {
-                request = request.header(key.as_str(), value.as_str());
+                if let (Ok(name), Ok(val)) = (
+                    key.parse::<reqwest::header::HeaderName>(),
+                    HeaderValue::from_str(value),
+                ) {
+                    header_map.insert(name, val);
+                }
             }
         }
 
-        match request.send().await {
-            Ok(resp) if resp.status().is_success() => Ok(DeliveryOutcome {
+        // Determine HTTP method
+        let http_method = match method.as_deref().unwrap_or("POST") {
+            "PUT" => Method::PUT,
+            _ => Method::POST,
+        };
+
+        let fetch_request = SafeFetchRequest::post(body_bytes, Duration::from_secs(30))
+            .with_method(http_method)
+            .with_headers(header_map);
+
+        match safe_fetch(url, &SsrfPolicy::default(), fetch_request).await {
+            Ok(resp) if resp.status.is_success() => Ok(DeliveryOutcome {
                 target_kind: "webhook".to_string(),
                 success: true,
-                message: Some(format!("HTTP {}", resp.status())),
+                message: Some(format!("HTTP {}", resp.status)),
             }),
             Ok(resp) => Err(DeliveryError::Failed(format!(
                 "HTTP {} from {}",
-                resp.status(),
-                url
+                resp.status, url
             ))),
             Err(e) => Err(DeliveryError::Failed(format!("Request failed: {}", e))),
         }

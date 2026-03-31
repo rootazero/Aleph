@@ -55,14 +55,7 @@ fn vault_key(provider_id: &str) -> String {
 
 /// Resolve API key from vault for an embedding provider
 fn resolve_api_key(id: &str, vault: &SharedTokenManager) -> Option<String> {
-    match vault.get_secret(&vault_key(id)) {
-        Ok(Some(secret)) => Some(secret.expose().to_string()),
-        Ok(None) => None,
-        Err(e) => {
-            warn!(provider = %id, error = %e, "Failed to read embedding API key from vault");
-            None
-        }
-    }
+    super::resolve_vault_secret(&vault_key(id), vault)
 }
 
 fn save_config(cfg: &Config) -> Result<(), String> {

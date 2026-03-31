@@ -12,8 +12,7 @@ impl ProfileGenerator {
             .tempdir()?;
         let path = temp_dir.path().to_path_buf();
         // Consume the TempDir guard to prevent auto-cleanup on drop.
-        // `into_path()` returns the PathBuf and disables auto-deletion.
-        let _ = temp_dir.into_path();
+        let _ = temp_dir.keep();
         Ok(path)
     }
 

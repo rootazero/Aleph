@@ -264,7 +264,7 @@ impl PermissionEvaluator {
 }
 
 /// Simple wildcard matching (supports * and ?)
-pub fn wildcard_match(text: &str, pattern: &str) -> bool {
+pub(crate) fn wildcard_match(text: &str, pattern: &str) -> bool {
     if pattern == "*" {
         return true;
     }

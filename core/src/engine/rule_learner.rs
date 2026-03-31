@@ -34,7 +34,10 @@
 //! }
 //! ```
 
-use super::{AtomicAction, KeywordRule, FeatureExtractor, FeatureVector, NaiveBayesClassifier, ActionClass};
+use super::AtomicAction;
+use super::reflex_layer::KeywordRule;
+use super::feature_extractor::{FeatureExtractor, FeatureVector};
+use super::classifier::{NaiveBayesClassifier, ActionClass};
 use dashmap::DashMap;
 use regex::Regex;
 use serde::{Deserialize, Serialize};

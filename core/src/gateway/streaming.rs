@@ -124,6 +124,16 @@ impl StreamingController {
         }
     }
 
+    /// Reset the controller for a new streaming iteration (e.g. after an
+    /// intermediate boundary).  The current streamed message stays as-is;
+    /// subsequent chunks will start a fresh message.
+    pub fn reset(&mut self) {
+        self.buffer.clear();
+        self.sent_message_id = None;
+        self.last_edit_at = Instant::now();
+        self.last_edit_len = 0;
+    }
+
     /// Finalize the stream — returns the appropriate action for any
     /// remaining unsent content.
     pub fn finalize(&mut self) -> StreamAction {

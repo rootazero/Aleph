@@ -36,7 +36,7 @@
 
 pub mod agent_loop;
 pub mod agents;
-pub mod arena;
+pub(crate) mod arena;
 pub mod approval;
 pub mod browser;
 pub mod builtin_tools;
@@ -80,9 +80,9 @@ pub mod search;
 pub mod skill;
 pub mod bundled;
 
-pub mod supervisor;
+pub(crate) mod supervisor;
 pub mod thinker;
-pub mod tool_output;
+pub(crate) mod tool_output;
 pub mod tools;
 pub mod utils;
 pub mod vision;
@@ -219,9 +219,6 @@ pub use crate::exec::{
 // Supervisor Exports
 // =============================================================================
 
-pub use crate::supervisor::{
-    ClaudeSupervisor, PtySize, SupervisorConfig, SupervisorError, SupervisorEvent,
-};
 
 // =============================================================================
 // Wizard Exports
@@ -292,18 +289,6 @@ pub use crate::media::{
 
 pub use crate::conversation::{ConversationManager, ConversationSession, ConversationTurn};
 
-// =============================================================================
-// Group Chat Exports
-// =============================================================================
-
-pub use crate::group_chat::{
-    GroupChatExecutor,
-    GroupChatOrchestrator, GroupChatSession, PersonaRegistry,
-    GroupChatCommandParser, GroupChatRenderer,
-    GroupChatError, GroupChatMessage, GroupChatRequest, GroupChatStatus,
-    Persona, PersonaSource, Speaker, RenderedContent, ContentFormat,
-    CoordinatorPlan, RespondentPlan,
-};
 
 // =============================================================================
 // Provider Exports

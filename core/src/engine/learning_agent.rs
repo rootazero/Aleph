@@ -36,7 +36,9 @@
 //! agent.generate_and_deploy_rules().await;
 //! ```
 
-use super::{AtomicAction, ReflexLayer, RuleLearner, LearnerStats};
+use super::AtomicAction;
+use super::reflex_layer::ReflexLayer;
+use super::rule_learner::{RuleLearner, LearnerStats};
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use crate::sync_primitives::Arc;

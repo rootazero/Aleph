@@ -301,6 +301,10 @@ pub struct CronJob {
     #[serde(default)]
     pub source_channel_id: Option<String>,
 
+    /// Conversation ID within the channel (e.g. Telegram chat_id) for delivery routing
+    #[serde(default)]
+    pub source_conversation_id: Option<String>,
+
     /// Message to send to the agent
     pub prompt: String,
 
@@ -378,6 +382,7 @@ impl CronJob {
             name: name.into(),
             agent_id: agent_id.into(),
             source_channel_id: None,
+            source_conversation_id: None,
             prompt: prompt.into(),
             enabled: true,
             timezone: None,
@@ -426,6 +431,8 @@ pub struct JobSnapshot {
     pub agent_id: Option<String>,
     /// Channel to deliver results to
     pub source_channel_id: Option<String>,
+    /// Conversation ID within the channel (e.g. Telegram chat_id)
+    pub source_conversation_id: Option<String>,
     /// Template-rendered prompt
     pub prompt: String,
     pub model: Option<String>,
@@ -550,13 +557,14 @@ pub struct JobRun {
 }
 
 impl JobRun {
-    /// Create a new job run
+    /// Create a new job run.
+    /// All timestamps use milliseconds since epoch for consistency with the rest of the cron system.
     pub fn new(job_id: impl Into<String>) -> Self {
         Self {
             id: uuid::Uuid::new_v4().to_string(),
             job_id: job_id.into(),
             status: RunStatus::Ok, // Will be updated on completion
-            started_at: chrono::Utc::now().timestamp(),
+            started_at: chrono::Utc::now().timestamp_millis(),
             ended_at: 0,
             duration_ms: 0,
             error: None,
@@ -576,30 +584,30 @@ impl JobRun {
 
     /// Mark as success
     pub fn success(mut self, response: Option<String>) -> Self {
-        let now = chrono::Utc::now().timestamp();
+        let now = chrono::Utc::now().timestamp_millis();
         self.status = RunStatus::Ok;
         self.ended_at = now;
-        self.duration_ms = now.saturating_sub(self.started_at).saturating_mul(1000) as u64;
+        self.duration_ms = now.saturating_sub(self.started_at) as u64;
         self.response = response.map(|r| truncate_string(&r, 1000));
         self
     }
 
     /// Mark as failed
     pub fn failed(mut self, error: String) -> Self {
-        let now = chrono::Utc::now().timestamp();
+        let now = chrono::Utc::now().timestamp_millis();
         self.status = RunStatus::Error;
         self.ended_at = now;
-        self.duration_ms = now.saturating_sub(self.started_at).saturating_mul(1000) as u64;
+        self.duration_ms = now.saturating_sub(self.started_at) as u64;
         self.error = Some(truncate_string(&error, 500));
         self
     }
 
     /// Mark as timeout
     pub fn timeout(mut self) -> Self {
-        let now = chrono::Utc::now().timestamp();
+        let now = chrono::Utc::now().timestamp_millis();
         self.status = RunStatus::Timeout;
         self.ended_at = now;
-        self.duration_ms = now.saturating_sub(self.started_at).saturating_mul(1000) as u64;
+        self.duration_ms = now.saturating_sub(self.started_at) as u64;
         self.error = Some("Job execution timed out".to_string());
         self
     }
@@ -617,7 +625,7 @@ fn truncate_string(s: &str, max_len: usize) -> String {
             .take_while(|&i| i <= target)
             .last()
             .unwrap_or(0);
-        format!("{}...", &s[..boundary])
+        format!("{}...", s.get(..boundary).unwrap_or(s))
     }
 }
 

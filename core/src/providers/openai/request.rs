@@ -16,7 +16,7 @@ use super::types::{
 
 /// Build text content for image/multimodal requests.
 /// Handles prepend mode for system prompts and provides default description for images.
-pub fn build_text_content(
+pub(crate) fn build_text_content(
     input: &str,
     system_prompt: Option<&str>,
     use_prepend_mode: bool,

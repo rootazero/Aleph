@@ -434,8 +434,8 @@ pub(super) fn parse_heading(trimmed: &str) -> Option<(u8, &str)> {
 
 /// Parse a blockquote line. Returns the inner text (after `> `), or `""` for bare `>`.
 pub(super) fn parse_blockquote_line(trimmed: &str) -> Option<&str> {
-    if trimmed.starts_with("> ") {
-        Some(&trimmed[2..])
+    if let Some(rest) = trimmed.strip_prefix("> ") {
+        Some(rest)
     } else if trimmed == ">" {
         Some("")
     } else {

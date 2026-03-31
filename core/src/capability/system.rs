@@ -104,13 +104,6 @@ impl SystemStatus {
             .collect()
     }
 
-    /// Get operational capabilities
-    pub fn operational_capabilities(&self) -> Vec<&CapabilityHealth> {
-        self.capabilities
-            .iter()
-            .filter(|c| c.is_operational())
-            .collect()
-    }
 }
 
 /// Unified Capability System

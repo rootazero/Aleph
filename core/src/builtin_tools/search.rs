@@ -11,6 +11,8 @@ use tracing::{debug, info, warn};
 
 use super::error::ToolError;
 use crate::error::Result;
+use crate::search::SearchRegistry;
+use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
 
 /// Arguments for search tool
@@ -60,6 +62,8 @@ struct TavilyResult {
 pub struct SearchTool {
     client: Client,
     api_key: Option<String>,
+    /// Multi-provider search registry (when available, takes priority over direct Tavily)
+    registry: Option<Arc<SearchRegistry>>,
 }
 
 impl SearchTool {
@@ -81,6 +85,7 @@ impl SearchTool {
         Self {
             client: Client::new(),
             api_key,
+            registry: None,
         }
     }
 
@@ -99,23 +104,68 @@ impl SearchTool {
         Self {
             client: Client::new(),
             api_key: resolved_key,
+            registry: None,
         }
     }
 
-    /// Execute a web search using Tavily API (internal implementation)
+    /// Create with a SearchRegistry for multi-provider support
+    pub fn with_registry(registry: Arc<SearchRegistry>) -> Self {
+        info!("SearchTool initialized with multi-provider registry");
+        Self {
+            client: Client::new(),
+            api_key: None,
+            registry: Some(registry),
+        }
+    }
+
+    /// Execute a web search, trying registry first then falling back to direct Tavily API
     async fn call_impl(&self, args: SearchArgs) -> std::result::Result<SearchOutput, ToolError> {
         use super::{notify_tool_result, notify_tool_start};
 
-        // Notify tool start
         let args_summary = format!("搜索: {}", &args.query);
         notify_tool_start(Self::NAME, &args_summary);
 
+        // Try SearchRegistry first (multi-provider with fallback)
+        if let Some(ref registry) = self.registry {
+            let options = crate::search::SearchOptions {
+                max_results: args.limit,
+                ..Default::default()
+            };
+
+            match registry.search(&args.query, &options).await {
+                Ok(results) => {
+                    let results: Vec<SearchResult> = results
+                        .into_iter()
+                        .map(|r| SearchResult {
+                            title: r.title,
+                            url: r.url,
+                            snippet: r.snippet,
+                        })
+                        .collect();
+
+                    info!(count = results.len(), "Search completed via registry");
+                    let result_summary = format!("找到 {} 条搜索结果", results.len());
+                    notify_tool_result(Self::NAME, &result_summary, true);
+
+                    return Ok(SearchOutput {
+                        results,
+                        query: args.query,
+                    });
+                }
+                Err(e) => {
+                    warn!("Registry search failed, falling back to direct Tavily: {}", e);
+                    // Fall through to direct Tavily path
+                }
+            }
+        }
+
+        // Fallback: Direct Tavily API call (legacy path)
         let api_key = self
             .api_key
             .as_ref()
             .ok_or_else(|| {
-                notify_tool_result(Self::NAME, "API key not configured", false);
-                ToolError::InvalidArgs("TAVILY_API_KEY not set".to_string())
+                notify_tool_result(Self::NAME, "No search provider available", false);
+                ToolError::InvalidArgs("No search provider configured (no registry and no TAVILY_API_KEY)".to_string())
             })?;
 
         info!(query = %args.query, limit = args.limit, "Executing Tavily search");
@@ -192,6 +242,7 @@ impl Clone for SearchTool {
         Self {
             client: Client::new(),
             api_key: self.api_key.clone(),
+            registry: self.registry.clone(),
         }
     }
 }
@@ -280,5 +331,16 @@ mod tests {
         if let Some(key) = original_key {
             env::set_var("TAVILY_API_KEY", key);
         }
+    }
+
+    #[test]
+    fn test_search_tool_with_registry() {
+        use crate::search::SearchRegistry;
+        use crate::sync_primitives::Arc;
+
+        let registry = Arc::new(SearchRegistry::new("tavily".to_string()));
+        let tool = SearchTool::with_registry(registry);
+        assert!(tool.registry.is_some());
+        assert!(tool.api_key.is_none());
     }
 }

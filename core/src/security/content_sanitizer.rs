@@ -86,7 +86,7 @@ pub fn wrap_external_content(content: &str, source: ContentSource) -> String {
 /// - Instruction override phrases
 /// - Tokenizer markers
 /// - Model format markers
-pub fn detect_injection_patterns(content: &str) -> Vec<InjectionPattern> {
+fn detect_injection_patterns(content: &str) -> Vec<InjectionPattern> {
     let lower = content.to_lowercase();
     let mut patterns = Vec::new();
 
@@ -170,7 +170,7 @@ pub fn detect_injection_patterns(content: &str) -> Vec<InjectionPattern> {
 ///
 /// - Converts fullwidth ASCII (U+FF01–U+FF5E) to halfwidth equivalents.
 /// - Converts common Cyrillic confusables to Latin equivalents.
-pub fn normalize_homoglyphs(text: &str) -> String {
+fn normalize_homoglyphs(text: &str) -> String {
     text.chars().map(normalize_char).collect()
 }
 

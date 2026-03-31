@@ -462,15 +462,23 @@ impl ToolRegistry for BuiltinToolRegistry {
                 })
             }
 
-            // Cron management tool — inject session channel context so
-            // created jobs know where to deliver results.
+            // Cron management tool — inject session channel + conversation context so
+            // created jobs know where to deliver results. Also inject current_time_ms
+            // so the LLM has a reliable epoch reference for computing At timestamps.
             "cron_manage" => {
                 let arguments = {
                     let mut args = arguments;
+                    if let Some(obj) = args.as_object_mut() {
+                        obj.insert(
+                            "__current_time_ms".into(),
+                            serde_json::Value::Number(chrono::Utc::now().timestamp_millis().into()),
+                        );
+                    }
                     if let Some(ref h) = self.session_context_handle {
                         if let Ok(ctx) = h.try_read() {
                             if let Some(obj) = args.as_object_mut() {
                                 obj.insert("__channel".into(), serde_json::Value::String(ctx.channel.clone()));
+                                obj.insert("__conversation_id".into(), serde_json::Value::String(ctx.conversation_id.clone()));
                             }
                         }
                     }

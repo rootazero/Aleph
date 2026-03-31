@@ -31,7 +31,7 @@ use crate::gateway::channel::{
     ChannelInfo, ChannelResult, ChannelState, ChannelStatus, ConversationId, InboundMessage,
     MessageId, OutboundMessage, PairingData, SendResult, UserId,
 };
-use access::{AccessDecision, PairingResult};
+use access::AccessDecision;
 use async_trait::async_trait;
 use chrono::Utc;
 use std::sync::Arc;
@@ -173,12 +173,16 @@ impl Channel for TelegramChannel {
             }
         }
 
-        // Build slash commands from ToolRegistry (builtin tools only)
+        // Build slash commands from ToolRegistry (user-facing commands only)
+        // Only register tools that have `usage` set — these are the curated
+        // user-facing slash commands from register_builtin_tools(), not the
+        // full set of LLM-callable executor tools.
         if let Some(ref registry) = self.tool_registry {
             use teloxide::types::BotCommand;
 
             let tools = registry.list_builtin_tools().await;
             let mut commands: Vec<(String, String)> = tools.iter()
+                .filter(|t| t.usage.is_some())
                 .map(|t| (t.name.clone(), t.description.clone()))
                 .collect();
 
@@ -224,11 +228,14 @@ impl Channel for TelegramChannel {
             if !bot_commands.is_empty() {
                 // Clear old commands first, then set new ones
                 let _ = bot.delete_my_commands().await;
+                let cmd_names: Vec<_> = bot_commands.iter().map(|c| c.command.as_str()).collect();
+                tracing::debug!("Telegram slash commands to register: {:?}", cmd_names);
                 match bot.set_my_commands(bot_commands.clone()).await {
                     Ok(_) => {
                         tracing::info!(
-                            "Registered {} slash commands with Telegram Bot API",
-                            bot_commands.len()
+                            "Registered {} slash commands with Telegram Bot API: {:?}",
+                            bot_commands.len(),
+                            cmd_names,
                         );
                     }
                     Err(e) => {
@@ -271,39 +278,14 @@ impl Channel for TelegramChannel {
                     let chat_id = msg.chat.id.0;
 
                     match access.check_message(user_id, chat_id, is_group).await {
-                        AccessDecision::Allowed => {
+                        AccessDecision::Allowed | AccessDecision::NeedsPairing => {
+                            // NeedsPairing messages are forwarded to InboundMessageRouter
+                            // which handles pairing via PairingStore (SQLite).
                             if let Some(inbound) = handlers::convert_message(
                                 &msg, &bot, &channel_id,
                             ).await {
                                 if let Err(e) = inbound_tx.send(inbound).await {
                                     tracing::error!("Failed to send inbound message: {}", e);
-                                }
-                            }
-                        }
-                        AccessDecision::NeedsPairing => {
-                            // Handle pairing flow for DM messages
-                            if let Some(text) = msg.text() {
-                                match access.try_pair(user_id, text).await {
-                                    PairingResult::Success => {
-                                        let _ = bot.send_message(
-                                            msg.chat.id,
-                                            "Paired successfully! You can now send messages.",
-                                        ).await;
-                                    }
-                                    PairingResult::Expired => {
-                                        let _ = bot.send_message(
-                                            msg.chat.id,
-                                            "Pairing code expired. Please request a new one.",
-                                        ).await;
-                                    }
-                                    PairingResult::InvalidCode => {
-                                        if access.should_prompt(user_id).await {
-                                            let _ = bot.send_message(
-                                                msg.chat.id,
-                                                "Please enter your pairing code.",
-                                            ).await;
-                                        }
-                                    }
                                 }
                             }
                         }

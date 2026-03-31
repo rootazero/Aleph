@@ -1,12 +1,12 @@
 // SSRF (Server-Side Request Forgery) protection for browser navigation.
-// Validates URLs against private network ranges and domain blocklists.
+// Thin wrapper over the core SSRF engine (`crate::security::ssrf`).
 
 use std::fmt;
-use std::net::IpAddr;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use url::Url;
+
+use crate::security::ssrf::{self, SsrfPolicy as CoreSsrfPolicy};
 
 /// Configuration for SSRF protection policy.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -72,112 +72,81 @@ impl fmt::Display for PolicyViolation {
 
 impl std::error::Error for PolicyViolation {}
 
-/// SSRF protection policy that validates URLs before navigation.
+impl From<ssrf::SsrfError> for PolicyViolation {
+    fn from(err: ssrf::SsrfError) -> Self {
+        match &err {
+            ssrf::SsrfError::InvalidUrl(_) | ssrf::SsrfError::NoHost => {
+                PolicyViolation::InvalidUrl(err.to_string())
+            }
+            ssrf::SsrfError::BlockedAddress(addr) => {
+                // Distinguish private-network blocks from domain blocks by checking
+                // if the address looks like an IP or hostname.
+                if addr.contains("blocklist") {
+                    PolicyViolation::BlockedDomain(addr.clone())
+                } else {
+                    PolicyViolation::PrivateNetwork(addr.clone())
+                }
+            }
+            ssrf::SsrfError::DnsResolutionFailed { host, .. } => {
+                PolicyViolation::PrivateNetwork(host.clone())
+            }
+            ssrf::SsrfError::TooManyRedirects(_) | ssrf::SsrfError::FetchFailed(_) => {
+                PolicyViolation::InvalidUrl(err.to_string())
+            }
+        }
+    }
+}
+
+/// SSRF protection guard for browser navigation.
+/// Delegates to the core SSRF engine for IP/hostname validation.
 #[derive(Debug, Clone, Default)]
-pub struct SsrfPolicy {
+pub struct BrowserSsrfGuard {
     config: SsrfConfig,
 }
 
-impl SsrfPolicy {
+impl BrowserSsrfGuard {
     pub fn new(config: SsrfConfig) -> Self {
         Self { config }
     }
 
     /// Validate a URL against the SSRF policy.
     pub fn check_url(&self, url_str: &str) -> Result<(), PolicyViolation> {
-        let parsed = Url::parse(url_str)
-            .map_err(|e| PolicyViolation::InvalidUrl(e.to_string()))?;
+        // Build core policy from browser config
+        let core_policy = CoreSsrfPolicy {
+            enabled: true,
+            allow_private_network: !self.config.block_private,
+            allowed_hosts: self.config.allowed_domains.clone(),
+            blocked_hosts: self.config.blocked_domains.clone(),
+            ..CoreSsrfPolicy::default()
+        };
 
-        let host_str = parsed
-            .host_str()
-            .ok_or_else(|| PolicyViolation::InvalidUrl("no host in URL".to_string()))?;
+        // Delegate to core engine (sync validation)
+        ssrf::validate_url(url_str, &core_policy).map_err(PolicyViolation::from)?;
 
-        // Check private network blocking
-        if self.config.block_private && self.is_private_host(host_str) {
-            return Err(PolicyViolation::PrivateNetwork(host_str.to_string()));
-        }
-
-        // Allowlist mode: if non-empty, domain must match at least one pattern
+        // Additional browser-specific: allowlist-only mode
+        // (when allowed_domains is non-empty, ONLY those domains are permitted)
         if !self.config.allowed_domains.is_empty() {
-            let matched = self
-                .config
-                .allowed_domains
-                .iter()
-                .any(|pat| domain_matches(pat, host_str));
-            if !matched {
-                return Err(PolicyViolation::NotInAllowlist(host_str.to_string()));
-            }
-        }
-
-        // Blocklist: reject if any pattern matches
-        for pattern in &self.config.blocked_domains {
-            if domain_matches(pattern, host_str) {
-                return Err(PolicyViolation::BlockedDomain(host_str.to_string()));
+            let url = url::Url::parse(url_str)
+                .map_err(|e| PolicyViolation::InvalidUrl(e.to_string()))?;
+            if let Some(host) = url.host_str() {
+                // The core engine's allowlist BYPASSES blocks, but browser needs allowlist-ONLY mode.
+                // Check if host matches any allowed domain pattern.
+                let matched = self.config.allowed_domains.iter().any(|pat| {
+                    let pat_lower = pat.to_ascii_lowercase();
+                    let host_lower = host.to_ascii_lowercase();
+                    if let Some(base) = pat_lower.strip_prefix("*.") {
+                        host_lower == base || host_lower.ends_with(&format!(".{base}"))
+                    } else {
+                        host_lower == pat_lower
+                    }
+                });
+                if !matched {
+                    return Err(PolicyViolation::NotInAllowlist(host.to_string()));
+                }
             }
         }
 
         Ok(())
-    }
-
-    /// Check whether a host string refers to a private/loopback address.
-    fn is_private_host(&self, host: &str) -> bool {
-        // Strip IPv6 brackets if present
-        let bare = host.trim_start_matches('[').trim_end_matches(']');
-
-        // Well-known loopback hostnames
-        if bare.eq_ignore_ascii_case("localhost") {
-            return true;
-        }
-
-        // Try parsing as IP address
-        if let Ok(ip) = bare.parse::<IpAddr>() {
-            return is_private_ip(ip);
-        }
-
-        false
-    }
-}
-
-/// Returns true if the IP address belongs to a private or loopback range.
-fn is_private_ip(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(v4) => {
-            let octets = v4.octets();
-            // 127.0.0.0/8 loopback
-            octets[0] == 127
-            // 10.0.0.0/8 private
-            || octets[0] == 10
-            // 172.16.0.0/12 private
-            || (octets[0] == 172 && (16..=31).contains(&octets[1]))
-            // 192.168.0.0/16 private
-            || (octets[0] == 192 && octets[1] == 168)
-            // 0.0.0.0
-            || v4.is_unspecified()
-            // 169.254.0.0/16 link-local
-            || (octets[0] == 169 && octets[1] == 254)
-        }
-        IpAddr::V6(v6) => {
-            // ::1 loopback
-            v6.is_loopback()
-            // :: unspecified
-            || v6.is_unspecified()
-            // IPv4-mapped addresses (::ffff:x.x.x.x)
-            || v6.to_ipv4_mapped().is_some_and(|v4| is_private_ip(IpAddr::V4(v4)))
-        }
-    }
-}
-
-/// Match a domain against a glob-like pattern.
-/// Supports `*.example.com` (matches any subdomain) and exact matches.
-fn domain_matches(pattern: &str, domain: &str) -> bool {
-    let pattern_lower = pattern.to_ascii_lowercase();
-    let domain_lower = domain.to_ascii_lowercase();
-
-    if let Some(suffix) = pattern_lower.strip_prefix("*.") {
-        // *.example.com matches example.com itself and any subdomain
-        domain_lower == suffix || domain_lower.ends_with(&format!(".{suffix}"))
-    } else {
-        domain_lower == pattern_lower
     }
 }
 
@@ -187,7 +156,7 @@ mod tests {
 
     #[test]
     fn test_blocks_localhost() {
-        let policy = SsrfPolicy::default();
+        let policy = BrowserSsrfGuard::default();
 
         assert!(matches!(
             policy.check_url("http://localhost/path"),
@@ -205,7 +174,7 @@ mod tests {
 
     #[test]
     fn test_blocks_private_networks() {
-        let policy = SsrfPolicy::default();
+        let policy = BrowserSsrfGuard::default();
 
         // 10.x.x.x
         assert!(matches!(
@@ -231,7 +200,7 @@ mod tests {
 
     #[test]
     fn test_allows_public_urls() {
-        let policy = SsrfPolicy::default();
+        let policy = BrowserSsrfGuard::default();
 
         assert!(policy.check_url("https://example.com/page").is_ok());
         assert!(policy.check_url("https://8.8.8.8/dns").is_ok());
@@ -240,7 +209,7 @@ mod tests {
 
     #[test]
     fn test_blocked_domain_patterns() {
-        let policy = SsrfPolicy::new(SsrfConfig {
+        let policy = BrowserSsrfGuard::new(SsrfConfig {
             block_private: false,
             blocked_domains: vec![
                 "*.malware.com".to_string(),
@@ -250,27 +219,27 @@ mod tests {
         });
 
         // Subdomain match
-        assert!(matches!(
-            policy.check_url("https://payload.malware.com/x"),
-            Err(PolicyViolation::BlockedDomain(_))
-        ));
+        assert!(
+            policy.check_url("https://payload.malware.com/x").is_err(),
+            "subdomain of blocked wildcard should be blocked"
+        );
         // Bare domain match for wildcard
-        assert!(matches!(
-            policy.check_url("https://malware.com/x"),
-            Err(PolicyViolation::BlockedDomain(_))
-        ));
+        assert!(
+            policy.check_url("https://malware.com/x").is_err(),
+            "bare domain of blocked wildcard should be blocked"
+        );
         // Exact match
-        assert!(matches!(
-            policy.check_url("https://evil.org/"),
-            Err(PolicyViolation::BlockedDomain(_))
-        ));
+        assert!(
+            policy.check_url("https://evil.org/").is_err(),
+            "exact blocked domain should be blocked"
+        );
         // Non-matching domain is fine
         assert!(policy.check_url("https://safe.com/").is_ok());
     }
 
     #[test]
     fn test_allowed_domains_whitelist() {
-        let policy = SsrfPolicy::new(SsrfConfig {
+        let policy = BrowserSsrfGuard::new(SsrfConfig {
             block_private: false,
             blocked_domains: vec![],
             allowed_domains: vec![
@@ -292,7 +261,7 @@ mod tests {
 
     #[test]
     fn test_disabled_ssrf_allows_everything() {
-        let policy = SsrfPolicy::new(SsrfConfig {
+        let policy = BrowserSsrfGuard::new(SsrfConfig {
             block_private: false,
             blocked_domains: vec![],
             allowed_domains: vec![],
@@ -306,7 +275,7 @@ mod tests {
 
     #[test]
     fn test_invalid_url() {
-        let policy = SsrfPolicy::default();
+        let policy = BrowserSsrfGuard::default();
 
         assert!(matches!(
             policy.check_url("not-a-url"),

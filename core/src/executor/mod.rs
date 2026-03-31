@@ -30,20 +30,21 @@
 
 pub mod action_types;
 mod builtin_registry;
+#[allow(dead_code)]
 mod cache_config;
+#[allow(dead_code)]
 mod cache_store;
+#[allow(dead_code)]
 mod single_step;
+#[allow(dead_code)]
 mod types;
 mod exec_security_gate;
 
 pub use builtin_registry::{
-    create_tool_boxed, get_builtin_tool_names, is_builtin_tool, BuiltinToolConfig,
-    BuiltinToolDefinition, BuiltinToolRegistry, BUILTIN_TOOL_DEFINITIONS, TOOL_CATEGORIES,
+    create_tool_boxed, get_builtin_tool_names, BuiltinToolConfig,
+    BuiltinToolRegistry, BUILTIN_TOOL_DEFINITIONS, TOOL_CATEGORIES,
 };
-pub use cache_config::ToolCacheConfig;
-pub use cache_store::{CacheStats, ToolResultCache};
-pub use single_step::{SingleStepConfig, SingleStepExecutor, ToolRegistry};
-pub use types::{
-    ExecutionContext, ExecutionResult, ExecutorError, TaskExecutionResult, ToolCallRecord,
-};
-pub use exec_security_gate::{ExecSecurityGate, PreExecDecision};
+pub use single_step::ToolRegistry;
+pub use types::{ExecutionContext, ExecutionResult, ToolCallRecord};
+pub use exec_security_gate::ExecSecurityGate;
+pub(crate) use exec_security_gate::PreExecDecision;

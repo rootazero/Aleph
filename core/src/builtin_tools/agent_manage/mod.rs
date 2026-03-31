@@ -18,6 +18,8 @@ pub struct SessionContext {
     pub peer_id: String,
     /// Serialized session key string (e.g. "main:default:0" or "main:dm:telegram:user123:0")
     pub session_key_str: String,
+    /// Conversation ID within the channel (e.g. Telegram chat_id)
+    pub conversation_id: String,
 }
 
 pub type SessionContextHandle = Arc<RwLock<SessionContext>>;

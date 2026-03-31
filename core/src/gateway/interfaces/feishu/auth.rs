@@ -154,9 +154,5 @@ impl TokenManager {
         });
     }
 
-    /// Get the internal token state Arc for WS reconnect.
-    pub(super) fn token_state(&self) -> Arc<RwLock<TokenState>> {
-        self.token.clone()
-    }
 
 }

@@ -1,13 +1,13 @@
-pub mod actions;
+mod actions;
 pub mod backend;
 pub mod chrome_mcp;
 pub mod chrome_mcp_backend;
-pub mod chrome_mcp_snapshot;
+mod chrome_mcp_snapshot;
 pub mod playwright_mcp;
 pub mod playwright_mcp_backend;
-pub mod discovery;
+mod discovery;
 pub mod error;
-pub mod managed_backend;
+mod managed_backend;
 pub mod manager;
 pub mod network_policy;
 

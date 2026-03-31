@@ -1,7 +1,5 @@
 //! Provider handler helper functions.
 
-use tracing::warn;
-
 use crate::config::{Config, ProviderConfig};
 use crate::config::presets_override::PresetsOverride;
 use crate::providers::presets::get_merged_preset;
@@ -14,40 +12,17 @@ pub(super) fn vault_key(provider_name: &str) -> String {
     format!("ai:{}", provider_name)
 }
 
-/// Check whether an API key exists in the vault for a provider (never exposes the key)
-pub(super) fn has_api_key(name: &str, vault: &SharedTokenManager) -> bool {
-    match vault.get_secret(&vault_key(name)) {
-        Ok(Some(_)) => true,
-        Ok(None) => false,
-        Err(e) => {
-            warn!(provider = %name, error = %e, "Failed to read API key from vault");
-            false
-        }
-    }
-}
-
 /// Resolve the actual API key from vault (for internal use like test/create-provider, never serialized to responses)
 pub(super) fn resolve_api_key(name: &str, vault: &SharedTokenManager) -> Option<String> {
-    match vault.get_secret(&vault_key(name)) {
-        Ok(Some(secret)) => Some(secret.expose().to_string()),
-        Ok(None) => None,
-        Err(e) => {
-            warn!(provider = %name, error = %e, "Failed to read API key from vault");
-            None
-        }
-    }
+    crate::gateway::handlers::resolve_vault_secret(&vault_key(name), vault)
 }
 
-pub(super) fn normalize_optional_string(value: Option<String>) -> Option<String> {
-    value.and_then(|v| {
-        let trimmed = v.trim();
-        if trimmed.is_empty() {
-            None
-        } else {
-            Some(trimmed.to_string())
-        }
-    })
+/// Check whether a provider has an API key stored in the vault.
+pub(super) fn has_api_key(name: &str, vault: &SharedTokenManager) -> bool {
+    resolve_api_key(name, vault).is_some()
 }
+
+pub(super) use crate::gateway::handlers::normalize_optional_string;
 
 pub(super) fn save_config(cfg: &Config, sections: &[&str]) -> Result<(), String> {
     // api_key is #[serde(skip)] — never persisted to disk

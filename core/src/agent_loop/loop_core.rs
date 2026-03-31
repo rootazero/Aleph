@@ -9,6 +9,8 @@
 //! - `max_iterations` is reached
 //! - Token budget is exhausted
 
+use std::sync::Mutex;
+
 use async_trait::async_trait;
 use futures::StreamExt;
 use serde_json::Value;
@@ -29,6 +31,16 @@ use futures::stream::BoxStream;
 const TRUNCATION_NOTICE: &str =
     "[SYSTEM] Earlier conversation history and memory context were truncated \
      to fit the model's context window. Continue based on the remaining context.";
+
+const CRITICAL_CONTEXT_NOTICE: &str =
+    "[SYSTEM] Context window is critically full. You MUST respond directly to the user now. \
+     Do NOT call any tools. Summarize your progress and provide the best answer you can \
+     with the information you have.";
+
+const DIMINISHING_RETURNS_NOTICE: &str =
+    "[SYSTEM] Your recent iterations have produced minimal progress. Summarize: \
+     (1) what you accomplished, (2) what you tried that didn't work, \
+     (3) what the user should do next. Then stop.";
 
 /// Find a safe cut point that doesn't split ToolCall/ToolResult pairs.
 fn find_safe_cut_point(messages: &[UnifiedMessage], initial_cut: usize) -> usize {
@@ -148,27 +160,6 @@ pub trait LoopProvider: Send + Sync {
 }
 
 // =============================================================================
-// ToolCompactorConfig
-// =============================================================================
-
-/// Configuration for in-loop tool result compression.
-///
-/// When set on an `AgentLoop`, the compactor runs synchronously before each
-/// LLM call and collapses verbose tool-use/tool-result pairs into compact
-/// summaries when the estimated context exceeds `context_threshold * token_budget`.
-#[derive(Debug, Clone)]
-pub struct ToolCompactorConfig {
-    /// Total token budget for the model context window.
-    pub token_budget: u64,
-    /// Fraction of `token_budget` at which compaction triggers (e.g. 0.80).
-    pub context_threshold: f64,
-    /// Characters-per-token ratio used for token estimation.
-    pub token_estimate_ratio: f64,
-    /// Number of most-recent messages to leave untouched during compaction.
-    pub fresh_tail_count: usize,
-}
-
-// =============================================================================
 // LoopConfig
 // =============================================================================
 
@@ -253,7 +244,7 @@ pub trait LoopCallback: Send {
 }
 
 /// No-op callback for when you don't need events.
-pub struct NoopCallback;
+pub(crate) struct NoopCallback;
 impl LoopCallback for NoopCallback {}
 
 // =============================================================================
@@ -267,8 +258,10 @@ pub struct AgentLoop<P: LoopProvider> {
     prompt_builder: PromptBuilder,
     safety_guard: SafetyGuard,
     config: LoopConfig,
-    /// Optional in-loop tool result compactor configuration.
-    tool_compactor_config: Option<ToolCompactorConfig>,
+    /// Optional context budget for pressure sensing and budget tracking.
+    /// Wrapped in `Mutex` for interior mutability — `run_with_history_messages`
+    /// takes `&self` but the budget needs mutable state across turns.
+    context_budget: Mutex<Option<super::context_budget::ContextBudget>>,
     /// Sink for streaming deltas during the Think step. Defaults to NoopSink.
     delta_sink: Box<dyn DeltaSink>,
     /// Token for cooperative cancellation of streaming and tool execution.
@@ -293,15 +286,15 @@ impl<P: LoopProvider> AgentLoop<P> {
             prompt_builder,
             safety_guard,
             config,
-            tool_compactor_config: None,
+            context_budget: Mutex::new(None),
             delta_sink: Box::new(NoopSink),
             cancel_token,
         }
     }
 
-    /// Attach an optional `ToolCompactorConfig` to enable in-loop context compression.
-    pub fn with_tool_compactor_config(mut self, cfg: Option<ToolCompactorConfig>) -> Self {
-        self.tool_compactor_config = cfg;
+    /// Attach a [`ContextBudget`](super::context_budget::ContextBudget) for pressure sensing and budget tracking.
+    pub fn with_context_budget(self, budget: Option<super::context_budget::ContextBudget>) -> Self {
+        *self.context_budget.lock().unwrap_or_else(|e| e.into_inner()) = budget;
         self
     }
 
@@ -387,33 +380,53 @@ impl<P: LoopProvider> AgentLoop<P> {
         while iterations < self.config.max_iterations {
             iterations += 1;
 
-            // Compact tool results if context exceeds threshold
-            if let Some(ref tc_config) = self.tool_compactor_config {
-                crate::memory::session_compactor::tool_compactor::compact_if_needed(
-                    &mut messages,
-                    tc_config.token_budget,
-                    tc_config.context_threshold,
-                    tc_config.token_estimate_ratio,
-                    tc_config.fresh_tail_count,
-                );
-            }
+            // --- Context budget evaluation (single lock scope) ---
+            let mut budget_directive = super::context_budget::LoopDirective::Continue;
+            let (budget_fresh_tail, budget_ratio) = {
+                let mut ctx_budget_ref = self.context_budget.lock().unwrap_or_else(|e| e.into_inner());
+                if let Some(ref mut ctx_budget) = *ctx_budget_ref {
+                    budget_directive = ctx_budget.before_turn(&messages, &system_prompt, &tool_defs);
 
-            // Hard safety net: if context STILL exceeds budget after compaction,
-            // aggressively truncate old messages to guarantee the LLM call succeeds.
-            // Priority: keep running > preserve history.
+                    match budget_directive {
+                        super::context_budget::LoopDirective::CompactAndContinue => {
+                            crate::memory::session_compactor::tool_compactor::compact_if_needed(
+                                &mut messages,
+                                ctx_budget.token_budget(),
+                                0.70,
+                                ctx_budget.token_estimate_ratio(),
+                                ctx_budget.fresh_tail_count(),
+                            );
+                            ctx_budget.notify_compaction_success();
+                        }
+                        super::context_budget::LoopDirective::FinalReply => {
+                            crate::memory::session_compactor::tool_compactor::compact_if_needed(
+                                &mut messages,
+                                ctx_budget.token_budget(),
+                                0.5,
+                                ctx_budget.token_estimate_ratio(),
+                                ctx_budget.fresh_tail_count(),
+                            );
+                            messages.push(UnifiedMessage::user(CRITICAL_CONTEXT_NOTICE));
+                        }
+                        super::context_budget::LoopDirective::StopDiminishing => {
+                            messages.push(UnifiedMessage::user(DIMINISHING_RETURNS_NOTICE));
+                        }
+                        super::context_budget::LoopDirective::Continue => {}
+                    }
+                    (ctx_budget.fresh_tail_count(), ctx_budget.token_estimate_ratio())
+                } else {
+                    (6, 3.5)
+                }
+            };
+
+            // Hard safety net: enforce context limit
             enforce_context_limit(
                 &mut messages,
                 &system_prompt,
                 &tool_defs,
                 self.config.token_budget,
-                self.tool_compactor_config
-                    .as_ref()
-                    .map(|c| c.fresh_tail_count)
-                    .unwrap_or(6),
-                self.tool_compactor_config
-                    .as_ref()
-                    .map(|c| c.token_estimate_ratio)
-                    .unwrap_or(3.5),
+                budget_fresh_tail,
+                budget_ratio,
             );
 
             // Think: stream deltas with retry and cancellation
@@ -572,61 +585,106 @@ impl<P: LoopProvider> AgentLoop<P> {
                 break;
             }
 
-            // Act: execute tool calls via orchestrator (concurrent where safe)
-            let outcomes = super::tool_orchestrator::execute_tool_batch(
-                &response.tool_calls,
-                &self.tool_registry,
-                &self.safety_guard,
-                &self.cancel_token,
-                callback,
-            ).await;
+            // Skip tool execution if context budget says to stop
+            let skip_tools = matches!(
+                budget_directive,
+                super::context_budget::LoopDirective::FinalReply
+                    | super::context_budget::LoopDirective::StopDiminishing
+            );
 
-            for outcome in &outcomes {
-                if outcome.is_error {
-                    // Safety denials and retryable errors don't count toward consecutive limit
-                    let is_safety_denial = outcome.output_text.starts_with("[BLOCKED]")
-                        || outcome.output_text.starts_with("[NEEDS_CONFIRMATION]")
-                        || outcome.output_text.starts_with("[DENIED]")
-                        || outcome.output_text.starts_with("[CANCELLED]");
-                    if is_safety_denial {
-                        // Fire safety block callback for denied tools
-                        if outcome.output_text.starts_with("[BLOCKED]") {
-                            callback.on_safety_block(&SafetyError::Blocked {
-                                tool: outcome.tool_name.clone(),
-                                pattern: String::new(),
-                            });
-                        } else if outcome.output_text.starts_with("[NEEDS_CONFIRMATION]") {
-                            callback.on_safety_block(&SafetyError::NeedsConfirmation {
-                                tool: outcome.tool_name.clone(),
-                            });
-                        } else if outcome.output_text.starts_with("[DENIED]") {
-                            callback.on_safety_block(&SafetyError::PolicyDenied {
-                                tool: outcome.tool_name.clone(),
-                            });
+            if skip_tools && response.has_tool_calls() {
+                // Inject a tool result telling the LLM tools were skipped
+                for tc in &response.tool_calls {
+                    messages.push(UnifiedMessage::tool_result(
+                        tc.id.clone(),
+                        tc.name.clone(),
+                        "[SYSTEM] Tool execution skipped — context budget exhausted. Provide your best response now.",
+                        true,
+                    ));
+                }
+            } else {
+                // Act: execute tool calls via orchestrator (concurrent where safe)
+                let outcomes = super::tool_orchestrator::execute_tool_batch(
+                    &response.tool_calls,
+                    &self.tool_registry,
+                    &self.safety_guard,
+                    &self.cancel_token,
+                    callback,
+                ).await;
+
+                for outcome in &outcomes {
+                    if outcome.is_error {
+                        // Safety denials and retryable errors don't count toward consecutive limit
+                        let is_safety_denial = outcome.output_text.starts_with("[BLOCKED]")
+                            || outcome.output_text.starts_with("[NEEDS_CONFIRMATION]")
+                            || outcome.output_text.starts_with("[DENIED]")
+                            || outcome.output_text.starts_with("[CANCELLED]");
+                        if is_safety_denial {
+                            // Fire safety block callback for denied tools
+                            if outcome.output_text.starts_with("[BLOCKED]") {
+                                callback.on_safety_block(&SafetyError::Blocked {
+                                    tool: outcome.tool_name.clone(),
+                                    pattern: String::new(),
+                                });
+                            } else if outcome.output_text.starts_with("[NEEDS_CONFIRMATION]") {
+                                callback.on_safety_block(&SafetyError::NeedsConfirmation {
+                                    tool: outcome.tool_name.clone(),
+                                });
+                            } else if outcome.output_text.starts_with("[DENIED]") {
+                                callback.on_safety_block(&SafetyError::PolicyDenied {
+                                    tool: outcome.tool_name.clone(),
+                                });
+                            }
+                        } else if !outcome.retryable {
+                            consecutive_errors += 1;
                         }
-                    } else if !outcome.retryable {
-                        consecutive_errors += 1;
+                    } else {
+                        consecutive_errors = 0;
                     }
-                } else {
-                    consecutive_errors = 0;
+
+                    messages.push(UnifiedMessage::tool_result(
+                        outcome.tool_id.clone(),
+                        outcome.tool_name.clone(),
+                        outcome.output_text.clone(),
+                        outcome.is_error,
+                    ));
+
+                    if outcome.should_stop {
+                        if final_text.is_none() {
+                            final_text = Some(outcome.output_text.clone());
+                        }
+                        stop_requested = true;
+                    }
                 }
 
-                messages.push(UnifiedMessage::tool_result(
-                    outcome.tool_id.clone(),
-                    outcome.tool_name.clone(),
-                    outcome.output_text.clone(),
-                    outcome.is_error,
-                ));
-
-                if outcome.should_stop {
-                    if final_text.is_none() {
-                        final_text = Some(outcome.output_text.clone());
-                    }
-                    stop_requested = true;
-                }
+                tool_calls_made += outcomes.len();
             }
 
-            tool_calls_made += outcomes.len();
+            // --- After-turn: record metrics for diminishing returns detection ---
+            {
+                let mut ctx_budget_ref = self.context_budget.lock().unwrap_or_else(|e| e.into_inner());
+                if let Some(ref mut ctx_budget) = *ctx_budget_ref {
+                    let turn_productive = response.has_tool_calls()
+                        && !skip_tools
+                        && tool_calls_made > 0
+                        && consecutive_errors == 0;
+                    let output_tokens = response
+                        .usage
+                        .as_ref()
+                        .map(|u| u.output_tokens as usize)
+                        .unwrap_or(0);
+                    let post_directive = ctx_budget.after_turn(
+                        super::context_budget::TurnMetrics {
+                            output_tokens,
+                            tool_calls: response.tool_calls.len(),
+                            productive: turn_productive,
+                        },
+                    );
+                    if post_directive == super::context_budget::LoopDirective::StopDiminishing {
+                        messages.push(UnifiedMessage::user(DIMINISHING_RETURNS_NOTICE));
+                    }
+                }
+            }
 
             if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
                 hit_limit = true;

@@ -129,11 +129,76 @@ impl SqliteCoordTaskStore {
     }
 
     /// Run schema migration (creates tables + indexes).
+    ///
+    /// Also handles legacy schema cleanup: earlier versions stored team data
+    /// in `coord_teams` / `coord_team_members` tables inside this database and
+    /// added a `FOREIGN KEY (team_id) REFERENCES coord_teams(id)` on
+    /// `coord_tasks`.  Team management has since moved to a separate `teams.db`
+    /// via `TeamStore`, so the FK now causes inserts to fail.  When the legacy
+    /// tables are detected we rebuild `coord_tasks` without the stale FK.
     pub async fn migrate(&self) -> crate::error::Result<()> {
         let conn = self.conn.lock().await;
         conn.execute_batch("PRAGMA foreign_keys = ON;")
             .map_err(db_err)?;
 
+        // --- Legacy schema migration -------------------------------------------
+        // Detect old `coord_teams` table whose FK on `coord_tasks.team_id`
+        // blocks inserts (teams now live in teams.db).
+        let has_legacy: bool = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='coord_teams'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0i64)
+            > 0;
+
+        if has_legacy {
+            // Must disable FK checks while we recreate the table, otherwise
+            // the data copy itself could trip the stale constraint.
+            conn.execute_batch("PRAGMA foreign_keys = OFF;")
+                .map_err(db_err)?;
+
+            conn.execute_batch(
+                r#"
+                BEGIN;
+
+                -- Rebuild coord_tasks without the stale FK to coord_teams
+                CREATE TABLE coord_tasks_new (
+                    id TEXT PRIMARY KEY,
+                    team_id TEXT,
+                    subject TEXT NOT NULL,
+                    description TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    owner TEXT,
+                    priority TEXT NOT NULL DEFAULT 'normal',
+                    result TEXT,
+                    metadata TEXT NOT NULL DEFAULT '{}',
+                    created_at INTEGER NOT NULL,
+                    started_at INTEGER,
+                    completed_at INTEGER
+                );
+                INSERT INTO coord_tasks_new SELECT * FROM coord_tasks;
+                DROP TABLE coord_tasks;
+                ALTER TABLE coord_tasks_new RENAME TO coord_tasks;
+
+                -- Drop legacy team tables that are no longer used
+                DROP TABLE IF EXISTS coord_team_members;
+                DROP TABLE IF EXISTS coord_teams;
+
+                COMMIT;
+                "#,
+            )
+            .map_err(db_err)?;
+
+            // Re-enable FK enforcement
+            conn.execute_batch("PRAGMA foreign_keys = ON;")
+                .map_err(db_err)?;
+
+            tracing::info!("coord_tasks: migrated away from legacy coord_teams FK");
+        }
+
+        // --- Standard schema ---------------------------------------------------
         conn.execute_batch(
             r#"
             CREATE TABLE IF NOT EXISTS coord_tasks (

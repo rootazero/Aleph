@@ -111,14 +111,6 @@ impl Default for WaitTimeTracker {
 mod tests {
     use super::*;
 
-    #[allow(dead_code)]
-    fn current_time_ms() -> i64 {
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as i64
-    }
-
     #[tokio::test]
     async fn test_track_enqueue() {
         let tracker = WaitTimeTracker::new();

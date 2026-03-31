@@ -11,6 +11,7 @@ pub enum ChatType {
 // ── Mentions ──
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct Mention {
     /// Placeholder key in message text (e.g., "@_user_1")
     pub key: String,
@@ -25,6 +26,7 @@ pub struct Mention {
 // ── Events ──
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub enum FeishuEvent {
     MessageReceive {
         message_id: String,
@@ -47,15 +49,6 @@ pub enum FeishuEvent {
     Unknown(String),
 }
 
-// ── WebSocket Frame Types ──
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WsFrameType {
-    Event,
-    Ping,
-    Pong,
-}
-
 // ── API Response Types ──
 
 #[derive(Debug, Deserialize)]
@@ -75,6 +68,7 @@ pub struct WsEndpointResponse {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct WsEndpointData {
     #[serde(rename = "URL")]
     pub url: String,
@@ -130,6 +124,7 @@ pub struct WsEventEnvelope {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct WsEventHeader {
     pub event_id: Option<String>,
     pub event_type: Option<String>,
@@ -146,6 +141,7 @@ pub struct MessageEventPayload {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct MessageSender {
     pub sender_id: Option<SenderIdContainer>,
     pub sender_type: Option<String>,
@@ -169,6 +165,7 @@ pub struct MessageBody {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct MentionPayload {
     pub key: Option<String>,
     pub id: Option<MentionId>,

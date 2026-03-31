@@ -32,7 +32,7 @@ fn has_semantic_boundary(s: &str) -> bool {
         || s.ends_with("！")
         || s.ends_with("! ")
         || s.ends_with("? ")
-        || s.lines().last().map_or(false, |line| line.trim_start().starts_with("```"))
+        || s.lines().last().is_some_and(|line| line.trim_start().starts_with("```"))
 }
 
 /// Check if buffer ends with a soft boundary (shorter timeout).

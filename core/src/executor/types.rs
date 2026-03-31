@@ -382,6 +382,7 @@ impl ExecutionContext {
 /// Executor error types
 ///
 /// Represents the various ways execution can fail.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ExecutorError {
     /// General execution failure
@@ -421,6 +422,7 @@ impl std::fmt::Display for ExecutorError {
 
 impl std::error::Error for ExecutorError {}
 
+#[allow(dead_code)]
 impl ExecutorError {
     /// Create an execution failed error
     pub fn execution_failed(msg: impl Into<String>) -> Self {

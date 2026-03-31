@@ -95,7 +95,7 @@ impl AlephToolDyn for McpGetPromptTool {
                     None => {
                         return Err(crate::error::AlephError::NotFound(
                             format!("No MCP server found for prompt: {}", name)
-                        ).into());
+                        ));
                     }
                 }
             };

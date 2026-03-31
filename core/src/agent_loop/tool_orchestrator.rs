@@ -262,13 +262,6 @@ pub async fn execute_tool_batch(
     results.into_iter().map(|(_, outcome)| outcome).collect()
 }
 
-/// Check if a ToolOutcome represents a safety denial (not a real execution).
-fn is_safety_blocked(outcome: &ToolOutcome) -> bool {
-    outcome.is_error
-        && (outcome.output_text.starts_with("[BLOCKED]")
-            || outcome.output_text.starts_with("[NEEDS_CONFIRMATION]")
-            || outcome.output_text.starts_with("[DENIED]"))
-}
 
 /// Convert a ToolOutcome back to a ToolResult for the callback.
 fn outcome_to_tool_result(outcome: &ToolOutcome) -> ToolResult {

@@ -36,30 +36,15 @@ pub mod identity_files;
 
 use crate::sync_primitives::Arc;
 
-pub use cache::{
-    AnthropicCacheStrategy, CacheContext, CacheControl, CacheStrategy, CacheableContentBlock,
-    GeminiCacheCreateRequest, GeminiCacheCreateResponse, GeminiCacheStrategy, GeminiContent,
-    GeminiPart, ProviderType, SystemPromptCache, TransparentCacheStrategy,
-    get_cache_strategy, GEMINI_CACHE_TTL_SECS, MIN_CACHE_TOKENS,
-};
+pub use cache::{CacheControl, CacheStrategy};
 pub use prompt_builder::{PromptBuilder, PromptConfig};
-pub use prompt_budget::{PromptResult, TokenBudget, TruncationStat, TruncationWarning};
-pub use prompt_layer::{AssemblyPath, LayerInput, PromptLayer};
-pub use prompt_mode::PromptMode;
-pub use prompt_pipeline::PromptPipeline;
+pub use prompt_budget::{PromptResult, TokenBudget};
+pub use prompt_layer::{LayerInput, PromptLayer};
 pub use interaction::{Capability, InteractionConstraints, InteractionManifest, InteractionParadigm};
-pub use security_context::{
-    ElevatedPolicy, SandboxLevel, SecurityContext, ToolPermission, is_network_tool,
-};
-pub use context::{
-    ContextAggregator, DisableReason, DisabledTool, EnvironmentContract, ResolvedContext,
-};
-pub use soul::{FormattingStyle, RelationshipMode, SoulLoadError, SoulManifest, SoulVoice, Verbosity};
-pub use protocol_tokens::ProtocolToken;
-pub use memory_context::{MemoryContext, MemorySummary};
-pub use memory_context_provider::{MemoryContextProvider, MemoryContextConfig};
-pub use runtime_context::RuntimeContext;
-pub use identity::{IdentityResolver, IdentitySource, IdentitySourceType};
+pub use context::ContextAggregator;
+pub use soul::{SoulManifest, SoulVoice};
+pub use memory_context_provider::MemoryContextProvider;
+pub use identity::{IdentityResolver, IdentitySource};
 
 use crate::providers::AiProvider;
 use crate::providers::health::{ProviderError, ProviderHealth, ResolvedModel};
@@ -218,7 +203,7 @@ impl MultiProviderRegistry {
     pub fn register(&self, name: String, provider: Arc<dyn AiProvider>) {
         let mut state = self.state.write().unwrap_or_else(|e| e.into_inner());
         state.providers.insert(name.clone(), provider);
-        state.health.entry(name).or_insert_with(ProviderHealth::default);
+        state.health.entry(name).or_default();
     }
 
     pub fn remove(&self, name: &str) -> crate::error::Result<Option<Arc<dyn AiProvider>>> {

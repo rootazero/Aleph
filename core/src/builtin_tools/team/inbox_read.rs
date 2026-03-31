@@ -102,7 +102,7 @@ impl AlephTool for InboxReadTool {
                 })?;
                 self.inbox.read_thread(thread_id).await?
             }
-            "inbox" | _ => {
+            _ => {
                 self.inbox
                     .read(
                         &self.current_agent_id,

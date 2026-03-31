@@ -130,16 +130,6 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         let max_loops = agent.config().max_loops as usize;
         let token_budget = agent.config().max_tokens.unwrap_or(500_000);
 
-        // Build optional ToolCompactorConfig from session compactor settings
-        let tool_compactor_config = self.session_compactor.as_ref().map(|sc| {
-            crate::agent_loop::ToolCompactorConfig {
-                token_budget: token_budget as u64,
-                context_threshold: sc.config().context_threshold,
-                token_estimate_ratio: sc.config().token_estimate_ratio,
-                fresh_tail_count: sc.config().fresh_tail_count,
-            }
-        });
-
         // Load conversation history from session (for multi-turn context)
         // Compression time excluded from agent's timeout budget
         let before_compress = tokio::time::Instant::now();
@@ -243,10 +233,9 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             // Resolve model behavior: config override > protocol auto-mapping
             let behavior_content = {
                 let behavior_name = provider.model_behavior_override()
-                    .map(|s| s.to_string())
-                    .or_else(|| protocol_to_behavior(&provider.protocol().to_string()).map(|s| s.to_string()));
+                    .or_else(|| protocol_to_behavior(&provider.protocol().to_string()));
                 let content = match behavior_name {
-                    Some(ref name) => load_model_behavior(name).await,
+                    Some(name) => load_model_behavior(name).await,
                     None => None,
                 };
                 info!(
@@ -325,6 +314,21 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             );
 
             // Create the agent loop
+            // Build ContextBudget fresh for each retry attempt
+            let context_budget = self.session_compactor.as_ref().map(|sc| {
+                let config = crate::agent_loop::ContextBudgetConfig {
+                    token_budget: token_budget as u64,
+                    warning_threshold: 0.70,
+                    critical_threshold: 0.85,
+                    token_estimate_ratio: sc.config().token_estimate_ratio,
+                    fresh_tail_count: sc.config().fresh_tail_count,
+                    circuit_breaker_max: 3,
+                    diminishing_window: 4,
+                    diminishing_threshold: 500,
+                };
+                crate::agent_loop::ContextBudget::new(&config)
+            });
+
             let agent_loop = AgentLoop::new(
                 bridge,
                 tool_registry,
@@ -334,7 +338,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 cancel_token.clone(),
             )
             .with_delta_sink(Box::new(streaming_sink))
-            .with_tool_compactor_config(tool_compactor_config.clone());
+            .with_context_budget(context_budget);
 
             // Create a streaming callback
             let mut callback = StreamCallback::new(

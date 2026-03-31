@@ -14,6 +14,8 @@ pub struct ProviderInfo {
     pub provider_type: Option<String>,
     pub has_api_key: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub base_url: Option<String>,
     pub color: String,
     pub timeout_seconds: u64,

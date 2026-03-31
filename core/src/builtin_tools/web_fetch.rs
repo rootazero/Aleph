@@ -7,20 +7,44 @@ use super::error::ToolError;
 use crate::config::WebFetchPolicy;
 use crate::error::Result;
 use crate::security::content_sanitizer::{wrap_external_content, ContentSource};
-use crate::security::ssrf::{validate_url, SsrfPolicy};
+use crate::security::ssrf::{safe_fetch, SafeFetchRequest, SsrfPolicy};
 use crate::tools::AlephTool;
-use reqwest::Client;
+use regex::Regex;
 use schemars::JsonSchema;
 use scraper::{Html, Selector};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info};
 
 
+/// Content extraction mode
+#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum ExtractMode {
+    /// Structured Markdown output (default)
+    #[default]
+    Markdown,
+    /// Plain text output (legacy behavior)
+    Text,
+}
+
+/// Which extraction method produced the content
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Extractor {
+    /// Mozilla Readability algorithm
+    Readability,
+    /// CSS selector-based fallback
+    Selector,
+}
+
 /// Arguments for web fetch tool
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct WebFetchArgs {
     /// URL to fetch
     pub url: String,
+    /// Content extraction mode (default: markdown)
+    #[serde(default)]
+    pub extract_mode: ExtractMode,
 }
 
 /// Web fetch result containing extracted content
@@ -32,19 +56,22 @@ pub struct WebFetchResult {
     pub title: Option<String>,
     /// Main text content extracted from the page
     pub content: String,
+    /// Which extraction method was used
+    pub extractor: Extractor,
 }
 
 /// Web fetch tool for retrieving and extracting content from web pages
 pub struct WebFetchTool {
-    client: Client,
     /// Maximum content length in characters (from policy)
     max_content_length: usize,
     /// Minimum content length to accept a selector match (from policy)
     min_content_length: usize,
     /// User agent string (from policy)
     user_agent: String,
-    /// Request timeout in seconds (preserved across clones)
+    /// Request timeout in seconds
     timeout_secs: u64,
+    /// Whether Readability extraction is enabled
+    enable_readability: bool,
 }
 
 impl WebFetchTool {
@@ -71,33 +98,23 @@ impl WebFetchTool {
 
     /// Create a new WebFetchTool with default settings
     pub fn new() -> Self {
-        let client = Client::builder()
-            .timeout(std::time::Duration::from_secs(Self::DEFAULT_TIMEOUT_SECS))
-            .build()
-            .unwrap_or_else(|_| Client::new());
-
         Self {
-            client,
             max_content_length: Self::DEFAULT_MAX_CONTENT_LENGTH,
             min_content_length: Self::DEFAULT_MIN_CONTENT_LENGTH,
             user_agent: Self::DEFAULT_USER_AGENT.to_string(),
             timeout_secs: Self::DEFAULT_TIMEOUT_SECS,
+            enable_readability: true,
         }
     }
 
     /// Create a new WebFetchTool with policy configuration
     pub fn with_policy(policy: &WebFetchPolicy) -> Self {
-        let client = Client::builder()
-            .timeout(std::time::Duration::from_secs(policy.timeout_seconds))
-            .build()
-            .unwrap_or_else(|_| Client::new());
-
         Self {
-            client,
             max_content_length: policy.max_content_length as usize,
             min_content_length: policy.min_content_length as usize,
             user_agent: policy.user_agent.clone(),
             timeout_secs: policy.timeout_seconds,
+            enable_readability: policy.enable_readability,
         }
     }
 
@@ -116,50 +133,30 @@ impl WebFetchTool {
 
         info!("Fetching URL: {}", args.url);
 
-        // Validate URL format
-        if !args.url.starts_with("http://") && !args.url.starts_with("https://") {
-            let error_msg = format!(
-                "Invalid URL format: {}. URL must start with http:// or https://",
-                args.url
-            );
-            notify_tool_result(Self::NAME, &error_msg, false);
-            return Err(ToolError::InvalidArgs(error_msg));
-        }
-
-        // SSRF protection: block requests to internal/private hosts
+        // SSRF-protected fetch with DNS pinning
         let ssrf_policy = SsrfPolicy::default();
-        if let Err(e) = validate_url(&args.url, &ssrf_policy) {
-            let error_msg = format!("SSRF blocked: {}", e);
-            notify_tool_result(Self::NAME, &error_msg, false);
-            return Err(ToolError::InvalidArgs(error_msg));
+        let mut headers = reqwest::header::HeaderMap::new();
+        if let Ok(ua) = reqwest::header::HeaderValue::from_str(&self.user_agent) {
+            headers.insert(reqwest::header::USER_AGENT, ua);
         }
+        let fetch_request = SafeFetchRequest::get(std::time::Duration::from_secs(self.timeout_secs))
+            .with_headers(headers);
 
-        // Fetch the page
-        let response = self
-            .client
-            .get(&args.url)
-            .header("User-Agent", &self.user_agent)
-            .send()
+        let fetch_response = safe_fetch(&args.url, &ssrf_policy, fetch_request)
             .await
             .map_err(|e| {
-                let error_msg = format!("Failed to fetch URL: {}", e);
+                let error_msg = format!("Fetch blocked or failed: {}", e);
                 notify_tool_result(Self::NAME, &error_msg, false);
                 ToolError::Network(error_msg)
             })?;
 
-        // Check status
-        if !response.status().is_success() {
-            let error_msg = format!("HTTP error: {} for URL: {}", response.status(), args.url);
+        if !fetch_response.status.is_success() {
+            let error_msg = format!("HTTP error: {} for URL: {}", fetch_response.status, args.url);
             notify_tool_result(Self::NAME, &error_msg, false);
             return Err(ToolError::Network(error_msg));
         }
 
-        // Get HTML content with size limit to prevent memory exhaustion
-        let bytes = response.bytes().await.map_err(|e| {
-            let error_msg = format!("Failed to read response body: {}", e);
-            notify_tool_result(Self::NAME, &error_msg, false);
-            ToolError::Network(error_msg)
-        })?;
+        let bytes = &fetch_response.body;
 
         if bytes.len() > Self::MAX_RESPONSE_BYTES {
             let error_msg = format!(
@@ -175,26 +172,38 @@ impl WebFetchTool {
 
         debug!("Fetched {} bytes from {}", html_content.len(), args.url);
 
-        // Parse HTML
-        let document = Html::parse_document(&html_content);
+        // Safety gate: reject oversized HTML
+        Self::validate_html_safety(&html_content).map_err(|e| {
+            notify_tool_result(Self::NAME, &e.to_string(), false);
+            e
+        })?;
 
-        // Extract title
+        // Extract title from raw HTML (before pre-cleaning)
+        let document = Html::parse_document(&html_content);
         let title = self.extract_title(&document);
         debug!("Extracted title: {:?}", title);
 
-        // Extract main content
-        let content = self.extract_content(&document);
-        debug!("Extracted {} chars of content", content.len());
+        // Enhanced extraction: Readability + Markdown with selector fallback
+        let (content, extractor) = self.extract_content_enhanced(
+            &html_content,
+            &args.url,
+            &args.extract_mode,
+        );
+        debug!("Extracted {} chars via {:?} extractor", content.len(), extractor);
 
         // Notify success
+        let extractor_name = match &extractor {
+            Extractor::Readability => "readability",
+            Extractor::Selector => "selector",
+        };
         let result_summary = format!(
-            "已获取网页内容 ({} 字符)",
-            content.len()
+            "已获取网页内容 ({} 字符, {})",
+            content.len(),
+            extractor_name,
         );
         notify_tool_result(Self::NAME, &result_summary, true);
 
-        // Wrap fetched content with external content boundary markers to guard
-        // against prompt injection embedded in web page content.
+        // Wrap with external content boundary markers
         let wrapped_content = wrap_external_content(
             &content,
             ContentSource::WebFetch { url: args.url.clone() },
@@ -204,6 +213,7 @@ impl WebFetchTool {
             url: args.url,
             title,
             content: wrapped_content,
+            extractor,
         })
     }
 
@@ -276,6 +286,140 @@ impl WebFetchTool {
             format!("{}...", truncated)
         }
     }
+
+    // -----------------------------------------------------------------------
+    // Part A: Pre-cleaning and safety gates
+    // -----------------------------------------------------------------------
+
+    /// Reject HTML that exceeds 1,000,000 characters to prevent DoS.
+    pub(crate) fn validate_html_safety(html: &str) -> std::result::Result<(), ToolError> {
+        if html.len() > 1_000_000 {
+            return Err(ToolError::Execution(format!(
+                "HTML too large: {} chars (max 1,000,000)",
+                html.len()
+            )));
+        }
+        Ok(())
+    }
+
+    /// Remove noise from raw HTML before extraction:
+    /// zero-width Unicode, HTML comments, script/style/noscript blocks,
+    /// and elements that are visually hidden.
+    pub(crate) fn pre_clean_html(html: &str) -> String {
+        // 1. Strip zero-width / invisible Unicode characters
+        let zero_width: &[char] = &[
+            '\u{200B}', // ZERO WIDTH SPACE
+            '\u{200C}', // ZERO WIDTH NON-JOINER
+            '\u{200D}', // ZERO WIDTH JOINER
+            '\u{200E}', // LEFT-TO-RIGHT MARK
+            '\u{200F}', // RIGHT-TO-LEFT MARK
+            '\u{FEFF}', // ZERO WIDTH NO-BREAK SPACE (BOM)
+            '\u{2060}', // WORD JOINER
+        ];
+        let cleaned: String = html.chars().filter(|c| !zero_width.contains(c)).collect();
+
+        // 2. Remove HTML comments
+        let re_comments = Regex::new(r"(?s)<!--.*?-->").unwrap();
+        let cleaned = re_comments.replace_all(&cleaned, "").to_string();
+
+        // 3. Remove <script>, <style>, <noscript> blocks with their content.
+        // The regex crate does not support backreferences, so use three separate patterns.
+        let re_script = Regex::new(r"(?si)<script(\s[^>]*)?>.*?</script\s*>").unwrap();
+        let cleaned = re_script.replace_all(&cleaned, "").to_string();
+        let re_style = Regex::new(r"(?si)<style(\s[^>]*)?>.*?</style\s*>").unwrap();
+        let cleaned = re_style.replace_all(&cleaned, "").to_string();
+        let re_noscript = Regex::new(r"(?si)<noscript(\s[^>]*)?>.*?</noscript\s*>").unwrap();
+        let cleaned = re_noscript.replace_all(&cleaned, "").to_string();
+
+        // 4. Remove elements with hidden attribute
+        let re_hidden_attr = Regex::new(r"(?si)<[^>]+\shidden(\s[^>]*)?>.*?</[^>]+>").unwrap();
+        let cleaned = re_hidden_attr.replace_all(&cleaned, "").to_string();
+
+        // 5. Remove elements with aria-hidden="true"
+        let re_aria = Regex::new(r#"(?si)<[^>]+\saria-hidden\s*=\s*["']true["'][^>]*>.*?</[^>]+>"#)
+            .unwrap();
+        let cleaned = re_aria.replace_all(&cleaned, "").to_string();
+
+        // 6. Remove elements with display:none or visibility:hidden in style attribute
+        let re_display_none =
+            Regex::new(r#"(?si)<[^>]+\sstyle\s*=\s*["'][^"']*(?:display\s*:\s*none|visibility\s*:\s*hidden)[^"']*["'][^>]*>.*?</[^>]+>"#)
+                .unwrap();
+        let cleaned = re_display_none.replace_all(&cleaned, "").to_string();
+
+        // 7. Remove elements with screen-reader / visually-hidden CSS classes
+        let re_sr_classes = Regex::new(
+            r#"(?si)<[^>]+\sclass\s*=\s*["'][^"']*(?:sr-only|visually-hidden|d-none|screen-reader-only)[^"']*["'][^>]*>.*?</[^>]+>"#,
+        )
+        .unwrap();
+        re_sr_classes.replace_all(&cleaned, "").to_string()
+    }
+
+    // -----------------------------------------------------------------------
+    // Part B: Readability + Markdown pipeline
+    // -----------------------------------------------------------------------
+
+    /// Run the Mozilla Readability algorithm on the HTML and return clean
+    /// article HTML. Returns `None` when the result is empty or too short.
+    fn extract_with_readability(&self, html: &str, url: &str) -> Option<String> {
+        use url::Url;
+
+        let parsed_url = Url::parse(url).ok()?;
+        let mut cursor = std::io::Cursor::new(html.as_bytes());
+        let product = readability::extractor::extract(&mut cursor, &parsed_url).ok()?;
+
+        if product.content.len() < self.min_content_length {
+            return None;
+        }
+        Some(product.content)
+    }
+
+    /// Convert an HTML string to Markdown using `htmd`. Falls back to
+    /// tag-stripping on conversion failure.
+    fn html_to_markdown(&self, html: &str) -> String {
+        match htmd::convert(html) {
+            Ok(md) => md,
+            Err(_) => self.strip_tags(html),
+        }
+    }
+
+    /// Strip HTML tags from a string using a simple regex, leaving plain text.
+    fn strip_tags(&self, html: &str) -> String {
+        let re = Regex::new(r"<[^>]+>").unwrap();
+        let text = re.replace_all(html, " ").to_string();
+        self.clean_text(&text)
+    }
+
+    /// Enhanced extraction pipeline: pre-clean → Readability → Markdown/Text.
+    /// Falls back to the legacy selector-based extractor when Readability
+    /// fails or the result is too short.
+    pub(crate) fn extract_content_enhanced(
+        &self,
+        raw_html: &str,
+        url: &str,
+        mode: &ExtractMode,
+    ) -> (String, Extractor) {
+        let cleaned_html = Self::pre_clean_html(raw_html);
+
+        // Try Readability extraction (if enabled)
+        if self.enable_readability {
+            if let Some(article_html) = self.extract_with_readability(&cleaned_html, url) {
+                let content = match mode {
+                    ExtractMode::Markdown => self.html_to_markdown(&article_html),
+                    ExtractMode::Text => {
+                        let text = self.strip_tags(&article_html);
+                        self.clean_text(&text)
+                    }
+                };
+                let content = self.truncate_content(content);
+                return (content, Extractor::Readability);
+            }
+        }
+
+        // Fallback: legacy CSS-selector-based extraction
+        let document = Html::parse_document(raw_html);
+        let content = self.extract_content(&document);
+        (content, Extractor::Selector)
+    }
 }
 
 
@@ -287,18 +431,12 @@ impl Default for WebFetchTool {
 
 impl Clone for WebFetchTool {
     fn clone(&self) -> Self {
-        // Rebuild client preserving the configured timeout
-        let client = Client::builder()
-            .timeout(std::time::Duration::from_secs(self.timeout_secs))
-            .build()
-            .unwrap_or_else(|_| Client::new());
-
         Self {
-            client,
             max_content_length: self.max_content_length,
             min_content_length: self.min_content_length,
             user_agent: self.user_agent.clone(),
             timeout_secs: self.timeout_secs,
+            enable_readability: self.enable_readability,
         }
     }
 }
@@ -322,6 +460,7 @@ mod tests {
     use super::*;
     use crate::security::ssrf::{validate_url, SsrfPolicy};
     use crate::tools::AlephTool;
+    // Note: validate_url is still used by SSRF unit tests below (test_ssrf_*)
 
     #[test]
     fn test_web_fetch_args() {
@@ -334,7 +473,7 @@ mod tests {
         let tool = WebFetchTool::new();
         assert_eq!(WebFetchTool::NAME, "web_fetch");
         assert!(!WebFetchTool::DESCRIPTION.is_empty());
-        // Verify the tool was created (client is private, so we just ensure no panic)
+        // Verify the tool was created successfully
         drop(tool);
     }
 
@@ -344,6 +483,7 @@ mod tests {
         let tool = WebFetchTool::new();
         let args = WebFetchArgs {
             url: "https://example.com".to_string(),
+            extract_mode: ExtractMode::Markdown,
         };
 
         // Use fully qualified syntax
@@ -365,16 +505,17 @@ mod tests {
         let tool = WebFetchTool::new();
         let args = WebFetchArgs {
             url: "not-a-valid-url".to_string(),
+            extract_mode: ExtractMode::Markdown,
         };
 
         // Use fully qualified syntax to avoid ambiguity
         let result = AlephTool::call(&tool, args).await;
         assert!(result.is_err(), "Expected error for invalid URL");
 
-        // Error is now AlephError
+        // Error is now AlephError wrapping the SSRF/fetch error
         let err = result.unwrap_err();
         let err_msg = err.to_string();
-        assert!(err_msg.contains("Invalid URL format"), "Expected 'Invalid URL format' error, got: {}", err_msg);
+        assert!(err_msg.contains("Fetch blocked or failed"), "Expected 'Fetch blocked or failed' error, got: {}", err_msg);
     }
 
     #[test]
@@ -434,5 +575,151 @@ mod tests {
         let truncated = tool.truncate_content(long);
         assert!(truncated.len() <= WebFetchTool::DEFAULT_MAX_CONTENT_LENGTH + 3); // +3 for "..."
         assert!(truncated.ends_with("..."));
+    }
+
+    #[test]
+    fn test_extract_mode_defaults_to_markdown() {
+        let args: WebFetchArgs = serde_json::from_str(r#"{"url": "https://example.com"}"#).unwrap();
+        assert!(matches!(args.extract_mode, ExtractMode::Markdown));
+    }
+
+    #[test]
+    fn test_extract_mode_text() {
+        let args: WebFetchArgs = serde_json::from_str(
+            r#"{"url": "https://example.com", "extract_mode": "text"}"#
+        ).unwrap();
+        assert!(matches!(args.extract_mode, ExtractMode::Text));
+    }
+
+    #[test]
+    fn test_pre_clean_removes_script_and_style() {
+        let html = r#"<html><body>
+            <script>alert('xss')</script>
+            <style>.hide { display: none; }</style>
+            <p>Visible content here</p>
+        </body></html>"#;
+        let cleaned = WebFetchTool::pre_clean_html(html);
+        assert!(!cleaned.contains("alert"), "Script content should be removed: {}", cleaned);
+        assert!(!cleaned.contains(".hide"), "Style content should be removed: {}", cleaned);
+        assert!(cleaned.contains("Visible content here"), "Visible text should remain: {}", cleaned);
+    }
+
+    #[test]
+    fn test_pre_clean_removes_hidden_elements() {
+        let html = r#"<html><body>
+            <div style="display:none">Hidden div</div>
+            <div aria-hidden="true">Aria hidden div</div>
+            <p>Visible paragraph</p>
+        </body></html>"#;
+        let cleaned = WebFetchTool::pre_clean_html(html);
+        assert!(!cleaned.contains("Hidden div"), "display:none should be removed: {}", cleaned);
+        assert!(!cleaned.contains("Aria hidden div"), "aria-hidden should be removed: {}", cleaned);
+        assert!(cleaned.contains("Visible paragraph"), "Visible text should remain: {}", cleaned);
+    }
+
+    #[test]
+    fn test_pre_clean_strips_zero_width_chars() {
+        let html = "<html><body><p>Hello\u{200B}World\u{FEFF}Test</p></body></html>";
+        let cleaned = WebFetchTool::pre_clean_html(html);
+        assert!(cleaned.contains("HelloWorldTest"), "Zero-width chars should be stripped: {}", cleaned);
+    }
+
+    #[test]
+    fn test_safety_gate_rejects_oversized_html() {
+        let huge = "a".repeat(1_100_000);
+        assert!(WebFetchTool::validate_html_safety(&huge).is_err());
+    }
+
+    #[test]
+    fn test_safety_gate_accepts_normal_html() {
+        let normal = "<html><body><p>Hello</p></body></html>";
+        assert!(WebFetchTool::validate_html_safety(normal).is_ok());
+    }
+
+    #[test]
+    fn test_readability_extraction_produces_markdown() {
+        let html = r#"<!DOCTYPE html>
+        <html><head><title>Test Article</title></head>
+        <body>
+            <nav><a href="/">Home</a> | <a href="/about">About</a> | <a href="/contact">Contact</a></nav>
+            <article>
+                <h1>Main Article Title</h1>
+                <p>This is the first paragraph of the article with enough content to be recognized by the readability algorithm as meaningful text content that should be extracted and preserved in the output.</p>
+                <p>This is the second paragraph providing additional detail about the topic being discussed in this article. It contains several sentences to ensure adequate length for proper extraction.</p>
+                <h2>Section Two</h2>
+                <ul>
+                    <li>First item in the list</li>
+                    <li>Second item in the list</li>
+                    <li>Third item in the list</li>
+                </ul>
+                <p>A concluding paragraph that wraps up the discussion and provides final thoughts on the matter at hand. This ensures the article has sufficient content density.</p>
+            </article>
+            <footer><p>Copyright 2024 | Privacy Policy | Terms of Service</p></footer>
+        </body></html>"#;
+
+        let tool = WebFetchTool::new();
+        let (content, extractor) = tool.extract_content_enhanced(html, "https://example.com/article", &ExtractMode::Markdown);
+
+        // Should produce non-empty content
+        assert!(!content.is_empty(), "Content should not be empty");
+        // Should contain article text
+        assert!(content.contains("Main Article Title") || content.contains("first paragraph"),
+            "Should contain article content: {}", &content[..content.len().min(500)]);
+    }
+
+    #[test]
+    fn test_text_mode_produces_plain_text() {
+        let html = r#"<!DOCTYPE html>
+        <html><head><title>Test</title></head>
+        <body><article>
+            <h1>Title Here</h1>
+            <p>This is a paragraph with enough content for readability to extract it properly as meaningful text content in the article body section.</p>
+            <p>Another paragraph with sufficient length to ensure the readability algorithm recognizes this as article content worth preserving in output.</p>
+        </article></body></html>"#;
+
+        let tool = WebFetchTool::new();
+        let (content, _) = tool.extract_content_enhanced(html, "https://example.com", &ExtractMode::Text);
+
+        // Should contain the actual text
+        assert!(content.contains("paragraph") || content.contains("Title"),
+            "Should contain article text: {}", content);
+    }
+
+    #[test]
+    fn test_fallback_to_selector_on_minimal_html() {
+        let html = "<html><body><p>Short</p></body></html>";
+        let tool = WebFetchTool::new();
+        let (_, extractor) = tool.extract_content_enhanced(html, "https://example.com", &ExtractMode::Markdown);
+
+        assert!(matches!(extractor, Extractor::Selector), "Expected Selector fallback, got {:?}", extractor);
+    }
+
+    #[test]
+    fn test_readability_disabled_uses_selector() {
+        let html = r#"<!DOCTYPE html>
+        <html><head><title>Test</title></head>
+        <body><article>
+            <h1>Title</h1>
+            <p>Long enough paragraph for readability to normally extract this content from the article body with sufficient detail and words.</p>
+            <p>Another paragraph ensuring adequate length for the readability algorithm to process and recognize as valid content.</p>
+        </article></body></html>"#;
+
+        let mut tool = WebFetchTool::new();
+        tool.enable_readability = false;
+        let (_, extractor) = tool.extract_content_enhanced(html, "https://example.com", &ExtractMode::Markdown);
+
+        assert!(matches!(extractor, Extractor::Selector), "Should use Selector when readability disabled, got {:?}", extractor);
+    }
+
+    #[test]
+    fn test_extractor_serialization() {
+        let result = WebFetchResult {
+            url: "https://example.com".to_string(),
+            title: Some("Test".to_string()),
+            content: "# Hello".to_string(),
+            extractor: Extractor::Readability,
+        };
+        let json = serde_json::to_value(&result).unwrap();
+        assert_eq!(json["extractor"], "readability");
     }
 }

@@ -9,7 +9,7 @@ use crate::error::{AlephError, Result};
 use crate::sync_primitives::Arc;
 use crate::teams::sessions::store::SessionStore;
 use crate::teams::sessions::types::{
-    CollaborativeSession, SessionOutcome, SessionStatus, SessionTurn,
+    CollaborativeSession, SessionOutcome,
 };
 use crate::tools::AlephTool;
 

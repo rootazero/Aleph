@@ -125,7 +125,7 @@ pub fn convert_messages(messages: &[UnifiedMessage]) -> Vec<InputItem> {
 }
 
 /// Map ThinkLevel to Responses API reasoning config
-pub fn build_reasoning(think_level: Option<ThinkLevel>) -> Option<ReasoningConfig> {
+pub(crate) fn build_reasoning(think_level: Option<ThinkLevel>) -> Option<ReasoningConfig> {
     match think_level {
         Some(ThinkLevel::Low) => Some(ReasoningConfig {
             effort: Some("low".to_string()),
@@ -147,7 +147,7 @@ pub fn build_reasoning(think_level: Option<ThinkLevel>) -> Option<ReasoningConfi
 ///
 /// Cleans schemars metadata ($schema, title) and ensures object schemas
 /// have a "properties" field for API compatibility.
-pub fn build_tools(tools: Option<&[ToolDefinition]>) -> Option<Vec<FunctionToolDef>> {
+pub(crate) fn build_tools(tools: Option<&[ToolDefinition]>) -> Option<Vec<FunctionToolDef>> {
     tools.map(|tool_defs| {
         tool_defs
             .iter()
@@ -179,7 +179,7 @@ pub fn build_tools(tools: Option<&[ToolDefinition]>) -> Option<Vec<FunctionToolD
 }
 
 /// Map ToolChoice to Responses API tool_choice string
-pub fn map_tool_choice(choice: Option<&ToolChoice>) -> Option<String> {
+pub(crate) fn map_tool_choice(choice: Option<&ToolChoice>) -> Option<String> {
     choice.map(|c| match c {
         ToolChoice::Auto => "auto".to_string(),
         ToolChoice::Required => "required".to_string(),
@@ -237,7 +237,7 @@ pub fn extract_tool_calls(response: &ResponseResource) -> Vec<NativeToolCall> {
 /// Parse a single SSE data line into a StreamEvent
 ///
 /// Returns `None` for the `[DONE]` sentinel or unparseable data.
-pub fn parse_sse_data(data: &str) -> Option<StreamEvent> {
+pub(crate) fn parse_sse_data(data: &str) -> Option<StreamEvent> {
     if data == "[DONE]" {
         return None;
     }

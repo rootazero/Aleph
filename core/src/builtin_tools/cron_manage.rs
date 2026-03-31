@@ -47,9 +47,14 @@ pub enum CronAction {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ScheduleInput {
-    /// One-shot: fire at a specific timestamp (milliseconds since epoch)
+    /// One-shot: fire at a specific timestamp (milliseconds since epoch).
+    /// IMPORTANT: Use the current system time as reference. For example,
+    /// 2026-03-30 10:00:00 Asia/Shanghai = 2026-03-30 02:00:00 UTC = 1774850400000 ms.
+    /// Tip: 1 hour = 3600000 ms, 1 day = 86400000 ms. You can compute
+    /// at_ms = current_time_ms + offset_ms for relative scheduling.
     At {
-        /// Timestamp in milliseconds since epoch (UTC)
+        /// Timestamp in milliseconds since epoch (UTC).
+        /// Must be in the future — past timestamps will be rejected.
         at_ms: i64,
         /// Whether to auto-delete after execution (default: true)
         #[serde(default = "default_true")]
@@ -132,6 +137,18 @@ pub struct CronManageArgs {
     #[serde(default, rename = "__channel")]
     #[schemars(skip)]
     pub __channel: Option<String>,
+
+    /// Source conversation ID — injected by the tool dispatcher from session context.
+    /// For Telegram this is the chat_id; used so cron results can be sent to the correct chat.
+    #[serde(default, rename = "__conversation_id")]
+    #[schemars(skip)]
+    pub __conversation_id: Option<String>,
+
+    /// Current server time in ms since epoch — injected by dispatcher so the LLM
+    /// has a reliable reference for computing At timestamps.
+    #[serde(default, rename = "__current_time_ms")]
+    #[schemars(skip)]
+    pub __current_time_ms: Option<i64>,
 }
 
 // =============================================================================
@@ -190,7 +207,9 @@ impl AlephTool for CronManageTool {
         "Manage scheduled tasks (cron jobs). Create, list, delete, enable, or disable \
          recurring or one-shot tasks. Use this when the user wants to schedule something \
          for a specific time or interval — e.g., 'remind me tomorrow at 9am', \
-         'check the server every hour', 'send a report every Monday at 10am'.";
+         'check the server every hour', 'send a report every Monday at 10am'. \
+         For one-shot 'at' scheduling, compute at_ms from current system time (check __current_time_ms). \
+         Tip: 1h = 3600000ms, 1d = 86400000ms. Asia/Shanghai = UTC+8.";
 
     type Args = CronManageArgs;
     type Output = CronManageOutput;
@@ -219,6 +238,23 @@ impl AlephTool for CronManageTool {
                     crate::error::AlephError::tool("cron_manage create: 'schedule' is required")
                 })?;
 
+                // Validate At timestamps: reject if in the past
+                if let ScheduleInput::At { at_ms, .. } = &schedule {
+                    let now_ms = chrono::Utc::now().timestamp_millis();
+                    if *at_ms <= now_ms {
+                        let at_human = chrono::DateTime::from_timestamp_millis(*at_ms)
+                            .map(|dt| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
+                            .unwrap_or_else(|| format!("{}ms", at_ms));
+                        let now_human = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC").to_string();
+                        return Err(crate::error::AlephError::tool(format!(
+                            "Cannot schedule a one-shot task in the past. \
+                             The provided at_ms={} resolves to {}, but current time is {} (now_ms={}). \
+                             Please provide a future timestamp.",
+                            at_ms, at_human, now_human, now_ms
+                        )));
+                    }
+                }
+
                 let agent_id = args.agent_id.unwrap_or_else(|| "main".to_string());
                 let schedule_kind: ScheduleKind = schedule.into();
 
@@ -226,6 +262,8 @@ impl AlephTool for CronManageTool {
                 // Prefer runtime channel from dispatcher (injected via __channel),
                 // fall back to static channel set at construction time.
                 job.source_channel_id = args.__channel.or_else(|| self.source_channel_id.clone());
+                // Store conversation_id for delivery routing (e.g. Telegram chat_id)
+                job.source_conversation_id = args.__conversation_id;
                 let id = service.add_job(job).await.map_err(|e| {
                     crate::error::AlephError::tool(format!("Failed to create cron job: {}", e))
                 })?;

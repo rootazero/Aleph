@@ -173,19 +173,6 @@ impl OAuthStorage {
         Ok(storage)
     }
 
-    /// Save storage file with secure permissions
-    async fn save(&self, storage: &StorageFile) -> Result<()> {
-        self.save_to_file(storage).await?;
-
-        // Update cache
-        {
-            let mut cache = self.cache.write().await;
-            *cache = Some(storage.clone());
-        }
-
-        Ok(())
-    }
-
     /// Write storage to file without updating cache (caller manages cache lock)
     async fn save_to_file(&self, storage: &StorageFile) -> Result<()> {
         // Create parent directory if needed

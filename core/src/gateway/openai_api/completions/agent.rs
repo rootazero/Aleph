@@ -311,7 +311,7 @@ pub async fn handle(
                 let role = match msg.role.as_str() {
                     "user" => MessageRole::User,
                     "assistant" => MessageRole::Assistant,
-                    "system" | _ => continue,
+                    _ => continue,
                 };
                 if let Some(content) = &msg.content {
                     agent.add_message(&session_key, role, content).await;

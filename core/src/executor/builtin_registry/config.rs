@@ -17,6 +17,8 @@ use crate::gateway::context::GatewayContext;
 pub struct BuiltinToolConfig {
     /// Tavily API key for search tool
     pub tavily_api_key: Option<String>,
+    /// Search registry for multi-provider search (SearXNG, Tavily, Brave, etc.)
+    pub search_registry: Option<Arc<crate::search::SearchRegistry>>,
     /// Generation provider registry for image/video/audio generation
     pub generation_registry: Option<Arc<std::sync::RwLock<GenerationProviderRegistry>>>,
     /// Dispatcher tool registry for meta tools (smart tool discovery)

@@ -14,6 +14,83 @@ use crate::Config;
 use crate::gateway::channel::{ChannelId, ChannelInfo, ChannelStatus, OutboundMessage};
 use crate::gateway::channel_registry::ChannelRegistry;
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
+use crate::gateway::security::SharedTokenManager;
+
+// ── Vault helpers for channel secrets ────────────���───────────────────────────
+
+/// Known secret field names per channel type.
+pub const CHANNEL_SECRET_FIELDS: &[&str] = &[
+    "bot_token",    // telegram, discord, slack
+    "app_token",    // slack
+    "app_secret",   // feishu
+    "app_password", // msteams
+    "access_token", // matrix
+    "password",     // xmpp, irc, email
+    "private_key",  // nostr
+    "secret",       // webhook
+    "session_data", // whatsapp
+];
+
+/// Vault key for a channel secret field.
+fn channel_vault_key(channel_id: &str, field: &str) -> String {
+    format!("channel:{}:{}", channel_id, field)
+}
+
+/// Inject vault-resolved secrets into a channel config Value.
+/// Mutates the config object in place, adding secret fields from vault.
+pub fn inject_channel_secrets(channel_id: &str, config: &mut Value, vault: &SharedTokenManager) {
+    let obj = match config.as_object_mut() {
+        Some(o) => o,
+        None => return,
+    };
+    for &field in CHANNEL_SECRET_FIELDS {
+        // Skip if already present and non-empty in config
+        if let Some(existing) = obj.get(field) {
+            if existing.as_str().map(|s| !s.is_empty()).unwrap_or(false) {
+                continue;
+            }
+        }
+        let key = channel_vault_key(channel_id, field);
+        match vault.get_secret(&key) {
+            Ok(Some(secret)) => {
+                obj.insert(field.to_string(), Value::String(secret.expose().to_string()));
+            }
+            Ok(None) => {}
+            Err(e) => {
+                tracing::warn!(channel = %channel_id, field, error = %e, "Failed to read channel secret from vault");
+            }
+        }
+    }
+}
+
+/// Extract secret fields from config, store them in vault, and remove from config.
+/// Returns the number of secrets migrated.
+pub fn store_and_strip_channel_secrets(channel_id: &str, config: &mut Value, vault: &SharedTokenManager) -> usize {
+    let obj = match config.as_object_mut() {
+        Some(o) => o,
+        None => return 0,
+    };
+    let mut count = 0;
+    for &field in CHANNEL_SECRET_FIELDS {
+        let value = match obj.get(field).and_then(|v| v.as_str()) {
+            Some(s) if !s.is_empty() => s.to_string(),
+            _ => continue,
+        };
+        let key = channel_vault_key(channel_id, field);
+        match vault.store_secret(&key, &value) {
+            Ok(_) => {
+                obj.remove(field);
+                count += 1;
+                tracing::info!(channel = %channel_id, field, "Migrated channel secret to vault");
+            }
+            Err(e) => {
+                tracing::error!(channel = %channel_id, field, error = %e, "Failed to store channel secret in vault");
+            }
+        }
+    }
+    count
+}
+
 
 /// Cached ToolRegistry for Telegram channel recreation.
 ///
@@ -33,7 +110,7 @@ fn get_telegram_tool_registry() -> Option<Arc<crate::dispatcher::ToolRegistry>> 
 
 /// Channel info for JSON response
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ChannelInfoResponse {
+pub(crate) struct ChannelInfoResponse {
     pub id: String,
     pub name: String,
     pub channel_type: String,
@@ -42,7 +119,7 @@ pub struct ChannelInfoResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CapabilitiesResponse {
+pub(crate) struct CapabilitiesResponse {
     pub attachments: bool,
     pub images: bool,
     pub audio: bool,
@@ -213,6 +290,7 @@ pub async fn handle_start(
     request: JsonRpcRequest,
     registry: Arc<ChannelRegistry>,
     app_config: Arc<RwLock<Config>>,
+    vault: Arc<SharedTokenManager>,
 ) -> JsonRpcResponse {
     let channel_id = match &request.params {
         Some(Value::Object(map)) => map.get("channel_id").and_then(|v| v.as_str()),
@@ -243,6 +321,9 @@ pub async fn handle_start(
         if let serde_json::Value::Object(ref mut map) = clean_config {
             map.remove("type");
         }
+
+        // Inject secrets from vault into the config
+        inject_channel_secrets(channel_id.as_str(), &mut clean_config, &vault);
 
         if let Some(mut new_channel) = create_channel_from_config(channel_id.as_str(), &channel_type, clean_config.clone()) {
             // Re-attach ToolRegistry for telegram channels so slash commands are registered
@@ -487,6 +568,7 @@ pub async fn handle_create(
     request: JsonRpcRequest,
     registry: Arc<ChannelRegistry>,
     app_config: Arc<RwLock<Config>>,
+    vault: Arc<SharedTokenManager>,
 ) -> JsonRpcResponse {
     let params = match &request.params {
         Some(Value::Object(map)) => map,
@@ -526,10 +608,18 @@ pub async fn handle_create(
         );
     }
 
-    // Save to app config first (always succeeds)
+    // Store secrets in vault and strip from config before persisting
+    let mut config_with_secrets = config.clone();
+    let mut config_to_persist = config.clone();
+    store_and_strip_channel_secrets(&id, &mut config_to_persist, &vault);
+
+    // Inject secrets back for runtime channel creation
+    inject_channel_secrets(&id, &mut config_with_secrets, &vault);
+
+    // Save secret-free config to app config
     {
         let mut app_cfg = app_config.write().await;
-        let mut config_to_save = if let Value::Object(ref map) = config {
+        let mut config_to_save = if let Value::Object(ref map) = config_to_persist {
             map.clone()
         } else {
             serde_json::Map::new()
@@ -538,10 +628,10 @@ pub async fn handle_create(
         app_cfg.channels.insert(id.clone(), Value::Object(config_to_save));
     }
 
-    // Try to create and register channel instance.
+    // Try to create and register channel instance (with secrets injected).
     // If config is incomplete (e.g. missing bot_token), we still succeed
     // with status "pending_config" so the user can fill in details via Panel.
-    let channel = create_channel_from_config(&id, &channel_type, config.clone());
+    let channel = create_channel_from_config(&id, &channel_type, config_with_secrets);
 
     if let Some(ch) = channel {
         registry.register(ch).await;

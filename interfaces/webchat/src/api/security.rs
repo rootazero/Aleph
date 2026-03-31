@@ -14,11 +14,28 @@ pub struct SecurityConfig {
     /// Network access scope: "localhost" or "lan"
     #[serde(default = "default_network_access")]
     pub network_access: String,
+    // SSRF outbound protection
+    #[serde(default = "default_true")]
+    pub ssrf_enabled: bool,
+    #[serde(default)]
+    pub ssrf_allow_tool_private_network: bool,
+    #[serde(default)]
+    pub ssrf_allow_webhook_private_network: bool,
+    #[serde(default = "default_max_redirects")]
+    pub ssrf_max_redirects: u8,
+    #[serde(default)]
+    pub ssrf_allowed_hosts: Vec<String>,
+    #[serde(default)]
+    pub ssrf_blocked_hosts: Vec<String>,
 }
 
 fn default_network_access() -> String {
     "localhost".to_string()
 }
+
+fn default_true() -> bool { true }
+
+fn default_max_redirects() -> u8 { 5 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeviceInfo {

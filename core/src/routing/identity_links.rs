@@ -9,7 +9,7 @@ use std::collections::HashMap;
 ///
 /// Checks both bare peer ID and channel-scoped peer ID.
 /// Returns the canonical name if a link is found, None otherwise.
-pub fn resolve_linked_peer_id(
+pub(crate) fn resolve_linked_peer_id(
     identity_links: &HashMap<String, Vec<String>>,
     channel: &str,
     peer_id: &str,
