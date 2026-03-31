@@ -192,12 +192,12 @@ impl CompactionStage for MicroCompact {
 
             let old_tokens = estimate_tokens_smart(&old_content);
             let marker_tokens = estimate_tokens_smart(CLEARED_MARKER);
-            messages[idx].replace_tool_result_content(CLEARED_MARKER.to_string());
-            // Count at least 1 freed token — replacing any content with the
-            // marker represents a real compaction action even if the content
-            // was already short.
-            let saved = old_tokens.saturating_sub(marker_tokens).max(1);
-            total_freed += saved;
+            // Only replace when we actually free tokens — replacing short
+            // content with a longer marker increases context pressure.
+            if old_tokens > marker_tokens {
+                messages[idx].replace_tool_result_content(CLEARED_MARKER.to_string());
+                total_freed += old_tokens - marker_tokens;
+            }
         }
 
         total_freed
@@ -484,7 +484,7 @@ mod tests {
     fn microcompact_preserves_fresh_tail() {
         let mut msgs = vec![
             UnifiedMessage::user("old"),
-            UnifiedMessage::tool_result("c1", "Bash", "old output", false),
+            UnifiedMessage::tool_result("c1", "Bash", &"z".repeat(200), false),
             UnifiedMessage::assistant("old reply"),
             UnifiedMessage::user("new"),
             UnifiedMessage::tool_result("c2", "Read", &"y".repeat(2000), false),
@@ -495,7 +495,7 @@ mod tests {
         let (_, content) = msgs[4].tool_result_info().unwrap();
         assert_eq!(content, "y".repeat(2000)); // fresh tail untouched
         let (_, old) = msgs[1].tool_result_info().unwrap();
-        assert_eq!(old, "[Old result cleared]"); // old one cleared
+        assert_eq!(old, "[Old result cleared]"); // old one cleared (200 chars > marker)
         assert!(freed > 0);
     }
 
