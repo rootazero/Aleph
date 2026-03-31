@@ -1,7 +1,7 @@
 //! Factory function for creating generation providers from configuration.
 
-use super::*;
 use super::url_normalize::resolve_base_url;
+use super::*;
 use crate::config::GenerationProviderConfig;
 use crate::generation::{GenerationError, GenerationProvider, GenerationResult, GenerationType};
 use crate::sync_primitives::Arc;

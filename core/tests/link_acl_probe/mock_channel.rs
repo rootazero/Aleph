@@ -1,16 +1,14 @@
 //! Mock channel that captures outbound messages for assertion.
 
-use tokio::sync::mpsc;
 use async_trait::async_trait;
 use chrono::Utc;
+use tokio::sync::mpsc;
 
-use alephcore::gateway::{
-    ChannelId, MessageId,
-};
 use alephcore::gateway::channel::{
-    Channel, ChannelCapabilities, ChannelInfo, ChannelResult, ChannelState,
-    ChannelStatus, OutboundMessage, SendResult,
+    Channel, ChannelCapabilities, ChannelInfo, ChannelResult, ChannelState, ChannelStatus,
+    OutboundMessage, SendResult,
 };
+use alephcore::gateway::{ChannelId, MessageId};
 
 #[derive(Debug, Clone)]
 pub struct CapturedReply {
@@ -34,7 +32,11 @@ impl MockChannel {
             capabilities: ChannelCapabilities::default(),
         };
         let state = ChannelState::new(100);
-        Self { info, state, reply_tx }
+        Self {
+            info,
+            state,
+            reply_tx,
+        }
     }
 }
 

@@ -14,7 +14,10 @@ pub struct ConfigExtraFilesHook {
 impl ConfigExtraFilesHook {
     /// Create from config values.
     pub fn new(workspace_dir: PathBuf, paths: Vec<String>) -> Self {
-        Self { workspace_dir, paths }
+        Self {
+            workspace_dir,
+            paths,
+        }
     }
 }
 
@@ -43,8 +46,8 @@ impl ExtraFilesHook for ConfigExtraFilesHook {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::tempdir;
     use std::fs;
+    use tempfile::tempdir;
 
     #[test]
     fn reads_configured_files() {
@@ -75,10 +78,8 @@ mod tests {
     #[test]
     fn skips_missing_files() {
         let dir = tempdir().unwrap();
-        let hook = ConfigExtraFilesHook::new(
-            dir.path().to_path_buf(),
-            vec!["nonexistent.md".into()],
-        );
+        let hook =
+            ConfigExtraFilesHook::new(dir.path().to_path_buf(), vec!["nonexistent.md".into()]);
 
         let ctx = ExtraFilesContext {
             workspace_dir: dir.path().to_path_buf(),
@@ -95,10 +96,7 @@ mod tests {
         let dir = tempdir().unwrap();
         fs::write(dir.path().join("empty.md"), "   \n  ").unwrap();
 
-        let hook = ConfigExtraFilesHook::new(
-            dir.path().to_path_buf(),
-            vec!["empty.md".into()],
-        );
+        let hook = ConfigExtraFilesHook::new(dir.path().to_path_buf(), vec!["empty.md".into()]);
 
         let ctx = ExtraFilesContext {
             workspace_dir: dir.path().to_path_buf(),

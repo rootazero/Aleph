@@ -14,7 +14,12 @@ pub fn clone_github_repo(owner_repo: &str, target: &Path) -> Result<(), String> 
     let url = format!("https://github.com/{owner_repo}.git");
 
     let output = Command::new("git")
-        .args(["clone", "--depth=1", &url, target.to_string_lossy().as_ref()])
+        .args([
+            "clone",
+            "--depth=1",
+            &url,
+            target.to_string_lossy().as_ref(),
+        ])
         .output()
         .map_err(|e| format!("Failed to run git: {e}"))?;
 
@@ -31,7 +36,12 @@ pub fn clone_github_repo(owner_repo: &str, target: &Path) -> Result<(), String> 
 /// Pull the latest changes in an existing local git repository.
 pub fn pull_github_repo(repo_dir: &Path) -> Result<(), String> {
     let output = Command::new("git")
-        .args(["-C", repo_dir.to_string_lossy().as_ref(), "pull", "--ff-only"])
+        .args([
+            "-C",
+            repo_dir.to_string_lossy().as_ref(),
+            "pull",
+            "--ff-only",
+        ])
         .output()
         .map_err(|e| format!("Failed to run git: {e}"))?;
 

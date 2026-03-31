@@ -2,18 +2,25 @@
 //! Non-sensitive config (enabled/disabled, scope override, install preferences)
 //! persists to ~/.aleph/data/skills.toml. API keys route to the Vault.
 
+use crate::domain::skill::{PromptScope, SkillId};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
-use serde::{Deserialize, Serialize};
-use crate::domain::skill::{PromptScope, SkillId};
 
 /// Node.js package manager preference.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum NodeManager {
-    Npm, Pnpm, Yarn, Bun,
+    Npm,
+    Pnpm,
+    Yarn,
+    Bun,
 }
-impl Default for NodeManager { fn default() -> Self { Self::Npm } }
+impl Default for NodeManager {
+    fn default() -> Self {
+        Self::Npm
+    }
+}
 
 /// Global install preferences.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -25,7 +32,10 @@ pub struct InstallPreferences {
 }
 impl Default for InstallPreferences {
     fn default() -> Self {
-        Self { prefer_brew: cfg!(target_os = "macos"), node_manager: NodeManager::Npm }
+        Self {
+            prefer_brew: cfg!(target_os = "macos"),
+            node_manager: NodeManager::Npm,
+        }
     }
 }
 
@@ -46,7 +56,10 @@ pub struct SkillsConfig {
 }
 impl Default for SkillsConfig {
     fn default() -> Self {
-        Self { install_preferences: InstallPreferences::default(), entries: HashMap::new() }
+        Self {
+            install_preferences: InstallPreferences::default(),
+            entries: HashMap::new(),
+        }
     }
 }
 
@@ -84,8 +97,12 @@ impl SkillsConfig {
     pub fn apply_update(&mut self, id: &SkillId, update: SkillConfigUpdate) {
         let entry = self.entries.entry(id.as_str().to_string()).or_default();
         match update {
-            SkillConfigUpdate::SetEnabled(enabled) => { entry.enabled = Some(enabled); }
-            SkillConfigUpdate::SetScope(scope) => { entry.scope_override = Some(scope); }
+            SkillConfigUpdate::SetEnabled(enabled) => {
+                entry.enabled = Some(enabled);
+            }
+            SkillConfigUpdate::SetScope(scope) => {
+                entry.scope_override = Some(scope);
+            }
         }
     }
 }
@@ -105,7 +122,10 @@ mod tests {
     #[test]
     fn roundtrip_toml() {
         let mut config = SkillsConfig::default();
-        config.apply_update(&SkillId::new("test:skill"), SkillConfigUpdate::SetEnabled(false));
+        config.apply_update(
+            &SkillId::new("test:skill"),
+            SkillConfigUpdate::SetEnabled(false),
+        );
         config.install_preferences.prefer_brew = true;
 
         let tmp = NamedTempFile::new().unwrap();

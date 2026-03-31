@@ -7,22 +7,20 @@ use super::rule::{PermissionEvaluator, Ruleset};
 use crate::event::permission::{PermissionReply, PermissionRequest};
 use crate::event::{AlephEvent, EventBus};
 use crate::extension::PermissionAction;
-use std::collections::HashMap;
 use crate::sync_primitives::Arc;
+use std::collections::HashMap;
 use std::time::Duration;
 use tokio::sync::{oneshot, RwLock};
 use tracing::{debug, info, warn};
 
 /// Configuration for the permission manager
-#[derive(Debug, Clone)]
-#[derive(Default)]
+#[derive(Debug, Clone, Default)]
 pub struct PermissionManagerConfig {
     /// Default timeout for permission requests (0 = no timeout)
     pub timeout_ms: u64,
     /// Whether to persist approved rules
     pub persist_approvals: bool,
 }
-
 
 /// A pending permission request waiting for user response
 pub struct PendingPermission {
@@ -53,7 +51,11 @@ pub struct PermissionManager {
 impl PermissionManager {
     /// Create a new permission manager
     pub fn new(event_bus: Arc<EventBus>) -> Self {
-        Self::with_config(event_bus, default_config(), PermissionManagerConfig::default())
+        Self::with_config(
+            event_bus,
+            default_config(),
+            PermissionManagerConfig::default(),
+        )
     }
 
     /// Create with custom configuration
@@ -171,7 +173,11 @@ impl PermissionManager {
     }
 
     /// Handle user reply to a permission request
-    pub async fn reply(&self, request_id: &str, reply: PermissionReply) -> Result<(), PermissionError> {
+    pub async fn reply(
+        &self,
+        request_id: &str,
+        reply: PermissionReply,
+    ) -> Result<(), PermissionError> {
         let pending = {
             let mut pending = self.pending.write().await;
             pending.remove(request_id)
@@ -227,7 +233,9 @@ impl PermissionManager {
             }
             PermissionReply::Correct { message } => {
                 info!(request_id = %request_id, message = %message, "Permission rejected with feedback");
-                let _ = pending.response_tx.send(Err(PermissionError::corrected(message)));
+                let _ = pending
+                    .response_tx
+                    .send(Err(PermissionError::corrected(message)));
             }
         }
 
@@ -355,7 +363,8 @@ mod tests {
         let manager = create_test_manager();
 
         // Read should be allowed by default config
-        let request = PermissionRequest::new("req-1", "session-1", "read", vec!["src/main.rs".into()]);
+        let request =
+            PermissionRequest::new("req-1", "session-1", "read", vec!["src/main.rs".into()]);
         let result = manager.ask(request).await;
         assert!(result.is_ok());
     }
@@ -366,17 +375,26 @@ mod tests {
 
         // rm -rf /path should be denied by default config (matches "rm -rf *")
         // Note: Rules are now sorted deterministically (Deny first) in config.rs
-        let request = PermissionRequest::new("req-1", "session-1", "bash", vec!["rm -rf /home/user".into()]);
+        let request = PermissionRequest::new(
+            "req-1",
+            "session-1",
+            "bash",
+            vec!["rm -rf /home/user".into()],
+        );
 
         // Use timeout to avoid hanging if it falls through to Ask
-        let result = tokio::time::timeout(
-            std::time::Duration::from_secs(1),
-            manager.ask(request)
-        ).await;
+        let result =
+            tokio::time::timeout(std::time::Duration::from_secs(1), manager.ask(request)).await;
 
         // Should complete immediately with Deny, not timeout
-        assert!(result.is_ok(), "Test should not timeout - pattern should match Deny rule");
-        assert!(matches!(result.unwrap(), Err(PermissionError::Denied { .. })));
+        assert!(
+            result.is_ok(),
+            "Test should not timeout - pattern should match Deny rule"
+        );
+        assert!(matches!(
+            result.unwrap(),
+            Err(PermissionError::Denied { .. })
+        ));
     }
 
     #[tokio::test]

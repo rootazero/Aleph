@@ -117,7 +117,9 @@ pub fn extract_value(json: &Value, path: &str) -> Result<String> {
 /// For complex paths with arrays/wildcards, we rely on jsonpath behavior.
 fn path_exists_in_json(json: &Value, path: &str) -> bool {
     // Remove the root $ and split by dots
-    let path_clean = path.strip_prefix("$.").unwrap_or(path.strip_prefix("$").unwrap_or(path));
+    let path_clean = path
+        .strip_prefix("$.")
+        .unwrap_or(path.strip_prefix("$").unwrap_or(path));
 
     // If path is empty or just "$", it exists
     if path_clean.is_empty() {
@@ -200,7 +202,10 @@ mod tests {
                     && message.contains("path does not exist")
             );
         } else {
-            panic!("Expected ProviderError for nonexistent path, got: {:?}", result);
+            panic!(
+                "Expected ProviderError for nonexistent path, got: {:?}",
+                result
+            );
         }
     }
 
@@ -295,7 +300,10 @@ mod tests {
                     || message.contains("Invalid JSONPath expression")
             );
         } else {
-            panic!("Expected ProviderError for invalid JSONPath, got: {:?}", result);
+            panic!(
+                "Expected ProviderError for invalid JSONPath, got: {:?}",
+                result
+            );
         }
     }
 

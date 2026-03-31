@@ -4,9 +4,9 @@
 //! - `MemorySearchTool` — semantic search over long-term memory
 //! - `MemoryStoreTool` — persist important information for future recall
 
+use crate::sync_primitives::Arc;
 use async_trait::async_trait;
 use serde_json::{json, Value};
-use crate::sync_primitives::Arc;
 
 use super::super::tool::{LoopTool, ToolResult};
 
@@ -87,10 +87,7 @@ impl<M: MemoryBackend + 'static> LoopTool for MemorySearchTool<M> {
             }
         };
 
-        let limit = input
-            .get("limit")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(5) as usize;
+        let limit = input.get("limit").and_then(|v| v.as_u64()).unwrap_or(5) as usize;
 
         match self.backend.search(query, limit).await {
             Ok(entries) => {
@@ -262,10 +259,7 @@ mod tests {
         let backend = Arc::new(FakeMemory::new());
 
         // Store something first
-        backend
-            .store("User prefers dark mode", None)
-            .await
-            .unwrap();
+        backend.store("User prefers dark mode", None).await.unwrap();
 
         let tool = MemorySearchTool::new(Arc::clone(&backend));
         let result = tool.execute(json!({ "query": "dark mode" })).await;
@@ -286,9 +280,7 @@ mod tests {
         let backend = Arc::new(FakeMemory::new());
         let tool = MemorySearchTool::new(Arc::clone(&backend));
 
-        let result = tool
-            .execute(json!({ "query": "nonexistent topic" }))
-            .await;
+        let result = tool.execute(json!({ "query": "nonexistent topic" })).await;
 
         match result {
             ToolResult::Success { output } | ToolResult::SuccessAndStopLoop { output } => {
@@ -340,7 +332,9 @@ mod tests {
                 assert!(error.contains("missing required parameter: query"));
                 assert!(!retryable);
             }
-            ToolResult::Success { .. } | ToolResult::SuccessAndStopLoop { .. } => panic!("expected error"),
+            ToolResult::Success { .. } | ToolResult::SuccessAndStopLoop { .. } => {
+                panic!("expected error")
+            }
         }
     }
 
@@ -357,7 +351,9 @@ mod tests {
                 assert!(error.contains("missing required parameter: content"));
                 assert!(!retryable);
             }
-            ToolResult::Success { .. } | ToolResult::SuccessAndStopLoop { .. } => panic!("expected error"),
+            ToolResult::Success { .. } | ToolResult::SuccessAndStopLoop { .. } => {
+                panic!("expected error")
+            }
         }
     }
 }

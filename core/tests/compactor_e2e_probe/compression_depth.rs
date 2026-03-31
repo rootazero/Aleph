@@ -67,7 +67,9 @@ async fn many_turns_trigger_hierarchical_compression() {
             d0_count > 0 || d1_count > 0,
             "Should have d0 or d1 facts after 15 turns. \
              d0={}, d1={}, d2={}",
-            d0_count, d1_count, d2_count
+            d0_count,
+            d1_count,
+            d2_count
         );
 
         // If d1_min_fanout=3 and we have enough d0 facts, d1 should appear.
@@ -124,34 +126,41 @@ async fn condensation_invalidates_source_facts() {
 
     if compressed {
         // Query including invalid facts
-        let result = server.rpc_ok("memory.list_facts", serde_json::json!({
-            "limit": 200,
-            "include_invalid": true
-        })).await;
+        let result = server
+            .rpc_ok(
+                "memory.list_facts",
+                serde_json::json!({
+                    "limit": 200,
+                    "include_invalid": true
+                }),
+            )
+            .await;
 
-        let all_facts = result["facts"]
-            .as_array()
-            .cloned()
-            .unwrap_or_default();
+        let all_facts = result["facts"].as_array().cloned().unwrap_or_default();
 
-        let session_facts: Vec<_> = all_facts.iter()
+        let session_facts: Vec<_> = all_facts
+            .iter()
             .filter(|f| {
                 let path = f["path"].as_str().unwrap_or("");
                 path.contains("aleph://session/")
             })
             .collect();
 
-        let valid_count = session_facts.iter()
+        let valid_count = session_facts
+            .iter()
             .filter(|f| f["is_valid"].as_bool() == Some(true))
             .count();
-        let invalid_count = session_facts.iter()
+        let invalid_count = session_facts
+            .iter()
             .filter(|f| f["is_valid"].as_bool() == Some(false))
             .count();
 
         eprintln!(
             "[condensation_invalidates_source_facts] \
              total_session_facts={}, valid={}, invalid={}",
-            session_facts.len(), valid_count, invalid_count
+            session_facts.len(),
+            valid_count,
+            invalid_count
         );
 
         // If condensation occurred, some d0 facts should be invalidated

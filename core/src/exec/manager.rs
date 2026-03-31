@@ -2,8 +2,8 @@
 //!
 //! Provides async approval flow with timeout and event broadcasting.
 
-use std::collections::HashMap;
 use crate::sync_primitives::{Arc, RwLock};
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -399,7 +399,7 @@ impl ExecApprovalManager {
             last_used_at: Some(
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
+                    .unwrap_or_default()
                     .as_secs() as i64,
             ),
             last_used_command: None,
@@ -495,14 +495,18 @@ mod tests {
 
         // Spawn wait task
         let manager_clone = ExecApprovalManager::with_storage(manager.storage.clone());
-        manager_clone.pending.write().unwrap_or_else(|e| e.into_inner()).insert(
-            id.clone(),
-            PendingEntry {
-                record: record.clone(),
-                sender: None,
-                created_at: Instant::now(),
-            },
-        );
+        manager_clone
+            .pending
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(
+                id.clone(),
+                PendingEntry {
+                    record: record.clone(),
+                    sender: None,
+                    created_at: Instant::now(),
+                },
+            );
 
         // Resolve
         let resolved = manager_clone.resolve(&id, ApprovalDecisionType::AllowOnce, None);
@@ -524,25 +528,33 @@ mod tests {
         // Add some pending
         let request1 = mock_request();
         let record1 = manager.create(&request1, 60_000);
-        manager.pending.write().unwrap_or_else(|e| e.into_inner()).insert(
-            record1.id.clone(),
-            PendingEntry {
-                record: record1,
-                sender: None,
-                created_at: Instant::now(),
-            },
-        );
+        manager
+            .pending
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(
+                record1.id.clone(),
+                PendingEntry {
+                    record: record1,
+                    sender: None,
+                    created_at: Instant::now(),
+                },
+            );
 
         let request2 = mock_request();
         let record2 = manager.create(&request2, 60_000);
-        manager.pending.write().unwrap_or_else(|e| e.into_inner()).insert(
-            record2.id.clone(),
-            PendingEntry {
-                record: record2,
-                sender: None,
-                created_at: Instant::now(),
-            },
-        );
+        manager
+            .pending
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(
+                record2.id.clone(),
+                PendingEntry {
+                    record: record2,
+                    sender: None,
+                    created_at: Instant::now(),
+                },
+            );
 
         let pending = manager.list_pending();
         assert_eq!(pending.len(), 2);
@@ -575,9 +587,7 @@ mod tests {
     fn test_add_to_allowlist() {
         let (_dir, manager) = temp_manager();
 
-        manager
-            .add_to_allowlist("main", "/usr/bin/git")
-            .unwrap();
+        manager.add_to_allowlist("main", "/usr/bin/git").unwrap();
 
         let config = manager.get_config().unwrap();
         let agent = config.config.agents.get("main").unwrap();

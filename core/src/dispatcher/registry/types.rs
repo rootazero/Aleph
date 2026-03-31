@@ -2,8 +2,8 @@
 //!
 //! Core data structure for the ToolRegistry.
 
-use std::collections::HashMap;
 use crate::sync_primitives::Arc;
+use std::collections::HashMap;
 use tokio::sync::RwLock;
 
 use super::super::types::UnifiedTool;

@@ -93,7 +93,10 @@ mod tests {
         // Should fail because path doesn't exist, but the error message should
         // reference the home-expanded path, not the literal "~".
         let msg = expanded.unwrap_err();
-        assert!(!msg.contains('~'), "tilde should have been expanded, got: {msg}");
+        assert!(
+            !msg.contains('~'),
+            "tilde should have been expanded, got: {msg}"
+        );
         assert!(msg.contains(home.to_str().unwrap()), "got: {msg}");
     }
 }

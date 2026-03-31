@@ -2,8 +2,8 @@
 //!
 //! Echoes back the request parameters for testing purposes.
 
-use serde_json::json;
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse};
+use serde_json::json;
 
 /// Handle echo requests
 ///

@@ -1,7 +1,7 @@
 //! Step definitions for security features (VirtualFs sandbox)
 
 use crate::world::{AlephWorld, SecurityContext, SkillExecutionResult};
-use alephcore::tools::markdown_skill::{load_skills_from_dir, SandboxMode, MarkdownToolOutput};
+use alephcore::tools::markdown_skill::{load_skills_from_dir, MarkdownToolOutput, SandboxMode};
 use alephcore::tools::AlephToolServer;
 use alephcore::AlephError;
 use cucumber::{given, then, when};
@@ -13,7 +13,11 @@ use tempfile::TempDir;
 // ═══ Helper Functions ═══
 
 /// Create a VirtualFs skill in the given directory
-fn create_virtualfs_skill(temp_dir: &TempDir, skill_name: &str, cli_command: &str) -> std::path::PathBuf {
+fn create_virtualfs_skill(
+    temp_dir: &TempDir,
+    skill_name: &str,
+    cli_command: &str,
+) -> std::path::PathBuf {
     let skill_dir = temp_dir.path().join(skill_name);
     fs::create_dir(&skill_dir).unwrap();
 
@@ -71,7 +75,10 @@ async fn given_temp_skill_dir(w: &mut AlephWorld) {
 
 #[given(expr = "a VirtualFs skill named {string} using {string}")]
 async fn given_virtualfs_skill(w: &mut AlephWorld, skill_name: String, cli_command: String) {
-    let ctx = w.security.as_mut().expect("Security context not initialized");
+    let ctx = w
+        .security
+        .as_mut()
+        .expect("Security context not initialized");
     let temp_dir = ctx.temp_dir.as_ref().expect("Temp directory not set");
     let skill_dir = create_virtualfs_skill(temp_dir, &skill_name, &cli_command);
     ctx.skill_dir = Some(skill_dir);
@@ -87,7 +94,10 @@ async fn given_empty_tool_server(w: &mut AlephWorld) {
 
 #[when("I load VirtualFs skills from the directory")]
 async fn when_load_virtualfs_skills(w: &mut AlephWorld) {
-    let ctx = w.security.as_mut().expect("Security context not initialized");
+    let ctx = w
+        .security
+        .as_mut()
+        .expect("Security context not initialized");
     let skill_dir = ctx.skill_dir.as_ref().expect("Skill directory not set");
     let tools = load_skills_from_dir(skill_dir).await;
     ctx.loaded_tools = tools;
@@ -95,7 +105,10 @@ async fn when_load_virtualfs_skills(w: &mut AlephWorld) {
 
 #[when(expr = "I call the skill with args {word}")]
 async fn when_call_skill_args(w: &mut AlephWorld, args_json: String) {
-    let ctx = w.security.as_mut().expect("Security context not initialized");
+    let ctx = w
+        .security
+        .as_mut()
+        .expect("Security context not initialized");
     let tool = ctx.loaded_tools.first().expect("No tools loaded");
 
     // Parse args like ["Hello", "VirtualFs"]
@@ -115,10 +128,14 @@ async fn when_call_skill_args(w: &mut AlephWorld, args_json: String) {
 
 #[when(expr = "I call the skill with shell command {string}")]
 async fn when_call_skill_shell(w: &mut AlephWorld, command: String) {
-    let ctx = w.security.as_mut().expect("Security context not initialized");
+    let ctx = w
+        .security
+        .as_mut()
+        .expect("Security context not initialized");
     let tool = ctx.loaded_tools.first().expect("No tools loaded");
 
-    let result: Result<MarkdownToolOutput, AlephError> = tool.call(json!({ "args": ["-c", command] })).await;
+    let result: Result<MarkdownToolOutput, AlephError> =
+        tool.call(json!({ "args": ["-c", command] })).await;
 
     ctx.execution_result = Some(match result {
         Ok(output) => Ok(SkillExecutionResult {
@@ -132,14 +149,20 @@ async fn when_call_skill_shell(w: &mut AlephWorld, command: String) {
 
 #[when("I count sandbox directories before execution")]
 async fn when_count_sandboxes_before(w: &mut AlephWorld) {
-    let ctx = w.security.as_mut().expect("Security context not initialized");
+    let ctx = w
+        .security
+        .as_mut()
+        .expect("Security context not initialized");
     let system_temp = std::env::temp_dir();
     ctx.sandbox_count_before = count_virtualfs_sandboxes(&system_temp);
 }
 
 #[when("I execute the skill multiple times")]
 async fn when_execute_multiple_times(w: &mut AlephWorld) {
-    let ctx = w.security.as_mut().expect("Security context not initialized");
+    let ctx = w
+        .security
+        .as_mut()
+        .expect("Security context not initialized");
     let tool = ctx.loaded_tools.first().expect("No tools loaded");
 
     for _ in 0..3 {
@@ -155,18 +178,27 @@ async fn when_wait_cleanup(w: &mut AlephWorld) {
 
 #[when("I count sandbox directories after execution")]
 async fn when_count_sandboxes_after(w: &mut AlephWorld) {
-    let ctx = w.security.as_mut().expect("Security context not initialized");
+    let ctx = w
+        .security
+        .as_mut()
+        .expect("Security context not initialized");
     let system_temp = std::env::temp_dir();
     ctx.sandbox_count_after = count_virtualfs_sandboxes(&system_temp);
 }
 
 #[when("I load VirtualFs skills into the tool server")]
 async fn when_load_virtualfs_skills_to_server(w: &mut AlephWorld) {
-    let ctx = w.security.as_mut().expect("Security context not initialized");
+    let ctx = w
+        .security
+        .as_mut()
+        .expect("Security context not initialized");
     let skill_dir = ctx.skill_dir.as_ref().expect("Skill directory not set");
     let tools = load_skills_from_dir(skill_dir).await;
 
-    let server = ctx.tool_server.as_ref().expect("Tool server not initialized");
+    let server = ctx
+        .tool_server
+        .as_ref()
+        .expect("Tool server not initialized");
     for tool in tools {
         server.add_tool(tool).await;
     }
@@ -174,8 +206,14 @@ async fn when_load_virtualfs_skills_to_server(w: &mut AlephWorld) {
 
 #[when(expr = "I call {string} via tool server with args {word}")]
 async fn when_call_via_server(w: &mut AlephWorld, tool_name: String, args_json: String) {
-    let ctx = w.security.as_mut().expect("Security context not initialized");
-    let server = ctx.tool_server.as_ref().expect("Tool server not initialized");
+    let ctx = w
+        .security
+        .as_mut()
+        .expect("Security context not initialized");
+    let server = ctx
+        .tool_server
+        .as_ref()
+        .expect("Tool server not initialized");
 
     let args: Vec<String> = serde_json::from_str(&args_json).unwrap_or_default();
     let result = server.call(&tool_name, json!({ "args": args })).await;
@@ -187,13 +225,22 @@ async fn when_call_via_server(w: &mut AlephWorld, tool_name: String, args_json: 
 
 #[then("the skill should be loaded successfully")]
 async fn then_skill_loaded(w: &mut AlephWorld) {
-    let ctx = w.security.as_ref().expect("Security context not initialized");
-    assert!(!ctx.loaded_tools.is_empty(), "At least one tool should be loaded");
+    let ctx = w
+        .security
+        .as_ref()
+        .expect("Security context not initialized");
+    assert!(
+        !ctx.loaded_tools.is_empty(),
+        "At least one tool should be loaded"
+    );
 }
 
 #[then("the sandbox mode should be VirtualFs")]
 async fn then_sandbox_virtualfs(w: &mut AlephWorld) {
-    let ctx = w.security.as_ref().expect("Security context not initialized");
+    let ctx = w
+        .security
+        .as_ref()
+        .expect("Security context not initialized");
     let tool = ctx.loaded_tools.first().expect("No tools loaded");
 
     assert!(
@@ -207,26 +254,36 @@ async fn then_sandbox_virtualfs(w: &mut AlephWorld) {
 
 #[then("the skill execution should succeed")]
 async fn then_skill_execution_success(w: &mut AlephWorld) {
-    let ctx = w.security.as_ref().expect("Security context not initialized");
+    let ctx = w
+        .security
+        .as_ref()
+        .expect("Security context not initialized");
     let result = ctx.execution_result.as_ref().expect("No execution result");
     assert!(result.is_ok(), "Execution should succeed: {:?}", result);
 }
 
 #[then(expr = "the stdout should contain {string}")]
 async fn then_stdout_contains(w: &mut AlephWorld, expected: String) {
-    let ctx = w.security.as_ref().expect("Security context not initialized");
+    let ctx = w
+        .security
+        .as_ref()
+        .expect("Security context not initialized");
     let result = ctx.execution_result.as_ref().expect("No execution result");
     let output = result.as_ref().expect("Execution failed");
     assert!(
         output.stdout.contains(&expected),
         "stdout '{}' should contain '{}'",
-        output.stdout, expected
+        output.stdout,
+        expected
     );
 }
 
 #[then(expr = "{string} should NOT exist in the real skill directory")]
 async fn then_file_not_exists(w: &mut AlephWorld, filename: String) {
-    let ctx = w.security.as_ref().expect("Security context not initialized");
+    let ctx = w
+        .security
+        .as_ref()
+        .expect("Security context not initialized");
     let skill_dir = ctx.skill_dir.as_ref().expect("Skill directory not set");
     let file_path = skill_dir.join(&filename);
     assert!(
@@ -238,7 +295,10 @@ async fn then_file_not_exists(w: &mut AlephWorld, filename: String) {
 
 #[then("the stdout should indicate HOME is sandboxed")]
 async fn then_home_sandboxed(w: &mut AlephWorld) {
-    let ctx = w.security.as_ref().expect("Security context not initialized");
+    let ctx = w
+        .security
+        .as_ref()
+        .expect("Security context not initialized");
     let result = ctx.execution_result.as_ref().expect("No execution result");
     let output = result.as_ref().expect("Execution failed");
     assert!(
@@ -250,7 +310,10 @@ async fn then_home_sandboxed(w: &mut AlephWorld) {
 
 #[then("the stdout should indicate TMPDIR is sandboxed")]
 async fn then_tmpdir_sandboxed(w: &mut AlephWorld) {
-    let ctx = w.security.as_ref().expect("Security context not initialized");
+    let ctx = w
+        .security
+        .as_ref()
+        .expect("Security context not initialized");
     let result = ctx.execution_result.as_ref().expect("No execution result");
     let output = result.as_ref().expect("Execution failed");
     assert!(
@@ -262,7 +325,10 @@ async fn then_tmpdir_sandboxed(w: &mut AlephWorld) {
 
 #[then("the stdout should indicate PWD is sandboxed")]
 async fn then_pwd_sandboxed(w: &mut AlephWorld) {
-    let ctx = w.security.as_ref().expect("Security context not initialized");
+    let ctx = w
+        .security
+        .as_ref()
+        .expect("Security context not initialized");
     let result = ctx.execution_result.as_ref().expect("No execution result");
     let output = result.as_ref().expect("Execution failed");
     assert!(
@@ -274,8 +340,13 @@ async fn then_pwd_sandboxed(w: &mut AlephWorld) {
 
 #[then("sandbox directories should not accumulate")]
 async fn then_sandboxes_not_accumulate(w: &mut AlephWorld) {
-    let ctx = w.security.as_ref().expect("Security context not initialized");
-    let diff = ctx.sandbox_count_after.saturating_sub(ctx.sandbox_count_before);
+    let ctx = w
+        .security
+        .as_ref()
+        .expect("Security context not initialized");
+    let diff = ctx
+        .sandbox_count_after
+        .saturating_sub(ctx.sandbox_count_before);
     assert!(
         diff < 3,
         "Sandbox directories should be cleaned up (before: {}, after: {})",
@@ -286,7 +357,10 @@ async fn then_sandboxes_not_accumulate(w: &mut AlephWorld) {
 
 #[then("the tool server call should succeed")]
 async fn then_server_call_success(w: &mut AlephWorld) {
-    let ctx = w.security.as_ref().expect("Security context not initialized");
+    let ctx = w
+        .security
+        .as_ref()
+        .expect("Security context not initialized");
     assert!(
         ctx.tool_server_result.is_some(),
         "Tool server call should succeed"
@@ -295,12 +369,19 @@ async fn then_server_call_success(w: &mut AlephWorld) {
 
 #[then(expr = "the result stdout should contain {string}")]
 async fn then_result_stdout_contains(w: &mut AlephWorld, expected: String) {
-    let ctx = w.security.as_ref().expect("Security context not initialized");
-    let result = ctx.tool_server_result.as_ref().expect("No tool server result");
+    let ctx = w
+        .security
+        .as_ref()
+        .expect("Security context not initialized");
+    let result = ctx
+        .tool_server_result
+        .as_ref()
+        .expect("No tool server result");
     let stdout = result.get("stdout").and_then(|v| v.as_str()).unwrap_or("");
     assert!(
         stdout.contains(&expected),
         "Result stdout '{}' should contain '{}'",
-        stdout, expected
+        stdout,
+        expected
     );
 }

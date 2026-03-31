@@ -37,10 +37,7 @@ use chrono::Utc;
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot};
 
-use teloxide::{
-    prelude::*,
-    types::CallbackQuery as TgCallbackQuery,
-};
+use teloxide::{prelude::*, types::CallbackQuery as TgCallbackQuery};
 
 /// Telegram channel implementation
 pub struct TelegramChannel {
@@ -145,9 +142,7 @@ impl Channel for TelegramChannel {
 
     async fn start(&mut self) -> ChannelResult<()> {
         // Validate configuration
-        self.config
-            .validate()
-            .map_err(ChannelError::ConfigError)?;
+        self.config.validate().map_err(ChannelError::ConfigError)?;
 
         self.set_status(ChannelStatus::Connecting).await;
         tracing::info!("Starting Telegram channel...");
@@ -158,11 +153,7 @@ impl Channel for TelegramChannel {
         // Verify bot token by getting bot info
         match bot.get_me().await {
             Ok(me) => {
-                tracing::info!(
-                    "Telegram bot connected: @{} ({})",
-                    me.username(),
-                    me.id
-                );
+                tracing::info!("Telegram bot connected: @{} ({})", me.username(), me.id);
             }
             Err(e) => {
                 self.set_status(ChannelStatus::Error).await;
@@ -181,7 +172,8 @@ impl Channel for TelegramChannel {
             use teloxide::types::BotCommand;
 
             let tools = registry.list_builtin_tools().await;
-            let mut commands: Vec<(String, String)> = tools.iter()
+            let mut commands: Vec<(String, String)> = tools
+                .iter()
                 .filter(|t| t.usage.is_some())
                 .map(|t| (t.name.clone(), t.description.clone()))
                 .collect();
@@ -202,11 +194,14 @@ impl Channel for TelegramChannel {
 
             // Telegram limits: max 100 commands, command name max 32 chars,
             // lowercase a-z, 0-9, underscore only
-            let bot_commands: Vec<BotCommand> = commands.iter()
+            let bot_commands: Vec<BotCommand> = commands
+                .iter()
                 .take(100) // Telegram hard limit
                 .filter_map(|(name, desc)| {
                     // Normalize: lowercase, replace hyphens with underscores, strip invalid chars
-                    let normalized: String = name.to_lowercase().chars()
+                    let normalized: String = name
+                        .to_lowercase()
+                        .chars()
                         .map(|c| if c == '-' { '_' } else { c })
                         .filter(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || *c == '_')
                         .take(32) // Max command name length
@@ -267,8 +262,8 @@ impl Channel for TelegramChannel {
         let access_for_cb = self.access.clone();
 
         // Message handler
-        let message_handler = Update::filter_message().endpoint(
-            move |bot: Bot, msg: teloxide::types::Message| {
+        let message_handler =
+            Update::filter_message().endpoint(move |bot: Bot, msg: teloxide::types::Message| {
                 let inbound_tx = inbound_tx.clone();
                 let channel_id = channel_id.clone();
                 let access = access_clone.clone();
@@ -281,41 +276,46 @@ impl Channel for TelegramChannel {
                         AccessDecision::Allowed | AccessDecision::NeedsPairing => {
                             // NeedsPairing messages are forwarded to InboundMessageRouter
                             // which handles pairing via PairingStore (SQLite).
-                            if let Some(inbound) = handlers::convert_message(
-                                &msg, &bot, &channel_id,
-                            ).await {
+                            if let Some(inbound) =
+                                handlers::convert_message(&msg, &bot, &channel_id).await
+                            {
                                 if let Err(e) = inbound_tx.send(inbound).await {
                                     tracing::error!("Failed to send inbound message: {}", e);
                                 }
                             }
                         }
                         AccessDecision::Denied => {
-                            tracing::debug!("Access denied for user {} in chat {}", user_id, chat_id);
+                            tracing::debug!(
+                                "Access denied for user {} in chat {}",
+                                user_id,
+                                chat_id
+                            );
                         }
                     }
                     Ok::<(), std::convert::Infallible>(())
                 }
-            },
-        );
+            });
 
         // Callback query handler — also re-injects callback data as an
         // InboundMessage so the inbound router can process namespace
         // sub-command selections through the normal message pipeline.
-        let callback_handler = Update::filter_callback_query().endpoint(
-            move |bot: Bot, q: TgCallbackQuery| {
+        let callback_handler =
+            Update::filter_callback_query().endpoint(move |bot: Bot, q: TgCallbackQuery| {
                 let tx = callback_tx.clone();
                 let inbound_tx = inbound_tx_for_cb.clone();
                 let channel_id = channel_id_for_cb.clone();
                 let access = access_for_cb.clone();
                 async move {
                     // Extract chat_id and optional thread_id for forum topic isolation
-                    let (raw_chat_id, thread_id_val) = q.message.as_ref()
+                    let (raw_chat_id, thread_id_val) = q
+                        .message
+                        .as_ref()
                         .map(|m| {
                             let chat = m.chat().id.0;
                             // Extract thread_id from Regular messages for forum topics
                             let tid = match m {
                                 teloxide::types::MaybeInaccessibleMessage::Regular(msg) => {
-                                    msg.thread_id.map(|t| t.0.0)
+                                    msg.thread_id.map(|t| t.0 .0)
                                 }
                                 _ => None,
                             };
@@ -364,7 +364,11 @@ impl Channel for TelegramChannel {
                                 channel_id: channel_id.clone(),
                                 conversation_id: ConversationId::new(conv_id_str),
                                 sender_id: UserId::new(q.from.id.to_string()),
-                                sender_name: q.from.username.clone().or_else(|| Some(q.from.first_name.clone())),
+                                sender_name: q
+                                    .from
+                                    .username
+                                    .clone()
+                                    .or_else(|| Some(q.from.first_name.clone())),
                                 text: data,
                                 attachments: Vec::new(),
                                 timestamp: Utc::now(),
@@ -373,7 +377,10 @@ impl Channel for TelegramChannel {
                                 raw: None,
                             };
                             if let Err(e) = inbound_tx.send(inbound).await {
-                                tracing::error!("Failed to re-inject callback as inbound message: {}", e);
+                                tracing::error!(
+                                    "Failed to re-inject callback as inbound message: {}",
+                                    e
+                                );
                             }
                         }
                     }
@@ -385,8 +392,7 @@ impl Channel for TelegramChannel {
 
                     Ok::<(), std::convert::Infallible>(())
                 }
-            },
-        );
+            });
 
         // Compose the dptree handler and delegate to polling loop
         let handler = dptree::entry()
@@ -430,7 +436,12 @@ impl Channel for TelegramChannel {
         delivery::send_typing(bot, conversation_id.as_str()).await
     }
 
-    async fn react(&self, conversation_id: &ConversationId, message_id: &MessageId, reaction: &str) -> ChannelResult<()> {
+    async fn react(
+        &self,
+        conversation_id: &ConversationId,
+        message_id: &MessageId,
+        reaction: &str,
+    ) -> ChannelResult<()> {
         let bot = self
             .bot
             .as_ref()
@@ -438,15 +449,31 @@ impl Channel for TelegramChannel {
         delivery::send_reaction(bot, conversation_id.as_str(), message_id, reaction).await
     }
 
-    async fn edit(&self, conversation_id: &ConversationId, message_id: &MessageId, new_text: &str) -> ChannelResult<()> {
+    async fn edit(
+        &self,
+        conversation_id: &ConversationId,
+        message_id: &MessageId,
+        new_text: &str,
+    ) -> ChannelResult<()> {
         let bot = self
             .bot
             .as_ref()
             .ok_or_else(|| ChannelError::NotConnected("Bot not initialized".to_string()))?;
-        delivery::edit_message(bot, conversation_id.as_str(), message_id, Some(new_text), None).await
+        delivery::edit_message(
+            bot,
+            conversation_id.as_str(),
+            message_id,
+            Some(new_text),
+            None,
+        )
+        .await
     }
 
-    async fn delete(&self, _conversation_id: &ConversationId, message_id: &MessageId) -> ChannelResult<()> {
+    async fn delete(
+        &self,
+        _conversation_id: &ConversationId,
+        message_id: &MessageId,
+    ) -> ChannelResult<()> {
         // Note: Deleting requires both message_id and chat_id
         let _ = message_id;
         Err(ChannelError::UnsupportedFeature(
@@ -460,7 +487,6 @@ impl TelegramChannel {
     pub fn take_callback_receiver(&mut self) -> Option<mpsc::Receiver<CallbackQuery>> {
         self.callback_rx.take()
     }
-
 }
 
 /// Factory for creating Telegram channels
@@ -476,9 +502,7 @@ impl ChannelFactory for TelegramChannelFactory {
         let config: TelegramConfig = serde_json::from_value(config)
             .map_err(|e| ChannelError::ConfigError(format!("Invalid Telegram config: {}", e)))?;
 
-        config
-            .validate()
-            .map_err(ChannelError::ConfigError)?;
+        config.validate().map_err(ChannelError::ConfigError)?;
 
         Ok(Box::new(TelegramChannel::new("telegram", config)))
     }
@@ -507,5 +531,4 @@ mod tests {
         assert_eq!(channel.info().id.as_str(), "telegram-test");
         assert_eq!(channel.info().channel_type, "telegram");
     }
-
 }

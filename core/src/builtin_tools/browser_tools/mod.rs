@@ -37,12 +37,14 @@ async fn get_active_tab(backend: &dyn BrowserBackend) -> Result<String, BrowserE
 pub(crate) fn make_backend(manager: &ProfileManager, profile: &str) -> Box<dyn BrowserBackend> {
     manager.record_activity(profile);
     match manager.get_driver(profile) {
-        Some(BrowserDriver::ExistingSession) => {
-            Box::new(ChromeMcpBackend::new(manager.get_chrome_mcp_driver(), profile.to_string()))
-        }
-        Some(BrowserDriver::Managed) | None => {
-            Box::new(PlaywrightMcpBackend::new(manager.get_playwright_mcp_driver(), profile.to_string()))
-        }
+        Some(BrowserDriver::ExistingSession) => Box::new(ChromeMcpBackend::new(
+            manager.get_chrome_mcp_driver(),
+            profile.to_string(),
+        )),
+        Some(BrowserDriver::Managed) | None => Box::new(PlaywrightMcpBackend::new(
+            manager.get_playwright_mcp_driver(),
+            profile.to_string(),
+        )),
     }
 }
 

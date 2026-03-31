@@ -3,10 +3,8 @@
 //! Tests abstract concurrency patterns extracted from memory internals.
 //! Run with: `just test-loom`
 
+use crate::sync_primitives::{Arc, AtomicBool, AtomicU32, AtomicU64, Mutex, Ordering, RwLock};
 use loom::thread;
-use crate::sync_primitives::{
-    Arc, AtomicBool, AtomicU32, AtomicU64, Ordering, Mutex, RwLock,
-};
 
 /// Verify singleton initialization via compare_exchange — exactly one thread wins.
 ///
@@ -20,7 +18,10 @@ fn loom_daemon_singleton_init() {
         let i1 = initialized.clone();
         let c1 = init_count.clone();
         let t1 = thread::spawn(move || {
-            if i1.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
+            if i1
+                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
+            {
                 c1.fetch_add(1, Ordering::SeqCst);
             }
         });
@@ -28,7 +29,10 @@ fn loom_daemon_singleton_init() {
         let i2 = initialized.clone();
         let c2 = init_count.clone();
         let t2 = thread::spawn(move || {
-            if i2.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
+            if i2
+                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
+            {
                 c2.fetch_add(1, Ordering::SeqCst);
             }
         });
@@ -36,7 +40,10 @@ fn loom_daemon_singleton_init() {
         let i3 = initialized.clone();
         let c3 = init_count.clone();
         let t3 = thread::spawn(move || {
-            if i3.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
+            if i3
+                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
+            {
                 c3.fetch_add(1, Ordering::SeqCst);
             }
         });
@@ -164,8 +171,11 @@ fn loom_embedding_provider_swap() {
         let reader1 = thread::spawn(move || {
             let p = r1.read().unwrap();
             let name = p.clone();
-            assert!(name == "openai" || name == "ollama",
-                "Read unexpected provider: {}", name);
+            assert!(
+                name == "openai" || name == "ollama",
+                "Read unexpected provider: {}",
+                name
+            );
         });
 
         let r2 = provider.clone();

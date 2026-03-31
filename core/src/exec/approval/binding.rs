@@ -4,8 +4,8 @@
 //! match their declared bindings, preventing tools from accessing resources
 //! beyond their declared scope.
 
-use super::types::EscalationTrigger;
 use super::types::EscalationReason;
+use super::types::EscalationTrigger;
 use std::collections::HashMap;
 
 /// Check if runtime parameters comply with declared bindings

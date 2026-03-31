@@ -7,7 +7,8 @@ async fn p7_01_stale_link_in_whitelist() {
     // allowed_links contains "deleted-bot" (not registered) → other links still checked correctly
     let mut h = LinkAclHarness::new();
     h.register_link("tg-1").await;
-    h.register_agent("main", Some(vec!["deleted-bot".into(), "tg-1".into()])).await;
+    h.register_agent("main", Some(vec!["deleted-bot".into(), "tg-1".into()]))
+        .await;
     h.bind("tg-1", "main");
     h.send_message("tg-1", "hello").await;
     h.assert_no_denial();
@@ -30,7 +31,8 @@ async fn p7_03_duplicate_entries() {
     // allowed_links has duplicate entries → works correctly, no panic
     let mut h = LinkAclHarness::new();
     h.register_link("tg-1").await;
-    h.register_agent("main", Some(vec!["tg-1".into(), "tg-1".into()])).await;
+    h.register_agent("main", Some(vec!["tg-1".into(), "tg-1".into()]))
+        .await;
     h.bind("tg-1", "main");
     h.send_message("tg-1", "hello").await;
     h.assert_no_denial();
@@ -56,7 +58,8 @@ async fn p7_05_message_routing_then_acl() {
     let mut h = LinkAclHarness::new();
     h.register_link("tg-1").await;
     h.register_agent("main", None).await;
-    h.register_agent("restricted", Some(vec!["dc-1".into()])).await;
+    h.register_agent("restricted", Some(vec!["dc-1".into()]))
+        .await;
     h.bind("tg-1", "restricted");
 
     // Now message from tg-1 resolves to "restricted" which denies tg-1
@@ -71,7 +74,8 @@ async fn p7_06_switch_denied_acl_overrides_routing() {
     let mut h = LinkAclHarness::new();
     h.register_link("tg-1").await;
     h.register_agent("main", None).await;
-    h.register_agent("target", Some(vec!["dc-only".into()])).await;
+    h.register_agent("target", Some(vec!["dc-only".into()]))
+        .await;
     h.bind("tg-1", "main");
 
     h.send_message("tg-1", "/switch target").await;

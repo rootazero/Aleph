@@ -2,24 +2,24 @@
 //!
 //! Provides background scheduling for memory compression tasks.
 
-pub mod daemon;
 pub mod config;
+pub mod daemon;
 
-pub use daemon::CompressionDaemon;
 pub use config::CompressionDaemonConfig;
+pub use daemon::CompressionDaemon;
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sync_primitives::{AtomicUsize, Ordering};
     use crate::sync_primitives::Arc;
+    use crate::sync_primitives::{AtomicUsize, Ordering};
     use std::time::Duration;
 
     #[tokio::test]
     async fn test_daemon_config_default() {
         let config = CompressionDaemonConfig::default();
-        assert_eq!(config.check_interval_seconds, 3600);  // 1 hour
-        assert_eq!(config.idle_threshold_seconds, 300);   // 5 minutes
+        assert_eq!(config.check_interval_seconds, 3600); // 1 hour
+        assert_eq!(config.idle_threshold_seconds, 300); // 5 minutes
         assert!(config.enabled);
     }
 
@@ -50,8 +50,8 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_daemon_runs_compression() {
         let config = CompressionDaemonConfig {
-            check_interval_seconds: 1,  // Check every second
-            idle_threshold_seconds: 0,  // No idle requirement
+            check_interval_seconds: 1, // Check every second
+            idle_threshold_seconds: 0, // No idle requirement
             enabled: true,
         };
 

@@ -40,9 +40,7 @@ pub enum ArenaEvent {
         description: String,
     },
     /// The arena has begun settling (persisting facts, archiving artifacts).
-    SettlingStarted {
-        arena_id: ArenaId,
-    },
+    SettlingStarted { arena_id: ArenaId },
 }
 
 impl ArenaEvent {

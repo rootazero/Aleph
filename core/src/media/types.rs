@@ -157,10 +157,23 @@ impl DocFormat {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum MediaType {
-    Image { format: MediaImageFormat, width: Option<u32>, height: Option<u32> },
-    Audio { format: AudioFormat, duration_secs: Option<f64> },
-    Video { format: VideoFormat, duration_secs: Option<f64> },
-    Document { format: DocFormat, pages: Option<u32> },
+    Image {
+        format: MediaImageFormat,
+        width: Option<u32>,
+        height: Option<u32>,
+    },
+    Audio {
+        format: AudioFormat,
+        duration_secs: Option<f64>,
+    },
+    Video {
+        format: VideoFormat,
+        duration_secs: Option<f64>,
+    },
+    Document {
+        format: DocFormat,
+        pages: Option<u32>,
+    },
     Unknown,
 }
 
@@ -230,16 +243,29 @@ mod tests {
 
     #[test]
     fn media_type_category() {
-        let img = MediaType::Image { format: MediaImageFormat::Png, width: Some(800), height: Some(600) };
+        let img = MediaType::Image {
+            format: MediaImageFormat::Png,
+            width: Some(800),
+            height: Some(600),
+        };
         assert_eq!(img.category(), "image");
 
-        let aud = MediaType::Audio { format: AudioFormat::Mp3, duration_secs: Some(120.0) };
+        let aud = MediaType::Audio {
+            format: AudioFormat::Mp3,
+            duration_secs: Some(120.0),
+        };
         assert_eq!(aud.category(), "audio");
 
-        let vid = MediaType::Video { format: VideoFormat::Mp4, duration_secs: None };
+        let vid = MediaType::Video {
+            format: VideoFormat::Mp4,
+            duration_secs: None,
+        };
         assert_eq!(vid.category(), "video");
 
-        let doc = MediaType::Document { format: DocFormat::Pdf, pages: Some(10) };
+        let doc = MediaType::Document {
+            format: DocFormat::Pdf,
+            pages: Some(10),
+        };
         assert_eq!(doc.category(), "document");
 
         assert_eq!(MediaType::Unknown.category(), "unknown");
@@ -263,7 +289,11 @@ mod tests {
 
     #[test]
     fn media_type_serde_round_trip() {
-        let mt = MediaType::Image { format: MediaImageFormat::Jpeg, width: Some(1920), height: Some(1080) };
+        let mt = MediaType::Image {
+            format: MediaImageFormat::Jpeg,
+            width: Some(1920),
+            height: Some(1080),
+        };
         let json = serde_json::to_value(&mt).unwrap();
         assert_eq!(json["kind"], "image");
         assert_eq!(json["format"], "jpeg");
@@ -273,29 +303,43 @@ mod tests {
 
     #[test]
     fn media_output_serde_round_trip() {
-        let output = MediaOutput::Text { text: "Hello world".into() };
+        let output = MediaOutput::Text {
+            text: "Hello world".into(),
+        };
         let json = serde_json::to_value(&output).unwrap();
         assert_eq!(json["output_type"], "text");
         let _: MediaOutput = serde_json::from_value(json).unwrap();
 
-        let output = MediaOutput::Description { text: "A cat".into(), confidence: 0.95 };
+        let output = MediaOutput::Description {
+            text: "A cat".into(),
+            confidence: 0.95,
+        };
         let json = serde_json::to_value(&output).unwrap();
         assert_eq!(json["output_type"], "description");
 
-        let output = MediaOutput::Chunks { chunks: vec![
-            MediaChunk { index: 0, offset: 0.0, length: 30.0, content: "First segment".into() },
-        ]};
+        let output = MediaOutput::Chunks {
+            chunks: vec![MediaChunk {
+                index: 0,
+                offset: 0.0,
+                length: 30.0,
+                content: "First segment".into(),
+            }],
+        };
         let json = serde_json::to_value(&output).unwrap();
         assert_eq!(json["output_type"], "chunks");
     }
 
     #[test]
     fn media_input_serde() {
-        let input = MediaInput::FilePath { path: "/tmp/test.png".into() };
+        let input = MediaInput::FilePath {
+            path: "/tmp/test.png".into(),
+        };
         let json = serde_json::to_value(&input).unwrap();
         assert_eq!(json["type"], "file_path");
 
-        let input = MediaInput::Url { url: "https://example.com/img.png".into() };
+        let input = MediaInput::Url {
+            url: "https://example.com/img.png".into(),
+        };
         let json = serde_json::to_value(&input).unwrap();
         assert_eq!(json["type"], "url");
     }

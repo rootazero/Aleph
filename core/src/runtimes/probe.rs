@@ -6,12 +6,12 @@
 //!
 //! It never installs anything — only detects what is already available.
 
+use crate::sync_primitives::Mutex;
 use once_cell::sync::Lazy;
 use regex::Regex;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use crate::sync_primitives::Mutex;
 use tracing::{debug, trace, warn};
 
 use crate::runtimes::ledger::CapabilitySource;
@@ -75,10 +75,7 @@ const PROBE_SPECS: &[ProbeSpec] = &[
         version_flag: "--version",
         version_regex: r"Python (\d+\.\d+\.\d+)",
         min_version: Some("3.10"),
-        aleph_paths: &[
-            "python/default/bin/python3",
-            "uv/envs/default/bin/python3",
-        ],
+        aleph_paths: &["python/default/bin/python3", "uv/envs/default/bin/python3"],
     },
     ProbeSpec {
         capability: "node",
@@ -195,7 +192,11 @@ fn probe_system_path(spec: &ProbeSpec) -> Option<ProbeResult> {
     for bin_name in spec.binaries {
         trace!("Looking for '{}' on system PATH", bin_name);
 
-        let cmd = if cfg!(target_os = "windows") { "where" } else { "which" };
+        let cmd = if cfg!(target_os = "windows") {
+            "where"
+        } else {
+            "which"
+        };
         let output = Command::new(cmd).arg(bin_name).output().ok()?;
 
         if output.status.success() {
@@ -245,10 +246,7 @@ fn get_compiled_regex(pattern: &'static str) -> Option<Regex> {
 
 /// Execute the binary with its version flag and parse the version string.
 fn get_version(bin_path: &Path, version_flag: &str, version_regex: &'static str) -> Option<String> {
-    let output = Command::new(bin_path)
-        .arg(version_flag)
-        .output()
-        .ok()?;
+    let output = Command::new(bin_path).arg(version_flag).output().ok()?;
 
     // Some tools print version to stdout, others to stderr
     let combined = format!(

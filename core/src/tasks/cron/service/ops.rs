@@ -4,11 +4,13 @@
 //! Write operations (`add_job`, `update_job`, `toggle_job`, `delete_job`)
 //! modify the store and recompute next run times as needed.
 
-use crate::tasks::shared::clock::Clock;
 use crate::tasks::cron::config::{CronJob, CronJobView, ScheduleKind};
-use crate::tasks::shared::schedule::{apply_min_gap, compute_next_cron, compute_next_every, resolve_anchor};
 use crate::tasks::cron::stagger::compute_staggered_next;
 use crate::tasks::cron::store::CronStore;
+use crate::tasks::shared::clock::Clock;
+use crate::tasks::shared::schedule::{
+    apply_min_gap, compute_next_cron, compute_next_every, resolve_anchor,
+};
 
 // ── Schedule computation ─────────────────────────────────────────────
 
@@ -32,16 +34,14 @@ pub fn compute_next_run_for_job(job: &CronJob, now_ms: i64) -> Option<i64> {
             tz,
             stagger_ms,
         } => {
-            let from = chrono::DateTime::from_timestamp_millis(now_ms)
-                .unwrap_or_else(chrono::Utc::now);
+            let from =
+                chrono::DateTime::from_timestamp_millis(now_ms).unwrap_or_else(chrono::Utc::now);
             let base = compute_next_cron(expr, tz.as_deref(), from);
             match base {
                 Ok(Some(next)) => {
                     // Apply stagger if configured
                     let staggered = match stagger_ms {
-                        Some(s) if *s > 0 => {
-                            compute_staggered_next(&job.id, next, *s, now_ms)
-                        }
+                        Some(s) if *s > 0 => compute_staggered_next(&job.id, next, *s, now_ms),
                         _ => next,
                     };
                     // Apply min gap using last_ended = last_run_at + last_duration
@@ -170,11 +170,7 @@ pub fn update_job<C: Clock>(
 
 /// Toggle a job's enabled state. Recomputes next run if enabling.
 /// Returns the new enabled state.
-pub fn toggle_job<C: Clock>(
-    store: &mut CronStore,
-    id: &str,
-    clock: &C,
-) -> Result<bool, String> {
+pub fn toggle_job<C: Clock>(store: &mut CronStore, id: &str, clock: &C) -> Result<bool, String> {
     let job = store
         .get_job_mut(id)
         .ok_or_else(|| format!("job not found: {id}"))?;
@@ -348,13 +344,19 @@ mod tests {
         let new_state = toggle_job(&mut store, "togglable", &clock).unwrap();
         assert!(!new_state);
         let j = store.get_job("togglable").unwrap();
-        assert!(j.state.next_run_at_ms.is_none(), "disabled job should have no next_run");
+        assert!(
+            j.state.next_run_at_ms.is_none(),
+            "disabled job should have no next_run"
+        );
 
         // Toggle back to enabled
         let new_state = toggle_job(&mut store, "togglable", &clock).unwrap();
         assert!(new_state);
         let j = store.get_job("togglable").unwrap();
-        assert!(j.state.next_run_at_ms.is_some(), "re-enabled job should have next_run");
+        assert!(
+            j.state.next_run_at_ms.is_some(),
+            "re-enabled job should have next_run"
+        );
     }
 
     #[test]

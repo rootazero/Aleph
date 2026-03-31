@@ -3,10 +3,10 @@
 //! This tool allows agents to discover and query sessions in the system,
 //! enabling agent-to-agent communication by listing accessible sessions.
 
+use crate::sync_primitives::Arc;
 use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use crate::sync_primitives::Arc;
 use tracing::{debug, info};
 
 use super::helpers::{classify_session_kind, derive_channel, SessionKind};
@@ -191,7 +191,10 @@ impl AlephTool for SessionsListTool {
                 crate::error::AlephError::other(msg)
             })?;
 
-        debug!(total_sessions = all_sessions.len(), "Raw session list retrieved");
+        debug!(
+            total_sessions = all_sessions.len(),
+            "Raw session list retrieved"
+        );
 
         // 2. Apply A2A policy filtering
         let accessible_sessions: Vec<_> = all_sessions
@@ -212,10 +215,8 @@ impl AlephTool for SessionsListTool {
 
         // 4. Apply kind filter if specified
         if let Some(ref kinds) = args.kinds {
-            let parsed_kinds: Vec<SessionKind> = kinds
-                .iter()
-                .filter_map(|s| Self::parse_kind(s))
-                .collect();
+            let parsed_kinds: Vec<SessionKind> =
+                kinds.iter().filter_map(|s| Self::parse_kind(s)).collect();
 
             if !parsed_kinds.is_empty() {
                 rows.retain(|row| {
@@ -228,16 +229,15 @@ impl AlephTool for SessionsListTool {
             }
         }
 
-        debug!(after_kind_filter = rows.len(), "Sessions after kind filtering");
+        debug!(
+            after_kind_filter = rows.len(),
+            "Sessions after kind filtering"
+        );
 
         // 5. Apply active_minutes filter if specified
         if let Some(active_mins) = args.active_minutes {
             let threshold = chrono::Utc::now().timestamp() - (active_mins as i64 * 60);
-            rows.retain(|row| {
-                row.updated_at
-                    .map(|ts| ts >= threshold)
-                    .unwrap_or(false)
-            });
+            rows.retain(|row| row.updated_at.map(|ts| ts >= threshold).unwrap_or(false));
         }
 
         debug!(
@@ -298,14 +298,14 @@ impl AlephTool for SessionsListTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gateway::inter_agent_policy::AgentToAgentPolicy;
+    use crate::gateway::agent_instance::AgentInstance;
     use crate::gateway::agent_instance::AgentRegistry;
+    use crate::gateway::event_emitter::EventEmitter;
     use crate::gateway::execution_adapter::ExecutionAdapter;
     use crate::gateway::execution_engine::{ExecutionError, RunRequest, RunState, RunStatus};
-    use crate::gateway::event_emitter::EventEmitter;
+    use crate::gateway::inter_agent_policy::AgentToAgentPolicy;
     use crate::gateway::session_manager::SessionManagerConfig;
     use crate::gateway::{GatewayContext, SessionManager};
-    use crate::gateway::agent_instance::AgentInstance;
     use tempfile::tempdir;
 
     /// Mock execution adapter for testing
@@ -408,7 +408,10 @@ mod tests {
             r#"{"kinds": ["main", "task"], "limit": 10, "active_minutes": 30, "message_limit": 5}"#,
         )
         .unwrap();
-        assert_eq!(args.kinds, Some(vec!["main".to_string(), "task".to_string()]));
+        assert_eq!(
+            args.kinds,
+            Some(vec!["main".to_string(), "task".to_string()])
+        );
         assert_eq!(args.limit, Some(10));
         assert_eq!(args.active_minutes, Some(30));
         assert_eq!(args.message_limit, Some(5));
@@ -494,7 +497,8 @@ mod tests {
         // Create multiple sessions
         let session_manager = context.session_manager();
         for i in 0..5 {
-            let key = crate::gateway::router::SessionKey::task("main", "cron", format!("task-{}", i));
+            let key =
+                crate::gateway::router::SessionKey::task("main", "cron", format!("task-{}", i));
             session_manager.get_or_create(&key).await.unwrap();
         }
 
@@ -563,8 +567,14 @@ mod tests {
         let session_manager = context.session_manager();
         let key = crate::gateway::router::SessionKey::main("main");
         session_manager.get_or_create(&key).await.unwrap();
-        session_manager.add_message(&key, "user", "Hello").await.unwrap();
-        session_manager.add_message(&key, "assistant", "Hi there!").await.unwrap();
+        session_manager
+            .add_message(&key, "user", "Hello")
+            .await
+            .unwrap();
+        session_manager
+            .add_message(&key, "assistant", "Hi there!")
+            .await
+            .unwrap();
 
         let tool = SessionsListTool::new(context, "main");
         let args = SessionsListArgs {

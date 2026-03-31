@@ -68,7 +68,10 @@ impl AlephTool for BrowserNavigateTool {
             Ok((backend, tab_id)) => match backend.evaluate(&tab_id, js).await {
                 Ok(_) => Ok(BrowserNavigateOutput {
                     success: true,
-                    message: Some(format!("Navigated {:?} in profile '{}'", args.action, args.profile)),
+                    message: Some(format!(
+                        "Navigated {:?} in profile '{}'",
+                        args.action, args.profile
+                    )),
                 }),
                 Err(e) => Ok(BrowserNavigateOutput {
                     success: false,

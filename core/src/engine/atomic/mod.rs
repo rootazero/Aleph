@@ -17,27 +17,25 @@
 //! 3. **Separation of Concerns** - Environment (Context) vs. Constraints (Handler-specific config)
 //! 4. **Defense in Depth** - Centralized security checks in ExecutorContext
 
-use async_trait::async_trait;
 use crate::error::Result;
+use async_trait::async_trait;
 
 // Re-export types from sibling modules
 use super::atomic_executor::AtomicResult;
-use super::{
-    LineRange, WriteMode, Patch, SearchPattern, SearchScope, FileFilter,
-};
+use super::{FileFilter, LineRange, Patch, SearchPattern, SearchScope, WriteMode};
 
 // Module declarations
-pub mod context;
-pub mod file;
-pub mod edit;
 pub mod bash;
+pub mod context;
+pub mod edit;
+pub mod file;
 pub mod search;
 
 // Re-export ExecutorContext and handlers
-pub use context::ExecutorContext;
-pub use file::FileOpsHandler;
-pub use edit::EditOpsHandler;
 pub use bash::BashOpsHandler;
+pub use context::ExecutorContext;
+pub use edit::EditOpsHandler;
+pub use file::FileOpsHandler;
 pub use search::SearchOpsHandler;
 
 /// File operations trait

@@ -2,21 +2,19 @@
 //!
 //! RPC handlers for agent operations: run, wait, cancel, status.
 
+use crate::sync_primitives::Arc;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
-use crate::sync_primitives::Arc;
 use std::time::Instant;
 use tokio::sync::RwLock;
 use tracing::{debug, info};
 
 use super::super::event_bus::GatewayEventBus;
-use super::super::event_emitter::{
-    EventEmitter, GatewayEventEmitter, RunSummary, StreamEvent,
-};
+use super::super::event_emitter::{EventEmitter, GatewayEventEmitter, RunSummary, StreamEvent};
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
-use super::parse_params;
 use super::super::router::{AgentRouter, SessionKey};
+use super::parse_params;
 
 /// A file attachment sent with a message
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -155,8 +153,10 @@ impl AgentRunManager {
             };
 
             if let Ok(event_value) = serde_json::to_value(&event) {
-                let notification =
-                    super::super::protocol::JsonRpcRequest::notification("stream.run_accepted", Some(event_value));
+                let notification = super::super::protocol::JsonRpcRequest::notification(
+                    "stream.run_accepted",
+                    Some(event_value),
+                );
                 if let Ok(json) = serde_json::to_string(&notification) {
                     self.event_bus.publish(json);
                 }
@@ -217,15 +217,26 @@ async fn execute_agent_run(
     let start_time = Instant::now();
 
     // Simulate reasoning
-    emitter.emit_reasoning(&run_id, "Analyzing the request...", false).await;
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-
     emitter
-        .emit_reasoning(&run_id, &format!("Processing input: {}", input.chars().take(50).collect::<String>()), false)
+        .emit_reasoning(&run_id, "Analyzing the request...", false)
         .await;
     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
-    emitter.emit_reasoning(&run_id, "Formulating response...", true).await;
+    emitter
+        .emit_reasoning(
+            &run_id,
+            &format!(
+                "Processing input: {}",
+                input.chars().take(50).collect::<String>()
+            ),
+            false,
+        )
+        .await;
+    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+    emitter
+        .emit_reasoning(&run_id, "Formulating response...", true)
+        .await;
 
     // Simulate response
     let response = format!("Echo: {}", input);
@@ -253,7 +264,9 @@ async fn execute_agent_run(
         final_response: Some(response),
     };
 
-    emitter.emit_run_complete(&run_id, summary, duration_ms).await;
+    emitter
+        .emit_run_complete(&run_id, summary, duration_ms)
+        .await;
 
     // Update run state
     {
@@ -348,10 +361,7 @@ pub async fn handle_cancel(
 }
 
 /// Handle agents.list RPC request
-pub async fn handle_list(
-    request: JsonRpcRequest,
-    router: Arc<AgentRouter>,
-) -> JsonRpcResponse {
+pub async fn handle_list(request: JsonRpcRequest, router: Arc<AgentRouter>) -> JsonRpcResponse {
     let agents = router.list_agents().await;
     JsonRpcResponse::success(
         request.id,

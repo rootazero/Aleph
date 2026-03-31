@@ -109,7 +109,8 @@ mod tests {
 
     #[test]
     fn test_get_forward_targets_session_mode() {
-        let targets = get_forward_targets("agent:main:telegram:dm:12345", &[], ForwardMode::Session);
+        let targets =
+            get_forward_targets("agent:main:telegram:dm:12345", &[], ForwardMode::Session);
         assert_eq!(targets.len(), 1);
         assert_eq!(targets[0].channel, "telegram");
         assert_eq!(targets[0].target, "12345");

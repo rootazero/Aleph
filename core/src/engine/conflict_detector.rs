@@ -125,26 +125,36 @@ impl ConflictDetector {
         // Detect redundant rules
         conflicts.extend(self.detect_redundant_rules(reflex_layer));
 
-        info!(count = conflicts.len(), "Detected {} conflicts", conflicts.len());
+        info!(
+            count = conflicts.len(),
+            "Detected {} conflicts",
+            conflicts.len()
+        );
 
         conflicts
     }
 
     /// Find all rules that match a given input
-    fn find_matching_rules(&self, _reflex_layer: &ReflexLayer, input: &str) -> Vec<(usize, String)> {
+    fn find_matching_rules(
+        &self,
+        _reflex_layer: &ReflexLayer,
+        input: &str,
+    ) -> Vec<(usize, String)> {
         // This is a simplified implementation
         // In a real implementation, we would access the internal rules of ReflexLayer
         let mut matches = Vec::new();
 
         // Simulate rule matching with common patterns
-        let patterns = [(r"git\s+status", "git status rule"),
+        let patterns = [
+            (r"git\s+status", "git status rule"),
             (r"git.*", "git wildcard rule"),
             (r"read\s+.*", "read file rule"),
             (r"cat\s+.*", "cat file rule"),
             (r"(read|cat)\s+.*", "read/cat combined rule"),
             (r"ls.*", "ls rule"),
             (r"search.*", "search rule"),
-            (r"find.*", "find rule")];
+            (r"find.*", "find rule"),
+        ];
 
         for (idx, (pattern, name)) in patterns.iter().enumerate() {
             if let Ok(re) = Regex::new(pattern) {
@@ -159,8 +169,6 @@ impl ConflictDetector {
 
     /// Detect priority conflicts
     fn detect_priority_conflicts(&self, _reflex_layer: &ReflexLayer) -> Vec<Conflict> {
-        
-
         // This is a simplified implementation
         // In a real implementation, we would check for rules with same priority
         // that could match the same inputs
@@ -170,8 +178,6 @@ impl ConflictDetector {
 
     /// Detect redundant rules
     fn detect_redundant_rules(&self, _reflex_layer: &ReflexLayer) -> Vec<Conflict> {
-        
-
         // This is a simplified implementation
         // In a real implementation, we would check for rules that are never hit
         // due to higher priority rules matching first
@@ -398,10 +404,7 @@ impl ConflictReport {
 
     /// Get critical conflicts
     pub fn critical_conflicts(&self) -> Vec<&Conflict> {
-        self.conflicts
-            .iter()
-            .filter(|c| c.is_critical())
-            .collect()
+        self.conflicts.iter().filter(|c| c.is_critical()).collect()
     }
 
     /// Get high severity conflicts

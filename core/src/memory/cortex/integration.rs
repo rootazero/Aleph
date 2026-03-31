@@ -8,9 +8,9 @@ use crate::memory::cortex::{
     ClusteringConfig, ClusteringService, CortexDreamingConfig, CortexDreamingService,
     DistillationConfig, DistillationService, PatternExtractor, PatternExtractorConfig,
 };
-use crate::memory::EmbeddingProvider;
 use crate::memory::store::MemoryBackend;
 use crate::memory::value_estimator::cortex::CortexValueEstimator;
+use crate::memory::EmbeddingProvider;
 use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
 use tracing::info;
@@ -56,7 +56,11 @@ pub struct CortexIntegration {
 
 impl CortexIntegration {
     /// Create a new Cortex integration
-    pub fn new(config: CortexConfig, db: MemoryBackend, embedder: Arc<dyn EmbeddingProvider>) -> Self {
+    pub fn new(
+        config: CortexConfig,
+        db: MemoryBackend,
+        embedder: Arc<dyn EmbeddingProvider>,
+    ) -> Self {
         info!("Initializing Cortex Integration");
 
         // Create distillation service
@@ -192,7 +196,10 @@ mod tests {
         let (db, _temp) = create_test_db().await;
         let config = CortexConfig::default();
         let embedder: Arc<dyn EmbeddingProvider> = Arc::new(
-            crate::memory::embedding_provider::tests::MockEmbeddingProvider::new(1024, "mock-model"),
+            crate::memory::embedding_provider::tests::MockEmbeddingProvider::new(
+                1024,
+                "mock-model",
+            ),
         );
 
         let mut cortex = CortexIntegration::new(config, db, embedder);
@@ -217,7 +224,10 @@ mod tests {
             ..CortexConfig::default()
         };
         let embedder: Arc<dyn EmbeddingProvider> = Arc::new(
-            crate::memory::embedding_provider::tests::MockEmbeddingProvider::new(1024, "mock-model"),
+            crate::memory::embedding_provider::tests::MockEmbeddingProvider::new(
+                1024,
+                "mock-model",
+            ),
         );
 
         let mut cortex = CortexIntegration::new(config, db, embedder);

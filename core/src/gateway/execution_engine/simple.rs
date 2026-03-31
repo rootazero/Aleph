@@ -3,9 +3,9 @@
 //! Provides `SimpleExecutionEngine` for use when full provider/tool integration
 //! is not available. Emits placeholder responses with simulated streaming events.
 
-use std::collections::HashMap;
-use crate::sync_primitives::{AtomicU32, AtomicU64};
 use crate::sync_primitives::Arc;
+use crate::sync_primitives::{AtomicU32, AtomicU64};
+use std::collections::HashMap;
 
 use async_trait::async_trait;
 use tokio::sync::{mpsc, RwLock};
@@ -113,7 +113,9 @@ impl SimpleExecutionEngine {
         let final_state = match &result {
             Ok(_) => RunState::Completed,
             Err(ExecutionError::Cancelled) => RunState::Cancelled,
-            Err(e) => RunState::Failed { error: e.to_string() },
+            Err(e) => RunState::Failed {
+                error: e.to_string(),
+            },
         };
         let (started_at, steps_completed, final_seq) = {
             let mut runs = self.active_runs.write().await;

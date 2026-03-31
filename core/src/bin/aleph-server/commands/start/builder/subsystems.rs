@@ -10,16 +10,14 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use alephcore::gateway::GatewayServer;
-use alephcore::gateway::{
-    AgentRegistry, ChannelRegistry, InboundMessageRouter, RoutingConfig,
-};
-use alephcore::gateway::handlers::auth as auth_handlers;
-use alephcore::gateway::security::{TokenManager, PairingManager};
 use alephcore::gateway::device_store::DeviceStore;
-use alephcore::gateway::interfaces::{TelegramChannel, TelegramConfig};
+use alephcore::gateway::handlers::auth as auth_handlers;
 #[cfg(target_os = "macos")]
 use alephcore::gateway::interfaces::{IMessageChannel, IMessageConfig};
+use alephcore::gateway::interfaces::{TelegramChannel, TelegramConfig};
+use alephcore::gateway::security::{PairingManager, TokenManager};
+use alephcore::gateway::GatewayServer;
+use alephcore::gateway::{AgentRegistry, ChannelRegistry, InboundMessageRouter, RoutingConfig};
 
 use super::register_channel_handlers;
 
@@ -45,25 +43,30 @@ pub(in crate::commands::start) fn initialize_auth(
     use alephcore::utils::paths;
     use tracing::{info, warn};
 
-    let device_store_path = paths::get_devices_db_path()
-        .unwrap_or_else(|_| PathBuf::from("/tmp/aleph_devices.db"));
+    let device_store_path =
+        paths::get_devices_db_path().unwrap_or_else(|_| PathBuf::from("/tmp/aleph_devices.db"));
 
-    let device_store = Arc::new(
-        DeviceStore::open(&device_store_path)
-            .unwrap_or_else(|e| {
-                eprintln!("Warning: Failed to load device store from {:?}: {}. Using in-memory.", device_store_path, e);
-                DeviceStore::in_memory().expect("Failed to create in-memory device store")
-            })
-    );
+    let device_store = Arc::new(DeviceStore::open(&device_store_path).unwrap_or_else(|e| {
+        eprintln!(
+            "Warning: Failed to load device store from {:?}: {}. Using in-memory.",
+            device_store_path, e
+        );
+        DeviceStore::in_memory().expect("Failed to create in-memory device store")
+    }));
 
-    let security_store_path = paths::get_security_db_path()
-        .unwrap_or_else(|_| PathBuf::from("/tmp/aleph_security.db"));
+    let security_store_path =
+        paths::get_security_db_path().unwrap_or_else(|_| PathBuf::from("/tmp/aleph_security.db"));
     let security_store = Arc::new(
-        alephcore::gateway::security::SecurityStore::open(&security_store_path)
-            .unwrap_or_else(|e| {
-                eprintln!("Warning: Failed to load security store from {:?}: {}. Using in-memory.", security_store_path, e);
-                alephcore::gateway::security::SecurityStore::in_memory().expect("Failed to create in-memory security store")
-            })
+        alephcore::gateway::security::SecurityStore::open(&security_store_path).unwrap_or_else(
+            |e| {
+                eprintln!(
+                    "Warning: Failed to load security store from {:?}: {}. Using in-memory.",
+                    security_store_path, e
+                );
+                alephcore::gateway::security::SecurityStore::in_memory()
+                    .expect("Failed to create in-memory security store")
+            },
+        ),
     );
 
     let token_manager = Arc::new(TokenManager::new(security_store.clone()));
@@ -77,7 +80,10 @@ pub(in crate::commands::start) fn initialize_auth(
             Some(broadcaster)
         }
         Err(e) => {
-            warn!("Failed to start mDNS broadcaster: {} (discovery disabled)", e);
+            warn!(
+                "Failed to start mDNS broadcaster: {} (discovery disabled)",
+                e
+            );
             None
         }
     };
@@ -87,7 +93,10 @@ pub(in crate::commands::start) fn initialize_auth(
         .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
         .join(".aleph/data");
     let vault_path = data_dir.join("secrets.vault");
-    let shared_token_mgr = Arc::new(alephcore::gateway::security::SharedTokenManager::new(security_store.clone(), vault_path));
+    let shared_token_mgr = Arc::new(alephcore::gateway::security::SharedTokenManager::new(
+        security_store.clone(),
+        vault_path,
+    ));
 
     // Clean up legacy token file (token is now stored in SQLite)
     let legacy_token_file = data_dir.join(".shared_token");
@@ -142,7 +151,13 @@ pub(in crate::commands::start) fn initialize_auth(
         println!();
     }
 
-    AuthBundle { device_store, auth_ctx, mdns_broadcaster, invitation_manager, guest_session_manager }
+    AuthBundle {
+        device_store,
+        auth_ctx,
+        mdns_broadcaster,
+        invitation_manager,
+        guest_session_manager,
+    }
 }
 
 // ── load_app_config ──────────────────────────────────────────────────────────
@@ -171,7 +186,9 @@ pub(in crate::commands::start) async fn initialize_channels(
     daemon: bool,
     vault: Arc<alephcore::gateway::security::SharedTokenManager>,
 ) -> Arc<ChannelRegistry> {
-    use alephcore::gateway::handlers::channel::{create_channel_from_config, inject_channel_secrets};
+    use alephcore::gateway::handlers::channel::{
+        create_channel_from_config, inject_channel_secrets,
+    };
 
     let channel_registry = Arc::new(ChannelRegistry::new());
 
@@ -190,7 +207,11 @@ pub(in crate::commands::start) async fn initialize_channels(
         if inst.channel_type == "imessage" {
             let imessage_config = serde_json::from_value::<IMessageConfig>(inst.config.clone())
                 .unwrap_or_else(|e| {
-                    tracing::warn!("Failed to parse imessage config '{}': {}, using default", inst.id, e);
+                    tracing::warn!(
+                        "Failed to parse imessage config '{}': {}, using default",
+                        inst.id,
+                        e
+                    );
                     IMessageConfig::default()
                 });
             let imessage_channel = IMessageChannel::new(imessage_config);
@@ -205,10 +226,14 @@ pub(in crate::commands::start) async fn initialize_channels(
         let mut config_with_secrets = inst.config.clone();
         inject_channel_secrets(&inst.id, &mut config_with_secrets, &vault);
 
-        if let Some(mut channel) = create_channel_from_config(&inst.id, &inst.channel_type, config_with_secrets.clone()) {
+        if let Some(mut channel) =
+            create_channel_from_config(&inst.id, &inst.channel_type, config_with_secrets.clone())
+        {
             // Pass ToolRegistry to telegram instances so they self-register slash commands
             if inst.channel_type == "telegram" {
-                if let Ok(tg_config) = serde_json::from_value::<TelegramConfig>(config_with_secrets.clone()) {
+                if let Ok(tg_config) =
+                    serde_json::from_value::<TelegramConfig>(config_with_secrets.clone())
+                {
                     let mut tg_channel = TelegramChannel::new(&inst.id, tg_config);
                     if let Some(ref reg) = dispatch_registry {
                         tg_channel.set_tool_registry(reg.clone());
@@ -221,7 +246,11 @@ pub(in crate::commands::start) async fn initialize_channels(
                 println!("Registered channel: {} ({})", channel_id, inst.channel_type);
             }
         } else {
-            tracing::warn!("Failed to create channel '{}' of type '{}'", inst.id, inst.channel_type);
+            tracing::warn!(
+                "Failed to create channel '{}' of type '{}'",
+                inst.id,
+                inst.channel_type
+            );
         }
     }
 
@@ -287,7 +316,9 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
     dispatch_registry: Option<Arc<alephcore::dispatcher::ToolRegistry>>,
     session_manager: Option<Arc<alephcore::gateway::session_manager::SessionManager>>,
     app_config: Option<Arc<tokio::sync::RwLock<alephcore::Config>>>,
-    generation_registry: Option<Arc<std::sync::RwLock<alephcore::generation::GenerationProviderRegistry>>>,
+    generation_registry: Option<
+        Arc<std::sync::RwLock<alephcore::generation::GenerationProviderRegistry>>,
+    >,
     daemon: bool,
 ) {
     let routing_config = RoutingConfig::default();
@@ -357,22 +388,33 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
     if let Some(ref cfg_arc) = app_config {
         let cfg = cfg_arc.read().await;
         // Find first enabled speech provider with API key for STT
-        let speech_provider = cfg.generation.merged_providers()
-            .into_iter()
-            .find(|(_, pcfg, gen_type)| {
-                *gen_type == alephcore::generation::GenerationType::Speech
-                    && pcfg.enabled
-                    && !pcfg.api_key.as_deref().unwrap_or("").is_empty()
-            });
+        let speech_provider =
+            cfg.generation
+                .merged_providers()
+                .into_iter()
+                .find(|(_, pcfg, gen_type)| {
+                    *gen_type == alephcore::generation::GenerationType::Speech
+                        && pcfg.enabled
+                        && !pcfg.api_key.as_deref().unwrap_or("").is_empty()
+                });
         if let Some((_name, pcfg, _)) = speech_provider {
             if let Some(ref key) = pcfg.api_key {
                 let base = pcfg.base_url.as_deref().unwrap_or("https://api.openai.com");
-                let resolved = alephcore::generation::providers::url_normalize::resolve_base_url(base);
-                let stt_endpoint = resolved.secondary_endpoint(alephcore::generation::GenerationType::Speech)
-                    .unwrap_or_else(|| format!("{}/v1/audio/transcriptions", base.trim_end_matches('/')));
+                let resolved =
+                    alephcore::generation::providers::url_normalize::resolve_base_url(base);
+                let stt_endpoint = resolved
+                    .secondary_endpoint(alephcore::generation::GenerationType::Speech)
+                    .unwrap_or_else(|| {
+                        format!("{}/v1/audio/transcriptions", base.trim_end_matches('/'))
+                    });
                 // Derive base_url for SttConfig: strip the /audio/transcriptions suffix
-                let stt_base = stt_endpoint.trim_end_matches("/audio/transcriptions").to_string();
-                let stt_model = pcfg.defaults.stt_model.clone()
+                let stt_base = stt_endpoint
+                    .trim_end_matches("/audio/transcriptions")
+                    .to_string();
+                let stt_model = pcfg
+                    .defaults
+                    .stt_model
+                    .clone()
                     .unwrap_or_else(|| "whisper-1".to_string());
                 let stt = alephcore::gateway::voice::inbound::SttConfig {
                     api_key: key.clone(),
@@ -424,7 +466,7 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
             Arc::new(new_reg)
         };
         let gen_config = Arc::new(tokio::sync::RwLock::new(
-            alephcore::GenerationConfig::default()
+            alephcore::GenerationConfig::default(),
         ));
         inbound_router = inbound_router.with_voice_output(reg, gen_config);
         if !daemon {

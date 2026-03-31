@@ -25,9 +25,9 @@ impl ProfileGenerator {
             .tempfile()?;
         temp_file.write_all(content.as_bytes())?;
         let temp_path = temp_file.into_temp_path();
-        temp_path
-            .keep()
-            .map_err(|e| crate::error::AlephError::IoError(format!("Failed to persist temp file: {}", e)))
+        temp_path.keep().map_err(|e| {
+            crate::error::AlephError::IoError(format!("Failed to persist temp file: {}", e))
+        })
     }
 }
 

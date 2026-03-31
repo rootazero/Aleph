@@ -129,9 +129,7 @@ impl From<&UnifiedTool> for UnifiedToolInfo {
             ToolSource::Custom { rule_index } => {
                 (ToolSourceType::Custom, Some(rule_index.to_string()))
             }
-            ToolSource::Plugin { plugin_id } => {
-                (ToolSourceType::Plugin, Some(plugin_id.clone()))
-            }
+            ToolSource::Plugin { plugin_id } => (ToolSourceType::Plugin, Some(plugin_id.clone())),
         };
 
         let parameters_schema = tool
@@ -205,7 +203,10 @@ mod tests {
     #[test]
     fn test_tool_source_type_default_icon() {
         assert_eq!(ToolSourceType::Native.default_icon(), "command.circle.fill");
-        assert_eq!(ToolSourceType::Builtin.default_icon(), "command.circle.fill");
+        assert_eq!(
+            ToolSourceType::Builtin.default_icon(),
+            "command.circle.fill"
+        );
         assert_eq!(ToolSourceType::Mcp.default_icon(), "bolt.fill");
         assert_eq!(ToolSourceType::Skill.default_icon(), "lightbulb.fill");
         assert_eq!(ToolSourceType::Custom.default_icon(), "command");

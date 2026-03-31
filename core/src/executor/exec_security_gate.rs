@@ -11,15 +11,15 @@ use crate::sync_primitives::Arc;
 use serde_json::Value;
 use tracing::{info, warn};
 
-use crate::exec::{
-    analyze_shell_command, ApprovalDecision, ExecApprovalManager,
-    ExecContext, RiskLevel, SecretMasker, SecurityKernel, decide_exec_approval,
-};
-use crate::exec::sanitize::has_invisible_chars;
 use crate::exec::config::{ExecAsk, ExecSecurity, ResolvedExecConfig};
 use crate::exec::manager::DEFAULT_APPROVAL_TIMEOUT_MS;
 use crate::exec::sandbox::SandboxManager;
+use crate::exec::sanitize::has_invisible_chars;
 use crate::exec::socket::ApprovalDecisionType;
+use crate::exec::{
+    analyze_shell_command, decide_exec_approval, ApprovalDecision, ExecApprovalManager,
+    ExecContext, RiskLevel, SecretMasker, SecurityKernel,
+};
 
 /// Decision from pre-execution gate
 #[derive(Debug)]
@@ -74,7 +74,8 @@ impl ExecSecurityGate {
             "bash" => args.get("cmd").and_then(|v| v.as_str()).map(String::from),
             "code_exec" => {
                 // Only gate shell language, not Python/JavaScript
-                let is_shell = args.get("language")
+                let is_shell = args
+                    .get("language")
                     .and_then(|v| v.as_str())
                     .map(|lang| lang == "shell")
                     .unwrap_or(false);
@@ -148,11 +149,14 @@ impl ExecSecurityGate {
 
             RiskLevel::Danger => {
                 info!(cmd = %cmd, "Danger-tier command — requesting human approval");
-                self.request_approval(&cmd, identity, approval_timeout_ms).await
+                self.request_approval(&cmd, identity, approval_timeout_ms)
+                    .await
             }
 
             RiskLevel::Caution | RiskLevel::Safe => {
-                let use_sandbox = self.sandbox_manager.as_ref()
+                let use_sandbox = self
+                    .sandbox_manager
+                    .as_ref()
                     .map(|s| s.is_available())
                     .unwrap_or(false);
                 info!(cmd = %cmd, risk = ?risk, use_sandbox, "Shell command allowed");
@@ -171,12 +175,8 @@ impl ExecSecurityGate {
         args: &Value,
         identity: &aleph_protocol::IdentityContext,
     ) -> PreExecDecision {
-        self.pre_execute_with_timeout(
-            tool_name,
-            args,
-            identity,
-            DEFAULT_APPROVAL_TIMEOUT_MS,
-        ).await
+        self.pre_execute_with_timeout(tool_name, args, identity, DEFAULT_APPROVAL_TIMEOUT_MS)
+            .await
     }
 
     /// Request human approval for a Danger-tier command.
@@ -252,7 +252,9 @@ impl ExecSecurityGate {
             Some(ApprovalDecisionType::AllowAlways) => {
                 info!(cmd = %cmd, id = %record_id, "Danger command approved (always)");
                 // Add to allowlist for future auto-approval
-                let pattern = analysis.segments.first()
+                let pattern = analysis
+                    .segments
+                    .first()
                     .and_then(|s| s.resolution.as_ref())
                     .map(|r| {
                         r.resolved_path
@@ -289,30 +291,42 @@ impl ExecSecurityGate {
     ///
     /// Applies SecretMasker to stdout and stderr string fields in the output Value.
     /// Non-Success results and non-ToolResults variants are passed through unchanged.
-    pub fn post_execute(&self, result: crate::executor::action_types::ActionResult) -> crate::executor::action_types::ActionResult {
+    pub fn post_execute(
+        &self,
+        result: crate::executor::action_types::ActionResult,
+    ) -> crate::executor::action_types::ActionResult {
         match result {
             crate::executor::action_types::ActionResult::ToolResults { results } => {
-                let masked_results: Vec<_> = results.into_iter().map(|mut r| {
-                    if let crate::executor::action_types::SingleToolResult::Success { ref mut output, .. } = r.result {
-                        // Mask stdout field if present
-                        if let Some(stdout) = output.get("stdout").and_then(|v| v.as_str()) {
-                            let masked = self.masker.mask(stdout);
-                            output["stdout"] = serde_json::Value::String(masked);
+                let masked_results: Vec<_> = results
+                    .into_iter()
+                    .map(|mut r| {
+                        if let crate::executor::action_types::SingleToolResult::Success {
+                            ref mut output,
+                            ..
+                        } = r.result
+                        {
+                            // Mask stdout field if present
+                            if let Some(stdout) = output.get("stdout").and_then(|v| v.as_str()) {
+                                let masked = self.masker.mask(stdout);
+                                output["stdout"] = serde_json::Value::String(masked);
+                            }
+                            // Mask stderr field if present
+                            if let Some(stderr) = output.get("stderr").and_then(|v| v.as_str()) {
+                                let masked = self.masker.mask(stderr);
+                                output["stderr"] = serde_json::Value::String(masked);
+                            }
+                            // Mask plain string output if not an object
+                            if let Some(s) = output.as_str().map(String::from) {
+                                let masked = self.masker.mask(&s);
+                                *output = serde_json::Value::String(masked);
+                            }
                         }
-                        // Mask stderr field if present
-                        if let Some(stderr) = output.get("stderr").and_then(|v| v.as_str()) {
-                            let masked = self.masker.mask(stderr);
-                            output["stderr"] = serde_json::Value::String(masked);
-                        }
-                        // Mask plain string output if not an object
-                        if let Some(s) = output.as_str().map(String::from) {
-                            let masked = self.masker.mask(&s);
-                            *output = serde_json::Value::String(masked);
-                        }
-                    }
-                    r
-                }).collect();
-                crate::executor::action_types::ActionResult::ToolResults { results: masked_results }
+                        r
+                    })
+                    .collect();
+                crate::executor::action_types::ActionResult::ToolResults {
+                    results: masked_results,
+                }
             }
             other => other,
         }
@@ -322,9 +336,9 @@ impl ExecSecurityGate {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
-    use crate::sync_primitives::Arc;
     use crate::exec::ExecApprovalManager;
+    use crate::sync_primitives::Arc;
+    use serde_json::json;
 
     fn make_identity() -> aleph_protocol::IdentityContext {
         aleph_protocol::IdentityContext::owner("session:test".to_string(), "cli".to_string())
@@ -377,7 +391,11 @@ mod tests {
         let decision = gate.pre_execute("bash", &args, &identity).await;
         assert!(matches!(decision, PreExecDecision::Block { .. }));
         if let PreExecDecision::Block { reason } = decision {
-            assert!(reason.contains("Blocked"), "Expected 'Blocked' in reason, got: {}", reason);
+            assert!(
+                reason.contains("Blocked"),
+                "Expected 'Blocked' in reason, got: {}",
+                reason
+            );
         }
     }
 
@@ -427,10 +445,13 @@ mod tests {
         let args = serde_json::json!({"cmd": "rm -rf ./old_backups"});
 
         // Use 0ms timeout — will immediately timeout → Block
-        let decision = gate.pre_execute_with_timeout("bash", &args, &identity, 0).await;
+        let decision = gate
+            .pre_execute_with_timeout("bash", &args, &identity, 0)
+            .await;
         assert!(
             matches!(decision, PreExecDecision::Block { .. }),
-            "Expected Block on timeout, got {:?}", decision
+            "Expected Block on timeout, got {:?}",
+            decision
         );
     }
 
@@ -454,10 +475,13 @@ mod tests {
         });
 
         // Use 5s timeout — the spawned task will approve before it expires
-        let decision = gate.pre_execute_with_timeout("bash", &args, &identity, 5000).await;
+        let decision = gate
+            .pre_execute_with_timeout("bash", &args, &identity, 5000)
+            .await;
         assert!(
             matches!(decision, PreExecDecision::Allow { .. }),
-            "Expected Allow after approval, got {:?}", decision
+            "Expected Allow after approval, got {:?}",
+            decision
         );
     }
 
@@ -473,24 +497,29 @@ mod tests {
             "exit_code": 0,
         });
 
-        let result = crate::executor::action_types::ActionResult::ToolResults { results: vec![
-            crate::executor::action_types::ToolCallResult {
+        let result = crate::executor::action_types::ActionResult::ToolResults {
+            results: vec![crate::executor::action_types::ToolCallResult {
                 call_id: "test".to_string(),
                 tool_name: "bash".to_string(),
                 result: crate::executor::action_types::SingleToolResult::Success {
                     output: raw_output,
                     duration_ms: 100,
                 },
-            },
-        ]};
+            }],
+        };
 
         let masked = gate.post_execute(result);
 
         if let crate::executor::action_types::ActionResult::ToolResults { ref results } = masked {
-            if let crate::executor::action_types::SingleToolResult::Success { ref output, .. } = results[0].result {
+            if let crate::executor::action_types::SingleToolResult::Success { ref output, .. } =
+                results[0].result
+            {
                 let stdout = output["stdout"].as_str().unwrap();
                 // The secret should be redacted somehow (not present in full form)
-                assert!(!stdout.contains("abcdefghijklmno"), "API key should be redacted");
+                assert!(
+                    !stdout.contains("abcdefghijklmno"),
+                    "API key should be redacted"
+                );
             } else {
                 panic!("Expected Success");
             }
@@ -504,20 +533,23 @@ mod tests {
         let manager = Arc::new(ExecApprovalManager::new());
         let gate = ExecSecurityGate::new(manager, None);
 
-        let result = crate::executor::action_types::ActionResult::ToolResults { results: vec![
-            crate::executor::action_types::ToolCallResult {
+        let result = crate::executor::action_types::ActionResult::ToolResults {
+            results: vec![crate::executor::action_types::ToolCallResult {
                 call_id: "test".to_string(),
                 tool_name: "bash".to_string(),
                 result: crate::executor::action_types::SingleToolResult::Error {
                     error: "execution failed".to_string(),
                     retryable: false,
                 },
-            },
-        ]};
+            }],
+        };
 
         let masked = gate.post_execute(result);
         if let crate::executor::action_types::ActionResult::ToolResults { ref results } = masked {
-            assert!(matches!(results[0].result, crate::executor::action_types::SingleToolResult::Error { .. }));
+            assert!(matches!(
+                results[0].result,
+                crate::executor::action_types::SingleToolResult::Error { .. }
+            ));
         } else {
             panic!("Expected ToolResults");
         }
@@ -531,7 +563,9 @@ mod tests {
         // "ls -la" with ZWSP appended at end: still matches ^ls\s+ Safe pattern,
         // then escalated Safe→Caution by invisible char detection. Caution is auto-allowed.
         let args = json!({"cmd": "ls -la\u{200B}"});
-        let decision = gate.pre_execute_with_timeout("bash", &args, &identity, 100).await;
+        let decision = gate
+            .pre_execute_with_timeout("bash", &args, &identity, 100)
+            .await;
         assert!(matches!(decision, PreExecDecision::Allow { .. }));
     }
 
@@ -543,10 +577,13 @@ mod tests {
         // "npm install" is Caution, invisible chars should escalate to Danger
         // With 0ms timeout, Danger → Block
         let args = json!({"cmd": "npm\u{200B} install"});
-        let decision = gate.pre_execute_with_timeout("bash", &args, &identity, 0).await;
+        let decision = gate
+            .pre_execute_with_timeout("bash", &args, &identity, 0)
+            .await;
         assert!(
             matches!(decision, PreExecDecision::Block { .. }),
-            "Expected Block (Caution→Danger→timeout), got {:?}", decision
+            "Expected Block (Caution→Danger→timeout), got {:?}",
+            decision
         );
     }
 
@@ -563,21 +600,23 @@ mod tests {
 
         let original_stdout = raw_output["stdout"].as_str().unwrap().to_string();
 
-        let result = crate::executor::action_types::ActionResult::ToolResults { results: vec![
-            crate::executor::action_types::ToolCallResult {
+        let result = crate::executor::action_types::ActionResult::ToolResults {
+            results: vec![crate::executor::action_types::ToolCallResult {
                 call_id: "test".to_string(),
                 tool_name: "bash".to_string(),
                 result: crate::executor::action_types::SingleToolResult::Success {
                     output: raw_output,
                     duration_ms: 50,
                 },
-            },
-        ]};
+            }],
+        };
 
         let masked = gate.post_execute(result);
 
         if let crate::executor::action_types::ActionResult::ToolResults { ref results } = masked {
-            if let crate::executor::action_types::SingleToolResult::Success { ref output, .. } = results[0].result {
+            if let crate::executor::action_types::SingleToolResult::Success { ref output, .. } =
+                results[0].result
+            {
                 assert_eq!(output["stdout"].as_str().unwrap(), original_stdout);
             } else {
                 panic!("Expected Success");

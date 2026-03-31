@@ -94,7 +94,8 @@ impl ArenaManager {
 
     /// Returns arena IDs where the given agent is a participant and the arena is not Archived.
     pub fn active_arenas_for(&self, agent_id: &AgentId) -> Vec<ArenaId> {
-        let mut result: Vec<ArenaId> = self.arenas
+        let mut result: Vec<ArenaId> = self
+            .arenas
             .iter()
             .filter_map(|(arena_id, shared)| {
                 let arena = shared.read().unwrap_or_else(|e| e.into_inner());

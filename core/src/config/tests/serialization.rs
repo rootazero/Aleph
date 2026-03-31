@@ -230,7 +230,11 @@ fn test_agents_toml_round_trip() {
     assert!(
         toml_str.contains("[[agents.list]]"),
         "Expected [[agents.list]] in serialized TOML, got:\n{}",
-        &toml_str[toml_str.find("[agents").unwrap_or(0)..].lines().take(10).collect::<Vec<_>>().join("\n")
+        &toml_str[toml_str.find("[agents").unwrap_or(0)..]
+            .lines()
+            .take(10)
+            .collect::<Vec<_>>()
+            .join("\n")
     );
 
     let deserialized: Config = toml::from_str(&toml_str).unwrap();
@@ -246,8 +250,11 @@ fn test_real_config_file_parse() {
         // Test 1: Direct parse (should work)
         match toml::from_str::<Config>(&contents) {
             Ok(cfg) => {
-                eprintln!("Direct parse OK: {} providers, {} agents",
-                    cfg.providers.len(), cfg.agents.list.len());
+                eprintln!(
+                    "Direct parse OK: {} providers, {} agents",
+                    cfg.providers.len(),
+                    cfg.agents.list.len()
+                );
             }
             Err(e) => {
                 panic!("Direct parse failed: {}", e);
@@ -257,18 +264,25 @@ fn test_real_config_file_parse() {
         // Test 2: Through migrate_mcp_builtin_in_toml (simulates load_from_file)
         let migrated = Config::migrate_mcp_builtin_in_toml(&contents).unwrap();
         eprintln!("migrated == original: {}", migrated == contents);
-        eprintln!("migrated len: {}, original len: {}", migrated.len(), contents.len());
+        eprintln!(
+            "migrated len: {}, original len: {}",
+            migrated.len(),
+            contents.len()
+        );
         match toml::from_str::<Config>(&migrated) {
             Ok(cfg) => {
-                eprintln!("Post-migration parse OK: {} providers, {} agents",
-                    cfg.providers.len(), cfg.agents.list.len());
+                eprintln!(
+                    "Post-migration parse OK: {} providers, {} agents",
+                    cfg.providers.len(),
+                    cfg.agents.list.len()
+                );
             }
             Err(e) => {
                 // Show differences
                 if migrated != contents {
                     for (i, (a, b)) in migrated.lines().zip(contents.lines()).enumerate() {
                         if a != b {
-                            eprintln!("Line {} differs: '{}' vs '{}'", i+1, a, b);
+                            eprintln!("Line {} differs: '{}' vs '{}'", i + 1, a, b);
                         }
                     }
                 }
@@ -279,8 +293,11 @@ fn test_real_config_file_parse() {
         // Test 3: Full load_from_file
         match Config::load_from_file(&path) {
             Ok(cfg) => {
-                eprintln!("load_from_file OK: {} providers, {} agents",
-                    cfg.providers.len(), cfg.agents.list.len());
+                eprintln!(
+                    "load_from_file OK: {} providers, {} agents",
+                    cfg.providers.len(),
+                    cfg.agents.list.len()
+                );
             }
             Err(e) => {
                 panic!("load_from_file failed: {}", e);
@@ -342,7 +359,7 @@ fn test_atomic_write_overwrites_existing_file() {
 
 #[test]
 fn test_embedding_providers_survive_toml_roundtrip() {
-    use crate::config::types::memory::{EmbeddingProviderConfig, EmbeddingPreset};
+    use crate::config::types::memory::{EmbeddingPreset, EmbeddingProviderConfig};
     use tempfile::NamedTempFile;
 
     let mut config = Config::default();
@@ -416,7 +433,13 @@ fn test_embedding_survives_json_then_toml_roundtrip() {
     // Config → JSON (like patcher step 1)
     let json = serde_json::to_value(&config).unwrap();
     assert!(json["memory"]["embedding"]["providers"].is_array());
-    assert_eq!(json["memory"]["embedding"]["providers"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        json["memory"]["embedding"]["providers"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
 
     // JSON → Config (like patcher step 6)
     let loaded: Config = serde_json::from_value(json).unwrap();
@@ -433,7 +456,10 @@ fn test_embedding_survives_json_then_toml_roundtrip() {
         1,
         "Embedding providers should survive Config→JSON→Config→TOML→Config roundtrip"
     );
-    assert_eq!(final_config.memory.embedding.active_provider_id, "siliconflow");
+    assert_eq!(
+        final_config.memory.embedding.active_provider_id,
+        "siliconflow"
+    );
 }
 
 #[test]
@@ -454,8 +480,10 @@ fn test_embedding_survives_save_incremental() {
 
     // Verify file has providers
     let content = std::fs::read_to_string(path).unwrap();
-    assert!(content.contains("[[memory.embedding.providers]]"),
-        "Initial file should have providers");
+    assert!(
+        content.contains("[[memory.embedding.providers]]"),
+        "Initial file should have providers"
+    );
 
     // Now modify memory config (like memory_config.update would) but keep embedding
     config.memory.max_context_items = 20;
@@ -466,18 +494,25 @@ fn test_embedding_survives_save_incremental() {
 
     // Verify memory section in toml::Value has embedding
     let memory_table = memory_val.as_table().unwrap();
-    assert!(memory_table.contains_key("embedding"),
+    assert!(
+        memory_table.contains_key("embedding"),
         "Memory toml::Value should contain 'embedding' key. Keys: {:?}",
-        memory_table.keys().collect::<Vec<_>>());
+        memory_table.keys().collect::<Vec<_>>()
+    );
 
     let embed_table = memory_table.get("embedding").unwrap().as_table().unwrap();
-    assert!(embed_table.contains_key("providers"),
+    assert!(
+        embed_table.contains_key("providers"),
         "Embedding should have 'providers'. Keys: {:?}",
-        embed_table.keys().collect::<Vec<_>>());
+        embed_table.keys().collect::<Vec<_>>()
+    );
 
     let providers = embed_table.get("providers").unwrap().as_array().unwrap();
-    assert_eq!(providers.len(), 1,
-        "Should have 1 provider in toml::Value representation");
+    assert_eq!(
+        providers.len(),
+        1,
+        "Should have 1 provider in toml::Value representation"
+    );
 }
 
 #[test]
@@ -504,10 +539,15 @@ fn test_save_to_file_guards_against_embedding_erasure() {
     empty_config.memory.embedding.active_provider_id = String::new();
 
     let result = empty_config.save_to_file(path);
-    assert!(result.is_err(), "save_to_file should refuse to erase embedding providers");
+    assert!(
+        result.is_err(),
+        "save_to_file should refuse to erase embedding providers"
+    );
 
     // Verify the file was NOT overwritten
     let content_after = std::fs::read_to_string(path).unwrap();
-    assert!(content_after.contains("[[memory.embedding.providers]]"),
-        "File should still have embedding providers after refused save");
+    assert!(
+        content_after.contains("[[memory.embedding.providers]]"),
+        "File should still have embedding providers after refused save"
+    );
 }

@@ -218,7 +218,12 @@ impl PermissionEvaluator {
     ///
     /// # Default Behavior
     /// If no rule matches, returns "ask" action.
-    pub fn evaluate(&self, permission: &str, pattern: &str, rulesets: &[&Ruleset]) -> PermissionRule {
+    pub fn evaluate(
+        &self,
+        permission: &str,
+        pattern: &str,
+        rulesets: &[&Ruleset],
+    ) -> PermissionRule {
         // Merge all rulesets in order
         let merged: Vec<&PermissionRule> = rulesets.iter().flat_map(|r| r.iter()).collect();
 
@@ -275,12 +280,7 @@ pub(crate) fn wildcard_match(text: &str, pattern: &str) -> bool {
     wildcard_match_recursive(&text_chars, &pattern_chars, 0, 0)
 }
 
-fn wildcard_match_recursive(
-    text: &[char],
-    pattern: &[char],
-    ti: usize,
-    pi: usize,
-) -> bool {
+fn wildcard_match_recursive(text: &[char], pattern: &[char], ti: usize, pi: usize) -> bool {
     // Both exhausted - match
     if ti == text.len() && pi == pattern.len() {
         return true;
@@ -376,7 +376,7 @@ mod tests {
         // More specific deny rules should come AFTER general ask rules
         let rules = vec![
             PermissionRule::allow("edit", "*"),
-            PermissionRule::ask("bash", "*"),       // General: ask for all bash
+            PermissionRule::ask("bash", "*"), // General: ask for all bash
             PermissionRule::deny("bash", "rm -rf *"), // Specific: deny rm -rf (after ask)
         ];
         let ruleset = Ruleset::from_rules(rules);

@@ -2,9 +2,9 @@
 //!
 //! RPC handlers for pairing operations: list, approve, reject.
 
+use crate::sync_primitives::Arc;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use crate::sync_primitives::Arc;
 use tracing::debug;
 
 use crate::gateway::pairing_store::{PairingRequest, PairingStore};
@@ -33,10 +33,7 @@ impl From<PairingRequest> for PairingRequestResponse {
 /// Handle pairing.list RPC request
 ///
 /// Lists pending pairing requests, optionally filtered by channel.
-pub async fn handle_list(
-    request: JsonRpcRequest,
-    store: Arc<dyn PairingStore>,
-) -> JsonRpcResponse {
+pub async fn handle_list(request: JsonRpcRequest, store: Arc<dyn PairingStore>) -> JsonRpcResponse {
     let channel = request
         .params
         .as_ref()

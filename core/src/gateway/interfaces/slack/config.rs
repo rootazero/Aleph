@@ -60,7 +60,9 @@ impl SlackConfig {
             return Err("app_token is required".to_string());
         }
         if !self.app_token.starts_with("xapp-") {
-            return Err("app_token must start with 'xapp-' (Socket Mode app-level token)".to_string());
+            return Err(
+                "app_token must start with 'xapp-' (Socket Mode app-level token)".to_string(),
+            );
         }
         if self.bot_token.is_empty() {
             return Err("bot_token is required".to_string());
@@ -110,7 +112,11 @@ mod tests {
             ..Default::default()
         };
         let err = config.validate().unwrap_err();
-        assert!(err.contains("xapp-"), "Error should mention xapp- prefix: {}", err);
+        assert!(
+            err.contains("xapp-"),
+            "Error should mention xapp- prefix: {}",
+            err
+        );
     }
 
     #[test]
@@ -131,7 +137,11 @@ mod tests {
             ..Default::default()
         };
         let err = config.validate().unwrap_err();
-        assert!(err.contains("xoxb-"), "Error should mention xoxb- prefix: {}", err);
+        assert!(
+            err.contains("xoxb-"),
+            "Error should mention xoxb- prefix: {}",
+            err
+        );
     }
 
     #[test]

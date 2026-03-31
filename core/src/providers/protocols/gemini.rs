@@ -6,15 +6,13 @@ use crate::agents::thinking::ThinkLevel;
 use crate::config::ProviderConfig;
 use crate::dispatcher::DEFAULT_MAX_TOKENS;
 use crate::error::{AlephError, Result};
-use crate::providers::adapter::{
-    ProtocolAdapter, RequestPayload, StopReason, TokenUsage,
-};
+use crate::providers::adapter::{ProtocolAdapter, RequestPayload, StopReason, TokenUsage};
 use crate::providers::delta::ProviderDelta;
-use crate::providers::gemini::{
-    Content, GeminiFunctionDeclaration, GeminiToolConfig, GenerateContentRequest,
-    GenerationConfig, Part, ThinkingConfig,
-};
 use crate::providers::gemini::schema::clean_schema_for_gemini;
+use crate::providers::gemini::{
+    Content, GeminiFunctionDeclaration, GeminiToolConfig, GenerateContentRequest, GenerationConfig,
+    Part, ThinkingConfig,
+};
 use crate::providers::message::UnifiedMessage;
 use async_trait::async_trait;
 use futures::stream::BoxStream;
@@ -54,10 +52,7 @@ impl GeminiProtocol {
         let model = model_override.unwrap_or_else(|| config.default_model());
 
         // Always use the streaming endpoint
-        format!(
-            "{}/v1beta/models/{}:streamGenerateContent",
-            base_url, model
-        )
+        format!("{}/v1beta/models/{}:streamGenerateContent", base_url, model)
     }
 
     /// Convert UnifiedMessages to Gemini Contents
@@ -191,7 +186,6 @@ impl GeminiProtocol {
             })
         }
     }
-
 }
 
 #[async_trait]
@@ -206,14 +200,22 @@ impl ProtocolAdapter for GeminiProtocol {
         let system_instruction = Self::build_system_instruction(payload.system_prompt);
 
         // Build generation config
-        let thinking_config = payload
-            .think_level
-            .as_ref()
-            .and_then(|level| Self::map_think_level(level, payload.model.as_deref().unwrap_or_else(|| config.default_model())));
+        let thinking_config = payload.think_level.as_ref().and_then(|level| {
+            Self::map_think_level(
+                level,
+                payload
+                    .model
+                    .as_deref()
+                    .unwrap_or_else(|| config.default_model()),
+            )
+        });
 
         // Per-request overrides provider config
         let generation_config = GenerationConfig {
-            max_output_tokens: payload.max_tokens.or(config.max_tokens).or(Some(DEFAULT_MAX_TOKENS)),
+            max_output_tokens: payload
+                .max_tokens
+                .or(config.max_tokens)
+                .or(Some(DEFAULT_MAX_TOKENS)),
             temperature: payload.temperature.or(config.temperature),
             top_p: config.top_p,
             top_k: None,
@@ -273,12 +275,18 @@ impl ProtocolAdapter for GeminiProtocol {
         if let Some(ref choice) = payload.tool_choice {
             use crate::providers::adapter::ToolChoice;
             body["tool_config"] = match choice {
-                ToolChoice::Auto => serde_json::json!({"function_calling_config": {"mode": "AUTO"}}),
-                ToolChoice::Required => serde_json::json!({"function_calling_config": {"mode": "ANY"}}),
+                ToolChoice::Auto => {
+                    serde_json::json!({"function_calling_config": {"mode": "AUTO"}})
+                }
+                ToolChoice::Required => {
+                    serde_json::json!({"function_calling_config": {"mode": "ANY"}})
+                }
                 ToolChoice::Specific(name) => serde_json::json!({"function_calling_config": {
                     "mode": "ANY", "allowed_function_names": [name]
                 }}),
-                ToolChoice::None => serde_json::json!({"function_calling_config": {"mode": "NONE"}}),
+                ToolChoice::None => {
+                    serde_json::json!({"function_calling_config": {"mode": "NONE"}})
+                }
             };
         }
 
@@ -363,15 +371,13 @@ impl ProtocolAdapter for GeminiProtocol {
 
                     if let Some(data) = line.strip_prefix("data: ") {
                         if data != "[DONE]" {
-                            parse_gemini_sse_chunk(
-                                data,
-                                &mut state.fc_counter,
-                                &mut state.pending,
-                            );
+                            parse_gemini_sse_chunk(data, &mut state.fc_counter, &mut state.pending);
                             // If Done was queued, stop after draining pending
-                            if state.pending.iter().any(|d| {
-                                matches!(d, Ok(ProviderDelta::Done(_)))
-                            }) {
+                            if state
+                                .pending
+                                .iter()
+                                .any(|d| matches!(d, Ok(ProviderDelta::Done(_))))
+                            {
                                 state.done = true;
                             }
                         }
@@ -450,9 +456,7 @@ fn parse_gemini_sse_chunk(
     };
 
     // Extract candidate[0]
-    let candidate = json
-        .get("candidates")
-        .and_then(|c| c.get(0));
+    let candidate = json.get("candidates").and_then(|c| c.get(0));
 
     if let Some(candidate) = candidate {
         // Process content parts
@@ -465,7 +469,8 @@ fn parse_gemini_sse_chunk(
                 // Text delta
                 if let Some(text) = part.get("text").and_then(|t| t.as_str()) {
                     if !text.is_empty() {
-                        let is_thought = part.get("thought")
+                        let is_thought = part
+                            .get("thought")
                             .and_then(|v| v.as_bool())
                             .unwrap_or(false);
                         if is_thought {
@@ -487,7 +492,8 @@ fn parse_gemini_sse_chunk(
                     let args_str = args.to_string();
 
                     // Prefer native ID (Gemini 3+), fallback to synthetic
-                    let id = fc.get("id")
+                    let id = fc
+                        .get("id")
                         .and_then(|v| v.as_str())
                         .map(|s| s.to_string())
                         .unwrap_or_else(|| {
@@ -512,13 +518,11 @@ fn parse_gemini_sse_chunk(
         }
 
         // Map finishReason to Done
-        let finish_reason = candidate
-            .get("finishReason")
-            .and_then(|r| r.as_str());
+        let finish_reason = candidate.get("finishReason").and_then(|r| r.as_str());
 
-        let has_tool_calls = out.iter().any(|d| {
-            matches!(d, Ok(ProviderDelta::ToolCallStart { .. }))
-        });
+        let has_tool_calls = out
+            .iter()
+            .any(|d| matches!(d, Ok(ProviderDelta::ToolCallStart { .. })));
 
         let stop_reason = match finish_reason {
             Some("STOP") => Some(StopReason::EndTurn),
@@ -556,7 +560,9 @@ fn parse_gemini_sse_chunk(
             .unwrap_or(0) as u32;
 
         // Insert Usage before the Done event so consumers see it in the right order
-        let done_pos = out.iter().position(|d| matches!(d, Ok(ProviderDelta::Done(_))));
+        let done_pos = out
+            .iter()
+            .position(|d| matches!(d, Ok(ProviderDelta::Done(_))));
         let usage_event = Ok(ProviderDelta::Usage(TokenUsage {
             input_tokens: input,
             output_tokens: output,
@@ -640,8 +646,12 @@ mod tests {
         let data = r#"{"candidates":[{"content":{"parts":[{"text":"thinking...","thought":true},{"text":"answer"}]},"finishReason":"STOP"}]}"#;
         parse_gemini_sse_chunk(data, &mut fc, &mut out);
 
-        assert!(matches!(out.pop_front().unwrap(), Ok(ProviderDelta::ThinkingDelta(t)) if t == "thinking..."));
-        assert!(matches!(out.pop_front().unwrap(), Ok(ProviderDelta::TextDelta(t)) if t == "answer"));
+        assert!(
+            matches!(out.pop_front().unwrap(), Ok(ProviderDelta::ThinkingDelta(t)) if t == "thinking...")
+        );
+        assert!(
+            matches!(out.pop_front().unwrap(), Ok(ProviderDelta::TextDelta(t)) if t == "answer")
+        );
     }
 
     #[test]
@@ -684,10 +694,13 @@ mod tests {
         let data = r#"{"candidates":[{"content":{"parts":[{"text":"done"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":5,"thoughtsTokenCount":100}}"#;
         parse_gemini_sse_chunk(data, &mut fc, &mut out);
 
-        let usage = out.iter().find_map(|d| match d {
-            Ok(ProviderDelta::Usage(u)) => Some(u.clone()),
-            _ => None,
-        }).expect("Usage event not found");
+        let usage = out
+            .iter()
+            .find_map(|d| match d {
+                Ok(ProviderDelta::Usage(u)) => Some(u.clone()),
+                _ => None,
+            })
+            .expect("Usage event not found");
         assert_eq!(usage.thinking_tokens, Some(100));
     }
 
@@ -790,8 +803,7 @@ mod tests {
         config.api_key = Some("test-api-key".to_string());
 
         let msgs = [UnifiedMessage::user("Solve this problem")];
-        let payload = RequestPayload::new(&msgs)
-            .with_think_level(Some(ThinkLevel::Medium));
+        let payload = RequestPayload::new(&msgs).with_think_level(Some(ThinkLevel::Medium));
 
         let request = protocol
             .build_request(&payload, &config)
@@ -1147,10 +1159,7 @@ mod tests {
         ];
         let result = GeminiProtocol::convert_messages(&msgs);
 
-        let roles: Vec<&str> = result
-            .iter()
-            .map(|c| c.role.as_deref().unwrap())
-            .collect();
+        let roles: Vec<&str> = result.iter().map(|c| c.role.as_deref().unwrap()).collect();
         assert_eq!(roles, vec!["user", "model", "user", "model"]);
     }
 

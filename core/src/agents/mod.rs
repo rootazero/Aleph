@@ -58,15 +58,12 @@ pub use sub_agents::{
 };
 
 // Re-export swarm module types for convenience
-pub use swarm::{
-    AgentEvent, AgentMessageBus, CriticalEvent, EventTier, ImportantEvent, InfoEvent,
-};
+pub use swarm::{AgentEvent, AgentMessageBus, CriticalEvent, EventTier, ImportantEvent, InfoEvent};
 
 // Re-export thinking module types for convenience
 pub use thinking::{
-    format_thinking_levels, get_supported_levels, is_binary_thinking_provider,
-    is_level_supported, is_thinking_level_error, list_thinking_level_labels,
-    normalize_think_level, supports_xhigh_thinking, ThinkLevel, ThinkingConfig,
-    ThinkingFallbackState,
+    format_thinking_levels, get_supported_levels, is_binary_thinking_provider, is_level_supported,
+    is_thinking_level_error, list_thinking_level_labels, normalize_think_level,
+    supports_xhigh_thinking, ThinkLevel, ThinkingConfig, ThinkingFallbackState,
 };
 pub use thinking_adapter::ThinkingAdapter;

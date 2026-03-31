@@ -435,7 +435,8 @@ mod tests {
     fn test_provider_as_trait_object() {
         use crate::sync_primitives::Arc;
 
-        let provider: Arc<dyn GenerationProvider> = Arc::new(MidjourneyProvider::new("test-key").unwrap());
+        let provider: Arc<dyn GenerationProvider> =
+            Arc::new(MidjourneyProvider::new("test-key").unwrap());
 
         assert_eq!(provider.name(), "midjourney");
         assert!(provider.supports(GenerationType::Image));

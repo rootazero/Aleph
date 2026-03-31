@@ -6,18 +6,18 @@
 //! facts have not changed.
 
 use crate::error::AlephError;
+use crate::gateway::agent_env::AgentEnvFilter;
 use crate::memory::context::{compute_parent_path, FactSpecificity, FactType, TemporalScope};
 use crate::memory::namespace::NamespaceScope;
-use crate::memory::EmbeddingProvider;
 use crate::memory::store::{MemoryBackend, MemoryStore};
 use crate::memory::vfs::compute_directory_hash;
-use crate::gateway::agent_env::AgentEnvFilter;
+use crate::memory::EmbeddingProvider;
 use crate::memory::{FactSource, MemoryFact, MemoryLayer, SearchFilter};
-use crate::providers::AiProvider;
 use crate::providers::adapter::RequestPayload;
 use crate::providers::message::UnifiedMessage;
-use std::collections::HashSet;
+use crate::providers::AiProvider;
 use crate::sync_primitives::Arc;
+use std::collections::HashSet;
 
 /// L1 Overview generator
 ///
@@ -63,8 +63,14 @@ impl L1Generator {
         // 3. Check existing L1 — skip if hash matches
         // Old: db.get_l1_overview(path)
         // New: db.get_by_path(path, &NamespaceScope::Owner, "default")
-        if let Some(existing_l1) = self.database.get_by_path(path, &NamespaceScope::Owner, "default").await? {
-            if existing_l1.fact_source == FactSource::Summary && existing_l1.content_hash == new_hash {
+        if let Some(existing_l1) = self
+            .database
+            .get_by_path(path, &NamespaceScope::Owner, "default")
+            .await?
+        {
+            if existing_l1.fact_source == FactSource::Summary
+                && existing_l1.content_hash == new_hash
+            {
                 tracing::debug!(path = path, "L1 Overview is current, skipping");
                 return Ok(false);
             }
@@ -94,7 +100,11 @@ impl L1Generator {
 
         // Upsert: invalidate old L1 if exists, then insert new
         // Old: db.get_l1_overview(path) → New: db.get_by_path(path, &NamespaceScope::Owner, "default")
-        if let Some(old_l1) = self.database.get_by_path(path, &NamespaceScope::Owner, "default").await? {
+        if let Some(old_l1) = self
+            .database
+            .get_by_path(path, &NamespaceScope::Owner, "default")
+            .await?
+        {
             if old_l1.fact_source == FactSource::Summary {
                 self.database
                     .invalidate_fact(&old_l1.id, "Superseded by updated L1 Overview")
@@ -158,9 +168,7 @@ impl L1Generator {
             .collect::<Vec<_>>()
             .join("\n");
 
-        let path_display = path
-            .trim_start_matches("aleph://")
-            .trim_end_matches('/');
+        let path_display = path.trim_start_matches("aleph://").trim_end_matches('/');
 
         let prompt = format!(
             r#"You are generating an L1 Overview for the knowledge directory: {path}
@@ -217,9 +225,7 @@ mod tests {
     #[test]
     fn test_l1_prompt_format() {
         let path = "aleph://user/preferences/";
-        let path_display = path
-            .trim_start_matches("aleph://")
-            .trim_end_matches('/');
+        let path_display = path.trim_start_matches("aleph://").trim_end_matches('/');
         assert_eq!(path_display, "user/preferences");
     }
 
@@ -237,10 +243,11 @@ mod tests {
             .with_fact_source(FactSource::Extracted);
         target_l2.agent = "default".to_string();
 
-        let mut target_non_l2 = MemoryFact::new("Target non-L2".into(), FactType::Preference, vec![])
-            .with_path("aleph://user/preferences/coding/overview".to_string())
-            .with_layer(MemoryLayer::L1Overview)
-            .with_fact_source(FactSource::Manual);
+        let mut target_non_l2 =
+            MemoryFact::new("Target non-L2".into(), FactType::Preference, vec![])
+                .with_path("aleph://user/preferences/coding/overview".to_string())
+                .with_layer(MemoryLayer::L1Overview)
+                .with_fact_source(FactSource::Manual);
         target_non_l2.agent = "default".to_string();
 
         let mut other_path_l2 = MemoryFact::new("Other path".into(), FactType::Preference, vec![])
@@ -254,13 +261,12 @@ mod tests {
             .unwrap();
 
         let embedder: Arc<dyn EmbeddingProvider> = Arc::new(
-            crate::memory::embedding_provider::tests::MockEmbeddingProvider::new(1024, "mock-model"),
+            crate::memory::embedding_provider::tests::MockEmbeddingProvider::new(
+                1024,
+                "mock-model",
+            ),
         );
-        let generator = L1Generator::new(
-            db,
-            crate::providers::create_mock_provider(),
-            embedder,
-        );
+        let generator = L1Generator::new(db, crate::providers::create_mock_provider(), embedder);
 
         let facts = generator
             .get_l2_facts("aleph://user/preferences/coding/")

@@ -71,13 +71,18 @@ impl LaunchdService {
         );
 
         // Nice value (priority)
-        dict.insert("Nice".to_string(), Value::Integer(Integer::from(config.nice_value)));
+        dict.insert(
+            "Nice".to_string(),
+            Value::Integer(Integer::from(config.nice_value)),
+        );
 
         // Resource limits
         let mut soft_limits = Dictionary::new();
         soft_limits.insert(
             "MemoryLimit".to_string(),
-            Value::Integer(Integer::from(i64::try_from(config.soft_mem_limit).unwrap_or(i64::MAX))),
+            Value::Integer(Integer::from(
+                i64::try_from(config.soft_mem_limit).unwrap_or(i64::MAX),
+            )),
         );
         dict.insert(
             "SoftResourceLimits".to_string(),
@@ -87,7 +92,9 @@ impl LaunchdService {
         let mut hard_limits = Dictionary::new();
         hard_limits.insert(
             "MemoryLimit".to_string(),
-            Value::Integer(Integer::from(i64::try_from(config.hard_mem_limit).unwrap_or(i64::MAX))),
+            Value::Integer(Integer::from(
+                i64::try_from(config.hard_mem_limit).unwrap_or(i64::MAX),
+            )),
         );
         dict.insert(
             "HardResourceLimits".to_string(),
@@ -132,10 +139,7 @@ impl ServiceManager for LaunchdService {
         // Write plist file
         fs::write(&self.plist_path, plist_content).await?;
 
-        tracing::info!(
-            "Installed launchd service at {}",
-            self.plist_path.display()
-        );
+        tracing::info!("Installed launchd service at {}", self.plist_path.display());
 
         Ok(())
     }
@@ -163,14 +167,15 @@ impl ServiceManager for LaunchdService {
         }
 
         // Get user ID for domain targeting
-        let uid_output = Command::new("id")
-            .arg("-u")
-            .output()
-            .await?;
-        let uid = String::from_utf8_lossy(&uid_output.stdout).trim().to_string();
+        let uid_output = Command::new("id").arg("-u").output().await?;
+        let uid = String::from_utf8_lossy(&uid_output.stdout)
+            .trim()
+            .to_string();
 
         // Use modern bootstrap command with domain targeting
-        let plist_path_str = self.plist_path.to_str()
+        let plist_path_str = self
+            .plist_path
+            .to_str()
             .ok_or_else(|| DaemonError::Config("Invalid plist path".to_string()))?;
 
         let output = Command::new("launchctl")
@@ -196,11 +201,10 @@ impl ServiceManager for LaunchdService {
         }
 
         // Get user ID for domain targeting
-        let uid_output = Command::new("id")
-            .arg("-u")
-            .output()
-            .await?;
-        let uid = String::from_utf8_lossy(&uid_output.stdout).trim().to_string();
+        let uid_output = Command::new("id").arg("-u").output().await?;
+        let uid = String::from_utf8_lossy(&uid_output.stdout)
+            .trim()
+            .to_string();
 
         // Use modern bootout command with domain targeting
         let output = Command::new("launchctl")

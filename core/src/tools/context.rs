@@ -20,10 +20,13 @@ impl ToolContext {
     pub fn from_workspace(workspace_path: &Path) -> Result<Self> {
         let output_dir = workspace_path.join("output");
 
-        fs::create_dir_all(&output_dir)
-            .map_err(|e| crate::error::AlephError::config(
-                format!("Failed to create output directory {}: {}", output_dir.display(), e)
-            ))?;
+        fs::create_dir_all(&output_dir).map_err(|e| {
+            crate::error::AlephError::config(format!(
+                "Failed to create output directory {}: {}",
+                output_dir.display(),
+                e
+            ))
+        })?;
 
         Ok(Self { output_dir })
     }
@@ -39,16 +42,15 @@ pub fn new_tool_context_handle() -> ToolContextHandle {
         .join(".aleph")
         .join("workspaces")
         .join("main");
-    let ctx = ToolContext::from_workspace(&default_workspace)
-        .unwrap_or_else(|e| {
-            tracing::warn!(
-                error = %e,
-                path = %default_workspace.display(),
-                "Failed to create default workspace output dir; tools may fail"
-            );
-            ToolContext {
-                output_dir: default_workspace.join("output"),
-            }
-        });
+    let ctx = ToolContext::from_workspace(&default_workspace).unwrap_or_else(|e| {
+        tracing::warn!(
+            error = %e,
+            path = %default_workspace.display(),
+            "Failed to create default workspace output dir; tools may fail"
+        );
+        ToolContext {
+            output_dir: default_workspace.join("output"),
+        }
+    });
     std::sync::Arc::new(tokio::sync::RwLock::new(ctx))
 }

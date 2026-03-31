@@ -7,7 +7,10 @@ fn p1_01_preset_defaults_complete() {
     let claude = AcpHarnessEntry::preset_claude_code();
     assert_eq!(claude.executable.as_deref(), Some("claude"));
     assert_eq!(claude.default_mode, HarnessModeSerde::Oneshot);
-    assert!(matches!(claude.output_format, OutputFormatSerde::Json { .. }));
+    assert!(matches!(
+        claude.output_format,
+        OutputFormatSerde::Json { .. }
+    ));
     if let OutputFormatSerde::Json { field } = &claude.output_format {
         assert_eq!(field, "result");
     }
@@ -58,7 +61,9 @@ fn p1_04_harness_mode_serde_roundtrip() {
 #[test]
 fn p1_05_output_format_serde_roundtrip() {
     let plain = OutputFormatSerde::PlainText;
-    let json_fmt = OutputFormatSerde::Json { field: "result".into() };
+    let json_fmt = OutputFormatSerde::Json {
+        field: "result".into(),
+    };
     for fmt in [&plain, &json_fmt] {
         let json = serde_json::to_string(fmt).unwrap();
         let back: OutputFormatSerde = serde_json::from_str(&json).unwrap();
@@ -81,7 +86,10 @@ fn p1_06_config_merge_user_override() {
     assert_eq!(entry.executable.as_deref(), Some("/custom/path/claude"));
     assert_eq!(entry.timeout_seconds, 600);
     // Other presets unchanged
-    assert_eq!(presets.get("codex").unwrap().executable.as_deref(), Some("codex"));
+    assert_eq!(
+        presets.get("codex").unwrap().executable.as_deref(),
+        Some("codex")
+    );
 }
 
 #[test]

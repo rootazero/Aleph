@@ -222,15 +222,15 @@ impl AlephTool for ArenaQueryTool {
         }
 
         // No agent_id — use manager's global query
-        let snapshot = manager
-            .query_arena(&arena_id)
-            .ok_or_else(|| {
-                crate::error::AlephError::other(format!("Arena not found: {}", arena_id))
-            })?;
+        let snapshot = manager.query_arena(&arena_id).ok_or_else(|| {
+            crate::error::AlephError::other(format!("Arena not found: {}", arena_id))
+        })?;
 
         let goal = snapshot["goal"].as_str().unwrap_or("").to_string();
         let status = snapshot["status"].as_str().unwrap_or("Active").to_string();
-        let completed_steps = snapshot["progress"]["completed_steps"].as_u64().unwrap_or(0) as usize;
+        let completed_steps = snapshot["progress"]["completed_steps"]
+            .as_u64()
+            .unwrap_or(0) as usize;
         let total_steps = snapshot["progress"]["total_steps"].as_u64().unwrap_or(0) as usize;
 
         let slots = snapshot["slots"]
@@ -319,9 +319,7 @@ impl AlephTool for ArenaSettleTool {
     type Output = ArenaSettleOutput;
 
     fn examples(&self) -> Option<Vec<String>> {
-        Some(vec![
-            "arena_settle(arena_id='abc-123')".to_string(),
-        ])
+        Some(vec!["arena_settle(arena_id='abc-123')".to_string()])
     }
 
     fn requires_confirmation(&self) -> bool {

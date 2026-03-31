@@ -98,13 +98,8 @@ impl EventSourcingMigration {
                 snapshot,
             };
 
-            let mut envelope = MemoryEventEnvelope::new(
-                fact.id.clone(),
-                1,
-                event,
-                EventActor::Migration,
-                None,
-            );
+            let mut envelope =
+                MemoryEventEnvelope::new(fact.id.clone(), 1, event, EventActor::Migration, None);
             // Preserve the original creation timestamp rather than "now".
             envelope.timestamp = fact.created_at;
 
@@ -151,11 +146,7 @@ mod tests {
             updated_at: 1000,
             confidence: 0.9,
             is_valid,
-            invalidation_reason: if is_valid {
-                None
-            } else {
-                Some("test".into())
-            },
+            invalidation_reason: if is_valid { None } else { Some("test".into()) },
             decay_invalidated_at: None,
             specificity: FactSpecificity::Pattern,
             temporal_scope: TemporalScope::Contextual,
@@ -267,10 +258,7 @@ mod tests {
         let db = Arc::new(StateDatabase::in_memory().unwrap());
         let migration = EventSourcingMigration::new(db.clone());
         let original = make_test_fact("rt1", "Roundtrip test", true);
-        migration
-            .migrate_facts(&[original.clone()])
-            .await
-            .unwrap();
+        migration.migrate_facts(&[original.clone()]).await.unwrap();
 
         let events = db.get_memory_events_for_fact("rt1").await.unwrap();
         let rebuilt = super::super::projector::EventProjector::fold_events_to_fact(&events)

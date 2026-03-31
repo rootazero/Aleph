@@ -3,8 +3,8 @@
 //! Manages the lifecycle of a wizard session, coordinating between
 //! the flow implementation and the client.
 
-use std::collections::HashMap;
 use crate::sync_primitives::{Arc, RwLock};
+use std::collections::HashMap;
 
 use async_trait::async_trait;
 use serde_json::Value;
@@ -83,10 +83,7 @@ impl WizardSession {
         };
 
         // Create prompter for the flow
-        let prompter = RpcPrompter::new(
-            session.step_tx.clone(),
-            session.answers.clone(),
-        );
+        let prompter = RpcPrompter::new(session.step_tx.clone(), session.answers.clone());
 
         // Spawn the flow runner
         let status = session.status.clone();
@@ -166,7 +163,9 @@ impl WizardSession {
                     WizardStatus::Cancelled => WizardNextResult::cancelled(),
                     WizardStatus::Error => {
                         let error = self.error.read().unwrap_or_else(|e| e.into_inner()).clone();
-                        WizardNextResult::error(error.unwrap_or_else(|| "Unknown error".to_string()))
+                        WizardNextResult::error(
+                            error.unwrap_or_else(|| "Unknown error".to_string()),
+                        )
                     }
                     _ => WizardNextResult::done(),
                 }
@@ -198,9 +197,9 @@ impl WizardSession {
         };
 
         if let Some(sender) = sender {
-            sender.send(value).map_err(|_| {
-                WizardSessionError::Internal("Failed to send answer".to_string())
-            })?;
+            sender
+                .send(value)
+                .map_err(|_| WizardSessionError::Internal("Failed to send answer".to_string()))?;
             Ok(())
         } else {
             Err(WizardSessionError::StepNotFound(step_id.to_string()))

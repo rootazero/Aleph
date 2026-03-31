@@ -18,8 +18,7 @@ mod tests;
 pub use adapter::{SandboxAdapter, SandboxCommand, SandboxProfile};
 pub use audit::{ExecutionStatus, SandboxAuditLog, SandboxViolation};
 pub use capabilities::{
-    Capabilities, EnvironmentCapability, FileSystemCapability, NetworkCapability,
-    ProcessCapability,
+    Capabilities, EnvironmentCapability, FileSystemCapability, NetworkCapability, ProcessCapability,
 };
 pub use executor::{FallbackPolicy, SandboxManager};
 pub use profile::ProfileGenerator;

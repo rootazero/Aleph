@@ -138,7 +138,10 @@ fn scan_standalone_file(path: &Path, origin: PluginOrigin) -> Option<PluginCandi
     let kind = PluginKind::detect_from_path(path)?;
 
     // Only process WASM and MD files as standalone
-    if !matches!(kind, PluginKind::Wasm | PluginKind::Mcp | PluginKind::Static) {
+    if !matches!(
+        kind,
+        PluginKind::Wasm | PluginKind::Mcp | PluginKind::Static
+    ) {
         return None;
     }
 

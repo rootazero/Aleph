@@ -58,8 +58,10 @@ pub async fn process_inbound_voice(
     }
 
     // Partition attachments into audio and non-audio.
-    let (audio_attachments, other_attachments): (Vec<Attachment>, Vec<Attachment>) =
-        msg.attachments.drain(..).partition(|a| a.mime_type.starts_with("audio/"));
+    let (audio_attachments, other_attachments): (Vec<Attachment>, Vec<Attachment>) = msg
+        .attachments
+        .drain(..)
+        .partition(|a| a.mime_type.starts_with("audio/"));
 
     // Transcribe the first audio attachment.
     let first_audio = &audio_attachments[0];
@@ -120,7 +122,10 @@ async fn transcribe_attachment(
         .text("model", config.model.clone())
         .text("response_format", "json");
 
-    let url = format!("{}/audio/transcriptions", config.base_url.trim_end_matches('/'));
+    let url = format!(
+        "{}/audio/transcriptions",
+        config.base_url.trim_end_matches('/')
+    );
     debug!(url = %url, model = %config.model, "Sending Whisper transcription request");
 
     let client = reqwest::Client::new();
@@ -195,8 +200,8 @@ async fn get_audio_bytes(attachment: &Attachment) -> Result<(Vec<u8>, String), S
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Utc;
     use crate::gateway::channel::{ChannelId, ConversationId, MessageId, UserId};
+    use chrono::Utc;
 
     fn make_attachment(mime: &str) -> Attachment {
         Attachment {

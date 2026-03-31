@@ -103,8 +103,7 @@ impl PromptBuilder {
 
         // Expertise as directives
         if !soul.expertise.is_empty() {
-            let expertise_str =
-                format!("Your areas of expertise: {}", soul.expertise.join(", "));
+            let expertise_str = format!("Your areas of expertise: {}", soul.expertise.join(", "));
             builder = builder.with_soul_directive(&expertise_str);
         }
 
@@ -192,10 +191,7 @@ impl PromptBuilder {
         }
 
         // 1. Identity
-        let identity = self
-            .soul_identity
-            .as_deref()
-            .unwrap_or(DEFAULT_IDENTITY);
+        let identity = self.soul_identity.as_deref().unwrap_or(DEFAULT_IDENTITY);
         sections.push(format!("# Identity\n\n{}", identity));
 
         // 2. Communication Style
@@ -241,9 +237,9 @@ impl PromptBuilder {
                 .iter()
                 .filter(|s| match *s.scope() {
                     PromptScope::System => true,
-                    PromptScope::Tool => s.bound_tool().is_some_and(|bound| {
-                        active_tool_names.contains(&bound)
-                    }),
+                    PromptScope::Tool => s
+                        .bound_tool()
+                        .is_some_and(|bound| active_tool_names.contains(&bound)),
                     PromptScope::Standalone | PromptScope::Disabled => false,
                 })
                 .collect();
@@ -317,8 +313,8 @@ mod tests {
 
     #[test]
     fn test_build_includes_memory_context() {
-        let prompt = PromptBuilder::new()
-            .build(&[], Some("User prefers dark mode and short replies."));
+        let prompt =
+            PromptBuilder::new().build(&[], Some("User prefers dark mode and short replies."));
 
         assert!(prompt.contains("# Context from Memory"));
         assert!(prompt.contains("User prefers dark mode and short replies."));
@@ -430,34 +426,44 @@ mod tests {
         use crate::domain::skill::{PromptScope, SkillContent, SkillManifest, SkillSource};
 
         let mut system_skill = SkillManifest::new(
-            "git-commit", "Git Commit", "Helps write commit messages",
-            SkillContent::new("content"), SkillSource::Bundled,
+            "git-commit",
+            "Git Commit",
+            "Helps write commit messages",
+            SkillContent::new("content"),
+            SkillSource::Bundled,
         );
         system_skill.set_scope(PromptScope::System);
 
         let mut tool_skill = SkillManifest::new(
-            "docker-build", "Docker Build", "Builds Docker images",
-            SkillContent::new("content"), SkillSource::Bundled,
+            "docker-build",
+            "Docker Build",
+            "Builds Docker images",
+            SkillContent::new("content"),
+            SkillSource::Bundled,
         );
         tool_skill.set_scope(PromptScope::Tool);
         tool_skill.set_bound_tool("docker_cli".to_string());
 
         let mut standalone_skill = SkillManifest::new(
-            "hidden", "Hidden", "Hidden skill",
-            SkillContent::new("content"), SkillSource::Bundled,
+            "hidden",
+            "Hidden",
+            "Hidden skill",
+            SkillContent::new("content"),
+            SkillSource::Bundled,
         );
         standalone_skill.set_scope(PromptScope::Standalone);
 
-        let builder = PromptBuilder::new()
-            .with_eligible_skills(vec![system_skill, tool_skill, standalone_skill]);
+        let builder = PromptBuilder::new().with_eligible_skills(vec![
+            system_skill,
+            tool_skill,
+            standalone_skill,
+        ]);
 
-        let tools = vec![
-            ToolInfo {
-                name: "docker_cli".to_string(),
-                description: "Docker CLI".to_string(),
-                parameters_schema: None,
-            },
-        ];
+        let tools = vec![ToolInfo {
+            name: "docker_cli".to_string(),
+            description: "Docker CLI".to_string(),
+            parameters_schema: None,
+        }];
 
         let prompt = builder.build(&tools, None);
 
@@ -479,13 +485,15 @@ mod tests {
         use crate::skill::prompt::DEFERRED_LOADING_GUIDANCE;
 
         let mut skill = SkillManifest::new(
-            "test-skill", "Test Skill", "A test skill",
-            SkillContent::new("content"), SkillSource::Bundled,
+            "test-skill",
+            "Test Skill",
+            "A test skill",
+            SkillContent::new("content"),
+            SkillSource::Bundled,
         );
         skill.set_scope(PromptScope::System);
 
-        let builder = PromptBuilder::new()
-            .with_eligible_skills(vec![skill]);
+        let builder = PromptBuilder::new().with_eligible_skills(vec![skill]);
 
         let prompt = builder.build(&[], None);
 
@@ -524,6 +532,9 @@ mod tests {
 
         let behavior_pos = prompt.find("# Model Behavior").unwrap();
         let rules_pos = prompt.find("# Tool Usage Rules").unwrap();
-        assert!(behavior_pos < rules_pos, "Model Behavior should appear before Tool Usage Rules");
+        assert!(
+            behavior_pos < rules_pos,
+            "Model Behavior should appear before Tool Usage Rules"
+        );
     }
 }

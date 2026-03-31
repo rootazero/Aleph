@@ -2,10 +2,10 @@
 //!
 //! Implements host, Docker, and VirtualFs execution modes for Markdown CLI tools.
 
+use anyhow::Result;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
-use anyhow::Result;
 use tokio::process::Command;
 use tracing::{debug, info, warn};
 
@@ -18,17 +18,17 @@ use super::tool_adapter::{MarkdownCliTool, MarkdownToolOutput};
 impl MarkdownCliTool {
     /// Resolve the execution timeout: skill-specific override or global default.
     fn execution_timeout(&self) -> Duration {
-        self.spec.metadata.aleph.as_ref()
+        self.spec
+            .metadata
+            .aleph
+            .as_ref()
             .and_then(|a| a.timeout_secs)
             .map(Duration::from_secs)
             .unwrap_or(DEFAULT_EXECUTION_TIMEOUT)
     }
 
     /// Execute on host system (with SafetyGate if configured)
-    pub(crate) async fn execute_on_host(
-        &self,
-        cli_args: &[String],
-    ) -> Result<MarkdownToolOutput> {
+    pub(crate) async fn execute_on_host(&self, cli_args: &[String]) -> Result<MarkdownToolOutput> {
         // Get primary binary name
         let bin = self
             .spec
@@ -68,11 +68,13 @@ impl MarkdownCliTool {
         let timeout = self.execution_timeout();
         let output = tokio::time::timeout(timeout, cmd.output())
             .await
-            .map_err(|_| anyhow::anyhow!(
-                "Skill '{}' timed out after {}s",
-                self.spec.name,
-                timeout.as_secs()
-            ))??;
+            .map_err(|_| {
+                anyhow::anyhow!(
+                    "Skill '{}' timed out after {}s",
+                    self.spec.name,
+                    timeout.as_secs()
+                )
+            })??;
 
         Ok(MarkdownToolOutput {
             stdout: String::from_utf8_lossy(&output.stdout).to_string(),
@@ -122,7 +124,9 @@ impl MarkdownCliTool {
                     // Validate env var name: must be a valid identifier [A-Za-z_][A-Za-z0-9_]*
                     if env_var.is_empty()
                         || !env_var.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
-                        || !env_var.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+                        || !env_var
+                            .chars()
+                            .all(|c| c.is_ascii_alphanumeric() || c == '_')
                     {
                         warn!(
                             env_var = %env_var,
@@ -180,11 +184,13 @@ impl MarkdownCliTool {
                 .output(),
         )
         .await
-        .map_err(|_| anyhow::anyhow!(
-            "Docker skill '{}' timed out after {}s",
-            self.spec.name,
-            timeout.as_secs()
-        ))??;
+        .map_err(|_| {
+            anyhow::anyhow!(
+                "Docker skill '{}' timed out after {}s",
+                self.spec.name,
+                timeout.as_secs()
+            )
+        })??;
 
         // Enhanced exit code handling
         if !output.status.success() {
@@ -338,11 +344,13 @@ impl MarkdownCliTool {
         let timeout = self.execution_timeout();
         let output = tokio::time::timeout(timeout, cmd.output())
             .await
-            .map_err(|_| anyhow::anyhow!(
-                "VirtualFs skill '{}' timed out after {}s",
-                self.spec.name,
-                timeout.as_secs()
-            ))??;
+            .map_err(|_| {
+                anyhow::anyhow!(
+                    "VirtualFs skill '{}' timed out after {}s",
+                    self.spec.name,
+                    timeout.as_secs()
+                )
+            })??;
 
         // Cleanup happens when sandbox is dropped
 
@@ -451,7 +459,6 @@ impl VirtualFsSandbox {
             "Applied VirtualFs environment"
         );
     }
-
 }
 
 /// Allowlist of safe Docker flags that skills may use.
@@ -477,25 +484,34 @@ fn is_allowed_docker_flag(flag: &str) -> bool {
 
     // Allowlist of safe flags — only these are permitted
     const ALLOWED: &[&str] = &[
-        "memory", "m",
+        "memory",
+        "m",
         "cpus",
-        "cpu-shares", "c",
+        "cpu-shares",
+        "c",
         "cpu-period",
         "cpu-quota",
         "memory-swap",
         "memory-reservation",
-        "workdir", "w",
-        "env", "e",
+        "workdir",
+        "w",
+        "env",
+        "e",
         "env-file",
-        "label", "l",
+        "label",
+        "l",
         "name",
-        "hostname", "h",
+        "hostname",
+        "h",
         "tmpfs",
         "read-only",
         "rm",
-        "interactive", "i",
-        "tty", "t",
-        "detach", "d",
+        "interactive",
+        "i",
+        "tty",
+        "t",
+        "detach",
+        "d",
         "stop-timeout",
         "shm-size",
         "log-opt",
@@ -521,4 +537,3 @@ impl Drop for VirtualFsSandbox {
         }
     }
 }
-

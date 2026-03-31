@@ -84,7 +84,9 @@ mod tests {
 
     #[test]
     fn test_detect_anthropic_key() {
-        let matches = rule().detect("ANTHROPIC_API_KEY=sk-ant-api03-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
+        let matches = rule().detect(
+            "ANTHROPIC_API_KEY=sk-ant-api03-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        );
         assert_eq!(matches.len(), 1);
     }
 

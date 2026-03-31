@@ -3,9 +3,11 @@
 //! Provides filter, scoring, and query types shared across
 //! MemoryStore, GraphStore, and SessionStore implementations.
 
-use crate::memory::context::{FactType, MemoryCategory, MemoryFact, MemoryLayer, MemoryScope, MemoryTier};
-use crate::memory::namespace::NamespaceScope;
 use crate::gateway::agent_env::AgentEnvFilter;
+use crate::memory::context::{
+    FactType, MemoryCategory, MemoryFact, MemoryLayer, MemoryScope, MemoryTier,
+};
+use crate::memory::namespace::NamespaceScope;
 
 // ---------------------------------------------------------------------------
 // SQL String Escaping — prevent injection in LanceDB/DataFusion filter strings
@@ -218,7 +220,10 @@ impl SearchFilter {
         }
 
         if let Some(category) = self.category {
-            clauses.push(format!("category = '{}'", escape_sql_string(category.as_str())));
+            clauses.push(format!(
+                "category = '{}'",
+                escape_sql_string(category.as_str())
+            ));
         }
 
         if let Some(valid) = self.is_valid {
@@ -227,7 +232,10 @@ impl SearchFilter {
 
         if let Some(ref prefix) = self.path_prefix {
             // DataFusion supports the `starts_with` function.
-            clauses.push(format!("starts_with(path, '{}')", escape_sql_string(prefix)));
+            clauses.push(format!(
+                "starts_with(path, '{}')",
+                escape_sql_string(prefix)
+            ));
         }
 
         if let Some(min_conf) = self.min_confidence {
@@ -345,7 +353,8 @@ impl MemoryFilter {
 
         if let Some(ref ids) = self.session_ids {
             if !ids.is_empty() {
-                let escaped: Vec<String> = ids.iter()
+                let escaped: Vec<String> = ids
+                    .iter()
                     .map(|id| format!("'{}'", escape_sql_string(id)))
                     .collect();
                 clauses.push(format!("session_id IN ({})", escaped.join(", ")));
@@ -435,8 +444,7 @@ mod tests {
 
     #[test]
     fn search_filter_agent_single() {
-        let f = SearchFilter::new()
-            .with_agent_filter(AgentEnvFilter::Single("crypto".into()));
+        let f = SearchFilter::new().with_agent_filter(AgentEnvFilter::Single("crypto".into()));
         let sql = f.to_lance_filter().unwrap();
         assert_eq!(sql, "agent = 'crypto'");
     }
@@ -451,8 +459,7 @@ mod tests {
 
     #[test]
     fn search_filter_agent_all_no_filter() {
-        let f = SearchFilter::new()
-            .with_agent_filter(AgentEnvFilter::All);
+        let f = SearchFilter::new().with_agent_filter(AgentEnvFilter::All);
         // All means no agent filtering, so no SQL generated
         assert!(f.to_lance_filter().is_none());
     }
@@ -509,8 +516,7 @@ mod tests {
 
     #[test]
     fn search_filter_scope_stack_generates_or_clause() {
-        let filter = SearchFilter::new()
-            .with_scope_stack(Some("reviewer"), "aleph");
+        let filter = SearchFilter::new().with_scope_stack(Some("reviewer"), "aleph");
         let sql = filter.to_lance_filter().unwrap();
         assert!(sql.contains("scope = 'global'"));
         assert!(sql.contains("scope = 'agent'"));
@@ -520,8 +526,7 @@ mod tests {
 
     #[test]
     fn search_filter_scope_stack_without_persona() {
-        let filter = SearchFilter::new()
-            .with_scope_stack(None, "aleph");
+        let filter = SearchFilter::new().with_scope_stack(None, "aleph");
         let sql = filter.to_lance_filter().unwrap();
         assert!(sql.contains("scope = 'global'"));
         assert!(sql.contains("scope = 'agent'"));

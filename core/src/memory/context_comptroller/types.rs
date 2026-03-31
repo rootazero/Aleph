@@ -33,12 +33,10 @@ pub struct ArbitratedContext {
 }
 
 /// Retention mode for arbitration
-#[derive(Debug, Clone, Copy)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, Default)]
 pub enum RetentionMode {
-    PreferTranscript,  // Default: keep original text
-    PreferFact,        // Space-constrained: keep compressed
+    PreferTranscript, // Default: keep original text
+    PreferFact,       // Space-constrained: keep compressed
     #[default]
-    Hybrid,            // Mix based on importance
+    Hybrid, // Mix based on importance
 }
-

@@ -74,8 +74,7 @@ impl MessageSendTool {
 #[async_trait]
 impl AlephTool for MessageSendTool {
     const NAME: &'static str = "message_send";
-    const DESCRIPTION: &'static str =
-        "Send a message to team members with to/cc routing";
+    const DESCRIPTION: &'static str = "Send a message to team members with to/cc routing";
 
     type Args = MessageSendArgs;
     type Output = MessageSendOutput;
@@ -123,10 +122,7 @@ impl AlephTool for MessageSendTool {
         Ok(MessageSendOutput {
             message_id: msg.id,
             thread_id: msg.thread_id,
-            message: format!(
-                "Message '{}' sent successfully",
-                args.subject
-            ),
+            message: format!("Message '{}' sent successfully", args.subject),
         })
     }
 }

@@ -508,8 +508,7 @@ mod tests {
 
     #[test]
     fn test_args_minimal() {
-        let args: SessionsSpawnArgs =
-            serde_json::from_str(r#"{"task": "Do something"}"#).unwrap();
+        let args: SessionsSpawnArgs = serde_json::from_str(r#"{"task": "Do something"}"#).unwrap();
         assert_eq!(args.task, "Do something");
         assert!(args.label.is_none());
         assert!(args.agent_id.is_none());
@@ -601,10 +600,8 @@ mod tests {
 
     #[test]
     fn test_output_forbidden() {
-        let output = SessionsSpawnOutput::forbidden(
-            "run-3".to_string(),
-            "A2A policy denied".to_string(),
-        );
+        let output =
+            SessionsSpawnOutput::forbidden("run-3".to_string(), "A2A policy denied".to_string());
         assert_eq!(output.status, SpawnStatus::Forbidden);
         assert!(output.child_session_key.is_empty());
         assert_eq!(output.run_id, "run-3");
@@ -613,10 +610,7 @@ mod tests {
 
     #[test]
     fn test_output_error() {
-        let output = SessionsSpawnOutput::error(
-            "run-4".to_string(),
-            "Agent not found".to_string(),
-        );
+        let output = SessionsSpawnOutput::error("run-4".to_string(), "Agent not found".to_string());
         assert_eq!(output.status, SpawnStatus::Error);
         assert!(output.child_session_key.is_empty());
         assert_eq!(output.error, Some("Agent not found".to_string()));
@@ -766,5 +760,4 @@ mod tests {
         // Total: 56 chars
         assert_eq!(key.len(), 56);
     }
-
 }

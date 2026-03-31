@@ -24,8 +24,8 @@
 //! └─────────────────────────────────────────────────────────┘
 //! ```
 
-use std::collections::HashMap;
 use crate::sync_primitives::{Arc, Mutex};
+use std::collections::HashMap;
 use tokio::sync::{mpsc, RwLock};
 use tracing::{error, info, warn};
 
@@ -78,14 +78,12 @@ impl ChannelRegistry {
     /// Create and register a channel from configuration
     pub async fn create_channel(&self, config: ChannelConfig) -> ChannelResult<ChannelId> {
         let factories = self.factories.read().await;
-        let factory = factories
-            .get(&config.channel_type)
-            .ok_or_else(|| {
-                ChannelError::ConfigError(format!(
-                    "No factory registered for channel type: {}",
-                    config.channel_type
-                ))
-            })?;
+        let factory = factories.get(&config.channel_type).ok_or_else(|| {
+            ChannelError::ConfigError(format!(
+                "No factory registered for channel type: {}",
+                config.channel_type
+            ))
+        })?;
 
         let channel = factory.create(config.config.clone()).await?;
         let channel_id = channel.id().clone();
@@ -95,7 +93,10 @@ impl ChannelRegistry {
         let mut channels = self.channels.write().await;
         channels.insert(channel_id.clone(), Arc::new(RwLock::new(channel)));
 
-        info!("Created channel: {} (type: {})", channel_id, config.channel_type);
+        info!(
+            "Created channel: {} (type: {})",
+            channel_id, config.channel_type
+        );
         Ok(channel_id)
     }
 
@@ -180,10 +181,9 @@ impl ChannelRegistry {
 
     /// Start a channel
     pub async fn start_channel(&self, channel_id: &ChannelId) -> ChannelResult<()> {
-        let channel_arc = self
-            .get(channel_id)
-            .await
-            .ok_or_else(|| ChannelError::NotConnected(format!("Channel not found: {}", channel_id)))?;
+        let channel_arc = self.get(channel_id).await.ok_or_else(|| {
+            ChannelError::NotConnected(format!("Channel not found: {}", channel_id))
+        })?;
 
         let mut channel = channel_arc.write().await;
         channel.start().await?;
@@ -198,10 +198,9 @@ impl ChannelRegistry {
 
     /// Stop a channel
     pub async fn stop_channel(&self, channel_id: &ChannelId) -> ChannelResult<()> {
-        let channel_arc = self
-            .get(channel_id)
-            .await
-            .ok_or_else(|| ChannelError::NotConnected(format!("Channel not found: {}", channel_id)))?;
+        let channel_arc = self.get(channel_id).await.ok_or_else(|| {
+            ChannelError::NotConnected(format!("Channel not found: {}", channel_id))
+        })?;
 
         let mut channel = channel_arc.write().await;
         channel.stop().await?;
@@ -244,10 +243,9 @@ impl ChannelRegistry {
         channel_id: &ChannelId,
         message: OutboundMessage,
     ) -> ChannelResult<SendResult> {
-        let channel_arc = self
-            .get(channel_id)
-            .await
-            .ok_or_else(|| ChannelError::NotConnected(format!("Channel not found: {}", channel_id)))?;
+        let channel_arc = self.get(channel_id).await.ok_or_else(|| {
+            ChannelError::NotConnected(format!("Channel not found: {}", channel_id))
+        })?;
 
         let channel = channel_arc.read().await;
         if channel.status() == ChannelStatus::Disabled {
@@ -268,10 +266,9 @@ impl ChannelRegistry {
         message_id: &super::channel::MessageId,
         new_text: &str,
     ) -> ChannelResult<()> {
-        let channel_arc = self
-            .get(channel_id)
-            .await
-            .ok_or_else(|| ChannelError::NotConnected(format!("Channel not found: {}", channel_id)))?;
+        let channel_arc = self.get(channel_id).await.ok_or_else(|| {
+            ChannelError::NotConnected(format!("Channel not found: {}", channel_id))
+        })?;
 
         let channel = channel_arc.read().await;
         channel.edit(conversation_id, message_id, new_text).await
@@ -285,10 +282,9 @@ impl ChannelRegistry {
         message_id: &super::channel::MessageId,
         reaction: &str,
     ) -> ChannelResult<()> {
-        let channel_arc = self
-            .get(channel_id)
-            .await
-            .ok_or_else(|| ChannelError::NotConnected(format!("Channel not found: {}", channel_id)))?;
+        let channel_arc = self.get(channel_id).await.ok_or_else(|| {
+            ChannelError::NotConnected(format!("Channel not found: {}", channel_id))
+        })?;
 
         let channel = channel_arc.read().await;
         channel.react(conversation_id, message_id, reaction).await
@@ -300,14 +296,18 @@ impl ChannelRegistry {
         channel_id: &ChannelId,
         conversation_id: &ConversationId,
     ) -> ChannelResult<()> {
-        let channel_arc = self.get(channel_id).await
-            .ok_or_else(|| ChannelError::NotConnected(format!("Channel not found: {}", channel_id)))?;
+        let channel_arc = self.get(channel_id).await.ok_or_else(|| {
+            ChannelError::NotConnected(format!("Channel not found: {}", channel_id))
+        })?;
         let channel = channel_arc.read().await;
         channel.send_typing(conversation_id).await
     }
 
     /// Broadcast a message to all channels
-    pub async fn broadcast(&self, message: OutboundMessage) -> Vec<(ChannelId, ChannelResult<SendResult>)> {
+    pub async fn broadcast(
+        &self,
+        message: OutboundMessage,
+    ) -> Vec<(ChannelId, ChannelResult<SendResult>)> {
         let channels = self.channels.read().await;
         let mut results = Vec::with_capacity(channels.len());
 
@@ -336,11 +336,7 @@ impl ChannelRegistry {
     }
 
     /// Start forwarding messages from a channel to the unified stream
-    async fn start_message_forwarder(
-        &self,
-        channel_id: ChannelId,
-        channel_arc: ChannelHandle,
-    ) {
+    async fn start_message_forwarder(&self, channel_id: ChannelId, channel_arc: ChannelHandle) {
         let inbound_tx = self.inbound_tx.clone();
 
         tokio::spawn(async move {
@@ -350,7 +346,10 @@ impl ChannelRegistry {
             drop(channel);
 
             if let Some(mut rx) = receiver {
-                info!("[Forwarder] Channel {} forwarder started — receiver obtained", channel_id);
+                info!(
+                    "[Forwarder] Channel {} forwarder started — receiver obtained",
+                    channel_id
+                );
                 while let Some(message) = rx.recv().await {
                     info!(
                         "[Forwarder] Forwarding message from channel {} (text: {:?})",

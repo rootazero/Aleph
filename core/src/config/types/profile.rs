@@ -38,8 +38,7 @@ use super::search::default_true;
 /// tools = ["search", "fs_read"]
 /// temperature = 0.9
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
 pub struct ProfileConfig {
     /// Human-readable description of this profile
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -83,7 +82,6 @@ pub struct ProfileConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub smart_recall: Option<SmartRecallConfig>,
 }
-
 
 // =============================================================================
 // CacheStrategy

@@ -5,8 +5,8 @@ use std::collections::HashMap;
 use crate::memory::context::{FactType, MemoryFact};
 use crate::memory::store::{MemoryBackend, MemoryStore};
 use crate::providers::AiProvider;
-use crate::Result;
 use crate::sync_primitives::Arc;
+use crate::Result;
 
 use super::profile::{ConsolidatedFact, ProfileCategory, UserProfile};
 
@@ -55,10 +55,7 @@ impl Default for ConsolidationConfig {
 
 impl ConsolidationAnalyzer {
     /// Create a new consolidation analyzer
-    pub fn new(
-        database: MemoryBackend,
-        provider: Option<Arc<dyn AiProvider>>,
-    ) -> Self {
+    pub fn new(database: MemoryBackend, provider: Option<Arc<dyn AiProvider>>) -> Self {
         Self { database, provider }
     }
 

@@ -1,13 +1,13 @@
 //! PromptLayer trait — the composable unit of prompt assembly
 
-use crate::agent_loop::ToolInfo;
-use crate::dispatcher::tool_index::HydrationResult;
 use super::context::ResolvedContext;
+use super::identity_files::IdentityFiles;
 use super::inbound_context::InboundContext;
 use super::prompt_builder::PromptConfig;
 use super::prompt_mode::PromptMode;
 use super::soul::SoulManifest;
-use super::identity_files::IdentityFiles;
+use crate::agent_loop::ToolInfo;
+use crate::dispatcher::tool_index::HydrationResult;
 
 /// Whether a layer's content is stable across requests or changes per request.
 ///
@@ -70,22 +70,70 @@ pub struct LayerInput<'a> {
 impl<'a> LayerInput<'a> {
     /// Input for the `Basic` path — config + tool list.
     pub fn basic(config: &'a PromptConfig, tools: &'a [ToolInfo]) -> Self {
-        Self { config, tools: Some(tools), hydration: None, soul: None, context: None, profile: None, mode: PromptMode::Full, inbound: None, workspace: None, memory_context: None, has_session_summaries: false }
+        Self {
+            config,
+            tools: Some(tools),
+            hydration: None,
+            soul: None,
+            context: None,
+            profile: None,
+            mode: PromptMode::Full,
+            inbound: None,
+            workspace: None,
+            memory_context: None,
+            has_session_summaries: false,
+        }
     }
 
     /// Input for the `Hydration` path — config + hydration result.
     pub fn hydration(config: &'a PromptConfig, hydration: &'a HydrationResult) -> Self {
-        Self { config, tools: None, hydration: Some(hydration), soul: None, context: None, profile: None, mode: PromptMode::Full, inbound: None, workspace: None, memory_context: None, has_session_summaries: false }
+        Self {
+            config,
+            tools: None,
+            hydration: Some(hydration),
+            soul: None,
+            context: None,
+            profile: None,
+            mode: PromptMode::Full,
+            inbound: None,
+            workspace: None,
+            memory_context: None,
+            has_session_summaries: false,
+        }
     }
 
     /// Input for the `Soul` path — config + tools + soul manifest.
     pub fn soul(config: &'a PromptConfig, tools: &'a [ToolInfo], soul: &'a SoulManifest) -> Self {
-        Self { config, tools: Some(tools), hydration: None, soul: Some(soul), context: None, profile: None, mode: PromptMode::Full, inbound: None, workspace: None, memory_context: None, has_session_summaries: false }
+        Self {
+            config,
+            tools: Some(tools),
+            hydration: None,
+            soul: Some(soul),
+            context: None,
+            profile: None,
+            mode: PromptMode::Full,
+            inbound: None,
+            workspace: None,
+            memory_context: None,
+            has_session_summaries: false,
+        }
     }
 
     /// Input for the `Context` path — config + resolved context.
     pub fn context(config: &'a PromptConfig, ctx: &'a ResolvedContext) -> Self {
-        Self { config, tools: None, hydration: None, soul: None, context: Some(ctx), profile: None, mode: PromptMode::Full, inbound: None, workspace: None, memory_context: None, has_session_summaries: false }
+        Self {
+            config,
+            tools: None,
+            hydration: None,
+            soul: None,
+            context: Some(ctx),
+            profile: None,
+            mode: PromptMode::Full,
+            inbound: None,
+            workspace: None,
+            memory_context: None,
+            has_session_summaries: false,
+        }
     }
 
     /// Attach workspace profile to this input.
@@ -131,7 +179,10 @@ impl<'a> LayerInput<'a> {
     }
 
     /// Attach optional pre-fetched memory context.
-    pub fn with_memory_context_opt(mut self, ctx: Option<&'a super::memory_context::MemoryContext>) -> Self {
+    pub fn with_memory_context_opt(
+        mut self,
+        ctx: Option<&'a super::memory_context::MemoryContext>,
+    ) -> Self {
         self.memory_context = ctx;
         self
     }
@@ -188,9 +239,9 @@ pub trait PromptLayer: Send + Sync {
 #[cfg(test)]
 mod workspace_inbound_tests {
     use super::*;
-    use crate::thinker::prompt_builder::PromptConfig;
-    use crate::thinker::identity_files::{IdentityFiles, IdentityFile};
+    use crate::thinker::identity_files::{IdentityFile, IdentityFiles};
     use crate::thinker::inbound_context::{InboundContext, SenderInfo};
+    use crate::thinker::prompt_builder::PromptConfig;
 
     fn make_config() -> PromptConfig {
         PromptConfig::default()
@@ -201,14 +252,12 @@ mod workspace_inbound_tests {
         let config = make_config();
         let ws = IdentityFiles {
             workspace_dir: std::path::PathBuf::from("/tmp"),
-            files: vec![
-                IdentityFile {
-                    name: "SOUL.md",
-                    content: Some("You are Aleph.".to_string()),
-                    truncated: false,
-                    original_size: 14,
-                },
-            ],
+            files: vec![IdentityFile {
+                name: "SOUL.md",
+                content: Some("You are Aleph.".to_string()),
+                truncated: false,
+                original_size: 14,
+            }],
         };
 
         let input = LayerInput::basic(&config, &[]).with_workspace(&ws);

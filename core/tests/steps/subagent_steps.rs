@@ -2,13 +2,11 @@
 
 use std::time::Duration;
 
-use cucumber::{given, when, then};
+use cucumber::{given, then, when};
 
 use crate::world::{AlephWorld, SubagentContext};
-use alephcore::agents::sub_agents::{SubAgentRun, RunStatus as SubAgentRunStatus};
-use alephcore::gateway::run_event_bus::{
-    wait_for_run_end, RunEvent, RunStatus, RunEndResult,
-};
+use alephcore::agents::sub_agents::{RunStatus as SubAgentRunStatus, SubAgentRun};
+use alephcore::gateway::run_event_bus::{wait_for_run_end, RunEndResult, RunEvent, RunStatus};
 use alephcore::providers::auth_profiles::AuthProfileFailureReason;
 use alephcore::routing::SessionKey as RoutingSessionKey;
 
@@ -35,14 +33,20 @@ async fn given_run_event_bus_handle(w: &mut AlephWorld, run_id: String) {
 
 #[when("I subscribe to the event bus")]
 async fn when_subscribe_to_event_bus(w: &mut AlephWorld) {
-    let ctx = w.subagent.as_mut().expect("Subagent context not initialized");
+    let ctx = w
+        .subagent
+        .as_mut()
+        .expect("Subagent context not initialized");
     let handle = ctx.run_handle.as_ref().expect("Run handle not created");
     ctx.event_rx = Some(handle.subscribe());
 }
 
 #[when("I create two subscribers")]
 async fn when_create_two_subscribers(w: &mut AlephWorld) {
-    let ctx = w.subagent.as_mut().expect("Subagent context not initialized");
+    let ctx = w
+        .subagent
+        .as_mut()
+        .expect("Subagent context not initialized");
     let handle = ctx.run_handle.as_ref().expect("Run handle not created");
     ctx.event_rx = Some(handle.subscribe());
     ctx.event_rx2 = Some(handle.subscribe());
@@ -50,7 +54,10 @@ async fn when_create_two_subscribers(w: &mut AlephWorld) {
 
 #[when("I emit a status changed event to Running")]
 async fn when_emit_status_changed_running(w: &mut AlephWorld) {
-    let ctx = w.subagent.as_mut().expect("Subagent context not initialized");
+    let ctx = w
+        .subagent
+        .as_mut()
+        .expect("Subagent context not initialized");
     let handle = ctx.run_handle.as_ref().expect("Run handle not created");
     let _seq = handle.next_seq();
     handle.emit(RunEvent::StatusChanged {
@@ -62,7 +69,10 @@ async fn when_emit_status_changed_running(w: &mut AlephWorld) {
 
 #[when(expr = "I emit a run completed event with summary {string} and tokens {int}")]
 async fn when_emit_run_completed(w: &mut AlephWorld, summary: String, tokens: i64) {
-    let ctx = w.subagent.as_mut().expect("Subagent context not initialized");
+    let ctx = w
+        .subagent
+        .as_mut()
+        .expect("Subagent context not initialized");
     let handle = ctx.run_handle.as_ref().expect("Run handle not created");
     let seq = handle.next_seq();
     handle.emit(RunEvent::RunCompleted {
@@ -78,7 +88,10 @@ async fn when_emit_run_completed(w: &mut AlephWorld, summary: String, tokens: i6
 
 #[when(expr = "I emit a run failed event with error {string} and code {string}")]
 async fn when_emit_run_failed(w: &mut AlephWorld, error: String, code: String) {
-    let ctx = w.subagent.as_mut().expect("Subagent context not initialized");
+    let ctx = w
+        .subagent
+        .as_mut()
+        .expect("Subagent context not initialized");
     let handle = ctx.run_handle.as_ref().expect("Run handle not created");
     let seq = handle.next_seq();
     handle.emit(RunEvent::RunFailed {
@@ -91,7 +104,10 @@ async fn when_emit_run_failed(w: &mut AlephWorld, error: String, code: String) {
 
 #[when(expr = "I emit a run cancelled event with reason {string}")]
 async fn when_emit_run_cancelled(w: &mut AlephWorld, reason: String) {
-    let ctx = w.subagent.as_mut().expect("Subagent context not initialized");
+    let ctx = w
+        .subagent
+        .as_mut()
+        .expect("Subagent context not initialized");
     let handle = ctx.run_handle.as_ref().expect("Run handle not created");
     let seq = handle.next_seq();
     handle.emit(RunEvent::RunCancelled {
@@ -103,14 +119,20 @@ async fn when_emit_run_cancelled(w: &mut AlephWorld, reason: String) {
 
 #[when("I get the input sender")]
 async fn when_get_input_sender(w: &mut AlephWorld) {
-    let ctx = w.subagent.as_mut().expect("Subagent context not initialized");
+    let ctx = w
+        .subagent
+        .as_mut()
+        .expect("Subagent context not initialized");
     let handle = ctx.run_handle.as_ref().expect("Run handle not created");
     ctx.input_tx = Some(handle.input_sender());
 }
 
 #[when(expr = "I send {string} through the input sender")]
 async fn when_send_through_input_sender(w: &mut AlephWorld, message: String) {
-    let ctx = w.subagent.as_mut().expect("Subagent context not initialized");
+    let ctx = w
+        .subagent
+        .as_mut()
+        .expect("Subagent context not initialized");
     let input_tx = ctx.input_tx.as_ref().expect("Input sender not obtained");
     input_tx.send(message).await.unwrap();
 }
@@ -120,13 +142,27 @@ async fn when_send_through_input_sender(w: &mut AlephWorld, message: String) {
 // =============================================================================
 
 #[then(expr = "waiting for run end should return Completed with summary {string} and tokens {int}")]
-async fn then_wait_for_completed(w: &mut AlephWorld, expected_summary: String, expected_tokens: i64) {
-    let ctx = w.subagent.as_mut().expect("Subagent context not initialized");
-    let rx = ctx.event_rx.as_mut().expect("Event receiver not initialized");
+async fn then_wait_for_completed(
+    w: &mut AlephWorld,
+    expected_summary: String,
+    expected_tokens: i64,
+) {
+    let ctx = w
+        .subagent
+        .as_mut()
+        .expect("Subagent context not initialized");
+    let rx = ctx
+        .event_rx
+        .as_mut()
+        .expect("Event receiver not initialized");
     let result = wait_for_run_end(rx, Duration::from_secs(5)).await;
     assert!(result.is_ok(), "Expected Ok result, got: {:?}", result);
     match result.unwrap() {
-        RunEndResult::Completed { summary, total_tokens, .. } => {
+        RunEndResult::Completed {
+            summary,
+            total_tokens,
+            ..
+        } => {
             assert_eq!(summary, Some(expected_summary));
             assert_eq!(total_tokens, expected_tokens as u64);
         }
@@ -136,8 +172,14 @@ async fn then_wait_for_completed(w: &mut AlephWorld, expected_summary: String, e
 
 #[then(expr = "waiting for run end should return Failed with error {string} and code {string}")]
 async fn then_wait_for_failed(w: &mut AlephWorld, expected_error: String, expected_code: String) {
-    let ctx = w.subagent.as_mut().expect("Subagent context not initialized");
-    let rx = ctx.event_rx.as_mut().expect("Event receiver not initialized");
+    let ctx = w
+        .subagent
+        .as_mut()
+        .expect("Subagent context not initialized");
+    let rx = ctx
+        .event_rx
+        .as_mut()
+        .expect("Event receiver not initialized");
     let result = wait_for_run_end(rx, Duration::from_secs(5)).await;
     assert!(result.is_ok(), "Expected Ok result, got: {:?}", result);
     match result.unwrap() {
@@ -151,8 +193,14 @@ async fn then_wait_for_failed(w: &mut AlephWorld, expected_error: String, expect
 
 #[then(expr = "waiting for run end should return Cancelled with reason {string}")]
 async fn then_wait_for_cancelled(w: &mut AlephWorld, expected_reason: String) {
-    let ctx = w.subagent.as_mut().expect("Subagent context not initialized");
-    let rx = ctx.event_rx.as_mut().expect("Event receiver not initialized");
+    let ctx = w
+        .subagent
+        .as_mut()
+        .expect("Subagent context not initialized");
+    let rx = ctx
+        .event_rx
+        .as_mut()
+        .expect("Event receiver not initialized");
     let result = wait_for_run_end(rx, Duration::from_secs(5)).await;
     assert!(result.is_ok(), "Expected Ok result, got: {:?}", result);
     match result.unwrap() {
@@ -165,27 +213,53 @@ async fn then_wait_for_cancelled(w: &mut AlephWorld, expected_reason: String) {
 
 #[then("both subscribers should receive the Running status event")]
 async fn then_both_receive_running(w: &mut AlephWorld) {
-    let ctx = w.subagent.as_mut().expect("Subagent context not initialized");
+    let ctx = w
+        .subagent
+        .as_mut()
+        .expect("Subagent context not initialized");
 
-    let rx1 = ctx.event_rx.as_mut().expect("Event receiver 1 not initialized");
-    let rx2 = ctx.event_rx2.as_mut().expect("Event receiver 2 not initialized");
+    let rx1 = ctx
+        .event_rx
+        .as_mut()
+        .expect("Event receiver 1 not initialized");
+    let rx2 = ctx
+        .event_rx2
+        .as_mut()
+        .expect("Event receiver 2 not initialized");
 
     let event1 = rx1.recv().await.unwrap();
     let event2 = rx2.recv().await.unwrap();
 
     assert!(
-        matches!(event1, RunEvent::StatusChanged { status: RunStatus::Running, .. }),
-        "Expected StatusChanged(Running) for subscriber 1, got {:?}", event1
+        matches!(
+            event1,
+            RunEvent::StatusChanged {
+                status: RunStatus::Running,
+                ..
+            }
+        ),
+        "Expected StatusChanged(Running) for subscriber 1, got {:?}",
+        event1
     );
     assert!(
-        matches!(event2, RunEvent::StatusChanged { status: RunStatus::Running, .. }),
-        "Expected StatusChanged(Running) for subscriber 2, got {:?}", event2
+        matches!(
+            event2,
+            RunEvent::StatusChanged {
+                status: RunStatus::Running,
+                ..
+            }
+        ),
+        "Expected StatusChanged(Running) for subscriber 2, got {:?}",
+        event2
     );
 }
 
 #[then("the sequence counter should start at 0")]
 async fn then_seq_starts_at_0(w: &mut AlephWorld) {
-    let ctx = w.subagent.as_mut().expect("Subagent context not initialized");
+    let ctx = w
+        .subagent
+        .as_mut()
+        .expect("Subagent context not initialized");
     let handle = ctx.run_handle.as_ref().expect("Run handle not created");
     // The next_seq() returns the current value and increments
     // So first call should return 0
@@ -196,7 +270,10 @@ async fn then_seq_starts_at_0(w: &mut AlephWorld) {
 
 #[then(expr = "incrementing the sequence should return {int}, {int}, {int} in order")]
 async fn then_seq_increments(w: &mut AlephWorld, a: i64, b: i64, c: i64) {
-    let ctx = w.subagent.as_mut().expect("Subagent context not initialized");
+    let ctx = w
+        .subagent
+        .as_mut()
+        .expect("Subagent context not initialized");
     let handle = ctx.run_handle.as_ref().expect("Run handle not created");
 
     // First call already happened in previous step
@@ -211,15 +288,24 @@ async fn then_seq_increments(w: &mut AlephWorld, a: i64, b: i64, c: i64) {
 
 #[then(expr = "the current sequence should be {int}")]
 async fn then_current_seq(w: &mut AlephWorld, expected: i64) {
-    let ctx = w.subagent.as_ref().expect("Subagent context not initialized");
+    let ctx = w
+        .subagent
+        .as_ref()
+        .expect("Subagent context not initialized");
     let handle = ctx.run_handle.as_ref().expect("Run handle not created");
     assert_eq!(handle.current_seq(), expected as u64);
 }
 
 #[then(expr = "the input receiver should receive {string}")]
 async fn then_input_received(w: &mut AlephWorld, expected: String) {
-    let ctx = w.subagent.as_mut().expect("Subagent context not initialized");
-    let rx = ctx.input_rx.as_mut().expect("Input receiver not initialized");
+    let ctx = w
+        .subagent
+        .as_mut()
+        .expect("Subagent context not initialized");
+    let rx = ctx
+        .input_rx
+        .as_mut()
+        .expect("Input receiver not initialized");
     let received = rx.recv().await.unwrap();
     assert_eq!(received, expected);
 }
@@ -234,8 +320,15 @@ async fn given_temp_profiles_config(w: &mut AlephWorld, profile_id: String, prov
     ctx.create_profile_manager(&profile_id, &provider);
 }
 
-#[given(expr = "a temp profiles config with primary {string} and backup {string} for provider {string}")]
-async fn given_temp_profiles_primary_backup(w: &mut AlephWorld, primary: String, backup: String, provider: String) {
+#[given(
+    expr = "a temp profiles config with primary {string} and backup {string} for provider {string}"
+)]
+async fn given_temp_profiles_primary_backup(
+    w: &mut AlephWorld,
+    primary: String,
+    backup: String,
+    provider: String,
+) {
     let ctx = w.subagent.get_or_insert_with(SubagentContext::default);
     ctx.create_profile_manager_with_backup(&primary, &backup, &provider);
 }
@@ -252,8 +345,14 @@ async fn given_empty_profiles_config(w: &mut AlephWorld) {
 
 #[when(expr = "I get available profile for provider {string} and agent {string}")]
 async fn when_get_available_profile(w: &mut AlephWorld, provider: String, agent: String) {
-    let ctx = w.subagent.as_mut().expect("Subagent context not initialized");
-    let manager = ctx.profile_manager.as_ref().expect("Profile manager not initialized");
+    let ctx = w
+        .subagent
+        .as_mut()
+        .expect("Subagent context not initialized");
+    let manager = ctx
+        .profile_manager
+        .as_ref()
+        .expect("Profile manager not initialized");
     match manager.get_available_profile(&provider, &agent) {
         Ok(profile) => {
             ctx.profile_id = Some(profile.id.clone());
@@ -274,19 +373,35 @@ async fn when_try_get_available_profile(w: &mut AlephWorld, provider: String, ag
 
 #[when(expr = "I mark profile {string} as failed due to rate limit")]
 async fn when_mark_profile_failed(w: &mut AlephWorld, profile_id: String) {
-    let ctx = w.subagent.as_ref().expect("Subagent context not initialized");
-    let manager = ctx.profile_manager.as_ref().expect("Profile manager not initialized");
-    manager.mark_failure(&profile_id, AuthProfileFailureReason::RateLimit).unwrap();
+    let ctx = w
+        .subagent
+        .as_ref()
+        .expect("Subagent context not initialized");
+    let manager = ctx
+        .profile_manager
+        .as_ref()
+        .expect("Profile manager not initialized");
+    manager
+        .mark_failure(&profile_id, AuthProfileFailureReason::RateLimit)
+        .unwrap();
 }
 
 #[when(expr = "I mark profile {string} as success")]
 async fn when_mark_profile_success(w: &mut AlephWorld, profile_id: String) {
-    let ctx = w.subagent.as_ref().expect("Subagent context not initialized");
-    let manager = ctx.profile_manager.as_ref().expect("Profile manager not initialized");
+    let ctx = w
+        .subagent
+        .as_ref()
+        .expect("Subagent context not initialized");
+    let manager = ctx
+        .profile_manager
+        .as_ref()
+        .expect("Profile manager not initialized");
     manager.mark_success(&profile_id).unwrap();
 }
 
-#[when(expr = "I record usage for agent {string} profile {string} with {int} input tokens and {int} output tokens and cost {float}")]
+#[when(
+    expr = "I record usage for agent {string} profile {string} with {int} input tokens and {int} output tokens and cost {float}"
+)]
 async fn when_record_usage(
     w: &mut AlephWorld,
     agent: String,
@@ -295,10 +410,22 @@ async fn when_record_usage(
     output_tokens: i64,
     cost: f64,
 ) {
-    let ctx = w.subagent.as_ref().expect("Subagent context not initialized");
-    let manager = ctx.profile_manager.as_ref().expect("Profile manager not initialized");
+    let ctx = w
+        .subagent
+        .as_ref()
+        .expect("Subagent context not initialized");
+    let manager = ctx
+        .profile_manager
+        .as_ref()
+        .expect("Profile manager not initialized");
     manager
-        .record_usage(&agent, &profile, input_tokens as u64, output_tokens as u64, cost)
+        .record_usage(
+            &agent,
+            &profile,
+            input_tokens as u64,
+            output_tokens as u64,
+            cost,
+        )
         .unwrap();
 }
 
@@ -308,60 +435,132 @@ async fn when_record_usage(
 
 #[then(expr = "the profile id should be {string}")]
 async fn then_profile_id_should_be(w: &mut AlephWorld, expected: String) {
-    let ctx = w.subagent.as_ref().expect("Subagent context not initialized");
+    let ctx = w
+        .subagent
+        .as_ref()
+        .expect("Subagent context not initialized");
     let profile_id = ctx.profile_id.as_ref().expect("Profile ID not set");
     assert_eq!(profile_id, &expected);
 }
 
 #[then(expr = "profile {string} should be in cooldown")]
 async fn then_profile_in_cooldown(w: &mut AlephWorld, profile_id: String) {
-    let ctx = w.subagent.as_ref().expect("Subagent context not initialized");
-    let manager = ctx.profile_manager.as_ref().expect("Profile manager not initialized");
+    let ctx = w
+        .subagent
+        .as_ref()
+        .expect("Subagent context not initialized");
+    let manager = ctx
+        .profile_manager
+        .as_ref()
+        .expect("Profile manager not initialized");
     let profiles = manager.list_profiles();
-    let profile = profiles.iter().find(|p| p.id == profile_id).expect("Profile not found");
-    assert!(profile.in_cooldown, "Profile {} should be in cooldown", profile_id);
+    let profile = profiles
+        .iter()
+        .find(|p| p.id == profile_id)
+        .expect("Profile not found");
+    assert!(
+        profile.in_cooldown,
+        "Profile {} should be in cooldown",
+        profile_id
+    );
 }
 
 #[then(expr = "profile {string} should not be in cooldown")]
 async fn then_profile_not_in_cooldown(w: &mut AlephWorld, profile_id: String) {
-    let ctx = w.subagent.as_ref().expect("Subagent context not initialized");
-    let manager = ctx.profile_manager.as_ref().expect("Profile manager not initialized");
+    let ctx = w
+        .subagent
+        .as_ref()
+        .expect("Subagent context not initialized");
+    let manager = ctx
+        .profile_manager
+        .as_ref()
+        .expect("Profile manager not initialized");
     let profiles = manager.list_profiles();
-    let profile = profiles.iter().find(|p| p.id == profile_id).expect("Profile not found");
-    assert!(!profile.in_cooldown, "Profile {} should not be in cooldown", profile_id);
+    let profile = profiles
+        .iter()
+        .find(|p| p.id == profile_id)
+        .expect("Profile not found");
+    assert!(
+        !profile.in_cooldown,
+        "Profile {} should not be in cooldown",
+        profile_id
+    );
 }
 
 #[then(expr = "profile {string} should have failure count {int}")]
 async fn then_profile_failure_count(w: &mut AlephWorld, profile_id: String, expected: i32) {
-    let ctx = w.subagent.as_ref().expect("Subagent context not initialized");
-    let manager = ctx.profile_manager.as_ref().expect("Profile manager not initialized");
+    let ctx = w
+        .subagent
+        .as_ref()
+        .expect("Subagent context not initialized");
+    let manager = ctx
+        .profile_manager
+        .as_ref()
+        .expect("Profile manager not initialized");
     let profiles = manager.list_profiles();
-    let profile = profiles.iter().find(|p| p.id == profile_id).expect("Profile not found");
-    assert_eq!(profile.failure_count, expected as u32, "Failure count mismatch");
+    let profile = profiles
+        .iter()
+        .find(|p| p.id == profile_id)
+        .expect("Profile not found");
+    assert_eq!(
+        profile.failure_count, expected as u32,
+        "Failure count mismatch"
+    );
 }
 
 #[then("the usage state file should exist")]
 async fn then_usage_state_file_exists(w: &mut AlephWorld) {
-    let ctx = w.subagent.as_ref().expect("Subagent context not initialized");
+    let ctx = w
+        .subagent
+        .as_ref()
+        .expect("Subagent context not initialized");
     let temp_dir = ctx.temp_dir.as_ref().expect("Temp dir not set");
-    let state_path = temp_dir.path().join("agents").join("main").join("state.json");
-    assert!(state_path.exists(), "Usage state file should exist: {:?}", state_path);
+    let state_path = temp_dir
+        .path()
+        .join("agents")
+        .join("main")
+        .join("state.json");
+    assert!(
+        state_path.exists(),
+        "Usage state file should exist: {:?}",
+        state_path
+    );
 }
 
 #[then(expr = "the usage state file should contain {string}")]
 async fn then_usage_state_contains(w: &mut AlephWorld, expected: String) {
-    let ctx = w.subagent.as_ref().expect("Subagent context not initialized");
+    let ctx = w
+        .subagent
+        .as_ref()
+        .expect("Subagent context not initialized");
     let temp_dir = ctx.temp_dir.as_ref().expect("Temp dir not set");
-    let state_path = temp_dir.path().join("agents").join("main").join("state.json");
+    let state_path = temp_dir
+        .path()
+        .join("agents")
+        .join("main")
+        .join("state.json");
     let content = std::fs::read_to_string(&state_path).unwrap();
-    assert!(content.contains(&expected), "State file should contain '{}': {}", expected, content);
+    assert!(
+        content.contains(&expected),
+        "State file should contain '{}': {}",
+        expected,
+        content
+    );
 }
 
 #[then(expr = "it should return an error containing {string}")]
 async fn then_error_containing(w: &mut AlephWorld, expected: String) {
-    let ctx = w.subagent.as_ref().expect("Subagent context not initialized");
+    let ctx = w
+        .subagent
+        .as_ref()
+        .expect("Subagent context not initialized");
     let error = ctx.profile_error.as_ref().expect("Expected an error");
-    assert!(error.contains(&expected), "Error should contain '{}': {}", expected, error);
+    assert!(
+        error.contains(&expected),
+        "Error should contain '{}': {}",
+        expected,
+        error
+    );
 }
 
 // =============================================================================
@@ -415,7 +614,10 @@ async fn given_spawn_tool_no_context(w: &mut AlephWorld) {
 #[cfg(feature = "gateway")]
 #[when(expr = "I call spawn with task {string}")]
 async fn when_call_spawn(w: &mut AlephWorld, task: String) {
-    let ctx = w.subagent.as_mut().expect("Subagent context not initialized");
+    let ctx = w
+        .subagent
+        .as_mut()
+        .expect("Subagent context not initialized");
     let tool = ctx.spawn_tool.as_ref().expect("Spawn tool not initialized");
     let args = SessionsSpawnArgs {
         task,
@@ -451,33 +653,57 @@ async fn when_parse_spawn_args(w: &mut AlephWorld, task: String) {
 #[cfg(feature = "gateway")]
 #[then(expr = "the subagent session key prefix should be {string}")]
 async fn then_session_key_prefix(w: &mut AlephWorld, expected: String) {
-    let ctx = w.subagent.as_ref().expect("Subagent context not initialized");
-    let prefix = ctx.session_key_prefix.as_ref().expect("Session key prefix not set");
+    let ctx = w
+        .subagent
+        .as_ref()
+        .expect("Subagent context not initialized");
+    let prefix = ctx
+        .session_key_prefix
+        .as_ref()
+        .expect("Session key prefix not set");
     assert_eq!(prefix, &expected);
 }
 
 #[cfg(feature = "gateway")]
 #[then(expr = "authorization for {string} should succeed")]
 async fn then_auth_succeeds(w: &mut AlephWorld, agent: String) {
-    let ctx = w.subagent.as_ref().expect("Subagent context not initialized");
+    let ctx = w
+        .subagent
+        .as_ref()
+        .expect("Subagent context not initialized");
     let tool = ctx.spawn_tool.as_ref().expect("Spawn tool not initialized");
     let result = tool.check_authorization(&agent);
-    assert!(result.is_ok(), "Expected authorization to succeed for '{}', got: {:?}", agent, result);
+    assert!(
+        result.is_ok(),
+        "Expected authorization to succeed for '{}', got: {:?}",
+        agent,
+        result
+    );
 }
 
 #[cfg(feature = "gateway")]
 #[then(expr = "authorization for {string} should fail")]
 async fn then_auth_fails(w: &mut AlephWorld, agent: String) {
-    let ctx = w.subagent.as_ref().expect("Subagent context not initialized");
+    let ctx = w
+        .subagent
+        .as_ref()
+        .expect("Subagent context not initialized");
     let tool = ctx.spawn_tool.as_ref().expect("Spawn tool not initialized");
     let result = tool.check_authorization(&agent);
-    assert!(result.is_err(), "Expected authorization to fail for '{}'", agent);
+    assert!(
+        result.is_err(),
+        "Expected authorization to fail for '{}'",
+        agent
+    );
 }
 
 #[cfg(feature = "gateway")]
 #[then("the spawn status should be Error")]
 async fn then_spawn_status_error(w: &mut AlephWorld) {
-    let ctx = w.subagent.as_ref().expect("Subagent context not initialized");
+    let ctx = w
+        .subagent
+        .as_ref()
+        .expect("Subagent context not initialized");
     let output = ctx.spawn_output.as_ref().expect("Spawn output not set");
     assert_eq!(output.status, SpawnStatus::Error, "Expected Error status");
 }
@@ -485,16 +711,30 @@ async fn then_spawn_status_error(w: &mut AlephWorld) {
 #[cfg(feature = "gateway")]
 #[then(expr = "the spawn error should contain {string}")]
 async fn then_spawn_error_contains(w: &mut AlephWorld, expected: String) {
-    let ctx = w.subagent.as_ref().expect("Subagent context not initialized");
+    let ctx = w
+        .subagent
+        .as_ref()
+        .expect("Subagent context not initialized");
     let output = ctx.spawn_output.as_ref().expect("Spawn output not set");
-    let error = output.error.as_ref().expect("Expected error in spawn output");
-    assert!(error.contains(&expected), "Expected error to contain '{}': {}", expected, error);
+    let error = output
+        .error
+        .as_ref()
+        .expect("Expected error in spawn output");
+    assert!(
+        error.contains(&expected),
+        "Expected error to contain '{}': {}",
+        expected,
+        error
+    );
 }
 
 #[cfg(feature = "gateway")]
 #[then("the cleanup policy should be Ephemeral")]
 async fn then_cleanup_ephemeral(w: &mut AlephWorld) {
-    let ctx = w.subagent.as_ref().expect("Subagent context not initialized");
+    let ctx = w
+        .subagent
+        .as_ref()
+        .expect("Subagent context not initialized");
     let policy = ctx.cleanup_policy.as_ref().expect("Cleanup policy not set");
     assert_eq!(*policy, CleanupPolicy::Ephemeral);
 }
@@ -502,7 +742,10 @@ async fn then_cleanup_ephemeral(w: &mut AlephWorld) {
 #[cfg(feature = "gateway")]
 #[then(expr = "the spawn args task should be {string}")]
 async fn then_spawn_args_task(w: &mut AlephWorld, expected: String) {
-    let ctx = w.subagent.as_ref().expect("Subagent context not initialized");
+    let ctx = w
+        .subagent
+        .as_ref()
+        .expect("Subagent context not initialized");
     let args = ctx.spawn_args.as_ref().expect("Spawn args not set");
     assert_eq!(args.task, expected);
 }
@@ -510,7 +753,10 @@ async fn then_spawn_args_task(w: &mut AlephWorld, expected: String) {
 #[cfg(feature = "gateway")]
 #[then("the spawn args label should be none")]
 async fn then_spawn_args_label_none(w: &mut AlephWorld) {
-    let ctx = w.subagent.as_ref().expect("Subagent context not initialized");
+    let ctx = w
+        .subagent
+        .as_ref()
+        .expect("Subagent context not initialized");
     let args = ctx.spawn_args.as_ref().expect("Spawn args not set");
     assert!(args.label.is_none());
 }
@@ -518,7 +764,10 @@ async fn then_spawn_args_label_none(w: &mut AlephWorld) {
 #[cfg(feature = "gateway")]
 #[then("the spawn args agent_id should be none")]
 async fn then_spawn_args_agent_id_none(w: &mut AlephWorld) {
-    let ctx = w.subagent.as_ref().expect("Subagent context not initialized");
+    let ctx = w
+        .subagent
+        .as_ref()
+        .expect("Subagent context not initialized");
     let args = ctx.spawn_args.as_ref().expect("Spawn args not set");
     assert!(args.agent_id.is_none());
 }
@@ -526,7 +775,10 @@ async fn then_spawn_args_agent_id_none(w: &mut AlephWorld) {
 #[cfg(feature = "gateway")]
 #[then("the spawn args model should be none")]
 async fn then_spawn_args_model_none(w: &mut AlephWorld) {
-    let ctx = w.subagent.as_ref().expect("Subagent context not initialized");
+    let ctx = w
+        .subagent
+        .as_ref()
+        .expect("Subagent context not initialized");
     let args = ctx.spawn_args.as_ref().expect("Spawn args not set");
     assert!(args.model.is_none());
 }
@@ -534,7 +786,10 @@ async fn then_spawn_args_model_none(w: &mut AlephWorld) {
 #[cfg(feature = "gateway")]
 #[then("the spawn args thinking should be none")]
 async fn then_spawn_args_thinking_none(w: &mut AlephWorld) {
-    let ctx = w.subagent.as_ref().expect("Subagent context not initialized");
+    let ctx = w
+        .subagent
+        .as_ref()
+        .expect("Subagent context not initialized");
     let args = ctx.spawn_args.as_ref().expect("Spawn args not set");
     assert!(args.thinking.is_none());
 }
@@ -542,7 +797,10 @@ async fn then_spawn_args_thinking_none(w: &mut AlephWorld) {
 #[cfg(feature = "gateway")]
 #[then(expr = "the spawn args timeout should be {int}")]
 async fn then_spawn_args_timeout(w: &mut AlephWorld, expected: i64) {
-    let ctx = w.subagent.as_ref().expect("Subagent context not initialized");
+    let ctx = w
+        .subagent
+        .as_ref()
+        .expect("Subagent context not initialized");
     let args = ctx.spawn_args.as_ref().expect("Spawn args not set");
     assert_eq!(args.run_timeout_seconds, expected as u32);
 }
@@ -550,7 +808,10 @@ async fn then_spawn_args_timeout(w: &mut AlephWorld, expected: i64) {
 #[cfg(feature = "gateway")]
 #[then("the spawn args cleanup should be Ephemeral")]
 async fn then_spawn_args_cleanup_ephemeral(w: &mut AlephWorld) {
-    let ctx = w.subagent.as_ref().expect("Subagent context not initialized");
+    let ctx = w
+        .subagent
+        .as_ref()
+        .expect("Subagent context not initialized");
     let args = ctx.spawn_args.as_ref().expect("Spawn args not set");
     assert_eq!(args.cleanup, CleanupPolicy::Ephemeral);
 }
@@ -567,7 +828,10 @@ async fn given_fresh_registry(w: &mut AlephWorld) {
 
 #[given("a registered sub-agent run")]
 async fn given_registered_run(w: &mut AlephWorld) {
-    let ctx = w.subagent.as_mut().expect("Subagent context not initialized");
+    let ctx = w
+        .subagent
+        .as_mut()
+        .expect("Subagent context not initialized");
     let registry = ctx.registry.as_ref().expect("Registry not initialized");
     let session_key = RoutingSessionKey::Subagent {
         parent_key: Box::new(RoutingSessionKey::main("parent-test")),
@@ -585,7 +849,10 @@ async fn given_registered_run(w: &mut AlephWorld) {
 
 #[when(expr = "I register a sub-agent run with task {string}")]
 async fn when_register_run(w: &mut AlephWorld, task: String) {
-    let ctx = w.subagent.as_mut().expect("Subagent context not initialized");
+    let ctx = w
+        .subagent
+        .as_mut()
+        .expect("Subagent context not initialized");
     let registry = ctx.registry.as_ref().expect("Registry not initialized");
     let session_key = RoutingSessionKey::Subagent {
         parent_key: Box::new(RoutingSessionKey::main("parent-1")),
@@ -599,7 +866,10 @@ async fn when_register_run(w: &mut AlephWorld, task: String) {
 
 #[when(expr = "I register a sub-agent run with parent {string} and task {string}")]
 async fn when_register_run_with_parent(w: &mut AlephWorld, parent: String, task: String) {
-    let ctx = w.subagent.as_mut().expect("Subagent context not initialized");
+    let ctx = w
+        .subagent
+        .as_mut()
+        .expect("Subagent context not initialized");
     let registry = ctx.registry.as_ref().expect("Registry not initialized");
     let session_key = RoutingSessionKey::Subagent {
         parent_key: Box::new(RoutingSessionKey::main(&parent)),
@@ -612,7 +882,10 @@ async fn when_register_run_with_parent(w: &mut AlephWorld, parent: String, task:
 
 #[when(expr = "I transition the run to {string}")]
 async fn when_transition_run(w: &mut AlephWorld, status: String) {
-    let ctx = w.subagent.as_mut().expect("Subagent context not initialized");
+    let ctx = w
+        .subagent
+        .as_mut()
+        .expect("Subagent context not initialized");
     let registry = ctx.registry.as_ref().expect("Registry not initialized");
     let run_id = ctx.registered_run_id.as_ref().expect("No registered run");
     let new_status = match status.as_str() {
@@ -632,7 +905,10 @@ async fn when_transition_run(w: &mut AlephWorld, status: String) {
 
 #[then(expr = "the run should have status {string}")]
 async fn then_run_status(w: &mut AlephWorld, expected: String) {
-    let ctx = w.subagent.as_mut().expect("Subagent context not initialized");
+    let ctx = w
+        .subagent
+        .as_mut()
+        .expect("Subagent context not initialized");
     let registry = ctx.registry.as_ref().expect("Registry not initialized");
     let run_id = ctx.registered_run_id.as_ref().expect("No registered run");
     let run = registry.get(run_id).await.unwrap().expect("Run not found");
@@ -651,7 +927,10 @@ async fn then_run_status(w: &mut AlephWorld, expected: String) {
 
 #[then("the run should be retrievable by its ID")]
 async fn then_run_retrievable(w: &mut AlephWorld) {
-    let ctx = w.subagent.as_ref().expect("Subagent context not initialized");
+    let ctx = w
+        .subagent
+        .as_ref()
+        .expect("Subagent context not initialized");
     let registry = ctx.registry.as_ref().expect("Registry not initialized");
     let run_id = ctx.registered_run_id.as_ref().expect("No registered run");
     let run = registry.get(run_id).await.unwrap();
@@ -660,18 +939,33 @@ async fn then_run_retrievable(w: &mut AlephWorld) {
 
 #[then("the run should have a started_at timestamp")]
 async fn then_run_has_started_at(w: &mut AlephWorld) {
-    let ctx = w.subagent.as_ref().expect("Subagent context not initialized");
+    let ctx = w
+        .subagent
+        .as_ref()
+        .expect("Subagent context not initialized");
     let run = ctx.retrieved_run.as_ref().expect("No retrieved run");
-    assert!(run.started_at.is_some(), "Run should have started_at timestamp");
+    assert!(
+        run.started_at.is_some(),
+        "Run should have started_at timestamp"
+    );
 }
 
 #[then(expr = "parent {string} should have {int} children")]
 async fn then_parent_children_count(w: &mut AlephWorld, parent: String, count: i64) {
-    let ctx = w.subagent.as_ref().expect("Subagent context not initialized");
+    let ctx = w
+        .subagent
+        .as_ref()
+        .expect("Subagent context not initialized");
     let registry = ctx.registry.as_ref().expect("Registry not initialized");
     let parent_key = RoutingSessionKey::main(&parent);
     let children = registry.get_children(&parent_key).await;
-    assert_eq!(children.len(), count as usize, "Parent {} should have {} children", parent, count);
+    assert_eq!(
+        children.len(),
+        count as usize,
+        "Parent {} should have {} children",
+        parent,
+        count
+    );
 }
 
 #[then(expr = "parent {string} should have {int} child")]
@@ -681,8 +975,16 @@ async fn then_parent_child_count(w: &mut AlephWorld, parent: String, count: i64)
 
 #[then(expr = "there should be {int} active runs")]
 async fn then_active_runs_count(w: &mut AlephWorld, count: i64) {
-    let ctx = w.subagent.as_ref().expect("Subagent context not initialized");
+    let ctx = w
+        .subagent
+        .as_ref()
+        .expect("Subagent context not initialized");
     let registry = ctx.registry.as_ref().expect("Registry not initialized");
     let active = registry.get_active_runs().await;
-    assert_eq!(active.len(), count as usize, "Expected {} active runs", count);
+    assert_eq!(
+        active.len(),
+        count as usize,
+        "Expected {} active runs",
+        count
+    );
 }

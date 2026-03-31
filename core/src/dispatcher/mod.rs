@@ -51,7 +51,7 @@ pub use risk::{RiskEvaluator, RiskLevel};
 
 // === Re-exports: Tool Index (Semantic Retrieval) ===
 pub use tool_index::{
-    HydrationLevel, HydrationPipeline, HydrationPipelineConfig, HydrationResult, HydratedTool,
+    HydratedTool, HydrationLevel, HydrationPipeline, HydrationPipelineConfig, HydrationResult,
     InferredPurpose, SemanticPurposeInferrer, ToolIndexCoordinator, ToolMeta, ToolRetrieval,
     ToolRetrievalConfig,
 };

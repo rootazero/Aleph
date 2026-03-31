@@ -19,8 +19,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// Controls experimental features that are still being tested.
 /// All flags default to `false` for backward compatibility.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
 pub struct ExperimentalPolicy {
     /// Legacy flag — no longer has any effect.
     /// The unified intent classifier is now the only classifier.
@@ -48,7 +47,6 @@ pub struct ExperimentalPolicy {
     #[serde(default)]
     pub verbose_decision_logging: bool,
 }
-
 
 #[cfg(test)]
 mod tests {

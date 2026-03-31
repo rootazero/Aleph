@@ -41,83 +41,85 @@
 //! | guests | Guest invitation management |
 //! | teams | Team management (list, get, disband, delete) |
 
+pub mod acp_config;
 pub mod activity;
-pub mod health;
-pub mod echo;
-pub mod version;
 pub mod agent;
 pub mod agent_config;
 pub mod agents;
-pub mod general_config;
-pub mod browser_config;
-pub mod behavior_config;
-pub mod generation_config;
-pub mod search_config;
-pub mod session;
-pub mod session_usage;
+pub mod approval_bridge;
+pub mod arena;
 pub mod auth;
 pub mod auth_tools;
-pub mod events;
+pub mod behavior_config;
+pub mod browser_config;
 pub mod channel;
-pub mod config;
-pub mod config_ext;
-pub mod logs;
-pub mod commands;
-pub mod memory;
-pub mod plugins;
-pub mod services;
-pub mod skills;
-pub mod mcp;
-pub mod mcp_config;
-pub mod memory_config;
-pub mod providers;
-pub mod routing_rules;
-pub mod security_config;
-pub mod profiles;
-pub mod generation;
-pub mod embedding_providers;
-pub mod rerank_config;
-pub mod generation_providers;
-pub mod group_chat;
-pub mod pairing;
-pub mod runs;
 pub mod chat;
 pub mod clawhub;
+pub mod commands;
+pub mod config;
+pub mod config_ext;
 pub mod cron;
-pub mod heartbeat;
+pub mod daemon_control;
+pub mod debug;
+pub mod discord_panel;
+pub mod echo;
+pub mod embedding_providers;
+pub mod events;
 pub mod exec_approvals;
-pub mod wizard;
+pub mod execution_config;
+pub mod general_config;
+pub mod generation;
+pub mod generation_config;
+pub mod generation_providers;
+pub mod group_chat;
+pub mod guests;
+pub mod health;
+pub mod heartbeat;
+pub mod identity;
+pub mod logs;
+pub mod mcp;
+pub mod mcp_config;
+pub mod memory;
+pub mod memory_config;
+pub mod oauth;
+pub mod pairing;
+pub mod plugins;
+pub mod profiles;
+pub mod providers;
+pub mod rerank_config;
+pub mod routing_rules;
+pub mod runs;
+pub mod search_config;
+pub mod secret_approvals;
+pub mod secret_migration;
+pub mod security_config;
+pub mod services;
+pub mod session;
+pub mod session_usage;
+pub mod skills;
 #[allow(dead_code)] // DTOs only — handlers deferred to Milestone 2
 pub mod supervisor;
-pub mod approval_bridge;
-pub mod identity;
-pub mod debug;
-pub mod guests;
-pub mod workspace;
-pub mod secret_approvals;
 pub mod system_info;
-pub mod daemon_control;
-pub mod discord_panel;
-pub mod oauth;
-pub mod acp_config;
-pub mod execution_config;
-pub mod arena;
 pub mod teams;
 pub mod tools_visibility;
-pub mod secret_migration;
+pub mod version;
+pub mod wizard;
+pub mod workspace;
 
-pub use approval_bridge::{parse_session_target, get_forward_targets, ForwardMode};
-pub use identity::SharedIdentityResolver;
-pub use guests::SharedInvitationManager;
+pub use approval_bridge::{get_forward_targets, parse_session_target, ForwardMode};
 pub use config::{handle_get_full_config, handle_patch_config};
+pub use guests::SharedInvitationManager;
+pub use identity::SharedIdentityResolver;
 
+use crate::gateway::security::SharedTokenManager;
+use crate::sync_primitives::Arc;
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
-use crate::sync_primitives::Arc;
-use crate::gateway::security::SharedTokenManager;
 
-use super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS, METHOD_NOT_FOUND};
+use super::protocol::{
+    JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS, METHOD_NOT_FOUND,
+};
 
 /// Resolve a secret from the vault by its full key. Returns `None` on missing or error.
 pub(crate) fn resolve_vault_secret(key: &str, vault: &SharedTokenManager) -> Option<String> {
@@ -240,9 +242,18 @@ impl HandlerRegistry {
         // Plugin marketplace handlers
         registry.register("plugin.marketplace.list", plugins::handle_marketplace_list);
         registry.register("plugin.marketplace.add", plugins::handle_marketplace_add);
-        registry.register("plugin.marketplace.update", plugins::handle_marketplace_update);
-        registry.register("plugin.marketplace.remove", plugins::handle_marketplace_remove);
-        registry.register("plugin.marketplace.install", plugins::handle_marketplace_install);
+        registry.register(
+            "plugin.marketplace.update",
+            plugins::handle_marketplace_update,
+        );
+        registry.register(
+            "plugin.marketplace.remove",
+            plugins::handle_marketplace_remove,
+        );
+        registry.register(
+            "plugin.marketplace.install",
+            plugins::handle_marketplace_install,
+        );
 
         // Service handlers
         registry.register("services.start", services::handle_start);
@@ -320,7 +331,10 @@ impl HandlerRegistry {
         });
 
         // MCP Approval handlers
-        registry.register("mcp.list_pending_approvals", mcp::handle_list_pending_approvals);
+        registry.register(
+            "mcp.list_pending_approvals",
+            mcp::handle_list_pending_approvals,
+        );
         registry.register("mcp.respond_approval", mcp::handle_respond_approval);
         registry.register("mcp.cancel_approval", mcp::handle_cancel_approval);
 
@@ -341,28 +355,32 @@ impl HandlerRegistry {
             JsonRpcResponse::error(
                 req.id,
                 INTERNAL_ERROR,
-                "identity.get requires IdentityResolver - wire SharedIdentityResolver first".to_string(),
+                "identity.get requires IdentityResolver - wire SharedIdentityResolver first"
+                    .to_string(),
             )
         });
         registry.register("identity.set", |req| async move {
             JsonRpcResponse::error(
                 req.id,
                 INTERNAL_ERROR,
-                "identity.set requires IdentityResolver - wire SharedIdentityResolver first".to_string(),
+                "identity.set requires IdentityResolver - wire SharedIdentityResolver first"
+                    .to_string(),
             )
         });
         registry.register("identity.clear", |req| async move {
             JsonRpcResponse::error(
                 req.id,
                 INTERNAL_ERROR,
-                "identity.clear requires IdentityResolver - wire SharedIdentityResolver first".to_string(),
+                "identity.clear requires IdentityResolver - wire SharedIdentityResolver first"
+                    .to_string(),
             )
         });
         registry.register("identity.list", |req| async move {
             JsonRpcResponse::error(
                 req.id,
                 INTERNAL_ERROR,
-                "identity.list requires IdentityResolver - wire SharedIdentityResolver first".to_string(),
+                "identity.list requires IdentityResolver - wire SharedIdentityResolver first"
+                    .to_string(),
             )
         });
 
@@ -429,7 +447,8 @@ impl HandlerRegistry {
             JsonRpcResponse::error(
                 req.id,
                 INTERNAL_ERROR,
-                "channels.set_agent requires AgentEnvStore - wire Gateway runtime first".to_string(),
+                "channels.set_agent requires AgentEnvStore - wire Gateway runtime first"
+                    .to_string(),
             )
         });
         registry.register("agents.bindings", |req| async move {
@@ -442,7 +461,10 @@ impl HandlerRegistry {
 
         // Group Chat handlers (placeholders - actual handlers wired with GroupChatOrchestrator)
         registry.register("group_chat.start", group_chat::handle_start_placeholder);
-        registry.register("group_chat.continue", group_chat::handle_continue_placeholder);
+        registry.register(
+            "group_chat.continue",
+            group_chat::handle_continue_placeholder,
+        );
         registry.register("group_chat.mention", group_chat::handle_mention_placeholder);
         registry.register("group_chat.end", group_chat::handle_end_placeholder);
         registry.register("group_chat.list", group_chat::handle_list_placeholder);
@@ -469,7 +491,10 @@ impl HandlerRegistry {
 
         // Memory utility handlers (stateless — no shared state required)
         // NOTE: rerank_config.test is registered in register_config_handlers with vault access
-        registry.register("memory.retrieve_with_trace", memory_config::handle_retrieve_with_trace);
+        registry.register(
+            "memory.retrieve_with_trace",
+            memory_config::handle_retrieve_with_trace,
+        );
 
         // Arena handlers (placeholders - actual handlers wired with ArenaManager)
         registry.register("arena.create", |req| async move {
@@ -496,24 +521,39 @@ impl HandlerRegistry {
 
         // Team management handlers (placeholders — actual handlers wired with TeamStore in Gateway startup)
         registry.register("teams.list", |req| async move {
-            JsonRpcResponse::error(req.id, INTERNAL_ERROR,
-                "teams.list requires TeamStore — wire in Gateway startup".to_string())
+            JsonRpcResponse::error(
+                req.id,
+                INTERNAL_ERROR,
+                "teams.list requires TeamStore — wire in Gateway startup".to_string(),
+            )
         });
         registry.register("teams.get", |req| async move {
-            JsonRpcResponse::error(req.id, INTERNAL_ERROR,
-                "teams.get requires TeamStore — wire in Gateway startup".to_string())
+            JsonRpcResponse::error(
+                req.id,
+                INTERNAL_ERROR,
+                "teams.get requires TeamStore — wire in Gateway startup".to_string(),
+            )
         });
         registry.register("teams.disband", |req| async move {
-            JsonRpcResponse::error(req.id, INTERNAL_ERROR,
-                "teams.disband requires TeamStore — wire in Gateway startup".to_string())
+            JsonRpcResponse::error(
+                req.id,
+                INTERNAL_ERROR,
+                "teams.disband requires TeamStore — wire in Gateway startup".to_string(),
+            )
         });
         registry.register("teams.delete", |req| async move {
-            JsonRpcResponse::error(req.id, INTERNAL_ERROR,
-                "teams.delete requires TeamStore — wire in Gateway startup".to_string())
+            JsonRpcResponse::error(
+                req.id,
+                INTERNAL_ERROR,
+                "teams.delete requires TeamStore — wire in Gateway startup".to_string(),
+            )
         });
         registry.register("agents.teams", |req| async move {
-            JsonRpcResponse::error(req.id, INTERNAL_ERROR,
-                "agents.teams requires TeamStore — wire in Gateway startup".to_string())
+            JsonRpcResponse::error(
+                req.id,
+                INTERNAL_ERROR,
+                "agents.teams requires TeamStore — wire in Gateway startup".to_string(),
+            )
         });
 
         // Tools visibility handlers (placeholders — actual handlers wired with ToolRegistry)
@@ -522,48 +562,81 @@ impl HandlerRegistry {
 
         // Agent management handlers (placeholders — actual handlers wired with AgentManager)
         registry.register("agents.list", |req| async move {
-            JsonRpcResponse::error(req.id, INTERNAL_ERROR,
-                "agents.list requires AgentManager — wire in Gateway startup".to_string())
+            JsonRpcResponse::error(
+                req.id,
+                INTERNAL_ERROR,
+                "agents.list requires AgentManager — wire in Gateway startup".to_string(),
+            )
         });
         registry.register("agents.get", |req| async move {
-            JsonRpcResponse::error(req.id, INTERNAL_ERROR,
-                "agents.get requires AgentManager — wire in Gateway startup".to_string())
+            JsonRpcResponse::error(
+                req.id,
+                INTERNAL_ERROR,
+                "agents.get requires AgentManager — wire in Gateway startup".to_string(),
+            )
         });
         registry.register("agents.create", |req| async move {
-            JsonRpcResponse::error(req.id, INTERNAL_ERROR,
-                "agents.create requires AgentManager — wire in Gateway startup".to_string())
+            JsonRpcResponse::error(
+                req.id,
+                INTERNAL_ERROR,
+                "agents.create requires AgentManager — wire in Gateway startup".to_string(),
+            )
         });
         registry.register("agents.update", |req| async move {
-            JsonRpcResponse::error(req.id, INTERNAL_ERROR,
-                "agents.update requires AgentManager — wire in Gateway startup".to_string())
+            JsonRpcResponse::error(
+                req.id,
+                INTERNAL_ERROR,
+                "agents.update requires AgentManager — wire in Gateway startup".to_string(),
+            )
         });
         registry.register("agents.delete", |req| async move {
-            JsonRpcResponse::error(req.id, INTERNAL_ERROR,
-                "agents.delete requires AgentManager — wire in Gateway startup".to_string())
+            JsonRpcResponse::error(
+                req.id,
+                INTERNAL_ERROR,
+                "agents.delete requires AgentManager — wire in Gateway startup".to_string(),
+            )
         });
         registry.register("agents.set_default", |req| async move {
-            JsonRpcResponse::error(req.id, INTERNAL_ERROR,
-                "agents.set_default requires AgentManager — wire in Gateway startup".to_string())
+            JsonRpcResponse::error(
+                req.id,
+                INTERNAL_ERROR,
+                "agents.set_default requires AgentManager — wire in Gateway startup".to_string(),
+            )
         });
         registry.register("agents.files.list", |req| async move {
-            JsonRpcResponse::error(req.id, INTERNAL_ERROR,
-                "agents.files.list requires AgentManager — wire in Gateway startup".to_string())
+            JsonRpcResponse::error(
+                req.id,
+                INTERNAL_ERROR,
+                "agents.files.list requires AgentManager — wire in Gateway startup".to_string(),
+            )
         });
         registry.register("agents.files.get", |req| async move {
-            JsonRpcResponse::error(req.id, INTERNAL_ERROR,
-                "agents.files.get requires AgentManager — wire in Gateway startup".to_string())
+            JsonRpcResponse::error(
+                req.id,
+                INTERNAL_ERROR,
+                "agents.files.get requires AgentManager — wire in Gateway startup".to_string(),
+            )
         });
         registry.register("agents.files.set", |req| async move {
-            JsonRpcResponse::error(req.id, INTERNAL_ERROR,
-                "agents.files.set requires AgentManager — wire in Gateway startup".to_string())
+            JsonRpcResponse::error(
+                req.id,
+                INTERNAL_ERROR,
+                "agents.files.set requires AgentManager — wire in Gateway startup".to_string(),
+            )
         });
         registry.register("agents.files.delete", |req| async move {
-            JsonRpcResponse::error(req.id, INTERNAL_ERROR,
-                "agents.files.delete requires AgentManager — wire in Gateway startup".to_string())
+            JsonRpcResponse::error(
+                req.id,
+                INTERNAL_ERROR,
+                "agents.files.delete requires AgentManager — wire in Gateway startup".to_string(),
+            )
         });
         registry.register("agents.tools_schema", |req| async move {
-            JsonRpcResponse::error(req.id, INTERNAL_ERROR,
-                "agents.tools_schema requires initialization — wire in Gateway startup".to_string())
+            JsonRpcResponse::error(
+                req.id,
+                INTERNAL_ERROR,
+                "agents.tools_schema requires initialization — wire in Gateway startup".to_string(),
+            )
         });
 
         registry

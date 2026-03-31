@@ -1,13 +1,13 @@
+use super::migration;
 /// Core StateDatabase struct and initialization
 ///
 /// Contains the database connection, schema setup, and migration logic.
 /// Schema DDL is in `schema.rs`, tests are in `tests.rs`.
 use crate::error::AlephError;
-use super::migration;
+use crate::sync_primitives::{Arc, Mutex};
 use rusqlite::{params, Connection, OptionalExtension};
 use sqlite_vec::sqlite3_vec_init;
 use std::path::PathBuf;
-use crate::sync_primitives::{Arc, Mutex};
 
 mod schema;
 #[cfg(test)]
@@ -37,7 +37,9 @@ impl StateDatabase {
                     *mut *mut std::ffi::c_char,
                     *const rusqlite::ffi::sqlite3_api_routines,
                 ) -> std::ffi::c_int,
-            >(sqlite3_vec_init as *const ())));
+            >(
+                sqlite3_vec_init as *const ()
+            )));
         }
     }
 
@@ -168,7 +170,7 @@ impl StateDatabase {
         if dim_changed {
             conn.execute_batch(
                 "DROP TABLE IF EXISTS memories_vec;
-                 DROP TABLE IF EXISTS facts_vec;"
+                 DROP TABLE IF EXISTS facts_vec;",
             )
             .map_err(|e| AlephError::config(format!("Failed to drop vec0 tables: {}", e)))?;
 
@@ -298,9 +300,7 @@ impl StateDatabase {
                 "#,
                 [],
             )
-            .map_err(|e| {
-                AlephError::config(format!("Failed to migrate facts to vec0: {}", e))
-            })?;
+            .map_err(|e| AlephError::config(format!("Failed to migrate facts to vec0: {}", e)))?;
 
             tracing::info!("Facts migration complete");
         }
@@ -361,7 +361,6 @@ impl StateDatabase {
     pub fn serialize_embedding(embedding: &[f32]) -> Vec<u8> {
         embedding.iter().flat_map(|f| f.to_le_bytes()).collect()
     }
-
 }
 
 /// Memory database statistics

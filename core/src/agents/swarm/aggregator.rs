@@ -3,14 +3,14 @@
 //! Implements "fast reflex + slow thinking" dual-loop control.
 //! Transforms low-level events into high-level situational awareness.
 
-use std::collections::VecDeque;
 use crate::sync_primitives::Arc;
+use std::collections::VecDeque;
 use std::time::Duration;
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
-use super::events::{AgentEvent, ImportantEvent, InfoEvent};
 use super::bus::AgentMessageBus;
+use super::events::{AgentEvent, ImportantEvent, InfoEvent};
 use super::rules::{AggregationRule, RuleEngine};
 use crate::error::Result;
 
@@ -50,13 +50,8 @@ impl SlidingWindow {
     }
 
     pub fn get_recent(&self, count: usize) -> Vec<&InfoEvent> {
-        self.events
-            .iter()
-            .rev()
-            .take(count)
-            .collect()
+        self.events.iter().rev().take(count).collect()
     }
-
 }
 
 impl SemanticAggregator {
@@ -99,7 +94,11 @@ impl SemanticAggregator {
         }
 
         // 2. Try fast path (rule engine)
-        if let Some(aggregated) = self.rule_engine.try_aggregate(&event, &self.event_window).await {
+        if let Some(aggregated) = self
+            .rule_engine
+            .try_aggregate(&event, &self.event_window)
+            .await
+        {
             debug!("Rule engine aggregated event: {:?}", aggregated);
             self.bus.publish(AgentEvent::Important(aggregated)).await?;
         }
@@ -181,11 +180,7 @@ impl IntelligenceLayer {
     }
 
     /// Run the intelligence layer background loop
-    pub async fn run(
-        &self,
-        bus: Arc<AgentMessageBus>,
-        event_window: Arc<RwLock<SlidingWindow>>,
-    ) {
+    pub async fn run(&self, bus: Arc<AgentMessageBus>, event_window: Arc<RwLock<SlidingWindow>>) {
         info!("Starting intelligence layer");
 
         let mut interval = tokio::time::interval(self.summary_interval);
@@ -196,7 +191,11 @@ impl IntelligenceLayer {
             // Collect recent events
             let events = {
                 let window = event_window.read().await;
-                window.get_recent(100).into_iter().cloned().collect::<Vec<_>>()
+                window
+                    .get_recent(100)
+                    .into_iter()
+                    .cloned()
+                    .collect::<Vec<_>>()
             };
 
             if events.len() < self.min_events {
@@ -229,15 +228,18 @@ impl IntelligenceLayer {
         // TODO: Integrate with LLM for intelligent summarization
         // For now, provide a simple statistical summary
 
-        let tool_count = events.iter()
+        let tool_count = events
+            .iter()
             .filter(|e| matches!(e, InfoEvent::ToolExecuted { .. }))
             .count();
 
-        let file_count = events.iter()
+        let file_count = events
+            .iter()
             .filter(|e| matches!(e, InfoEvent::FileAccessed { .. }))
             .count();
 
-        let search_count = events.iter()
+        let search_count = events
+            .iter()
             .filter(|e| matches!(e, InfoEvent::SymbolSearched { .. }))
             .count();
 

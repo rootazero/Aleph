@@ -176,7 +176,10 @@ mod tests {
             ..Default::default()
         };
         let err = config.validate().unwrap_err();
-        assert!(err.contains("ws://") || err.contains("wss://"), "Error: {err}");
+        assert!(
+            err.contains("ws://") || err.contains("wss://"),
+            "Error: {err}"
+        );
     }
 
     #[test]
@@ -253,9 +256,8 @@ mod tests {
             ..Default::default()
         };
         assert!(config.is_pubkey_allowed(TEST_PUBKEY));
-        assert!(!config.is_pubkey_allowed(
-            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-        ));
+        assert!(!config
+            .is_pubkey_allowed("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"));
     }
 
     #[test]

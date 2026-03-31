@@ -72,12 +72,16 @@ impl AlephTool for AcpDelegateTool {
         notify_tool_start(Self::NAME, &args_summary);
 
         // Trust level check
-        let config = self.manager.get_config(&args.harness).await.ok_or_else(|| {
-            AlephError::tool(format!(
-                "Unknown ACP harness: '{}'. Check available harnesses via acp.list.",
-                args.harness
-            ))
-        })?;
+        let config = self
+            .manager
+            .get_config(&args.harness)
+            .await
+            .ok_or_else(|| {
+                AlephError::tool(format!(
+                    "Unknown ACP harness: '{}'. Check available harnesses via acp.list.",
+                    args.harness
+                ))
+            })?;
 
         match config.trust_level {
             TrustLevel::Disabled => {
@@ -114,7 +118,14 @@ impl AlephTool for AcpDelegateTool {
 
         let result = self
             .manager
-            .prompt(&args.harness, &args.prompt, &cwd, mode, reuse, Some(on_chunk))
+            .prompt(
+                &args.harness,
+                &args.prompt,
+                &cwd,
+                mode,
+                reuse,
+                Some(on_chunk),
+            )
             .await;
 
         match result {

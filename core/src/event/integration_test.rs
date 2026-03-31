@@ -4,9 +4,9 @@
 #[cfg(test)]
 mod tests {
     use crate::event::*;
-    use async_trait::async_trait;
-    use crate::sync_primitives::{AtomicUsize, Ordering};
     use crate::sync_primitives::Arc;
+    use crate::sync_primitives::{AtomicUsize, Ordering};
+    use async_trait::async_trait;
 
     /// Simulates IntentAnalyzer: receives InputReceived, publishes ToolCallRequested
     struct MockIntentAnalyzer;

@@ -52,9 +52,7 @@ impl UnifiedMessage {
     /// Single text user message
     pub fn user(text: impl Into<String>) -> Self {
         Self::User {
-            content: vec![ContentBlock::Text {
-                text: text.into(),
-            }],
+            content: vec![ContentBlock::Text { text: text.into() }],
         }
     }
 
@@ -66,9 +64,7 @@ impl UnifiedMessage {
     /// Single text assistant message
     pub fn assistant(text: impl Into<String>) -> Self {
         Self::Assistant {
-            content: vec![ContentBlock::Text {
-                text: text.into(),
-            }],
+            content: vec![ContentBlock::Text { text: text.into() }],
         }
     }
 
@@ -166,7 +162,9 @@ impl UnifiedMessage {
                 ContentBlock::Text { text } => parts.push(text.as_str().to_owned()),
                 ContentBlock::Thinking { thinking } => parts.push(thinking.as_str().to_owned()),
                 ContentBlock::Json { value } => parts.push(value.to_string()),
-                ContentBlock::ToolCall { name, arguments, .. } => {
+                ContentBlock::ToolCall {
+                    name, arguments, ..
+                } => {
                     parts.push(format!("{} {}", name, arguments));
                 }
                 ContentBlock::Image { .. } => {}
@@ -195,7 +193,9 @@ impl UnifiedMessage {
     /// Returns `None` if this is not a ToolResult.
     pub fn tool_result_info(&self) -> Option<(&str, String)> {
         match self {
-            Self::ToolResult { tool_name, content, .. } => {
+            Self::ToolResult {
+                tool_name, content, ..
+            } => {
                 let text = content
                     .iter()
                     .map(|b| match b {

@@ -9,16 +9,16 @@
 //! - `chat.history` - Get chat history
 //! - `chat.clear` - Clear chat history
 
+use crate::sync_primitives::Arc;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use crate::sync_primitives::Arc;
 use tracing::debug;
 
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
-use super::parse_params;
 use super::super::router::SessionKey;
 use super::super::session_manager::SessionManager;
 use super::agent::{AgentRunManager, AgentRunParams, Attachment};
+use super::parse_params;
 
 // ============================================================================
 // Request/Response Types
@@ -215,7 +215,10 @@ pub async fn handle_history(
     };
 
     // Get history from session manager
-    match session_manager.get_history(&session_key, params.limit).await {
+    match session_manager
+        .get_history(&session_key, params.limit)
+        .await
+    {
         Ok(messages) => {
             let chat_messages: Vec<ChatMessage> = messages
                 .into_iter()
@@ -226,9 +229,9 @@ pub async fn handle_history(
                         .map(|dt| dt.to_rfc3339())
                         .unwrap_or_default(),
                     run_id: m.metadata.and_then(|meta| {
-                        serde_json::from_str::<Value>(&meta)
-                            .ok()
-                            .and_then(|v| v.get("run_id").and_then(|r| r.as_str()).map(String::from))
+                        serde_json::from_str::<Value>(&meta).ok().and_then(|v| {
+                            v.get("run_id").and_then(|r| r.as_str()).map(String::from)
+                        })
                     }),
                 })
                 .collect();

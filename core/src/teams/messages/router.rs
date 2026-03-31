@@ -7,10 +7,8 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
-use super::types::{
-    MessageType, NewMessage, Recipient, RecipientRole, TeamMessage,
-};
 use super::store::MessageStore;
+use super::types::{MessageType, NewMessage, Recipient, RecipientRole, TeamMessage};
 use crate::error::Result;
 use crate::teams::events::{EventLogStore, NewTeamEvent, TeamEventType};
 
@@ -141,13 +139,8 @@ impl MessageRouter {
             if let Some(ref leader) = self.leader_id {
                 if reply_to.is_some() {
                     if let Some(ref thread_id) = msg.thread_id {
-                        self.maybe_escalate(
-                            &team_id,
-                            thread_id,
-                            leader,
-                            &from_agent,
-                        )
-                        .await;
+                        self.maybe_escalate(&team_id, thread_id, leader, &from_agent)
+                            .await;
                     }
                 }
             }
@@ -180,10 +173,9 @@ impl MessageRouter {
             Err(_) => return,
         };
 
-        let already_notified = thread_msgs.iter().any(|m| {
-            m.msg_type == MessageType::SystemNotification
-                && m.from_agent == "system"
-        });
+        let already_notified = thread_msgs
+            .iter()
+            .any(|m| m.msg_type == MessageType::SystemNotification && m.from_agent == "system");
 
         if already_notified {
             return;
@@ -265,10 +257,7 @@ mod tests {
         assert_eq!(msg.recipients[0].role, RecipientRole::To);
 
         // Verify event was logged
-        let events = event_store
-            .get_events("team-1", None, None)
-            .await
-            .unwrap();
+        let events = event_store.get_events("team-1", None, None).await.unwrap();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].event_type, TeamEventType::MessageSent);
         assert_eq!(events[0].agent_id, "agent-a");
@@ -299,10 +288,18 @@ mod tests {
         let msg = router.send(req).await.unwrap();
         assert_eq!(msg.recipients.len(), 2);
 
-        let to_recip = msg.recipients.iter().find(|r| r.agent_id == "agent-b").unwrap();
+        let to_recip = msg
+            .recipients
+            .iter()
+            .find(|r| r.agent_id == "agent-b")
+            .unwrap();
         assert_eq!(to_recip.role, RecipientRole::To);
 
-        let cc_recip = msg.recipients.iter().find(|r| r.agent_id == "agent-c").unwrap();
+        let cc_recip = msg
+            .recipients
+            .iter()
+            .find(|r| r.agent_id == "agent-c")
+            .unwrap();
         assert_eq!(cc_recip.role, RecipientRole::Cc);
     }
 

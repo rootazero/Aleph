@@ -39,10 +39,7 @@ fn test_absolute_path_outside_scope() {
         trigger.is_some(),
         "Absolute path outside scope should be detected"
     );
-    assert_eq!(
-        trigger.unwrap().reason,
-        EscalationReason::PathOutOfScope
-    );
+    assert_eq!(trigger.unwrap().reason, EscalationReason::PathOutOfScope);
 }
 
 /// Test URL-encoded path traversal
@@ -133,7 +130,10 @@ fn test_various_parameter_names() {
 fn test_null_byte_injection() {
     let approved_paths = vec!["/tmp/*".to_string()];
     let mut params = HashMap::new();
-    params.insert("file_path".to_string(), "/tmp/file\0/etc/passwd".to_string());
+    params.insert(
+        "file_path".to_string(),
+        "/tmp/file\0/etc/passwd".to_string(),
+    );
 
     let trigger = check_path_escalation(&params, &approved_paths);
     // Null bytes should be rejected or sanitized
@@ -374,13 +374,9 @@ fn test_special_characters_in_path() {
 
     // Path with special chars
     let mut params = HashMap::new();
-    params.insert(
-        "file_path".to_string(),
-        "/tmp/file@#$%.txt".to_string(),
-    );
+    params.insert("file_path".to_string(), "/tmp/file@#$%.txt".to_string());
     assert!(
         check_path_escalation(&params, &approved_paths).is_none(),
         "Path with special characters should be allowed if in scope"
     );
 }
-

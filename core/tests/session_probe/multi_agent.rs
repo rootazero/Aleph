@@ -22,15 +22,23 @@ async fn p6_01_two_agents_have_independent_sessions() {
     h.create_session("agent-b").await;
 
     // Seed different messages to each
-    h.seed_messages("agent-a", &[
-        ("user", "Hello from agent-a session"),
-        ("assistant", "Agent-A reply"),
-    ]).await;
+    h.seed_messages(
+        "agent-a",
+        &[
+            ("user", "Hello from agent-a session"),
+            ("assistant", "Agent-A reply"),
+        ],
+    )
+    .await;
 
-    h.seed_messages("agent-b", &[
-        ("user", "Hello from agent-b session"),
-        ("assistant", "Agent-B reply"),
-    ]).await;
+    h.seed_messages(
+        "agent-b",
+        &[
+            ("user", "Hello from agent-b session"),
+            ("assistant", "Agent-B reply"),
+        ],
+    )
+    .await;
 
     // Verify histories are independent
     let key_a = SessionKey::main("agent-a");
@@ -118,10 +126,14 @@ async fn p6_03_switch_closes_only_source_agent_session() {
     h.register_agent("beta", None).await;
 
     // Seed messages for "main" agent via DM helpers (router creates PerPeer keys)
-    h.seed_dm_messages("main", &[
-        ("user", "Main agent conversation"),
-        ("assistant", "Main agent reply"),
-    ]).await;
+    h.seed_dm_messages(
+        "main",
+        &[
+            ("user", "Main agent conversation"),
+            ("assistant", "Main agent reply"),
+        ],
+    )
+    .await;
 
     // Switch from main to beta
     h.send_message("ch-multi", "/switch beta").await;
@@ -200,7 +212,11 @@ async fn p6_04_different_peers_have_independent_sessions() {
     assert!(!peer2_closed, "peer-2 session should NOT be closed");
 
     // Verify peer-2 history is intact
-    let history_peer2 = h.session_manager.get_history(&key_peer2, None).await.unwrap();
+    let history_peer2 = h
+        .session_manager
+        .get_history(&key_peer2, None)
+        .await
+        .unwrap();
     assert_eq!(history_peer2.len(), 1);
     assert_eq!(history_peer2[0].content, "peer-2 message");
 }
@@ -225,14 +241,21 @@ async fn p6_05_epoch_increments_are_agent_scoped() {
 
     // Create agent-b with a single session
     h.create_session("agent-b").await;
-    h.seed_messages("agent-b", &[("user", "agent-b original")]).await;
+    h.seed_messages("agent-b", &[("user", "agent-b original")])
+        .await;
 
     // Create agent-a epoch sessions
     h.session_manager.get_or_create(&key_a_s1).await.unwrap();
-    h.session_manager.add_message(&key_a_s1, "user", "epoch s1").await.unwrap();
+    h.session_manager
+        .add_message(&key_a_s1, "user", "epoch s1")
+        .await
+        .unwrap();
 
     h.session_manager.get_or_create(&key_a_s2).await.unwrap();
-    h.session_manager.add_message(&key_a_s2, "user", "epoch s2").await.unwrap();
+    h.session_manager
+        .add_message(&key_a_s2, "user", "epoch s2")
+        .await
+        .unwrap();
 
     // Verify agent-a has multiple sessions
     let sessions_a = h.list_sessions(Some("agent-a")).await;

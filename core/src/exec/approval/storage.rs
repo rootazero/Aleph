@@ -1,4 +1,4 @@
-use rusqlite::{Connection, Result as SqliteResult, params};
+use rusqlite::{params, Connection, Result as SqliteResult};
 use std::path::Path;
 use tokio::sync::Mutex;
 
@@ -113,12 +113,7 @@ impl ApprovalAuditStorage {
         )?;
 
         let rows = stmt.query_map(params![tool_name, limit as i64], |row| {
-            Ok((
-                row.get(0)?,
-                row.get(1)?,
-                row.get(2)?,
-                row.get(3)?,
-            ))
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
         })?;
 
         rows.collect()
@@ -194,7 +189,8 @@ impl ApprovalAuditStorage {
                     let mut capabilities = Vec::new();
 
                     // Extract filesystem capabilities
-                    if let Some(fs_array) = json_value.get("filesystem").and_then(|v| v.as_array()) {
+                    if let Some(fs_array) = json_value.get("filesystem").and_then(|v| v.as_array())
+                    {
                         for fs_cap in fs_array {
                             if let Some(cap_type) = fs_cap.get("type").and_then(|v| v.as_str()) {
                                 capabilities.push(format!("filesystem.{}", cap_type));

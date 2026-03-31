@@ -290,7 +290,10 @@ fn test_interactive_prompt_minimal_token_overhead() {
         prompt.contains("## Runtime Environment"),
         "RuntimeContext should be present in WebRich mode"
     );
-    assert!(prompt.contains("os=linux"), "Missing OS info in WebRich mode");
+    assert!(
+        prompt.contains("os=linux"),
+        "Missing OS info in WebRich mode"
+    );
     assert!(
         prompt.contains("model=gpt-4"),
         "Missing model info in WebRich mode"

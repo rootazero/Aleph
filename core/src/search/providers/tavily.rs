@@ -91,9 +91,10 @@ impl SearchProvider for TavilyProvider {
             )));
         }
 
-        let tavily_response: TavilyResponse = response.json().await.map_err(|e| {
-            AlephError::provider(format!("Failed to parse Tavily response: {}", e))
-        })?;
+        let tavily_response: TavilyResponse = response
+            .json()
+            .await
+            .map_err(|e| AlephError::provider(format!("Failed to parse Tavily response: {}", e)))?;
 
         // Convert to unified format
         let results = tavily_response

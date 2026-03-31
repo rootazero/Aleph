@@ -11,7 +11,7 @@ use crate::thinker::soul::SoulManifest;
 use crate::tools::AlephToolDyn;
 
 use super::adapters::BuiltinToolAdapter;
-use super::loop_core::{LoopConfig, AgentLoop};
+use super::loop_core::{AgentLoop, LoopConfig};
 use super::prompt_builder::PromptBuilder;
 use super::provider_bridge::AiProviderBridge;
 use super::safety::SafetyGuard;
@@ -53,7 +53,14 @@ impl LoopFactory {
         // Safety guard with sensible defaults
         let safety = SafetyGuard::default_guard();
 
-        AgentLoop::new(bridge, registry, prompt_builder, safety, config, CancellationToken::new())
+        AgentLoop::new(
+            bridge,
+            registry,
+            prompt_builder,
+            safety,
+            config,
+            CancellationToken::new(),
+        )
     }
 
     /// Build a `AgentLoop` from an `AlephToolServer`.
@@ -98,8 +105,19 @@ mod tests {
         fn process(
             &self,
             _payload: crate::providers::adapter::RequestPayload<'_>,
-        ) -> Pin<Box<dyn Future<Output = crate::error::Result<crate::providers::adapter::ProviderResponse>> + Send + '_>> {
-            Box::pin(async { Ok(crate::providers::adapter::ProviderResponse::text_only("response".into())) })
+        ) -> Pin<
+            Box<
+                dyn Future<
+                        Output = crate::error::Result<crate::providers::adapter::ProviderResponse>,
+                    > + Send
+                    + '_,
+            >,
+        > {
+            Box::pin(async {
+                Ok(crate::providers::adapter::ProviderResponse::text_only(
+                    "response".into(),
+                ))
+            })
         }
     }
 
@@ -214,8 +232,7 @@ mod tests {
             token_budget: 50000,
         };
 
-        let loop_instance =
-            LoopFactory::build_from_server(provider, &server, None, config).await;
+        let loop_instance = LoopFactory::build_from_server(provider, &server, None, config).await;
         let defs = loop_instance.tool_definitions();
         assert_eq!(defs.len(), 2);
     }

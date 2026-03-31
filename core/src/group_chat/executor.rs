@@ -6,10 +6,10 @@
 //! 3. Invokes each selected persona's LLM in order
 //! 4. Records each persona response and returns the collected messages
 
-use crate::providers::AiProvider;
-use crate::providers::ProviderRegistry;
 use crate::providers::adapter::RequestPayload;
 use crate::providers::message::UnifiedMessage;
+use crate::providers::AiProvider;
+use crate::providers::ProviderRegistry;
 use crate::resilience::database::StateDatabase;
 use crate::sync_primitives::Arc;
 
@@ -232,7 +232,13 @@ impl GroupChatExecutor {
             session.add_turn(round, speaker.clone(), persona_response.clone());
 
             let sequence = i as u32 + seq_offset;
-            self.persist_turn(&session.id, round, sequence + 1, &speaker, &persona_response);
+            self.persist_turn(
+                &session.id,
+                round,
+                sequence + 1,
+                &speaker,
+                &persona_response,
+            );
 
             // Accumulate prior discussion for the next persona
             prior_discussion.push_str(&format!("[{}]: {}\n\n", persona.name, persona_response));
@@ -260,8 +266,8 @@ impl GroupChatExecutor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::providers::AiProvider;
     use crate::providers::adapter::{ProviderResponse, RequestPayload};
+    use crate::providers::AiProvider;
 
     use crate::sync_primitives::Arc;
     use std::future::Future;
@@ -291,7 +297,8 @@ mod tests {
         fn process<'a>(
             &'a self,
             _payload: RequestPayload<'a>,
-        ) -> Pin<Box<dyn Future<Output = crate::error::Result<ProviderResponse>> + Send + 'a>> {
+        ) -> Pin<Box<dyn Future<Output = crate::error::Result<ProviderResponse>> + Send + 'a>>
+        {
             let idx = self.call_count.fetch_add(1, Ordering::SeqCst);
             let response = self
                 .responses
@@ -389,8 +396,7 @@ mod tests {
     #[tokio::test]
     async fn test_execute_round_single_persona() {
         // Coordinator selects only one persona
-        let coordinator_response =
-            r#"{"respondents":[{"persona_id":"pm","order":0,"guidance":"Be concise"}],"need_summary":false}"#;
+        let coordinator_response = r#"{"respondents":[{"persona_id":"pm","order":0,"guidance":"Be concise"}],"need_summary":false}"#;
 
         let provider = Arc::new(SequentialMockProvider::new(vec![
             coordinator_response.to_string(),
@@ -446,7 +452,8 @@ mod tests {
             fn process<'a>(
                 &'a self,
                 _payload: RequestPayload<'a>,
-            ) -> Pin<Box<dyn Future<Output = crate::error::Result<ProviderResponse>> + Send + 'a>> {
+            ) -> Pin<Box<dyn Future<Output = crate::error::Result<ProviderResponse>> + Send + 'a>>
+            {
                 Box::pin(async { Err(crate::error::AlephError::network("connection refused")) })
             }
             fn name(&self) -> &str {
@@ -461,14 +468,15 @@ mod tests {
         let executor = GroupChatExecutor::new(provider);
         let mut session = make_session();
 
-        let result = executor
-            .execute_round(&mut session, "Hello?", &[])
-            .await;
+        let result = executor.execute_round(&mut session, "Hello?", &[]).await;
 
         assert!(result.is_err());
         match result.unwrap_err() {
             GroupChatError::ProviderUnavailable(msg) => {
-                assert!(msg.contains("connection refused"), "error should mention the cause: {msg}");
+                assert!(
+                    msg.contains("connection refused"),
+                    "error should mention the cause: {msg}"
+                );
             }
             other => panic!("expected ProviderUnavailable, got: {other:?}"),
         }
@@ -477,8 +485,7 @@ mod tests {
     #[tokio::test]
     async fn test_execute_round_persona_invocation_failure() {
         // Coordinator succeeds, but persona call fails
-        let coordinator_response =
-            r#"{"respondents":[{"persona_id":"arch","order":0,"guidance":"go"}],"need_summary":false}"#;
+        let coordinator_response = r#"{"respondents":[{"persona_id":"arch","order":0,"guidance":"go"}],"need_summary":false}"#;
 
         struct CoordinatorOnlyProvider {
             coordinator_response: String,
@@ -489,7 +496,8 @@ mod tests {
             fn process<'a>(
                 &'a self,
                 _payload: RequestPayload<'a>,
-            ) -> Pin<Box<dyn Future<Output = crate::error::Result<ProviderResponse>> + Send + 'a>> {
+            ) -> Pin<Box<dyn Future<Output = crate::error::Result<ProviderResponse>> + Send + 'a>>
+            {
                 let idx = self.call_count.fetch_add(1, Ordering::SeqCst);
                 if idx == 0 {
                     let resp = self.coordinator_response.clone();
@@ -513,9 +521,7 @@ mod tests {
         let executor = GroupChatExecutor::new(provider);
         let mut session = make_session();
 
-        let result = executor
-            .execute_round(&mut session, "Help me", &[])
-            .await;
+        let result = executor.execute_round(&mut session, "Help me", &[]).await;
 
         assert!(result.is_err());
         match result.unwrap_err() {
@@ -530,11 +536,10 @@ mod tests {
     #[tokio::test]
     async fn test_execute_round_persona_not_found() {
         // Coordinator references a persona not in the session
-        let coordinator_response =
-            r#"{"respondents":[{"persona_id":"ghost","order":0,"guidance":"boo"}],"need_summary":false}"#;
+        let coordinator_response = r#"{"respondents":[{"persona_id":"ghost","order":0,"guidance":"boo"}],"need_summary":false}"#;
 
         let provider = Arc::new(SequentialMockProvider::new(vec![
-            coordinator_response.to_string(),
+            coordinator_response.to_string()
         ]));
 
         let executor = GroupChatExecutor::new(provider);
@@ -555,8 +560,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_round_increments_round_number() {
-        let coordinator_response =
-            r#"{"respondents":[{"persona_id":"arch","order":0,"guidance":""}],"need_summary":false}"#;
+        let coordinator_response = r#"{"respondents":[{"persona_id":"arch","order":0,"guidance":""}],"need_summary":false}"#;
 
         let provider = Arc::new(SequentialMockProvider::new(vec![
             coordinator_response.to_string(),
@@ -569,12 +573,18 @@ mod tests {
         let mut session = make_session();
 
         // Round 1
-        let msgs1 = executor.execute_round(&mut session, "First", &[]).await.unwrap();
+        let msgs1 = executor
+            .execute_round(&mut session, "First", &[])
+            .await
+            .unwrap();
         assert_eq!(msgs1[0].round, 1);
         assert_eq!(session.current_round, 1);
 
         // Round 2
-        let msgs2 = executor.execute_round(&mut session, "Second", &[]).await.unwrap();
+        let msgs2 = executor
+            .execute_round(&mut session, "Second", &[])
+            .await
+            .unwrap();
         assert_eq!(msgs2[0].round, 2);
         assert_eq!(session.current_round, 2);
     }
@@ -592,13 +602,16 @@ mod tests {
             fn process<'a>(
                 &'a self,
                 payload: RequestPayload<'a>,
-            ) -> Pin<Box<dyn Future<Output = crate::error::Result<ProviderResponse>> + Send + 'a>> {
+            ) -> Pin<Box<dyn Future<Output = crate::error::Result<ProviderResponse>> + Send + 'a>>
+            {
                 let idx = self.call_count.fetch_add(1, Ordering::SeqCst);
                 if idx == 0 {
                     let resp = self.coordinator_response.clone();
                     Box::pin(async move { Ok(ProviderResponse::text_only(resp)) })
                 } else {
-                    let input = payload.messages.first()
+                    let input = payload
+                        .messages
+                        .first()
                         .and_then(|m| m.content_blocks().first())
                         .and_then(|b| b.as_text())
                         .unwrap_or("");
@@ -676,8 +689,7 @@ mod tests {
             .unwrap();
 
         // Coordinator returns plan selecting the persona with provider override
-        let coordinator_response =
-            r#"{"respondents":[{"persona_id":"custom","order":0,"guidance":""}],"need_summary":false}"#;
+        let coordinator_response = r#"{"respondents":[{"persona_id":"custom","order":0,"guidance":""}],"need_summary":false}"#;
 
         let default_provider = Arc::new(SequentialMockProvider::new(vec![
             coordinator_response.to_string(),
@@ -685,8 +697,8 @@ mod tests {
             "Default provider response (should not appear).".to_string(),
         ]));
 
-        let executor = GroupChatExecutor::new(default_provider)
-            .with_provider_registry(Arc::new(registry));
+        let executor =
+            GroupChatExecutor::new(default_provider).with_provider_registry(Arc::new(registry));
 
         let mut session = GroupChatSession::new(
             "test-provider".to_string(),

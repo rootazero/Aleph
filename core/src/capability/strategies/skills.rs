@@ -165,12 +165,7 @@ mod tests {
     use std::fs;
     use tempfile::TempDir;
 
-    fn create_test_skill(
-        dir: &std::path::Path,
-        name: &str,
-        description: &str,
-        instructions: &str,
-    ) {
+    fn create_test_skill(dir: &std::path::Path, name: &str, description: &str, instructions: &str) {
         let skill_dir = dir.join(name);
         fs::create_dir_all(&skill_dir).unwrap();
 

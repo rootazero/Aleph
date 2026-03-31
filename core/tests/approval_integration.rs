@@ -7,16 +7,11 @@ use alephcore::exec::approval::audit::AuditQuery;
 use alephcore::exec::approval::binding::check_binding_compliance;
 use alephcore::exec::approval::escalation::check_path_escalation;
 use alephcore::exec::approval::storage::ApprovalAuditStorage;
-use alephcore::exec::approval::types::{
-    CapabilityApprovalRequest, EscalationReason, TrustStage,
-};
+use alephcore::exec::approval::types::{CapabilityApprovalRequest, EscalationReason, TrustStage};
 use alephcore::exec::sandbox::capabilities::{
-    Capabilities, EnvironmentCapability, FileSystemCapability, NetworkCapability,
-    ProcessCapability,
+    Capabilities, EnvironmentCapability, FileSystemCapability, NetworkCapability, ProcessCapability,
 };
-use alephcore::exec::sandbox::parameter_binding::{
-    CapabilityOverrides, RequiredCapabilities,
-};
+use alephcore::exec::sandbox::parameter_binding::{CapabilityOverrides, RequiredCapabilities};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use tempfile::TempDir;
@@ -154,7 +149,11 @@ async fn test_runtime_escalation() {
     }"#;
 
     storage
-        .insert_test_capability_approval(tool_name, capabilities_json, chrono::Utc::now().timestamp())
+        .insert_test_capability_approval(
+            tool_name,
+            capabilities_json,
+            chrono::Utc::now().timestamp(),
+        )
         .await
         .unwrap();
 
@@ -171,10 +170,7 @@ async fn test_runtime_escalation() {
 
     let trigger = escalation.unwrap();
     assert_eq!(trigger.reason, EscalationReason::PathOutOfScope);
-    assert_eq!(
-        trigger.requested_path,
-        Some(PathBuf::from("/etc/passwd"))
-    );
+    assert_eq!(trigger.requested_path, Some(PathBuf::from("/etc/passwd")));
 
     // Step 4: Record user decision in audit log
     let execution_id = "exec_escalation_001";
@@ -192,10 +188,7 @@ async fn test_runtime_escalation() {
     let escalation_count = storage.get_escalation_count(tool_name).await.unwrap();
     assert_eq!(escalation_count, 1, "Escalation should be recorded");
 
-    let escalation_details = storage
-        .get_escalation_details(execution_id)
-        .await
-        .unwrap();
+    let escalation_details = storage.get_escalation_details(execution_id).await.unwrap();
     assert!(escalation_details.is_some());
 
     let (reason, _path, _decision) = escalation_details.unwrap();
@@ -262,7 +255,12 @@ async fn test_multi_tool_approval() {
 
     // Step 2: Execute all tools
     storage
-        .insert_test_execution(tool1, "exec_t1_001", r#"{"file": "/tmp/data.txt"}"#, timestamp + 10)
+        .insert_test_execution(
+            tool1,
+            "exec_t1_001",
+            r#"{"file": "/tmp/data.txt"}"#,
+            timestamp + 10,
+        )
         .await
         .unwrap();
 
@@ -302,22 +300,37 @@ async fn test_multi_tool_approval() {
     let summary1 = audit.get_tool_risk_summary(tool1).await.unwrap();
     assert_eq!(summary1.tool_name, tool1);
     assert_eq!(summary1.execution_count, 1);
-    assert!(summary1.capabilities.contains(&"filesystem.read_only".to_string()));
+    assert!(summary1
+        .capabilities
+        .contains(&"filesystem.read_only".to_string()));
 
     let summary2 = audit.get_tool_risk_summary(tool2).await.unwrap();
     assert_eq!(summary2.tool_name, tool2);
-    assert_eq!(summary2.execution_count, 2, "Session scope allows multiple executions");
-    assert!(summary2.capabilities.contains(&"network.allow_all".to_string()));
+    assert_eq!(
+        summary2.execution_count, 2,
+        "Session scope allows multiple executions"
+    );
+    assert!(summary2
+        .capabilities
+        .contains(&"network.allow_all".to_string()));
 
     let summary3 = audit.get_tool_risk_summary(tool3).await.unwrap();
     assert_eq!(summary3.tool_name, tool3);
     assert_eq!(summary3.execution_count, 1);
-    assert!(summary3.capabilities.contains(&"filesystem.read_write".to_string()));
+    assert!(summary3
+        .capabilities
+        .contains(&"filesystem.read_write".to_string()));
     assert!(summary3.capabilities.contains(&"process.exec".to_string()));
 
     // Verify risk scores are calculated correctly
-    assert!(summary1.risk_score < summary2.risk_score, "File reader should be lower risk than network fetcher");
-    assert!(summary2.risk_score < summary3.risk_score, "Network fetcher should be lower risk than process executor");
+    assert!(
+        summary1.risk_score < summary2.risk_score,
+        "File reader should be lower risk than network fetcher"
+    );
+    assert!(
+        summary2.risk_score < summary3.risk_score,
+        "Network fetcher should be lower risk than process executor"
+    );
 }
 
 /// Test: Binding compliance check during execution
@@ -343,7 +356,10 @@ async fn test_binding_compliance_during_execution() {
 
     let result = check_binding_compliance(&runtime_params, &declared_bindings);
     assert!(result.is_err(), "Non-compliant file extension should fail");
-    assert_eq!(result.unwrap_err().reason, EscalationReason::UndeclaredBinding);
+    assert_eq!(
+        result.unwrap_err().reason,
+        EscalationReason::UndeclaredBinding
+    );
 
     // Test 3: Extra undeclared parameter
     let mut runtime_params = HashMap::new();
@@ -404,10 +420,7 @@ async fn test_first_execution_escalation() {
     let escalation_count = storage.get_escalation_count(tool_name).await.unwrap();
     assert_eq!(escalation_count, 1);
 
-    let details = storage
-        .get_escalation_details(execution_id)
-        .await
-        .unwrap();
+    let details = storage.get_escalation_details(execution_id).await.unwrap();
     assert!(details.is_some());
 
     let (reason, _, _) = details.unwrap();
@@ -464,7 +477,10 @@ async fn test_concurrent_tool_executions() {
 
     // Verify all executions were recorded
     let execution_count = storage.get_execution_count(tool_name).await.unwrap();
-    assert_eq!(execution_count, 5, "All concurrent executions should be recorded");
+    assert_eq!(
+        execution_count, 5,
+        "All concurrent executions should be recorded"
+    );
 
     // Verify execution history
     // Try to unwrap Arc to get the storage back

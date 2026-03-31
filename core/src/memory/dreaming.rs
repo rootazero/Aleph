@@ -1,17 +1,19 @@
 //! DreamDaemon: background memory consolidation and graph decay.
 
-use crate::config::{DreamingConfig as ConfigDreamingConfig, GraphDecayPolicy, MemoryConfig, MemoryDecayPolicy};
+use crate::config::{
+    DreamingConfig as ConfigDreamingConfig, GraphDecayPolicy, MemoryConfig, MemoryDecayPolicy,
+};
 use crate::error::AlephError;
 use crate::memory::context::{FactType, MemoryEntry, MemoryFact, MemoryTier};
-use serde::{Deserialize, Serialize};
-use crate::memory::store::{DreamStore, MemoryBackend, MemoryStore, SessionStore};
 use crate::memory::decay::DecayConfig;
 use crate::memory::graph::{GraphDecayConfig, GraphDecayReport, GraphStore};
+use crate::memory::store::{DreamStore, MemoryBackend, MemoryStore, SessionStore};
+use crate::sync_primitives::Arc;
+use crate::sync_primitives::{AtomicBool, AtomicI64, Ordering};
 use chrono::{Local, NaiveTime, TimeZone};
 use once_cell::sync::{Lazy, OnceCell};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use crate::sync_primitives::{AtomicBool, AtomicI64, Ordering};
-use crate::sync_primitives::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::task::JoinHandle;
 use tokio::time::interval;
@@ -163,10 +165,7 @@ pub struct DreamDaemon {
 }
 
 impl DreamDaemon {
-    pub fn from_config(
-        database: MemoryBackend,
-        config: &MemoryConfig,
-    ) -> Result<Self, AlephError> {
+    pub fn from_config(database: MemoryBackend, config: &MemoryConfig) -> Result<Self, AlephError> {
         let (window_start, window_end) = parse_window(&config.dreaming)?;
         let graph_decay = graph_decay_from_policy(&config.graph_decay);
         let memory_decay = decay_config_from_policy(&config.memory_decay);
@@ -202,7 +201,10 @@ impl DreamDaemon {
     }
 
     /// Start background task using an existing Tokio runtime handle.
-    pub fn start_background_task_with_handle(self: Arc<Self>, handle: tokio::runtime::Handle) -> JoinHandle<()> {
+    pub fn start_background_task_with_handle(
+        self: Arc<Self>,
+        handle: tokio::runtime::Handle,
+    ) -> JoinHandle<()> {
         handle.spawn(async move {
             self.run_scheduler().await;
         })
@@ -234,7 +236,8 @@ impl DreamDaemon {
 
         if self
             .is_running
-            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_err()
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
         {
             return Ok(());
         }
@@ -305,7 +308,8 @@ impl DreamDaemon {
                     );
                 }
 
-                let _ = self.database
+                let _ = self
+                    .database
                     .set_dream_status(DreamStatus {
                         last_run_at: Some(run_start),
                         last_status: Some(report.status.as_str().to_string()),
@@ -315,7 +319,8 @@ impl DreamDaemon {
             }
             Ok(Err(err)) => {
                 warn!(error = %err, "DreamDaemon run failed");
-                let _ = self.database
+                let _ = self
+                    .database
                     .set_dream_status(DreamStatus {
                         last_run_at: Some(run_start),
                         last_status: Some("error".to_string()),
@@ -325,7 +330,8 @@ impl DreamDaemon {
             }
             Err(_) => {
                 warn!("DreamDaemon run timed out");
-                let _ = self.database
+                let _ = self
+                    .database
                     .set_dream_status(DreamStatus {
                         last_run_at: Some(run_start),
                         last_status: Some("timeout".to_string()),
@@ -358,10 +364,17 @@ impl DreamDaemon {
         let since = run_start - DEFAULT_LOOKBACK_HOURS * 3600;
         let memories = self
             .database
-            .get_memories_since(since, &crate::memory::namespace::NamespaceScope::Owner, "default")
+            .get_memories_since(
+                since,
+                &crate::memory::namespace::NamespaceScope::Owner,
+                "default",
+            )
             .await?;
         // Limit to max memories
-        let memories: Vec<_> = memories.into_iter().take(DEFAULT_MAX_MEMORIES as usize).collect();
+        let memories: Vec<_> = memories
+            .into_iter()
+            .take(DEFAULT_MAX_MEMORIES as usize)
+            .collect();
 
         let mut report = DreamRunReport {
             status: DreamRunStatus::Success,
@@ -451,7 +464,8 @@ impl DreamDaemon {
                     // Ebbinghaus exponential decay: exp(-t * ln(2) / half_life)
                     let last_access = fact.last_accessed_at.unwrap_or(fact.updated_at);
                     let days_since_access = (now_ts - last_access) as f64 / 86400.0;
-                    let decay = (-(days_since_access) * (2.0_f64.ln()) / half_life_days as f64).exp() as f32;
+                    let decay = (-(days_since_access) * (2.0_f64.ln()) / half_life_days as f64)
+                        .exp() as f32;
                     let new_strength = fact.strength * decay;
                     // Only record facts that actually change.
                     if (new_strength - fact.strength).abs() > f32::EPSILON {
@@ -474,13 +488,19 @@ impl DreamDaemon {
             }
 
             // Still apply the actual LanceDB update.
-            let decayed_count = self.database.apply_fact_decay(half_life_days, min_strength).await?;
+            let decayed_count = self
+                .database
+                .apply_fact_decay(half_life_days, min_strength)
+                .await?;
             report.memory_decay = MemoryDecayReport {
                 updated_facts: decayed_count as u64,
                 pruned_facts: 0,
             };
         } else {
-            let decayed_count = self.database.apply_fact_decay(half_life_days, min_strength).await?;
+            let decayed_count = self
+                .database
+                .apply_fact_decay(half_life_days, min_strength)
+                .await?;
             report.memory_decay = MemoryDecayReport {
                 updated_facts: decayed_count as u64,
                 pruned_facts: 0,

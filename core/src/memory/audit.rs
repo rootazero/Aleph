@@ -305,14 +305,12 @@ mod tests {
             creation_source: Some("session".to_string()),
             access_count: 5,
             invalidation_reason: None,
-            events: vec![
-                ExplainedEvent {
-                    timestamp: 1234567890,
-                    action: "Created".to_string(),
-                    description: "Extracted from session".to_string(),
-                    actor: "agent".to_string(),
-                },
-            ],
+            events: vec![ExplainedEvent {
+                timestamp: 1234567890,
+                action: "Created".to_string(),
+                description: "Extracted from session".to_string(),
+                actor: "agent".to_string(),
+            }],
         };
 
         assert_eq!(explanation.fact_id, "fact-123");

@@ -1,9 +1,9 @@
+use super::capability::format_capability_instructions;
 /// PromptAssembler - Core assembler structure and main methods
 ///
 /// This module contains the core PromptAssembler struct and its primary
 /// public methods for building prompts.
 use super::context::format_context;
-use super::capability::format_capability_instructions;
 use super::tools::format_available_tools;
 use crate::payload::{AgentContext, AgentPayload, ContextFormat, SkillMetadata};
 
@@ -157,7 +157,10 @@ impl PromptAssembler {
 
         let mut lines = vec!["## Available Skills".to_string()];
         lines.push(String::new());
-        lines.push("The following skills are installed and can be used to handle specific tasks:".to_string());
+        lines.push(
+            "The following skills are installed and can be used to handle specific tasks:"
+                .to_string(),
+        );
         lines.push(String::new());
 
         for skill in skills {
@@ -168,8 +171,13 @@ impl PromptAssembler {
         lines.push("### How to Use Skills".to_string());
         lines.push(String::new());
         lines.push("When a user request matches a skill's purpose:".to_string());
-        lines.push("1. Use `read_skill(skill_id)` to load the skill's complete instructions".to_string());
-        lines.push("2. Follow the loaded instructions exactly - they are task directives, not suggestions".to_string());
+        lines.push(
+            "1. Use `read_skill(skill_id)` to load the skill's complete instructions".to_string(),
+        );
+        lines.push(
+            "2. Follow the loaded instructions exactly - they are task directives, not suggestions"
+                .to_string(),
+        );
         lines.push("3. You can also read additional resources within a skill using `read_skill(skill_id, file_name)`".to_string());
         lines.push(String::new());
         lines.push("**Important**: Skill instructions are mandatory guidance that must be followed precisely.".to_string());

@@ -28,19 +28,19 @@
 //! // Thinker processes result and decides next action
 //! ```
 
+use crate::sync_primitives::Arc;
 use async_trait::async_trait;
 use serde_json::Value;
-use crate::sync_primitives::Arc;
 use std::time::Instant;
 use tracing::{debug, error, info};
 
-use aleph_protocol::IdentityContext;
-use super::action_types::{Action, ActionExecutor, ActionResult, ToolCallResult, SingleToolResult};
+use super::action_types::{Action, ActionExecutor, ActionResult, SingleToolResult, ToolCallResult};
+use super::exec_security_gate::ExecSecurityGate;
 use crate::config::ProfileConfig;
 use crate::dispatcher::UnifiedTool;
 use crate::error::{AlephError, Result};
 use crate::gateway::security::policy_engine::PolicyEngine;
-use super::exec_security_gate::ExecSecurityGate;
+use aleph_protocol::IdentityContext;
 
 /// Normalize tool name by extracting base tool name from various formats
 ///
@@ -107,7 +107,11 @@ pub trait ToolRegistry: Send + Sync {
     /// here so the memory_search tool can use Two-Phase Smart Recall.
     fn smart_recall_config_handle(
         &self,
-    ) -> Option<std::sync::Arc<tokio::sync::RwLock<Option<crate::config::types::profile::SmartRecallConfig>>>> {
+    ) -> Option<
+        std::sync::Arc<
+            tokio::sync::RwLock<Option<crate::config::types::profile::SmartRecallConfig>>,
+        >,
+    > {
         None
     }
 
@@ -117,7 +121,9 @@ pub trait ToolRegistry: Send + Sync {
     /// tools can bind agent switches to the correct conversation.
     fn session_context_handle(
         &self,
-    ) -> Option<std::sync::Arc<tokio::sync::RwLock<crate::builtin_tools::agent_manage::SessionContext>>> {
+    ) -> Option<
+        std::sync::Arc<tokio::sync::RwLock<crate::builtin_tools::agent_manage::SessionContext>>,
+    > {
         None
     }
 
@@ -127,7 +133,8 @@ pub trait ToolRegistry: Send + Sync {
     /// Default ToolPolicy (empty whitelist/blacklist) allows all tools.
     fn tool_policy_handle(
         &self,
-    ) -> Option<std::sync::Arc<tokio::sync::RwLock<crate::builtin_tools::agent_manage::ToolPolicy>>> {
+    ) -> Option<std::sync::Arc<tokio::sync::RwLock<crate::builtin_tools::agent_manage::ToolPolicy>>>
+    {
         None
     }
 
@@ -239,22 +246,23 @@ impl<R: ToolRegistry> SingleStepExecutor<R> {
             let duration_ms = start.elapsed().as_millis() as u64;
             info!(
                 tool = tool_name,
-                duration_ms,
-                "Tool result returned from cache"
+                duration_ms, "Tool result returned from cache"
             );
             return cached_result;
         }
 
         // Check if tool exists using normalized name
         if self.tool_registry.get_tool(&normalized_tool_name).is_none() {
-            return ActionResult::ToolResults { results: vec![ToolCallResult {
-                call_id: String::new(),
-                tool_name: tool_name.to_string(),
-                result: SingleToolResult::Error {
-                    error: format!("Tool not found: {}", tool_name),
-                    retryable: false,
-                },
-            }]};
+            return ActionResult::ToolResults {
+                results: vec![ToolCallResult {
+                    call_id: String::new(),
+                    tool_name: tool_name.to_string(),
+                    result: SingleToolResult::Error {
+                        error: format!("Tool not found: {}", tool_name),
+                        retryable: false,
+                    },
+                }],
+            };
         }
 
         // Execute with timeout using normalized tool name
@@ -271,11 +279,16 @@ impl<R: ToolRegistry> SingleStepExecutor<R> {
         let action_result = match result {
             Ok(Ok(output)) => {
                 info!(tool = tool_name, duration_ms, "Tool executed successfully");
-                ActionResult::ToolResults { results: vec![ToolCallResult {
-                    call_id: String::new(),
-                    tool_name: tool_name.to_string(),
-                    result: SingleToolResult::Success { output, duration_ms },
-                }]}
+                ActionResult::ToolResults {
+                    results: vec![ToolCallResult {
+                        call_id: String::new(),
+                        tool_name: tool_name.to_string(),
+                        result: SingleToolResult::Success {
+                            output,
+                            duration_ms,
+                        },
+                    }],
+                }
             }
             Ok(Err(e)) => {
                 error!(tool = tool_name, error = %e, "Tool execution failed");
@@ -283,28 +296,32 @@ impl<R: ToolRegistry> SingleStepExecutor<R> {
                     e,
                     AlephError::NetworkError { .. } | AlephError::Timeout { .. }
                 );
-                ActionResult::ToolResults { results: vec![ToolCallResult {
-                    call_id: String::new(),
-                    tool_name: tool_name.to_string(),
-                    result: SingleToolResult::Error {
-                        error: e.to_string(),
-                        retryable,
-                    },
-                }]}
+                ActionResult::ToolResults {
+                    results: vec![ToolCallResult {
+                        call_id: String::new(),
+                        tool_name: tool_name.to_string(),
+                        result: SingleToolResult::Error {
+                            error: e.to_string(),
+                            retryable,
+                        },
+                    }],
+                }
             }
             Err(_) => {
                 error!(tool = tool_name, "Tool execution timed out");
-                ActionResult::ToolResults { results: vec![ToolCallResult {
-                    call_id: String::new(),
-                    tool_name: tool_name.to_string(),
-                    result: SingleToolResult::Error {
-                        error: format!(
-                            "Tool execution timed out after {}s",
-                            self.config.timeout_seconds
-                        ),
-                        retryable: true,
-                    },
-                }]}
+                ActionResult::ToolResults {
+                    results: vec![ToolCallResult {
+                        call_id: String::new(),
+                        tool_name: tool_name.to_string(),
+                        result: SingleToolResult::Error {
+                            error: format!(
+                                "Tool execution timed out after {}s",
+                                self.config.timeout_seconds
+                            ),
+                            retryable: true,
+                        },
+                    }],
+                }
             }
         };
 
@@ -321,7 +338,9 @@ impl<R: ToolRegistry> SingleStepExecutor<R> {
 impl<R: ToolRegistry + 'static> ActionExecutor for SingleStepExecutor<R> {
     async fn execute(&self, action: &Action, identity: &IdentityContext) -> ActionResult {
         match action {
-            Action::ToolCalls { calls: ref requests } => {
+            Action::ToolCalls {
+                calls: ref requests,
+            } => {
                 if let Some(req) = requests.first() {
                     let tool_name = &req.tool_name;
                     let arguments = &req.arguments;
@@ -329,25 +348,33 @@ impl<R: ToolRegistry + 'static> ActionExecutor for SingleStepExecutor<R> {
 
                     // Check permission before execution (Layer 3: Identity-based permission)
                     let normalized_tool_name = normalize_tool_name(tool_name);
-                    let permission_result = PolicyEngine::check_tool_permission(identity, &normalized_tool_name);
+                    let permission_result =
+                        PolicyEngine::check_tool_permission(identity, &normalized_tool_name);
 
                     match permission_result {
                         crate::gateway::security::policy_engine::PermissionResult::Allowed => {
                             // Layer 4: Exec security gate (bash/code_exec only)
                             if let Some(gate) = &self.exec_security_gate {
                                 if ExecSecurityGate::is_exec_tool(&normalized_tool_name) {
-                                    match gate.pre_execute(&normalized_tool_name, arguments, identity).await {
+                                    match gate
+                                        .pre_execute(&normalized_tool_name, arguments, identity)
+                                        .await
+                                    {
                                         crate::executor::PreExecDecision::Block { reason } => {
-                                            return ActionResult::ToolResults { results: vec![ToolCallResult {
-                                                call_id: call_id.clone(),
-                                                tool_name: tool_name.clone(),
-                                                result: SingleToolResult::Error {
-                                                    error: reason,
-                                                    retryable: false,
-                                                },
-                                            }]};
+                                            return ActionResult::ToolResults {
+                                                results: vec![ToolCallResult {
+                                                    call_id: call_id.clone(),
+                                                    tool_name: tool_name.clone(),
+                                                    result: SingleToolResult::Error {
+                                                        error: reason,
+                                                        retryable: false,
+                                                    },
+                                                }],
+                                            };
                                         }
-                                        crate::executor::PreExecDecision::Allow { use_sandbox: _ } => {
+                                        crate::executor::PreExecDecision::Allow {
+                                            use_sandbox: _,
+                                        } => {
                                             // TODO: route through SandboxManager when use_sandbox=true
                                             // Currently executes directly — sandbox integration pending
                                         }
@@ -367,7 +394,9 @@ impl<R: ToolRegistry + 'static> ActionExecutor for SingleStepExecutor<R> {
 
                             result
                         }
-                        crate::gateway::security::policy_engine::PermissionResult::Denied { reason } => {
+                        crate::gateway::security::policy_engine::PermissionResult::Denied {
+                            reason,
+                        } => {
                             // Permission denied
                             error!(
                                 tool = %tool_name,
@@ -376,14 +405,16 @@ impl<R: ToolRegistry + 'static> ActionExecutor for SingleStepExecutor<R> {
                                 reason = %reason,
                                 "Tool execution blocked by PolicyEngine"
                             );
-                            ActionResult::ToolResults { results: vec![ToolCallResult {
-                                call_id: call_id.clone(),
-                                tool_name: tool_name.clone(),
-                                result: SingleToolResult::Error {
-                                    error: reason,
-                                    retryable: false,
-                                },
-                            }]}
+                            ActionResult::ToolResults {
+                                results: vec![ToolCallResult {
+                                    call_id: call_id.clone(),
+                                    tool_name: tool_name.clone(),
+                                    result: SingleToolResult::Error {
+                                        error: reason,
+                                        retryable: false,
+                                    },
+                                }],
+                            }
                         }
                     }
                 } else {
@@ -434,7 +465,10 @@ impl<R: ToolRegistry + 'static> ActionExecutor for SingleStepExecutor<R> {
 impl<R: ToolRegistry> SingleStepExecutor<R> {
     /// Check if an action requires user confirmation
     pub fn requires_confirmation(&self, action: &Action) -> bool {
-        if let Action::ToolCalls { calls: ref requests } = action {
+        if let Action::ToolCalls {
+            calls: ref requests,
+        } = action
+        {
             if let Some(req) = requests.first() {
                 let normalized = normalize_tool_name(&req.tool_name);
                 if let Some(tool) = self.tool_registry.get_tool(&normalized) {
@@ -469,17 +503,19 @@ impl<R: ToolRegistry> SingleStepExecutor<R> {
         if profile.is_tool_allowed(&normalized_tool_name) {
             None
         } else {
-            Some(ActionResult::ToolResults { results: vec![ToolCallResult {
-                call_id: String::new(),
-                tool_name: tool_name.to_string(),
-                result: SingleToolResult::Error {
-                    error: format!(
-                        "Tool '{}' is not allowed in current workspace. Allowed patterns: {:?}",
-                        tool_name, profile.tools
-                    ),
-                    retryable: false,
-                },
-            }]})
+            Some(ActionResult::ToolResults {
+                results: vec![ToolCallResult {
+                    call_id: String::new(),
+                    tool_name: tool_name.to_string(),
+                    result: SingleToolResult::Error {
+                        error: format!(
+                            "Tool '{}' is not allowed in current workspace. Allowed patterns: {:?}",
+                            tool_name, profile.tools
+                        ),
+                        retryable: false,
+                    },
+                }],
+            })
         }
     }
 
@@ -580,9 +616,13 @@ mod tests {
 
         let executor = SingleStepExecutor::new(Arc::new(registry));
 
-        let action = Action::ToolCalls { calls: vec![crate::executor::action_types::ToolCallRequest { call_id: String::new(),
-            tool_name: "search".to_string(),
-            arguments: json!({"query": "test"}) }]};
+        let action = Action::ToolCalls {
+            calls: vec![crate::executor::action_types::ToolCallRequest {
+                call_id: String::new(),
+                tool_name: "search".to_string(),
+                arguments: json!({"query": "test"}),
+            }],
+        };
 
         let identity = create_owner_identity();
         let result = executor.execute(&action, &identity).await;
@@ -597,9 +637,13 @@ mod tests {
         let registry = MockToolRegistry::new();
         let executor = SingleStepExecutor::new(Arc::new(registry));
 
-        let action = Action::ToolCalls { calls: vec![crate::executor::action_types::ToolCallRequest { call_id: String::new(),
-            tool_name: "unknown".to_string(),
-            arguments: json!({}) }]};
+        let action = Action::ToolCalls {
+            calls: vec![crate::executor::action_types::ToolCallRequest {
+                call_id: String::new(),
+                tool_name: "unknown".to_string(),
+                arguments: json!({}),
+            }],
+        };
 
         let identity = create_owner_identity();
         let result = executor.execute(&action, &identity).await;
@@ -667,15 +711,23 @@ mod tests {
         let executor = SingleStepExecutor::new(Arc::new(registry));
 
         // LLM returns tool name with suffix "file_ops:mkdir"
-        let action = Action::ToolCalls { calls: vec![crate::executor::action_types::ToolCallRequest { call_id: String::new(),
-            tool_name: "file_ops:mkdir".to_string(),
-            arguments: json!({"operation": "mkdir", "path": "/tmp/test"}) }]};
+        let action = Action::ToolCalls {
+            calls: vec![crate::executor::action_types::ToolCallRequest {
+                call_id: String::new(),
+                tool_name: "file_ops:mkdir".to_string(),
+                arguments: json!({"operation": "mkdir", "path": "/tmp/test"}),
+            }],
+        };
 
         let identity = create_owner_identity();
         let result = executor.execute(&action, &identity).await;
 
         // Should succeed because "file_ops:mkdir" is normalized to "file_ops"
-        assert!(result.is_success(), "Expected ToolSuccess, got {:?}", result);
+        assert!(
+            result.is_success(),
+            "Expected ToolSuccess, got {:?}",
+            result
+        );
     }
 
     #[tokio::test]
@@ -703,9 +755,13 @@ mod tests {
             source_channel: "test".to_string(),
         };
 
-        let action = Action::ToolCalls { calls: vec![crate::executor::action_types::ToolCallRequest { call_id: String::new(),
-            tool_name: "shell_exec".to_string(),
-            arguments: json!({"command": "ls"}) }]};
+        let action = Action::ToolCalls {
+            calls: vec![crate::executor::action_types::ToolCallRequest {
+                call_id: String::new(),
+                tool_name: "shell_exec".to_string(),
+                arguments: json!({"command": "ls"}),
+            }],
+        };
 
         let result = executor.execute(&action, &guest_identity).await;
 
@@ -740,9 +796,13 @@ mod tests {
             source_channel: "test".to_string(),
         };
 
-        let action = Action::ToolCalls { calls: vec![crate::executor::action_types::ToolCallRequest { call_id: String::new(),
-            tool_name: "translate".to_string(),
-            arguments: json!({"text": "你好"}) }]};
+        let action = Action::ToolCalls {
+            calls: vec![crate::executor::action_types::ToolCallRequest {
+                call_id: String::new(),
+                tool_name: "translate".to_string(),
+                arguments: json!({"text": "你好"}),
+            }],
+        };
 
         let result = executor.execute(&action, &guest_identity).await;
 
@@ -761,18 +821,25 @@ mod tests {
         let approval_manager = Arc::new(ExecApprovalManager::new());
         let gate = Arc::new(ExecSecurityGate::new(approval_manager, None));
 
-        let executor = SingleStepExecutor::new(tool_registry)
-            .with_exec_security_gate(gate);
+        let executor = SingleStepExecutor::new(tool_registry).with_exec_security_gate(gate);
 
         let identity = IdentityContext::owner("session:test".to_string(), "test".to_string());
-        let action = Action::ToolCalls { calls: vec![crate::executor::action_types::ToolCallRequest { call_id: String::new(),
-            tool_name: "bash".to_string(),
-            arguments: serde_json::json!({"cmd": "rm -rf /"}) }]};
+        let action = Action::ToolCalls {
+            calls: vec![crate::executor::action_types::ToolCallRequest {
+                call_id: String::new(),
+                tool_name: "bash".to_string(),
+                arguments: serde_json::json!({"cmd": "rm -rf /"}),
+            }],
+        };
 
         let result = executor.execute(&action, &identity).await;
         assert!(!result.is_success());
         let error = result.first_tool_error().expect("Expected tool error");
-        assert!(error.contains("Blocked"), "Expected Blocked error, got: {}", error);
+        assert!(
+            error.contains("Blocked"),
+            "Expected Blocked error, got: {}",
+            error
+        );
     }
 
     #[tokio::test]
@@ -780,22 +847,32 @@ mod tests {
         // When no gate is attached, executor should work normally
         let mut registry = MockToolRegistry::new();
         registry.add_tool(create_test_tool("bash"));
-        registry.set_result("bash", serde_json::json!({"stdout": "hello", "exit_code": 0}));
+        registry.set_result(
+            "bash",
+            serde_json::json!({"stdout": "hello", "exit_code": 0}),
+        );
 
         let executor = SingleStepExecutor::new(Arc::new(registry));
 
-        let identity = aleph_protocol::IdentityContext::owner(
-            "session:test".to_string(), "test".to_string()
-        );
+        let identity =
+            aleph_protocol::IdentityContext::owner("session:test".to_string(), "test".to_string());
         // A safe action that doesn't require shell
-        let action = Action::ToolCalls { calls: vec![crate::executor::action_types::ToolCallRequest { call_id: String::new(),
-            tool_name: "bash".to_string(),
-            arguments: serde_json::json!({"cmd": "echo hello"}) }]};
+        let action = Action::ToolCalls {
+            calls: vec![crate::executor::action_types::ToolCallRequest {
+                call_id: String::new(),
+                tool_name: "bash".to_string(),
+                arguments: serde_json::json!({"cmd": "echo hello"}),
+            }],
+        };
 
         let result = executor.execute(&action, &identity).await;
         // Without gate, shouldn't be blocked (might succeed or fail for other reasons but not Blocked)
         if let Some(error) = result.first_tool_error() {
-            assert!(!error.contains("Blocked"), "Unexpected block without gate: {}", error);
+            assert!(
+                !error.contains("Blocked"),
+                "Unexpected block without gate: {}",
+                error
+            );
         }
     }
 }

@@ -9,8 +9,7 @@ use crate::memory::store::{MemoryBackend, MemoryStore};
 use serde::{Deserialize, Serialize};
 
 /// Strategy for merging facts
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum MergeStrategy {
     /// Generalize: "likes Rust" + "likes Go" → "likes systems languages"
     Generalize,
@@ -20,7 +19,6 @@ pub enum MergeStrategy {
     #[default]
     Enumerate,
 }
-
 
 /// Result of conflict resolution
 #[derive(Debug, Clone)]
@@ -97,9 +95,9 @@ impl ConflictDetector {
         })?;
 
         // Find similar existing facts
-        let filter = crate::memory::store::types::SearchFilter::valid_only(
-            Some(crate::memory::NamespaceScope::Owner),
-        );
+        let filter = crate::memory::store::types::SearchFilter::valid_only(Some(
+            crate::memory::NamespaceScope::Owner,
+        ));
         let similar_facts = self
             .database
             .find_similar_facts(
@@ -196,14 +194,17 @@ impl ConflictDetector {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sync_primitives::Arc;
     use crate::memory::context::FactType;
+    use crate::sync_primitives::Arc;
     use tempfile::tempdir;
 
     async fn create_test_detector() -> ConflictDetector {
         let temp_dir = tempdir().unwrap();
-        let database: MemoryBackend =
-            Arc::new(crate::memory::store::lance::LanceMemoryBackend::open_or_create(temp_dir.path()).await.unwrap());
+        let database: MemoryBackend = Arc::new(
+            crate::memory::store::lance::LanceMemoryBackend::open_or_create(temp_dir.path())
+                .await
+                .unwrap(),
+        );
         ConflictDetector::with_defaults(database)
     }
 
@@ -227,8 +228,11 @@ mod tests {
     #[tokio::test]
     async fn test_conflict_detection_with_similar_fact() {
         let temp_dir = tempdir().unwrap();
-        let database: MemoryBackend =
-            Arc::new(crate::memory::store::lance::LanceMemoryBackend::open_or_create(temp_dir.path()).await.unwrap());
+        let database: MemoryBackend = Arc::new(
+            crate::memory::store::lance::LanceMemoryBackend::open_or_create(temp_dir.path())
+                .await
+                .unwrap(),
+        );
 
         // Insert an existing fact
         let old_fact = MemoryFact::new(

@@ -132,8 +132,8 @@ impl AlephTool for ReviewScoreTool {
         }
 
         // Save as TaskArtifact (type: Review)
-        let review_content = serde_json::to_string_pretty(&review)
-            .unwrap_or_else(|_| "{}".to_string());
+        let review_content =
+            serde_json::to_string_pretty(&review).unwrap_or_else(|_| "{}".to_string());
 
         let artifact = self
             .artifact_store

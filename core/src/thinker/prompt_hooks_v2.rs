@@ -16,10 +16,10 @@
 use std::path::PathBuf;
 
 use crate::error::Result;
+use crate::thinker::identity_files::IdentityFile;
 use crate::thinker::inbound_context::InboundContext;
 use crate::thinker::prompt_budget::TokenBudget;
 use crate::thinker::prompt_builder::PromptConfig;
-use crate::thinker::identity_files::IdentityFile;
 
 // ---------------------------------------------------------------------------
 // Hook 1: BootstrapHook — full control over workspace files

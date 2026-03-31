@@ -12,8 +12,8 @@ use crate::world::{AlephWorld, SkillsContext};
 use alephcore::gateway::handlers::HandlerRegistry;
 use alephcore::gateway::protocol::JsonRpcRequest;
 use alephcore::tools::markdown_skill::{
-    load_skills_from_dir, MarkdownSkillGenerator, MarkdownSkillGeneratorConfig,
-    SkillLoader, SkillWatcher, SkillWatcherConfig,
+    load_skills_from_dir, MarkdownSkillGenerator, MarkdownSkillGeneratorConfig, SkillLoader,
+    SkillWatcher, SkillWatcherConfig,
 };
 use alephcore::tools::AlephToolServer;
 
@@ -120,8 +120,8 @@ Original content.
 #[given("the echo-basic fixture skill")]
 async fn given_echo_basic_fixture(w: &mut AlephWorld) {
     let ctx = w.skills.get_or_insert_with(SkillsContext::default);
-    let fixtures_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/markdown_skills/echo-basic");
+    let fixtures_dir =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/markdown_skills/echo-basic");
     ctx.skill_dir = Some(fixtures_dir);
 }
 
@@ -758,7 +758,12 @@ async fn then_execution_contains_hello(w: &mut AlephWorld) {
 async fn then_schema_has_property(w: &mut AlephWorld, expected: String) {
     let ctx = w.skills.as_ref().expect("Skills context not initialized");
     let definition = ctx.loaded_tools[0].definition();
-    let properties = definition.parameters.get("properties").unwrap().as_object().unwrap();
+    let properties = definition
+        .parameters
+        .get("properties")
+        .unwrap()
+        .as_object()
+        .unwrap();
     assert!(properties.contains_key(&expected));
 }
 
@@ -766,7 +771,12 @@ async fn then_schema_has_property(w: &mut AlephWorld, expected: String) {
 async fn then_schema_required_includes(w: &mut AlephWorld, expected: String) {
     let ctx = w.skills.as_ref().expect("Skills context not initialized");
     let definition = ctx.loaded_tools[0].definition();
-    let required = definition.parameters.get("required").unwrap().as_array().unwrap();
+    let required = definition
+        .parameters
+        .get("required")
+        .unwrap()
+        .as_array()
+        .unwrap();
     assert!(required.iter().any(|v| v.as_str().unwrap() == expected));
 }
 
@@ -774,7 +784,12 @@ async fn then_schema_required_includes(w: &mut AlephWorld, expected: String) {
 async fn then_schema_required_not_includes(w: &mut AlephWorld, expected: String) {
     let ctx = w.skills.as_ref().expect("Skills context not initialized");
     let definition = ctx.loaded_tools[0].definition();
-    let required = definition.parameters.get("required").unwrap().as_array().unwrap();
+    let required = definition
+        .parameters
+        .get("required")
+        .unwrap()
+        .as_array()
+        .unwrap();
     assert!(!required.iter().any(|v| v.as_str().unwrap() == expected));
 }
 
@@ -785,20 +800,14 @@ async fn then_schema_required_not_includes(w: &mut AlephWorld, expected: String)
 #[then("the generated skill path should exist")]
 async fn then_generated_path_exists(w: &mut AlephWorld) {
     let ctx = w.skills.as_ref().expect("Skills context not initialized");
-    let path = ctx
-        .generated_skill_path
-        .as_ref()
-        .expect("Path not set");
+    let path = ctx.generated_skill_path.as_ref().expect("Path not set");
     assert!(path.exists());
 }
 
 #[then("the generated skill path should end with SKILL.md")]
 async fn then_generated_path_ends_skill_md(w: &mut AlephWorld) {
     let ctx = w.skills.as_ref().expect("Skills context not initialized");
-    let path = ctx
-        .generated_skill_path
-        .as_ref()
-        .expect("Path not set");
+    let path = ctx.generated_skill_path.as_ref().expect("Path not set");
     assert!(path.ends_with("SKILL.md"));
 }
 
@@ -806,16 +815,18 @@ async fn then_generated_path_ends_skill_md(w: &mut AlephWorld) {
 async fn then_generated_contains(w: &mut AlephWorld, expected: String) {
     let ctx = w.skills.as_ref().expect("Skills context not initialized");
     let content = ctx.generated_content.as_ref().expect("Content not set");
-    assert!(content.contains(&expected), "Content should contain '{}': {}", expected, content);
+    assert!(
+        content.contains(&expected),
+        "Content should contain '{}': {}",
+        expected,
+        content
+    );
 }
 
 #[then(expr = "the generated skill directory name should be {string}")]
 async fn then_generated_dir_name(w: &mut AlephWorld, expected: String) {
     let ctx = w.skills.as_ref().expect("Skills context not initialized");
-    let path = ctx
-        .generated_skill_path
-        .as_ref()
-        .expect("Path not set");
+    let path = ctx.generated_skill_path.as_ref().expect("Path not set");
     let dir_name = path
         .parent()
         .unwrap()

@@ -1,8 +1,8 @@
 //! SSE line buffering and stream utilities.
 
+use crate::error::{AlephError, Result};
 use futures::stream::BoxStream;
 use futures::TryStreamExt;
-use crate::error::{AlephError, Result};
 
 /// Build a stream of individual SSE data lines from an HTTP response.
 ///

@@ -21,9 +21,19 @@ impl AiProvider for MockScoringProvider {
     fn process(
         &self,
         _payload: crate::providers::adapter::RequestPayload<'_>,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<crate::providers::adapter::ProviderResponse>> + Send + '_>> {
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = Result<crate::providers::adapter::ProviderResponse>>
+                + Send
+                + '_,
+        >,
+    > {
         let score = self.score;
-        Box::pin(async move { Ok(crate::providers::adapter::ProviderResponse::text_only(format!("{}", score))) })
+        Box::pin(async move {
+            Ok(crate::providers::adapter::ProviderResponse::text_only(
+                format!("{}", score),
+            ))
+        })
     }
 
     fn name(&self) -> &str {
@@ -88,7 +98,11 @@ async fn test_llm_scoring_hybrid() {
 
     // Should be weighted average of LLM (0.5) and keyword (high)
     // 0.5 * 0.7 + keyword * 0.3
-    assert!(score > 0.4 && score < 0.8, "Expected hybrid score, got {}", score);
+    assert!(
+        score > 0.4 && score < 0.8,
+        "Expected hybrid score, got {}",
+        score
+    );
 }
 
 #[tokio::test]

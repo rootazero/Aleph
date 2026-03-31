@@ -80,15 +80,15 @@ impl WebhookMessageOps {
         channel_id: &ChannelId,
     ) -> ChannelResult<Vec<InboundMessage>> {
         // Try parsing as array first, then as single object
-        let payloads: Vec<WebhookPayload> =
-            if let Ok(arr) = serde_json::from_slice::<Vec<WebhookPayload>>(body) {
-                arr
-            } else {
-                let single: WebhookPayload = serde_json::from_slice(body).map_err(|e| {
-                    ChannelError::ReceiveFailed(format!("Invalid webhook JSON: {e}"))
-                })?;
-                vec![single]
-            };
+        let payloads: Vec<WebhookPayload> = if let Ok(arr) =
+            serde_json::from_slice::<Vec<WebhookPayload>>(body)
+        {
+            arr
+        } else {
+            let single: WebhookPayload = serde_json::from_slice(body)
+                .map_err(|e| ChannelError::ReceiveFailed(format!("Invalid webhook JSON: {e}")))?;
+            vec![single]
+        };
 
         let mut messages = Vec::with_capacity(payloads.len());
 
@@ -309,8 +309,7 @@ mod tests {
 
     #[test]
     fn test_build_outbound_payload_with_reply() {
-        let message = OutboundMessage::text("conv-abc", "Reply text")
-            .with_reply_to("thread-42");
+        let message = OutboundMessage::text("conv-abc", "Reply text").with_reply_to("thread-42");
         let payload = WebhookMessageOps::build_outbound_payload(&message);
 
         assert_eq!(payload["thread_id"], "thread-42");
@@ -319,7 +318,9 @@ mod tests {
     #[test]
     fn test_build_outbound_payload_with_metadata() {
         let mut message = OutboundMessage::text("conv-abc", "With metadata");
-        message.metadata.insert("key".to_string(), "value".to_string());
+        message
+            .metadata
+            .insert("key".to_string(), "value".to_string());
         let payload = WebhookMessageOps::build_outbound_payload(&message);
 
         assert_eq!(payload["metadata"]["key"], "value");

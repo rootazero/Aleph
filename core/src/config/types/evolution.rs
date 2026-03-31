@@ -262,7 +262,6 @@ impl EvolutionConfig {
             skills_config.get_skills_dir_path()
         }
     }
-
 }
 
 impl ToolGenerationConfig {

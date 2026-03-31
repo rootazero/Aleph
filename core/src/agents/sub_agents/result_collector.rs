@@ -250,12 +250,7 @@ impl ResultCollector {
         let records = self.tool_records.read().await;
         records
             .get(request_id)
-            .map(|calls| {
-                calls
-                    .iter()
-                    .filter(|c| c.status.is_terminal())
-                    .count()
-            })
+            .map(|calls| calls.iter().filter(|c| c.status.is_terminal()).count())
             .unwrap_or(0)
     }
 

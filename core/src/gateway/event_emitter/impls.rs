@@ -9,8 +9,8 @@
 use async_trait::async_trait;
 use tokio::sync::Mutex;
 
-use crate::sync_primitives::{AtomicU64, Ordering};
 use crate::sync_primitives::Arc;
+use crate::sync_primitives::{AtomicU64, Ordering};
 
 use super::types::{EventEmitError, OutputMode, StreamEvent};
 use super::{event_method, EventEmitter};
@@ -90,14 +90,18 @@ impl EventEmitter for GatewayEventEmitter {
                                 is_intermediate: true,
                             };
                             let flush_value = serde_json::to_value(&flush_event)?;
-                            let flush_notification = JsonRpcRequest::notification(event_method(&flush_event), Some(flush_value));
+                            let flush_notification = JsonRpcRequest::notification(
+                                event_method(&flush_event),
+                                Some(flush_value),
+                            );
                             let flush_json = serde_json::to_string(&flush_notification)?;
                             self.event_bus.publish(flush_json);
                         }
                     } else {
                         // Non-empty intermediate: emit immediately as standalone message
                         let event_value = serde_json::to_value(&event)?;
-                        let notification = JsonRpcRequest::notification(event_method(&event), Some(event_value));
+                        let notification =
+                            JsonRpcRequest::notification(event_method(&event), Some(event_value));
                         let json = serde_json::to_string(&notification)?;
                         self.event_bus.publish(json);
                     }
@@ -139,7 +143,12 @@ impl EventEmitter for GatewayEventEmitter {
 
         // In instant mode, flush any buffered content on RunComplete
         if self.output_mode == OutputMode::Instant {
-            if let StreamEvent::RunComplete { ref run_id, ref summary, .. } = event {
+            if let StreamEvent::RunComplete {
+                ref run_id,
+                ref summary,
+                ..
+            } = event
+            {
                 let mut buffer = self.instant_buffer.lock().await;
                 if !buffer.is_empty() {
                     let buffered = std::mem::take(&mut *buffer);
@@ -175,8 +184,10 @@ impl EventEmitter for GatewayEventEmitter {
                             is_intermediate: false,
                         };
                         let fb_value = serde_json::to_value(&fallback_event)?;
-                        let fb_notification =
-                            JsonRpcRequest::notification(event_method(&fallback_event), Some(fb_value));
+                        let fb_notification = JsonRpcRequest::notification(
+                            event_method(&fallback_event),
+                            Some(fb_value),
+                        );
                         let fb_json = serde_json::to_string(&fb_notification)?;
                         self.event_bus.publish(fb_json);
                     }

@@ -37,8 +37,8 @@
 //! let result = wait_for_run_end(&mut events, Duration::from_secs(30)).await;
 //! ```
 
-use crate::sync_primitives::{AtomicU32, AtomicU64, Ordering};
 use crate::sync_primitives::Arc;
+use crate::sync_primitives::{AtomicU32, AtomicU64, Ordering};
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
@@ -211,7 +211,9 @@ impl RunEvent {
     pub fn is_terminal(&self) -> bool {
         matches!(
             self,
-            RunEvent::RunCompleted { .. } | RunEvent::RunFailed { .. } | RunEvent::RunCancelled { .. }
+            RunEvent::RunCompleted { .. }
+                | RunEvent::RunFailed { .. }
+                | RunEvent::RunCancelled { .. }
         )
     }
 }
@@ -342,7 +344,10 @@ impl ActiveRunHandle {
     /// Returns the handle along with receivers for input and cancellation:
     /// - `mpsc::Receiver<String>` for receiving user input
     /// - `oneshot::Receiver<()>` for receiving cancellation signal
-    pub fn new(run_id: String, session_key: SessionKey) -> (Self, mpsc::Receiver<String>, oneshot::Receiver<()>) {
+    pub fn new(
+        run_id: String,
+        session_key: SessionKey,
+    ) -> (Self, mpsc::Receiver<String>, oneshot::Receiver<()>) {
         let (event_tx, _) = broadcast::channel(RUN_EVENT_CHANNEL_SIZE);
         let (input_tx, input_rx) = mpsc::channel(INPUT_CHANNEL_SIZE);
         let (cancel_tx, cancel_rx) = oneshot::channel();
@@ -518,7 +523,9 @@ pub async fn wait_for_run_end(
                             duration_ms,
                         });
                     }
-                    RunEvent::RunFailed { error, error_code, .. } => {
+                    RunEvent::RunFailed {
+                        error, error_code, ..
+                    } => {
                         return Ok(RunEndResult::Failed { error, error_code });
                     }
                     RunEvent::RunCancelled { reason, .. } => {
@@ -623,10 +630,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_active_run_handle_new() {
-        let (handle, _input_rx, _cancel_rx) = ActiveRunHandle::new(
-            "test-run-1".to_string(),
-            SessionKey::main("main"),
-        );
+        let (handle, _input_rx, _cancel_rx) =
+            ActiveRunHandle::new("test-run-1".to_string(), SessionKey::main("main"));
 
         assert_eq!(handle.run_id, "test-run-1");
         assert_eq!(handle.current_seq(), 0);
@@ -635,10 +640,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_active_run_handle_subscribe_and_emit() {
-        let (handle, _input_rx, _cancel_rx) = ActiveRunHandle::new(
-            "test-run-2".to_string(),
-            SessionKey::main("main"),
-        );
+        let (handle, _input_rx, _cancel_rx) =
+            ActiveRunHandle::new("test-run-2".to_string(), SessionKey::main("main"));
 
         let mut rx1 = handle.subscribe();
         let mut rx2 = handle.subscribe();
@@ -655,16 +658,26 @@ mod tests {
         let received1 = rx1.recv().await.unwrap();
         let received2 = rx2.recv().await.unwrap();
 
-        assert!(matches!(received1, RunEvent::StatusChanged { status: RunStatus::Running, .. }));
-        assert!(matches!(received2, RunEvent::StatusChanged { status: RunStatus::Running, .. }));
+        assert!(matches!(
+            received1,
+            RunEvent::StatusChanged {
+                status: RunStatus::Running,
+                ..
+            }
+        ));
+        assert!(matches!(
+            received2,
+            RunEvent::StatusChanged {
+                status: RunStatus::Running,
+                ..
+            }
+        ));
     }
 
     #[tokio::test]
     async fn test_active_run_handle_seq_counter() {
-        let (handle, _input_rx, _cancel_rx) = ActiveRunHandle::new(
-            "test-run-3".to_string(),
-            SessionKey::main("main"),
-        );
+        let (handle, _input_rx, _cancel_rx) =
+            ActiveRunHandle::new("test-run-3".to_string(), SessionKey::main("main"));
 
         assert_eq!(handle.next_seq(), 0);
         assert_eq!(handle.next_seq(), 1);
@@ -674,10 +687,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_active_run_handle_chunk_counter() {
-        let (handle, _input_rx, _cancel_rx) = ActiveRunHandle::new(
-            "test-run-4".to_string(),
-            SessionKey::main("main"),
-        );
+        let (handle, _input_rx, _cancel_rx) =
+            ActiveRunHandle::new("test-run-4".to_string(), SessionKey::main("main"));
 
         assert_eq!(handle.next_chunk(), 0);
         assert_eq!(handle.next_chunk(), 1);
@@ -686,10 +697,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_active_run_handle_take_cancel_tx() {
-        let (handle, _input_rx, cancel_rx) = ActiveRunHandle::new(
-            "test-run-5".to_string(),
-            SessionKey::main("main"),
-        );
+        let (handle, _input_rx, cancel_rx) =
+            ActiveRunHandle::new("test-run-5".to_string(), SessionKey::main("main"));
 
         // First take should succeed
         let tx = handle.take_cancel_tx().await;
@@ -708,10 +717,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_active_run_handle_clone() {
-        let (handle, _input_rx, _cancel_rx) = ActiveRunHandle::new(
-            "test-run-6".to_string(),
-            SessionKey::main("main"),
-        );
+        let (handle, _input_rx, _cancel_rx) =
+            ActiveRunHandle::new("test-run-6".to_string(), SessionKey::main("main"));
 
         handle.next_seq();
         handle.next_seq();
@@ -735,10 +742,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_active_run_handle_input_sender() {
-        let (handle, mut input_rx, _cancel_rx) = ActiveRunHandle::new(
-            "test-run-7".to_string(),
-            SessionKey::main("main"),
-        );
+        let (handle, mut input_rx, _cancel_rx) =
+            ActiveRunHandle::new("test-run-7".to_string(), SessionKey::main("main"));
 
         let input_tx = handle.input_sender();
         input_tx.send("user input".to_string()).await.unwrap();
@@ -749,10 +754,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_wait_for_run_end_completed() {
-        let (handle, _input_rx, _cancel_rx) = ActiveRunHandle::new(
-            "test-run-8".to_string(),
-            SessionKey::main("main"),
-        );
+        let (handle, _input_rx, _cancel_rx) =
+            ActiveRunHandle::new("test-run-8".to_string(), SessionKey::main("main"));
 
         let mut rx = handle.subscribe();
 
@@ -775,7 +778,11 @@ mod tests {
         assert!(result.is_ok());
 
         match result.unwrap() {
-            RunEndResult::Completed { summary, total_tokens, .. } => {
+            RunEndResult::Completed {
+                summary,
+                total_tokens,
+                ..
+            } => {
                 assert_eq!(summary, Some("done".to_string()));
                 assert_eq!(total_tokens, 100);
             }
@@ -785,10 +792,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_wait_for_run_end_failed() {
-        let (handle, _input_rx, _cancel_rx) = ActiveRunHandle::new(
-            "test-run-9".to_string(),
-            SessionKey::main("main"),
-        );
+        let (handle, _input_rx, _cancel_rx) =
+            ActiveRunHandle::new("test-run-9".to_string(), SessionKey::main("main"));
 
         let mut rx = handle.subscribe();
 
@@ -816,10 +821,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_wait_for_run_end_timeout() {
-        let (handle, _input_rx, _cancel_rx) = ActiveRunHandle::new(
-            "test-run-10".to_string(),
-            SessionKey::main("main"),
-        );
+        let (handle, _input_rx, _cancel_rx) =
+            ActiveRunHandle::new("test-run-10".to_string(), SessionKey::main("main"));
 
         let mut rx = handle.subscribe();
 
@@ -830,10 +833,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_wait_for_run_end_ignores_non_terminal() {
-        let (handle, _input_rx, _cancel_rx) = ActiveRunHandle::new(
-            "test-run-11".to_string(),
-            SessionKey::main("main"),
-        );
+        let (handle, _input_rx, _cancel_rx) =
+            ActiveRunHandle::new("test-run-11".to_string(), SessionKey::main("main"));
 
         let mut rx = handle.subscribe();
 

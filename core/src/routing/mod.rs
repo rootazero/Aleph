@@ -16,7 +16,9 @@ pub use composite_router::CompositeRouter;
 pub use config::{MatchRule, PeerMatchConfig, RouteBinding, SessionConfig};
 pub use resolve::{resolve_route, MatchedBy, ResolvedRoute, RouteInput, RoutePeer, RoutePeerKind};
 pub use rules::{RoutingPatternsConfig, RoutingRules};
-pub use session_key::{normalize_agent_id, DmScope, PeerKind, SessionKey, DEFAULT_AGENT_ID, DEFAULT_MAIN_KEY};
+pub use session_key::{
+    normalize_agent_id, DmScope, PeerKind, SessionKey, DEFAULT_AGENT_ID, DEFAULT_MAIN_KEY,
+};
 pub use task_router::{
     CollabStrategy, EscalationContext, EscalationSnapshot, ManifestHints, RouterContext, TaskRoute,
     TaskRouter,

@@ -2,12 +2,14 @@
 //!
 //! Monitors SKILL.md files for changes and triggers reload callbacks.
 
-use std::path::{Path, PathBuf};
 use crate::sync_primitives::Arc;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
-use notify_debouncer_full::{new_debouncer, DebounceEventResult, DebouncedEvent, Debouncer, FileIdMap};
+use notify_debouncer_full::{
+    new_debouncer, DebounceEventResult, DebouncedEvent, Debouncer, FileIdMap,
+};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
@@ -62,10 +64,7 @@ impl SkillWatcher {
     /// * `config` - Watcher configuration
     ///
     /// The reload callback is passed to [`run()`] when starting the event loop.
-    pub fn new(
-        skills_dir: impl AsRef<Path>,
-        config: SkillWatcherConfig,
-    ) -> Result<Self> {
+    pub fn new(skills_dir: impl AsRef<Path>, config: SkillWatcherConfig) -> Result<Self> {
         let skills_dir = skills_dir.as_ref().to_path_buf();
 
         // Create channel for file system events
@@ -124,11 +123,7 @@ impl SkillWatcher {
     ///
     /// This is a blocking async function that processes file events
     /// and invokes the reload callback when skills change.
-    pub async fn run(
-        mut self,
-        skills_dir: PathBuf,
-        reload_callback: ReloadCallback,
-    ) -> Result<()> {
+    pub async fn run(mut self, skills_dir: PathBuf, reload_callback: ReloadCallback) -> Result<()> {
         info!("Skill watcher event loop started");
 
         while let Some(event) = self.event_rx.recv().await {
@@ -142,7 +137,9 @@ impl SkillWatcher {
             }
 
             // Reload affected skills
-            if let Err(e) = Self::handle_skill_events(&skills_dir, &skill_events, &reload_callback).await {
+            if let Err(e) =
+                Self::handle_skill_events(&skills_dir, &skill_events, &reload_callback).await
+            {
                 error!(error = %e, "Failed to handle skill events");
             }
         }
@@ -161,15 +158,9 @@ impl SkillWatcher {
             }
 
             let skill_event = match &event.event.kind {
-                EventKind::Create(_) => Some(SkillEvent::Created {
-                    path: path.clone(),
-                }),
-                EventKind::Modify(_) => Some(SkillEvent::Modified {
-                    path: path.clone(),
-                }),
-                EventKind::Remove(_) => Some(SkillEvent::Deleted {
-                    path: path.clone(),
-                }),
+                EventKind::Create(_) => Some(SkillEvent::Created { path: path.clone() }),
+                EventKind::Modify(_) => Some(SkillEvent::Modified { path: path.clone() }),
+                EventKind::Remove(_) => Some(SkillEvent::Deleted { path: path.clone() }),
                 _ => None,
             };
 
@@ -186,8 +177,7 @@ impl SkillWatcher {
         path.file_name()
             .and_then(|n| n.to_str())
             .map(|name| {
-                name.eq_ignore_ascii_case("SKILL.md")
-                    || name.to_lowercase().ends_with(".skill.md")
+                name.eq_ignore_ascii_case("SKILL.md") || name.to_lowercase().ends_with(".skill.md")
             })
             .unwrap_or(false)
     }
@@ -243,7 +233,10 @@ impl SkillWatcher {
 
         // Invoke callback with reloaded tools
         if !reloaded_tools.is_empty() {
-            info!(count = reloaded_tools.len(), "Reloaded skills, invoking callback");
+            info!(
+                count = reloaded_tools.len(),
+                "Reloaded skills, invoking callback"
+            );
             reload_callback(reloaded_tools)?;
         }
 
@@ -262,7 +255,9 @@ mod tests {
         assert!(SkillWatcher::is_skill_file(Path::new("/path/to/SKILL.md")));
         assert!(SkillWatcher::is_skill_file(Path::new("skill.md")));
         assert!(SkillWatcher::is_skill_file(Path::new("github-pr.skill.md")));
-        assert!(SkillWatcher::is_skill_file(Path::new("/path/to/foo.SKILL.MD")));
+        assert!(SkillWatcher::is_skill_file(Path::new(
+            "/path/to/foo.SKILL.MD"
+        )));
         assert!(!SkillWatcher::is_skill_file(Path::new("README.md")));
         assert!(!SkillWatcher::is_skill_file(Path::new("skill.txt")));
     }

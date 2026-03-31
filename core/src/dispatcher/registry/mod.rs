@@ -11,8 +11,8 @@ mod registration;
 mod state;
 mod types;
 
-use std::collections::HashMap;
 use crate::sync_primitives::Arc;
+use std::collections::HashMap;
 use tokio::sync::RwLock;
 
 use crate::config::RoutingRuleConfig;
@@ -25,8 +25,8 @@ use discovery::ToolDiscovery;
 use query::ToolQuery;
 use registration::ToolRegistrar;
 use state::ToolState;
-use types::ToolStorage;
 pub use types::ResolvedCommand;
+use types::ToolStorage;
 
 // Re-export helpers for tests
 

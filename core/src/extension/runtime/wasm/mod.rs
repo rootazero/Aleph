@@ -21,8 +21,8 @@ pub use credential_injector::{inject_credential, CredentialError};
 pub use limits::WasmResourceLimits;
 pub use permissions::PermissionChecker;
 
-use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use tracing::{debug, info};
 
 use crate::extension::error::ExtensionError;

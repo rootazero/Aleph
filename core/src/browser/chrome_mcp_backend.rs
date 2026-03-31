@@ -57,7 +57,8 @@ impl ChromeMcpBackend {
     /// Chrome DevTools MCP uses `pageId` (number) for page selection.
     async fn select_page(&self, tab_id: &str) -> Result<(), BrowserError> {
         let page_id: u32 = tab_id.parse().unwrap_or(1);
-        self.call("select_page", json!({ "pageId": page_id })).await?;
+        self.call("select_page", json!({ "pageId": page_id }))
+            .await?;
         Ok(())
     }
 
@@ -130,7 +131,8 @@ impl BrowserBackend for ChromeMcpBackend {
 
     async fn close_tab(&self, tab_id: &str) -> Result<(), BrowserError> {
         let page_id: u32 = tab_id.parse().unwrap_or(1);
-        self.call("close_page", json!({ "pageId": page_id })).await?;
+        self.call("close_page", json!({ "pageId": page_id }))
+            .await?;
         Ok(())
     }
 
@@ -141,15 +143,31 @@ impl BrowserBackend for ChromeMcpBackend {
         let tabs = Self::parse_pages_text(&text);
         if tabs.is_empty() {
             // Fallback: try JSON parsing for future structured content support
-            if let Some(pages) = result.as_array()
+            if let Some(pages) = result
+                .as_array()
                 .or_else(|| result.get("pages").and_then(|v| v.as_array()))
             {
-                return Ok(pages.iter().map(|page| TabInfo {
-                    id: page.get("pageId").or_else(|| page.get("id"))
-                        .and_then(|v| v.as_str()).unwrap_or("unknown").to_string(),
-                    url: page.get("url").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                    title: page.get("title").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                }).collect());
+                return Ok(pages
+                    .iter()
+                    .map(|page| TabInfo {
+                        id: page
+                            .get("pageId")
+                            .or_else(|| page.get("id"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("unknown")
+                            .to_string(),
+                        url: page
+                            .get("url")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                        title: page
+                            .get("title")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                    })
+                    .collect());
             }
         }
         Ok(tabs)
@@ -293,9 +311,15 @@ impl BrowserBackend for ChromeMcpBackend {
         Ok(())
     }
 
-    async fn wait_for_text(&self, tab_id: &str, text: &str, timeout_ms: u64) -> Result<bool, BrowserError> {
+    async fn wait_for_text(
+        &self,
+        tab_id: &str,
+        text: &str,
+        timeout_ms: u64,
+    ) -> Result<bool, BrowserError> {
         self.select_page(tab_id).await?;
-        self.call("wait_for", json!({ "text": text, "timeout": timeout_ms })).await?;
+        self.call("wait_for", json!({ "text": text, "timeout": timeout_ms }))
+            .await?;
         Ok(true)
     }
 
@@ -306,19 +330,29 @@ impl BrowserBackend for ChromeMcpBackend {
         Ok(parse_console_messages(&text))
     }
 
-    async fn fill_form(&self, tab_id: &str, fields: &[(ActionTarget, String)]) -> Result<usize, BrowserError> {
+    async fn fill_form(
+        &self,
+        tab_id: &str,
+        fields: &[(ActionTarget, String)],
+    ) -> Result<usize, BrowserError> {
         if fields.is_empty() {
             return Ok(0);
         }
         self.select_page(tab_id).await?;
-        let form_fields: Vec<_> = fields.iter().filter_map(|(target, value)| {
-            let uid = Self::extract_element_ref(target).ok()?;
-            Some(json!({ "uid": uid, "value": value }))
-        }).collect();
+        let form_fields: Vec<_> = fields
+            .iter()
+            .filter_map(|(target, value)| {
+                let uid = Self::extract_element_ref(target).ok()?;
+                Some(json!({ "uid": uid, "value": value }))
+            })
+            .collect();
         if form_fields.is_empty() {
-            return Err(BrowserError::ActionFailed("No valid ref_id targets for fill_form".into()));
+            return Err(BrowserError::ActionFailed(
+                "No valid ref_id targets for fill_form".into(),
+            ));
         }
-        self.call("fill_form", json!({ "fields": form_fields })).await?;
+        self.call("fill_form", json!({ "fields": form_fields }))
+            .await?;
         Ok(form_fields.len())
     }
 }
@@ -326,18 +360,25 @@ impl BrowserBackend for ChromeMcpBackend {
 /// Parse console messages from Chrome DevTools MCP text output.
 /// Console output format: "[level] message" per line.
 fn parse_console_messages(text: &str) -> Vec<ConsoleMessage> {
-    text.lines().filter_map(|line| {
-        let line = line.trim();
-        if line.is_empty() { return None; }
-        // Try to extract [level] prefix
-        if line.starts_with('[') {
-            if let Some(end) = line.find(']') {
-                let level = line.get(1..end).unwrap_or("log").to_lowercase();
-                let msg = line.get(end + 1..).unwrap_or("").trim().to_string();
-                return Some(ConsoleMessage { level, text: msg });
+    text.lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            if line.is_empty() {
+                return None;
             }
-        }
-        // Fallback: treat as log
-        Some(ConsoleMessage { level: "log".to_string(), text: line.to_string() })
-    }).collect()
+            // Try to extract [level] prefix
+            if line.starts_with('[') {
+                if let Some(end) = line.find(']') {
+                    let level = line.get(1..end).unwrap_or("log").to_lowercase();
+                    let msg = line.get(end + 1..).unwrap_or("").trim().to_string();
+                    return Some(ConsoleMessage { level, text: msg });
+                }
+            }
+            // Fallback: treat as log
+            Some(ConsoleMessage {
+                level: "log".to_string(),
+                text: line.to_string(),
+            })
+        })
+        .collect()
 }

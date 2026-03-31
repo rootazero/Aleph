@@ -345,8 +345,7 @@ pub fn is_level_supported(level: ThinkLevel, provider: &str, model: &str) -> boo
 // =============================================================================
 
 /// Configuration for thinking level in LLM requests
-#[derive(Debug, Clone)]
-#[derive(Default)]
+#[derive(Debug, Clone, Default)]
 pub struct ThinkingConfig {
     /// Requested thinking level
     pub level: ThinkLevel,
@@ -394,7 +393,6 @@ impl ThinkingConfig {
         self.effective_level().token_budget()
     }
 }
-
 
 // =============================================================================
 // ThinkingFallbackState
@@ -700,7 +698,10 @@ mod tests {
     #[test]
     fn test_normalize_with_whitespace() {
         assert_eq!(normalize_think_level("  high  "), Some(ThinkLevel::High));
-        assert_eq!(normalize_think_level("\tmedium\n"), Some(ThinkLevel::Medium));
+        assert_eq!(
+            normalize_think_level("\tmedium\n"),
+            Some(ThinkLevel::Medium)
+        );
     }
 
     #[test]
@@ -715,15 +716,24 @@ mod tests {
     fn test_supports_xhigh() {
         assert!(supports_xhigh_thinking("openai", "o1"));
         assert!(supports_xhigh_thinking("openai", "o1-preview"));
-        assert!(supports_xhigh_thinking("claude", "claude-opus-4-5-20251101"));
+        assert!(supports_xhigh_thinking(
+            "claude",
+            "claude-opus-4-5-20251101"
+        ));
         assert!(!supports_xhigh_thinking("openai", "gpt-4o"));
-        assert!(!supports_xhigh_thinking("claude", "claude-3-5-sonnet-20241022"));
+        assert!(!supports_xhigh_thinking(
+            "claude",
+            "claude-3-5-sonnet-20241022"
+        ));
     }
 
     #[test]
     fn test_supports_xhigh_case_insensitive() {
         assert!(supports_xhigh_thinking("OPENAI", "O1"));
-        assert!(supports_xhigh_thinking("Claude", "Claude-Opus-4-5-20251101"));
+        assert!(supports_xhigh_thinking(
+            "Claude",
+            "Claude-Opus-4-5-20251101"
+        ));
     }
 
     #[test]
@@ -828,7 +838,8 @@ mod tests {
     // Error parsing tests
     #[test]
     fn test_extract_supported_values_quoted() {
-        let msg = "Error: unsupported thinking level. Supported values are: 'off', 'minimal', 'low'";
+        let msg =
+            "Error: unsupported thinking level. Supported values are: 'off', 'minimal', 'low'";
         let values = extract_supported_values(msg);
         assert_eq!(values, vec!["off", "minimal", "low"]);
     }

@@ -1,7 +1,7 @@
 //! Content hashing for L1 staleness detection
 
-use sha2::{Sha256, Digest};
 use crate::memory::MemoryFact;
+use sha2::{Digest, Sha256};
 
 /// Compute a stable content hash for a set of facts under a path.
 /// Used to detect when L1 Overviews need regeneration.

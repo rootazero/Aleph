@@ -1,17 +1,18 @@
 //! Compression daemon implementation
 
 use super::config::CompressionDaemonConfig;
+use crate::sync_primitives::Arc;
+use crate::sync_primitives::{AtomicBool, AtomicI64, Ordering};
 use std::future::Future;
 use std::pin::Pin;
-use crate::sync_primitives::{AtomicBool, AtomicI64, Ordering};
-use crate::sync_primitives::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::task::JoinHandle;
 use tokio::time::interval;
 use tracing::{debug, error, info, warn};
 
 /// Type alias for compression function
-type CompressionFn = Arc<dyn Fn() -> Pin<Box<dyn Future<Output = Result<(), String>> + Send>> + Send + Sync>;
+type CompressionFn =
+    Arc<dyn Fn() -> Pin<Box<dyn Future<Output = Result<(), String>> + Send>> + Send + Sync>;
 
 /// Compression daemon for background memory compression
 pub struct CompressionDaemon {
@@ -52,7 +53,8 @@ impl CompressionDaemon {
 
     /// Record user activity (resets idle timer)
     pub fn record_activity(&self) {
-        self.last_activity.store(Self::now_timestamp(), Ordering::Relaxed);
+        self.last_activity
+            .store(Self::now_timestamp(), Ordering::Relaxed);
     }
 
     /// Get current timestamp in seconds

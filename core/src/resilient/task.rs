@@ -118,7 +118,8 @@ pub trait ResilientTask: Send + Sync {
 }
 
 /// Type alias for an async task function used in fallbacks
-type AsyncTaskFn<O> = Box<dyn Fn(&TaskContext) -> Pin<Box<dyn Future<Output = Result<O>> + Send + '_>> + Send + Sync>;
+type AsyncTaskFn<O> =
+    Box<dyn Fn(&TaskContext) -> Pin<Box<dyn Future<Output = Result<O>> + Send + '_>> + Send + Sync>;
 
 /// A simple wrapper for closures as resilient tasks.
 pub struct FnTask<F, O>

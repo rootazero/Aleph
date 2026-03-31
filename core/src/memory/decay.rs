@@ -126,7 +126,7 @@ impl Default for MemoryStrength {
         Self::new(
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
+                .unwrap_or_default()
                 .as_secs() as i64,
         )
     }
@@ -161,7 +161,7 @@ impl DecayConfig {
     pub fn effective_half_life(&self, fact_type: &FactType) -> f32 {
         match fact_type {
             FactType::Preference => self.half_life_days * 2.0, // More durable
-            FactType::Personal => f32::INFINITY,              // Never decay
+            FactType::Personal => f32::INFINITY,               // Never decay
             _ => self.half_life_days,
         }
     }
@@ -210,9 +210,9 @@ impl DecayConfig {
         }
 
         match temporal_scope {
-            TemporalScope::Ephemeral => base * 0.5,  // Decays 2x faster
-            TemporalScope::Permanent => base * 3.0,  // Lasts 3x longer
-            TemporalScope::Contextual => base,       // Normal decay
+            TemporalScope::Ephemeral => base * 0.5, // Decays 2x faster
+            TemporalScope::Permanent => base * 3.0, // Lasts 3x longer
+            TemporalScope::Contextual => base,      // Normal decay
         }
     }
 }
@@ -246,11 +246,21 @@ pub fn on_access(fact: &mut MemoryFact, now: i64) {
 // ============================================================================
 
 // Serde default functions
-fn default_tier_half_life() -> f32 { 30.0 }
-fn default_tier_min_strength() -> f32 { 0.1 }
-fn default_reinforcement_factor() -> f32 { 0.5 }
-fn default_max_multiplier() -> f32 { 3.0 }
-fn default_access_decay_days() -> f32 { 30.0 }
+fn default_tier_half_life() -> f32 {
+    30.0
+}
+fn default_tier_min_strength() -> f32 {
+    0.1
+}
+fn default_reinforcement_factor() -> f32 {
+    0.5
+}
+fn default_max_multiplier() -> f32 {
+    3.0
+}
+fn default_access_decay_days() -> f32 {
+    30.0
+}
 
 fn default_core_params() -> TierDecayParams {
     TierDecayParams {
@@ -399,7 +409,11 @@ pub fn effective_half_life(
     }
 
     // Guard: zero access_decay_days would cause division by zero
-    let access_decay = if config.access_decay_days <= 0.0 { 30.0 } else { config.access_decay_days };
+    let access_decay = if config.access_decay_days <= 0.0 {
+        30.0
+    } else {
+        config.access_decay_days
+    };
     let freshness = (-days_since_last_access * 2.0_f32.ln() / access_decay).exp();
     let effective_count = access_count as f32 * freshness;
     let extension = base * config.factor * (1.0 + effective_count).ln();
@@ -514,7 +528,11 @@ mod tests {
         let mut fact = MemoryFact::new("test".into(), FactType::Other, vec![]);
         let now = fact.created_at;
         update_strength(&mut fact, now, 30.0);
-        assert!(fact.strength > 0.95, "Fresh fact should be near 1.0, got {}", fact.strength);
+        assert!(
+            fact.strength > 0.95,
+            "Fresh fact should be near 1.0, got {}",
+            fact.strength
+        );
     }
 
     #[test]
@@ -523,8 +541,16 @@ mod tests {
         let mut fact = MemoryFact::new("test".into(), FactType::Other, vec![]);
         let now = fact.created_at + 30 * 86400; // 30 days, no access
         update_strength(&mut fact, now, 30.0);
-        assert!(fact.strength < 0.6, "Should decay below 0.6, got {}", fact.strength);
-        assert!(fact.strength > 0.3, "Should be above 0.3, got {}", fact.strength);
+        assert!(
+            fact.strength < 0.6,
+            "Should decay below 0.6, got {}",
+            fact.strength
+        );
+        assert!(
+            fact.strength > 0.3,
+            "Should be above 0.3, got {}",
+            fact.strength
+        );
     }
 
     #[test]
@@ -535,7 +561,11 @@ mod tests {
         fact.last_accessed_at = Some(fact.created_at + 29 * 86400); // accessed 1 day ago
         let now = fact.created_at + 30 * 86400;
         update_strength(&mut fact, now, 30.0);
-        assert!(fact.strength > 0.7, "Recently accessed + high count should boost, got {}", fact.strength);
+        assert!(
+            fact.strength > 0.7,
+            "Recently accessed + high count should boost, got {}",
+            fact.strength
+        );
     }
 
     #[test]
@@ -561,14 +591,22 @@ mod tests {
     fn effective_half_life_no_access() {
         let config = AccessReinforcementConfig::default();
         let result = effective_half_life(7.0, 0, 0.0, &config);
-        assert!((result - 7.0).abs() < 0.001, "No access should return base, got {}", result);
+        assert!(
+            (result - 7.0).abs() < 0.001,
+            "No access should return base, got {}",
+            result
+        );
     }
 
     #[test]
     fn effective_half_life_recent_access() {
         let config = AccessReinforcementConfig::default();
         let result = effective_half_life(7.0, 3, 1.0, &config);
-        assert!(result > 7.0, "Recent access should extend half-life, got {}", result);
+        assert!(
+            result > 7.0,
+            "Recent access should extend half-life, got {}",
+            result
+        );
         assert!(result < 21.0, "Should be below cap (7*3), got {}", result);
     }
 
@@ -579,14 +617,22 @@ mod tests {
         // extension = 7 * 0.5 * ln(1.625) ≈ 1.7 → result ≈ 8.7
         let result = effective_half_life(7.0, 5, 90.0, &config);
         assert!(result > 7.0, "Should still extend slightly, got {}", result);
-        assert!(result < 10.0, "Stale access should barely extend, got {}", result);
+        assert!(
+            result < 10.0,
+            "Stale access should barely extend, got {}",
+            result
+        );
     }
 
     #[test]
     fn effective_half_life_capped() {
         let config = AccessReinforcementConfig::default();
         let result = effective_half_life(7.0, 1000, 0.0, &config);
-        assert!((result - 21.0).abs() < 0.01, "Should be capped at 7*3=21, got {}", result);
+        assert!(
+            (result - 21.0).abs() < 0.01,
+            "Should be capped at 7*3=21, got {}",
+            result
+        );
     }
 
     #[test]
@@ -603,22 +649,42 @@ mod tests {
     #[test]
     fn calculate_strength_tiered_short_term_decays_fast() {
         let config = TieredDecayConfig::default();
-        let ms = MemoryStrength { access_count: 0, last_accessed: 0, creation_time: 0 };
+        let ms = MemoryStrength {
+            access_count: 0,
+            last_accessed: 0,
+            creation_time: 0,
+        };
         let now = 7 * 86400; // 7 days later
-        let strength = ms.calculate_strength_tiered(&config, &MemoryTier::ShortTerm, &FactType::Other, now);
-        assert!(strength < 0.6, "ShortTerm should decay significantly in 7 days: got {strength}");
+        let strength =
+            ms.calculate_strength_tiered(&config, &MemoryTier::ShortTerm, &FactType::Other, now);
+        assert!(
+            strength < 0.6,
+            "ShortTerm should decay significantly in 7 days: got {strength}"
+        );
 
-        let core_strength = ms.calculate_strength_tiered(&config, &MemoryTier::Core, &FactType::Other, now);
-        assert!(core_strength > strength, "Core should decay slower than ShortTerm");
+        let core_strength =
+            ms.calculate_strength_tiered(&config, &MemoryTier::Core, &FactType::Other, now);
+        assert!(
+            core_strength > strength,
+            "Core should decay slower than ShortTerm"
+        );
     }
 
     #[test]
     fn calculate_strength_tiered_protected_type_returns_one() {
         let config = TieredDecayConfig::default();
-        let ms = MemoryStrength { access_count: 0, last_accessed: 0, creation_time: 0 };
+        let ms = MemoryStrength {
+            access_count: 0,
+            last_accessed: 0,
+            creation_time: 0,
+        };
         let now = 365 * 86400; // 1 year later
-        let strength = ms.calculate_strength_tiered(&config, &MemoryTier::ShortTerm, &FactType::Personal, now);
-        assert!((strength - 1.0).abs() < 0.001, "Protected type should always return 1.0, got {strength}");
+        let strength =
+            ms.calculate_strength_tiered(&config, &MemoryTier::ShortTerm, &FactType::Personal, now);
+        assert!(
+            (strength - 1.0).abs() < 0.001,
+            "Protected type should always return 1.0, got {strength}"
+        );
     }
 
     #[test]
@@ -626,12 +692,29 @@ mod tests {
         let config = TieredDecayConfig::default();
         let now = 7 * 86400;
         // No accesses
-        let ms_no = MemoryStrength { access_count: 0, last_accessed: 0, creation_time: 0 };
-        let s_no = ms_no.calculate_strength_tiered(&config, &MemoryTier::ShortTerm, &FactType::Other, now);
+        let ms_no = MemoryStrength {
+            access_count: 0,
+            last_accessed: 0,
+            creation_time: 0,
+        };
+        let s_no =
+            ms_no.calculate_strength_tiered(&config, &MemoryTier::ShortTerm, &FactType::Other, now);
         // 5 recent accesses (last accessed 1 day ago)
-        let ms_yes = MemoryStrength { access_count: 5, last_accessed: 6 * 86400, creation_time: 0 };
-        let s_yes = ms_yes.calculate_strength_tiered(&config, &MemoryTier::ShortTerm, &FactType::Other, now);
-        assert!(s_yes > s_no, "Access reinforcement should boost strength: {s_yes} vs {s_no}");
+        let ms_yes = MemoryStrength {
+            access_count: 5,
+            last_accessed: 6 * 86400,
+            creation_time: 0,
+        };
+        let s_yes = ms_yes.calculate_strength_tiered(
+            &config,
+            &MemoryTier::ShortTerm,
+            &FactType::Other,
+            now,
+        );
+        assert!(
+            s_yes > s_no,
+            "Access reinforcement should boost strength: {s_yes} vs {s_no}"
+        );
     }
 
     #[test]
@@ -650,7 +733,8 @@ mod tests {
         let normal_score = strength.calculate_strength_for_type(&config, now, &FactType::Other);
 
         // Check that ephemeral scope gives faster decay
-        let ephemeral_half_life = config.effective_half_life_with_scope(&FactType::Other, &TemporalScope::Ephemeral);
+        let ephemeral_half_life =
+            config.effective_half_life_with_scope(&FactType::Other, &TemporalScope::Ephemeral);
         assert!(ephemeral_half_life < config.half_life_days);
 
         // Ephemeral: 15 days (half-life with 0.5x multiplier = 15 days half-life)

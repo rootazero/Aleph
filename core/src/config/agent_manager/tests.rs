@@ -206,10 +206,7 @@ fn test_create_agent_with_all_fields() {
         Some(vec!["code".to_string(), "search".to_string()])
     );
     assert!(agent.subagents.is_some());
-    assert_eq!(
-        agent.subagents.as_ref().unwrap().allow,
-        vec!["helper"]
-    );
+    assert_eq!(agent.subagents.as_ref().unwrap().allow, vec!["helper"]);
 }
 
 #[test]
@@ -239,11 +236,7 @@ fn test_delete_trashes_both_directories() {
     // Pre-create both dirs for coder
     fs::create_dir_all(mgr.workspace_root.join("coder")).unwrap();
     fs::create_dir_all(mgr.agents_root.join("coder").join("sessions")).unwrap();
-    fs::write(
-        mgr.agents_root.join("coder").join("SOUL.md"),
-        "test",
-    )
-    .unwrap();
+    fs::write(mgr.agents_root.join("coder").join("SOUL.md"), "test").unwrap();
 
     mgr.delete("coder").unwrap();
 
@@ -322,10 +315,7 @@ fn test_delete_agent() {
         .filter_map(|e| e.ok())
         .collect();
     assert_eq!(trash_entries.len(), 1);
-    let trash_name = trash_entries[0]
-        .file_name()
-        .to_string_lossy()
-        .to_string();
+    let trash_name = trash_entries[0].file_name().to_string_lossy().to_string();
     assert!(trash_name.starts_with("coder_"));
 }
 

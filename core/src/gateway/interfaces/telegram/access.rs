@@ -225,11 +225,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_dm_open() {
-        let ctrl = AccessController::new(make_config(
-            DmPolicy::Open,
-            GroupPolicy::default(),
-            vec![],
-        ));
+        let ctrl =
+            AccessController::new(make_config(DmPolicy::Open, GroupPolicy::default(), vec![]));
         assert_eq!(
             ctrl.check_message(111, 111, false).await,
             AccessDecision::Allowed,
@@ -311,11 +308,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_group_open() {
-        let ctrl = AccessController::new(make_config(
-            DmPolicy::default(),
-            GroupPolicy::Open,
-            vec![],
-        ));
+        let ctrl =
+            AccessController::new(make_config(DmPolicy::default(), GroupPolicy::Open, vec![]));
         assert_eq!(
             ctrl.check_message(111, -100123, true).await,
             AccessDecision::Allowed,
@@ -364,8 +358,7 @@ mod tests {
         {
             let mut codes = ctrl.pairing_codes.write().await;
             if let Some(entry) = codes.get_mut(&code) {
-                entry.created_at =
-                    Instant::now() - std::time::Duration::from_secs(3601);
+                entry.created_at = Instant::now() - std::time::Duration::from_secs(3601);
             }
         }
 

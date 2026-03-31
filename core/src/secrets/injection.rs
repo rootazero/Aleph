@@ -29,10 +29,8 @@ pub struct InjectedSecret {
 impl InjectedSecret {
     fn from_value(name: &str, value: &str) -> Self {
         // Use non-zero fixed keys to avoid trivial rainbow table attacks
-        let mut hasher = siphasher::sip::SipHasher::new_with_keys(
-            0x517c_c1b7_2722_0a95,
-            0x6c62_272e_07bb_0142,
-        );
+        let mut hasher =
+            siphasher::sip::SipHasher::new_with_keys(0x517c_c1b7_2722_0a95, 0x6c62_272e_07bb_0142);
         value.hash(&mut hasher);
         let hash = hasher.finish();
 
@@ -74,8 +72,8 @@ pub async fn render_with_secrets(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::types::DecryptedSecret;
+    use super::*;
 
     struct MockResolver {
         secrets: std::collections::HashMap<String, String>,
@@ -145,7 +143,9 @@ mod tests {
     #[tokio::test]
     async fn test_injected_secret_tracks_hash_not_value() {
         let resolver = MockResolver::new().with("key", "my-secret-value");
-        let (_, injected) = render_with_secrets("{{secret:key}}", &resolver).await.unwrap();
+        let (_, injected) = render_with_secrets("{{secret:key}}", &resolver)
+            .await
+            .unwrap();
         let record = &injected[0];
         assert_eq!(record.name, "key");
         assert_eq!(record.value_len, "my-secret-value".len());

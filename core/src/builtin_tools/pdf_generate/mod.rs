@@ -81,7 +81,10 @@ Examples:\n\
     /// 1. Absolute paths (starting with `/`) - used as-is
     /// 2. Home paths (starting with `~`) - expanded to home directory
     /// 3. Relative paths - resolved via ToolContext output_dir, or global fallback
-    async fn resolve_output_path(&self, output_path: &str) -> std::result::Result<PathBuf, ToolError> {
+    async fn resolve_output_path(
+        &self,
+        output_path: &str,
+    ) -> std::result::Result<PathBuf, ToolError> {
         let output_path = Path::new(output_path);
 
         if output_path.starts_with("/") {
@@ -93,9 +96,7 @@ Examples:\n\
                 let home = dirs::home_dir().ok_or_else(|| {
                     ToolError::Execution("Cannot resolve '~': home directory not found".to_string())
                 })?;
-                return Ok(PathBuf::from(
-                    s.replacen('~', &home.to_string_lossy(), 1),
-                ));
+                return Ok(PathBuf::from(s.replacen('~', &home.to_string_lossy(), 1)));
             }
         }
 
@@ -105,7 +106,11 @@ Examples:\n\
             ctx.output_dir.join("documents")
         } else {
             dirs::home_dir()
-                .ok_or_else(|| ToolError::Execution("Cannot determine home directory for output path".to_string()))?
+                .ok_or_else(|| {
+                    ToolError::Execution(
+                        "Cannot determine home directory for output path".to_string(),
+                    )
+                })?
                 .join(".aleph")
                 .join("workspaces")
                 .join("main")
@@ -155,12 +160,8 @@ DEFAULT OUTPUT: Use relative paths like \"article.pdf\" or \"translated.pdf\" fo
         let output_path = self.resolve_output_path(&args.output_path).await?;
 
         let result = match args.render_engine {
-            RenderEngine::Browser => {
-                browser_engine::generate(&args, &output_path).await
-            }
-            RenderEngine::Native => {
-                native_engine::generate(&args, &output_path)
-            }
+            RenderEngine::Browser => browser_engine::generate(&args, &output_path).await,
+            RenderEngine::Native => native_engine::generate(&args, &output_path),
             RenderEngine::Auto => {
                 if browser_engine::is_chrome_available() {
                     match browser_engine::generate(&args, &output_path).await {

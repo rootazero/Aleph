@@ -3,7 +3,7 @@
 use super::*;
 use crate::components::{AiResponsePart, SessionPart, UserInputPart};
 use crate::event::{
-    AlephEvent, AiResponse, ErrorKind, EventBus, EventContext, EventType, InputContext, InputEvent,
+    AiResponse, AlephEvent, ErrorKind, EventBus, EventContext, EventType, InputContext, InputEvent,
     PlanStep, StepStatus, TaskPlan, TokenUsage, ToolCallError, ToolCallResult,
 };
 
@@ -59,12 +59,8 @@ fn test_create_session_with_parent() {
     recorder.create_session("parent-001", "gpt-4").unwrap();
 
     // Create child session
-    let result = recorder.create_session_with_options(
-        "child-001",
-        "gpt-4",
-        Some("parent-001"),
-        "sub-agent",
-    );
+    let result =
+        recorder.create_session_with_options("child-001", "gpt-4", Some("parent-001"), "sub-agent");
     assert!(result.is_ok());
 
     let session = recorder.get_session("child-001").unwrap().unwrap();

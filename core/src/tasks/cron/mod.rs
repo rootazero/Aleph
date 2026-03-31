@@ -30,8 +30,8 @@
 pub mod alert;
 pub mod chain;
 pub mod config;
-pub mod executor;
 pub mod execution;
+pub mod executor;
 pub mod history;
 pub mod service;
 pub mod stagger;
@@ -41,17 +41,17 @@ pub mod webhook_target;
 
 // Re-export shared infrastructure for backward compatibility
 pub use crate::tasks::shared::clock;
-pub use crate::tasks::shared::schedule;
 pub use crate::tasks::shared::delivery;
+pub use crate::tasks::shared::schedule;
 
 // ── Re-exports ──────────────────────────────────────────────────────
 
+pub use crate::tasks::shared::delivery::{DeliveryEngine, DeliveryPayload, DeliveryTarget};
 pub use config::{
     CronConfig, CronJob, CronJobView, DeliveryConfig, DeliveryMode, DeliveryOutcome,
-    DeliveryStatus, DeliveryTargetConfig, ErrorReason, ExecutionResult, FailureAlertConfig,
-    JobRun, JobSnapshot, JobStateV2, RunStatus, ScheduleKind, SessionTarget, TriggerSource,
+    DeliveryStatus, DeliveryTargetConfig, ErrorReason, ExecutionResult, FailureAlertConfig, JobRun,
+    JobSnapshot, JobStateV2, RunStatus, ScheduleKind, SessionTarget, TriggerSource,
 };
-pub use crate::tasks::shared::delivery::{DeliveryEngine, DeliveryPayload, DeliveryTarget};
 
 use crate::sync_primitives::Arc;
 use clock::{Clock, SystemClock};
@@ -73,7 +73,9 @@ impl CronService {
     ///
     /// Opens (or creates) the SQLite store and initializes the service state.
     pub fn new(config: CronConfig) -> Result<Self, String> {
-        config.validate().map_err(|e| format!("invalid config: {e}"))?;
+        config
+            .validate()
+            .map_err(|e| format!("invalid config: {e}"))?;
 
         let db_path = config.expand_db_path();
         let path = std::path::PathBuf::from(&db_path);
@@ -97,8 +99,7 @@ impl CronService {
     /// Get a single job by ID as a read-only view.
     pub async fn get_job(&self, id: &str) -> Result<CronJobView, String> {
         let store = self.state.store.lock().await;
-        service::ops::get_job(&store, id)
-            .ok_or_else(|| format!("job not found: {id}"))
+        service::ops::get_job(&store, id).ok_or_else(|| format!("job not found: {id}"))
     }
 
     // ── Write operations ────────────────────────────────────────────
@@ -112,7 +113,11 @@ impl CronService {
     }
 
     /// Update an existing job with partial changes.
-    pub async fn update_job(&self, id: &str, updates: service::ops::CronJobUpdates) -> Result<(), String> {
+    pub async fn update_job(
+        &self,
+        id: &str,
+        updates: service::ops::CronJobUpdates,
+    ) -> Result<(), String> {
         let mut store = self.state.store.lock().await;
         service::ops::update_job(&mut store, id, updates, self.state.clock.as_ref())?;
         store.persist()?;

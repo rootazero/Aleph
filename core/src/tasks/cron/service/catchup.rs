@@ -4,9 +4,9 @@ use std::sync::Arc;
 
 use tracing::info;
 
-use crate::tasks::shared::clock::Clock;
 use crate::tasks::cron::service::ops::recompute_next_run_full;
 use crate::tasks::cron::store::CronStore;
+use crate::tasks::shared::clock::Clock;
 
 /// Summary of what the catchup pass did.
 #[derive(Debug, Default)]
@@ -125,9 +125,9 @@ pub async fn run_startup_catchup<C: Clock>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tasks::shared::clock::testing::FakeClock;
     use crate::tasks::cron::config::{CronJob, ScheduleKind};
     use crate::tasks::cron::service::ops::add_job;
+    use crate::tasks::shared::clock::testing::FakeClock;
     use tempfile::TempDir;
 
     fn make_test_job(id: &str) -> CronJob {
@@ -307,10 +307,7 @@ mod tests {
             report.immediate_count, 3,
             "only max_missed=3 should be immediate"
         );
-        assert_eq!(
-            report.deferred_count, 7,
-            "remaining 7 should be deferred"
-        );
+        assert_eq!(report.deferred_count, 7, "remaining 7 should be deferred");
 
         // Verify deferred jobs have future next_run times
         let guard = store.lock().await;

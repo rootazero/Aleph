@@ -8,8 +8,8 @@
 //! Features fence-aware chunking to never break inside code blocks.
 //! When forced to break inside a fence, closes and reopens it properly.
 
+use crate::markdown::fences::{get_fence_split, is_safe_fence_break, parse_fence_spans, FenceSpan};
 use std::collections::VecDeque;
-use crate::markdown::fences::{parse_fence_spans, is_safe_fence_break, get_fence_split, FenceSpan};
 
 /// Configuration for block chunking
 #[derive(Debug, Clone)]
@@ -124,7 +124,11 @@ impl BlockReplyChunker {
                     let block = self.buffer.drain(..=pos).collect::<String>();
                     blocks.push(block.trim().to_string());
                 }
-                Some(BreakPoint::FenceSplit { pos, close_line, reopen_line }) => {
+                Some(BreakPoint::FenceSplit {
+                    pos,
+                    close_line,
+                    reopen_line,
+                }) => {
                     // Breaking inside fence - need to close and reopen
                     let mut block: String = self.buffer.drain(..pos).collect();
 
@@ -141,7 +145,8 @@ impl BlockReplyChunker {
                 None => {
                     if self.buffer.len() >= self.config.max_block_size {
                         // Force split at max size, handling fences
-                        let split_pos = Self::snap_char_boundary(&self.buffer, self.config.max_block_size);
+                        let split_pos =
+                            Self::snap_char_boundary(&self.buffer, self.config.max_block_size);
 
                         if self.config.fence_aware {
                             if let Some(split) = get_fence_split(&spans, split_pos) {
@@ -153,7 +158,8 @@ impl BlockReplyChunker {
                                 block.push_str(&split.close_line);
                                 blocks.push(block);
 
-                                self.buffer.insert_str(0, &format!("{}\n", split.reopen_line));
+                                self.buffer
+                                    .insert_str(0, &format!("{}\n", split.reopen_line));
                                 continue;
                             }
                         }
@@ -186,7 +192,10 @@ impl BlockReplyChunker {
 
     /// Find the best boundary position for splitting
     fn find_boundary(&self, spans: &[FenceSpan]) -> Option<BreakPoint> {
-        let search_range = Self::snap_char_boundary(&self.buffer, self.buffer.len().min(self.config.max_block_size));
+        let search_range = Self::snap_char_boundary(
+            &self.buffer,
+            self.buffer.len().min(self.config.max_block_size),
+        );
         let search_str = &self.buffer[..search_range];
 
         // Priority 1: Paragraph break (outside fences)
@@ -235,9 +244,10 @@ impl BlockReplyChunker {
         let mut pos = search_str.len();
         while let Some(found) = search_str[..pos].rfind("\n\n") {
             if found >= self.config.min_block_size
-                && (!self.config.fence_aware || is_safe_fence_break(spans, found + 1)) {
-                    return Some(found + 1);
-                }
+                && (!self.config.fence_aware || is_safe_fence_break(spans, found + 1))
+            {
+                return Some(found + 1);
+            }
             pos = found;
             if pos == 0 {
                 break;
@@ -255,16 +265,16 @@ impl BlockReplyChunker {
             if matches!(c, '.' | '!' | '?') {
                 // Check next char is space or end (i is a byte offset from char_indices)
                 let next_char_start = i + c.len_utf8();
-                let is_sentence_end = if let Some(next) = search_str[next_char_start..].chars().next() {
-                    next.is_whitespace() || next == '\n'
-                } else {
-                    true
-                };
+                let is_sentence_end =
+                    if let Some(next) = search_str[next_char_start..].chars().next() {
+                        next.is_whitespace() || next == '\n'
+                    } else {
+                        true
+                    };
 
-                if is_sentence_end
-                    && (!self.config.fence_aware || is_safe_fence_break(spans, i)) {
-                        return Some(i);
-                    }
+                if is_sentence_end && (!self.config.fence_aware || is_safe_fence_break(spans, i)) {
+                    return Some(i);
+                }
             }
         }
         None
@@ -275,9 +285,10 @@ impl BlockReplyChunker {
         let mut pos = search_str.len();
         while let Some(found) = search_str[..pos].rfind('\n') {
             if found >= self.config.min_block_size
-                && (!self.config.fence_aware || is_safe_fence_break(spans, found)) {
-                    return Some(found);
-                }
+                && (!self.config.fence_aware || is_safe_fence_break(spans, found))
+            {
+                return Some(found);
+            }
             pos = found;
             if pos == 0 {
                 break;
@@ -291,9 +302,10 @@ impl BlockReplyChunker {
         let mut pos = search_str.len();
         while let Some(found) = search_str[..pos].rfind(' ') {
             if found >= self.config.min_block_size
-                && (!self.config.fence_aware || is_safe_fence_break(spans, found)) {
-                    return Some(found);
-                }
+                && (!self.config.fence_aware || is_safe_fence_break(spans, found))
+            {
+                return Some(found);
+            }
             pos = found;
             if pos == 0 {
                 break;

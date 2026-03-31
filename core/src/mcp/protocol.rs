@@ -646,7 +646,9 @@ mod tests {
     fn test_sampling_response_serialization() {
         let resp = SamplingResponse {
             role: PromptRole::Assistant,
-            content: SamplingContent::Text { text: "Hello back!".to_string() },
+            content: SamplingContent::Text {
+                text: "Hello back!".to_string(),
+            },
             model: Some("claude-3".to_string()),
             stop_reason: Some(StopReason::EndTurn),
         };
@@ -657,12 +659,14 @@ mod tests {
 
     #[test]
     fn test_sampling_content_variants() {
-        let text = SamplingContent::Text { text: "Hello".to_string() };
+        let text = SamplingContent::Text {
+            text: "Hello".to_string(),
+        };
         assert!(matches!(text, SamplingContent::Text { .. }));
 
         let image = SamplingContent::Image {
             data: "base64data".to_string(),
-            mime_type: "image/png".to_string()
+            mime_type: "image/png".to_string(),
         };
         assert!(matches!(image, SamplingContent::Image { .. }));
     }

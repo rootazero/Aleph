@@ -160,8 +160,14 @@ fn p4_05_trace_none_produces_no_side_effects() {
     );
 
     // Same fact IDs in the same order
-    let traced_ids: Vec<&str> = traced_results.iter().map(|sf| sf.fact.content.as_str()).collect();
-    let plain_ids: Vec<&str> = plain_results.iter().map(|sf| sf.fact.content.as_str()).collect();
+    let traced_ids: Vec<&str> = traced_results
+        .iter()
+        .map(|sf| sf.fact.content.as_str())
+        .collect();
+    let plain_ids: Vec<&str> = plain_results
+        .iter()
+        .map(|sf| sf.fact.content.as_str())
+        .collect();
     assert_eq!(
         traced_ids, plain_ids,
         "traced and untraced runs should return facts in the same order"

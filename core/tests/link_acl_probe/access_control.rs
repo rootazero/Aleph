@@ -26,7 +26,8 @@ async fn p1_02_empty_list_allows_all() {
 async fn p1_03_whitelist_hit() {
     let mut h = LinkAclHarness::new();
     h.register_link("telegram-bot").await;
-    h.register_agent("main", Some(vec!["telegram-bot".into()])).await;
+    h.register_agent("main", Some(vec!["telegram-bot".into()]))
+        .await;
     h.bind("telegram-bot", "main");
     h.send_message("telegram-bot", "hello").await;
     h.assert_no_denial();
@@ -36,7 +37,8 @@ async fn p1_03_whitelist_hit() {
 async fn p1_04_whitelist_miss() {
     let mut h = LinkAclHarness::new();
     h.register_link("discord-bot").await;
-    h.register_agent("main", Some(vec!["telegram-bot".into()])).await;
+    h.register_agent("main", Some(vec!["telegram-bot".into()]))
+        .await;
     h.bind("discord-bot", "main");
     h.send_message("discord-bot", "hello").await;
     h.assert_denied();
@@ -46,7 +48,8 @@ async fn p1_04_whitelist_miss() {
 async fn p1_05_multi_link_whitelist() {
     let mut h = LinkAclHarness::new();
     h.register_link("tg-2").await;
-    h.register_agent("main", Some(vec!["tg-1".into(), "tg-2".into()])).await;
+    h.register_agent("main", Some(vec!["tg-1".into(), "tg-2".into()]))
+        .await;
     h.bind("tg-2", "main");
     h.send_message("tg-2", "hello").await;
     h.assert_no_denial();
@@ -62,8 +65,11 @@ async fn p1_06_single_link_rejects_others() {
     // Drain manually to check both denial and content
     let replies = h.drain_replies();
     assert!(
-        replies.iter().any(|r| r.text.contains('\u{26D4}') || r.text.to_lowercase().contains("not allowed")),
-        "Expected denial, got: {:?}", replies.iter().map(|r| &r.text).collect::<Vec<_>>()
+        replies
+            .iter()
+            .any(|r| r.text.contains('\u{26D4}') || r.text.to_lowercase().contains("not allowed")),
+        "Expected denial, got: {:?}",
+        replies.iter().map(|r| &r.text).collect::<Vec<_>>()
     );
     // Verify the error message contains both link_id and agent_id
     assert!(

@@ -54,11 +54,16 @@ pub(crate) fn extract_codex_account_id(token: &str) -> Option<String> {
 /// Recursively ensure all object schemas have a "properties" field.
 /// Codex Responses API rejects object schemas without it.
 pub(crate) fn ensure_properties_recursive(schema: &mut serde_json::Value) {
-    let Some(obj) = schema.as_object_mut() else { return };
+    let Some(obj) = schema.as_object_mut() else {
+        return;
+    };
 
     if obj.get("type").and_then(|v| v.as_str()) == Some("object") {
         if !obj.contains_key("properties") {
-            obj.insert("properties".into(), serde_json::Value::Object(serde_json::Map::new()));
+            obj.insert(
+                "properties".into(),
+                serde_json::Value::Object(serde_json::Map::new()),
+            );
         }
         if !obj.contains_key("required") {
             obj.insert("required".into(), serde_json::Value::Array(vec![]));

@@ -92,8 +92,14 @@ mod tests {
     fn chinese_query_expands_synonyms() {
         let result = expand("用户喜欢什么编程语言");
         assert_ne!(result.original, result.bm25_query);
-        assert!(result.bm25_query.contains("偏好"), "bm25_query should contain synonym '偏好'");
-        assert!(result.bm25_query.contains("用户喜欢什么编程语言"), "original text preserved in bm25_query");
+        assert!(
+            result.bm25_query.contains("偏好"),
+            "bm25_query should contain synonym '偏好'"
+        );
+        assert!(
+            result.bm25_query.contains("用户喜欢什么编程语言"),
+            "original text preserved in bm25_query"
+        );
     }
 
     #[test]
@@ -106,7 +112,10 @@ mod tests {
     fn original_always_preserved() {
         let input = "我喜欢使用Rust";
         let result = expand(input);
-        assert_eq!(result.original, input, "original field must be the verbatim input");
+        assert_eq!(
+            result.original, input,
+            "original field must be the verbatim input"
+        );
         // bm25_query should be expanded (contains synonyms for 喜欢 and 使用)
         assert!(result.bm25_query.starts_with(input));
     }

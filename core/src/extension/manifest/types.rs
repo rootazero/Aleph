@@ -286,7 +286,6 @@ pub struct PluginManifest {
     // ═══════════════════════════════════════════
     // V2 Extension fields (from aleph_plugin.toml)
     // ═══════════════════════════════════════════
-
     /// V2: Static tool declarations from TOML
     #[serde(skip)]
     pub tools_v2: Option<Vec<ToolSection>>,
@@ -322,7 +321,6 @@ pub struct PluginManifest {
     // ═══════════════════════════════════════════
     // P2 Extension fields
     // ═══════════════════════════════════════════
-
     /// V2: Channel definitions for messaging platform integrations
     #[serde(skip)]
     pub channels_v2: Option<Vec<ChannelSection>>,
@@ -514,7 +512,10 @@ mod tests {
             PluginPermission::Filesystem(FilesystemAccess::Write).to_string(),
             "filesystem:write"
         );
-        assert_eq!(PluginPermission::Filesystem(FilesystemAccess::Full).to_string(), "filesystem");
+        assert_eq!(
+            PluginPermission::Filesystem(FilesystemAccess::Full).to_string(),
+            "filesystem"
+        );
         assert_eq!(PluginPermission::Env.to_string(), "env");
         assert_eq!(
             PluginPermission::Custom("custom:perm".to_string()).to_string(),
@@ -621,7 +622,10 @@ mod tests {
         let parsed: Vec<PluginPermission> = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.len(), 3);
         assert_eq!(parsed[0], PluginPermission::Network);
-        assert_eq!(parsed[1], PluginPermission::Filesystem(FilesystemAccess::Read));
+        assert_eq!(
+            parsed[1],
+            PluginPermission::Filesystem(FilesystemAccess::Read)
+        );
         assert_eq!(parsed[2], PluginPermission::Custom("my:perm".to_string()));
     }
 }

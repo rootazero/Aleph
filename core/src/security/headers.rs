@@ -126,8 +126,8 @@ fn inject_security_headers(headers: &mut http::HeaderMap, is_static: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::{Router, routing::get};
     use axum::http::StatusCode;
+    use axum::{routing::get, Router};
     use tower::ServiceExt;
 
     fn test_router() -> Router {
@@ -152,11 +152,15 @@ mod tests {
         let headers = response.headers();
 
         assert_eq!(
-            headers.get("x-content-type-options").and_then(|v: &HeaderValue| v.to_str().ok()),
+            headers
+                .get("x-content-type-options")
+                .and_then(|v: &HeaderValue| v.to_str().ok()),
             Some("nosniff"),
         );
         assert_eq!(
-            headers.get("x-frame-options").and_then(|v: &HeaderValue| v.to_str().ok()),
+            headers
+                .get("x-frame-options")
+                .and_then(|v: &HeaderValue| v.to_str().ok()),
             Some("DENY"),
         );
         assert!(
@@ -168,7 +172,9 @@ mod tests {
             "HSTS header should be present"
         );
         assert_eq!(
-            headers.get("cache-control").and_then(|v: &HeaderValue| v.to_str().ok()),
+            headers
+                .get("cache-control")
+                .and_then(|v: &HeaderValue| v.to_str().ok()),
             Some("no-store"),
             "API paths should get Cache-Control: no-store"
         );
@@ -201,7 +207,9 @@ mod tests {
 
         // But they must still get other security headers
         assert_eq!(
-            headers.get("x-content-type-options").and_then(|v: &HeaderValue| v.to_str().ok()),
+            headers
+                .get("x-content-type-options")
+                .and_then(|v: &HeaderValue| v.to_str().ok()),
             Some("nosniff"),
         );
         assert!(

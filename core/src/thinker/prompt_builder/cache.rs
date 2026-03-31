@@ -21,8 +21,12 @@ impl PromptBuilder {
     /// declaration, so adding new layers automatically classifies them.
     pub fn build_system_prompt_cached(&self, tools: &[ToolInfo]) -> Vec<SystemPromptPart> {
         let input = LayerInput::basic(&self.config, tools);
-        let stable = self.pipeline.execute_stable_only(AssemblyPath::Cached, &input);
-        let dynamic = self.pipeline.execute_dynamic_only(AssemblyPath::Cached, &input);
+        let stable = self
+            .pipeline
+            .execute_stable_only(AssemblyPath::Cached, &input);
+        let dynamic = self
+            .pipeline
+            .execute_dynamic_only(AssemblyPath::Cached, &input);
 
         vec![
             SystemPromptPart {

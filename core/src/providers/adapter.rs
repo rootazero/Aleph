@@ -156,7 +156,9 @@ pub trait ProtocolAdapter: Send + Sync {
     }
 
     /// Whether this protocol supports strict JSON schema mode
-    fn supports_strict_schema(&self) -> bool { false }
+    fn supports_strict_schema(&self) -> bool {
+        false
+    }
 
     /// Stream fine-grained delta events from an HTTP response.
     ///
@@ -217,10 +219,16 @@ impl ProviderResponse {
     /// Validate response completeness — warns on missing usage or unknown stop reason
     pub fn validate(&self, protocol_name: &str) {
         if self.usage.is_none() {
-            tracing::warn!(protocol = protocol_name, "Provider response missing usage data");
+            tracing::warn!(
+                protocol = protocol_name,
+                "Provider response missing usage data"
+            );
         }
         if self.stop_reason == StopReason::Unknown {
-            tracing::warn!(protocol = protocol_name, "Provider response has Unknown stop_reason");
+            tracing::warn!(
+                protocol = protocol_name,
+                "Provider response has Unknown stop_reason"
+            );
         }
     }
 }
@@ -336,8 +344,7 @@ mod tests {
     #[test]
     fn test_request_payload_with_tools() {
         let msgs = [UnifiedMessage::user("test input")];
-        let payload = RequestPayload::new(&msgs)
-            .with_tools(None);
+        let payload = RequestPayload::new(&msgs).with_tools(None);
         assert!(payload.tools.is_none());
     }
 
@@ -345,15 +352,16 @@ mod tests {
     fn test_tool_choice_enum() {
         assert_eq!(ToolChoice::Auto, ToolChoice::Auto);
         assert_ne!(ToolChoice::Auto, ToolChoice::Required);
-        assert_eq!(ToolChoice::Specific("s".into()), ToolChoice::Specific("s".into()));
+        assert_eq!(
+            ToolChoice::Specific("s".into()),
+            ToolChoice::Specific("s".into())
+        );
     }
 
     #[test]
     fn test_payload_with_tool_choice() {
         let msgs = [UnifiedMessage::user("test")];
-        let payload = RequestPayload::new(&msgs)
-            .with_tool_choice(Some(ToolChoice::Required));
+        let payload = RequestPayload::new(&msgs).with_tool_choice(Some(ToolChoice::Required));
         assert_eq!(payload.tool_choice, Some(ToolChoice::Required));
     }
-
 }

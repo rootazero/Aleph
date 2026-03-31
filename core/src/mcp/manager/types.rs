@@ -8,8 +8,8 @@
 //! - `McpManagerEvent` - Extended events for manager lifecycle
 //! - Health tracking types for circuit breaker pattern
 
-use std::collections::HashMap;
 use crate::sync_primitives::Arc;
+use std::collections::HashMap;
 use std::time::Instant;
 
 use serde::{Deserialize, Serialize};

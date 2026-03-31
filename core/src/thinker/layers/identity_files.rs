@@ -67,9 +67,9 @@ impl PromptLayer for IdentityFilesLayer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::thinker::identity_files::{IdentityFile, IdentityFiles};
     use crate::thinker::prompt_builder::PromptConfig;
     use crate::thinker::prompt_mode::PromptMode;
-    use crate::thinker::identity_files::{IdentityFile, IdentityFiles};
     use std::path::PathBuf;
 
     fn make_workspace(files: Vec<IdentityFile>) -> IdentityFiles {

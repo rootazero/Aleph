@@ -110,11 +110,7 @@ impl CortexValueEstimator {
     ///
     /// Uses Levenshtein distance to measure how different this pattern is
     /// from existing patterns in the experience database.
-    pub fn calculate_novelty(
-        &self,
-        current_pattern: &str,
-        existing_patterns: &[String],
-    ) -> f64 {
+    pub fn calculate_novelty(&self, current_pattern: &str, existing_patterns: &[String]) -> f64 {
         if existing_patterns.is_empty() {
             return 1.0; // Completely novel if no existing patterns
         }
@@ -127,13 +123,9 @@ impl CortexValueEstimator {
             .unwrap_or(current_pattern.len());
 
         // Normalize by max possible distance
-        let max_distance = current_pattern.len().max(
-            existing_patterns
-                .iter()
-                .map(|p| p.len())
-                .max()
-                .unwrap_or(0),
-        );
+        let max_distance = current_pattern
+            .len()
+            .max(existing_patterns.iter().map(|p| p.len()).max().unwrap_or(0));
 
         if max_distance == 0 {
             return 0.0;

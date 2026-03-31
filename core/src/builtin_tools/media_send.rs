@@ -94,7 +94,11 @@ impl AlephTool for MediaSendTool {
             .collect();
 
         Ok(MediaSendOutput {
-            _display: format!("Sending {} media file{}...", count, if count == 1 { "" } else { "s" }),
+            _display: format!(
+                "Sending {} media file{}...",
+                count,
+                if count == 1 { "" } else { "s" }
+            ),
             _media: media,
         })
     }

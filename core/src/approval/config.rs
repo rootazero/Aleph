@@ -189,9 +189,7 @@ impl ConfigApprovalPolicy {
     fn config_path() -> PathBuf {
         dirs::home_dir()
             .unwrap_or_else(|| {
-                warn!(
-                    "Cannot determine home directory; approval policy will use /tmp fallback"
-                );
+                warn!("Cannot determine home directory; approval policy will use /tmp fallback");
                 PathBuf::from("/tmp")
             })
             .join(".aleph")
@@ -269,7 +267,10 @@ impl ApprovalPolicy for ConfigApprovalPolicy {
                     reason: format!("Denied by default policy for {:?}", action),
                 },
                 DefaultDecision::Ask => ApprovalDecision::Ask {
-                    prompt: format!("Action {:?} on target '{}' requires approval", action, target),
+                    prompt: format!(
+                        "Action {:?} on target '{}' requires approval",
+                        action, target
+                    ),
                 },
             };
         }

@@ -119,10 +119,7 @@ impl ArchivalService {
                 archived: false,
                 archived_content: None,
                 facts_extracted: 0,
-                reason: format!(
-                    "Archival not triggered for {:?}",
-                    reason.aggressiveness()
-                ),
+                reason: format!("Archival not triggered for {:?}", reason.aggressiveness()),
             });
         }
 

@@ -7,8 +7,8 @@ use std::sync::Arc;
 use alephcore::providers::adapter::{ProtocolAdapter, RequestPayload};
 use alephcore::providers::protocols::{ConfigurableProtocol, ProtocolDefinition};
 use alephcore::providers::AiProvider;
-use std::sync::Arc as StdArc;
 use alephcore::ProviderConfig;
+use std::sync::Arc as StdArc;
 use tempfile::TempDir;
 
 /// Protocol test context
@@ -43,9 +43,15 @@ impl std::fmt::Debug for ProtocolContext {
         f.debug_struct("ProtocolContext")
             .field("yaml_content", &self.yaml_content.as_ref().map(|_| "..."))
             .field("protocol_def", &self.protocol_def)
-            .field("protocol", &self.protocol.as_ref().map(|_| "dyn ProtocolAdapter"))
+            .field(
+                "protocol",
+                &self.protocol.as_ref().map(|_| "dyn ProtocolAdapter"),
+            )
             .field("protocol_name", &self.protocol_name)
-            .field("provider", &self.provider.as_ref().map(|_| "dyn AIProvider"))
+            .field(
+                "provider",
+                &self.provider.as_ref().map(|_| "dyn AIProvider"),
+            )
             .field("provider_config", &self.provider_config)
             .field("last_result", &self.last_result)
             .field("request_result", &self.request_result)
@@ -123,7 +129,9 @@ impl ProtocolContext {
     pub fn create_provider(&mut self, protocol_name: &str) -> Result<(), String> {
         use alephcore::providers::create_provider;
 
-        let mut config = self.provider_config.clone()
+        let mut config = self
+            .provider_config
+            .clone()
             .unwrap_or_else(|| ProviderConfig::test_config("test-model"));
         config.protocol = Some(protocol_name.to_string());
         if config.api_key.is_none() {
@@ -151,9 +159,13 @@ impl ProtocolContext {
             .get(&name)
             .ok_or(format!("Protocol {} not in registry", name))?;
 
-        let messages = vec![alephcore::providers::message::UnifiedMessage::user("Test input")];
+        let messages = vec![alephcore::providers::message::UnifiedMessage::user(
+            "Test input",
+        )];
         let payload = RequestPayload::new(&messages);
-        let mut config = self.provider_config.clone()
+        let mut config = self
+            .provider_config
+            .clone()
             .unwrap_or_else(|| ProviderConfig::test_config("test-model"));
         config.protocol = Some(name);
         config.api_key = Some("test-key".to_string());
@@ -168,7 +180,12 @@ impl ProtocolContext {
     }
 
     /// Set provider config values
-    pub fn configure_provider(&mut self, model: &str, max_tokens: Option<u32>, temperature: Option<f32>) {
+    pub fn configure_provider(
+        &mut self,
+        model: &str,
+        max_tokens: Option<u32>,
+        temperature: Option<f32>,
+    ) {
         let mut config = ProviderConfig::test_config(model);
         config.max_tokens = max_tokens;
         config.temperature = temperature;
@@ -177,7 +194,8 @@ impl ProtocolContext {
 
     /// Create temp dir for file-based tests
     pub fn create_temp_dir(&mut self) -> &TempDir {
-        self.temp_dir.get_or_insert_with(|| tempfile::tempdir().unwrap())
+        self.temp_dir
+            .get_or_insert_with(|| tempfile::tempdir().unwrap())
     }
 
     /// Cleanup registered protocols

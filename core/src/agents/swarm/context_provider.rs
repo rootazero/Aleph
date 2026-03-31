@@ -36,10 +36,7 @@ impl SwarmContextProvider {
         }
 
         let timestamp = chrono::Utc::now().to_rfc3339();
-        let mut xml = format!(
-            "<team_awareness timestamp=\"{}\">\n",
-            timestamp
-        );
+        let mut xml = format!("<team_awareness timestamp=\"{}\">\n", timestamp);
 
         // Parse the swarm state (which is already formatted by ContextInjector)
         // and wrap it in XML structure
@@ -69,9 +66,8 @@ impl ContextProvider for SwarmContextProvider {
         let injector = self.context_injector.clone();
 
         let swarm_state = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async move {
-                injector.inject_swarm_state("").await
-            })
+            tokio::runtime::Handle::current()
+                .block_on(async move { injector.inject_swarm_state("").await })
         });
 
         if swarm_state.is_empty() {
@@ -83,7 +79,7 @@ impl ContextProvider for SwarmContextProvider {
     }
 
     fn priority(&self) -> i32 {
-        100  // High priority, but lower than Critical interruption (1000+)
+        100 // High priority, but lower than Critical interruption (1000+)
     }
 
     fn name(&self) -> &str {
@@ -125,10 +121,7 @@ mod tests {
             area: "src/auth/".to_string(),
             agent_count: 3,
             activity: "Refactoring".to_string(),
-            timestamp: chrono::Utc::now()
-                .timestamp()
-                .try_into()
-                .unwrap_or(0),
+            timestamp: chrono::Utc::now().timestamp().try_into().unwrap_or(0),
         });
 
         bus.publish(event).await.unwrap();
@@ -191,5 +184,3 @@ mod tests {
         assert_eq!(xml, "");
     }
 }
-
-

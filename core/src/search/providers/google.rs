@@ -73,9 +73,10 @@ impl SearchProvider for GoogleProvider {
             )));
         }
 
-        let google_response: GoogleResponse = response.json().await.map_err(|e| {
-            AlephError::provider(format!("Failed to parse Google response: {}", e))
-        })?;
+        let google_response: GoogleResponse = response
+            .json()
+            .await
+            .map_err(|e| AlephError::provider(format!("Failed to parse Google response: {}", e)))?;
 
         let results = google_response
             .items

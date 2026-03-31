@@ -72,27 +72,19 @@ impl RuntimeCapability {
 /// methods and `format_entries_for_prompt`.
 fn get_usage_hints(runtime_id: &str) -> String {
     match runtime_id {
-        "uv" => {
-            "- Use for Python script execution and package management\n\
+        "uv" => "- Use for Python script execution and package management\n\
              - Install packages: `uv pip install <package>`\n"
-                .to_string()
-        }
-        "fnm" | "node" => {
-            "- Use for Node.js/JavaScript execution\n\
+            .to_string(),
+        "fnm" | "node" => "- Use for Node.js/JavaScript execution\n\
              - Run scripts with `node` command\n\
              - Install packages with `npm install`\n"
-                .to_string()
-        }
-        "ffmpeg" => {
-            "- Use for audio/video processing and conversion\n\
+            .to_string(),
+        "ffmpeg" => "- Use for audio/video processing and conversion\n\
              - Supports most media formats\n"
-                .to_string()
-        }
-        "yt-dlp" => {
-            "- Use for downloading videos from YouTube and other sites\n\
+            .to_string(),
+        "yt-dlp" => "- Use for downloading videos from YouTube and other sites\n\
              - Can extract audio, subtitles, and metadata\n"
-                .to_string()
-        }
+            .to_string(),
         _ => String::new(),
     }
 }
@@ -189,8 +181,14 @@ mod tests {
 
         assert!(result.contains("**uv**"), "should contain bold name");
         assert!(result.contains("Version: 0.5.14"), "should contain version");
-        assert!(result.contains("/home/user/.aleph/runtimes/uv/bin/uv"), "should contain bin path");
-        assert!(result.contains("Python"), "should contain usage hints for uv");
+        assert!(
+            result.contains("/home/user/.aleph/runtimes/uv/bin/uv"),
+            "should contain bin path"
+        );
+        assert!(
+            result.contains("Python"),
+            "should contain usage hints for uv"
+        );
     }
 
     #[test]
@@ -207,8 +205,14 @@ mod tests {
         let result = format_entries_for_prompt(&entries);
 
         assert!(result.contains("**ffmpeg**"));
-        assert!(!result.contains("Version:"), "empty version should be omitted");
-        assert!(result.contains("audio/video"), "should contain usage hints for ffmpeg");
+        assert!(
+            !result.contains("Version:"),
+            "empty version should be omitted"
+        );
+        assert!(
+            result.contains("audio/video"),
+            "should contain usage hints for ffmpeg"
+        );
     }
 
     #[test]

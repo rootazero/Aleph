@@ -204,7 +204,11 @@ impl StreamSubscriberBuilder {
     {
         let callback = Arc::new(callback);
         self.subscriber.on_event(move |event| {
-            if let StreamEvent::Error { message, recoverable } = event {
+            if let StreamEvent::Error {
+                message,
+                recoverable,
+            } = event
+            {
                 callback(&message, recoverable);
             }
         });
@@ -238,10 +242,12 @@ mod tests {
             counter_clone.fetch_add(1, Ordering::SeqCst);
         });
 
-        subscriber.emit(StreamEvent::TextDelta {
-            delta: "test".to_string(),
-            accumulated: "test".to_string(),
-        }).await;
+        subscriber
+            .emit(StreamEvent::TextDelta {
+                delta: "test".to_string(),
+                accumulated: "test".to_string(),
+            })
+            .await;
 
         assert_eq!(counter.load(Ordering::SeqCst), 1);
     }
@@ -251,10 +257,12 @@ mod tests {
         let (tx, mut rx) = mpsc::channel(10);
         let subscriber = StreamSubscriber::with_channel(tx);
 
-        subscriber.emit(StreamEvent::TextDelta {
-            delta: "hello".to_string(),
-            accumulated: "hello".to_string(),
-        }).await;
+        subscriber
+            .emit(StreamEvent::TextDelta {
+                delta: "hello".to_string(),
+                accumulated: "hello".to_string(),
+            })
+            .await;
 
         let event = rx.recv().await.unwrap();
         assert!(matches!(event, StreamEvent::TextDelta { .. }));

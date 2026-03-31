@@ -130,7 +130,11 @@ mod tests {
     #[tokio::test]
     async fn test_audit_log_send_receive() {
         let (log, mut rx) = SecurityAuditLog::new(100);
-        log.log_event(AuditEventType::SsrfBlocked, AuditSeverity::Warn, "Blocked request to 10.0.0.1".to_string());
+        log.log_event(
+            AuditEventType::SsrfBlocked,
+            AuditSeverity::Warn,
+            "Blocked request to 10.0.0.1".to_string(),
+        );
         let entry = rx.recv().await.unwrap();
         assert_eq!(entry.event_type, AuditEventType::SsrfBlocked);
         assert_eq!(entry.severity, AuditSeverity::Warn);
@@ -140,15 +144,26 @@ mod tests {
     #[tokio::test]
     async fn test_audit_log_drops_when_full() {
         let (log, _rx) = SecurityAuditLog::new(1);
-        log.log_event(AuditEventType::AuthFailure, AuditSeverity::Critical, "first".into());
+        log.log_event(
+            AuditEventType::AuthFailure,
+            AuditSeverity::Critical,
+            "first".into(),
+        );
         // This should drop without panic
-        log.log_event(AuditEventType::AuthFailure, AuditSeverity::Critical, "second".into());
+        log.log_event(
+            AuditEventType::AuthFailure,
+            AuditSeverity::Critical,
+            "second".into(),
+        );
     }
 
     #[test]
     fn test_event_type_display() {
         assert_eq!(AuditEventType::SsrfBlocked.to_string(), "ssrf_blocked");
-        assert_eq!(AuditEventType::InvisibleCharsDetected.to_string(), "invisible_chars");
+        assert_eq!(
+            AuditEventType::InvisibleCharsDetected.to_string(),
+            "invisible_chars"
+        );
     }
 
     #[test]

@@ -6,5 +6,5 @@
 pub mod types;
 
 // Re-export type definitions used by other modules
-pub use types::{DetectionLayer, DirectToolSource, ExecuteMetadata, IntentResult};
 pub use types::TaskCategory;
+pub use types::{DetectionLayer, DirectToolSource, ExecuteMetadata, IntentResult};

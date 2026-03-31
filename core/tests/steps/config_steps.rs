@@ -1,8 +1,8 @@
 //! Step definitions for configuration features
 
-use cucumber::{given, then, gherkin::Step};
 use crate::world::{AlephWorld, ConfigContext};
-use alephcore::{Config, MemoryConfig, BehaviorConfig, ProviderConfig, RoutingRuleConfig};
+use alephcore::{BehaviorConfig, Config, MemoryConfig, ProviderConfig, RoutingRuleConfig};
+use cucumber::{gherkin::Step, given, then};
 
 // ═══ Given Steps ═══
 
@@ -32,7 +32,10 @@ async fn given_default_behavior_config(w: &mut AlephWorld) {
 
 #[given("a config parsed from:")]
 async fn given_config_from_toml(w: &mut AlephWorld, step: &Step) {
-    let toml_str = step.docstring.as_ref().expect("toml_str not found in docstring");
+    let toml_str = step
+        .docstring
+        .as_ref()
+        .expect("toml_str not found in docstring");
     let ctx = w.config.get_or_insert_with(ConfigContext::default);
     let result = toml::from_str::<Config>(toml_str);
     ctx.parse_result = Some(result.map_err(|e: toml::de::Error| e.to_string()));
@@ -82,56 +85,80 @@ async fn then_smart_flow_enabled(w: &mut AlephWorld) {
 #[then(expr = "the active_embedding_provider should be {string}")]
 async fn then_active_embedding_provider(w: &mut AlephWorld, expected: String) {
     let ctx = w.config.as_ref().expect("Config context not initialized");
-    let mem = ctx.memory_config.as_ref().expect("MemoryConfig not initialized");
+    let mem = ctx
+        .memory_config
+        .as_ref()
+        .expect("MemoryConfig not initialized");
     assert_eq!(mem.embedding.active_provider_id, expected);
 }
 
 #[then(expr = "max_context_items should be {int}")]
 async fn then_max_context_items(w: &mut AlephWorld, expected: i32) {
     let ctx = w.config.as_ref().expect("Config context not initialized");
-    let mem = ctx.memory_config.as_ref().expect("MemoryConfig not initialized");
+    let mem = ctx
+        .memory_config
+        .as_ref()
+        .expect("MemoryConfig not initialized");
     assert_eq!(mem.max_context_items, expected as u32);
 }
 
 #[then(expr = "retention_days should be {int}")]
 async fn then_retention_days(w: &mut AlephWorld, expected: i32) {
     let ctx = w.config.as_ref().expect("Config context not initialized");
-    let mem = ctx.memory_config.as_ref().expect("MemoryConfig not initialized");
+    let mem = ctx
+        .memory_config
+        .as_ref()
+        .expect("MemoryConfig not initialized");
     assert_eq!(mem.retention_days, expected as u32);
 }
 
 #[then(expr = "vector_db should be {string}")]
 async fn then_vector_db(w: &mut AlephWorld, expected: String) {
     let ctx = w.config.as_ref().expect("Config context not initialized");
-    let mem = ctx.memory_config.as_ref().expect("MemoryConfig not initialized");
+    let mem = ctx
+        .memory_config
+        .as_ref()
+        .expect("MemoryConfig not initialized");
     assert_eq!(mem.vector_db, expected);
 }
 
 #[then(expr = "similarity_threshold should be {float}")]
 async fn then_similarity_threshold(w: &mut AlephWorld, expected: f32) {
     let ctx = w.config.as_ref().expect("Config context not initialized");
-    let mem = ctx.memory_config.as_ref().expect("MemoryConfig not initialized");
+    let mem = ctx
+        .memory_config
+        .as_ref()
+        .expect("MemoryConfig not initialized");
     assert!((mem.similarity_threshold - expected).abs() < 0.001);
 }
 
 #[then("dreaming should be enabled")]
 async fn then_dreaming_enabled(w: &mut AlephWorld) {
     let ctx = w.config.as_ref().expect("Config context not initialized");
-    let mem = ctx.memory_config.as_ref().expect("MemoryConfig not initialized");
+    let mem = ctx
+        .memory_config
+        .as_ref()
+        .expect("MemoryConfig not initialized");
     assert!(mem.dreaming.enabled);
 }
 
 #[then(expr = "dreaming window_start should be {string}")]
 async fn then_dreaming_start(w: &mut AlephWorld, expected: String) {
     let ctx = w.config.as_ref().expect("Config context not initialized");
-    let mem = ctx.memory_config.as_ref().expect("MemoryConfig not initialized");
+    let mem = ctx
+        .memory_config
+        .as_ref()
+        .expect("MemoryConfig not initialized");
     assert_eq!(mem.dreaming.window_start_local, expected);
 }
 
 #[then(expr = "dreaming window_end should be {string}")]
 async fn then_dreaming_end(w: &mut AlephWorld, expected: String) {
     let ctx = w.config.as_ref().expect("Config context not initialized");
-    let mem = ctx.memory_config.as_ref().expect("MemoryConfig not initialized");
+    let mem = ctx
+        .memory_config
+        .as_ref()
+        .expect("MemoryConfig not initialized");
     assert_eq!(mem.dreaming.window_end_local, expected);
 }
 
@@ -140,14 +167,20 @@ async fn then_dreaming_end(w: &mut AlephWorld, expected: String) {
 #[then(expr = "the output_mode should be {string}")]
 async fn then_output_mode(w: &mut AlephWorld, expected: String) {
     let ctx = w.config.as_ref().expect("Config context not initialized");
-    let behavior = ctx.behavior_config.as_ref().expect("BehaviorConfig not initialized");
+    let behavior = ctx
+        .behavior_config
+        .as_ref()
+        .expect("BehaviorConfig not initialized");
     assert_eq!(behavior.output_mode, expected);
 }
 
 #[then(expr = "typing_speed should be {int}")]
 async fn then_typing_speed(w: &mut AlephWorld, expected: i32) {
     let ctx = w.config.as_ref().expect("Config context not initialized");
-    let behavior = ctx.behavior_config.as_ref().expect("BehaviorConfig not initialized");
+    let behavior = ctx
+        .behavior_config
+        .as_ref()
+        .expect("BehaviorConfig not initialized");
     assert_eq!(behavior.typing_speed, expected as u32);
 }
 
@@ -225,7 +258,9 @@ async fn given_routing_rule_regex(w: &mut AlephWorld, pattern: String) {
 async fn given_rule_unknown_provider(w: &mut AlephWorld, provider_name: String) {
     let ctx = w.config.get_or_insert_with(ConfigContext::default);
     let mut config = Config::default();
-    config.rules.push(RoutingRuleConfig::command(".*", &provider_name, None));
+    config
+        .rules
+        .push(RoutingRuleConfig::command(".*", &provider_name, None));
     ctx.config = Some(config);
 }
 
@@ -276,7 +311,10 @@ async fn then_config_invalid(w: &mut AlephWorld) {
 #[then(expr = "the error should contain {string}")]
 async fn then_error_should_contain(w: &mut AlephWorld, expected: String) {
     let ctx = w.config.as_ref().expect("Config context not initialized");
-    let result = ctx.validation_result.as_ref().expect("No validation performed");
+    let result = ctx
+        .validation_result
+        .as_ref()
+        .expect("No validation performed");
     match result {
         Err(e) => assert!(
             e.contains(&expected),

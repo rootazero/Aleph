@@ -1,8 +1,8 @@
 //! BDD Test World - Shared state between cucumber steps
 
 use cucumber::World;
-use tempfile::TempDir;
 use rhai::{Engine, AST};
+use tempfile::TempDir;
 
 // TODO: removed — module deleted: mod agent_loop_ctx;
 mod config_ctx;
@@ -27,7 +27,7 @@ mod tools_ctx;
 pub use config_ctx::ConfigContext;
 pub use daemon_ctx::DaemonContext;
 pub use dispatcher_ctx::DispatcherContext;
-pub use e2e_ctx::{E2eContext, BatchLoadResult};
+pub use e2e_ctx::{BatchLoadResult, E2eContext};
 pub use extension_ctx::ExtensionContext;
 pub use gateway_ctx::{GatewayContext, TestEmitter};
 pub use logging_ctx::LoggingContext;

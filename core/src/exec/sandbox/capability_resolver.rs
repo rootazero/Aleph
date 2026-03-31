@@ -1,9 +1,11 @@
-use crate::error::{AlephError, Result};
 use super::capabilities::{Capabilities, FileSystemCapability};
-use super::parameter_binding::{CapabilityOverrides, ParameterBinding, ValidationRule, MappingType};
+use super::parameter_binding::{
+    CapabilityOverrides, MappingType, ParameterBinding, ValidationRule,
+};
+use crate::error::{AlephError, Result};
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::fs;
+use std::path::PathBuf;
 
 /// Apply capability overrides to base capabilities
 pub fn apply_overrides(
@@ -35,7 +37,9 @@ pub fn apply_overrides(
         if immutable_fields.contains(&"network".to_string()) {
             return Err(AlephError::InvalidConfig {
                 message: "Network capability is immutable for this preset".to_string(),
-                suggestion: Some("Remove network override or choose a different preset".to_string()),
+                suggestion: Some(
+                    "Remove network override or choose a different preset".to_string(),
+                ),
             });
         }
         base.network = network.clone();
@@ -56,7 +60,9 @@ pub fn apply_overrides(
         if immutable_fields.contains(&"environment".to_string()) {
             return Err(AlephError::InvalidConfig {
                 message: "Environment capability is immutable for this preset".to_string(),
-                suggestion: Some("Remove environment override or choose a different preset".to_string()),
+                suggestion: Some(
+                    "Remove environment override or choose a different preset".to_string(),
+                ),
             });
         }
         base.environment = env.clone();
@@ -72,12 +78,12 @@ pub fn bind_parameters(
     parameters: &serde_json::Value,
 ) -> Result<()> {
     for (param_name, binding) in bindings {
-        let param_value = parameters.get(param_name).ok_or_else(|| {
-            AlephError::InvalidConfig {
+        let param_value = parameters
+            .get(param_name)
+            .ok_or_else(|| AlephError::InvalidConfig {
                 message: format!("Missing parameter: {}", param_name),
                 suggestion: Some("Provide all required parameters".to_string()),
-            }
-        })?;
+            })?;
 
         match binding.mapping {
             MappingType::Single => {
@@ -97,36 +103,36 @@ fn bind_single_parameter(
     binding: &ParameterBinding,
     value: &serde_json::Value,
 ) -> Result<()> {
-    let path_str = value.as_str().ok_or_else(|| {
-        AlephError::InvalidConfig {
-            message: "Parameter value must be a string".to_string(),
-            suggestion: Some("Provide a valid file path string".to_string()),
-        }
+    let path_str = value.as_str().ok_or_else(|| AlephError::InvalidConfig {
+        message: "Parameter value must be a string".to_string(),
+        suggestion: Some("Provide a valid file path string".to_string()),
     })?;
 
     // Validate parameter
     validate_parameter(path_str, &binding.validation)?;
 
     // Canonicalize path
-    let path = fs::canonicalize(path_str).map_err(|e| {
-        AlephError::InvalidConfig {
-            message: format!("Invalid path {}: {}", path_str, e),
-            suggestion: Some("Ensure the path exists and is accessible".to_string()),
-        }
+    let path = fs::canonicalize(path_str).map_err(|e| AlephError::InvalidConfig {
+        message: format!("Invalid path {}: {}", path_str, e),
+        suggestion: Some("Ensure the path exists and is accessible".to_string()),
     })?;
 
     // Add capability
     match binding.capability.as_str() {
         "filesystem.read_only" => {
-            caps.filesystem.push(FileSystemCapability::ReadOnly { path });
+            caps.filesystem
+                .push(FileSystemCapability::ReadOnly { path });
         }
         "filesystem.read_write" => {
-            caps.filesystem.push(FileSystemCapability::ReadWrite { path });
+            caps.filesystem
+                .push(FileSystemCapability::ReadWrite { path });
         }
         _ => {
             return Err(AlephError::InvalidConfig {
                 message: format!("Unknown capability: {}", binding.capability),
-                suggestion: Some("Use 'filesystem.read_only' or 'filesystem.read_write'".to_string()),
+                suggestion: Some(
+                    "Use 'filesystem.read_only' or 'filesystem.read_write'".to_string(),
+                ),
             })
         }
     }
@@ -139,11 +145,9 @@ fn bind_array_parameter(
     binding: &ParameterBinding,
     value: &serde_json::Value,
 ) -> Result<()> {
-    let array = value.as_array().ok_or_else(|| {
-        AlephError::InvalidConfig {
-            message: "Parameter value must be an array".to_string(),
-            suggestion: Some("Provide an array of paths".to_string()),
-        }
+    let array = value.as_array().ok_or_else(|| AlephError::InvalidConfig {
+        message: "Parameter value must be an array".to_string(),
+        suggestion: Some("Provide an array of paths".to_string()),
     })?;
 
     for element in array {
@@ -156,11 +160,9 @@ fn bind_array_parameter(
 fn validate_parameter(path: &str, rule: &ValidationRule) -> Result<()> {
     match rule {
         ValidationRule::IsFile => {
-            let metadata = fs::metadata(path).map_err(|e| {
-                AlephError::InvalidConfig {
-                    message: format!("Path does not exist: {}", e),
-                    suggestion: Some("Ensure the file exists".to_string()),
-                }
+            let metadata = fs::metadata(path).map_err(|e| AlephError::InvalidConfig {
+                message: format!("Path does not exist: {}", e),
+                suggestion: Some("Ensure the file exists".to_string()),
             })?;
             if !metadata.is_file() {
                 return Err(AlephError::InvalidConfig {
@@ -170,11 +172,9 @@ fn validate_parameter(path: &str, rule: &ValidationRule) -> Result<()> {
             }
         }
         ValidationRule::IsDirectory => {
-            let metadata = fs::metadata(path).map_err(|e| {
-                AlephError::InvalidConfig {
-                    message: format!("Path does not exist: {}", e),
-                    suggestion: Some("Ensure the directory exists".to_string()),
-                }
+            let metadata = fs::metadata(path).map_err(|e| AlephError::InvalidConfig {
+                message: format!("Path does not exist: {}", e),
+                suggestion: Some("Ensure the directory exists".to_string()),
             })?;
             if !metadata.is_dir() {
                 return Err(AlephError::InvalidConfig {
@@ -203,9 +203,9 @@ fn validate_parameter(path: &str, rule: &ValidationRule) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::exec::sandbox::presets::PresetRegistry;
     use crate::exec::sandbox::parameter_binding::CapabilityOverrides;
     use crate::exec::sandbox::parameter_binding::FileSystemOverride;
+    use crate::exec::sandbox::presets::PresetRegistry;
 
     #[test]
     fn test_apply_overrides_filesystem() {
@@ -257,6 +257,9 @@ mod tests {
 
         // Should have TempWorkspace (from default) + bound file
         assert!(caps.filesystem.len() >= 2);
-        assert!(caps.filesystem.iter().any(|c| matches!(c, FileSystemCapability::ReadOnly { .. })));
+        assert!(caps
+            .filesystem
+            .iter()
+            .any(|c| matches!(c, FileSystemCapability::ReadOnly { .. })));
     }
 }

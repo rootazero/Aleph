@@ -232,8 +232,7 @@ timeout_seconds = 120
 
     #[test]
     fn test_load_nonexistent_defaults_file() {
-        let result =
-            load_defaults_override(Path::new("/tmp/does-not-exist-aleph-defaults.toml"));
+        let result = load_defaults_override(Path::new("/tmp/does-not-exist-aleph-defaults.toml"));
         assert!(result.memory.is_none());
         assert!(result.provider.is_none());
         assert!(result.generation.is_none());

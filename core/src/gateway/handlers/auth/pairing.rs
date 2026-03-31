@@ -2,16 +2,16 @@
 //!
 //! Handles device pairing approval, rejection, and listing.
 
+use crate::sync_primitives::Arc;
 use serde::Deserialize;
 use serde_json::{json, Value};
-use crate::sync_primitives::Arc;
 use tracing::{info, warn};
 
 use crate::gateway::device_store::ApprovedDevice;
-use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, AUTH_FAILED};
 use crate::gateway::handlers::parse_params;
-use crate::gateway::security::{DeviceRole, DeviceType, PairingRequest};
+use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, AUTH_FAILED};
 use crate::gateway::security::store::DeviceUpsertData;
+use crate::gateway::security::{DeviceRole, DeviceType, PairingRequest};
 
 use super::AuthContext;
 
@@ -35,37 +35,51 @@ pub async fn handle_pairing_approve(
         Ok(req) => req,
         Err(e) => {
             warn!(code = %params.code, error = %e, "Invalid or expired pairing code");
-            return JsonRpcResponse::error(request.id, AUTH_FAILED, "Invalid or expired pairing code");
+            return JsonRpcResponse::error(
+                request.id,
+                AUTH_FAILED,
+                "Invalid or expired pairing code",
+            );
         }
     };
 
     // Extract device info from pairing request
     let (device_name, device_type): (String, Option<String>) = match &pairing_request {
-        PairingRequest::Device { device_name, device_type, .. } => {
-            (device_name.clone(), device_type.map(|t: DeviceType| t.as_str().to_string()))
-        }
-        PairingRequest::Channel { channel, sender_id, .. } => {
+        PairingRequest::Device {
+            device_name,
+            device_type,
+            ..
+        } => (
+            device_name.clone(),
+            device_type.map(|t: DeviceType| t.as_str().to_string()),
+        ),
+        PairingRequest::Channel {
+            channel, sender_id, ..
+        } => {
             // Channel pairing approved - approve the sender via SecurityStore
             if let Err(e) = ctx.security_store.approve_sender(channel, sender_id) {
                 warn!(error = %e, "Failed to approve sender");
-                return JsonRpcResponse::error(request.id, -32603, format!("Failed to approve sender: {}", e));
+                return JsonRpcResponse::error(
+                    request.id,
+                    -32603,
+                    format!("Failed to approve sender: {}", e),
+                );
             }
             info!(channel = %channel, sender_id = %sender_id, "Channel sender approved");
-            return JsonRpcResponse::success(request.id, json!({
-                "channel": channel,
-                "sender_id": sender_id,
-                "approved": true,
-            }));
+            return JsonRpcResponse::success(
+                request.id,
+                json!({
+                    "channel": channel,
+                    "sender_id": sender_id,
+                    "approved": true,
+                }),
+            );
         }
     };
 
     // Generate device ID and create approved device
     let device_id = uuid::Uuid::new_v4().to_string();
-    let device = ApprovedDevice::new(
-        device_id.clone(),
-        device_name.clone(),
-        device_type,
-    );
+    let device = ApprovedDevice::new(device_id.clone(), device_name.clone(), device_type);
 
     // Store in device store
     if let Err(e) = ctx.device_store.approve_device(&device) {
@@ -83,7 +97,7 @@ pub async fn handle_pairing_approve(
         device_id: &device_id,
         device_name: &device_name,
         device_type: None,
-        public_key: &[0u8; 32], // placeholder public key
+        public_key: &[0u8; 32],           // placeholder public key
         fingerprint: &device_fingerprint, // use device_id prefix as fingerprint
         role: "operator",
         scopes: &["*".to_string()],
@@ -97,16 +111,21 @@ pub async fn handle_pairing_approve(
     }
 
     // Generate token for the new device
-    let signed_token = match ctx
-        .token_manager
-        .issue_token(&device_id, DeviceRole::Operator, vec!["*".to_string()])
-    {
-        Ok(t) => t,
-        Err(e) => {
-            warn!(error = %e, "Failed to issue token");
-            return JsonRpcResponse::error(request.id, -32603, format!("Failed to issue token: {}", e));
-        }
-    };
+    let signed_token =
+        match ctx
+            .token_manager
+            .issue_token(&device_id, DeviceRole::Operator, vec!["*".to_string()])
+        {
+            Ok(t) => t,
+            Err(e) => {
+                warn!(error = %e, "Failed to issue token");
+                return JsonRpcResponse::error(
+                    request.id,
+                    -32603,
+                    format!("Failed to issue token: {}", e),
+                );
+            }
+        };
 
     info!(
         device_id = %device_id,
@@ -150,7 +169,11 @@ pub async fn handle_pairing_reject(
         }
         Err(e) => {
             warn!(error = %e, "Failed to cancel pairing");
-            JsonRpcResponse::error(request.id, -32603, format!("Failed to cancel pairing: {}", e))
+            JsonRpcResponse::error(
+                request.id,
+                -32603,
+                format!("Failed to cancel pairing: {}", e),
+            )
         }
     }
 }
@@ -164,58 +187,74 @@ pub async fn handle_pairing_list(
         Ok(p) => p,
         Err(e) => {
             warn!(error = %e, "Failed to list pending pairings");
-            return JsonRpcResponse::error(request.id, -32603, format!("Failed to list pending pairings: {}", e));
+            return JsonRpcResponse::error(
+                request.id,
+                -32603,
+                format!("Failed to list pending pairings: {}", e),
+            );
         }
     };
 
     let items: Vec<Value> = pending
         .into_iter()
-        .map(|req| {
-            match req {
-                PairingRequest::Device { code, device_name, device_type, expires_at, created_at, .. } => {
-                    let remaining = if expires_at > created_at {
-                        let now = std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-                            .as_millis() as i64;
-                        if expires_at > now {
-                            ((expires_at - now) / 1000) as u64
-                        } else {
-                            0
-                        }
+        .map(|req| match req {
+            PairingRequest::Device {
+                code,
+                device_name,
+                device_type,
+                expires_at,
+                created_at,
+                ..
+            } => {
+                let remaining = if expires_at > created_at {
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as i64;
+                    if expires_at > now {
+                        ((expires_at - now) / 1000) as u64
                     } else {
                         0
-                    };
-                    json!({
-                        "type": "device",
-                        "code": code,
-                        "device_name": device_name,
-                        "device_type": device_type.map(|t: DeviceType| t.as_str()),
-                        "expires_in": remaining,
-                    })
-                }
-                PairingRequest::Channel { code, channel, sender_id, expires_at, created_at, .. } => {
-                    let remaining = if expires_at > created_at {
-                        let now = std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-                            .as_millis() as i64;
-                        if expires_at > now {
-                            ((expires_at - now) / 1000) as u64
-                        } else {
-                            0
-                        }
+                    }
+                } else {
+                    0
+                };
+                json!({
+                    "type": "device",
+                    "code": code,
+                    "device_name": device_name,
+                    "device_type": device_type.map(|t: DeviceType| t.as_str()),
+                    "expires_in": remaining,
+                })
+            }
+            PairingRequest::Channel {
+                code,
+                channel,
+                sender_id,
+                expires_at,
+                created_at,
+                ..
+            } => {
+                let remaining = if expires_at > created_at {
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as i64;
+                    if expires_at > now {
+                        ((expires_at - now) / 1000) as u64
                     } else {
                         0
-                    };
-                    json!({
-                        "type": "channel",
-                        "code": code,
-                        "channel": channel,
-                        "sender_id": sender_id,
-                        "expires_in": remaining,
-                    })
-                }
+                    }
+                } else {
+                    0
+                };
+                json!({
+                    "type": "channel",
+                    "code": code,
+                    "channel": channel,
+                    "sender_id": sender_id,
+                    "expires_in": remaining,
+                })
             }
         })
         .collect();

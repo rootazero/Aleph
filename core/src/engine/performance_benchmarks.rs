@@ -105,10 +105,17 @@ mod performance_benchmarks {
         let full_write_tokens = modified_content.len(); // Approximate token count
 
         // Method 2: Incremental edit via patch
-        let _patch = Patch::new(500, 500, "Line 500".to_string(), "Modified Line 500".to_string()).unwrap();
+        let _patch = Patch::new(
+            500,
+            500,
+            "Line 500".to_string(),
+            "Modified Line 500".to_string(),
+        )
+        .unwrap();
         let patch_tokens = "Line 500".len() + "Modified Line 500".len() + 20; // Patch overhead
 
-        let token_savings_percent = ((full_write_tokens - patch_tokens) as f64 / full_write_tokens as f64) * 100.0;
+        let token_savings_percent =
+            ((full_write_tokens - patch_tokens) as f64 / full_write_tokens as f64) * 100.0;
 
         println!("Token Savings Analysis:");
         println!("  File size: {} lines", 1000);
@@ -160,7 +167,10 @@ mod performance_benchmarks {
         println!("  Total executions: {}", total_executions);
         println!("  Total time: {:?}", total_duration);
         println!("  Average per execution: {} ms", avg_duration_ms);
-        println!("  Throughput: {:.2} ops/sec", 1000.0 / avg_duration_ms as f64);
+        println!(
+            "  Throughput: {:.2} ops/sec",
+            1000.0 / avg_duration_ms as f64
+        );
     }
 
     #[tokio::test]
@@ -170,14 +180,14 @@ mod performance_benchmarks {
 
         // Simulate realistic usage pattern
         let queries = vec![
-            "git status",    // L2
-            "git log",       // L2
-            "git status",    // L2 (repeated)
-            "ls",            // L2
-            "pwd",           // L2
-            "git status",    // L2 (repeated)
-            "complex task",  // L3
-            "git log",       // L2 (repeated)
+            "git status",   // L2
+            "git log",      // L2
+            "git status",   // L2 (repeated)
+            "ls",           // L2
+            "pwd",          // L2
+            "git status",   // L2 (repeated)
+            "complex task", // L3
+            "git log",      // L2 (repeated)
         ];
 
         for query in &queries {
@@ -194,6 +204,10 @@ mod performance_benchmarks {
         println!("  Hit rate: {:.2}%", hit_rate);
 
         // In realistic usage, we expect > 70% hit rate
-        assert!(hit_rate > 70.0, "Hit rate should be > 70%, got {:.2}%", hit_rate);
+        assert!(
+            hit_rate > 70.0,
+            "Hit rate should be > 70%, got {:.2}%",
+            hit_rate
+        );
     }
 }

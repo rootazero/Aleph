@@ -67,7 +67,10 @@ pub async fn run_heartbeat_loop(
     ctx: Arc<TickContext>,
 ) {
     let interval = Duration::from_secs(state.config.tick_interval_secs);
-    info!(tick_interval_secs = state.config.tick_interval_secs, "heartbeat timer loop started");
+    info!(
+        tick_interval_secs = state.config.tick_interval_secs,
+        "heartbeat timer loop started"
+    );
 
     loop {
         tokio::select! {
@@ -104,8 +107,7 @@ pub async fn run_heartbeat_loop(
                 let ctx = ctx.clone();
                 let task_id = task.id.clone();
                 handles.push(tokio::spawn(async move {
-                    let result =
-                        execute_heartbeat_tick(&task, wake_reason.as_deref(), &ctx).await;
+                    let result = execute_heartbeat_tick(&task, wake_reason.as_deref(), &ctx).await;
                     drop(permit);
                     (task_id, result)
                 }));
@@ -140,11 +142,7 @@ async fn collect_due_tasks(
         }
 
         // Check if task is due by timer
-        let is_due = task
-            .state
-            .next_due_ms
-            .map(|t| t <= now_ms)
-            .unwrap_or(false);
+        let is_due = task.state.next_due_ms.map(|t| t <= now_ms).unwrap_or(false);
 
         // Check if task was woken
         let wake_reason = wake_requests
@@ -243,9 +241,7 @@ async fn execute_heartbeat_tick(
                                 ("Delivered".into(), ds)
                             }
                         }
-                        HeartbeatL2Status::Error(ref e) => {
-                            ("Error".into(), Some(e.clone()))
-                        }
+                        HeartbeatL2Status::Error(ref e) => ("Error".into(), Some(e.clone())),
                     };
 
                     HeartbeatTickResult {
@@ -299,8 +295,8 @@ async fn writeback_results(
                 };
             }
 
-            let had_error = tick_result.error.is_some()
-                || tick_result.l2_status.as_deref() == Some("Error");
+            let had_error =
+                tick_result.error.is_some() || tick_result.l2_status.as_deref() == Some("Error");
 
             if had_error {
                 task.state.consecutive_errors += 1;
@@ -322,7 +318,9 @@ async fn writeback_results(
                 trigger_source: "Interval".to_string(),
                 l1_status: tick_result.l1_status.clone(),
                 l2_status: tick_result.l2_status.clone(),
-                started_at: now_ms - tick_result.l1_duration_ms - tick_result.l2_duration_ms.unwrap_or(0),
+                started_at: now_ms
+                    - tick_result.l1_duration_ms
+                    - tick_result.l2_duration_ms.unwrap_or(0),
                 ended_at: Some(now_ms),
                 l1_duration_ms: Some(tick_result.l1_duration_ms),
                 l2_duration_ms: tick_result.l2_duration_ms,
@@ -410,9 +408,7 @@ mod tests {
 
     fn make_ctx(adapter_mode: &'static str) -> Arc<TickContext> {
         Arc::new(TickContext {
-            probe_executor: Arc::new(MockProbe {
-                result: json!(42),
-            }),
+            probe_executor: Arc::new(MockProbe { result: json!(42) }),
             adapter: Arc::new(MockAdapter {
                 status: adapter_mode,
             }),

@@ -74,15 +74,12 @@ pub async fn validate_token(token: &str) -> Result<BotIdentity, String> {
         .map_err(|e| format!("Failed to validate token: {}", e))?;
 
     // Build avatar CDN URL if the user has one
-    let bot_avatar = user
-        .avatar
-        .as_ref()
-        .map(|hash| {
-            format!(
-                "https://cdn.discordapp.com/avatars/{}/{}.webp",
-                user.id, hash
-            )
-        });
+    let bot_avatar = user.avatar.as_ref().map(|hash| {
+        format!(
+            "https://cdn.discordapp.com/avatars/{}/{}.webp",
+            user.id, hash
+        )
+    });
 
     let discriminator = user
         .discriminator
@@ -116,12 +113,7 @@ pub async fn list_guilds(http: &Http) -> Result<Vec<GuildSummary>, String> {
         let icon_url = info
             .icon
             .as_ref()
-            .map(|hash| {
-                format!(
-                    "https://cdn.discordapp.com/icons/{}/{}.webp",
-                    info.id, hash
-                )
-            });
+            .map(|hash| format!("https://cdn.discordapp.com/icons/{}/{}.webp", info.id, hash));
 
         // Try to get approximate member count from the full guild object.
         // This is a best-effort call -- if it fails we just leave it as None.

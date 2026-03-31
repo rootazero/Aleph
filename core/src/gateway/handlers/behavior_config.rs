@@ -5,9 +5,9 @@
 use crate::config::{BehaviorConfig, Config};
 use crate::gateway::event_bus::{ConfigChangedEvent, GatewayEvent, GatewayEventBus};
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
+use crate::sync_primitives::Arc;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -17,10 +17,7 @@ pub(crate) struct BehaviorConfigDto {
 }
 
 /// Get behavior configuration
-pub async fn handle_get(
-    request: JsonRpcRequest,
-    config: Arc<RwLock<Config>>,
-) -> JsonRpcResponse {
+pub async fn handle_get(request: JsonRpcRequest, config: Arc<RwLock<Config>>) -> JsonRpcResponse {
     let cfg = config.read().await;
     let default_behavior = BehaviorConfig::default();
     let behavior = cfg.behavior.as_ref().unwrap_or(&default_behavior);
@@ -32,7 +29,11 @@ pub async fn handle_get(
 
     match serde_json::to_value(dto) {
         Ok(v) => JsonRpcResponse::success(request.id, v),
-        Err(e) => JsonRpcResponse::error(request.id, INTERNAL_ERROR, format!("Failed to serialize config: {}", e)),
+        Err(e) => JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!("Failed to serialize config: {}", e),
+        ),
     }
 }
 
@@ -45,11 +46,7 @@ pub async fn handle_update(
     let params = match request.params {
         Some(p) => p,
         None => {
-            return JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                "Missing params".to_string(),
-            )
+            return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Missing params".to_string())
         }
     };
 

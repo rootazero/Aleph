@@ -562,7 +562,10 @@ mod tests {
         let run_id = run.run_id.clone();
         registry.register(run).await.unwrap();
 
-        registry.transition(&run_id, RunStatus::Running).await.unwrap();
+        registry
+            .transition(&run_id, RunStatus::Running)
+            .await
+            .unwrap();
         registry.transition(&run_id, RunStatus::Idle).await.unwrap();
 
         let stats = registry.stats().await;
@@ -587,11 +590,20 @@ mod tests {
         registry.register(run).await.unwrap();
 
         // Pending -> Running -> Idle -> Running -> Idle -> Completed
-        registry.transition(&run_id, RunStatus::Running).await.unwrap();
+        registry
+            .transition(&run_id, RunStatus::Running)
+            .await
+            .unwrap();
         registry.transition(&run_id, RunStatus::Idle).await.unwrap();
-        registry.transition(&run_id, RunStatus::Running).await.unwrap();
+        registry
+            .transition(&run_id, RunStatus::Running)
+            .await
+            .unwrap();
         registry.transition(&run_id, RunStatus::Idle).await.unwrap();
-        registry.transition(&run_id, RunStatus::Completed).await.unwrap();
+        registry
+            .transition(&run_id, RunStatus::Completed)
+            .await
+            .unwrap();
 
         let run = registry.get(&run_id).await.unwrap().unwrap();
         assert_eq!(run.status, RunStatus::Completed);

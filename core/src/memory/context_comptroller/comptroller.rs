@@ -1,7 +1,7 @@
-use crate::memory::context::{MemoryEntry, MemoryFact};
-use crate::memory::fact_retrieval::RetrievalResult;
 use super::config::ComptrollerConfig;
 use super::types::{ArbitratedContext, RetentionMode, TokenBudget};
+use crate::memory::context::{MemoryEntry, MemoryFact};
+use crate::memory::fact_retrieval::RetrievalResult;
 
 pub struct ContextComptroller {
     config: ComptrollerConfig,
@@ -13,11 +13,7 @@ impl ContextComptroller {
     }
 
     /// Arbitrate retrieval results to eliminate redundancy and fit budget
-    pub fn arbitrate(
-        &self,
-        results: RetrievalResult,
-        budget: TokenBudget,
-    ) -> ArbitratedContext {
+    pub fn arbitrate(&self, results: RetrievalResult, budget: TokenBudget) -> ArbitratedContext {
         let mut tokens_saved = 0;
 
         // Detect redundancy between facts and transcripts
@@ -43,7 +39,10 @@ impl ContextComptroller {
                 // Keep facts, remove redundant transcripts
                 kept_facts = results.facts;
                 for transcript in results.raw_memories {
-                    if !redundant_pairs.iter().any(|(_, t_id)| t_id == &transcript.id) {
+                    if !redundant_pairs
+                        .iter()
+                        .any(|(_, t_id)| t_id == &transcript.id)
+                    {
                         kept_transcripts.push(transcript);
                     } else {
                         let text = format!("{} {}", transcript.user_input, transcript.ai_output);
@@ -55,7 +54,10 @@ impl ContextComptroller {
                 // Hybrid: Keep facts, remove redundant transcripts
                 kept_facts = results.facts;
                 for transcript in results.raw_memories {
-                    if !redundant_pairs.iter().any(|(_, t_id)| t_id == &transcript.id) {
+                    if !redundant_pairs
+                        .iter()
+                        .any(|(_, t_id)| t_id == &transcript.id)
+                    {
                         kept_transcripts.push(transcript);
                     } else {
                         let text = format!("{} {}", transcript.user_input, transcript.ai_output);
@@ -69,13 +71,17 @@ impl ContextComptroller {
         kept_facts.sort_by(|a, b| {
             let score_a = a.similarity_score.unwrap_or(0.0);
             let score_b = b.similarity_score.unwrap_or(0.0);
-            score_b.partial_cmp(&score_a).unwrap_or(std::cmp::Ordering::Equal)
+            score_b
+                .partial_cmp(&score_a)
+                .unwrap_or(std::cmp::Ordering::Equal)
         });
 
         kept_transcripts.sort_by(|a, b| {
             let score_a = a.similarity_score.unwrap_or(0.0);
             let score_b = b.similarity_score.unwrap_or(0.0);
-            score_b.partial_cmp(&score_a).unwrap_or(std::cmp::Ordering::Equal)
+            score_b
+                .partial_cmp(&score_a)
+                .unwrap_or(std::cmp::Ordering::Equal)
         });
 
         // Trim to fit budget (facts have priority)
@@ -130,7 +136,8 @@ impl ContextComptroller {
                 }
 
                 // Check embedding similarity if both have embeddings
-                if let (Some(fact_emb), Some(trans_emb)) = (&fact.embedding, &transcript.embedding) {
+                if let (Some(fact_emb), Some(trans_emb)) = (&fact.embedding, &transcript.embedding)
+                {
                     let similarity = self.cosine_similarity(fact_emb, trans_emb);
                     if similarity >= self.config.similarity_threshold {
                         pairs.push((fact.id.clone(), transcript.id.clone()));

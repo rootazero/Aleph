@@ -103,7 +103,6 @@ impl SystemStatus {
             .filter(|c| !c.is_operational())
             .collect()
     }
-
 }
 
 /// Unified Capability System

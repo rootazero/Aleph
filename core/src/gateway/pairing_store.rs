@@ -3,13 +3,13 @@
 //! Manages pairing requests for unknown senders.
 //! Stores pending pairing codes and approved senders.
 
+use crate::sync_primitives::Arc;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
-use crate::sync_primitives::Arc;
 use tokio::sync::Mutex;
 use tracing::{debug, info};
 
@@ -64,7 +64,10 @@ pub trait PairingStore: Send + Sync {
     async fn reject(&self, channel: &str, code: &str) -> Result<(), PairingError>;
 
     /// List pending pairing requests
-    async fn list_pending(&self, channel: Option<&str>) -> Result<Vec<PairingRequest>, PairingError>;
+    async fn list_pending(
+        &self,
+        channel: Option<&str>,
+    ) -> Result<Vec<PairingRequest>, PairingError>;
 
     /// Check if a sender is in the approved list
     async fn is_approved(&self, channel: &str, sender_id: &str) -> Result<bool, PairingError>;
@@ -164,7 +167,10 @@ impl PairingStore for SqlitePairingStore {
             .optional()?;
 
         if let Some(code) = existing {
-            debug!("Found existing pairing request for {}:{}", channel, sender_id);
+            debug!(
+                "Found existing pairing request for {}:{}",
+                channel, sender_id
+            );
             return Ok((code, false));
         }
 
@@ -178,7 +184,10 @@ impl PairingStore for SqlitePairingStore {
             params![channel, sender_id, code, now, metadata_json],
         )?;
 
-        info!("Created pairing request for {}:{} with code {}", channel, sender_id, code);
+        info!(
+            "Created pairing request for {}:{} with code {}",
+            channel, sender_id, code
+        );
         Ok((code, true))
     }
 
@@ -194,8 +203,7 @@ impl PairingStore for SqlitePairingStore {
             )
             .optional()?;
 
-        let (sender_id, code, created_at, metadata_json) =
-            request.ok_or(PairingError::NotFound)?;
+        let (sender_id, code, created_at, metadata_json) = request.ok_or(PairingError::NotFound)?;
 
         // Add to approved senders
         let now = Utc::now().to_rfc3339();
@@ -242,7 +250,10 @@ impl PairingStore for SqlitePairingStore {
         Ok(())
     }
 
-    async fn list_pending(&self, channel: Option<&str>) -> Result<Vec<PairingRequest>, PairingError> {
+    async fn list_pending(
+        &self,
+        channel: Option<&str>,
+    ) -> Result<Vec<PairingRequest>, PairingError> {
         let conn = self.conn.lock().await;
 
         let mut requests = Vec::new();

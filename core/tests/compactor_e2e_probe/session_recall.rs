@@ -19,13 +19,15 @@ async fn recalls_planted_info_after_compression() {
 
     // Step 1: Plant specific memorable information.
     // Use unique names/numbers that the AI wouldn't know from training data.
-    let plant_reply = server.send_message(
-        "Remember this: I'm building a project called 'Phoenix' using Rust. \
+    let plant_reply = server
+        .send_message(
+            "Remember this: I'm building a project called 'Phoenix' using Rust. \
          The project has exactly 47 microservices and uses a custom protocol \
          called 'FireWire' for inter-service communication. Our team lead is \
          Dr. Amelia Zhang.",
-        &session_key,
-    ).await;
+            &session_key,
+        )
+        .await;
 
     assert!(
         !plant_reply.is_empty(),
@@ -46,9 +48,7 @@ async fn recalls_planted_info_after_compression() {
         "What are the SOLID principles in software design?",
     ];
 
-    let _filler_replies = server
-        .send_messages(&filler_messages, &session_key)
-        .await;
+    let _filler_replies = server.send_messages(&filler_messages, &session_key).await;
 
     // Step 3: Wait for compression to process
     tokio::time::sleep(std::time::Duration::from_secs(5)).await;
@@ -57,10 +57,12 @@ async fn recalls_planted_info_after_compression() {
     // The planted info should now be either:
     // a) In a d0 summary injected as <session_context>, or
     // b) Still in fresh tail if not enough turns accumulated
-    let recall_reply = server.send_message(
-        "What is the name of my Rust project, and how many microservices does it have?",
-        &session_key,
-    ).await;
+    let recall_reply = server
+        .send_message(
+            "What is the name of my Rust project, and how many microservices does it have?",
+            &session_key,
+        )
+        .await;
 
     eprintln!(
         "[recalls_planted_info_after_compression] Recall reply: {}",
@@ -94,12 +96,14 @@ async fn recalls_info_through_deep_compression() {
     let session_key = CompactorE2eHarness::unique_session_key("recall-deep");
 
     // Plant distinctive information
-    let _plant = server.send_message(
-        "Important context: My company 'Starforge Labs' is building a quantum \
+    let _plant = server
+        .send_message(
+            "Important context: My company 'Starforge Labs' is building a quantum \
          computing simulator called 'QubitSim'. We use 128 qubits in our \
          latest benchmark. The lead researcher is Professor Wei Chen.",
-        &session_key,
-    ).await;
+            &session_key,
+        )
+        .await;
 
     // Send many filler messages to trigger multiple compression levels.
     // We want enough to potentially trigger d0→d1 condensation.
@@ -132,11 +136,13 @@ async fn recalls_info_through_deep_compression() {
     );
 
     // Ask about the planted info
-    let recall = server.send_message(
-        "What is my quantum computing simulator called, and how many qubits \
+    let recall = server
+        .send_message(
+            "What is my quantum computing simulator called, and how many qubits \
          does it use?",
-        &session_key,
-    ).await;
+            &session_key,
+        )
+        .await;
 
     eprintln!(
         "[recalls_info_through_deep_compression] Recall: {}",
@@ -146,8 +152,7 @@ async fn recalls_info_through_deep_compression() {
     let recall_lower = recall.to_lowercase();
 
     // The AI should recall QubitSim
-    let mentions_qubitsim = recall_lower.contains("qubitsim")
-        || recall_lower.contains("qubit sim");
+    let mentions_qubitsim = recall_lower.contains("qubitsim") || recall_lower.contains("qubit sim");
     eprintln!(
         "[recalls_info_through_deep_compression] Recalls QubitSim: {}",
         mentions_qubitsim
@@ -180,12 +185,14 @@ async fn preserves_language_context_across_compression() {
     let session_key = CompactorE2eHarness::unique_session_key("recall-lang");
 
     // Establish that we're talking about Rust (not the game, not rust on metal)
-    let _setup = server.send_message(
-        "I'm a Rust programmer working on systems software. \
+    let _setup = server
+        .send_message(
+            "I'm a Rust programmer working on systems software. \
          My current focus is implementing a lock-free concurrent data structure \
          using atomics and unsafe code.",
-        &session_key,
-    ).await;
+            &session_key,
+        )
+        .await;
 
     // Fill conversation with Rust-specific technical discussion
     let rust_messages = [
@@ -203,11 +210,13 @@ async fn preserves_language_context_across_compression() {
     tokio::time::sleep(std::time::Duration::from_secs(5)).await;
 
     // Ask a follow-up that depends on understanding the language context
-    let recall = server.send_message(
-        "Given our previous discussion, what language feature makes \
+    let recall = server
+        .send_message(
+            "Given our previous discussion, what language feature makes \
          lock-free programming safer compared to C++?",
-        &session_key,
-    ).await;
+            &session_key,
+        )
+        .await;
 
     let recall_lower = recall.to_lowercase();
 

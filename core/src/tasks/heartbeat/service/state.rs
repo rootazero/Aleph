@@ -20,10 +20,7 @@ pub struct HeartbeatServiceState {
 
 impl HeartbeatServiceState {
     /// Create a new service state.
-    pub fn new(
-        store: Arc<tokio::sync::Mutex<HeartbeatStore>>,
-        config: HeartbeatConfig,
-    ) -> Self {
+    pub fn new(store: Arc<tokio::sync::Mutex<HeartbeatStore>>, config: HeartbeatConfig) -> Self {
         Self {
             store,
             config,

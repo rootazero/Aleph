@@ -106,10 +106,7 @@ pub struct FileSetParams {
 // =============================================================================
 
 /// Handle agents.list — list all agents with summaries
-pub async fn handle_list(
-    request: JsonRpcRequest,
-    manager: Arc<AgentManager>,
-) -> JsonRpcResponse {
+pub async fn handle_list(request: JsonRpcRequest, manager: Arc<AgentManager>) -> JsonRpcResponse {
     debug!("Handling agents.list request");
 
     match manager.list() {
@@ -134,10 +131,7 @@ pub async fn handle_list(
 }
 
 /// Handle agents.get — get full agent definition by ID
-pub async fn handle_get(
-    request: JsonRpcRequest,
-    manager: Arc<AgentManager>,
-) -> JsonRpcResponse {
+pub async fn handle_get(request: JsonRpcRequest, manager: Arc<AgentManager>) -> JsonRpcResponse {
     debug!("Handling agents.get request");
 
     let params: AgentIdParams = match parse_params(&request) {
@@ -147,10 +141,7 @@ pub async fn handle_get(
 
     match manager.get(&params.id) {
         Ok(definition) => {
-            let file_count = manager
-                .list_files(&params.id)
-                .map(|f| f.len())
-                .unwrap_or(0);
+            let file_count = manager.list_files(&params.id).map(|f| f.len()).unwrap_or(0);
             JsonRpcResponse::success(
                 request.id,
                 json!({ "definition": definition, "file_count": file_count }),
@@ -327,7 +318,10 @@ pub async fn handle_files_list(
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to list files for agent '{}': {}", params.agent_id, e),
+            format!(
+                "Failed to list files for agent '{}': {}",
+                params.agent_id, e
+            ),
         ),
     }
 }

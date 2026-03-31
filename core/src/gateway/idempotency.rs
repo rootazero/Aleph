@@ -3,8 +3,8 @@
 //! Uses DashMap for lock-free concurrent access. Tracks both completed
 //! results (with TTL) and in-flight requests (via watch channels).
 
-use dashmap::DashMap;
 use dashmap::mapref::entry::Entry;
+use dashmap::DashMap;
 use serde_json::Value;
 use std::time::{Duration, Instant};
 use tokio::sync::watch;
@@ -58,7 +58,9 @@ impl IdempotencySlot {
 
             // If entry was already removed (e.g., expired by prune), insert fresh
             if !notified {
-                cache.entry(key).or_insert(CacheEntry::Complete(result, Instant::now()));
+                cache
+                    .entry(key)
+                    .or_insert(CacheEntry::Complete(result, Instant::now()));
             }
         }
     }
@@ -139,9 +141,7 @@ impl IdempotencyGuard {
                             guard: Some(self.cache.clone()),
                         })
                     }
-                    CacheEntry::InFlight(tx) => {
-                        AcquireResult::Waiting(tx.subscribe())
-                    }
+                    CacheEntry::InFlight(tx) => AcquireResult::Waiting(tx.subscribe()),
                 }
             }
             Entry::Vacant(e) => {

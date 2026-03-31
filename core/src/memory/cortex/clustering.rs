@@ -231,9 +231,7 @@ impl ClusteringService {
 
         // TODO: Implement experience CRUD via new store API
         // Old code used: db.get_experience(), db.delete_experience()
-        debug!(
-            "Merge skipped: experience store not yet migrated to LanceDB",
-        );
+        debug!("Merge skipped: experience store not yet migrated to LanceDB",);
 
         Ok(())
     }
@@ -242,13 +240,16 @@ impl ClusteringService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sync_primitives::Arc;
     use crate::memory::cortex::ExperienceBuilder;
+    use crate::sync_primitives::Arc;
     use tempfile::TempDir;
 
     async fn create_test_db() -> (MemoryBackend, TempDir) {
         let temp_dir = TempDir::new().unwrap();
-        let backend = crate::memory::store::lance::LanceMemoryBackend::open_or_create(temp_dir.path()).await.unwrap();
+        let backend =
+            crate::memory::store::lance::LanceMemoryBackend::open_or_create(temp_dir.path())
+                .await
+                .unwrap();
         (Arc::new(backend), temp_dir)
     }
 
@@ -281,29 +282,20 @@ mod tests {
         let config = ClusteringConfig::default();
         let service = ClusteringService::new(db, config);
 
-        let exp1 = ExperienceBuilder::new(
-            "exp1".to_string(),
-            "intent1".to_string(),
-            "{}".to_string(),
-        )
-        .pattern_hash("hash1".to_string())
-        .build();
+        let exp1 =
+            ExperienceBuilder::new("exp1".to_string(), "intent1".to_string(), "{}".to_string())
+                .pattern_hash("hash1".to_string())
+                .build();
 
-        let exp2 = ExperienceBuilder::new(
-            "exp2".to_string(),
-            "intent2".to_string(),
-            "{}".to_string(),
-        )
-        .pattern_hash("hash1".to_string())
-        .build();
+        let exp2 =
+            ExperienceBuilder::new("exp2".to_string(), "intent2".to_string(), "{}".to_string())
+                .pattern_hash("hash1".to_string())
+                .build();
 
-        let exp3 = ExperienceBuilder::new(
-            "exp3".to_string(),
-            "intent3".to_string(),
-            "{}".to_string(),
-        )
-        .pattern_hash("hash2".to_string())
-        .build();
+        let exp3 =
+            ExperienceBuilder::new("exp3".to_string(), "intent3".to_string(), "{}".to_string())
+                .pattern_hash("hash2".to_string())
+                .build();
 
         let experiences = vec![exp1, exp2, exp3];
         let groups = service.group_by_pattern_hash(&experiences);
@@ -319,29 +311,20 @@ mod tests {
         let config = ClusteringConfig::default();
         let service = ClusteringService::new(db, config);
 
-        let exp1 = ExperienceBuilder::new(
-            "exp1".to_string(),
-            "intent1".to_string(),
-            "{}".to_string(),
-        )
-        .success_score(0.8)
-        .build();
+        let exp1 =
+            ExperienceBuilder::new("exp1".to_string(), "intent1".to_string(), "{}".to_string())
+                .success_score(0.8)
+                .build();
 
-        let exp2 = ExperienceBuilder::new(
-            "exp2".to_string(),
-            "intent2".to_string(),
-            "{}".to_string(),
-        )
-        .success_score(0.95)
-        .build();
+        let exp2 =
+            ExperienceBuilder::new("exp2".to_string(), "intent2".to_string(), "{}".to_string())
+                .success_score(0.95)
+                .build();
 
-        let exp3 = ExperienceBuilder::new(
-            "exp3".to_string(),
-            "intent3".to_string(),
-            "{}".to_string(),
-        )
-        .success_score(0.7)
-        .build();
+        let exp3 =
+            ExperienceBuilder::new("exp3".to_string(), "intent3".to_string(), "{}".to_string())
+                .success_score(0.7)
+                .build();
 
         let experiences = vec![exp1, exp2.clone(), exp3];
         let representative = service.find_representative(&experiences).unwrap();

@@ -23,8 +23,8 @@
 
 use crate::error::Result;
 use crate::payload::{AgentPayload, Capability};
-use async_trait::async_trait;
 use crate::sync_primitives::Arc;
+use async_trait::async_trait;
 
 /// Strategy trait for capability execution
 ///

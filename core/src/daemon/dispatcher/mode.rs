@@ -2,8 +2,8 @@
 //!
 //! Defines the operational mode of the Dispatcher.
 
-use chrono::{DateTime, Utc};
 use crate::daemon::worldmodel::state::PendingAction;
+use chrono::{DateTime, Utc};
 
 /// Operational mode of the Dispatcher
 #[derive(Debug, Clone, PartialEq)]

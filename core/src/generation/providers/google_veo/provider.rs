@@ -115,9 +115,7 @@ impl GoogleVeoProvider {
             "Unexpected operation_name format: {}",
             operation_name
         );
-        let sanitized = operation_name
-            .trim_start_matches('/')
-            .replace("..", "");
+        let sanitized = operation_name.trim_start_matches('/').replace("..", "");
         format!("{}/v1beta/{}", self.endpoint, sanitized)
     }
 

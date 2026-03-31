@@ -76,7 +76,7 @@ pub(crate) async fn convert_message(
     // Encode forum topic into conversation_id for session isolation.
     // Format: "{chat_id}" or "{chat_id}:topic:{thread_id}"
     let conversation_id = if let Some(thread_id) = msg.thread_id {
-        ConversationId::new(format!("{}:topic:{}", msg.chat.id.0, thread_id.0.0))
+        ConversationId::new(format!("{}:topic:{}", msg.chat.id.0, thread_id.0 .0))
     } else {
         ConversationId::new(msg.chat.id.0.to_string())
     };
@@ -119,14 +119,14 @@ pub(crate) async fn extract_attachments(
     let media_info: Option<(String, String, Option<String>, u64)> =
         if let MessageKind::Common(common) = &msg.kind {
             match &common.media_kind {
-                MediaKind::Photo(photo) => {
-                    photo.photo.last().map(|largest| (
+                MediaKind::Photo(photo) => photo.photo.last().map(|largest| {
+                    (
                         largest.file.id.clone(),
                         "image/jpeg".to_string(),
                         None,
                         largest.file.size as u64,
-                    ))
-                }
+                    )
+                }),
                 MediaKind::Document(doc) => Some((
                     doc.document.file.id.clone(),
                     doc.document

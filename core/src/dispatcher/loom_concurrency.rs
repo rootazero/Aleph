@@ -3,8 +3,8 @@
 //! Tests abstract concurrency patterns extracted from dispatcher internals.
 //! Run with: `just test-loom`
 
-use loom::thread;
 use crate::sync_primitives::{Arc, AtomicBool, AtomicU64, Ordering, RwLock};
+use loom::thread;
 use std::collections::HashMap;
 
 /// Verify concurrent read/write to a registry-like structure doesn't deadlock

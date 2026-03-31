@@ -270,10 +270,7 @@ impl Config {
 
         // Read existing file
         let existing_contents = fs::read_to_string(path).map_err(|e| {
-            AlephError::invalid_config(format!(
-                "Failed to read config for incremental save: {}",
-                e
-            ))
+            AlephError::invalid_config(format!("Failed to read config for incremental save: {}", e))
         })?;
 
         // Parse existing as toml::Value
@@ -303,9 +300,15 @@ impl Config {
                     match node {
                         toml::Value::Table(t) => match t.get(*part) {
                             Some(v) => node = v,
-                            None => { found = false; break; }
+                            None => {
+                                found = false;
+                                break;
+                            }
                         },
-                        _ => { found = false; break; }
+                        _ => {
+                            found = false;
+                            break;
+                        }
                     }
                 }
                 if found {
@@ -330,7 +333,10 @@ impl Config {
                             .entry(part.to_string())
                             .or_insert_with(|| toml::Value::Table(toml::map::Map::new()));
                     }
-                    _ => { navigated = false; break; }
+                    _ => {
+                        navigated = false;
+                        break;
+                    }
                 }
             }
 
@@ -360,10 +366,7 @@ impl Config {
                 .write(true)
                 .open(&temp_path)
                 .map_err(|e| {
-                    AlephError::invalid_config(format!(
-                        "Failed to open temp file for fsync: {}",
-                        e
-                    ))
+                    AlephError::invalid_config(format!("Failed to open temp file for fsync: {}", e))
                 })?;
             file.sync_all()
                 .map_err(|e| AlephError::invalid_config(format!("Failed to fsync: {}", e)))?;

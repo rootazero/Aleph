@@ -36,10 +36,10 @@ use crate::gateway::channel::{
     ChannelResult, ChannelState, ChannelStatus, InboundMessage, MessageId, OutboundMessage,
     PairingData, SendResult,
 };
+use crate::sync_primitives::Arc;
 use async_trait::async_trait;
 use chrono::Utc;
 use std::path::PathBuf;
-use crate::sync_primitives::Arc;
 use tokio::sync::{mpsc, oneshot, RwLock};
 
 use bridge_manager::{BridgeManager, BridgeManagerConfig};
@@ -328,9 +328,7 @@ impl Channel for WhatsAppChannel {
     async fn get_pairing_data(&self) -> ChannelResult<PairingData> {
         let state = self.pairing_state.read().await;
         match &*state {
-            PairingState::WaitingQr { qr_data, .. } => {
-                Ok(PairingData::QrCode(qr_data.clone()))
-            }
+            PairingState::WaitingQr { qr_data, .. } => Ok(PairingData::QrCode(qr_data.clone())),
             _ => Ok(PairingData::None),
         }
     }
@@ -339,7 +337,8 @@ impl Channel for WhatsAppChannel {
         #[cfg(not(unix))]
         {
             return Err(ChannelError::Internal(
-                "WhatsApp bridge requires Unix domain sockets (not available on this platform)".to_string(),
+                "WhatsApp bridge requires Unix domain sockets (not available on this platform)"
+                    .to_string(),
             ));
         }
 
@@ -354,7 +353,10 @@ impl Channel for WhatsAppChannel {
             // 2. Start the bridge process
             if let Err(e) = self.bridge_manager.start().await {
                 *self.pairing_state.write().await = PairingState::Idle;
-                return Err(ChannelError::Internal(format!("Failed to start bridge: {}", e)));
+                return Err(ChannelError::Internal(format!(
+                    "Failed to start bridge: {}",
+                    e
+                )));
             }
 
             // 3. Create event channel and RPC client
@@ -366,18 +368,23 @@ impl Channel for WhatsAppChannel {
             if let Err(e) = rpc_client.connect(5, 500).await {
                 let _ = self.bridge_manager.stop().await;
                 *self.pairing_state.write().await = PairingState::Idle;
-                return Err(ChannelError::Internal(format!("Failed to connect to bridge RPC: {}", e)));
+                return Err(ChannelError::Internal(format!(
+                    "Failed to connect to bridge RPC: {}",
+                    e
+                )));
             }
 
             // 5. Tell the bridge to connect to WhatsApp
-            let connect_result: Result<serde_json::Value, _> = rpc_client
-                .call("bridge.connect", None)
-                .await;
+            let connect_result: Result<serde_json::Value, _> =
+                rpc_client.call("bridge.connect", None).await;
             if let Err(e) = connect_result {
                 rpc_client.disconnect().await;
                 let _ = self.bridge_manager.stop().await;
                 *self.pairing_state.write().await = PairingState::Idle;
-                return Err(ChannelError::Internal(format!("bridge.connect RPC failed: {}", e)));
+                return Err(ChannelError::Internal(format!(
+                    "bridge.connect RPC failed: {}",
+                    e
+                )));
             }
 
             // 6. Spawn event loop
@@ -419,9 +426,10 @@ impl Channel for WhatsAppChannel {
         }
 
         // 3. Stop bridge process
-        self.bridge_manager.stop().await.map_err(|e| {
-            ChannelError::Internal(format!("Failed to stop bridge: {}", e))
-        })?;
+        self.bridge_manager
+            .stop()
+            .await
+            .map_err(|e| ChannelError::Internal(format!("Failed to stop bridge: {}", e)))?;
 
         // 4. Set pairing state to Idle
         *self.pairing_state.write().await = PairingState::Idle;
@@ -433,9 +441,10 @@ impl Channel for WhatsAppChannel {
         // Check if connected
         let state = self.pairing_state.read().await;
         if !state.is_connected() {
-            return Err(ChannelError::NotConnected(
-                format!("WhatsApp not connected (state: {})", state.description()),
-            ));
+            return Err(ChannelError::NotConnected(format!(
+                "WhatsApp not connected (state: {})",
+                state.description()
+            )));
         }
         drop(state);
 
@@ -443,16 +452,18 @@ impl Channel for WhatsAppChannel {
         {
             let _ = message;
             return Err(ChannelError::Internal(
-                "WhatsApp bridge requires Unix domain sockets (not available on this platform)".to_string(),
+                "WhatsApp bridge requires Unix domain sockets (not available on this platform)"
+                    .to_string(),
             ));
         }
 
         #[cfg(unix)]
         {
             // Get the RPC client
-            let rpc_client = self.rpc_client.as_ref().ok_or_else(|| {
-                ChannelError::Internal("RPC client not initialized".to_string())
-            })?;
+            let rpc_client = self
+                .rpc_client
+                .as_ref()
+                .ok_or_else(|| ChannelError::Internal("RPC client not initialized".to_string()))?;
 
             // Convert outbound message to bridge SendRequest
             let send_request = message::outbound_to_send_request(&message);
@@ -464,9 +475,7 @@ impl Channel for WhatsAppChannel {
             let response: bridge_protocol::SendResponse = rpc_client
                 .call("bridge.send", Some(params))
                 .await
-                .map_err(|e| {
-                    ChannelError::SendFailed(format!("bridge.send RPC failed: {}", e))
-                })?;
+                .map_err(|e| ChannelError::SendFailed(format!("bridge.send RPC failed: {}", e)))?;
 
             Ok(SendResult {
                 message_id: MessageId::new(response.id),
@@ -474,7 +483,6 @@ impl Channel for WhatsAppChannel {
             })
         }
     }
-
 }
 
 /// Factory for creating WhatsApp channels

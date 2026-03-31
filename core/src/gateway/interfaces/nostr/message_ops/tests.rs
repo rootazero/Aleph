@@ -4,8 +4,7 @@ use super::*;
 use sha2::{Digest, Sha256};
 
 // A known test private key (NOT a real key, just deterministic for tests)
-const TEST_PRIVKEY: &str =
-    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+const TEST_PRIVKEY: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
 // ==================== Event ID Tests ====================
 
@@ -103,7 +102,8 @@ fn test_build_text_note() {
 #[test]
 fn test_build_dm() {
     let pubkey = "aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd";
-    let recipient = "11223344112233441122334411223344112233441122334411223344112233441122334411223344";
+    let recipient =
+        "11223344112233441122334411223344112233441122334411223344112233441122334411223344";
     let event = build_dm("Secret message", pubkey, recipient);
 
     assert_eq!(event.kind, 4);
@@ -347,11 +347,12 @@ fn test_derive_pubkey_deterministic() {
 #[test]
 fn test_derive_pubkey_different_keys() {
     let pk1 = derive_pubkey(TEST_PRIVKEY).unwrap();
-    let pk2 = derive_pubkey(
-        "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
-    )
-    .unwrap();
-    assert_ne!(pk1, pk2, "Different private keys should produce different public keys");
+    let pk2 =
+        derive_pubkey("fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210").unwrap();
+    assert_ne!(
+        pk1, pk2,
+        "Different private keys should produce different public keys"
+    );
 }
 
 #[test]
@@ -370,9 +371,7 @@ fn test_derive_pubkey_wrong_length() {
 #[test]
 fn test_derive_pubkey_zero_key() {
     // All zeros is not a valid secp256k1 private key
-    let result = derive_pubkey(
-        "0000000000000000000000000000000000000000000000000000000000000000",
-    );
+    let result = derive_pubkey("0000000000000000000000000000000000000000000000000000000000000000");
     assert!(result.is_err());
 }
 
@@ -471,10 +470,7 @@ fn test_convert_with_reply() {
         pubkey: "sender-pubkey".to_string(),
         created_at: 1700000000,
         kind: 1,
-        tags: vec![vec![
-            "e".to_string(),
-            "parent-event-id".to_string(),
-        ]],
+        tags: vec![vec!["e".to_string(), "parent-event-id".to_string()]],
         content: "Reply text".to_string(),
         sig: "sig".to_string(),
     };
@@ -517,7 +513,11 @@ fn test_sign_event_produces_valid_signature() {
     sign_event(&mut event, TEST_PRIVKEY).unwrap();
 
     // Signature should be 128 hex chars (64 bytes Schnorr signature)
-    assert_eq!(event.sig.len(), 128, "Schnorr signature should be 128 hex chars");
+    assert_eq!(
+        event.sig.len(),
+        128,
+        "Schnorr signature should be 128 hex chars"
+    );
     assert!(
         event.sig.chars().all(|c| c.is_ascii_hexdigit()),
         "Signature should be valid hex"

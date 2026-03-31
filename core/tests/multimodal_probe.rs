@@ -138,7 +138,11 @@ async fn test_unknown_type_placeholder() {
     assert_eq!(blocks.len(), 1);
     match &blocks[0] {
         ContentBlock::Text { text } => {
-            assert!(text.contains("report.pdf"), "should mention filename, got: {}", text);
+            assert!(
+                text.contains("report.pdf"),
+                "should mention filename, got: {}",
+                text
+            );
             assert!(
                 text.contains("application/pdf"),
                 "should mention MIME type, got: {}",

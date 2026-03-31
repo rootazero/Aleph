@@ -2,14 +2,14 @@
 //!
 //! Implements file search with pattern matching and filters
 
-use std::path::PathBuf;
+use crate::error::{AlephError, Result};
 use crate::sync_primitives::Arc;
 use async_trait::async_trait;
 use regex::Regex;
+use std::path::PathBuf;
 use tracing::debug;
-use crate::error::{AlephError, Result};
 
-use super::{SearchOps, ExecutorContext, AtomicResult, SearchPattern, SearchScope, FileFilter};
+use super::{AtomicResult, ExecutorContext, FileFilter, SearchOps, SearchPattern, SearchScope};
 
 /// Search match result
 #[derive(Debug, Clone)]
@@ -64,12 +64,19 @@ impl SearchOpsHandler {
             SearchScope::Directory { path, recursive } => {
                 let resolved = self.context.resolve_path(path.to_str().unwrap_or(""))?;
                 if resolved.exists() && resolved.is_dir() {
-                    self.context.collect_files_from_directory(&resolved, *recursive, filters, &mut files)
+                    self.context
+                        .collect_files_from_directory(&resolved, *recursive, filters, &mut files)
                         .await?;
                 }
             }
             SearchScope::Workspace => {
-                self.context.collect_files_from_directory(&self.context.working_dir, true, filters, &mut files)
+                self.context
+                    .collect_files_from_directory(
+                        &self.context.working_dir,
+                        true,
+                        filters,
+                        &mut files,
+                    )
                     .await?;
             }
         }
@@ -201,7 +208,11 @@ impl SearchOps for SearchOpsHandler {
             format!(
                 "Found {} matches in {} files:\n{}",
                 matches.len(),
-                matches.iter().map(|m| &m.file).collect::<std::collections::HashSet<_>>().len(),
+                matches
+                    .iter()
+                    .map(|m| &m.file)
+                    .collect::<std::collections::HashSet<_>>()
+                    .len(),
                 matches
                     .iter()
                     .map(|m| format!("{}:{}:{}", m.file.display(), m.line_number, m.line_content))

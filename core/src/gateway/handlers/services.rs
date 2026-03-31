@@ -93,7 +93,10 @@ pub async fn handle_start(request: JsonRpcRequest) -> JsonRpcResponse {
     };
 
     // Start the service
-    match manager.start_service(&params.plugin_id, &params.service_id).await {
+    match manager
+        .start_service(&params.plugin_id, &params.service_id)
+        .await
+    {
         Ok(info) => {
             let info_json = ServiceInfoJson::from(info);
             JsonRpcResponse::success(request.id, json!({ "service": info_json }))
@@ -148,7 +151,10 @@ pub async fn handle_stop(request: JsonRpcRequest) -> JsonRpcResponse {
     };
 
     // Stop the service
-    match manager.stop_service(&params.plugin_id, &params.service_id).await {
+    match manager
+        .stop_service(&params.plugin_id, &params.service_id)
+        .await
+    {
         Ok(info) => {
             let info_json = ServiceInfoJson::from(info);
             JsonRpcResponse::success(request.id, json!({ "service": info_json }))
@@ -301,7 +307,10 @@ pub async fn handle_status(request: JsonRpcRequest) -> JsonRpcResponse {
     };
 
     // Get service status
-    match manager.get_service_status(&params.plugin_id, &params.service_id).await {
+    match manager
+        .get_service_status(&params.plugin_id, &params.service_id)
+        .await
+    {
         Some(info) => {
             let info_json = ServiceInfoJson::from(info);
             JsonRpcResponse::success(request.id, json!({ "service": info_json }))

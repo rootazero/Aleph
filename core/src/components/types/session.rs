@@ -1,15 +1,15 @@
 //! Execution session types
 
 use crate::sync_primitives::Arc;
-use tokio::sync::RwLock;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use tokio::sync::RwLock;
 
 use crate::dispatcher::ToolRegistry;
 use crate::event::EventBus;
 
-use super::status::SessionStatus;
 use super::parts::SessionPart;
+use super::status::SessionStatus;
 
 /// Execution session - tracks the state of an agentic loop
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -29,7 +29,6 @@ pub struct ExecutionSession {
     // =========================================================================
     // Unified session model fields (from LoopState)
     // =========================================================================
-
     /// User's original request (from LoopState)
     #[serde(default)]
     pub original_request: String,

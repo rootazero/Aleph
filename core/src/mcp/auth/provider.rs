@@ -102,9 +102,10 @@ impl OAuthProvider {
             self.server_url.trim_end_matches('/')
         );
 
-        let response = self.client.get(&url).send().await.map_err(|e| {
-            AlephError::IoError(format!("Failed to fetch OAuth metadata: {}", e))
-        })?;
+        let response =
+            self.client.get(&url).send().await.map_err(|e| {
+                AlephError::IoError(format!("Failed to fetch OAuth metadata: {}", e))
+            })?;
 
         if !response.status().is_success() {
             return Err(AlephError::IoError(format!(
@@ -113,9 +114,10 @@ impl OAuthProvider {
             )));
         }
 
-        response.json::<OAuthServerMetadata>().await.map_err(|e| {
-            AlephError::IoError(format!("Failed to parse OAuth metadata: {}", e))
-        })
+        response
+            .json::<OAuthServerMetadata>()
+            .await
+            .map_err(|e| AlephError::IoError(format!("Failed to parse OAuth metadata: {}", e)))
     }
 
     /// Register client dynamically (if server supports it)
@@ -123,9 +125,7 @@ impl OAuthProvider {
     /// Uses OAuth 2.0 Dynamic Client Registration (RFC 7591)
     pub async fn register_client(&self, metadata: &OAuthServerMetadata) -> Result<ClientInfo> {
         let registration_endpoint = metadata.registration_endpoint.as_ref().ok_or_else(|| {
-            AlephError::IoError(
-                "Server does not support dynamic client registration".to_string(),
-            )
+            AlephError::IoError("Server does not support dynamic client registration".to_string())
         })?;
 
         let request_body = serde_json::json!({
@@ -199,9 +199,8 @@ impl OAuthProvider {
         let state = generate_state();
 
         // Build authorization URL
-        let mut url = url::Url::parse(&metadata.authorization_endpoint).map_err(|e| {
-            AlephError::IoError(format!("Invalid authorization endpoint: {}", e))
-        })?;
+        let mut url = url::Url::parse(&metadata.authorization_endpoint)
+            .map_err(|e| AlephError::IoError(format!("Invalid authorization endpoint: {}", e)))?;
 
         url.query_pairs_mut()
             .append_pair("response_type", "code")
@@ -249,17 +248,19 @@ impl OAuthProvider {
         received_state: &str,
     ) -> Result<OAuthTokens> {
         // Get stored state and code verifier
-        let entry = self.storage.get_entry(&self.server_name).await?.ok_or_else(|| {
-            AlephError::IoError("No pending authorization found".to_string())
-        })?;
+        let entry = self
+            .storage
+            .get_entry(&self.server_name)
+            .await?
+            .ok_or_else(|| AlephError::IoError("No pending authorization found".to_string()))?;
 
-        let stored_state = entry.oauth_state.ok_or_else(|| {
-            AlephError::IoError("No stored state found".to_string())
-        })?;
+        let stored_state = entry
+            .oauth_state
+            .ok_or_else(|| AlephError::IoError("No stored state found".to_string()))?;
 
-        let code_verifier = entry.code_verifier.ok_or_else(|| {
-            AlephError::IoError("No code verifier found".to_string())
-        })?;
+        let code_verifier = entry
+            .code_verifier
+            .ok_or_else(|| AlephError::IoError("No code verifier found".to_string()))?;
 
         // Verify state matches (constant-time comparison to prevent timing oracle)
         use subtle::ConstantTimeEq;
@@ -302,12 +303,14 @@ impl OAuthProvider {
         let tokens = parse_token_response(response).await?;
 
         // Save tokens
-        self.storage
-            .save_tokens(&self.server_name, &tokens)
-            .await?;
+        self.storage.save_tokens(&self.server_name, &tokens).await?;
 
         // Clear temporary state
-        let mut entry = self.storage.get_entry(&self.server_name).await?.unwrap_or_default();
+        let mut entry = self
+            .storage
+            .get_entry(&self.server_name)
+            .await?
+            .unwrap_or_default();
         entry.code_verifier = None;
         entry.oauth_state = None;
         self.storage.save_entry(&self.server_name, &entry).await?;
@@ -329,9 +332,9 @@ impl OAuthProvider {
             .await?
             .ok_or_else(|| AlephError::IoError("No tokens to refresh".to_string()))?;
 
-        let refresh_token = current_tokens.refresh_token.ok_or_else(|| {
-            AlephError::IoError("No refresh token available".to_string())
-        })?;
+        let refresh_token = current_tokens
+            .refresh_token
+            .ok_or_else(|| AlephError::IoError("No refresh token available".to_string()))?;
 
         self.refresh_token_with(metadata, client_id, &refresh_token)
             .await
@@ -372,9 +375,7 @@ impl OAuthProvider {
         let tokens = parse_token_response(response).await?;
 
         // Save new tokens
-        self.storage
-            .save_tokens(&self.server_name, &tokens)
-            .await?;
+        self.storage.save_tokens(&self.server_name, &tokens).await?;
 
         tracing::info!(
             server = %self.server_name,
@@ -492,9 +493,10 @@ async fn parse_token_response(response: reqwest::Response) -> Result<OAuthTokens
         scope: Option<String>,
     }
 
-    let token_response: TokenResponse = response.json().await.map_err(|e| {
-        AlephError::IoError(format!("Failed to parse token response: {}", e))
-    })?;
+    let token_response: TokenResponse = response
+        .json()
+        .await
+        .map_err(|e| AlephError::IoError(format!("Failed to parse token response: {}", e)))?;
 
     let expires_at = token_response.expires_in.map(|exp| {
         std::time::SystemTime::now()
@@ -521,7 +523,9 @@ mod tests {
         let verifier = generate_code_verifier();
         // Code verifier should be URL-safe base64 encoded
         assert!(verifier.len() >= 43); // 32 bytes base64 encoded
-        assert!(verifier.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
+        assert!(verifier
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
     }
 
     #[test]
@@ -537,7 +541,9 @@ mod tests {
         let state = generate_state();
         // State should be URL-safe base64 encoded
         assert!(state.len() >= 22); // 16 bytes base64 encoded
-        assert!(state.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
+        assert!(state
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
     }
 
     #[test]
@@ -547,7 +553,10 @@ mod tests {
             token_endpoint: "https://example.com/token".to_string(),
             registration_endpoint: Some("https://example.com/register".to_string()),
             response_types_supported: vec!["code".to_string()],
-            grant_types_supported: vec!["authorization_code".to_string(), "refresh_token".to_string()],
+            grant_types_supported: vec![
+                "authorization_code".to_string(),
+                "refresh_token".to_string(),
+            ],
             code_challenge_methods_supported: vec!["S256".to_string()],
         };
 
@@ -556,7 +565,10 @@ mod tests {
         assert!(json.contains("token_endpoint"));
 
         let deserialized: OAuthServerMetadata = serde_json::from_str(&json).unwrap();
-        assert_eq!(deserialized.authorization_endpoint, metadata.authorization_endpoint);
+        assert_eq!(
+            deserialized.authorization_endpoint,
+            metadata.authorization_endpoint
+        );
     }
 
     #[tokio::test]

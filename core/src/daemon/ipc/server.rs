@@ -1,5 +1,5 @@
-use crate::daemon::{DaemonError, DaemonStatus, Result};
 use crate::daemon::ipc::protocol::*;
+use crate::daemon::{DaemonError, DaemonStatus, Result};
 use serde_json::Value;
 use std::path::Path;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -70,11 +70,8 @@ impl IpcServer {
             let response = match serde_json::from_str::<JsonRpcRequest>(&line) {
                 Ok(request) => Self::handle_request(request).await,
                 Err(e) => {
-                    let error = JsonRpcError::new(
-                        Value::Null,
-                        PARSE_ERROR,
-                        format!("Parse error: {}", e),
-                    );
+                    let error =
+                        JsonRpcError::new(Value::Null, PARSE_ERROR, format!("Parse error: {}", e));
                     serde_json::to_string(&error).unwrap_or_else(|e| {
                         format!(r#"{{"jsonrpc":"2.0","error":{{"code":-32603,"message":"Serialization error: {}"}},"id":null}}"#, e)
                     })
@@ -146,7 +143,9 @@ impl IpcServer {
             // Send SIGTERM to self for graceful shutdown via the signal handler
             #[cfg(unix)]
             {
-                unsafe { libc::kill(libc::getpid(), libc::SIGTERM); }
+                unsafe {
+                    libc::kill(libc::getpid(), libc::SIGTERM);
+                }
             }
             #[cfg(not(unix))]
             {

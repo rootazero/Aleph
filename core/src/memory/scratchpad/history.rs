@@ -110,7 +110,10 @@ impl SessionHistory {
         match fs::metadata(&self.path).await {
             Ok(metadata) => Ok(metadata.len()),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(0),
-            Err(e) => Err(AlephError::other(format!("Failed to get history metadata: {}", e))),
+            Err(e) => Err(AlephError::other(format!(
+                "Failed to get history metadata: {}",
+                e
+            ))),
         }
     }
 
@@ -127,7 +130,10 @@ impl SessionHistory {
         // Try to remove old file if it exists (EAFP pattern - handle NotFound gracefully)
         if let Err(e) = fs::remove_file(&old_path).await {
             if e.kind() != std::io::ErrorKind::NotFound {
-                return Err(AlephError::other(format!("Failed to remove old history: {}", e)));
+                return Err(AlephError::other(format!(
+                    "Failed to remove old history: {}",
+                    e
+                )));
             }
         }
 
@@ -185,7 +191,10 @@ mod tests {
         let history = SessionHistory::new(temp.path().join("history.log"));
 
         // Write enough to exceed 100 bytes
-        history.append("A".repeat(100).as_str(), "sess").await.unwrap();
+        history
+            .append("A".repeat(100).as_str(), "sess")
+            .await
+            .unwrap();
 
         let rotated = history.rotate_if_needed(50).await.unwrap();
         assert!(rotated);

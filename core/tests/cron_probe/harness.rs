@@ -6,11 +6,9 @@ use std::sync::Arc;
 
 use tempfile::TempDir;
 
-use alephcore::cron::clock::Clock;
 use alephcore::cron::clock::testing::FakeClock;
-use alephcore::cron::config::{
-    CronConfig, CronJob, CronJobView, JobStateV2, ScheduleKind,
-};
+use alephcore::cron::clock::Clock;
+use alephcore::cron::config::{CronConfig, CronJob, CronJobView, JobStateV2, ScheduleKind};
 use alephcore::cron::service::catchup::run_startup_catchup;
 use alephcore::cron::service::concurrency::phase1_mark_manual;
 use alephcore::cron::service::ops::{self, CronJobUpdates};
@@ -119,8 +117,7 @@ impl CronTestHarness {
     /// Update a job with partial changes.
     pub async fn update_job(&self, id: &str, updates: CronJobUpdates) {
         let mut store = self.state.store.lock().await;
-        ops::update_job(&mut store, id, updates, self.clock.as_ref())
-            .expect("update_job failed");
+        ops::update_job(&mut store, id, updates, self.clock.as_ref()).expect("update_job failed");
         store.persist().expect("failed to persist after update_job");
     }
 
@@ -134,8 +131,8 @@ impl CronTestHarness {
     /// Toggle a job's enabled state. Returns the new enabled state.
     pub async fn toggle_job(&self, id: &str) -> bool {
         let mut store = self.state.store.lock().await;
-        let result = ops::toggle_job(&mut store, id, self.clock.as_ref())
-            .expect("toggle_job failed");
+        let result =
+            ops::toggle_job(&mut store, id, self.clock.as_ref()).expect("toggle_job failed");
         store.persist().expect("failed to persist after toggle_job");
         result
     }
@@ -236,7 +233,8 @@ impl CronTestHarness {
         let job = store.get_job(id).expect(&format!("job '{id}' not found"));
         assert_eq!(
             job.enabled, expected,
-            "expected job '{id}' enabled={expected}, got enabled={}", job.enabled
+            "expected job '{id}' enabled={expected}, got enabled={}",
+            job.enabled
         );
     }
 
@@ -255,7 +253,9 @@ impl CronTestHarness {
     pub async fn assert_next_run_after(&self, id: &str, ms: i64) {
         let store = self.state.store.lock().await;
         let job = store.get_job(id).expect(&format!("job '{id}' not found"));
-        let next = job.state.next_run_at_ms
+        let next = job
+            .state
+            .next_run_at_ms
             .expect(&format!("job '{id}' has no next_run_at_ms"));
         assert!(
             next > ms,

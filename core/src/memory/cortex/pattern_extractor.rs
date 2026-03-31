@@ -4,8 +4,8 @@
 //! raw execution traces into reusable, parameterized patterns.
 
 use crate::error::{AlephError, Result};
-use crate::utils::json_extract::extract_json_robust;
 use crate::memory::cortex::{EnvironmentContext, Experience, ParameterMapping};
+use crate::utils::json_extract::extract_json_robust;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
@@ -91,15 +91,16 @@ impl PatternExtractor {
     /// Build the extraction prompt
     fn build_extraction_prompt(&self, experience: &Experience) -> String {
         // Parse environment context if available
-        let (working_dir, platform) = if let Some(ref env_json) = experience.environment_context_json {
-            if let Ok(env) = serde_json::from_str::<EnvironmentContext>(env_json) {
-                (env.working_directory, env.platform)
+        let (working_dir, platform) =
+            if let Some(ref env_json) = experience.environment_context_json {
+                if let Ok(env) = serde_json::from_str::<EnvironmentContext>(env_json) {
+                    (env.working_directory, env.platform)
+                } else {
+                    ("unknown".to_string(), "unknown".to_string())
+                }
             } else {
                 ("unknown".to_string(), "unknown".to_string())
-            }
-        } else {
-            ("unknown".to_string(), "unknown".to_string())
-        };
+            };
 
         format!(
             r#"You are an expert at analyzing task execution patterns and extracting reusable templates.
@@ -195,7 +196,9 @@ Provide ONLY the JSON object, no additional text."#,
 
         Err(AlephError::Other {
             message: "LLM integration not yet implemented".to_string(),
-            suggestion: Some("This will be implemented when integrating with ProviderManager".to_string()),
+            suggestion: Some(
+                "This will be implemented when integrating with ProviderManager".to_string(),
+            ),
         })
     }
 
@@ -231,7 +234,7 @@ Provide ONLY the JSON object, no additional text."#,
         // Use FNV-1a with a fixed seed for deterministic hashing across runs.
         // DefaultHasher is NOT stable across Rust versions.
         let mut hash: u64 = 0xcbf29ce484222325; // FNV offset basis
-        let prime: u64 = 0x100000001b3;          // FNV prime
+        let prime: u64 = 0x100000001b3; // FNV prime
         for byte in pattern.description.as_bytes() {
             hash ^= *byte as u64;
             hash = hash.wrapping_mul(prime);
@@ -261,8 +264,8 @@ struct ExtractedPatternRaw {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
     use crate::memory::cortex::{EnvironmentContext, ExperienceBuilder};
+    use std::collections::HashMap;
 
     #[test]
     fn test_extract_json_from_markdown() {
@@ -283,7 +286,8 @@ mod tests {
 
     #[test]
     fn test_extract_json_plain() {
-        let response = r#"{"description": "Test", "parameter_mapping": {"variables": {}}, "key_steps": []}"#;
+        let response =
+            r#"{"description": "Test", "parameter_mapping": {"variables": {}}, "key_steps": []}"#;
 
         let result = extract_json_robust(response);
         assert!(result.is_some());

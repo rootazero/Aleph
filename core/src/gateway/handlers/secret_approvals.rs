@@ -4,8 +4,8 @@
 //! - secret.approval.resolve  — Client approves or denies the request
 //! - secret.approvals.pending — List pending approval requests
 
-use std::collections::HashMap;
 use crate::sync_primitives::Arc;
+use std::collections::HashMap;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -95,7 +95,9 @@ impl SecretApprovalManager {
             Ok(_) => {
                 let mut pending = self.pending.lock().await;
                 if let Some(record) = pending.remove(&id) {
-                    record.decision.ok_or_else(|| "Decision not set".to_string())
+                    record
+                        .decision
+                        .ok_or_else(|| "Decision not set".to_string())
                 } else {
                     Err("Approval record not found".to_string())
                 }
@@ -207,10 +209,7 @@ pub async fn handle_pending(
     manager: Arc<SecretApprovalManager>,
 ) -> JsonRpcResponse {
     let pending = manager.list_pending().await;
-    JsonRpcResponse::success(
-        request.id.clone(),
-        json!({ "approvals": pending }),
-    )
+    JsonRpcResponse::success(request.id.clone(), json!({ "approvals": pending }))
 }
 
 #[cfg(test)]

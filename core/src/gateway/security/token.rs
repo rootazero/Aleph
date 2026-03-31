@@ -134,7 +134,14 @@ impl TokenManager {
         let expires_at = now + expiry_ms;
 
         self.store
-            .insert_token(&token_id, device_id, &token_hash, role.as_str(), &scopes, expires_at)
+            .insert_token(
+                &token_id,
+                device_id,
+                &token_hash,
+                role.as_str(),
+                &scopes,
+                expires_at,
+            )
             .map_err(|e| TokenError::DatabaseError(e.to_string()))?;
 
         Ok(SignedToken {
@@ -146,7 +153,11 @@ impl TokenManager {
     }
 
     /// Validate a token and its signature
-    pub fn validate_token(&self, token: &str, signature: &str) -> Result<TokenValidation, TokenError> {
+    pub fn validate_token(
+        &self,
+        token: &str,
+        signature: &str,
+    ) -> Result<TokenValidation, TokenError> {
         // Verify HMAC signature
         hmac_verify(&self.secret, token, signature).map_err(|_| TokenError::SignatureInvalid)?;
 
@@ -184,7 +195,11 @@ impl TokenManager {
     }
 
     /// Rotate a token (invalidate old, issue new)
-    pub fn rotate_token(&self, old_token: &str, old_signature: &str) -> Result<SignedToken, TokenError> {
+    pub fn rotate_token(
+        &self,
+        old_token: &str,
+        old_signature: &str,
+    ) -> Result<SignedToken, TokenError> {
         // Validate the old token first
         let validation = self.validate_token(old_token, old_signature)?;
 
@@ -263,7 +278,9 @@ mod tests {
         assert!(!signed.token.is_empty());
         assert!(!signed.signature.is_empty());
 
-        let validation = manager.validate_token(&signed.token, &signed.signature).unwrap();
+        let validation = manager
+            .validate_token(&signed.token, &signed.signature)
+            .unwrap();
         assert_eq!(validation.device_id, "dev-1");
         assert_eq!(validation.role, DeviceRole::Operator);
     }
@@ -309,11 +326,15 @@ mod tests {
             .issue_token("dev-1", DeviceRole::Operator, vec![])
             .unwrap();
 
-        assert!(manager.validate_token(&signed.token, &signed.signature).is_ok());
+        assert!(manager
+            .validate_token(&signed.token, &signed.signature)
+            .is_ok());
 
         manager.revoke_token(&signed.token_id).unwrap();
 
-        assert!(manager.validate_token(&signed.token, &signed.signature).is_err());
+        assert!(manager
+            .validate_token(&signed.token, &signed.signature)
+            .is_err());
     }
 
     #[test]
@@ -321,8 +342,12 @@ mod tests {
         let manager = create_test_manager();
 
         // Issue multiple tokens
-        let t1 = manager.issue_token("dev-1", DeviceRole::Operator, vec![]).unwrap();
-        let t2 = manager.issue_token("dev-1", DeviceRole::Operator, vec![]).unwrap();
+        let t1 = manager
+            .issue_token("dev-1", DeviceRole::Operator, vec![])
+            .unwrap();
+        let t2 = manager
+            .issue_token("dev-1", DeviceRole::Operator, vec![])
+            .unwrap();
 
         // Revoke all
         let count = manager.revoke_device_tokens("dev-1").unwrap();
@@ -360,11 +385,7 @@ mod tests {
 
         let result = manager.validate_token(&signed.token, &signed.signature);
         // Token should fail validation - either expired or not found (database query filters expired)
-        assert!(
-            result.is_err(),
-            "Expected error but got: {:?}",
-            result
-        );
+        assert!(result.is_err(), "Expected error but got: {:?}", result);
         match result {
             Err(TokenError::TokenExpired) | Err(TokenError::InvalidToken) => {
                 // Both are acceptable - database query may filter expired tokens

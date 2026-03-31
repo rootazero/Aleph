@@ -1,7 +1,9 @@
 //! Shared helper functions for Arrow <-> domain type conversions.
 
 use arrow_array::builder::{FixedSizeListBuilder, Float32Builder};
-use arrow_array::{Array, FixedSizeListArray, Float32Array, Int64Array, ListArray, RecordBatch, StringArray};
+use arrow_array::{
+    Array, FixedSizeListArray, Float32Array, Int64Array, ListArray, RecordBatch, StringArray,
+};
 use tracing::warn;
 
 use crate::error::AlephError;
@@ -121,11 +123,7 @@ pub(super) fn normalize_embedding(embedding: &[f32]) -> Option<Vec<f32>> {
     }
 
     // Find the largest standard dim that is strictly smaller
-    let target = STANDARD_DIMS
-        .iter()
-        .rev()
-        .find(|&&d| d < dim)
-        .copied();
+    let target = STANDARD_DIMS.iter().rev().find(|&&d| d < dim).copied();
 
     match target {
         Some(target_dim) => {
@@ -137,7 +135,10 @@ pub(super) fn normalize_embedding(embedding: &[f32]) -> Option<Vec<f32>> {
             Some(truncate_and_normalize(embedding.to_vec(), target_dim))
         }
         None => {
-            warn!(dim, "Embedding dimension too small for any supported column, skipping storage");
+            warn!(
+                dim,
+                "Embedding dimension too small for any supported column, skipping storage"
+            );
             None
         }
     }

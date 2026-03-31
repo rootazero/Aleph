@@ -182,7 +182,11 @@ fn test_mixed_blocks_to_telegram_html() {
     assert!(result.contains("Some text"), "text: {}", result);
     assert!(result.contains("• item 1"), "list: {}", result);
     assert!(result.contains("———"), "hr: {}", result);
-    assert!(result.contains("<blockquote>quote</blockquote>"), "quote: {}", result);
+    assert!(
+        result.contains("<blockquote>quote</blockquote>"),
+        "quote: {}",
+        result
+    );
 }
 
 // -----------------------------------------------------------------------
@@ -331,10 +335,7 @@ fn test_split_respects_code_blocks() {
     // it should remain intact.
     if text.len() > 200 {
         // We expect the code block to fit in one chunk since it's ~80 bytes.
-        assert!(
-            !found_partial_fence,
-            "code block was split across chunks"
-        );
+        assert!(!found_partial_fence, "code block was split across chunks");
     }
 }
 
@@ -355,7 +356,11 @@ fn test_split_long_line_hard_split() {
     let long_line = "x".repeat(150);
     let max_len = 40;
     let chunks = MessageFormatter::split(&long_line, max_len);
-    assert!(chunks.len() >= 4, "expected at least 4 chunks, got {}", chunks.len());
+    assert!(
+        chunks.len() >= 4,
+        "expected at least 4 chunks, got {}",
+        chunks.len()
+    );
     for (i, chunk) in chunks.iter().enumerate() {
         assert!(
             chunk.len() <= max_len,
@@ -432,10 +437,7 @@ fn test_normalize_slack_mrkdwn() {
 #[test]
 fn test_normalize_slack_link() {
     assert_eq!(
-        MessageFormatter::normalize(
-            "<https://example.com|text>",
-            MarkupFormat::SlackMrkdwn
-        ),
+        MessageFormatter::normalize("<https://example.com|text>", MarkupFormat::SlackMrkdwn),
         "[text](https://example.com)"
     );
 }

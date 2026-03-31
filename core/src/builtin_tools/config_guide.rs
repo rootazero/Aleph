@@ -5,15 +5,16 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-
+use super::{notify_tool_result, notify_tool_start};
 use crate::error::Result;
 use crate::tools::AlephTool;
-use super::{notify_tool_start, notify_tool_result};
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ReadConfigGuideArgs {
     /// Topic to get configuration guide for
-    #[schemars(description = "Configuration domain: overview (all domains + file paths), providers (LLM provider config + vault), mcp (MCP server config), skills (skill install + format), agents (agent workspace + SOUL.md), general (general/memory/policies), generation (image/speech/video providers), channels (Telegram/Discord config), cron (scheduled tasks)")]
+    #[schemars(
+        description = "Configuration domain: overview (all domains + file paths), providers (LLM provider config + vault), mcp (MCP server config), skills (skill install + format), agents (agent workspace + SOUL.md), general (general/memory/policies), generation (image/speech/video providers), channels (Telegram/Discord config), cron (scheduled tasks)"
+    )]
     pub topic: GuideTopic,
 }
 
@@ -96,7 +97,12 @@ impl AlephTool for ReadConfigGuideTool {
         let content = match tokio::fs::read_to_string(&file_path).await {
             Ok(c) => c,
             Err(e) => {
-                let msg = format!("Guide '{}' not found at {}: {}", topic_name, file_path.display(), e);
+                let msg = format!(
+                    "Guide '{}' not found at {}: {}",
+                    topic_name,
+                    file_path.display(),
+                    e
+                );
                 notify_tool_result(Self::NAME, &msg, false);
                 return Ok(ReadConfigGuideOutput {
                     success: false,

@@ -53,7 +53,9 @@ impl AlephTool for BrowserSelectTool {
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         let target = if let Some(ref rid) = args.ref_id {
-            ActionTarget::Ref { ref_id: rid.clone() }
+            ActionTarget::Ref {
+                ref_id: rid.clone(),
+            }
         } else if let Some(ref css) = args.selector {
             ActionTarget::Selector { css: css.clone() }
         } else {

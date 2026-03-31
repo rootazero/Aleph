@@ -3,11 +3,8 @@
 //! These tests verify that all schema-related components work together correctly,
 //! including schema generation and UI hints.
 
-use crate::config::{
-    build_ui_hints,
-    generate_config_schema_json,
-};
 use crate::config::schema::generate_config_schema;
+use crate::config::{build_ui_hints, generate_config_schema_json};
 
 #[test]
 fn test_full_schema_generation() {
@@ -182,11 +179,7 @@ fn test_schema_and_hints_consistency() {
             path
         );
         for segment in &segments {
-            assert!(
-                !segment.is_empty(),
-                "Path '{}' has empty segment",
-                path
-            );
+            assert!(!segment.is_empty(), "Path '{}' has empty segment", path);
         }
     }
 }
@@ -197,10 +190,7 @@ fn test_groups_have_valid_metadata() {
 
     for (group_id, meta) in &hints.groups {
         // Group ID should be non-empty
-        assert!(
-            !group_id.is_empty(),
-            "Group ID should not be empty"
-        );
+        assert!(!group_id.is_empty(), "Group ID should not be empty");
 
         // Label should be non-empty
         assert!(
@@ -247,9 +237,6 @@ fn test_schema_definitions_not_empty() {
 
     // Each definition should have content
     for (name, _def) in schema.definitions.iter() {
-        assert!(
-            !name.is_empty(),
-            "Definition name should not be empty"
-        );
+        assert!(!name.is_empty(), "Definition name should not be empty");
     }
 }

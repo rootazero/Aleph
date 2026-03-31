@@ -2,10 +2,10 @@
 //!
 //! Persistent storage for approved devices using SQLite.
 
+use crate::sync_primitives::Mutex;
 use rusqlite::{params, Connection, Result as SqliteResult};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
-use crate::sync_primitives::Mutex;
 use tracing::{debug, info};
 
 /// An approved device that can connect to the Gateway
@@ -222,7 +222,11 @@ impl DeviceStore {
     }
 
     /// Update device permissions
-    pub fn update_permissions(&self, device_id: &str, permissions: &[String]) -> SqliteResult<bool> {
+    pub fn update_permissions(
+        &self,
+        device_id: &str,
+        permissions: &[String],
+    ) -> SqliteResult<bool> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let permissions_json = serde_json::to_string(permissions).unwrap_or_default();
         let rows = conn.execute(

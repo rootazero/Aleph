@@ -20,9 +20,9 @@ async fn concurrent_providers_list() {
         let handle = tokio::spawn(async move {
             // Each task creates its own WS connection
             use futures_util::{SinkExt, StreamExt};
+            use std::time::Duration;
             use tokio::time::timeout;
             use tokio_tungstenite::{connect_async, tungstenite::Message as WsMessage};
-            use std::time::Duration;
 
             let request = json!({
                 "jsonrpc": "2.0",
@@ -39,7 +39,9 @@ async fn concurrent_providers_list() {
             let (mut write, mut read) = ws_stream.split();
 
             write
-                .send(WsMessage::Text(serde_json::to_string(&request).unwrap().into()))
+                .send(WsMessage::Text(
+                    serde_json::to_string(&request).unwrap().into(),
+                ))
                 .await
                 .expect("send failed");
 

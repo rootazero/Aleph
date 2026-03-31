@@ -141,7 +141,6 @@ pub enum HookPriority {
     Low = 100,
 }
 
-
 impl HookPriority {
     /// Parse from string with fallback to Normal
     pub fn from_str_or_default(s: &str) -> Self {

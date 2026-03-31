@@ -63,9 +63,7 @@ impl AcpHarness for CustomHarness {
         HarnessConfig {
             executable: self.executable().to_string(),
             args: self.config.args.clone(),
-            cwd: cwd
-                .map(String::from)
-                .or_else(|| self.config.cwd.clone()),
+            cwd: cwd.map(String::from).or_else(|| self.config.cwd.clone()),
             env,
             timeout: Duration::from_secs(self.config.timeout_seconds),
         }

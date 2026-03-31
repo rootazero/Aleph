@@ -3,15 +3,16 @@
 use crate::sync_primitives::Arc;
 use tempfile::tempdir;
 
-use crate::memory::{EmbeddingProvider, SemanticChunkConfig, SemanticChunker};
 use crate::memory::embedding_provider::tests::MockEmbeddingProvider;
+use crate::memory::{EmbeddingProvider, SemanticChunkConfig, SemanticChunker};
 
 #[tokio::test]
 #[ignore = "Requires model download"]
 async fn test_semantic_chunking_basic() {
     let _temp_dir = tempdir().unwrap();
     let embedder = {
-        let mock: Arc<dyn EmbeddingProvider> = Arc::new(MockEmbeddingProvider::new(1024, "mock-model"));
+        let mock: Arc<dyn EmbeddingProvider> =
+            Arc::new(MockEmbeddingProvider::new(1024, "mock-model"));
         mock
     };
 
@@ -34,7 +35,8 @@ async fn test_semantic_chunking_basic() {
 async fn test_semantic_chunking_single_topic() {
     let _temp_dir = tempdir().unwrap();
     let embedder = {
-        let mock: Arc<dyn EmbeddingProvider> = Arc::new(MockEmbeddingProvider::new(1024, "mock-model"));
+        let mock: Arc<dyn EmbeddingProvider> =
+            Arc::new(MockEmbeddingProvider::new(1024, "mock-model"));
         mock
     };
 
@@ -55,7 +57,8 @@ async fn test_semantic_chunking_single_topic() {
 async fn test_semantic_chunking_empty() {
     let _temp_dir = tempdir().unwrap();
     let embedder = {
-        let mock: Arc<dyn EmbeddingProvider> = Arc::new(MockEmbeddingProvider::new(1024, "mock-model"));
+        let mock: Arc<dyn EmbeddingProvider> =
+            Arc::new(MockEmbeddingProvider::new(1024, "mock-model"));
         mock
     };
 
@@ -71,7 +74,8 @@ async fn test_semantic_chunking_empty() {
 async fn test_semantic_chunking_config() {
     let _temp_dir = tempdir().unwrap();
     let embedder = {
-        let mock: Arc<dyn EmbeddingProvider> = Arc::new(MockEmbeddingProvider::new(1024, "mock-model"));
+        let mock: Arc<dyn EmbeddingProvider> =
+            Arc::new(MockEmbeddingProvider::new(1024, "mock-model"));
         mock
     };
 

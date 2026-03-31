@@ -2,18 +2,16 @@
 
 use std::sync::Arc;
 
-use cucumber::{given, when, then};
+use cucumber::{given, then, when};
 use tempfile::tempdir;
 
 use crate::world::{AlephWorld, GatewayContext};
-use alephcore::gateway::{
-    AgentInstance, AgentInstanceConfig, DmScope,
-    ExecutionAdapter, ExecutionEngineConfig,
-    RouterChannelConfig, RoutingConfig, SimpleExecutionEngine,
-    DmPolicy, GroupPolicy, InboundMessage, ChannelId, ConversationId,
-    MessageId, UserId, PairingStore,
-};
 use alephcore::gateway::router::SessionKey;
+use alephcore::gateway::{
+    AgentInstance, AgentInstanceConfig, ChannelId, ConversationId, DmPolicy, DmScope,
+    ExecutionAdapter, ExecutionEngineConfig, GroupPolicy, InboundMessage, MessageId, PairingStore,
+    RouterChannelConfig, RoutingConfig, SimpleExecutionEngine, UserId,
+};
 
 // =========================================================================
 // Given Steps - Router Setup
@@ -182,7 +180,11 @@ async fn when_resolve_session_key(w: &mut AlephWorld) {
     let session_key = if msg.is_group {
         SessionKey::peer(
             &config.default_agent,
-            format!("{}:group:{}", msg.channel_id.as_str(), msg.conversation_id.as_str()),
+            format!(
+                "{}:group:{}",
+                msg.channel_id.as_str(),
+                msg.conversation_id.as_str()
+            ),
         )
     } else {
         match config.dm_scope {
@@ -209,7 +211,9 @@ async fn when_resolve_session_key(w: &mut AlephWorld) {
 async fn when_check_allowlist(w: &mut AlephWorld, sender: String) {
     let ctx = w.gateway.as_mut().expect("Gateway context not initialized");
 
-    let allowlist = ctx.allowlist.as_ref()
+    let allowlist = ctx
+        .allowlist
+        .as_ref()
         .expect("Allowlist not set - use 'an allowlist containing' step first")
         .clone();
 
@@ -345,7 +349,10 @@ async fn when_execute_for_context(w: &mut AlephWorld) {
 #[when(expr = "I get status for run {string}")]
 async fn when_get_status(w: &mut AlephWorld, run_id: String) {
     let ctx = w.gateway.as_mut().expect("Gateway context not initialized");
-    let adapter = ctx.execution_adapter.as_ref().expect("Execution adapter not initialized");
+    let adapter = ctx
+        .execution_adapter
+        .as_ref()
+        .expect("Execution adapter not initialized");
 
     let status = adapter.get_status(&run_id).await;
     ctx.execution_result = Some(if status.is_none() {
@@ -358,7 +365,10 @@ async fn when_get_status(w: &mut AlephWorld, run_id: String) {
 #[when(expr = "I cancel run {string}")]
 async fn when_cancel_run(w: &mut AlephWorld, run_id: String) {
     let ctx = w.gateway.as_mut().expect("Gateway context not initialized");
-    let adapter = ctx.execution_adapter.as_ref().expect("Execution adapter not initialized");
+    let adapter = ctx
+        .execution_adapter
+        .as_ref()
+        .expect("Execution adapter not initialized");
 
     let result = adapter.cancel(&run_id).await;
     ctx.execution_result = Some(result.map_err(|e| format!("{:?}", e)));
@@ -457,21 +467,38 @@ async fn then_mention_not_detected(w: &mut AlephWorld) {
 #[then("the execution should succeed with graceful degradation")]
 async fn then_execution_graceful_degradation(w: &mut AlephWorld) {
     let ctx = w.gateway.as_ref().expect("Gateway context not initialized");
-    let result = ctx.execution_result.as_ref().expect("Execution not performed");
-    assert!(result.is_ok(), "Expected graceful degradation (Ok), got: {:?}", result);
+    let result = ctx
+        .execution_result
+        .as_ref()
+        .expect("Execution not performed");
+    assert!(
+        result.is_ok(),
+        "Expected graceful degradation (Ok), got: {:?}",
+        result
+    );
 }
 
 #[then("the execution should succeed")]
 async fn then_execution_succeed(w: &mut AlephWorld) {
     let ctx = w.gateway.as_ref().expect("Gateway context not initialized");
-    let result = ctx.execution_result.as_ref().expect("Execution not performed");
-    assert!(result.is_ok(), "Expected execution to succeed, got: {:?}", result);
+    let result = ctx
+        .execution_result
+        .as_ref()
+        .expect("Execution not performed");
+    assert!(
+        result.is_ok(),
+        "Expected execution to succeed, got: {:?}",
+        result
+    );
 }
 
 #[then(expr = "the execution should fail with AgentNotFound {string}")]
 async fn then_execution_fail_agent_not_found(w: &mut AlephWorld, agent_id: String) {
     let ctx = w.gateway.as_ref().expect("Gateway context not initialized");
-    let result = ctx.execution_result.as_ref().expect("Execution not performed");
+    let result = ctx
+        .execution_result
+        .as_ref()
+        .expect("Execution not performed");
     assert!(result.is_err(), "Expected AgentNotFound error");
     let err = result.as_ref().unwrap_err();
     assert!(
@@ -485,8 +512,14 @@ async fn then_execution_fail_agent_not_found(w: &mut AlephWorld, agent_id: Strin
 #[then("the execution adapter should have been called once")]
 async fn then_adapter_called_once(w: &mut AlephWorld) {
     let ctx = w.gateway.as_ref().expect("Gateway context not initialized");
-    let adapter = ctx.tracking_adapter.as_ref().expect("Tracking adapter not initialized");
-    assert!(adapter.was_called(), "ExecutionAdapter.execute() should have been called");
+    let adapter = ctx
+        .tracking_adapter
+        .as_ref()
+        .expect("Tracking adapter not initialized");
+    assert!(
+        adapter.was_called(),
+        "ExecutionAdapter.execute() should have been called"
+    );
     assert_eq!(
         adapter.call_count(),
         1,
@@ -497,8 +530,14 @@ async fn then_adapter_called_once(w: &mut AlephWorld) {
 #[then("the status should be None")]
 async fn then_status_none(w: &mut AlephWorld) {
     let ctx = w.gateway.as_ref().expect("Gateway context not initialized");
-    let result = ctx.execution_result.as_ref().expect("Status check not performed");
-    assert!(result.is_err() && result.as_ref().unwrap_err() == "None", "Expected None status");
+    let result = ctx
+        .execution_result
+        .as_ref()
+        .expect("Status check not performed");
+    assert!(
+        result.is_err() && result.as_ref().unwrap_err() == "None",
+        "Expected None status"
+    );
 }
 
 #[then("the cancel should fail with RunNotFound")]
@@ -521,7 +560,10 @@ async fn then_cancel_fail_run_not_found(w: &mut AlephWorld) {
 #[then(expr = "the resolved agent ID should be {string}")]
 async fn then_resolved_agent_id(w: &mut AlephWorld, expected: String) {
     let ctx = w.gateway.as_ref().expect("Gateway context not initialized");
-    let agent_id = ctx.resolved_agent_id.as_ref().expect("Agent ID not resolved");
+    let agent_id = ctx
+        .resolved_agent_id
+        .as_ref()
+        .expect("Agent ID not resolved");
     assert_eq!(agent_id, &expected, "Resolved agent ID mismatch");
 }
 
@@ -719,7 +761,12 @@ async fn when_dm_message_arrives(w: &mut AlephWorld, sender: String, text: Strin
 }
 
 #[when(expr = "a group message arrives in {string} from {string} with text {string}")]
-async fn when_group_message_arrives(w: &mut AlephWorld, chat_id: String, sender: String, text: String) {
+async fn when_group_message_arrives(
+    w: &mut AlephWorld,
+    chat_id: String,
+    sender: String,
+    text: String,
+) {
     let ctx = w.gateway.as_mut().expect("Gateway context not initialized");
     let msg = InboundMessage {
         id: MessageId::new(format!("msg-{}", uuid::Uuid::new_v4())),
@@ -749,23 +796,40 @@ async fn when_group_message_arrives(w: &mut AlephWorld, chat_id: String, sender:
 #[then("the message should be accepted")]
 async fn then_message_accepted(w: &mut AlephWorld) {
     let ctx = w.gateway.as_ref().expect("Gateway context not initialized");
-    let result = ctx.handle_message_result.as_ref().expect("No handle_message result");
-    assert!(result.is_ok(), "Expected message to be accepted, got: {:?}", result);
+    let result = ctx
+        .handle_message_result
+        .as_ref()
+        .expect("No handle_message result");
+    assert!(
+        result.is_ok(),
+        "Expected message to be accepted, got: {:?}",
+        result
+    );
 }
 
 #[then("the message should be filtered")]
 async fn then_message_filtered(w: &mut AlephWorld) {
     let ctx = w.gateway.as_ref().expect("Gateway context not initialized");
-    let result = ctx.handle_message_result.as_ref().expect("No handle_message result");
+    let result = ctx
+        .handle_message_result
+        .as_ref()
+        .expect("No handle_message result");
     // In the current implementation, filtered messages return Ok()
     // The filtering happens silently - the test passes if no error occurs
-    assert!(result.is_ok(), "Expected filtered message (Ok result), got: {:?}", result);
+    assert!(
+        result.is_ok(),
+        "Expected filtered message (Ok result), got: {:?}",
+        result
+    );
 }
 
 #[then(expr = "a pairing request should exist for sender containing {string}")]
 async fn then_pairing_request_exists(w: &mut AlephWorld, sender_substr: String) {
     let ctx = w.gateway.as_ref().expect("Gateway context not initialized");
-    let store = ctx.pairing_store.as_ref().expect("Pairing store not initialized");
+    let store = ctx
+        .pairing_store
+        .as_ref()
+        .expect("Pairing store not initialized");
     let pending = store.list_pending(Some("imessage")).await.unwrap();
     assert!(!pending.is_empty(), "Expected at least one pairing request");
     assert!(

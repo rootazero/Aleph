@@ -14,6 +14,4 @@ pub mod types;
 
 // Re-export public types for external use
 pub use capability::Capability;
-pub use types::{
-    CapturedContext, CompressionStats, MediaAttachment, MemoryEntry,
-};
+pub use types::{CapturedContext, CompressionStats, MediaAttachment, MemoryEntry};

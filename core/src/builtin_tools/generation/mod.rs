@@ -13,8 +13,8 @@ pub use image_generate::{ImageGenerateArgs, ImageGenerateOutput, ImageGenerateTo
 pub use speech_generate::{SpeechGenerateArgs, SpeechGenerateOutput, SpeechGenerateTool};
 pub use video_generate::{VideoGenerateArgs, VideoGenerateOutput, VideoGenerateTool};
 
-use crate::generation::GenerationError;
 use crate::builtin_tools::error::ToolError;
+use crate::generation::GenerationError;
 
 /// Convert GenerationError to ToolError for tool execution
 impl From<GenerationError> for ToolError {

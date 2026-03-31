@@ -50,7 +50,10 @@ async fn p2_05_denied_message_not_executed() {
     h.bind("tg-1", "main");
     h.send_message("tg-1", "hello").await;
     h.assert_denied();
-    assert!(!h.tracking_adapter.was_called(), "Execution should NOT be called for denied message");
+    assert!(
+        !h.tracking_adapter.was_called(),
+        "Execution should NOT be called for denied message"
+    );
 }
 
 #[tokio::test]
@@ -61,9 +64,18 @@ async fn p2_06_denial_reply_format() {
     h.bind("tg-1", "main");
     h.send_message("tg-1", "hello").await;
     let replies = h.drain_replies();
-    let denial = replies.iter().find(|r| r.text.contains('\u{26D4}')).expect("Should have denial reply");
-    assert!(denial.text.contains("tg-1"), "Denial should contain link_id");
-    assert!(denial.text.contains("main"), "Denial should contain agent_id");
+    let denial = replies
+        .iter()
+        .find(|r| r.text.contains('\u{26D4}'))
+        .expect("Should have denial reply");
+    assert!(
+        denial.text.contains("tg-1"),
+        "Denial should contain link_id"
+    );
+    assert!(
+        denial.text.contains("main"),
+        "Denial should contain agent_id"
+    );
 }
 
 #[tokio::test]
@@ -76,8 +88,16 @@ async fn p2_07_consecutive_denials() {
     h.send_message("tg-1", "first").await;
     h.send_message("tg-1", "second").await;
     let replies = h.drain_replies();
-    let denials: Vec<_> = replies.iter().filter(|r| r.text.contains('\u{26D4}')).collect();
-    assert_eq!(denials.len(), 2, "Both messages should be denied, got {} denials", denials.len());
+    let denials: Vec<_> = replies
+        .iter()
+        .filter(|r| r.text.contains('\u{26D4}'))
+        .collect();
+    assert_eq!(
+        denials.len(),
+        2,
+        "Both messages should be denied, got {} denials",
+        denials.len()
+    );
 }
 
 #[tokio::test]

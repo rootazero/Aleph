@@ -3,8 +3,8 @@
 //! Provides CRUD functions for persisting arenas, slots, and artifacts
 //! to the StateDatabase.
 
+use super::types::{ArenaId, ArenaManifest, ArenaStatus, ArtifactId, ArtifactKind};
 use crate::resilience::database::StateDatabase;
-use super::types::{ArtifactId, ArtifactKind, ArenaId, ArenaManifest, ArenaStatus};
 use chrono::Utc;
 use rusqlite::{params, OptionalExtension};
 
@@ -45,10 +45,10 @@ pub fn save_arena(
 ) -> Result<(), String> {
     let conn = db.conn.lock().unwrap_or_else(|e| e.into_inner());
 
-    let strategy_json =
-        serde_json::to_string(&manifest.strategy).map_err(|e| format!("serialize strategy: {}", e))?;
-    let participants_json =
-        serde_json::to_string(&manifest.participants).map_err(|e| format!("serialize participants: {}", e))?;
+    let strategy_json = serde_json::to_string(&manifest.strategy)
+        .map_err(|e| format!("serialize strategy: {}", e))?;
+    let participants_json = serde_json::to_string(&manifest.participants)
+        .map_err(|e| format!("serialize participants: {}", e))?;
 
     conn.execute(
         r#"

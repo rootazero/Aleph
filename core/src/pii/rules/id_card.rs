@@ -18,7 +18,8 @@ fn id_card_regex() -> &'static Regex {
 const VALID_REGIONS: &[u8] = &[
     11, 12, 13, 14, 15, // Beijing, Tianjin, Hebei, Shanxi, Inner Mongolia
     21, 22, 23, // Liaoning, Jilin, Heilongjiang
-    31, 32, 33, 34, 35, 36, 37, // Shanghai, Jiangsu, Zhejiang, Anhui, Fujian, Jiangxi, Shandong
+    31, 32, 33, 34, 35, 36,
+    37, // Shanghai, Jiangsu, Zhejiang, Anhui, Fujian, Jiangxi, Shandong
     41, 42, 43, 44, 45, 46, // Henan, Hubei, Hunan, Guangdong, Guangxi, Hainan
     50, 51, 52, 53, 54, // Chongqing, Sichuan, Guizhou, Yunnan, Tibet
     61, 62, 63, 64, 65, // Shaanxi, Gansu, Qinghai, Ningxia, Xinjiang
@@ -58,9 +59,7 @@ impl IdCardRule {
             None => return false,
         };
 
-        (1900..=2100).contains(&year)
-            && (1..=12).contains(&month)
-            && (1..=31).contains(&day)
+        (1900..=2100).contains(&year) && (1..=12).contains(&month) && (1..=31).contains(&day)
     }
 
     /// Validate ISO 7064 MOD 11-2 checksum
@@ -87,9 +86,7 @@ impl IdCardRule {
         if id.len() != 18 {
             return false;
         }
-        Self::is_valid_region(id)
-            && Self::is_valid_date(id)
-            && Self::is_valid_checksum(id)
+        Self::is_valid_region(id) && Self::is_valid_date(id) && Self::is_valid_checksum(id)
     }
 
     /// Check word boundary

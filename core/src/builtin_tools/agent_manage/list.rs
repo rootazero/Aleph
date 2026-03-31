@@ -8,8 +8,8 @@ use serde::{Deserialize, Serialize};
 use tracing::info;
 
 use crate::error::Result;
-use crate::gateway::agent_instance::AgentRegistry;
 use crate::gateway::agent_env::AgentEnvStore;
+use crate::gateway::agent_instance::AgentRegistry;
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
 
@@ -80,10 +80,7 @@ pub struct AgentListTool {
 }
 
 impl AgentListTool {
-    pub fn new(
-        registry: Arc<AgentRegistry>,
-        workspace_mgr: Arc<AgentEnvStore>,
-    ) -> Self {
+    pub fn new(registry: Arc<AgentRegistry>, workspace_mgr: Arc<AgentEnvStore>) -> Self {
         Self {
             registry,
             workspace_mgr,
@@ -102,16 +99,15 @@ impl AlephTool for AgentListTool {
     type Output = AgentListOutput;
 
     fn examples(&self) -> Option<Vec<String>> {
-        Some(vec![
-            "agent_list()".to_string(),
-        ])
+        Some(vec!["agent_list()".to_string()])
     }
 
     async fn call(&self, _args: Self::Args) -> Result<Self::Output> {
         info!("Agent list requested");
 
         // 1. Get all agent→channel bindings
-        let bindings = self.workspace_mgr
+        let bindings = self
+            .workspace_mgr
             .get_all_agent_bindings()
             .unwrap_or_default();
 

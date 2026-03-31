@@ -263,7 +263,9 @@ mod tests {
 
         let config: McpConfig = serde_json::from_str(json).unwrap();
         match config {
-            McpConfig::Local { command, enabled, .. } => {
+            McpConfig::Local {
+                command, enabled, ..
+            } => {
                 assert_eq!(command.len(), 3);
                 assert!(enabled);
             }

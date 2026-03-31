@@ -82,7 +82,10 @@ fn compress_bash(content: &str) -> String {
 fn compress_web(content: &str) -> String {
     let head = safe_truncate(content, 200);
     if content.len() > 200 {
-        format!("{head}… [truncated, full content was {} chars]", content.len())
+        format!(
+            "{head}… [truncated, full content was {} chars]",
+            content.len()
+        )
     } else {
         head.to_owned()
     }
@@ -91,7 +94,10 @@ fn compress_web(content: &str) -> String {
 /// Generic compressor for unknown tools when content exceeds 500 tokens.
 fn compress_generic(content: &str) -> String {
     let head = safe_truncate(content, 200);
-    format!("{head}… [truncated, full content was {} chars]", content.len())
+    format!(
+        "{head}… [truncated, full content was {} chars]",
+        content.len()
+    )
 }
 
 /// Truncate `s` to at most `n` *bytes* at a valid UTF-8 char boundary.
@@ -171,9 +177,7 @@ pub fn compact_if_needed(
 
     // Collect indices of consumed tool results in the compressible zone.
     let candidates: Vec<usize> = (0..partition)
-        .filter(|&i| {
-            messages[i].is_tool_result() && is_tool_result_consumed(messages, i)
-        })
+        .filter(|&i| messages[i].is_tool_result() && is_tool_result_consumed(messages, i))
         .collect();
 
     // Compress oldest first until we are back under target.

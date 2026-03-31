@@ -51,8 +51,8 @@ pub async fn get_server() -> &'static CompactorE2eHarness {
 impl CompactorE2eHarness {
     /// Find a random available port by binding to :0.
     fn find_free_port() -> u16 {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0")
-            .expect("Failed to bind to random port");
+        let listener =
+            std::net::TcpListener::bind("127.0.0.1:0").expect("Failed to bind to random port");
         listener.local_addr().unwrap().port()
     }
 
@@ -91,8 +91,7 @@ d1_min_fanout = 3
 d2_min_fanout = 3
 max_summary_depth = 2
 "#;
-        std::fs::write(&config_path, config_content)
-            .expect("Failed to write test config.toml");
+        std::fs::write(&config_path, config_content).expect("Failed to write test config.toml");
     }
 
     /// Start the server with aggressive compaction config.
@@ -119,9 +118,12 @@ max_summary_depth = 2
         // Spawn the pre-built binary directly (no cargo overhead)
         let child = Command::new(&binary_path)
             .args([
-                "--config", config_path.to_str().unwrap(),
-                "--port", &port.to_string(),
-                "--bind", "127.0.0.1",
+                "--config",
+                config_path.to_str().unwrap(),
+                "--port",
+                &port.to_string(),
+                "--bind",
+                "127.0.0.1",
             ])
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::piped())
@@ -269,11 +271,16 @@ max_summary_depth = 2
     /// Returns the assistant's reply text.
     pub async fn send_message(&self, text: &str, session_key: &str) -> String {
         // Send the message (non-streaming for simpler response handling)
-        let send_result = self.rpc_ok("chat.send", json!({
-            "message": text,
-            "session_key": session_key,
-            "stream": false
-        })).await;
+        let send_result = self
+            .rpc_ok(
+                "chat.send",
+                json!({
+                    "message": text,
+                    "session_key": session_key,
+                    "stream": false
+                }),
+            )
+            .await;
 
         let _run_id = send_result["run_id"]
             .as_str()
@@ -286,28 +293,34 @@ max_summary_depth = 2
             loop {
                 tokio::time::sleep(Duration::from_secs(2)).await;
 
-                let history = self.rpc_ok("chat.history", json!({
-                    "session_key": session_key
-                })).await;
+                let history = self
+                    .rpc_ok(
+                        "chat.history",
+                        json!({
+                            "session_key": session_key
+                        }),
+                    )
+                    .await;
 
                 let messages = history["messages"].as_array();
                 if let Some(msgs) = messages {
                     // Find the last assistant message
-                    if let Some(last_assistant) = msgs.iter().rev().find(|m| {
-                        m["role"].as_str() == Some("assistant")
-                    }) {
-                        let content = last_assistant["content"]
-                            .as_str()
-                            .unwrap_or("")
-                            .to_string();
+                    if let Some(last_assistant) = msgs
+                        .iter()
+                        .rev()
+                        .find(|m| m["role"].as_str() == Some("assistant"))
+                    {
+                        let content = last_assistant["content"].as_str().unwrap_or("").to_string();
                         if !content.is_empty() {
                             // Count user messages to make sure this reply is for our message
-                            let user_count = msgs.iter()
+                            let user_count = msgs
+                                .iter()
                                 .filter(|m| m["role"].as_str() == Some("user"))
                                 .count();
                             // Simple heuristic: if we have at least as many assistant
                             // replies as expected, the latest one is ours
-                            let assistant_count = msgs.iter()
+                            let assistant_count = msgs
+                                .iter()
                                 .filter(|m| m["role"].as_str() == Some("assistant"))
                                 .count();
                             if assistant_count >= user_count {
@@ -325,11 +338,7 @@ max_summary_depth = 2
     }
 
     /// Send multiple messages sequentially and return all assistant replies.
-    pub async fn send_messages(
-        &self,
-        messages: &[&str],
-        session_key: &str,
-    ) -> Vec<String> {
+    pub async fn send_messages(&self, messages: &[&str], session_key: &str) -> Vec<String> {
         let mut replies = Vec::new();
         for msg in messages {
             let reply = self.send_message(msg, session_key).await;
@@ -354,10 +363,7 @@ max_summary_depth = 2
         }
 
         let result = self.rpc_ok("memory.list_facts", params).await;
-        result["facts"]
-            .as_array()
-            .cloned()
-            .unwrap_or_default()
+        result["facts"].as_array().cloned().unwrap_or_default()
     }
 
     /// Search memory via `memory.search`.
@@ -370,10 +376,7 @@ max_summary_depth = 2
         }
 
         let result = self.rpc_ok("memory.search", params).await;
-        result["memories"]
-            .as_array()
-            .cloned()
-            .unwrap_or_default()
+        result["memories"].as_array().cloned().unwrap_or_default()
     }
 
     /// Get memory statistics via `memory.stats`.
@@ -413,7 +416,8 @@ max_summary_depth = 2
     pub async fn count_facts_at_depth(&self, depth: u32) -> usize {
         let facts = self.query_memory_facts(None).await;
         let depth_segment = format!("/d{}/", depth);
-        facts.iter()
+        facts
+            .iter()
             .filter(|f| {
                 let path = f["path"].as_str().unwrap_or("");
                 path.contains("aleph://session/") && path.contains(&depth_segment)

@@ -2,14 +2,16 @@
 //!
 //! Implements text editing and replacement operations
 
-use std::path::PathBuf;
+use crate::error::{AlephError, Result};
 use crate::sync_primitives::Arc;
 use async_trait::async_trait;
 use regex::Regex;
+use std::path::PathBuf;
 use tracing::debug;
-use crate::error::{AlephError, Result};
 
-use super::{EditOps, ExecutorContext, AtomicResult, Patch, SearchPattern, SearchScope, FileFilter};
+use super::{
+    AtomicResult, EditOps, ExecutorContext, FileFilter, Patch, SearchPattern, SearchScope,
+};
 use crate::engine::PatchApplier;
 
 /// File replacement result
@@ -68,12 +70,19 @@ impl EditOpsHandler {
             SearchScope::Directory { path, recursive } => {
                 let resolved = self.context.resolve_path(path.to_str().unwrap_or(""))?;
                 if resolved.exists() && resolved.is_dir() {
-                    self.context.collect_files_from_directory(&resolved, *recursive, filters, &mut files)
+                    self.context
+                        .collect_files_from_directory(&resolved, *recursive, filters, &mut files)
                         .await?;
                 }
             }
             SearchScope::Workspace => {
-                self.context.collect_files_from_directory(&self.context.working_dir, true, filters, &mut files)
+                self.context
+                    .collect_files_from_directory(
+                        &self.context.working_dir,
+                        true,
+                        filters,
+                        &mut files,
+                    )
                     .await?;
             }
         }
@@ -113,9 +122,9 @@ impl EditOps for EditOpsHandler {
         }
 
         // Apply all patches
-        let new_content = applier.apply_all(&content).map_err(|e| {
-            AlephError::tool(format!("Failed to apply patches: {}", e))
-        })?;
+        let new_content = applier
+            .apply_all(&content)
+            .map_err(|e| AlephError::tool(format!("Failed to apply patches: {}", e)))?;
 
         // Write back
         tokio::fs::write(&resolved_path, new_content).await?;
@@ -194,13 +203,12 @@ impl EditOps for EditOpsHandler {
             if content != new_content {
                 let count = match pattern {
                     SearchPattern::Regex { pattern: regex_str } => {
-                        let regex = Regex::new(regex_str)
-                            .map_err(|e| AlephError::tool(format!("Invalid regex pattern: {}", e)))?;
+                        let regex = Regex::new(regex_str).map_err(|e| {
+                            AlephError::tool(format!("Invalid regex pattern: {}", e))
+                        })?;
                         regex.find_iter(&content).count()
                     }
-                    SearchPattern::Fuzzy { text, .. } => {
-                        content.matches(text).count()
-                    }
+                    SearchPattern::Fuzzy { text, .. } => content.matches(text).count(),
                     _ => 0,
                 };
 
@@ -263,7 +271,11 @@ impl EditOps for EditOpsHandler {
                 mode,
                 replacements
                     .iter()
-                    .map(|r| format!("  {}: {} replacements", r.file.display(), r.replacement_count))
+                    .map(|r| format!(
+                        "  {}: {} replacements",
+                        r.file.display(),
+                        r.replacement_count
+                    ))
                     .collect::<Vec<_>>()
                     .join("\n")
             )

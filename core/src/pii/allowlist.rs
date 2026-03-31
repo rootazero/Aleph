@@ -31,8 +31,10 @@ impl Default for PiiAllowlist {
             Regex::new(r"(?i)^noreply@").expect("valid regex literal"),
             Regex::new(r"(?i)^no-reply@").expect("valid regex literal"),
             Regex::new(r"(?i)^donotreply@").expect("valid regex literal"),
-            Regex::new(r"(?i)@(example|test|demo|sample|mock|localhost)\b").expect("valid regex literal"),
-            Regex::new(r"(?i)\.(example|test|local|internal|invalid)$").expect("valid regex literal"),
+            Regex::new(r"(?i)@(example|test|demo|sample|mock|localhost)\b")
+                .expect("valid regex literal"),
+            Regex::new(r"(?i)\.(example|test|local|internal|invalid)$")
+                .expect("valid regex literal"),
         ];
 
         let local_ips: HashSet<String> = [
@@ -61,10 +63,7 @@ impl PiiAllowlist {
     pub fn is_allowed(&self, value: &str, rule_name: &str) -> bool {
         match rule_name {
             "phone" => self.test_phones.contains(value),
-            "email" => self
-                .system_email_patterns
-                .iter()
-                .any(|p| p.is_match(value)),
+            "email" => self.system_email_patterns.iter().any(|p| p.is_match(value)),
             "ip_address" => self.local_ips.contains(value),
             _ => false,
         }

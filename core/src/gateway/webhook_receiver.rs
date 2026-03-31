@@ -34,6 +34,7 @@
 //! - Per-handler secret management
 //! - Configurable signature header format (`sha256={hex}`)
 
+use crate::sync_primitives::Arc;
 use async_trait::async_trait;
 use axum::{
     body::Bytes,
@@ -45,7 +46,6 @@ use axum::{
 };
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
-use crate::sync_primitives::Arc;
 use subtle::ConstantTimeEq;
 use tokio::sync::{mpsc, watch};
 use tracing::{info, warn};
@@ -128,10 +128,7 @@ impl WebhookReceiver {
                 inbound_tx: tx,
             });
 
-            router = router.route(
-                &path,
-                post(webhook_endpoint).with_state(handler_state),
-            );
+            router = router.route(&path, post(webhook_endpoint).with_state(handler_state));
 
             info!(path = %path, "Registered webhook handler");
         }
@@ -275,9 +272,17 @@ mod tests {
         let sig = WebhookReceiver::compute_signature(secret, body);
 
         // Wrong secret
-        assert!(!WebhookReceiver::verify_signature("wrong-secret", body, &sig));
+        assert!(!WebhookReceiver::verify_signature(
+            "wrong-secret",
+            body,
+            &sig
+        ));
         // Wrong body
-        assert!(!WebhookReceiver::verify_signature(secret, b"different body", &sig));
+        assert!(!WebhookReceiver::verify_signature(
+            secret,
+            b"different body",
+            &sig
+        ));
         // Completely wrong signature
         assert!(!WebhookReceiver::verify_signature(
             secret,
@@ -285,7 +290,11 @@ mod tests {
             "sha256=0000000000000000000000000000000000000000000000000000000000000000"
         ));
         // Truncated signature
-        assert!(!WebhookReceiver::verify_signature(secret, body, "sha256=bad"));
+        assert!(!WebhookReceiver::verify_signature(
+            secret,
+            body,
+            "sha256=bad"
+        ));
     }
 
     #[test]
@@ -363,9 +372,8 @@ mod tests {
             _headers: &HeaderMap,
             body: Bytes,
         ) -> ChannelResult<Vec<InboundMessage>> {
-            let json: serde_json::Value = serde_json::from_slice(&body).map_err(|e| {
-                ChannelError::ReceiveFailed(format!("Invalid JSON: {e}"))
-            })?;
+            let json: serde_json::Value = serde_json::from_slice(&body)
+                .map_err(|e| ChannelError::ReceiveFailed(format!("Invalid JSON: {e}")))?;
 
             let text = json["message"]
                 .as_str()

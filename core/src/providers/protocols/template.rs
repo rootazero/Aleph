@@ -77,7 +77,10 @@ impl TemplateContext {
     /// Apply per-request overrides from RequestPayload (temperature, max_tokens)
     ///
     /// Must be called after `with_config()` to override config values.
-    pub fn with_payload_overrides(mut self, payload: &super::super::adapter::RequestPayload) -> Self {
+    pub fn with_payload_overrides(
+        mut self,
+        payload: &super::super::adapter::RequestPayload,
+    ) -> Self {
         if let Some(ref mut config) = self.config {
             if let Some(ref model) = payload.model {
                 config["model"] = json!(model);
@@ -166,9 +169,7 @@ impl TemplateRenderer {
     pub fn render(&self, template: &str, context: &Value) -> Result<String> {
         self.handlebars
             .render_template(template, context)
-            .map_err(|e| {
-                AlephError::provider(format!("Template rendering failed: {}", e))
-            })
+            .map_err(|e| AlephError::provider(format!("Template rendering failed: {}", e)))
     }
 
     /// Render a template and parse the result as JSON
@@ -207,9 +208,7 @@ mod tests {
             .with_config(&config)
             .with_input("Hello, world!")
             .with_system_prompt("You are a helpful assistant.")
-            .with_messages(vec![
-                json!({"role": "user", "content": "Test message"}),
-            ])
+            .with_messages(vec![json!({"role": "user", "content": "Test message"})])
             .build();
 
         // Verify structure
@@ -225,7 +224,10 @@ mod tests {
         assert_eq!(obj["input"].as_str(), Some("Hello, world!"));
 
         // Check system_prompt
-        assert_eq!(obj["system_prompt"].as_str(), Some("You are a helpful assistant."));
+        assert_eq!(
+            obj["system_prompt"].as_str(),
+            Some("You are a helpful assistant.")
+        );
 
         // Check messages
         assert!(obj["messages"].is_array());
@@ -237,9 +239,7 @@ mod tests {
     #[test]
     fn test_template_context_partial_building() {
         // Test building context with only some fields
-        let context = TemplateContext::new()
-            .with_input("Partial input")
-            .build();
+        let context = TemplateContext::new().with_input("Partial input").build();
 
         let obj = context.as_object().unwrap();
         assert_eq!(obj["input"].as_str(), Some("Partial input"));
@@ -259,7 +259,9 @@ mod tests {
             .with_input("Hello!")
             .build();
 
-        let result = renderer.render("Model: {{config.model}}, Input: {{input}}", &context).unwrap();
+        let result = renderer
+            .render("Model: {{config.model}}, Input: {{input}}", &context)
+            .unwrap();
         assert_eq!(result, "Model: gpt-4o, Input: Hello!");
     }
 
@@ -270,7 +272,9 @@ mod tests {
         // Test that missing variables render as empty strings (strict mode disabled)
         let context = TemplateContext::new().build();
 
-        let result = renderer.render("Config: {{config.model}}", &context).unwrap();
+        let result = renderer
+            .render("Config: {{config.model}}", &context)
+            .unwrap();
         assert_eq!(result, "Config: ");
     }
 
@@ -321,9 +325,7 @@ mod tests {
         config.temperature = Some(0.7);
         config.max_tokens = Some(1024);
 
-        let context = TemplateContext::new()
-            .with_config(&config)
-            .build();
+        let context = TemplateContext::new().with_config(&config).build();
 
         let template = r#"{"model": "{{config.model}}", "temperature": {{config.temperature}}, "max_tokens": {{config.max_tokens}}}"#;
         let result = renderer.render_json(template, &context).unwrap();
@@ -331,7 +333,11 @@ mod tests {
         assert_eq!(result["model"].as_str(), Some("claude-3-5-sonnet"));
         // Use approximate comparison for floating point
         let temp = result["temperature"].as_f64().unwrap();
-        assert!((temp - 0.7).abs() < 0.01, "Temperature should be ~0.7, got {}", temp);
+        assert!(
+            (temp - 0.7).abs() < 0.01,
+            "Temperature should be ~0.7, got {}",
+            temp
+        );
         assert_eq!(result["max_tokens"].as_u64(), Some(1024));
     }
 
@@ -345,9 +351,7 @@ mod tests {
             json!({"role": "user", "content": "Hello!"}),
         ];
 
-        let context = TemplateContext::new()
-            .with_messages(messages)
-            .build();
+        let context = TemplateContext::new().with_messages(messages).build();
 
         // Note: Handlebars needs special syntax for arrays, but we can test basic rendering
         let result = renderer.render("Messages: {{messages}}", &context).unwrap();

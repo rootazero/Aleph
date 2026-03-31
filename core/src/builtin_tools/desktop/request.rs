@@ -1,8 +1,8 @@
 //! Build a `DesktopRequest` from tool arguments.
 
+use super::types::DesktopArgs;
 use crate::desktop::types::{CanvasPosition, MouseButton};
 use crate::desktop::DesktopRequest;
-use super::types::DesktopArgs;
 
 /// Build a `DesktopRequest` from tool args, returning an error message string if invalid.
 pub(super) fn build_request(args: &DesktopArgs) -> std::result::Result<DesktopRequest, String> {
@@ -42,9 +42,9 @@ pub(super) fn build_request(args: &DesktopArgs) -> std::result::Result<DesktopRe
         },
         "window_list" => DesktopRequest::WindowList,
         "focus_window" => {
-            let window_id = args
-                .window_id
-                .ok_or_else(|| "focus_window requires 'window_id' (get it from window_list)".to_string())?;
+            let window_id = args.window_id.ok_or_else(|| {
+                "focus_window requires 'window_id' (get it from window_list)".to_string()
+            })?;
             DesktopRequest::FocusWindow { window_id }
         }
         "snapshot" => DesktopRequest::Snapshot {
@@ -60,7 +60,9 @@ pub(super) fn build_request(args: &DesktopArgs) -> std::result::Result<DesktopRe
                 return Err("scroll requires 'ref' or both 'x' and 'y' coordinates".to_string());
             }
             DesktopRequest::Scroll {
-                ref_id, x, y,
+                ref_id,
+                x,
+                y,
                 delta_x: args.delta_x.unwrap_or(0.0),
                 delta_y: args.delta_y.unwrap_or(0.0),
             }
@@ -70,15 +72,20 @@ pub(super) fn build_request(args: &DesktopArgs) -> std::result::Result<DesktopRe
             let x = args.x;
             let y = args.y;
             if ref_id.is_none() && (x.is_none() || y.is_none()) {
-                return Err("double_click requires 'ref' or both 'x' and 'y' coordinates".to_string());
+                return Err(
+                    "double_click requires 'ref' or both 'x' and 'y' coordinates".to_string(),
+                );
             }
             DesktopRequest::DoubleClick {
-                ref_id, x, y,
+                ref_id,
+                x,
+                y,
                 button: args.button.clone().unwrap_or(MouseButton::Left),
             }
         }
         "drag" => {
-            let has_start = args.start_ref.is_some() || (args.start_x.is_some() && args.start_y.is_some());
+            let has_start =
+                args.start_ref.is_some() || (args.start_x.is_some() && args.start_y.is_some());
             let has_end = args.end_ref.is_some() || (args.end_x.is_some() && args.end_y.is_some());
             if !has_start || !has_end {
                 return Err("drag requires start (start_ref or start_x+start_y) and end (end_ref or end_x+end_y)".to_string());

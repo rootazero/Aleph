@@ -561,7 +561,8 @@ mod tests {
             "test-api-key",
             Some("https://custom.googleapis.com".to_string()),
             None,
-        ).unwrap();
+        )
+        .unwrap();
 
         assert_eq!(provider.endpoint, "https://custom.googleapis.com");
     }
@@ -572,7 +573,8 @@ mod tests {
             "test-api-key",
             None,
             Some("imagen-4.0-generate-001".to_string()),
-        ).unwrap();
+        )
+        .unwrap();
 
         assert_eq!(provider.model, "imagen-4.0-generate-001");
     }
@@ -589,7 +591,8 @@ mod tests {
             "test-api-key",
             Some("https://api.example.com".to_string()),
             Some("custom-model".to_string()),
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!(
             custom_provider.predict_url(),
             "https://api.example.com/v1beta/models/custom-model:predict"
@@ -644,7 +647,8 @@ mod tests {
             "test-api-key",
             None,
             Some("imagen-4.0-ultra-generate-001".to_string()),
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!(
             custom_provider.default_model(),
             Some("imagen-4.0-ultra-generate-001")

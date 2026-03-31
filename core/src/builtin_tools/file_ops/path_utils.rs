@@ -3,8 +3,8 @@
 use std::path::{Path, PathBuf};
 use tracing::info;
 
-use crate::builtin_tools::error::ToolError;
 use super::state::get_working_dir;
+use crate::builtin_tools::error::ToolError;
 
 /// Denied paths for security
 pub fn get_denied_paths() -> Vec<String> {
@@ -91,10 +91,13 @@ pub fn check_and_resolve_path(
 
     // Expand ~ to home directory
     let expanded = if expanded_str.starts_with("~") {
-        let home = dirs::home_dir().ok_or_else(|| {
-            ToolError::InvalidArgs("Cannot determine home directory".to_string())
-        })?;
-        home.join(expanded_str.strip_prefix("~").unwrap_or_else(|_| std::path::Path::new("")))
+        let home = dirs::home_dir()
+            .ok_or_else(|| ToolError::InvalidArgs("Cannot determine home directory".to_string()))?;
+        home.join(
+            expanded_str
+                .strip_prefix("~")
+                .unwrap_or_else(|_| std::path::Path::new("")),
+        )
     } else if expanded_str.is_relative() {
         // Relative paths are resolved to:
         // 1. ToolContext output_dir override (workspace-scoped, set by ExecutionEngine)

@@ -6,8 +6,12 @@ use crate::thinker::prompt_mode::PromptMode;
 pub struct EnvironmentLayer;
 
 impl PromptLayer for EnvironmentLayer {
-    fn name(&self) -> &'static str { "environment" }
-    fn priority(&self) -> u32 { 300 }
+    fn name(&self) -> &'static str {
+        "environment"
+    }
+    fn priority(&self) -> u32 {
+        300
+    }
     fn supports_mode(&self, mode: PromptMode) -> bool {
         matches!(mode, PromptMode::Full)
     }

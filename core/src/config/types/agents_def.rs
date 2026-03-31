@@ -317,10 +317,7 @@ mod tests {
             config.defaults.skills,
             Some(vec!["search".to_string(), "code_review".to_string()])
         );
-        assert_eq!(
-            config.defaults.dm_scope,
-            Some("workspace".to_string())
-        );
+        assert_eq!(config.defaults.dm_scope, Some("workspace".to_string()));
         assert_eq!(config.defaults.bootstrap_max_chars, Some(8000));
         assert_eq!(config.defaults.bootstrap_total_max_chars, Some(32000));
 
@@ -413,7 +410,10 @@ mod tests {
         "#;
         let identity: AgentIdentity = toml::from_str(toml_str).unwrap();
         assert_eq!(identity.emoji, Some("🧑‍💻".to_string()));
-        assert_eq!(identity.description, Some("Full-stack coding specialist".to_string()));
+        assert_eq!(
+            identity.description,
+            Some("Full-stack coding specialist".to_string())
+        );
     }
 
     #[test]
@@ -463,9 +463,15 @@ mod tests {
         let agent = &config.list[0];
         assert_eq!(agent.id, "coder");
         assert!(agent.identity.is_some());
-        assert_eq!(agent.identity.as_ref().unwrap().emoji, Some("🧑‍💻".to_string()));
+        assert_eq!(
+            agent.identity.as_ref().unwrap().emoji,
+            Some("🧑‍💻".to_string())
+        );
         assert!(agent.model_config.is_some());
-        assert_eq!(agent.model_config.as_ref().unwrap().primary, "claude-opus-4");
+        assert_eq!(
+            agent.model_config.as_ref().unwrap().primary,
+            "claude-opus-4"
+        );
         assert!(agent.params.is_some());
         assert_eq!(agent.params.as_ref().unwrap().temperature, Some(0.3));
     }
@@ -509,7 +515,10 @@ mod tests {
         let agent = &config.list[0];
         assert_eq!(
             agent.allowed_links,
-            Some(vec!["telegram-bot-1".to_string(), "discord-bot".to_string()])
+            Some(vec![
+                "telegram-bot-1".to_string(),
+                "discord-bot".to_string()
+            ])
         );
     }
 

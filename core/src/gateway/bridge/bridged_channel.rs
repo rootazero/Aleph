@@ -396,10 +396,8 @@ async fn handle_event(
                 .single()
                 .unwrap_or_else(Utc::now);
 
-            let converted_attachments: Vec<Attachment> = attachments
-                .iter()
-                .map(convert_attachment)
-                .collect();
+            let converted_attachments: Vec<Attachment> =
+                attachments.iter().map(convert_attachment).collect();
 
             let inbound = InboundMessage {
                 id: MessageId::new(message_id.clone()),

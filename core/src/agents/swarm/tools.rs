@@ -2,10 +2,10 @@
 //!
 //! AlephTool implementations for swarm intelligence features.
 
+use crate::sync_primitives::Arc;
 use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use crate::sync_primitives::Arc;
 
 use super::collective_memory::{CollectiveMemory, TeamHistoryQuery};
 use crate::error::Result;

@@ -108,7 +108,11 @@ pub fn load_presets_override(path: &Path) -> PresetsOverride {
             return PresetsOverride::default();
         }
         Err(e) => {
-            warn!("Failed to read presets override file {}: {}", path.display(), e);
+            warn!(
+                "Failed to read presets override file {}: {}",
+                path.display(),
+                e
+            );
             return PresetsOverride::default();
         }
     };
@@ -116,7 +120,11 @@ pub fn load_presets_override(path: &Path) -> PresetsOverride {
     match toml::from_str(&content) {
         Ok(parsed) => parsed,
         Err(e) => {
-            warn!("Failed to parse presets override file {}: {}", path.display(), e);
+            warn!(
+                "Failed to parse presets override file {}: {}",
+                path.display(),
+                e
+            );
             PresetsOverride::default()
         }
     }
@@ -266,7 +274,10 @@ protocol = "openai"
         let parsed: PresetsOverride = toml::from_str(toml_str).unwrap();
 
         let preset = parsed.providers.get("my-provider").unwrap();
-        assert_eq!(preset.base_url.as_deref(), Some("https://custom.example.com/v1"));
+        assert_eq!(
+            preset.base_url.as_deref(),
+            Some("https://custom.example.com/v1")
+        );
         assert_eq!(preset.protocol.as_deref(), Some("openai"));
         // Unset fields remain None / default
         assert!(preset.color.is_none());
@@ -336,8 +347,14 @@ aliases = ["doubao", "ark"]
         let parsed: PresetsOverride = toml::from_str(toml_str).unwrap();
 
         let preset = parsed.providers.get("volcengine").unwrap();
-        assert_eq!(preset.aliases, vec!["doubao".to_string(), "ark".to_string()]);
-        assert_eq!(preset.base_url.as_deref(), Some("https://ark.cn-beijing.volces.com/api/v3"));
+        assert_eq!(
+            preset.aliases,
+            vec!["doubao".to_string(), "ark".to_string()]
+        );
+        assert_eq!(
+            preset.base_url.as_deref(),
+            Some("https://ark.cn-beijing.volces.com/api/v3")
+        );
     }
 
     // =========================================================================

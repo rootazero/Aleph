@@ -31,11 +31,11 @@ pub use message_ops::MatrixMessageOps;
 
 use crate::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
-    ChannelResult, ChannelState, ChannelStatus, ConversationId, MessageId,
-    OutboundMessage, SendResult,
+    ChannelResult, ChannelState, ChannelStatus, ConversationId, MessageId, OutboundMessage,
+    SendResult,
 };
-use async_trait::async_trait;
 use crate::sync_primitives::Arc;
+use async_trait::async_trait;
 use tokio::sync::{watch, RwLock};
 
 /// Matrix channel implementation using the Client-Server API v3.
@@ -116,9 +116,7 @@ impl Channel for MatrixChannel {
 
     async fn start(&mut self) -> ChannelResult<()> {
         // Validate configuration
-        self.config
-            .validate()
-            .map_err(ChannelError::ConfigError)?;
+        self.config.validate().map_err(ChannelError::ConfigError)?;
 
         self.set_status(ChannelStatus::Connecting).await;
         tracing::info!("Starting Matrix channel...");
@@ -213,7 +211,6 @@ impl Channel for MatrixChannel {
             reply_to.as_deref(),
         )
         .await
-
     }
 
     async fn send_typing(&self, conversation_id: &ConversationId) -> ChannelResult<()> {
@@ -229,10 +226,14 @@ impl Channel for MatrixChannel {
             .await?;
         }
         Ok(())
-
     }
 
-    async fn edit(&self, conversation_id: &ConversationId, message_id: &MessageId, new_text: &str) -> ChannelResult<()> {
+    async fn edit(
+        &self,
+        conversation_id: &ConversationId,
+        message_id: &MessageId,
+        new_text: &str,
+    ) -> ChannelResult<()> {
         // Matrix supports editing via m.replace relation, but full implementation
         // requires matrix-sdk client integration.
         let _ = (conversation_id, message_id, new_text);
@@ -241,7 +242,12 @@ impl Channel for MatrixChannel {
         ))
     }
 
-    async fn react(&self, _conversation_id: &ConversationId, message_id: &MessageId, reaction: &str) -> ChannelResult<()> {
+    async fn react(
+        &self,
+        _conversation_id: &ConversationId,
+        message_id: &MessageId,
+        reaction: &str,
+    ) -> ChannelResult<()> {
         // Matrix supports reactions via m.reaction relation, but we need the room_id.
         let _ = (message_id, reaction);
         Err(ChannelError::UnsupportedFeature(
@@ -263,9 +269,7 @@ impl ChannelFactory for MatrixChannelFactory {
         let config: MatrixConfig = serde_json::from_value(config)
             .map_err(|e| ChannelError::ConfigError(format!("Invalid Matrix config: {}", e)))?;
 
-        config
-            .validate()
-            .map_err(ChannelError::ConfigError)?;
+        config.validate().map_err(ChannelError::ConfigError)?;
 
         Ok(Box::new(MatrixChannel::new("matrix", config)))
     }

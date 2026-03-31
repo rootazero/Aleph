@@ -7,10 +7,10 @@ use tokio::sync::RwLock;
 use crate::acp::manager::AcpHarnessManager;
 use crate::config::{Config, ConfigPatcher};
 use crate::dispatcher::ToolRegistry as DispatcherToolRegistry;
+use crate::gateway::context::GatewayContext;
 use crate::generation::GenerationProviderRegistry;
 use crate::memory::store::MemoryBackend;
 use crate::memory::EmbeddingProvider;
-use crate::gateway::context::GatewayContext;
 
 /// Configuration for builtin tools
 #[derive(Clone, Default)]

@@ -163,14 +163,15 @@ impl ConflictResolver {
 
         // Inline conflict check under write lock (no TOCTOU race)
         let name_lower = tool.name.to_lowercase();
-        let conflict = tools.values().find(|t| t.name.to_lowercase() == name_lower).map(|t| {
-            ConflictInfo {
+        let conflict = tools
+            .values()
+            .find(|t| t.name.to_lowercase() == name_lower)
+            .map(|t| ConflictInfo {
                 existing_id: t.id.clone(),
                 existing_name: t.name.clone(),
                 existing_source: t.source.clone(),
                 existing_priority: t.source.priority(),
-            }
-        });
+            });
 
         if let Some(conflict) = conflict {
             let resolution = self.resolve_conflict(&tool.name, &conflict, &tool.source);
@@ -193,8 +194,12 @@ impl ConflictResolver {
                             ToolSource::Builtin => format!("builtin:{}", new_name),
                             ToolSource::Mcp { server } => format!("mcp:{}:{}", server, new_name),
                             ToolSource::Skill { id } => format!("skill:{}", id),
-                            ToolSource::Custom { rule_index } => format!("custom:{}:{}", rule_index, new_name),
-                            ToolSource::Plugin { plugin_id } => format!("plugin:{}:{}", plugin_id, new_name),
+                            ToolSource::Custom { rule_index } => {
+                                format!("custom:{}:{}", rule_index, new_name)
+                            }
+                            ToolSource::Plugin { plugin_id } => {
+                                format!("plugin:{}:{}", plugin_id, new_name)
+                            }
                         };
 
                         debug!(

@@ -3,13 +3,13 @@ pub mod backend;
 pub mod chrome_mcp;
 pub mod chrome_mcp_backend;
 mod chrome_mcp_snapshot;
-pub mod playwright_mcp;
-pub mod playwright_mcp_backend;
 mod discovery;
 pub mod error;
 mod managed_backend;
 pub mod manager;
 pub mod network_policy;
+pub mod playwright_mcp;
+pub mod playwright_mcp_backend;
 
 pub mod profile;
 pub mod runtime;
@@ -20,11 +20,11 @@ pub mod types;
 pub use backend::BrowserBackend;
 pub use chrome_mcp::ChromeMcpDriver;
 pub use chrome_mcp_backend::ChromeMcpBackend;
-pub use playwright_mcp::PlaywrightMcpDriver;
-pub use playwright_mcp_backend::PlaywrightMcpBackend;
 pub use discovery::find_chromium;
 pub use error::BrowserError;
 pub use managed_backend::ManagedBackend;
+pub use playwright_mcp::PlaywrightMcpDriver;
+pub use playwright_mcp_backend::PlaywrightMcpBackend;
 pub use runtime::BrowserRuntime;
 pub use snapshot::{resolve_ref_to_point, take_aria_snapshot};
 pub use snapshot_format::{format_snapshot, SnapshotFormatOptions, SnapshotFormatResult};
@@ -50,13 +50,17 @@ mod tests {
     #[test]
     fn test_action_target_serialization() {
         // Ref variant
-        let target = ActionTarget::Ref { ref_id: "e42".to_string() };
+        let target = ActionTarget::Ref {
+            ref_id: "e42".to_string(),
+        };
         let json = serde_json::to_value(&target).unwrap();
         assert_eq!(json["type"], "ref");
         assert_eq!(json["ref_id"], "e42");
 
         // Selector variant
-        let target = ActionTarget::Selector { css: "button.submit".to_string() };
+        let target = ActionTarget::Selector {
+            css: "button.submit".to_string(),
+        };
         let json = serde_json::to_value(&target).unwrap();
         assert_eq!(json["type"], "selector");
         assert_eq!(json["css"], "button.submit");
@@ -70,7 +74,9 @@ mod tests {
 
         // Round-trip deserialization
         let round_trip: ActionTarget = serde_json::from_value(json).unwrap();
-        assert!(matches!(round_trip, ActionTarget::Coordinates { x, y } if x == 100.0 && y == 200.0));
+        assert!(
+            matches!(round_trip, ActionTarget::Coordinates { x, y } if x == 100.0 && y == 200.0)
+        );
     }
 
     #[test]
@@ -81,7 +87,12 @@ mod tests {
             name: Some("Submit".to_string()),
             value: None,
             state: vec!["focused".to_string()],
-            bounds: Some(ElementRect { x: 10.0, y: 20.0, width: 100.0, height: 40.0 }),
+            bounds: Some(ElementRect {
+                x: 10.0,
+                y: 20.0,
+                width: 100.0,
+                height: 40.0,
+            }),
             children: vec![],
         };
 
@@ -112,13 +123,17 @@ mod tests {
         assert_eq!(json["type"], "auto");
 
         // Connect
-        let mode = LaunchMode::Connect { endpoint: "ws://127.0.0.1:9222".to_string() };
+        let mode = LaunchMode::Connect {
+            endpoint: "ws://127.0.0.1:9222".to_string(),
+        };
         let json = serde_json::to_value(&mode).unwrap();
         assert_eq!(json["type"], "connect");
         assert_eq!(json["endpoint"], "ws://127.0.0.1:9222");
 
         // Binary
-        let mode = LaunchMode::Binary { path: "/usr/bin/chromium".to_string() };
+        let mode = LaunchMode::Binary {
+            path: "/usr/bin/chromium".to_string(),
+        };
         let json = serde_json::to_value(&mode).unwrap();
         assert_eq!(json["type"], "binary");
         assert_eq!(json["path"], "/usr/bin/chromium");

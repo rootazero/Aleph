@@ -33,10 +33,7 @@ pub enum MockBehavior {
         reason: ErrorReason,
     },
     /// Simulate a delayed execution (output after delay).
-    Delayed {
-        delay_ms: i64,
-        output: String,
-    },
+    Delayed { delay_ms: i64, output: String },
 }
 
 /// A mock executor that records calls and returns configurable results.
@@ -94,69 +91,71 @@ impl MockExecutor {
         let behaviors = Arc::clone(&self.behaviors);
         let call_log = Arc::clone(&self.call_log);
 
-        Arc::new(move |snapshot: JobSnapshot| -> Pin<Box<dyn Future<Output = ExecutionResult> + Send>> {
-            let behaviors = Arc::clone(&behaviors);
-            let call_log = Arc::clone(&call_log);
+        Arc::new(
+            move |snapshot: JobSnapshot| -> Pin<Box<dyn Future<Output = ExecutionResult> + Send>> {
+                let behaviors = Arc::clone(&behaviors);
+                let call_log = Arc::clone(&call_log);
 
-            Box::pin(async move {
-                // Record the call
-                {
-                    let mut log = call_log.lock().unwrap_or_else(|e| e.into_inner());
-                    log.push(ExecutionRecord {
-                        job_id: snapshot.id.clone(),
-                        trigger_source: snapshot.trigger_source,
-                        executed_at_ms: snapshot.marked_at,
-                        prompt: snapshot.prompt.clone(),
-                    });
-                }
+                Box::pin(async move {
+                    // Record the call
+                    {
+                        let mut log = call_log.lock().unwrap_or_else(|e| e.into_inner());
+                        log.push(ExecutionRecord {
+                            job_id: snapshot.id.clone(),
+                            trigger_source: snapshot.trigger_source,
+                            executed_at_ms: snapshot.marked_at,
+                            prompt: snapshot.prompt.clone(),
+                        });
+                    }
 
-                // Look up configured behavior (default: Ok("ok"))
-                let behavior = {
-                    let behaviors = behaviors.lock().unwrap_or_else(|e| e.into_inner());
-                    behaviors.get(&snapshot.id).cloned()
-                };
+                    // Look up configured behavior (default: Ok("ok"))
+                    let behavior = {
+                        let behaviors = behaviors.lock().unwrap_or_else(|e| e.into_inner());
+                        behaviors.get(&snapshot.id).cloned()
+                    };
 
-                let behavior = behavior.unwrap_or(MockBehavior::Ok("ok".to_string()));
+                    let behavior = behavior.unwrap_or(MockBehavior::Ok("ok".to_string()));
 
-                match behavior {
-                    MockBehavior::Ok(output) => ExecutionResult {
-                        started_at: snapshot.marked_at,
-                        ended_at: snapshot.marked_at + 100,
-                        duration_ms: 100,
-                        status: RunStatus::Ok,
-                        output: Some(output),
-                        error: None,
-                        error_reason: None,
-                        delivery_status: Some(DeliveryStatus::NotRequested),
-                        agent_used_messaging_tool: false,
-                    },
-                    MockBehavior::Error { message, reason } => ExecutionResult {
-                        started_at: snapshot.marked_at,
-                        ended_at: snapshot.marked_at + 100,
-                        duration_ms: 100,
-                        status: RunStatus::Error,
-                        output: None,
-                        error: Some(message),
-                        error_reason: Some(reason),
-                        delivery_status: None,
-                        agent_used_messaging_tool: false,
-                    },
-                    MockBehavior::Delayed { delay_ms, output } => {
-                        // Simulate delay (we don't actually sleep — just report duration)
-                        ExecutionResult {
+                    match behavior {
+                        MockBehavior::Ok(output) => ExecutionResult {
                             started_at: snapshot.marked_at,
-                            ended_at: snapshot.marked_at + delay_ms,
-                            duration_ms: delay_ms,
+                            ended_at: snapshot.marked_at + 100,
+                            duration_ms: 100,
                             status: RunStatus::Ok,
                             output: Some(output),
                             error: None,
                             error_reason: None,
                             delivery_status: Some(DeliveryStatus::NotRequested),
                             agent_used_messaging_tool: false,
+                        },
+                        MockBehavior::Error { message, reason } => ExecutionResult {
+                            started_at: snapshot.marked_at,
+                            ended_at: snapshot.marked_at + 100,
+                            duration_ms: 100,
+                            status: RunStatus::Error,
+                            output: None,
+                            error: Some(message),
+                            error_reason: Some(reason),
+                            delivery_status: None,
+                            agent_used_messaging_tool: false,
+                        },
+                        MockBehavior::Delayed { delay_ms, output } => {
+                            // Simulate delay (we don't actually sleep — just report duration)
+                            ExecutionResult {
+                                started_at: snapshot.marked_at,
+                                ended_at: snapshot.marked_at + delay_ms,
+                                duration_ms: delay_ms,
+                                status: RunStatus::Ok,
+                                output: Some(output),
+                                error: None,
+                                error_reason: None,
+                                delivery_status: Some(DeliveryStatus::NotRequested),
+                                agent_used_messaging_tool: false,
+                            }
                         }
                     }
-                }
-            })
-        })
+                })
+            },
+        )
     }
 }

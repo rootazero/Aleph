@@ -42,8 +42,7 @@ impl BrowserEvaluateTool {
 #[async_trait]
 impl AlephTool for BrowserEvaluateTool {
     const NAME: &'static str = "browser_evaluate";
-    const DESCRIPTION: &'static str =
-        "Execute JavaScript in the browser and return the result";
+    const DESCRIPTION: &'static str = "Execute JavaScript in the browser and return the result";
     type Args = BrowserEvaluateArgs;
     type Output = BrowserEvaluateOutput;
 
@@ -55,7 +54,8 @@ impl AlephTool for BrowserEvaluateTool {
                     result: Some(value),
                     message: Some(format!(
                         "Evaluated {} chars of JS in profile '{}'",
-                        args.script.chars().count(), args.profile
+                        args.script.chars().count(),
+                        args.profile
                     )),
                 }),
                 Err(e) => Ok(BrowserEvaluateOutput {

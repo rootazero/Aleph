@@ -116,11 +116,7 @@ Example:
             .map(|lang| format!("Transcribe this audio. Language: {}", lang))
             .unwrap_or_else(|| "Transcribe this audio.".to_string());
 
-        match self
-            .pipeline
-            .process(&input, &mt, Some(&prompt))
-            .await
-        {
+        match self.pipeline.process(&input, &mt, Some(&prompt)).await {
             Ok(output) => {
                 let data = serde_json::to_value(&output).unwrap_or_default();
                 match &output {

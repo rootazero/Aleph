@@ -126,8 +126,8 @@ impl BrowserSsrfGuard {
         // Additional browser-specific: allowlist-only mode
         // (when allowed_domains is non-empty, ONLY those domains are permitted)
         if !self.config.allowed_domains.is_empty() {
-            let url = url::Url::parse(url_str)
-                .map_err(|e| PolicyViolation::InvalidUrl(e.to_string()))?;
+            let url =
+                url::Url::parse(url_str).map_err(|e| PolicyViolation::InvalidUrl(e.to_string()))?;
             if let Some(host) = url.host_str() {
                 // The core engine's allowlist BYPASSES blocks, but browser needs allowlist-ONLY mode.
                 // Check if host matches any allowed domain pattern.
@@ -211,10 +211,7 @@ mod tests {
     fn test_blocked_domain_patterns() {
         let policy = BrowserSsrfGuard::new(SsrfConfig {
             block_private: false,
-            blocked_domains: vec![
-                "*.malware.com".to_string(),
-                "evil.org".to_string(),
-            ],
+            blocked_domains: vec!["*.malware.com".to_string(), "evil.org".to_string()],
             allowed_domains: vec![],
         });
 
@@ -242,10 +239,7 @@ mod tests {
         let policy = BrowserSsrfGuard::new(SsrfConfig {
             block_private: false,
             blocked_domains: vec![],
-            allowed_domains: vec![
-                "*.trusted.com".to_string(),
-                "api.example.org".to_string(),
-            ],
+            allowed_domains: vec!["*.trusted.com".to_string(), "api.example.org".to_string()],
         });
 
         // Allowed

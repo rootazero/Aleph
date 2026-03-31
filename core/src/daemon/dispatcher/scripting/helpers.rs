@@ -11,11 +11,14 @@ pub fn parse_duration(s: &str) -> Result<Duration, Box<EvalAltResult>> {
     }
 
     // Safe UTF-8: use last char boundary instead of byte offset
-    let last_char = s.chars().next_back()
+    let last_char = s
+        .chars()
+        .next_back()
         .ok_or_else(|| -> Box<EvalAltResult> { "Empty duration string".into() })?;
     let split_pos = s.len() - last_char.len_utf8();
     let (num_str, unit) = s.split_at(split_pos);
-    let num: i64 = num_str.parse()
+    let num: i64 = num_str
+        .parse()
         .map_err(|_| format!("Invalid number in duration: {}", s))?;
 
     let duration = match unit {

@@ -3,8 +3,8 @@
 //! Provides the `EventEmitter` trait for emitting real-time streaming events
 //! from the agent loop to connected WebSocket clients.
 
-mod types;
 mod impls;
+mod types;
 
 #[cfg(test)]
 mod tests;
@@ -15,9 +15,7 @@ pub use types::{
     RunSummary, StreamEvent, ToolErrorItem, ToolResult, ToolSummaryItem, UncertaintyAction,
 };
 
-pub use impls::{
-    CollectingEventEmitter, DynEventEmitter, GatewayEventEmitter, NoOpEventEmitter,
-};
+pub use impls::{CollectingEventEmitter, DynEventEmitter, GatewayEventEmitter, NoOpEventEmitter};
 
 use async_trait::async_trait;
 use serde_json::Value;
@@ -74,7 +72,13 @@ pub trait EventEmitter: Send + Sync {
     }
 
     /// Emit tool execution completion
-    async fn emit_tool_end(&self, run_id: &str, tool_id: &str, result: ToolResult, duration_ms: u64) {
+    async fn emit_tool_end(
+        &self,
+        run_id: &str,
+        tool_id: &str,
+        result: ToolResult,
+        duration_ms: u64,
+    ) {
         let seq = self.next_seq();
         let _ = self
             .emit(StreamEvent::ToolEnd {

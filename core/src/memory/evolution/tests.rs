@@ -2,15 +2,15 @@
 
 use crate::sync_primitives::Arc;
 
+use crate::memory::store::lance::LanceMemoryBackend;
+use crate::memory::store::{MemoryBackend, MemoryStore};
 use crate::memory::{
     FactSource, FactSpecificity, FactType, MemoryCategory, MemoryFact, MemoryLayer, TemporalScope,
 };
-use crate::memory::store::{MemoryBackend, MemoryStore};
-use crate::memory::store::lance::LanceMemoryBackend;
 use crate::Result;
 
-use super::*;
 use super::resolver::ResolutionStrategy;
+use super::*;
 
 /// Helper to create a test fact
 fn create_test_fact(id: &str, content: &str, confidence: f32) -> MemoryFact {
@@ -86,17 +86,9 @@ fn test_evolution_chain_extension() {
     let fact2 = create_test_fact("fact2", "User prefers tea", 0.95);
     let fact3 = create_test_fact("fact3", "User drinks water only", 0.98);
 
-    let evolution = EvolutionChain::create_evolution(
-        fact1,
-        fact2,
-        "First change".to_string(),
-    );
+    let evolution = EvolutionChain::create_evolution(fact1, fact2, "First change".to_string());
 
-    let evolution = EvolutionChain::extend_evolution(
-        evolution,
-        fact3,
-        "Second change".to_string(),
-    );
+    let evolution = EvolutionChain::extend_evolution(evolution, fact3, "Second change".to_string());
 
     assert_eq!(evolution.facts.len(), 3);
     assert_eq!(evolution.facts[0].superseded_by, Some("fact2".to_string()));
@@ -109,11 +101,7 @@ fn test_get_current_fact() {
     let fact1 = create_test_fact("fact1", "Old fact", 0.9);
     let fact2 = create_test_fact("fact2", "New fact", 0.95);
 
-    let evolution = EvolutionChain::create_evolution(
-        fact1,
-        fact2.clone(),
-        "Update".to_string(),
-    );
+    let evolution = EvolutionChain::create_evolution(fact1, fact2.clone(), "Update".to_string());
 
     let current = EvolutionChain::get_current_fact(&evolution);
     assert!(current.is_some());
@@ -126,16 +114,8 @@ fn test_get_history() {
     let fact2 = create_test_fact("fact2", "Version 2", 0.95);
     let fact3 = create_test_fact("fact3", "Version 3", 0.98);
 
-    let evolution = EvolutionChain::create_evolution(
-        fact1,
-        fact2,
-        "Update 1".to_string(),
-    );
-    let evolution = EvolutionChain::extend_evolution(
-        evolution,
-        fact3,
-        "Update 2".to_string(),
-    );
+    let evolution = EvolutionChain::create_evolution(fact1, fact2, "Update 1".to_string());
+    let evolution = EvolutionChain::extend_evolution(evolution, fact3, "Update 2".to_string());
 
     let history = EvolutionChain::get_history(&evolution);
     assert_eq!(history.len(), 3);

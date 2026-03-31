@@ -32,7 +32,9 @@ fn has_semantic_boundary(s: &str) -> bool {
         || s.ends_with("！")
         || s.ends_with("! ")
         || s.ends_with("? ")
-        || s.lines().last().is_some_and(|line| line.trim_start().starts_with("```"))
+        || s.lines()
+            .last()
+            .is_some_and(|line| line.trim_start().starts_with("```"))
 }
 
 /// Check if buffer ends with a soft boundary (shorter timeout).
@@ -127,9 +129,7 @@ impl DeltaSink for StreamingDeltaSink {
 
                     let idx = self.chunk_index.fetch_add(1, Ordering::Relaxed);
                     self.emitter
-                        .emit_response_chunk(
-                            &self.run_id, &content, &full_text, idx, false, false,
-                        )
+                        .emit_response_chunk(&self.run_id, &content, &full_text, idx, false, false)
                         .await;
                     self.has_emitted_text.store(true, Ordering::Release);
                     *self.last_emit.lock().await = Instant::now();
@@ -153,7 +153,12 @@ impl DeltaSink for StreamingDeltaSink {
                     let idx = self.chunk_index.fetch_add(1, Ordering::Relaxed);
                     self.emitter
                         .emit_response_chunk(
-                            &self.run_id, &remaining, &full_text, idx, false, false,
+                            &self.run_id,
+                            &remaining,
+                            &full_text,
+                            idx,
+                            false,
+                            false,
                         )
                         .await;
                     self.has_emitted_text.store(true, Ordering::Release);
@@ -167,18 +172,14 @@ impl DeltaSink for StreamingDeltaSink {
                     // Intermediate boundary: tell client to finalize accumulated
                     // text as a standalone intermediate message
                     self.emitter
-                        .emit_response_chunk(
-                            &self.run_id, "", &full_text, idx, false, true,
-                        )
+                        .emit_response_chunk(&self.run_id, "", &full_text, idx, false, true)
                         .await;
                     // Reset accumulated for next iteration
                     self.accumulated.lock().await.clear();
                 } else {
                     // Final marker: stream complete
                     self.emitter
-                        .emit_response_chunk(
-                            &self.run_id, "", &full_text, idx, true, false,
-                        )
+                        .emit_response_chunk(&self.run_id, "", &full_text, idx, true, false)
                         .await;
                 }
             }
@@ -243,22 +244,31 @@ mod tests {
         let (sink, emitter) = make_sink("run-1", flag.clone());
 
         // TextDelta — will be buffered (elapsed < timeout)
-        sink.on_delta(&ProviderDelta::TextDelta("hello world".to_string())).await;
+        sink.on_delta(&ProviderDelta::TextDelta("hello world".to_string()))
+            .await;
 
         // Done — should flush buffer + emit final marker
-        sink.on_delta(&ProviderDelta::Done(StopReason::EndTurn)).await;
+        sink.on_delta(&ProviderDelta::Done(StopReason::EndTurn))
+            .await;
 
         let events = emitter.events().await;
 
         // Must have at least two events: the flushed text chunk and the final marker
-        assert!(events.len() >= 2, "Expected at least 2 events, got {}", events.len());
+        assert!(
+            events.len() >= 2,
+            "Expected at least 2 events, got {}",
+            events.len()
+        );
 
         // The second-to-last event should contain the text content
         let text_event = events.iter().find(|e| {
             matches!(e, StreamEvent::ResponseChunk { content, is_final, .. }
                 if !content.is_empty() && !*is_final)
         });
-        assert!(text_event.is_some(), "Expected a non-final chunk with text content");
+        assert!(
+            text_event.is_some(),
+            "Expected a non-final chunk with text content"
+        );
 
         // The last event must be the final marker
         let last = events.last().unwrap();
@@ -280,10 +290,15 @@ mod tests {
         assert!(!flag.load(Ordering::Acquire));
 
         // Done with buffered text → flush triggers flag
-        sink.on_delta(&ProviderDelta::TextDelta("some text".to_string())).await;
-        sink.on_delta(&ProviderDelta::Done(StopReason::EndTurn)).await;
+        sink.on_delta(&ProviderDelta::TextDelta("some text".to_string()))
+            .await;
+        sink.on_delta(&ProviderDelta::Done(StopReason::EndTurn))
+            .await;
 
-        assert!(flag.load(Ordering::Acquire), "has_emitted_text flag should be true after text emission");
+        assert!(
+            flag.load(Ordering::Acquire),
+            "has_emitted_text flag should be true after text emission"
+        );
     }
 
     /// Non-text deltas (ThinkingDelta, ToolCallStart) should produce no events.
@@ -292,14 +307,19 @@ mod tests {
         let flag = Arc::new(AtomicBool::new(false));
         let (sink, emitter) = make_sink("run-3", flag.clone());
 
-        sink.on_delta(&ProviderDelta::ThinkingDelta("hmm".to_string())).await;
+        sink.on_delta(&ProviderDelta::ThinkingDelta("hmm".to_string()))
+            .await;
         sink.on_delta(&ProviderDelta::ToolCallStart {
             id: "tc1".to_string(),
             name: "search".to_string(),
-        }).await;
+        })
+        .await;
 
         let events = emitter.events().await;
-        assert!(events.is_empty(), "Non-text deltas should not produce any events");
+        assert!(
+            events.is_empty(),
+            "Non-text deltas should not produce any events"
+        );
         assert!(!flag.load(Ordering::Acquire), "Flag should remain unset");
     }
 
@@ -309,25 +329,35 @@ mod tests {
         let flag = Arc::new(AtomicBool::new(false));
         let (sink, emitter) = make_sink("run-int", flag.clone());
 
-        sink.on_delta(&ProviderDelta::TextDelta("Setting up team...".to_string())).await;
-        sink.on_delta(&ProviderDelta::Done(StopReason::ToolUse)).await;
+        sink.on_delta(&ProviderDelta::TextDelta("Setting up team...".to_string()))
+            .await;
+        sink.on_delta(&ProviderDelta::Done(StopReason::ToolUse))
+            .await;
 
         let events = emitter.events().await;
-        assert!(events.len() >= 2, "Expected at least 2 events, got {}", events.len());
+        assert!(
+            events.len() >= 2,
+            "Expected at least 2 events, got {}",
+            events.len()
+        );
 
         // Flushed text should be non-intermediate (emitters buffer it, boundary flushes)
         let text_event = events.iter().find(|e| {
             matches!(e, StreamEvent::ResponseChunk { content, is_intermediate, .. }
                 if !content.is_empty() && !*is_intermediate)
         });
-        assert!(text_event.is_some(), "Flushed text should be non-intermediate");
+        assert!(
+            text_event.is_some(),
+            "Flushed text should be non-intermediate"
+        );
 
         // Last event: intermediate boundary marker (empty, is_intermediate=true, is_final=false)
         let last = events.last().unwrap();
         assert!(
             matches!(last, StreamEvent::ResponseChunk { content, is_final, is_intermediate, .. }
                 if content.is_empty() && !*is_final && *is_intermediate),
-            "Last event must be intermediate boundary, got: {:?}", last
+            "Last event must be intermediate boundary, got: {:?}",
+            last
         );
     }
 
@@ -338,12 +368,16 @@ mod tests {
         let (sink, emitter) = make_sink("run-multi", flag.clone());
 
         // Iteration 1: intermediate
-        sink.on_delta(&ProviderDelta::TextDelta("Thinking...".to_string())).await;
-        sink.on_delta(&ProviderDelta::Done(StopReason::ToolUse)).await;
+        sink.on_delta(&ProviderDelta::TextDelta("Thinking...".to_string()))
+            .await;
+        sink.on_delta(&ProviderDelta::Done(StopReason::ToolUse))
+            .await;
 
         // Iteration 2: final
-        sink.on_delta(&ProviderDelta::TextDelta("Done!".to_string())).await;
-        sink.on_delta(&ProviderDelta::Done(StopReason::EndTurn)).await;
+        sink.on_delta(&ProviderDelta::TextDelta("Done!".to_string()))
+            .await;
+        sink.on_delta(&ProviderDelta::Done(StopReason::EndTurn))
+            .await;
 
         let events = emitter.events().await;
 
@@ -357,7 +391,10 @@ mod tests {
                 if *is_final && !*is_intermediate)
         });
 
-        assert!(has_intermediate_boundary, "Must have intermediate boundary marker");
+        assert!(
+            has_intermediate_boundary,
+            "Must have intermediate boundary marker"
+        );
         assert!(has_final_marker, "Must have final marker");
     }
 
@@ -367,10 +404,15 @@ mod tests {
         let flag = Arc::new(AtomicBool::new(false));
         let (sink, emitter) = make_sink("run-4", flag.clone());
 
-        sink.on_delta(&ProviderDelta::Done(StopReason::EndTurn)).await;
+        sink.on_delta(&ProviderDelta::Done(StopReason::EndTurn))
+            .await;
 
         let events = emitter.events().await;
-        assert_eq!(events.len(), 1, "Should emit exactly one event (the final marker)");
+        assert_eq!(
+            events.len(),
+            1,
+            "Should emit exactly one event (the final marker)"
+        );
 
         let only = &events[0];
         assert!(
@@ -381,7 +423,10 @@ mod tests {
         );
 
         // Flag should remain unset since no text was emitted
-        assert!(!flag.load(Ordering::Acquire), "Flag should remain unset when no text was emitted");
+        assert!(
+            !flag.load(Ordering::Acquire),
+            "Flag should remain unset when no text was emitted"
+        );
     }
 
     /// Verify accumulated text resets between iterations (on intermediate Done(ToolUse))
@@ -391,28 +436,41 @@ mod tests {
         let (sink, emitter) = make_sink("run-acc", flag.clone());
 
         // Iteration 1
-        sink.on_delta(&ProviderDelta::TextDelta("First part.".to_string())).await;
-        sink.on_delta(&ProviderDelta::Done(StopReason::ToolUse)).await;
+        sink.on_delta(&ProviderDelta::TextDelta("First part.".to_string()))
+            .await;
+        sink.on_delta(&ProviderDelta::Done(StopReason::ToolUse))
+            .await;
 
         // Iteration 2
-        sink.on_delta(&ProviderDelta::TextDelta("Second part.".to_string())).await;
-        sink.on_delta(&ProviderDelta::Done(StopReason::EndTurn)).await;
+        sink.on_delta(&ProviderDelta::TextDelta("Second part.".to_string()))
+            .await;
+        sink.on_delta(&ProviderDelta::Done(StopReason::EndTurn))
+            .await;
 
         let events = emitter.events().await;
 
         // Find text chunks and verify full_text resets between iterations
-        let text_chunks: Vec<_> = events.iter().filter(|e| {
-            matches!(e, StreamEvent::ResponseChunk { content, .. } if !content.is_empty())
-        }).collect();
+        let text_chunks: Vec<_> = events
+            .iter()
+            .filter(
+                |e| matches!(e, StreamEvent::ResponseChunk { content, .. } if !content.is_empty()),
+            )
+            .collect();
 
-        assert!(text_chunks.len() >= 2, "Should have text chunks from both iterations");
+        assert!(
+            text_chunks.len() >= 2,
+            "Should have text chunks from both iterations"
+        );
 
         if let StreamEvent::ResponseChunk { full_text, .. } = &text_chunks[0] {
             assert!(full_text.contains("First part."));
         }
 
         if let StreamEvent::ResponseChunk { full_text, .. } = text_chunks.last().unwrap() {
-            assert!(!full_text.contains("First part."), "accumulated should reset between iterations");
+            assert!(
+                !full_text.contains("First part."),
+                "accumulated should reset between iterations"
+            );
             assert!(full_text.contains("Second part."));
         }
     }
@@ -424,21 +482,30 @@ mod tests {
         let (sink, emitter) = make_sink("run-acc2", flag.clone());
 
         // Send text with a hard boundary to force immediate flush
-        sink.on_delta(&ProviderDelta::TextDelta("Hello. ".to_string())).await;
+        sink.on_delta(&ProviderDelta::TextDelta("Hello. ".to_string()))
+            .await;
         // Another chunk with hard boundary
-        sink.on_delta(&ProviderDelta::TextDelta("World. ".to_string())).await;
-        sink.on_delta(&ProviderDelta::Done(StopReason::EndTurn)).await;
+        sink.on_delta(&ProviderDelta::TextDelta("World. ".to_string()))
+            .await;
+        sink.on_delta(&ProviderDelta::Done(StopReason::EndTurn))
+            .await;
 
         let events = emitter.events().await;
 
         // Find chunks with non-empty content
-        let text_chunks: Vec<_> = events.iter().filter(|e| {
-            matches!(e, StreamEvent::ResponseChunk { content, .. } if !content.is_empty())
-        }).collect();
+        let text_chunks: Vec<_> = events
+            .iter()
+            .filter(
+                |e| matches!(e, StreamEvent::ResponseChunk { content, .. } if !content.is_empty()),
+            )
+            .collect();
 
         // The last text chunk's full_text should contain all accumulated text
         if let Some(StreamEvent::ResponseChunk { full_text, .. }) = text_chunks.last() {
-            assert!(full_text.contains("Hello."), "full_text should contain earlier text");
+            assert!(
+                full_text.contains("Hello."),
+                "full_text should contain earlier text"
+            );
         }
     }
 }

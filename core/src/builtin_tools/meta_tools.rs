@@ -15,11 +15,11 @@
 //! 3. System returns the full JSON Schema
 //! 4. LLM can then call the tool with correct parameters
 
+use crate::sync_primitives::Arc;
 use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
 use tracing::debug;
 
@@ -86,7 +86,10 @@ impl ListToolsTool {
     }
 
     /// Execute the list operation (internal implementation)
-    async fn call_impl(&self, args: ListToolsArgs) -> std::result::Result<ListToolsOutput, ToolError> {
+    async fn call_impl(
+        &self,
+        args: ListToolsArgs,
+    ) -> std::result::Result<ListToolsOutput, ToolError> {
         use super::{notify_tool_result, notify_tool_start};
 
         let category_filter = args.category.as_deref().unwrap_or("all");
@@ -109,11 +112,7 @@ impl ListToolsTool {
         let total_count = tools.len();
         let categories_json = serde_json::to_value(&categories).unwrap_or_default();
 
-        notify_tool_result(
-            Self::NAME,
-            &format!("找到 {} 个工具", total_count),
-            true,
-        );
+        notify_tool_result(Self::NAME, &format!("找到 {} 个工具", total_count), true);
 
         Ok(ListToolsOutput {
             total_count,
@@ -222,7 +221,10 @@ impl GetToolSchemaTool {
     }
 
     /// Execute the schema lookup (internal implementation)
-    async fn call_impl(&self, args: GetToolSchemaArgs) -> std::result::Result<GetToolSchemaOutput, ToolError> {
+    async fn call_impl(
+        &self,
+        args: GetToolSchemaArgs,
+    ) -> std::result::Result<GetToolSchemaOutput, ToolError> {
         use super::{notify_tool_result, notify_tool_start};
 
         notify_tool_start(Self::NAME, &format!("获取工具定义: {}", args.tool_name));

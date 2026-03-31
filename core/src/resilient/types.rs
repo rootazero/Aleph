@@ -196,7 +196,9 @@ impl ResilienceConfig {
     /// Calculate backoff for a given attempt
     pub fn calculate_backoff(&self, attempt: u32) -> Duration {
         let base_ms = self.initial_backoff_ms as f64
-            * self.backoff_multiplier.powi(attempt.saturating_sub(1) as i32);
+            * self
+                .backoff_multiplier
+                .powi(attempt.saturating_sub(1) as i32);
         let capped_ms = base_ms.min(self.max_backoff_ms as f64);
 
         let final_ms = if self.use_jitter {

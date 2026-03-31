@@ -8,21 +8,23 @@
 //! - exec.approvals.node.get - Get node approval config
 //! - exec.approvals.node.set - Set node approval config
 
+use crate::sync_primitives::Arc;
 use std::future::Future;
 use std::pin::Pin;
-use crate::sync_primitives::Arc;
 
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 use crate::exec::{
-    ApprovalBridge, ApprovalDecisionType, ConfigWithHash, ExecApprovalManager,
-    ExecApprovalsFile, PendingApproval, StorageError,
+    ApprovalBridge, ApprovalDecisionType, ConfigWithHash, ExecApprovalManager, ExecApprovalsFile,
+    PendingApproval, StorageError,
 };
 
 /// Type alias for an async RPC handler function
-type RpcHandler = Box<dyn Fn(JsonRpcRequest) -> Pin<Box<dyn Future<Output = JsonRpcResponse> + Send>> + Send + Sync>;
+type RpcHandler = Box<
+    dyn Fn(JsonRpcRequest) -> Pin<Box<dyn Future<Output = JsonRpcResponse> + Send>> + Send + Sync,
+>;
 
 /// Parameters for exec.approval.request
 #[derive(Debug, Deserialize)]
@@ -108,9 +110,7 @@ pub struct CallbackHandleResponse {
 }
 
 /// Create handlers that need the manager
-pub fn create_handlers(
-    manager: Arc<ExecApprovalManager>,
-) -> impl Fn(&str) -> Option<RpcHandler> {
+pub fn create_handlers(manager: Arc<ExecApprovalManager>) -> impl Fn(&str) -> Option<RpcHandler> {
     move |method: &str| -> Option<RpcHandler> {
         let mgr = manager.clone();
         match method {
@@ -255,7 +255,11 @@ async fn handle_approvals_get(
         Ok(ConfigWithHash { config, hash }) => {
             JsonRpcResponse::success(request.id, json!(ApprovalsGetResponse { config, hash }))
         }
-        Err(e) => JsonRpcResponse::error(request.id, INTERNAL_ERROR, format!("Failed to load config: {}", e)),
+        Err(e) => JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!("Failed to load config: {}", e),
+        ),
     }
 }
 
@@ -387,7 +391,10 @@ mod tests {
         // First get the current hash
         let get_request = JsonRpcRequest::with_id("exec.approvals.get", None, json!(1));
         let get_response = handle_approvals_get(get_request, manager.clone()).await;
-        let hash = get_response.result.unwrap()["hash"].as_str().unwrap().to_string();
+        let hash = get_response.result.unwrap()["hash"]
+            .as_str()
+            .unwrap()
+            .to_string();
 
         // Now set with the correct base hash
         let set_request = JsonRpcRequest::new(

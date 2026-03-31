@@ -3,8 +3,8 @@
 //! Provides secure communication between Gateway and macOS App for approval requests.
 //! Uses HMAC-SHA256 challenge-response authentication.
 
-use std::path::{Path, PathBuf};
 use crate::sync_primitives::Arc;
+use std::path::{Path, PathBuf};
 
 use hmac::{Hmac, Mac};
 use rand::RngCore;
@@ -47,13 +47,20 @@ pub enum IpcError {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum IpcMessage {
     /// Challenge from server (32-byte nonce)
-    Challenge { nonce: String },
+    Challenge {
+        nonce: String,
+    },
 
     /// Response to challenge (HMAC of nonce)
-    ChallengeResponse { response: String },
+    ChallengeResponse {
+        response: String,
+    },
 
     /// Authentication result
-    AuthResult { success: bool, error: Option<String> },
+    AuthResult {
+        success: bool,
+        error: Option<String>,
+    },
 
     /// Approval request (server -> client)
     ApprovalRequest {
@@ -78,7 +85,9 @@ pub enum IpcMessage {
     },
 
     /// Error message
-    Error { message: String },
+    Error {
+        message: String,
+    },
 
     /// Ping/Pong for keepalive
     Ping,
@@ -196,14 +205,15 @@ impl IpcServer {
                     error: Some("Expected challenge response".to_string()),
                 };
                 Self::send_message(&mut writer, &err).await?;
-                return Err(IpcError::AuthFailed("Expected challenge response".to_string()));
+                return Err(IpcError::AuthFailed(
+                    "Expected challenge response".to_string(),
+                ));
             }
         };
 
         // Step 3: Verify HMAC using constant-time comparison to prevent timing attacks
-        let response_bytes = hex::decode(&response_hex).map_err(|e| {
-            IpcError::AuthFailed(format!("Invalid response format: {}", e))
-        })?;
+        let response_bytes = hex::decode(&response_hex)
+            .map_err(|e| IpcError::AuthFailed(format!("Invalid response format: {}", e)))?;
 
         let mut mac = HmacSha256::new_from_slice(token)
             .map_err(|e| IpcError::AuthFailed(format!("Invalid HMAC key: {}", e)))?;
@@ -448,7 +458,9 @@ impl IpcConnection {
         let response = IpcClient::recv_message(&mut self.reader).await?;
         match response {
             IpcMessage::PendingList { pending } => Ok(pending),
-            _ => Err(IpcError::InvalidMessage("Expected pending list".to_string())),
+            _ => Err(IpcError::InvalidMessage(
+                "Expected pending list".to_string(),
+            )),
         }
     }
 

@@ -15,11 +15,11 @@
 //! {"jsonrpc":"2.0","method":"event","params":{...}}\n
 //! ```
 
+use crate::sync_primitives::Arc;
+use crate::sync_primitives::{AtomicBool, AtomicU64, Ordering};
 use std::collections::HashMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
-use crate::sync_primitives::{AtomicBool, AtomicU64, Ordering};
-use crate::sync_primitives::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -478,9 +478,7 @@ mod tests {
     #[tokio::test]
     async fn test_request_when_not_connected() {
         let transport = UnixSocketTransport::new("/tmp/not-connected.sock");
-        let result = transport
-            .request("test", serde_json::Value::Null)
-            .await;
+        let result = transport.request("test", serde_json::Value::Null).await;
         assert!(matches!(result, Err(TransportError::NotConnected)));
     }
 
@@ -531,7 +529,8 @@ mod tests {
 
     #[test]
     fn test_json_rpc_message_deserialization_error() {
-        let json = r#"{"jsonrpc":"2.0","id":2,"error":{"code":-32600,"message":"Invalid request"}}"#;
+        let json =
+            r#"{"jsonrpc":"2.0","id":2,"error":{"code":-32600,"message":"Invalid request"}}"#;
         let msg: JsonRpcMessage = serde_json::from_str(json).unwrap();
         assert_eq!(msg.id, Some(2));
         assert!(msg.result.is_none());

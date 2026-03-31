@@ -96,9 +96,7 @@ impl AlephTool for TaskSubmitTool {
                 metadata: args.metadata,
             })
             .await
-            .map_err(|e| {
-                AlephError::other(format!("Failed to create artifact: {e}"))
-            })?;
+            .map_err(|e| AlephError::other(format!("Failed to create artifact: {e}")))?;
 
         Ok(TaskSubmitOutput {
             artifact_id: artifact.id,

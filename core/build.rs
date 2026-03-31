@@ -13,7 +13,10 @@ fn main() {
         println!("cargo:rustc-env=ALEPH_VERSION={version}");
     } else {
         // Fallback to Cargo.toml version
-        println!("cargo:rustc-env=ALEPH_VERSION={}", env!("CARGO_PKG_VERSION"));
+        println!(
+            "cargo:rustc-env=ALEPH_VERSION={}",
+            env!("CARGO_PKG_VERSION")
+        );
     }
 
     #[cfg(feature = "control-plane")]
@@ -45,7 +48,12 @@ fn main() {
         }
 
         // If dist/ already has files (built by `just wasm`), skip trunk
-        if dist_dir.exists() && dist_dir.read_dir().map(|mut d| d.next().is_some()).unwrap_or(false) {
+        if dist_dir.exists()
+            && dist_dir
+                .read_dir()
+                .map(|mut d| d.next().is_some())
+                .unwrap_or(false)
+        {
             println!("cargo:warning=Panel UI assets found in dist/, embedding into binary");
             return;
         }
@@ -66,7 +74,10 @@ fn main() {
                 println!("cargo:warning=Run `just wasm` first, or fix trunk issues.");
             }
             Err(e) => {
-                println!("cargo:warning=Failed to execute trunk: {}. Server will run without UI.", e);
+                println!(
+                    "cargo:warning=Failed to execute trunk: {}. Server will run without UI.",
+                    e
+                );
                 println!("cargo:warning=Run `just wasm` first, or install trunk.");
             }
         }

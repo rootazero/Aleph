@@ -7,8 +7,12 @@ use crate::thinker::prompt_sanitizer::{sanitize_for_prompt, SanitizeLevel};
 pub struct GenerationModelsLayer;
 
 impl PromptLayer for GenerationModelsLayer {
-    fn name(&self) -> &'static str { "generation_models" }
-    fn priority(&self) -> u32 { 1000 }
+    fn name(&self) -> &'static str {
+        "generation_models"
+    }
+    fn priority(&self) -> u32 {
+        1000
+    }
     fn supports_mode(&self, mode: PromptMode) -> bool {
         matches!(mode, PromptMode::Full)
     }

@@ -123,7 +123,9 @@ impl A2ATaskManager for TaskStore {
             .collect();
         // Sort by timestamp descending, then by ID ascending for deterministic output
         result.sort_by(|a, b| {
-            b.status.timestamp.cmp(&a.status.timestamp)
+            b.status
+                .timestamp
+                .cmp(&a.status.timestamp)
                 .then_with(|| a.id.cmp(&b.id))
         });
         let limit = params.limit.unwrap_or(100);
@@ -211,7 +213,10 @@ mod tests {
             .unwrap();
 
         let err = store.cancel_task("t1").await.unwrap_err();
-        assert!(matches!(err, A2AError::TaskNotCancelable(TaskState::Completed)));
+        assert!(matches!(
+            err,
+            A2AError::TaskNotCancelable(TaskState::Completed)
+        ));
     }
 
     #[tokio::test]
@@ -283,7 +288,10 @@ mod tests {
             parts: vec![],
             metadata: None,
         };
-        let err = store.add_artifact("nonexistent", artifact).await.unwrap_err();
+        let err = store
+            .add_artifact("nonexistent", artifact)
+            .await
+            .unwrap_err();
         assert!(matches!(err, A2AError::TaskNotFound(_)));
     }
 
@@ -320,10 +328,7 @@ mod tests {
     async fn list_respects_limit() {
         let store = TaskStore::new();
         for i in 0..10 {
-            store
-                .create_task(&format!("t{}", i), "ctx1")
-                .await
-                .unwrap();
+            store.create_task(&format!("t{}", i), "ctx1").await.unwrap();
         }
 
         let result = store

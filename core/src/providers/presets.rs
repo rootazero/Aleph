@@ -321,15 +321,13 @@ pub fn get_merged_preset(
 ) -> Option<crate::config::presets_override::OwnedProviderPreset> {
     let lower = name.to_lowercase();
     let builtin = PRESETS.get(lower.as_str());
-    let partial = overrides
-        .providers
-        .get(&lower)
-        .or_else(|| {
-            // Check aliases in user overrides
-            overrides.providers.values().find(|p| {
-                p.aliases.iter().any(|a| a.to_lowercase() == lower)
-            })
-        });
+    let partial = overrides.providers.get(&lower).or_else(|| {
+        // Check aliases in user overrides
+        overrides
+            .providers
+            .values()
+            .find(|p| p.aliases.iter().any(|a| a.to_lowercase() == lower))
+    });
 
     match (builtin, partial) {
         (Some(b), Some(p)) => {
@@ -357,7 +355,8 @@ pub fn get_merged_preset(
 /// Resolve provider name from model name using known prefix patterns.
 pub fn resolve_provider_from_model(model: &str) -> Option<String> {
     let m = model.to_lowercase();
-    if m.starts_with("gpt-") || m.starts_with("o1-") || m.starts_with("o3-") || m.starts_with("o4-") {
+    if m.starts_with("gpt-") || m.starts_with("o1-") || m.starts_with("o3-") || m.starts_with("o4-")
+    {
         Some("openai".into())
     } else if m.starts_with("claude-") {
         Some("anthropic".into())

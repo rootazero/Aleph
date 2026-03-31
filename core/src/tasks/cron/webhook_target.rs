@@ -44,7 +44,11 @@ impl DeliveryTarget for WebhookTarget {
                 method,
                 headers,
             } => (url, method, headers),
-            _ => return Err(DeliveryError::InvalidConfig("Expected Webhook config".into())),
+            _ => {
+                return Err(DeliveryError::InvalidConfig(
+                    "Expected Webhook config".into(),
+                ))
+            }
         };
 
         let body = serde_json::json!({

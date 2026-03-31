@@ -13,14 +13,16 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+use super::{notify_tool_result, notify_tool_start};
 use crate::error::Result;
 use crate::tools::AlephTool;
-use super::{notify_tool_start, notify_tool_result};
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SelfManageArgs {
     /// Brief description of what the user wants to configure or manage
-    #[schemars(description = "What the user wants to configure, modify, or fix. Examples: 'add video provider', 'change default LLM', 'configure Telegram bot', 'install a plugin'")]
+    #[schemars(
+        description = "What the user wants to configure, modify, or fix. Examples: 'add video provider', 'change default LLM', 'configure Telegram bot', 'install a plugin'"
+    )]
     pub intent: String,
 }
 
@@ -57,9 +59,7 @@ impl Default for SelfManageTool {
     fn default() -> Self {
         let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/tmp"));
         let aleph_home = home.join(".aleph");
-        Self::new(vec![
-            aleph_home.join("skills"),
-        ])
+        Self::new(vec![aleph_home.join("skills")])
     }
 }
 
@@ -110,11 +110,18 @@ impl AlephTool for SelfManageTool {
                     "3. Detailed guides: call read_config_guide(topic) for domain-specific help\n",
                     "4. Topics: overview, providers, generation, channels, agents, skills, mcp, general, cron\n",
                 );
-                notify_tool_result(Self::NAME, "using fallback guidance (SKILL.md not found)", true);
+                notify_tool_result(
+                    Self::NAME,
+                    "using fallback guidance (SKILL.md not found)",
+                    true,
+                );
                 return Ok(SelfManageOutput {
                     success: true,
                     manual: fallback.to_string(),
-                    hint: format!("Now use read_config_guide(topic) for details about: {}", args.intent),
+                    hint: format!(
+                        "Now use read_config_guide(topic) for details about: {}",
+                        args.intent
+                    ),
                 });
             }
         };

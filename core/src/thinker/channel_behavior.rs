@@ -105,10 +105,16 @@ impl fmt::Display for ResponseTrigger {
             Self::DirectMention => write!(f, "Someone directly @mentions you"),
             Self::DirectReply => write!(f, "Someone replies to your message"),
             Self::AddingValue => {
-                write!(f, "You have unique knowledge that adds value to the conversation")
+                write!(
+                    f,
+                    "You have unique knowledge that adds value to the conversation"
+                )
             }
             Self::CorrectingMisinformation => {
-                write!(f, "Someone shares clearly incorrect information you can correct")
+                write!(
+                    f,
+                    "Someone shares clearly incorrect information you can correct"
+                )
             }
             Self::ExplicitQuestion => {
                 write!(f, "Someone asks a question clearly directed at you")
@@ -127,13 +133,19 @@ impl fmt::Display for SilenceTrigger {
                 write!(f, "The question has already been answered by someone else")
             }
             Self::ConversationFlowing => {
-                write!(f, "The conversation is flowing naturally without needing your input")
+                write!(
+                    f,
+                    "The conversation is flowing naturally without needing your input"
+                )
             }
             Self::EmptyAcknowledgment => {
                 write!(f, "Your response would just be an empty acknowledgment (e.g., \"ok\", \"got it\")")
             }
             Self::OffTopic => {
-                write!(f, "The topic is outside your expertise or not relevant to you")
+                write!(
+                    f,
+                    "The topic is outside your expertise or not relevant to you"
+                )
             }
         }
     }
@@ -320,7 +332,10 @@ impl ChannelBehaviorGuide {
         if let Some(ref limits) = self.message_limits {
             lines.push(String::new());
             lines.push("### Message Limits".to_string());
-            lines.push(format!("- Maximum: {} characters per message", limits.max_chars));
+            lines.push(format!(
+                "- Maximum: {} characters per message",
+                limits.max_chars
+            ));
             if limits.max_chars <= 2000 {
                 lines.push(
                     "- If your response exceeds the limit, split into logical sections".to_string(),
@@ -337,9 +352,7 @@ impl ChannelBehaviorGuide {
             ReactionStyle::Minimal => {
                 lines.push(String::new());
                 lines.push("### Reaction Guidance".to_string());
-                lines.push(
-                    "- Use reactions sparingly — roughly 1 per 5-10 messages".to_string(),
-                );
+                lines.push("- Use reactions sparingly — roughly 1 per 5-10 messages".to_string());
                 lines.push("- Preferred reactions: 👍 ❤️ 🤔".to_string());
             }
             ReactionStyle::Expressive => {
@@ -397,15 +410,13 @@ mod tests {
 
     #[test]
     fn test_telegram_private_no_group_behavior() {
-        let guide =
-            ChannelBehaviorGuide::for_channel(ChannelVariant::Telegram { is_group: false });
+        let guide = ChannelBehaviorGuide::for_channel(ChannelVariant::Telegram { is_group: false });
         assert!(guide.group_behavior.is_none());
     }
 
     #[test]
     fn test_discord_guild_defaults() {
-        let guide =
-            ChannelBehaviorGuide::for_channel(ChannelVariant::Discord { is_guild: true });
+        let guide = ChannelBehaviorGuide::for_channel(ChannelVariant::Discord { is_guild: true });
         assert_eq!(guide.reaction_style, ReactionStyle::Expressive);
         assert!(guide.supports_markdown);
         assert!(guide.group_behavior.is_some());
@@ -438,16 +449,14 @@ mod tests {
 
     #[test]
     fn test_prompt_section_omits_group_rules_for_dm() {
-        let guide =
-            ChannelBehaviorGuide::for_channel(ChannelVariant::Telegram { is_group: false });
+        let guide = ChannelBehaviorGuide::for_channel(ChannelVariant::Telegram { is_group: false });
         let section = guide.to_prompt_section();
         assert!(!section.contains("STAY SILENT"));
     }
 
     #[test]
     fn test_prompt_section_contains_message_limits() {
-        let guide =
-            ChannelBehaviorGuide::for_channel(ChannelVariant::Discord { is_guild: false });
+        let guide = ChannelBehaviorGuide::for_channel(ChannelVariant::Discord { is_guild: false });
         let section = guide.to_prompt_section();
         assert!(section.contains("2000"));
     }
@@ -455,7 +464,9 @@ mod tests {
     #[test]
     fn test_default_group_behavior() {
         let gb = GroupBehavior::default();
-        assert!(gb.respond_triggers.contains(&ResponseTrigger::DirectMention));
+        assert!(gb
+            .respond_triggers
+            .contains(&ResponseTrigger::DirectMention));
         assert!(gb.silence_triggers.contains(&SilenceTrigger::CasualBanter));
         assert!(gb.reaction_as_acknowledgment);
     }

@@ -19,9 +19,9 @@ mod tests;
 pub use engine::ExecutionEngine;
 pub use simple::SimpleExecutionEngine;
 
-use std::collections::HashMap;
 use crate::gateway::media::PendingMedia;
 use crate::sync_primitives::{AtomicU32, AtomicU64, Ordering};
+use std::collections::HashMap;
 
 use tokio::sync::mpsc;
 

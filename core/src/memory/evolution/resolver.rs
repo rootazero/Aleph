@@ -12,8 +12,7 @@ pub struct EvolutionResolver {
 }
 
 /// Resolution strategy for handling contradictions
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ResolutionStrategy {
     /// Keep the newer fact, invalidate the older one
     PreferNewer,
@@ -25,7 +24,6 @@ pub enum ResolutionStrategy {
     #[default]
     CreateEvolution,
 }
-
 
 impl EvolutionResolver {
     /// Create a new evolution resolver

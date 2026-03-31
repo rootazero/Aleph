@@ -32,10 +32,10 @@
 //! ```
 
 mod builtin;
+pub mod context;
 mod server;
 mod traits;
 mod types;
-pub mod context;
 
 // Markdown skill system
 pub mod markdown_skill;
@@ -43,7 +43,7 @@ pub mod markdown_skill;
 // Schema strictification for strict-mode tool calling
 pub mod schema_strictify;
 
-pub use context::{ToolContext, ToolContextHandle, new_tool_context_handle};
+pub use context::{new_tool_context_handle, ToolContext, ToolContextHandle};
 pub use server::{AlephToolServer, AlephToolServerHandle};
 pub use traits::{AlephTool, AlephToolDyn};
 pub use types::{ToolRepairInfo, ToolRepairType, ToolUpdateInfo};

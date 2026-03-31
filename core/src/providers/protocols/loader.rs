@@ -38,10 +38,10 @@
 
 use crate::error::{AlephError, Result};
 use crate::providers::protocols::{ConfigurableProtocol, ProtocolDefinition, ProtocolRegistry};
+use crate::sync_primitives::Arc;
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use notify_debouncer_full::{new_debouncer, DebounceEventResult, Debouncer, FileIdMap};
 use std::path::{Path, PathBuf};
-use crate::sync_primitives::Arc;
 use std::time::Duration;
 use tracing::{error, info};
 
@@ -218,7 +218,9 @@ impl ProtocolLoader {
                             for path in &event.paths {
                                 // Check if it's a YAML file
                                 if let Some(ext) = path.extension() {
-                                    if (ext == "yaml" || ext == "yml") && path.starts_with(&dir_for_closure) {
+                                    if (ext == "yaml" || ext == "yml")
+                                        && path.starts_with(&dir_for_closure)
+                                    {
                                         info!(
                                             path = ?path,
                                             kind = ?event.kind,
@@ -270,7 +272,6 @@ impl ProtocolLoader {
             }
         });
     }
-
 }
 
 #[cfg(test)]
@@ -384,7 +385,9 @@ base_url: https://api.test2.com
 
         // Create a non-YAML file (should be ignored)
         let file3 = temp_dir.path().join("readme.txt");
-        tokio::fs::write(&file3, "This is not a YAML file").await.unwrap();
+        tokio::fs::write(&file3, "This is not a YAML file")
+            .await
+            .unwrap();
 
         // Load all protocols from directory
         ProtocolLoader::load_from_dir(temp_dir.path())
@@ -422,7 +425,9 @@ base_url: https://api.valid.com
 
         // Create an invalid YAML file (should log error but not fail)
         let invalid_file = temp_dir.path().join("invalid.yaml");
-        tokio::fs::write(&invalid_file, "invalid: yaml: content: [[[").await.unwrap();
+        tokio::fs::write(&invalid_file, "invalid: yaml: content: [[[")
+            .await
+            .unwrap();
 
         // Load from directory (should succeed for valid file, log error for invalid)
         let result = ProtocolLoader::load_from_dir(temp_dir.path()).await;

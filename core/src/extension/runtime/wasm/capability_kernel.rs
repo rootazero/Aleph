@@ -73,15 +73,18 @@ impl WasmCapabilityKernel {
     }
 
     pub fn check_workspace_read(&self, path: &str) -> Result<(), CapabilityError> {
-        let ws = self.capabilities.workspace.as_ref().ok_or_else(|| {
-            CapabilityError::NotDeclared("workspace".to_string())
-        })?;
+        let ws = self
+            .capabilities
+            .workspace
+            .as_ref()
+            .ok_or_else(|| CapabilityError::NotDeclared("workspace".to_string()))?;
         self.validate_path(path)?;
         if !ws.allowed_prefixes.is_empty()
             && !ws.allowed_prefixes.iter().any(|p| path.starts_with(p))
         {
             return Err(CapabilityError::NotAllowed(format!(
-                "path '{}' not in allowed prefixes", path
+                "path '{}' not in allowed prefixes",
+                path
             )));
         }
         Ok(())
@@ -146,12 +149,15 @@ impl WasmCapabilityKernel {
     }
 
     pub fn resolve_tool_alias(&self, alias: &str) -> Result<String, CapabilityError> {
-        let ti = self.capabilities.tool_invoke.as_ref().ok_or_else(|| {
-            CapabilityError::NotDeclared("tool_invoke".to_string())
-        })?;
-        ti.aliases.get(alias).cloned().ok_or_else(|| {
-            CapabilityError::NotAllowed(format!("unknown tool alias: {}", alias))
-        })
+        let ti = self
+            .capabilities
+            .tool_invoke
+            .as_ref()
+            .ok_or_else(|| CapabilityError::NotDeclared("tool_invoke".to_string()))?;
+        ti.aliases
+            .get(alias)
+            .cloned()
+            .ok_or_else(|| CapabilityError::NotAllowed(format!("unknown tool alias: {}", alias)))
     }
 
     pub fn plugin_id(&self) -> &str {
@@ -165,13 +171,19 @@ impl WasmCapabilityKernel {
     fn validate_path(&self, path: &str) -> Result<(), CapabilityError> {
         // Check raw path first
         if path.contains("..") {
-            return Err(CapabilityError::PathTraversal("'..' not allowed".to_string()));
+            return Err(CapabilityError::PathTraversal(
+                "'..' not allowed".to_string(),
+            ));
         }
         if path.starts_with('/') {
-            return Err(CapabilityError::PathTraversal("absolute paths not allowed".to_string()));
+            return Err(CapabilityError::PathTraversal(
+                "absolute paths not allowed".to_string(),
+            ));
         }
         if path.contains('\0') {
-            return Err(CapabilityError::PathTraversal("null bytes not allowed".to_string()));
+            return Err(CapabilityError::PathTraversal(
+                "null bytes not allowed".to_string(),
+            ));
         }
 
         // Also check percent-decoded form to prevent encoded traversal (%2e%2e)
@@ -194,7 +206,6 @@ impl WasmCapabilityKernel {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
 
     fn kernel_with_no_caps() -> WasmCapabilityKernel {
         WasmCapabilityKernel::new(
@@ -233,7 +244,10 @@ mod tests {
         let kernel = kernel_with_no_caps();
         let result = kernel.check_workspace_read("any/path");
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), CapabilityError::NotDeclared(_)));
+        assert!(matches!(
+            result.unwrap_err(),
+            CapabilityError::NotDeclared(_)
+        ));
     }
 
     #[test]
@@ -253,7 +267,9 @@ mod tests {
     #[test]
     fn test_workspace_rejects_path_traversal() {
         let kernel = kernel_with_workspace();
-        assert!(kernel.check_workspace_read("docs/../secrets/key.pem").is_err());
+        assert!(kernel
+            .check_workspace_read("docs/../secrets/key.pem")
+            .is_err());
         assert!(kernel.check_workspace_read("/etc/passwd").is_err());
         assert!(kernel.check_workspace_read("docs/\0hidden").is_err());
     }
@@ -262,8 +278,12 @@ mod tests {
     fn test_workspace_rejects_percent_encoded_traversal() {
         let kernel = kernel_with_workspace();
         // %2e = '.', so %2e%2e = '..'
-        assert!(kernel.check_workspace_read("docs/%2e%2e/secrets/key.pem").is_err());
-        assert!(kernel.check_workspace_read("docs/%2E%2E/secrets/key.pem").is_err());
+        assert!(kernel
+            .check_workspace_read("docs/%2e%2e/secrets/key.pem")
+            .is_err());
+        assert!(kernel
+            .check_workspace_read("docs/%2E%2E/secrets/key.pem")
+            .is_err());
         // Encoded absolute path: %2f = '/'
         assert!(kernel.check_workspace_read("%2fetc/passwd").is_err());
     }
@@ -287,11 +307,8 @@ mod tests {
             max_log_entries: 2,
             ..Default::default()
         };
-        let kernel = WasmCapabilityKernel::new(
-            "test".to_string(),
-            WasmCapabilities::default(),
-            limits,
-        );
+        let kernel =
+            WasmCapabilityKernel::new("test".to_string(), WasmCapabilities::default(), limits);
         assert!(kernel.log("info", "first").is_ok());
         assert!(kernel.log("info", "second").is_ok());
         assert!(kernel.log("info", "third").is_err()); // limit exceeded
@@ -303,11 +320,8 @@ mod tests {
             max_log_message_bytes: 10,
             ..Default::default()
         };
-        let kernel = WasmCapabilityKernel::new(
-            "test".to_string(),
-            WasmCapabilities::default(),
-            limits,
-        );
+        let kernel =
+            WasmCapabilityKernel::new("test".to_string(), WasmCapabilities::default(), limits);
         assert!(kernel.log("info", "this is a very long message").is_ok());
     }
 

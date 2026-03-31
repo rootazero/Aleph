@@ -6,13 +6,13 @@
 //! The plaintext token is held in memory; only the hash is stored in SQLite.
 //! Also manages the encrypted secret vault, using the token as master key.
 
-use std::sync::RwLock;
-use crate::sync_primitives::{Arc, Mutex};
-use crate::secrets::vault::SecretVault;
-use crate::secrets::crypto::SecretsCrypto;
-use crate::secrets::types::{DecryptedSecret, EncryptedEntry, EntryMetadata, SecretError};
 use super::crypto::{generate_secret, hmac_sign};
 use super::store::SecurityStore;
+use crate::secrets::crypto::SecretsCrypto;
+use crate::secrets::types::{DecryptedSecret, EncryptedEntry, EntryMetadata, SecretError};
+use crate::secrets::vault::SecretVault;
+use crate::sync_primitives::{Arc, Mutex};
+use std::sync::RwLock;
 use uuid::Uuid;
 
 /// Manages a single shared token for UI/API authentication.
@@ -36,7 +36,6 @@ pub enum SharedTokenError {
     Storage(String),
 }
 
-
 impl SharedTokenManager {
     /// Create a new manager, restoring persisted HMAC secret if available.
     ///
@@ -49,7 +48,9 @@ impl SharedTokenManager {
                 s
             }
             Ok(None) => {
-                tracing::info!("SharedTokenManager: no persisted HMAC secret found, generating new one");
+                tracing::info!(
+                    "SharedTokenManager: no persisted HMAC secret found, generating new one"
+                );
                 generate_secret()
             }
             Err(e) => {
@@ -58,7 +59,8 @@ impl SharedTokenManager {
             }
         };
         let vault_path = vault_path.into();
-        let vault = SecretVault::open(&vault_path).unwrap_or_else(|_| SecretVault::empty(vault_path));
+        let vault =
+            SecretVault::open(&vault_path).unwrap_or_else(|_| SecretVault::empty(vault_path));
         Self {
             store,
             secret,
@@ -68,9 +70,14 @@ impl SharedTokenManager {
     }
 
     /// Create with a specific secret (for testing).
-    pub fn with_secret(store: Arc<SecurityStore>, secret: [u8; 32], vault_path: impl Into<std::path::PathBuf>) -> Self {
+    pub fn with_secret(
+        store: Arc<SecurityStore>,
+        secret: [u8; 32],
+        vault_path: impl Into<std::path::PathBuf>,
+    ) -> Self {
         let vault_path = vault_path.into();
-        let vault = SecretVault::open(&vault_path).unwrap_or_else(|_| SecretVault::empty(vault_path));
+        let vault =
+            SecretVault::open(&vault_path).unwrap_or_else(|_| SecretVault::empty(vault_path));
         Self {
             store,
             secret,
@@ -114,7 +121,10 @@ impl SharedTokenManager {
                 return None;
             }
             Err(e) => {
-                tracing::warn!("SharedTokenManager: failed to read plaintext token from DB: {}", e);
+                tracing::warn!(
+                    "SharedTokenManager: failed to read plaintext token from DB: {}",
+                    e
+                );
                 return None;
             }
         };
@@ -131,7 +141,10 @@ impl SharedTokenManager {
                 None
             }
             Err(e) => {
-                tracing::warn!("SharedTokenManager: token validation error during DB recovery: {}", e);
+                tracing::warn!(
+                    "SharedTokenManager: token validation error during DB recovery: {}",
+                    e
+                );
                 None
             }
         }
@@ -159,15 +172,17 @@ impl SharedTokenManager {
     /// Get a crypto engine using the current token as master key.
     fn crypto(&self) -> Result<SecretsCrypto, SharedTokenError> {
         let token = self.current_token.lock().unwrap_or_else(|e| e.into_inner());
-        let token = token.as_ref()
-            .ok_or_else(|| SharedTokenError::Storage("No token set — cannot access vault".into()))?;
+        let token = token.as_ref().ok_or_else(|| {
+            SharedTokenError::Storage("No token set — cannot access vault".into())
+        })?;
         Ok(SecretsCrypto::new(token))
     }
 
     /// Store an encrypted secret in the vault.
     pub fn store_secret(&self, name: &str, value: &str) -> Result<(), SharedTokenError> {
         let crypto = self.crypto()?;
-        let encrypted = crypto.encrypt(value)
+        let encrypted = crypto
+            .encrypt(value)
             .map_err(|e| SharedTokenError::Storage(format!("Encryption failed: {}", e)))?;
         let now = chrono::Utc::now().timestamp();
         let entry = EncryptedEntry {
@@ -182,7 +197,8 @@ impl SharedTokenManager {
             },
         };
         let mut vault = self.vault.write().unwrap_or_else(|e| e.into_inner());
-        vault.set(name, entry)
+        vault
+            .set(name, entry)
             .map_err(|e| SharedTokenError::Storage(e.to_string()))
     }
 
@@ -192,7 +208,8 @@ impl SharedTokenManager {
         let vault = self.vault.read().unwrap_or_else(|e| e.into_inner());
         match vault.get(name) {
             Ok(entry) => {
-                let decrypted = crypto.decrypt(&entry.ciphertext, &entry.nonce, &entry.salt)
+                let decrypted = crypto
+                    .decrypt(&entry.ciphertext, &entry.nonce, &entry.salt)
                     .map_err(|e| SharedTokenError::Storage(format!("Decryption failed: {}", e)))?;
                 Ok(Some(DecryptedSecret::new(decrypted)))
             }
@@ -204,7 +221,8 @@ impl SharedTokenManager {
     /// Delete a secret from the vault.
     pub fn delete_secret(&self, name: &str) -> Result<bool, SharedTokenError> {
         let mut vault = self.vault.write().unwrap_or_else(|e| e.into_inner());
-        vault.delete(name)
+        vault
+            .delete(name)
             .map_err(|e| SharedTokenError::Storage(e.to_string()))
     }
 
@@ -324,11 +342,13 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let store = Arc::new(SecurityStore::in_memory().unwrap());
         let secret = crate::gateway::security::crypto::generate_secret();
-        let manager1 = SharedTokenManager::with_secret(store.clone(), secret, dir.path().join("test1.vault"));
+        let manager1 =
+            SharedTokenManager::with_secret(store.clone(), secret, dir.path().join("test1.vault"));
         let token = manager1.generate_token().unwrap();
 
         // Same store + same secret = should validate
-        let manager2 = SharedTokenManager::with_secret(store, secret, dir.path().join("test2.vault"));
+        let manager2 =
+            SharedTokenManager::with_secret(store, secret, dir.path().join("test2.vault"));
         assert!(manager2.validate(&token).unwrap());
     }
 

@@ -9,10 +9,10 @@ use crate::providers::delta::ProviderDelta;
 use crate::providers::protocols::{
     extract_value, ProtocolDefinition, ProtocolRegistry, TemplateContext, TemplateRenderer,
 };
+use crate::sync_primitives::Arc;
 use async_trait::async_trait;
 use futures::stream::BoxStream;
 use reqwest::Client;
-use crate::sync_primitives::Arc;
 use tracing::debug;
 
 /// Protocol adapter configured from YAML definition
@@ -77,9 +77,10 @@ impl ConfigurableProtocol {
             "Parsing response using custom response mapping"
         );
 
-        let body = response.text().await.map_err(|e| {
-            AlephError::provider(format!("Failed to read response body: {}", e))
-        })?;
+        let body = response
+            .text()
+            .await
+            .map_err(|e| AlephError::provider(format!("Failed to read response body: {}", e)))?;
 
         let json: serde_json::Value = serde_json::from_str(&body).map_err(|e| {
             AlephError::provider(format!(
@@ -166,14 +167,16 @@ impl ProtocolAdapter for ConfigurableProtocol {
             );
 
             // Determine base URL
-            let base_url = self
-                .definition
-                .base_url
-                .as_deref()
-                .ok_or_else(|| AlephError::invalid_config("base_url is required for custom protocols"))?;
+            let base_url = self.definition.base_url.as_deref().ok_or_else(|| {
+                AlephError::invalid_config("base_url is required for custom protocols")
+            })?;
 
             // Always prefer stream endpoint if available (stream-first architecture)
-            let endpoint = custom.endpoints.stream.as_deref().unwrap_or(&custom.endpoints.chat);
+            let endpoint = custom
+                .endpoints
+                .stream
+                .as_deref()
+                .unwrap_or(&custom.endpoints.chat);
 
             // Build full URL
             let url = format!("{}{}", base_url, endpoint);
@@ -184,11 +187,18 @@ impl ProtocolAdapter for ConfigurableProtocol {
             );
 
             // Extract last user message text as template input
-            let input_text = payload.messages.iter().rev()
+            let input_text = payload
+                .messages
+                .iter()
+                .rev()
                 .find_map(|m| match m {
-                    crate::providers::message::UnifiedMessage::User { content } => {
-                        Some(content.iter().filter_map(|b| b.as_text()).collect::<Vec<_>>().join("\n"))
-                    }
+                    crate::providers::message::UnifiedMessage::User { content } => Some(
+                        content
+                            .iter()
+                            .filter_map(|b| b.as_text())
+                            .collect::<Vec<_>>()
+                            .join("\n"),
+                    ),
                     _ => None,
                 })
                 .unwrap_or_default();
@@ -210,9 +220,10 @@ impl ProtocolAdapter for ConfigurableProtocol {
                 self.renderer.render_json(template_str, &context)?
             } else {
                 // Template is already a JSON object, render it as string first
-                let template_str = serde_json::to_string(&custom.request_template).map_err(|e| {
-                    AlephError::provider(format!("Failed to serialize request_template: {}", e))
-                })?;
+                let template_str =
+                    serde_json::to_string(&custom.request_template).map_err(|e| {
+                        AlephError::provider(format!("Failed to serialize request_template: {}", e))
+                    })?;
                 self.renderer.render_json(&template_str, &context)?
             };
 
@@ -233,11 +244,19 @@ impl ProtocolAdapter for ConfigurableProtocol {
             // Parse auth config
             if custom.auth.auth_type == "header" {
                 // Extract header name and prefix from config
-                let header = custom.auth.config.get("header")
+                let header = custom
+                    .auth
+                    .config
+                    .get("header")
                     .and_then(|v| v.as_str())
-                    .ok_or_else(|| AlephError::invalid_config("auth.config.header is required for header auth"))?;
+                    .ok_or_else(|| {
+                        AlephError::invalid_config("auth.config.header is required for header auth")
+                    })?;
 
-                let prefix = custom.auth.config.get("prefix")
+                let prefix = custom
+                    .auth
+                    .config
+                    .get("prefix")
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
 
@@ -288,7 +307,9 @@ impl ProtocolAdapter for ConfigurableProtocol {
                 "Streaming deltas via bridge (custom mode — parse_custom_response wrapping)"
             );
             let provider_response = self.parse_custom_response(response).await?;
-            return Ok(crate::providers::delta::response_to_delta_stream_result(provider_response));
+            return Ok(crate::providers::delta::response_to_delta_stream_result(
+                provider_response,
+            ));
         }
 
         Err(AlephError::invalid_config(
@@ -361,7 +382,9 @@ mod tests {
         config.api_key = Some("test-key".to_string());
 
         // Create a test payload
-        let msgs = [crate::providers::message::UnifiedMessage::user("Hello, world!")];
+        let msgs = [crate::providers::message::UnifiedMessage::user(
+            "Hello, world!",
+        )];
         let payload = RequestPayload::new(&msgs);
 
         // Build request (this should work now)
@@ -398,7 +421,9 @@ mod tests {
         config.api_key = Some("test-key".to_string());
 
         // Create a test payload
-        let msgs = [crate::providers::message::UnifiedMessage::user("Test message")];
+        let msgs = [crate::providers::message::UnifiedMessage::user(
+            "Test message",
+        )];
         let payload = RequestPayload::new(&msgs);
 
         // Build request (should use base protocol's auth)
@@ -431,7 +456,9 @@ mod tests {
                     chat: "/v1/chat".to_string(),
                     stream: None,
                 },
-                request_template: json!(r#"{"model": "{{config.model}}", "messages": [{"role": "user", "content": "{{input}}"}]}"#),
+                request_template: json!(
+                    r#"{"model": "{{config.model}}", "messages": [{"role": "user", "content": "{{input}}"}]}"#
+                ),
                 response_mapping: ResponseMapping {
                     content: "$.choices[0].message.content".to_string(),
                     error: None,
@@ -448,7 +475,9 @@ mod tests {
 
         let mut config = ProviderConfig::test_config("test-model");
         config.api_key = Some("test-key-123".to_string());
-        let msgs = [crate::providers::message::UnifiedMessage::user("Hello, AI!")];
+        let msgs = [crate::providers::message::UnifiedMessage::user(
+            "Hello, AI!",
+        )];
         let payload = RequestPayload::new(&msgs);
 
         // Build request should work now

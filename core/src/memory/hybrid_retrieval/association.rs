@@ -224,11 +224,7 @@ mod tests {
 
     #[test]
     fn test_cluster_creation() {
-        let center = MemoryFact::new(
-            "User likes Rust".to_string(),
-            FactType::Preference,
-            vec![],
-        );
+        let center = MemoryFact::new("User likes Rust".to_string(), FactType::Preference, vec![]);
 
         let related = vec![MemoryFact::new(
             "User uses Cargo".to_string(),
@@ -249,11 +245,7 @@ mod tests {
 
     #[test]
     fn test_cluster_add_related() {
-        let center = MemoryFact::new(
-            "User likes Rust".to_string(),
-            FactType::Preference,
-            vec![],
-        );
+        let center = MemoryFact::new("User likes Rust".to_string(), FactType::Preference, vec![]);
 
         let mut cluster = AssociationCluster::new(center);
         assert_eq!(cluster.size(), 1);
@@ -297,19 +289,11 @@ mod tests {
     #[test]
     fn test_find_associations_with_embeddings() {
         // Create facts with similar embeddings (within expansion_radius of 0.4)
-        let fact1 = MemoryFact::new(
-            "User likes Rust".to_string(),
-            FactType::Preference,
-            vec![],
-        )
-        .with_embedding(vec![1.0, 0.0, 0.0]);
+        let fact1 = MemoryFact::new("User likes Rust".to_string(), FactType::Preference, vec![])
+            .with_embedding(vec![1.0, 0.0, 0.0]);
 
-        let fact2 = MemoryFact::new(
-            "User uses Cargo".to_string(),
-            FactType::Learning,
-            vec![],
-        )
-        .with_embedding(vec![0.9, 0.1, 0.0]); // Similar to fact1
+        let fact2 = MemoryFact::new("User uses Cargo".to_string(), FactType::Learning, vec![])
+            .with_embedding(vec![0.9, 0.1, 0.0]); // Similar to fact1
 
         let fact3 = MemoryFact::new(
             "User prefers tokio".to_string(),
@@ -318,12 +302,8 @@ mod tests {
         )
         .with_embedding(vec![0.85, 0.15, 0.0]); // Similar to fact1 and fact2
 
-        let fact4 = MemoryFact::new(
-            "User likes pizza".to_string(),
-            FactType::Personal,
-            vec![],
-        )
-        .with_embedding(vec![0.0, 0.0, 1.0]); // Orthogonal, different cluster
+        let fact4 = MemoryFact::new("User likes pizza".to_string(), FactType::Personal, vec![])
+            .with_embedding(vec![0.0, 0.0, 1.0]); // Orthogonal, different cluster
 
         let facts = vec![fact1, fact2, fact3, fact4];
         let retriever = AssociationRetriever::default();
@@ -337,16 +317,15 @@ mod tests {
 
     #[test]
     fn test_cluster_with_theme() {
-        let center = MemoryFact::new(
-            "User likes Rust".to_string(),
-            FactType::Preference,
-            vec![],
-        );
+        let center = MemoryFact::new("User likes Rust".to_string(), FactType::Preference, vec![]);
 
         let cluster =
             AssociationCluster::new(center).with_theme("Programming Languages".to_string());
 
-        assert_eq!(cluster.cluster_theme, Some("Programming Languages".to_string()));
+        assert_eq!(
+            cluster.cluster_theme,
+            Some("Programming Languages".to_string())
+        );
     }
 
     #[test]
@@ -378,17 +357,9 @@ mod tests {
 
     #[test]
     fn test_facts_without_embeddings_skipped() {
-        let fact1 = MemoryFact::new(
-            "User likes Rust".to_string(),
-            FactType::Preference,
-            vec![],
-        ); // No embedding
+        let fact1 = MemoryFact::new("User likes Rust".to_string(), FactType::Preference, vec![]); // No embedding
 
-        let fact2 = MemoryFact::new(
-            "User uses Cargo".to_string(),
-            FactType::Learning,
-            vec![],
-        ); // No embedding
+        let fact2 = MemoryFact::new("User uses Cargo".to_string(), FactType::Learning, vec![]); // No embedding
 
         let facts = vec![fact1, fact2];
         let retriever = AssociationRetriever::default();

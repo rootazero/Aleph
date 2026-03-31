@@ -10,9 +10,7 @@ use futures::stream::{self, BoxStream, StreamExt};
 use crate::providers::adapter::StopReason;
 use crate::providers::delta::ProviderDelta;
 
-use super::types::{
-    ChatCompletionChunk, Delta, DeltaFunction, DeltaToolCall, StreamChoice, Usage,
-};
+use super::types::{ChatCompletionChunk, Delta, DeltaFunction, DeltaToolCall, StreamChoice, Usage};
 
 // =============================================================================
 // Constants & helpers
@@ -37,9 +35,8 @@ pub fn now_timestamp() -> u64 {
 /// Format a [`ChatCompletionChunk`] as an SSE `data:` frame.
 pub fn sse_data(chunk: &ChatCompletionChunk) -> String {
     // serde_json::to_string should not fail on well-formed structs
-    let json = serde_json::to_string(chunk).unwrap_or_else(|e| {
-        serde_json::json!({"error": e.to_string()}).to_string()
-    });
+    let json = serde_json::to_string(chunk)
+        .unwrap_or_else(|e| serde_json::json!({"error": e.to_string()}).to_string());
     format!("data: {json}\n\n")
 }
 
@@ -91,152 +88,170 @@ pub fn provider_deltas_to_sse(
     // State: (delta_stream, tracker, accumulated_usage, done_flag)
     let state = (deltas, ToolCallTracker::default(), None::<Usage>, false);
 
-    stream::unfold(state, move |(mut deltas, mut tracker, mut usage_acc, done)| {
-        let id = id.clone();
-        let model = model.clone();
+    stream::unfold(
+        state,
+        move |(mut deltas, mut tracker, mut usage_acc, done)| {
+            let id = id.clone();
+            let model = model.clone();
 
-        async move {
-            if done {
-                return None;
-            }
+            async move {
+                if done {
+                    return None;
+                }
 
-            loop {
-                match deltas.next().await {
-                    None => {
-                        // Stream ended without a Done delta — emit [DONE]
-                        return Some((SSE_DONE.to_string(), (deltas, tracker, usage_acc, true)));
-                    }
-                    Some(Err(e)) => {
-                        // Infrastructure error — emit error JSON + [DONE]
-                        let error_frame = serde_json::json!({
-                            "error": {
-                                "message": e.to_string(),
-                                "type": "server_error"
-                            }
-                        });
-                        let frame = format!("data: {error_frame}\n\n{SSE_DONE}");
-                        return Some((frame, (deltas, tracker, usage_acc, true)));
-                    }
-                    Some(Ok(delta)) => {
-                        match delta {
-                            ProviderDelta::TextDelta(s) => {
-                                let chunk = make_chunk(
-                                    &id,
-                                    created,
-                                    &model,
-                                    Delta {
-                                        content: Some(s),
-                                        role: None,
-                                        tool_calls: None,
-                                    },
-                                    None,
-                                    None,
-                                );
-                                return Some((sse_data(&chunk), (deltas, tracker, usage_acc, false)));
-                            }
-                            ProviderDelta::ToolCallStart { id: tc_id, name } => {
-                                let index = tracker.index_for(&tc_id);
-                                let chunk = make_chunk(
-                                    &id,
-                                    created,
-                                    &model,
-                                    Delta {
-                                        content: None,
-                                        role: None,
-                                        tool_calls: Some(vec![DeltaToolCall {
-                                            index,
-                                            id: Some(tc_id),
-                                            r#type: Some("function".to_string()),
-                                            function: Some(DeltaFunction {
-                                                name: Some(name),
-                                                arguments: Some(String::new()),
-                                            }),
-                                        }]),
-                                    },
-                                    None,
-                                    None,
-                                );
-                                return Some((sse_data(&chunk), (deltas, tracker, usage_acc, false)));
-                            }
-                            ProviderDelta::ToolCallArgDelta { id: tc_id, delta: arg_delta } => {
-                                let index = tracker.index_for(&tc_id);
-                                let chunk = make_chunk(
-                                    &id,
-                                    created,
-                                    &model,
-                                    Delta {
-                                        content: None,
-                                        role: None,
-                                        tool_calls: Some(vec![DeltaToolCall {
-                                            index,
-                                            id: None,
-                                            r#type: None,
-                                            function: Some(DeltaFunction {
-                                                name: None,
-                                                arguments: Some(arg_delta),
-                                            }),
-                                        }]),
-                                    },
-                                    None,
-                                    None,
-                                );
-                                return Some((sse_data(&chunk), (deltas, tracker, usage_acc, false)));
-                            }
-                            ProviderDelta::ToolCallEnd { .. } => {
-                                // No-op — continue to next delta
-                                continue;
-                            }
-                            ProviderDelta::ThinkingDelta(_) => {
-                                // No-op — skip thinking deltas in OpenAI format
-                                continue;
-                            }
-                            ProviderDelta::Usage(u) => {
-                                usage_acc = Some(Usage {
-                                    prompt_tokens: u.input_tokens,
-                                    completion_tokens: u.output_tokens,
-                                    total_tokens: u.input_tokens + u.output_tokens,
-                                });
-                                // Don't emit a frame; usage is included in the final chunk
-                                continue;
-                            }
-                            ProviderDelta::Done(reason) => {
-                                let finish_reason = match reason {
-                                    StopReason::EndTurn => "stop",
-                                    StopReason::ToolUse => "tool_calls",
-                                    StopReason::MaxTokens => "length",
-                                    StopReason::Unknown => "stop",
-                                };
-                                let chunk = make_chunk(
-                                    &id,
-                                    created,
-                                    &model,
-                                    Delta {
-                                        content: None,
-                                        role: None,
-                                        tool_calls: None,
-                                    },
-                                    Some(finish_reason.to_string()),
-                                    usage_acc.take(),
-                                );
-                                let frame = format!("{}{SSE_DONE}", sse_data(&chunk));
-                                return Some((frame, (deltas, tracker, usage_acc, true)));
-                            }
-                            ProviderDelta::Error(e) => {
-                                let error_frame = serde_json::json!({
-                                    "error": {
-                                        "message": e,
-                                        "type": "server_error"
-                                    }
-                                });
-                                let frame = format!("data: {error_frame}\n\n{SSE_DONE}");
-                                return Some((frame, (deltas, tracker, usage_acc, true)));
+                loop {
+                    match deltas.next().await {
+                        None => {
+                            // Stream ended without a Done delta — emit [DONE]
+                            return Some((
+                                SSE_DONE.to_string(),
+                                (deltas, tracker, usage_acc, true),
+                            ));
+                        }
+                        Some(Err(e)) => {
+                            // Infrastructure error — emit error JSON + [DONE]
+                            let error_frame = serde_json::json!({
+                                "error": {
+                                    "message": e.to_string(),
+                                    "type": "server_error"
+                                }
+                            });
+                            let frame = format!("data: {error_frame}\n\n{SSE_DONE}");
+                            return Some((frame, (deltas, tracker, usage_acc, true)));
+                        }
+                        Some(Ok(delta)) => {
+                            match delta {
+                                ProviderDelta::TextDelta(s) => {
+                                    let chunk = make_chunk(
+                                        &id,
+                                        created,
+                                        &model,
+                                        Delta {
+                                            content: Some(s),
+                                            role: None,
+                                            tool_calls: None,
+                                        },
+                                        None,
+                                        None,
+                                    );
+                                    return Some((
+                                        sse_data(&chunk),
+                                        (deltas, tracker, usage_acc, false),
+                                    ));
+                                }
+                                ProviderDelta::ToolCallStart { id: tc_id, name } => {
+                                    let index = tracker.index_for(&tc_id);
+                                    let chunk = make_chunk(
+                                        &id,
+                                        created,
+                                        &model,
+                                        Delta {
+                                            content: None,
+                                            role: None,
+                                            tool_calls: Some(vec![DeltaToolCall {
+                                                index,
+                                                id: Some(tc_id),
+                                                r#type: Some("function".to_string()),
+                                                function: Some(DeltaFunction {
+                                                    name: Some(name),
+                                                    arguments: Some(String::new()),
+                                                }),
+                                            }]),
+                                        },
+                                        None,
+                                        None,
+                                    );
+                                    return Some((
+                                        sse_data(&chunk),
+                                        (deltas, tracker, usage_acc, false),
+                                    ));
+                                }
+                                ProviderDelta::ToolCallArgDelta {
+                                    id: tc_id,
+                                    delta: arg_delta,
+                                } => {
+                                    let index = tracker.index_for(&tc_id);
+                                    let chunk = make_chunk(
+                                        &id,
+                                        created,
+                                        &model,
+                                        Delta {
+                                            content: None,
+                                            role: None,
+                                            tool_calls: Some(vec![DeltaToolCall {
+                                                index,
+                                                id: None,
+                                                r#type: None,
+                                                function: Some(DeltaFunction {
+                                                    name: None,
+                                                    arguments: Some(arg_delta),
+                                                }),
+                                            }]),
+                                        },
+                                        None,
+                                        None,
+                                    );
+                                    return Some((
+                                        sse_data(&chunk),
+                                        (deltas, tracker, usage_acc, false),
+                                    ));
+                                }
+                                ProviderDelta::ToolCallEnd { .. } => {
+                                    // No-op — continue to next delta
+                                    continue;
+                                }
+                                ProviderDelta::ThinkingDelta(_) => {
+                                    // No-op — skip thinking deltas in OpenAI format
+                                    continue;
+                                }
+                                ProviderDelta::Usage(u) => {
+                                    usage_acc = Some(Usage {
+                                        prompt_tokens: u.input_tokens,
+                                        completion_tokens: u.output_tokens,
+                                        total_tokens: u.input_tokens + u.output_tokens,
+                                    });
+                                    // Don't emit a frame; usage is included in the final chunk
+                                    continue;
+                                }
+                                ProviderDelta::Done(reason) => {
+                                    let finish_reason = match reason {
+                                        StopReason::EndTurn => "stop",
+                                        StopReason::ToolUse => "tool_calls",
+                                        StopReason::MaxTokens => "length",
+                                        StopReason::Unknown => "stop",
+                                    };
+                                    let chunk = make_chunk(
+                                        &id,
+                                        created,
+                                        &model,
+                                        Delta {
+                                            content: None,
+                                            role: None,
+                                            tool_calls: None,
+                                        },
+                                        Some(finish_reason.to_string()),
+                                        usage_acc.take(),
+                                    );
+                                    let frame = format!("{}{SSE_DONE}", sse_data(&chunk));
+                                    return Some((frame, (deltas, tracker, usage_acc, true)));
+                                }
+                                ProviderDelta::Error(e) => {
+                                    let error_frame = serde_json::json!({
+                                        "error": {
+                                            "message": e,
+                                            "type": "server_error"
+                                        }
+                                    });
+                                    let frame = format!("data: {error_frame}\n\n{SSE_DONE}");
+                                    return Some((frame, (deltas, tracker, usage_acc, true)));
+                                }
                             }
                         }
                     }
                 }
             }
-        }
-    })
+        },
+    )
     .boxed()
 }
 
@@ -314,7 +329,11 @@ mod tests {
         assert!(frame.starts_with("data: "));
         assert!(frame.ends_with("\n\n"));
         // Should be valid JSON between "data: " and "\n\n"
-        let json_str = frame.strip_prefix("data: ").unwrap().strip_suffix("\n\n").unwrap();
+        let json_str = frame
+            .strip_prefix("data: ")
+            .unwrap()
+            .strip_suffix("\n\n")
+            .unwrap();
         let val: serde_json::Value = serde_json::from_str(json_str).unwrap();
         assert_eq!(val["choices"][0]["delta"]["content"], "hi");
     }
@@ -388,7 +407,9 @@ mod tests {
                 id: "call_1".to_string(),
                 delta: "{\"city\":\"NYC\"}".to_string(),
             }),
-            Ok(ProviderDelta::ToolCallEnd { id: "call_1".to_string() }),
+            Ok(ProviderDelta::ToolCallEnd {
+                id: "call_1".to_string(),
+            }),
             Ok(ProviderDelta::Done(StopReason::ToolUse)),
         ];
         let input = Box::pin(stream::iter(deltas)) as BoxStream<'static, _>;

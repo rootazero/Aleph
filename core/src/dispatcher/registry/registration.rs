@@ -317,7 +317,11 @@ impl ToolRegistrar {
     /// conflict with any other tool type.
     ///
     /// Priority: Builtin > Native > Custom > MCP > Skill
-    pub async fn register_skills(&self, skills: &[SkillInfo], conflict_resolver: &ConflictResolver) {
+    pub async fn register_skills(
+        &self,
+        skills: &[SkillInfo],
+        conflict_resolver: &ConflictResolver,
+    ) {
         for skill in skills {
             let id = format!("skill:{}", skill.id);
 
@@ -354,7 +358,6 @@ impl ToolRegistrar {
 
         debug!("Registered {} skills (flat namespace)", skills.len());
     }
-
 
     /// Register plugin tools from plugin manifests (Flat Namespace Mode)
     ///

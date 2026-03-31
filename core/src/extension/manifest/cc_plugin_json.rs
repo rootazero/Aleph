@@ -10,8 +10,10 @@ use serde::Deserialize;
 use serde_json::Value as JsonValue;
 
 use crate::extension::error::{ExtensionError, ExtensionResult};
+use crate::extension::manifest::types::{
+    AlephExtensions, AlephRuntime, AuthorInfo, PluginManifest,
+};
 use crate::extension::manifest::{sanitize_plugin_id, validate_plugin_id};
-use crate::extension::manifest::types::{AlephExtensions, AlephRuntime, AuthorInfo, PluginManifest};
 use crate::extension::types::PluginKind;
 
 /// Filename path for CC-format JSON manifest
@@ -53,7 +55,6 @@ pub struct CcPluginJson {
     pub author: Option<CcPluginAuthor>,
 
     // CC-native component path fields (camelCase)
-
     /// Path to skills directory
     pub skills: Option<String>,
 
@@ -69,7 +70,6 @@ pub struct CcPluginJson {
     /// Aleph-specific extensions (optional, ignored by Claude Code)
     pub aleph: Option<JsonValue>,
 }
-
 
 /// Author in CC plugin.json — either a plain string or an object
 #[derive(Debug, Deserialize)]
@@ -300,19 +300,27 @@ impl ManifestAdapter for ClaudeCodeJsonAdapter {
 
         // Parse skills
         let skills_rel = raw.skills.as_deref().unwrap_or("skills");
-        capabilities.extend(parsers::parse_skills_dir(plugin_dir, skills_rel, &plugin_id)?);
+        capabilities.extend(parsers::parse_skills_dir(
+            plugin_dir, skills_rel, &plugin_id,
+        )?);
 
         // Parse agents
         let agents_rel = raw.agents.as_deref().unwrap_or("agents");
-        capabilities.extend(parsers::parse_agents_dir(plugin_dir, agents_rel, &plugin_id)?);
+        capabilities.extend(parsers::parse_agents_dir(
+            plugin_dir, agents_rel, &plugin_id,
+        )?);
 
         // Parse hooks
         let hooks_rel = raw.hooks.as_deref().unwrap_or("hooks/hooks.json");
-        capabilities.extend(parsers::parse_hooks_file(plugin_dir, hooks_rel, &plugin_id)?);
+        capabilities.extend(parsers::parse_hooks_file(
+            plugin_dir, hooks_rel, &plugin_id,
+        )?);
 
         // Parse MCP servers
         let mcp_rel = raw.mcp_servers.as_deref().unwrap_or(".mcp.json");
-        capabilities.extend(parsers::parse_mcp_config_file(plugin_dir, mcp_rel, &plugin_id)?);
+        capabilities.extend(parsers::parse_mcp_config_file(
+            plugin_dir, mcp_rel, &plugin_id,
+        )?);
 
         Ok(AdapterOutput {
             plugin_id: plugin_id.clone(),

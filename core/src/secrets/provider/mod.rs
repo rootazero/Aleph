@@ -55,8 +55,8 @@ pub trait SecretProvider: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
     use crate::sync_primitives::Mutex;
+    use std::collections::HashMap;
 
     /// A simple in-memory mock provider for testing the trait surface.
     struct MockProvider {

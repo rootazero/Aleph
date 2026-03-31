@@ -1,9 +1,9 @@
 //! HistoryApi - Exposes WorldModel history to Rhai scripts
 
-use crate::daemon::worldmodel::WorldModel;
-use crate::daemon::dispatcher::scripting::helpers::parse_duration;
-use super::event_collection::EventCollection;
 use super::baseline::BaselineApi;
+use super::event_collection::EventCollection;
+use crate::daemon::dispatcher::scripting::helpers::parse_duration;
+use crate::daemon::worldmodel::WorldModel;
 use crate::sync_primitives::Arc;
 use chrono::Utc;
 
@@ -72,8 +72,8 @@ impl HistoryApi {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::daemon::worldmodel::WorldModelConfig;
     use crate::daemon::event_bus::DaemonEventBus;
+    use crate::daemon::worldmodel::WorldModelConfig;
 
     #[tokio::test]
     async fn test_history_api_last_returns_empty_from_stub() {

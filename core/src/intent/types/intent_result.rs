@@ -73,9 +73,7 @@ pub enum IntentResult {
         metadata: ExecuteMetadata,
     },
     /// The message is conversational — no tool needed.
-    Converse {
-        confidence: f32,
-    },
+    Converse { confidence: f32 },
     /// The request was aborted (e.g. safety filter).
     Abort,
 }

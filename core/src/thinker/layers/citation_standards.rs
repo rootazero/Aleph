@@ -6,8 +6,12 @@ use crate::thinker::prompt_mode::PromptMode;
 pub struct CitationStandardsLayer;
 
 impl PromptLayer for CitationStandardsLayer {
-    fn name(&self) -> &'static str { "citation_standards" }
-    fn priority(&self) -> u32 { 900 }
+    fn name(&self) -> &'static str {
+        "citation_standards"
+    }
+    fn priority(&self) -> u32 {
+        900
+    }
     fn supports_mode(&self, mode: PromptMode) -> bool {
         matches!(mode, PromptMode::Full)
     }
@@ -18,9 +22,13 @@ impl PromptLayer for CitationStandardsLayer {
         output.push_str("## Citation Standards\n\n");
         output.push_str("When referencing information from memory or knowledge base:\n");
         output.push_str("- Include source reference in format: `[Source: <path>#<id>]` or `[Source: <path>#L<line>]`\n");
-        output.push_str("- Sources are provided in the context metadata — do not fabricate source paths\n");
+        output.push_str(
+            "- Sources are provided in the context metadata — do not fabricate source paths\n",
+        );
         output.push_str("- If multiple sources support a claim, cite the most specific one\n");
-        output.push_str("- For real-time observations (current tool output, live data), no citation needed\n");
+        output.push_str(
+            "- For real-time observations (current tool output, live data), no citation needed\n",
+        );
         output.push_str("- For recalled facts, prior decisions, or historical context, citation is mandatory\n\n");
     }
 }

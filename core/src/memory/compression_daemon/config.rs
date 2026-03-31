@@ -18,8 +18,8 @@ pub struct CompressionDaemonConfig {
 impl Default for CompressionDaemonConfig {
     fn default() -> Self {
         Self {
-            check_interval_seconds: 3600,  // 1 hour
-            idle_threshold_seconds: 300,   // 5 minutes
+            check_interval_seconds: 3600, // 1 hour
+            idle_threshold_seconds: 300,  // 5 minutes
             enabled: true,
         }
     }

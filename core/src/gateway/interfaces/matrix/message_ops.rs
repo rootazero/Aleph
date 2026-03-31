@@ -7,8 +7,8 @@ use crate::gateway::channel::{
     ChannelError, ChannelId, ConversationId, InboundMessage, MessageId, SendResult, UserId,
 };
 use crate::gateway::formatter::{MarkupFormat, MessageFormatter};
-use chrono::Utc;
 use crate::sync_primitives::Arc;
+use chrono::Utc;
 use std::time::Duration;
 use tokio::sync::RwLock;
 
@@ -53,10 +53,7 @@ impl MatrixMessageOps {
             .await
             .map_err(|e| ChannelError::AuthFailed(format!("whoami response parse failed: {e}")))?;
 
-        let user_id = body["user_id"]
-            .as_str()
-            .unwrap_or("unknown")
-            .to_string();
+        let user_id = body["user_id"].as_str().unwrap_or("unknown").to_string();
 
         Ok(user_id)
     }
@@ -118,12 +115,9 @@ impl MatrixMessageOps {
                 )));
             }
 
-            let resp_json: serde_json::Value = resp
-                .json()
-                .await
-                .map_err(|e| {
-                    ChannelError::SendFailed(format!("Matrix send response parse failed: {e}"))
-                })?;
+            let resp_json: serde_json::Value = resp.json().await.map_err(|e| {
+                ChannelError::SendFailed(format!("Matrix send response parse failed: {e}"))
+            })?;
 
             let event_id = resp_json["event_id"]
                 .as_str()
@@ -136,8 +130,7 @@ impl MatrixMessageOps {
             });
         }
 
-        last_result
-            .ok_or_else(|| ChannelError::SendFailed("No message chunks to send".to_string()))
+        last_result.ok_or_else(|| ChannelError::SendFailed("No message chunks to send".to_string()))
     }
 
     /// Send a typing indicator to a Matrix room.
@@ -151,9 +144,7 @@ impl MatrixMessageOps {
         user_id: &str,
         typing: bool,
     ) -> Result<(), ChannelError> {
-        let url = format!(
-            "{homeserver}/_matrix/client/v3/rooms/{room_id}/typing/{user_id}"
-        );
+        let url = format!("{homeserver}/_matrix/client/v3/rooms/{room_id}/typing/{user_id}");
 
         let body = if typing {
             serde_json::json!({
@@ -172,15 +163,10 @@ impl MatrixMessageOps {
             .json(&body)
             .send()
             .await
-            .map_err(|e| {
-                ChannelError::Internal(format!("Matrix typing indicator failed: {e}"))
-            })?;
+            .map_err(|e| ChannelError::Internal(format!("Matrix typing indicator failed: {e}")))?;
 
         if !resp.status().is_success() {
-            tracing::warn!(
-                "Matrix typing indicator returned {}",
-                resp.status()
-            );
+            tracing::warn!("Matrix typing indicator returned {}", resp.status());
         }
 
         Ok(())
@@ -215,15 +201,14 @@ impl MatrixMessageOps {
             return None;
         }
 
-        let event_id = event["event_id"]
-            .as_str()
-            .unwrap_or("")
-            .to_string();
+        let event_id = event["event_id"].as_str().unwrap_or("").to_string();
 
         // Parse timestamp from origin_server_ts (milliseconds since epoch)
         let timestamp = event["origin_server_ts"]
             .as_i64()
-            .and_then(|ms| chrono::DateTime::from_timestamp(ms / 1000, ((ms % 1000) * 1_000_000) as u32))
+            .and_then(|ms| {
+                chrono::DateTime::from_timestamp(ms / 1000, ((ms % 1000) * 1_000_000) as u32)
+            })
             .unwrap_or_else(Utc::now);
 
         // Extract reply-to from m.relates_to.m.in_reply_to.event_id
@@ -331,11 +316,7 @@ impl MatrixMessageOps {
             }
 
             // Get own user ID for filtering
-            let own_user_id = user_id
-                .read()
-                .await
-                .clone()
-                .unwrap_or_default();
+            let own_user_id = user_id.read().await.clone().unwrap_or_default();
 
             // Process room events from rooms.join
             if let Some(rooms) = body["rooms"]["join"].as_object() {
@@ -347,12 +328,9 @@ impl MatrixMessageOps {
 
                     if let Some(events) = room_data["timeline"]["events"].as_array() {
                         for event in events {
-                            if let Some(inbound) = Self::convert_room_event(
-                                event,
-                                room_id,
-                                &channel_id,
-                                &own_user_id,
-                            ) {
+                            if let Some(inbound) =
+                                Self::convert_room_event(event, room_id, &channel_id, &own_user_id)
+                            {
                                 tracing::debug!(
                                     "Matrix message from {} in {}: {}",
                                     inbound.sender_id.as_str(),
@@ -503,10 +481,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(
-            msg.reply_to.as_ref().unwrap().as_str(),
-            "$original_event"
-        );
+        assert_eq!(msg.reply_to.as_ref().unwrap().as_str(), "$original_event");
     }
 
     #[test]
@@ -604,9 +579,6 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(
-            msg.sender_name.as_deref(),
-            Some("@alice:matrix.org")
-        );
+        assert_eq!(msg.sender_name.as_deref(), Some("@alice:matrix.org"));
     }
 }

@@ -276,9 +276,7 @@ impl SmartCompactionStrategy {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::{
-        AiResponsePart, ToolCallStatus, UserInputPart,
-    };
+    use crate::components::{AiResponsePart, ToolCallStatus, UserInputPart};
     use serde_json::json;
 
     // =========================================================================
@@ -719,7 +717,10 @@ mod tests {
         });
 
         // Protected tool: Keep
-        assert_eq!(strategy.evaluate_part(&protected_part, 0, 5), CompactionAction::Keep);
+        assert_eq!(
+            strategy.evaluate_part(&protected_part, 0, 5),
+            CompactionAction::Keep
+        );
 
         // Normal tool: Truncate
         assert!(matches!(

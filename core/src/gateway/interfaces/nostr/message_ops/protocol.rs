@@ -3,9 +3,7 @@
 use sha2::{Digest, Sha256};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::gateway::channel::{
-    ChannelId, ConversationId, InboundMessage, MessageId, UserId,
-};
+use crate::gateway::channel::{ChannelId, ConversationId, InboundMessage, MessageId, UserId};
 
 use super::types::{NostrEvent, RelayMessage};
 
@@ -252,11 +250,10 @@ pub fn sign_event(event: &mut NostrEvent, private_key_hex: &str) -> Result<(), S
         ));
     }
 
-    let signing_key = SigningKey::from_bytes(&privkey_bytes)
-        .map_err(|e| format!("invalid signing key: {e}"))?;
+    let signing_key =
+        SigningKey::from_bytes(&privkey_bytes).map_err(|e| format!("invalid signing key: {e}"))?;
 
-    let id_bytes =
-        hex::decode(&event.id).map_err(|e| format!("invalid event id hex: {e}"))?;
+    let id_bytes = hex::decode(&event.id).map_err(|e| format!("invalid event id hex: {e}"))?;
 
     // Use sign_raw with zeroed auxiliary randomness for deterministic signing.
     // The event ID is already the SHA-256 hash, so prehash signing is correct.

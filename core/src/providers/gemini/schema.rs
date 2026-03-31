@@ -68,7 +68,10 @@ fn resolve_refs_recursive(node: &mut Value, defs: &Value) {
     match node {
         Value::Object(map) => {
             // Check if this node IS a $ref
-            if let Some(ref_val) = map.get("$ref").and_then(|v| v.as_str()).map(|s| s.to_string())
+            if let Some(ref_val) = map
+                .get("$ref")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
             {
                 // Parse "#/$defs/Name" or "#/definitions/Name"
                 let name = ref_val

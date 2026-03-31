@@ -3,10 +3,10 @@
 //! Loads workspace-level context files (SOUL.md, IDENTITY.md, AGENTS.md, etc.)
 //! and injects them into the system prompt with truncation management.
 
-use std::path::PathBuf;
+use crate::thinker::prompt_budget::truncate_with_head_tail;
 use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, PromptLayer};
 use crate::thinker::prompt_mode::PromptMode;
-use crate::thinker::prompt_budget::truncate_with_head_tail;
+use std::path::PathBuf;
 
 /// Ordered list of bootstrap files by priority (highest first).
 const BOOTSTRAP_FILES: &[&str] = &[
@@ -93,10 +93,18 @@ impl BootstrapLayer {
 }
 
 impl PromptLayer for BootstrapLayer {
-    fn name(&self) -> &'static str { "bootstrap" }
-    fn priority(&self) -> u32 { 55 }
+    fn name(&self) -> &'static str {
+        "bootstrap"
+    }
+    fn priority(&self) -> u32 {
+        55
+    }
     fn paths(&self) -> &'static [AssemblyPath] {
-        &[AssemblyPath::Soul, AssemblyPath::Context, AssemblyPath::Cached]
+        &[
+            AssemblyPath::Soul,
+            AssemblyPath::Context,
+            AssemblyPath::Cached,
+        ]
     }
     fn supports_mode(&self, mode: PromptMode) -> bool {
         matches!(mode, PromptMode::Full)
@@ -112,8 +120,8 @@ impl PromptLayer for BootstrapLayer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
     use std::fs;
+    use std::path::Path;
     use tempfile::tempdir;
 
     fn create_bootstrap_file(dir: &Path, name: &str, content: &str) {
@@ -172,8 +180,7 @@ mod tests {
         let large_content = "X".repeat(30_000);
         create_bootstrap_file(dir.path(), "SOUL.md", &large_content);
 
-        let layer = BootstrapLayer::new(dir.path().to_path_buf())
-            .with_limits(20_000, 100_000);
+        let layer = BootstrapLayer::new(dir.path().to_path_buf()).with_limits(20_000, 100_000);
         let content = layer.load_files().unwrap();
 
         assert!(content.contains("[..."));
@@ -186,8 +193,7 @@ mod tests {
         create_bootstrap_file(dir.path(), "SOUL.md", &"A".repeat(80_000));
         create_bootstrap_file(dir.path(), "IDENTITY.md", &"B".repeat(80_000));
 
-        let layer = BootstrapLayer::new(dir.path().to_path_buf())
-            .with_limits(80_000, 100_000);
+        let layer = BootstrapLayer::new(dir.path().to_path_buf()).with_limits(80_000, 100_000);
         let content = layer.load_files().unwrap();
 
         // Total should be around 100K, not 160K
@@ -197,8 +203,16 @@ mod tests {
     #[test]
     fn loads_heartbeat_and_agents_files() {
         let dir = tempdir().unwrap();
-        create_bootstrap_file(dir.path(), "HEARTBEAT.md", "# Heartbeat\nSystem status: healthy");
-        create_bootstrap_file(dir.path(), "AGENTS.md", "# Operating Manual\nAlways run tests before committing");
+        create_bootstrap_file(
+            dir.path(),
+            "HEARTBEAT.md",
+            "# Heartbeat\nSystem status: healthy",
+        );
+        create_bootstrap_file(
+            dir.path(),
+            "AGENTS.md",
+            "# Operating Manual\nAlways run tests before committing",
+        );
 
         let layer = BootstrapLayer::new(dir.path().to_path_buf());
         let content = layer.load_files().unwrap();

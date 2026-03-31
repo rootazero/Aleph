@@ -23,19 +23,11 @@ async fn create_test_db_with_facts() -> (Arc<LanceMemoryBackend>, TempDir) {
     );
 
     // Insert owner facts
-    let owner_fact = MemoryFact::new(
-        "Owner secret data".to_string(),
-        FactType::Other,
-        vec![],
-    );
+    let owner_fact = MemoryFact::new("Owner secret data".to_string(), FactType::Other, vec![]);
     db.insert_fact(&owner_fact).await.unwrap();
 
     // Insert guest facts
-    let guest_fact = MemoryFact::new(
-        "Guest alice data".to_string(),
-        FactType::Other,
-        vec![],
-    );
+    let guest_fact = MemoryFact::new("Guest alice data".to_string(), FactType::Other, vec![]);
     db.insert_fact(&guest_fact).await.unwrap();
 
     (db, temp_dir)

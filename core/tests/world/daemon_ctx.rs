@@ -1,15 +1,13 @@
 //! Daemon test context
 #![allow(dead_code)]
 
+#[cfg(target_os = "macos")]
+use alephcore::daemon::platforms::launchd::LaunchdService;
 use alephcore::daemon::{
     DaemonConfig, DaemonEvent, DaemonEventBus, GovernorDecision, IpcServer, JsonRpcRequest,
     ResourceGovernor,
 };
-use alephcore::{
-    ProactiveDispatcher, ProactiveDispatcherConfig, WorldModel, WorldModelConfig,
-};
-#[cfg(target_os = "macos")]
-use alephcore::daemon::platforms::launchd::LaunchdService;
+use alephcore::{ProactiveDispatcher, ProactiveDispatcherConfig, WorldModel, WorldModelConfig};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tempfile::TempDir;
@@ -59,7 +57,6 @@ pub struct DaemonContext {
     pub received_event: Option<DaemonEvent>,
 }
 
-
 impl std::fmt::Debug for DaemonContext {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut d = f.debug_struct("DaemonContext");
@@ -71,7 +68,10 @@ impl std::fmt::Debug for DaemonContext {
             .field("governor_decision", &self.governor_decision)
             .field("cli_parse_result", &self.cli_parse_result)
             .field("socket_path", &self.socket_path)
-            .field("ipc_server", &self.ipc_server.as_ref().map(|s| s.socket_path()))
+            .field(
+                "ipc_server",
+                &self.ipc_server.as_ref().map(|s| s.socket_path()),
+            )
             .field("json_rpc_request", &self.json_rpc_request)
             .field("daemon_config", &self.daemon_config)
             .field("worldmodel", &self.worldmodel.is_some())
@@ -79,8 +79,14 @@ impl std::fmt::Debug for DaemonContext {
             .field("persistence_state_path", &self.persistence_state_path);
 
         #[cfg(target_os = "macos")]
-        d.field("launchd_service", &self.launchd_service.as_ref().map(|_| "<LaunchdService>"))
-            .field("plist_content", &self.plist_content.as_ref().map(|_| "<plist>"));
+        d.field(
+            "launchd_service",
+            &self.launchd_service.as_ref().map(|_| "<LaunchdService>"),
+        )
+        .field(
+            "plist_content",
+            &self.plist_content.as_ref().map(|_| "<plist>"),
+        );
 
         d.finish()
     }

@@ -6,13 +6,11 @@
 //!
 //! Handles edge cases like inline code blocks to avoid false positives.
 
-
 /// Known thinking tag variants
 const THINKING_TAGS: &[&str] = &["think", "thinking", "thought", "antthinking"];
 
 /// Block state for tracking thinking vs content
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum BlockState {
     /// Normal content (not in thinking block)
     #[default]
@@ -24,7 +22,6 @@ pub enum BlockState {
     /// Inside a fenced code block (```)
     FencedCode,
 }
-
 
 /// Thinking tag parser with state machine
 #[derive(Debug, Clone)]
@@ -159,8 +156,16 @@ impl ThinkingTagParser {
             }
         }
 
-        let content = if content_delta.is_empty() { None } else { Some(content_delta) };
-        let thinking = if thinking_delta.is_empty() { None } else { Some(thinking_delta) };
+        let content = if content_delta.is_empty() {
+            None
+        } else {
+            Some(content_delta)
+        };
+        let thinking = if thinking_delta.is_empty() {
+            None
+        } else {
+            Some(thinking_delta)
+        };
 
         (content, thinking)
     }
@@ -173,7 +178,11 @@ impl ThinkingTagParser {
 
             if let Some(pos) = self.buffer.find(&open) {
                 let pre = self.buffer.get(..pos).unwrap_or_default().to_string();
-                let post = self.buffer.get(pos + open.len()..).unwrap_or_default().to_string();
+                let post = self
+                    .buffer
+                    .get(pos + open.len()..)
+                    .unwrap_or_default()
+                    .to_string();
                 return Some((pre, tag.to_string(), post));
             }
 
@@ -181,7 +190,11 @@ impl ThinkingTagParser {
             if let Some(start) = self.buffer.find(&open_with_attrs) {
                 if let Some(end) = self.buffer.get(start..).unwrap_or_default().find('>') {
                     let pre = self.buffer.get(..start).unwrap_or_default().to_string();
-                    let post = self.buffer.get(start + end + 1..).unwrap_or_default().to_string();
+                    let post = self
+                        .buffer
+                        .get(start + end + 1..)
+                        .unwrap_or_default()
+                        .to_string();
                     return Some((pre, tag.to_string(), post));
                 }
             }
@@ -195,7 +208,11 @@ impl ThinkingTagParser {
             let close = format!("</{}>", tag);
             if let Some(pos) = self.buffer.find(&close) {
                 let pre = self.buffer.get(..pos).unwrap_or_default().to_string();
-                let post = self.buffer.get(pos + close.len()..).unwrap_or_default().to_string();
+                let post = self
+                    .buffer
+                    .get(pos + close.len()..)
+                    .unwrap_or_default()
+                    .to_string();
                 return Some((pre, post));
             }
         }
@@ -206,7 +223,13 @@ impl ThinkingTagParser {
     fn check_code_fence(&mut self) -> bool {
         if self.buffer.starts_with("```") {
             // Find end of fence line
-            let fence_end = self.buffer.get(3..).unwrap_or_default().find('\n').map(|p| p + 4).unwrap_or(3);
+            let fence_end = self
+                .buffer
+                .get(3..)
+                .unwrap_or_default()
+                .find('\n')
+                .map(|p| p + 4)
+                .unwrap_or(3);
             let _fence = self.buffer.get(..fence_end).unwrap_or_default().to_string();
             self.code_fence_pattern = Some("```".to_string());
             self.state = BlockState::FencedCode;
@@ -314,7 +337,8 @@ mod tests {
     #[test]
     fn test_multiple_tags() {
         let mut parser = ThinkingTagParser::new();
-        let (_content, _thinking) = parser.process("<thinking>first</thinking>middle<thought>second</thought>end");
+        let (_content, _thinking) =
+            parser.process("<thinking>first</thinking>middle<thought>second</thought>end");
         assert_eq!(parser.accumulated_thinking(), "firstsecond");
         assert_eq!(parser.accumulated_content(), "middleend");
     }

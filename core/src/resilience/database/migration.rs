@@ -2,7 +2,6 @@
 ///
 /// This module provides idempotent migration functions for adding namespace
 /// support to existing databases. Migrations are safe to run multiple times.
-
 use crate::error::AlephError;
 use rusqlite::Connection;
 
@@ -247,7 +246,9 @@ pub fn migrate_add_vfs_paths(conn: &Connection) -> Result<(), AlephError> {
 /// Enables lazy re-embedding when the configured model changes.
 pub fn migrate_add_embedding_model(conn: &Connection) -> Result<(), AlephError> {
     conn.execute_batch("SAVEPOINT migration_embedding_model")
-        .map_err(|e| AlephError::config(format!("Failed to begin embedding_model migration: {}", e)))?;
+        .map_err(|e| {
+            AlephError::config(format!("Failed to begin embedding_model migration: {}", e))
+        })?;
 
     let has_column: i64 = conn
         .query_row(
@@ -282,7 +283,9 @@ pub fn migrate_add_embedding_model(conn: &Connection) -> Result<(), AlephError> 
     })?;
 
     conn.execute_batch("RELEASE migration_embedding_model")
-        .map_err(|e| AlephError::config(format!("Failed to commit embedding_model migration: {}", e)))?;
+        .map_err(|e| {
+            AlephError::config(format!("Failed to commit embedding_model migration: {}", e))
+        })?;
 
     Ok(())
 }
@@ -607,7 +610,10 @@ mod tests {
         for col in &["path", "fact_source", "content_hash", "parent_path"] {
             let has_col: i64 = conn
                 .query_row(
-                    &format!("SELECT COUNT(*) FROM pragma_table_info('memory_facts') WHERE name='{}'", col),
+                    &format!(
+                        "SELECT COUNT(*) FROM pragma_table_info('memory_facts') WHERE name='{}'",
+                        col
+                    ),
                     [],
                     |row| row.get(0),
                 )
@@ -644,12 +650,20 @@ mod tests {
 
         // Verify defaults
         let path: String = conn
-            .query_row("SELECT path FROM memory_facts WHERE id = 'test-1'", [], |row| row.get(0))
+            .query_row(
+                "SELECT path FROM memory_facts WHERE id = 'test-1'",
+                [],
+                |row| row.get(0),
+            )
             .unwrap();
         assert_eq!(path, "");
 
         let fact_source: String = conn
-            .query_row("SELECT fact_source FROM memory_facts WHERE id = 'test-1'", [], |row| row.get(0))
+            .query_row(
+                "SELECT fact_source FROM memory_facts WHERE id = 'test-1'",
+                [],
+                |row| row.get(0),
+            )
             .unwrap();
         assert_eq!(fact_source, "extracted");
     }
@@ -696,5 +710,4 @@ mod tests {
             .unwrap();
         assert_eq!(has_col, 1);
     }
-
 }

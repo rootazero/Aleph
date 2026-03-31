@@ -1,8 +1,8 @@
 //! Compatibility types — bridges between v2 skill system and legacy consumers.
 
-use serde::{Deserialize, Serialize};
 use crate::domain::skill::SkillManifest;
 use crate::domain::Entity;
+use serde::{Deserialize, Serialize};
 
 /// Simplified skill info for tool registry and UI display.
 /// Mirrors the legacy `crate::skills::SkillInfo` for backward compatibility.
@@ -50,8 +50,11 @@ mod tests {
     #[test]
     fn skill_info_from_manifest() {
         let manifest = SkillManifest::new(
-            "test:skill", "Test Skill", "A test",
-            SkillContent::new("c"), SkillSource::Bundled,
+            "test:skill",
+            "Test Skill",
+            "A test",
+            SkillContent::new("c"),
+            SkillSource::Bundled,
         );
         let info: SkillInfo = manifest.into();
         assert_eq!(info.id, "test:skill");

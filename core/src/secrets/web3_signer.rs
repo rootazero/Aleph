@@ -114,9 +114,7 @@ impl<'a, R: SecretResolver> EvmSigner<'a, R> {
         let digest = compute_signing_digest(intent);
         let (signature, recovery_id) = signing_key
             .sign_prehash_recoverable(&digest)
-            .map_err(|e| {
-                SecretError::EncryptionFailed(format!("ECDSA signing failed: {}", e))
-            })?;
+            .map_err(|e| SecretError::EncryptionFailed(format!("ECDSA signing failed: {}", e)))?;
 
         Ok(SignedResult {
             signature: signature.to_bytes().to_vec(),
@@ -128,12 +126,10 @@ impl<'a, R: SecretResolver> EvmSigner<'a, R> {
 
 fn parse_private_key(hex_key: &str) -> Result<SigningKey, SecretError> {
     let key_str = hex_key.strip_prefix("0x").unwrap_or(hex_key);
-    let key_bytes = hex::decode(key_str).map_err(|e| {
-        SecretError::EncryptionFailed(format!("Invalid hex private key: {}", e))
-    })?;
-    SigningKey::from_bytes((&key_bytes[..]).into()).map_err(|e| {
-        SecretError::EncryptionFailed(format!("Invalid secp256k1 private key: {}", e))
-    })
+    let key_bytes = hex::decode(key_str)
+        .map_err(|e| SecretError::EncryptionFailed(format!("Invalid hex private key: {}", e)))?;
+    SigningKey::from_bytes((&key_bytes[..]).into())
+        .map_err(|e| SecretError::EncryptionFailed(format!("Invalid secp256k1 private key: {}", e)))
 }
 
 fn eth_address_from_pubkey(pubkey: &VerifyingKey) -> [u8; 20] {
@@ -267,8 +263,7 @@ mod tests {
 
         assert_eq!(result.signature.len(), 64);
         assert!(result.recovery_id <= 1);
-        let expected_addr =
-            hex::decode("f39Fd6e51aad88F6F4ce6aB8827279cffFb92266").unwrap();
+        let expected_addr = hex::decode("f39Fd6e51aad88F6F4ce6aB8827279cffFb92266").unwrap();
         assert_eq!(result.signer_address, expected_addr.as_slice());
     }
 

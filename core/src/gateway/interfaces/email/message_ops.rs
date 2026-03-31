@@ -87,7 +87,9 @@ impl EmailMessageOps {
 
         let message = MessageParser::default().parse(raw_email)?;
         let from = message.from()?;
-        from.first().and_then(|addr| addr.address()).map(|s| s.to_string())
+        from.first()
+            .and_then(|addr| addr.address())
+            .map(|s| s.to_string())
     }
 
     /// Extract subject from raw email bytes.
@@ -195,9 +197,10 @@ impl EmailMessageOps {
                 .build()
         };
 
-        let response = mailer.send(email).await.map_err(|e| {
-            ChannelError::SendFailed(format!("SMTP send failed: {e}"))
-        })?;
+        let response = mailer
+            .send(email)
+            .await
+            .map_err(|e| ChannelError::SendFailed(format!("SMTP send failed: {e}")))?;
 
         // Use first line of SMTP response as message ID
         let msg_id = response
@@ -281,9 +284,10 @@ impl EmailMessageOps {
     ) -> Result<usize, ChannelError> {
         use tokio_util::compat::TokioAsyncReadCompatExt;
 
-        let tcp_stream = tokio::net::TcpStream::connect((config.imap_host.as_str(), config.imap_port))
-            .await
-            .map_err(|e| ChannelError::Internal(format!("IMAP TCP connect failed: {e}")))?;
+        let tcp_stream =
+            tokio::net::TcpStream::connect((config.imap_host.as_str(), config.imap_port))
+                .await
+                .map_err(|e| ChannelError::Internal(format!("IMAP TCP connect failed: {e}")))?;
 
         // Wrap tokio TcpStream with compat layer so it implements futures::AsyncRead/Write
         let compat_stream = tcp_stream.compat();
@@ -309,9 +313,10 @@ impl EmailMessageOps {
 
         for folder in &config.folders {
             // Select the folder
-            session.select(folder).await.map_err(|e| {
-                ChannelError::Internal(format!("IMAP SELECT {folder} failed: {e}"))
-            })?;
+            session
+                .select(folder)
+                .await
+                .map_err(|e| ChannelError::Internal(format!("IMAP SELECT {folder} failed: {e}")))?;
 
             // Search for unseen messages
             let search_result = session
@@ -324,7 +329,10 @@ impl EmailMessageOps {
             }
 
             // Build sequence set from UIDs
-            let uids: Vec<String> = search_result.iter().map(|uid: &u32| uid.to_string()).collect();
+            let uids: Vec<String> = search_result
+                .iter()
+                .map(|uid: &u32| uid.to_string())
+                .collect();
             let uid_set = uids.join(",");
 
             // Fetch messages
@@ -399,10 +407,7 @@ impl EmailMessageOps {
 
             // Mark fetched messages as seen
             if !uid_set.is_empty() {
-                if let Ok(mut store_stream) = session
-                    .store(&uid_set, "+FLAGS (\\Seen)")
-                    .await
-                {
+                if let Ok(mut store_stream) = session.store(&uid_set, "+FLAGS (\\Seen)").await {
                     // Consume the stream to apply the flag changes
                     while store_stream.next().await.is_some() {}
                 }
@@ -586,8 +591,7 @@ impl EmailMessageOps {
                         let paren_end = bracket_end + 2 + rel_paren_end;
                         let link_text = &result[bracket_start + 1..bracket_end];
                         let url = &result[bracket_end + 2..paren_end];
-                        let replacement =
-                            format!("<a href=\"{url}\">{link_text}</a>");
+                        let replacement = format!("<a href=\"{url}\">{link_text}</a>");
                         result = format!(
                             "{}{}{}",
                             &result[..bracket_start],
@@ -799,9 +803,7 @@ mod tests {
 
     #[test]
     fn test_convert_links_multiple() {
-        let result = EmailMessageOps::convert_links(
-            "[a](https://a.com) and [b](https://b.com)"
-        );
+        let result = EmailMessageOps::convert_links("[a](https://a.com) and [b](https://b.com)");
         assert!(result.contains("<a href=\"https://a.com\">a</a>"));
         assert!(result.contains("<a href=\"https://b.com\">b</a>"));
     }

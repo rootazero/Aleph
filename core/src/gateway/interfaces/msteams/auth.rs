@@ -202,7 +202,8 @@ impl JwtValidator {
 
     /// Returns true if keys need refreshing (signature mismatch detected).
     pub fn key_refresh_needed(&self) -> bool {
-        self.refresh_needed.load(std::sync::atomic::Ordering::SeqCst)
+        self.refresh_needed
+            .load(std::sync::atomic::Ordering::SeqCst)
     }
 
     /// Validate an inbound Bearer JWT token. Returns `true` if valid.
@@ -274,14 +275,14 @@ impl JwtValidator {
         }
 
         warn!("JWT rejected: no key matched the signature — signaling key refresh");
-        self.refresh_needed.store(true, std::sync::atomic::Ordering::SeqCst);
+        self.refresh_needed
+            .store(true, std::sync::atomic::Ordering::SeqCst);
         false
     }
 
     /// Fetch JWKS public keys from Microsoft's OpenID metadata endpoint.
     pub async fn refresh_keys(&self) -> Result<(), ChannelError> {
-        let oidc_url =
-            "https://login.botframework.com/v1/.well-known/openidconfiguration";
+        let oidc_url = "https://login.botframework.com/v1/.well-known/openidconfiguration";
 
         let oidc: OidcConfig = self
             .http
@@ -322,14 +323,15 @@ impl JwtValidator {
             ));
         }
 
-        let mut guard = self
-            .keys
-            .write()
-            .unwrap_or_else(|e| e.into_inner());
+        let mut guard = self.keys.write().unwrap_or_else(|e| e.into_inner());
         *guard = new_keys;
 
-        debug!("Loaded {} JWKS keys for Bot Framework JWT validation", guard.len());
-        self.refresh_needed.store(false, std::sync::atomic::Ordering::SeqCst);
+        debug!(
+            "Loaded {} JWKS keys for Bot Framework JWT validation",
+            guard.len()
+        );
+        self.refresh_needed
+            .store(false, std::sync::atomic::Ordering::SeqCst);
         Ok(())
     }
 
@@ -455,8 +457,12 @@ DQIDAQAB
 
     #[test]
     fn test_validate_service_url_allows_botframework() {
-        assert!(validate_service_url("https://smba.trafficmanager.net/apis/"));
-        assert!(validate_service_url("https://directline.botframework.com/v3/directline"));
+        assert!(validate_service_url(
+            "https://smba.trafficmanager.net/apis/"
+        ));
+        assert!(validate_service_url(
+            "https://directline.botframework.com/v3/directline"
+        ));
         assert!(validate_service_url("https://api.botframework.com"));
         assert!(validate_service_url("https://botframework.com/"));
     }
@@ -494,7 +500,10 @@ DQIDAQAB
         let claims = make_claims(app_id, "https://api.botframework.com", 3600);
         let token = sign_token(&claims, TEST_RSA_PRIVATE_PEM);
 
-        assert!(validator.validate(&token), "Valid token should pass validation");
+        assert!(
+            validator.validate(&token),
+            "Valid token should pass validation"
+        );
     }
 
     #[test]
@@ -506,7 +515,10 @@ DQIDAQAB
         let claims = make_claims(app_id, "https://api.botframework.com", -1);
         let token = sign_token(&claims, TEST_RSA_PRIVATE_PEM);
 
-        assert!(!validator.validate(&token), "Expired token should be rejected");
+        assert!(
+            !validator.validate(&token),
+            "Expired token should be rejected"
+        );
     }
 
     #[test]
@@ -518,7 +530,10 @@ DQIDAQAB
         let claims = make_claims("wrong-app-id", "https://api.botframework.com", 3600);
         let token = sign_token(&claims, TEST_RSA_PRIVATE_PEM);
 
-        assert!(!validator.validate(&token), "Wrong audience token should be rejected");
+        assert!(
+            !validator.validate(&token),
+            "Wrong audience token should be rejected"
+        );
     }
 
     #[test]
@@ -529,7 +544,10 @@ DQIDAQAB
         let claims = make_claims(app_id, "https://attacker.example.com", 3600);
         let token = sign_token(&claims, TEST_RSA_PRIVATE_PEM);
 
-        assert!(!validator.validate(&token), "Wrong issuer should be rejected");
+        assert!(
+            !validator.validate(&token),
+            "Wrong issuer should be rejected"
+        );
     }
 
     #[test]
@@ -538,6 +556,9 @@ DQIDAQAB
         // No keys loaded — should reject
         let claims = make_claims("my-bot-app-id", "https://api.botframework.com", 3600);
         let token = sign_token(&claims, TEST_RSA_PRIVATE_PEM);
-        assert!(!validator.validate(&token), "Should reject when no keys are loaded");
+        assert!(
+            !validator.validate(&token),
+            "Should reject when no keys are loaded"
+        );
     }
 }

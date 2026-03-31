@@ -22,7 +22,11 @@ impl ScoringStage for ImportanceWeightStage {
             c.score *= 0.7 + 0.3 * importance;
         }
 
-        candidates.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        candidates.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         candidates
     }
 }

@@ -8,8 +8,12 @@ use crate::thinker::prompt_sanitizer::{sanitize_for_prompt, SanitizeLevel};
 pub struct SecurityLayer;
 
 impl PromptLayer for SecurityLayer {
-    fn name(&self) -> &'static str { "security" }
-    fn priority(&self) -> u32 { 600 }
+    fn name(&self) -> &'static str {
+        "security"
+    }
+    fn priority(&self) -> u32 {
+        600
+    }
     fn supports_mode(&self, mode: PromptMode) -> bool {
         !matches!(mode, PromptMode::Minimal)
     }
@@ -66,7 +70,9 @@ impl PromptLayer for SecurityLayer {
         if !requires_approval.is_empty() {
             output.push_str("**Requires User Approval**:\n");
             for tool in requires_approval {
-                if let DisableReason::RequiresApproval { prompt: ref approval_prompt } = tool.reason
+                if let DisableReason::RequiresApproval {
+                    prompt: ref approval_prompt,
+                } = tool.reason
                 {
                     output.push_str(&format!(
                         "- `{}` — available, but each invocation requires user confirmation ({})\n",

@@ -83,16 +83,12 @@ impl McpPersistentConfig {
     /// If the file exists but cannot be parsed, returns an error.
     pub async fn load(path: &Path) -> Result<Self> {
         match tokio::fs::read_to_string(path).await {
-            Ok(contents) => {
-                serde_json::from_str(&contents).map_err(|e| {
-                    AlephError::ConfigError {
-                        message: format!("Failed to parse MCP config at {}: {}", path.display(), e),
-                        suggestion: Some(
-                            "Check the JSON syntax in your MCP configuration file".to_string(),
-                        ),
-                    }
-                })
-            }
+            Ok(contents) => serde_json::from_str(&contents).map_err(|e| AlephError::ConfigError {
+                message: format!("Failed to parse MCP config at {}: {}", path.display(), e),
+                suggestion: Some(
+                    "Check the JSON syntax in your MCP configuration file".to_string(),
+                ),
+            }),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 tracing::debug!("MCP config not found at {}, using default", path.display());
                 Ok(Self::default())
@@ -122,9 +118,8 @@ impl McpPersistentConfig {
         }
 
         // Serialize to pretty JSON
-        let json = serde_json::to_string_pretty(self).map_err(|e| {
-            AlephError::IoError(format!("Failed to serialize MCP config: {}", e))
-        })?;
+        let json = serde_json::to_string_pretty(self)
+            .map_err(|e| AlephError::IoError(format!("Failed to serialize MCP config: {}", e)))?;
 
         // Write atomically by writing to temp file and renaming
         let temp_path = path.with_extension("json.tmp");
@@ -332,7 +327,11 @@ mod tests {
 
         // Create config with a server
         let mut config = McpPersistentConfig::default();
-        config.upsert_server(McpManagerConfig::stdio("test-server", "Test Server", "/usr/bin/test"));
+        config.upsert_server(McpManagerConfig::stdio(
+            "test-server",
+            "Test Server",
+            "/usr/bin/test",
+        ));
 
         // Save
         config.save(&config_path).await.unwrap();
@@ -376,9 +375,16 @@ mod tests {
         assert_eq!(config.servers.len(), 2);
 
         // Update first server
-        config.upsert_server(McpManagerConfig::stdio("server1", "Updated Server 1", "/bin/cmd1-updated"));
+        config.upsert_server(McpManagerConfig::stdio(
+            "server1",
+            "Updated Server 1",
+            "/bin/cmd1-updated",
+        ));
         assert_eq!(config.servers.len(), 2);
-        assert_eq!(config.get_server("server1").unwrap().name, "Updated Server 1");
+        assert_eq!(
+            config.get_server("server1").unwrap().name,
+            "Updated Server 1"
+        );
     }
 
     #[test]
@@ -440,8 +446,13 @@ mod tests {
         let mut config = McpPersistentConfig::default();
 
         let mut server = McpManagerConfig::stdio("test", "Test", "${TEST_HOME}/bin/server");
-        server.args = vec!["--config".to_string(), "${TEST_HOME}/config.json".to_string()];
-        server.env.insert("API_KEY".to_string(), "${TEST_API_KEY}".to_string());
+        server.args = vec![
+            "--config".to_string(),
+            "${TEST_HOME}/config.json".to_string(),
+        ];
+        server
+            .env
+            .insert("API_KEY".to_string(), "${TEST_API_KEY}".to_string());
 
         config.upsert_server(server);
         config.expand_env_vars();
@@ -466,7 +477,10 @@ mod tests {
 
         let result = McpPersistentConfig::load(&config_path).await;
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), AlephError::ConfigError { .. }));
+        assert!(matches!(
+            result.unwrap_err(),
+            AlephError::ConfigError { .. }
+        ));
     }
 
     #[test]

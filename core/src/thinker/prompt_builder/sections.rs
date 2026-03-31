@@ -21,17 +21,26 @@ impl PromptBuilder {
             prompt.push_str("## Available Runtimes\n\n");
             prompt.push_str("You can execute code using these installed runtimes:\n\n");
             prompt.push_str(&runtimes);
-            prompt.push_str("\n**IMPORTANT**: Runtimes are NOT tools. They describe execution environments.\n");
+            prompt.push_str(
+                "\n**IMPORTANT**: Runtimes are NOT tools. They describe execution environments.\n",
+            );
             prompt.push_str("- To execute Python code, use the `file_ops` tool to write a .py script, then use `bash` tool to run it\n");
             prompt.push_str("- To execute Node.js code, use the `file_ops` tool to write a .js script, then use `bash` tool to run it\n");
-            prompt.push_str("- Do NOT try to call runtime names (uv, fnm, ffmpeg, yt-dlp) as tools directly\n");
+            prompt.push_str(
+                "- Do NOT try to call runtime names (uv, fnm, ffmpeg, yt-dlp) as tools directly\n",
+            );
             prompt.push_str("\n**CRITICAL - Use Aleph Runtimes**:\n");
             prompt.push_str("When executing Python/Node.js scripts, ALWAYS use the full executable path from the runtimes above:\n");
-            prompt.push_str("- ✅ CORRECT: Use the exact \"Executable\" path shown in the runtime info\n");
+            prompt.push_str(
+                "- ✅ CORRECT: Use the exact \"Executable\" path shown in the runtime info\n",
+            );
             prompt.push_str("- ✅ Example: If runtime shows \"Executable: /path/to/python\", use \"/path/to/python script.py\"\n");
-            prompt.push_str("- ❌ WRONG: `python3 script.py` (system default may be incompatible)\n");
+            prompt
+                .push_str("- ❌ WRONG: `python3 script.py` (system default may be incompatible)\n");
             prompt.push_str("- ❌ WRONG: `python script.py` (may not exist)\n");
-            prompt.push_str("Aleph provides managed runtimes to ensure correct versions and dependencies.\n\n");
+            prompt.push_str(
+                "Aleph provides managed runtimes to ensure correct versions and dependencies.\n\n",
+            );
         }
     }
 
@@ -125,13 +134,17 @@ impl PromptBuilder {
         prompt.push_str("- Never attempt to elevate your own permissions or access.\n\n");
 
         prompt.push_str("### Transparency\n");
-        prompt.push_str("- Always explain what you're about to do before doing it (for impactful actions).\n");
+        prompt.push_str(
+            "- Always explain what you're about to do before doing it (for impactful actions).\n",
+        );
         prompt.push_str("- If you make a mistake, acknowledge it immediately.\n");
         prompt.push_str("- Never hide errors or pretend actions succeeded when they didn't.\n\n");
 
         prompt.push_str("### Data Handling\n");
         prompt.push_str("- Never expose, transmit, or store credentials, API keys, or sensitive data unless explicitly directed by the user.\n");
-        prompt.push_str("- In group contexts, respect that private user information should not be shared.\n\n");
+        prompt.push_str(
+            "- In group contexts, respect that private user information should not be shared.\n\n",
+        );
     }
 
     /// Append memory-first guidance to the system prompt
@@ -151,8 +164,12 @@ impl PromptBuilder {
 
         prompt.push_str("### After Learning\n");
         prompt.push_str("When you discover new facts worth remembering:\n");
-        prompt.push_str("- User preferences → use `memory_store` with category \"user_preference\"\n");
-        prompt.push_str("- Project decisions → use `memory_store` with category \"project_decision\"\n");
+        prompt.push_str(
+            "- User preferences → use `memory_store` with category \"user_preference\"\n",
+        );
+        prompt.push_str(
+            "- Project decisions → use `memory_store` with category \"project_decision\"\n",
+        );
         prompt.push_str("- Task outcomes → use `memory_store` with category \"task_outcome\"\n\n");
 
         prompt.push_str("### Memory Hygiene\n");
@@ -172,7 +189,7 @@ impl PromptBuilder {
              - After meaningful interactions that reveal new preferences, update your soul\n\
              - After corrections from the user (\"don't do that\"), add anti-patterns\n\
              - After discovering new expertise areas, extend your expertise list\n\
-             - Rule: Changes are gradual. Never rewrite your entire identity at once.\n\n"
+             - Rule: Changes are gradual. Never rewrite your entire identity at once.\n\n",
         );
     }
 
@@ -424,7 +441,9 @@ impl PromptBuilder {
         if !requires_approval.is_empty() {
             prompt.push_str("**Requires User Approval**:\n");
             for tool in requires_approval {
-                if let DisableReason::RequiresApproval { prompt: ref approval_prompt } = tool.reason
+                if let DisableReason::RequiresApproval {
+                    prompt: ref approval_prompt,
+                } = tool.reason
                 {
                     prompt.push_str(&format!(
                         "- `{}` — available, but each invocation requires user confirmation ({})\n",
@@ -443,7 +462,10 @@ impl PromptBuilder {
     /// behavior for silent/heartbeat operations.
     pub fn append_silent_behavior(&self, prompt: &mut String, contract: &EnvironmentContract) {
         // Only add if SilentReply capability is active
-        if !contract.active_capabilities.contains(&Capability::SilentReply) {
+        if !contract
+            .active_capabilities
+            .contains(&Capability::SilentReply)
+        {
             return;
         }
 
@@ -453,7 +475,8 @@ impl PromptBuilder {
         prompt.push_str("- Use `heartbeat_ok` for successful silent operations that need no user notification\n");
         prompt.push_str("- Use `silent_complete` when a background task finishes successfully\n");
         prompt.push_str("- Only use `ask_user` for critical decisions that cannot be automated\n");
-        prompt.push_str("- Prefer logging results to files rather than generating verbose output\n");
+        prompt
+            .push_str("- Prefer logging results to files rather than generating verbose output\n");
         prompt.push_str("- Keep reasoning concise as it may not be visible to the user\n\n");
     }
 
@@ -461,12 +484,11 @@ impl PromptBuilder {
     ///
     /// When SilentReply capability is active, injects structured protocol tokens
     /// that the LLM can use as minimal-cost responses in background mode.
-    pub fn append_protocol_tokens(
-        &self,
-        prompt: &mut String,
-        contract: &EnvironmentContract,
-    ) {
-        if !contract.active_capabilities.contains(&Capability::SilentReply) {
+    pub fn append_protocol_tokens(&self, prompt: &mut String, contract: &EnvironmentContract) {
+        if !contract
+            .active_capabilities
+            .contains(&Capability::SilentReply)
+        {
             return;
         }
         prompt.push_str(&crate::thinker::protocol_tokens::ProtocolToken::to_prompt_section());
@@ -496,9 +518,8 @@ impl PromptBuilder {
         prompt.push_str("- Check disk space: `df -h`\n");
         prompt.push_str("- Check memory usage: `vm_stat` / `free -h`\n");
         prompt.push_str("- Check running Aleph processes: `ps aux | grep aleph`\n");
-        prompt.push_str(
-            "- Check configuration validity: read config files and validate structure\n",
-        );
+        prompt
+            .push_str("- Check configuration validity: read config files and validate structure\n");
         prompt.push_str("- Check Desktop Bridge status: query UDS socket availability\n");
         prompt.push_str("- Check LanceDB health: verify database file accessibility\n\n");
 
@@ -528,9 +549,13 @@ impl PromptBuilder {
         prompt.push_str("## Citation Standards\n\n");
         prompt.push_str("When referencing information from memory or knowledge base:\n");
         prompt.push_str("- Include source reference in format: `[Source: <path>#<id>]` or `[Source: <path>#L<line>]`\n");
-        prompt.push_str("- Sources are provided in the context metadata — do not fabricate source paths\n");
+        prompt.push_str(
+            "- Sources are provided in the context metadata — do not fabricate source paths\n",
+        );
         prompt.push_str("- If multiple sources support a claim, cite the most specific one\n");
-        prompt.push_str("- For real-time observations (current tool output, live data), no citation needed\n");
+        prompt.push_str(
+            "- For real-time observations (current tool output, live data), no citation needed\n",
+        );
         prompt.push_str("- For recalled facts, prior decisions, or historical context, citation is mandatory\n\n");
     }
 

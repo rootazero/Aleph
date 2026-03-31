@@ -8,8 +8,8 @@
 //! - Notifies the main process via a channel
 //! - Auto-shuts down after receiving a callback or timeout (5 minutes)
 
-use std::net::SocketAddr;
 use crate::sync_primitives::Arc;
+use std::net::SocketAddr;
 use std::time::Duration;
 
 use tokio::net::TcpListener;

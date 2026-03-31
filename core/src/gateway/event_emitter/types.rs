@@ -179,9 +179,7 @@ pub enum StreamEvent {
     ///
     /// Emitted after a run completes so that UI sidebars can refresh
     /// their session list without polling.
-    SessionUpdated {
-        session_key: String,
-    },
+    SessionUpdated { session_key: String },
 }
 
 /// Suggested action for handling AI uncertainty

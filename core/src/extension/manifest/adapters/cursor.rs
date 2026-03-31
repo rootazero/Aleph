@@ -37,10 +37,7 @@ impl ManifestAdapter for CursorAdapter {
                 if let Some(n) = json.get("name").and_then(|v| v.as_str()) {
                     plugin_id = n.to_string();
                 }
-                name = json
-                    .get("name")
-                    .and_then(|v| v.as_str())
-                    .map(String::from);
+                name = json.get("name").and_then(|v| v.as_str()).map(String::from);
                 version = json
                     .get("version")
                     .and_then(|v| v.as_str())
@@ -96,9 +93,8 @@ impl ManifestAdapter for CursorAdapter {
         } else {
             None
         };
-        let json_has = |field: &str| -> bool {
-            json_ref.as_ref().and_then(|j| j.get(field)).is_some()
-        };
+        let json_has =
+            |field: &str| -> bool { json_ref.as_ref().and_then(|j| j.get(field)).is_some() };
 
         if !json_has("skills") && dir.join("skills").is_dir() {
             if let Ok(s) = parsers::parse_skills_dir(dir, "skills", &plugin_id) {

@@ -3,8 +3,8 @@
 //! Processes inbound messages through debounce, media download,
 //! media understanding, and enrichment stages.
 
-pub mod types;
 pub mod debounce;
+pub mod types;
 pub use debounce::{DebounceBuffer, DebounceConfig};
 pub mod media_download;
 pub use media_download::MediaDownloader;
@@ -172,7 +172,9 @@ mod tests {
         let merged = make_merged("Check this image", vec![attachment]);
         let enriched = pipeline.process(merged, None).await.unwrap();
 
-        assert!(enriched.enriched_text.contains("[Attachment Understanding]"));
+        assert!(enriched
+            .enriched_text
+            .contains("[Attachment Understanding]"));
         assert_eq!(enriched.local_media.len(), 1);
         assert!(enriched.understanding_tokens > 0);
     }

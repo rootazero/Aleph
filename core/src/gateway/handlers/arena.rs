@@ -3,7 +3,7 @@
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::arena::{ArenaId, ArenaManifest, ArenaManager, StageSpec};
+use crate::arena::{ArenaId, ArenaManager, ArenaManifest, StageSpec};
 use crate::sync_primitives::{Arc, RwLock};
 
 use super::parse_params;
@@ -19,7 +19,7 @@ pub type SharedArenaManager = Arc<RwLock<ArenaManager>>;
 #[derive(Deserialize)]
 pub struct CreateArenaParams {
     pub goal: String,
-    pub strategy: String, // "peer" or "pipeline"
+    pub strategy: String,          // "peer" or "pipeline"
     pub participants: Vec<String>, // agent IDs
     #[serde(default)]
     pub coordinator: Option<String>,
@@ -95,10 +95,7 @@ pub async fn handle_create(
 }
 
 /// Handle `arena.query` — snapshot arena state for inspection.
-pub async fn handle_query(
-    request: JsonRpcRequest,
-    manager: SharedArenaManager,
-) -> JsonRpcResponse {
+pub async fn handle_query(request: JsonRpcRequest, manager: SharedArenaManager) -> JsonRpcResponse {
     let params: QueryArenaParams = match parse_params(&request) {
         Ok(p) => p,
         Err(resp) => return resp,

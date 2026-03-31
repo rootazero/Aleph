@@ -3,8 +3,8 @@
 //! Provides FIFO queue, concurrency control via semaphore, and priority boost
 //! calculation based on wait time.
 
-use std::collections::{HashSet, VecDeque};
 use crate::sync_primitives::Arc;
+use std::collections::{HashSet, VecDeque};
 use tokio::sync::{RwLock, Semaphore, SemaphorePermit};
 
 /// A queued run with metadata

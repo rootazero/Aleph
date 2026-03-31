@@ -720,7 +720,12 @@ impl InternalEventHandler for MockEventHandler {
         self.agent_tool_started
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .push((plan_id.to_owned(), step_index, tool_name.to_owned(), tool_description.to_owned()));
+            .push((
+                plan_id.to_owned(),
+                step_index,
+                tool_name.to_owned(),
+                tool_description.to_owned(),
+            ));
     }
 
     fn on_agent_tool_completed(
@@ -734,7 +739,13 @@ impl InternalEventHandler for MockEventHandler {
         self.agent_tool_completed
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .push((plan_id.to_owned(), step_index, tool_name.to_owned(), success, result_preview.to_owned()));
+            .push((
+                plan_id.to_owned(),
+                step_index,
+                tool_name.to_owned(),
+                success,
+                result_preview.to_owned(),
+            ));
     }
 
     fn on_agent_completed(
@@ -747,7 +758,12 @@ impl InternalEventHandler for MockEventHandler {
         self.agent_completed
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .push((plan_id.to_owned(), success, total_duration_ms, final_response.to_owned()));
+            .push((
+                plan_id.to_owned(),
+                success,
+                total_duration_ms,
+                final_response.to_owned(),
+            ));
     }
 }
 

@@ -33,19 +33,11 @@ fn default_critical() -> Vec<String> {
 }
 
 fn default_multi_step() -> Vec<String> {
-    vec![
-        r"先.*然后.*最后".into(),
-        r"分步".into(),
-        r"依次完成".into(),
-    ]
+    vec![r"先.*然后.*最后".into(), r"分步".into(), r"依次完成".into()]
 }
 
 fn default_simple() -> Vec<String> {
-    vec![
-        r"^你好".into(),
-        r"^什么是".into(),
-        r"^帮我翻译".into(),
-    ]
+    vec![r"^你好".into(), r"^什么是".into(), r"^帮我翻译".into()]
 }
 
 fn default_collaborative() -> Vec<String> {

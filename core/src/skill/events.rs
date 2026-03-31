@@ -12,9 +12,7 @@ pub enum SkillSystemEvent {
         skill_name: String,
     },
     /// A single skill was removed
-    SkillRemoved {
-        skill_id: String,
-    },
+    SkillRemoved { skill_id: String },
     /// All skills were reloaded (bulk operation)
     AllReloaded {
         count: usize,
@@ -24,10 +22,15 @@ pub enum SkillSystemEvent {
 
 impl SkillSystemEvent {
     pub fn loaded(skill_id: impl Into<String>, skill_name: impl Into<String>) -> Self {
-        Self::SkillLoaded { skill_id: skill_id.into(), skill_name: skill_name.into() }
+        Self::SkillLoaded {
+            skill_id: skill_id.into(),
+            skill_name: skill_name.into(),
+        }
     }
     pub fn removed(skill_id: impl Into<String>) -> Self {
-        Self::SkillRemoved { skill_id: skill_id.into() }
+        Self::SkillRemoved {
+            skill_id: skill_id.into(),
+        }
     }
     pub fn all_reloaded(count: usize, skill_ids: Vec<String>) -> Self {
         Self::AllReloaded { count, skill_ids }

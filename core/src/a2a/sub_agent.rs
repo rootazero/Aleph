@@ -8,9 +8,7 @@ use async_trait::async_trait;
 use crate::a2a::adapter::client::A2AClientPool;
 use crate::a2a::domain::{A2AMessage, A2ARole};
 use crate::a2a::service::SmartRouter;
-use crate::agents::sub_agents::{
-    SubAgent, SubAgentCapability, SubAgentRequest, SubAgentResult,
-};
+use crate::agents::sub_agents::{SubAgent, SubAgentCapability, SubAgentRequest, SubAgentResult};
 use crate::sync_primitives::Arc;
 
 /// SubAgent implementation that delegates tasks to remote A2A agents.
@@ -69,10 +67,7 @@ impl A2ASubAgent {
                 }
             }
             tracing::debug!(count = names.len(), "Refreshed A2A agent name cache");
-            let mut cache = self
-                .cached_names
-                .write()
-                .unwrap_or_else(|e| e.into_inner());
+            let mut cache = self.cached_names.write().unwrap_or_else(|e| e.into_inner());
             *cache = names;
         } else {
             tracing::warn!("Failed to list agents from SmartRouter for name cache");
@@ -105,10 +100,7 @@ impl SubAgent for A2ASubAgent {
         }
 
         // Priority 2: Check if prompt mentions any cached agent/skill name
-        let names = self
-            .cached_names
-            .read()
-            .unwrap_or_else(|e| e.into_inner());
+        let names = self.cached_names.read().unwrap_or_else(|e| e.into_inner());
         if names.is_empty() {
             return false;
         }
@@ -176,22 +168,24 @@ impl SubAgent for A2ASubAgent {
                 } else if let Some(ref msg) = task.status.message {
                     msg.text_content()
                 } else {
-                    format!("Task {} completed with state: {:?}", task.id, task.status.state)
+                    format!(
+                        "Task {} completed with state: {:?}",
+                        task.id, task.status.state
+                    )
                 };
 
                 let output = serde_json::to_value(&task).unwrap_or_else(|e| {
                     tracing::warn!("Failed to serialize A2ATask: {}", e);
                     serde_json::Value::Null
                 });
-                let result = SubAgentResult::success(request.id.clone(), summary).with_output(output);
+                let result =
+                    SubAgentResult::success(request.id.clone(), summary).with_output(output);
                 Ok(result)
             }
-            Err(e) => {
-                Ok(SubAgentResult::failure(
-                    request.id.clone(),
-                    format!("A2A call failed: {}", e),
-                ))
-            }
+            Err(e) => Ok(SubAgentResult::failure(
+                request.id.clone(),
+                format!("A2A call failed: {}", e),
+            )),
         }
     }
 }
@@ -245,10 +239,7 @@ mod tests {
             Ok(None)
         }
 
-        async fn resolve_by_intent(
-            &self,
-            _intent: &str,
-        ) -> A2AResult<Option<RegisteredAgent>> {
+        async fn resolve_by_intent(&self, _intent: &str) -> A2AResult<Option<RegisteredAgent>> {
             Ok(None)
         }
     }

@@ -331,11 +331,7 @@ mod tests {
 
         let plugin_root = PathBuf::from("/plugin");
 
-        let result = substitute_variables(
-            "$CUSTOM_VAR and ${ANOTHER}",
-            &context,
-            &plugin_root,
-        );
+        let result = substitute_variables("$CUSTOM_VAR and ${ANOTHER}", &context, &plugin_root);
 
         assert_eq!(result, "custom_value and another_value");
     }
@@ -392,7 +388,10 @@ mod tests {
         let executor = HookExecutor::new(vec![]);
         let context = HookContext::new("test");
 
-        let result = executor.execute(HookEvent::BeforeToolCall, &context).await.unwrap();
+        let result = executor
+            .execute(HookEvent::BeforeToolCall, &context)
+            .await
+            .unwrap();
 
         assert_eq!(result.hooks_executed, 0);
         assert!(!result.blocked);
@@ -416,7 +415,10 @@ mod tests {
         let executor = HookExecutor::new(hooks);
         let context = HookContext::new("session").with_tool_name("Write");
 
-        let result = executor.execute(HookEvent::BeforeToolCall, &context).await.unwrap();
+        let result = executor
+            .execute(HookEvent::BeforeToolCall, &context)
+            .await
+            .unwrap();
 
         assert_eq!(result.hooks_executed, 1);
         assert_eq!(result.messages.len(), 1);
@@ -441,7 +443,10 @@ mod tests {
         let executor = HookExecutor::new(hooks);
         let context = HookContext::new("session").with_tool_name("Read");
 
-        let result = executor.execute(HookEvent::BeforeToolCall, &context).await.unwrap();
+        let result = executor
+            .execute(HookEvent::BeforeToolCall, &context)
+            .await
+            .unwrap();
 
         // Pattern doesn't match, so no hooks executed
         assert_eq!(result.hooks_executed, 0);
@@ -466,17 +471,26 @@ mod tests {
 
         // Test with Write
         let context = HookContext::new("session").with_tool_name("Write");
-        let result = executor.execute(HookEvent::BeforeToolCall, &context).await.unwrap();
+        let result = executor
+            .execute(HookEvent::BeforeToolCall, &context)
+            .await
+            .unwrap();
         assert_eq!(result.hooks_executed, 1);
 
         // Test with Edit
         let context = HookContext::new("session").with_tool_name("Edit");
-        let result = executor.execute(HookEvent::BeforeToolCall, &context).await.unwrap();
+        let result = executor
+            .execute(HookEvent::BeforeToolCall, &context)
+            .await
+            .unwrap();
         assert_eq!(result.hooks_executed, 1);
 
         // Test with Read (no match)
         let context = HookContext::new("session").with_tool_name("Read");
-        let result = executor.execute(HookEvent::BeforeToolCall, &context).await.unwrap();
+        let result = executor
+            .execute(HookEvent::BeforeToolCall, &context)
+            .await
+            .unwrap();
         assert_eq!(result.hooks_executed, 0);
     }
 
@@ -498,7 +512,10 @@ mod tests {
         let executor = HookExecutor::new(hooks);
         let context = HookContext::new("session").with_tool_name("Write");
 
-        let result = executor.execute(HookEvent::AfterToolCall, &context).await.unwrap();
+        let result = executor
+            .execute(HookEvent::AfterToolCall, &context)
+            .await
+            .unwrap();
 
         assert_eq!(result.hooks_executed, 1);
         assert_eq!(result.agents_to_invoke, vec!["review-agent"]);
@@ -522,7 +539,10 @@ mod tests {
         let executor = HookExecutor::new(hooks);
         let context = HookContext::new("session");
 
-        let result = executor.execute(HookEvent::BeforeToolCall, &context).await.unwrap();
+        let result = executor
+            .execute(HookEvent::BeforeToolCall, &context)
+            .await
+            .unwrap();
 
         assert_eq!(result.hooks_executed, 1);
         assert_eq!(result.action_results.len(), 1);

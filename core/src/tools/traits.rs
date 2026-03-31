@@ -139,9 +139,10 @@ pub trait AlephTool: Clone + Send + Sync + 'static {
             })
             .unwrap_or_default();
 
-        let mut def = ToolDefinition::new(Self::NAME, Self::DESCRIPTION, parameters, self.category())
-            .with_confirmation(self.requires_confirmation())
-            .with_strict(self.strict_schema());
+        let mut def =
+            ToolDefinition::new(Self::NAME, Self::DESCRIPTION, parameters, self.category())
+                .with_confirmation(self.requires_confirmation())
+                .with_strict(self.strict_schema());
 
         // Inject examples as llm_context if available
         if let Some(examples) = self.examples() {
@@ -285,9 +286,12 @@ mod tests {
     async fn test_tool_call() {
         let tool = TestTool;
         // Use fully qualified syntax to avoid ambiguity with blanket impl
-        let result = AlephTool::call(&tool, TestArgs {
-            message: "hello".to_string(),
-        })
+        let result = AlephTool::call(
+            &tool,
+            TestArgs {
+                message: "hello".to_string(),
+            },
+        )
         .await
         .unwrap();
 

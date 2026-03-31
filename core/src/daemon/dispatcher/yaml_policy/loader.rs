@@ -1,12 +1,12 @@
 //! YAML Policy Loader
 
-use crate::daemon::dispatcher::yaml_policy::{YamlRule, YamlPolicy};
 use crate::daemon::dispatcher::policy::Policy;
-use crate::daemon::worldmodel::WorldModel;
+use crate::daemon::dispatcher::yaml_policy::{YamlPolicy, YamlRule};
 use crate::daemon::error::{DaemonError, Result};
-use std::path::Path;
+use crate::daemon::worldmodel::WorldModel;
 use crate::sync_primitives::Arc;
 use std::fs;
+use std::path::Path;
 
 /// Load YAML policies from file
 pub fn load_yaml_policies(
@@ -39,8 +39,8 @@ pub fn load_yaml_policies(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::daemon::worldmodel::WorldModelConfig;
     use crate::daemon::event_bus::DaemonEventBus;
+    use crate::daemon::worldmodel::WorldModelConfig;
     use std::io::Write;
     use tempfile::NamedTempFile;
 

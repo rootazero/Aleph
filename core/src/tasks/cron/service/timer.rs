@@ -11,15 +11,14 @@ use std::sync::Arc;
 
 use tracing::{debug, error, info};
 
-use crate::tasks::shared::clock::Clock;
 use crate::tasks::cron::config::{ExecutionResult, JobSnapshot, SessionTarget};
 use crate::tasks::cron::service::concurrency::{phase1_mark_due_jobs, phase3_writeback};
 use crate::tasks::cron::service::state::ServiceState;
+use crate::tasks::shared::clock::Clock;
 
 /// Executor function type: takes a snapshot and returns an execution result.
-pub type JobExecutorFn = Arc<
-    dyn Fn(JobSnapshot) -> Pin<Box<dyn Future<Output = ExecutionResult> + Send>> + Send + Sync,
->;
+pub type JobExecutorFn =
+    Arc<dyn Fn(JobSnapshot) -> Pin<Box<dyn Future<Output = ExecutionResult> + Send>> + Send + Sync>;
 
 /// Run the timer loop until shutdown is requested.
 ///
@@ -97,11 +96,7 @@ pub async fn on_timer_tick<C: Clock>(
     }
 
     // Isolated jobs: worker pool
-    let max_workers = state
-        .config
-        .max_concurrent_agents
-        .unwrap_or(2)
-        .max(1);
+    let max_workers = state.config.max_concurrent_agents.unwrap_or(2).max(1);
     let isolated_results = run_worker_pool(isolated_jobs, max_workers, executor).await;
     all_results.extend(isolated_results);
 

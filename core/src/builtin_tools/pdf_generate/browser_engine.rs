@@ -55,9 +55,7 @@ pub async fn generate(
 ) -> Result<PdfGenerateOutput, ToolError> {
     // Step 1: Build HTML document
     let html_doc = match args.format {
-        ContentFormat::Markdown => {
-            build_html_document(&args.content, args.title.as_deref())
-        }
+        ContentFormat::Markdown => build_html_document(&args.content, args.title.as_deref()),
         ContentFormat::Text => {
             let escaped = html_escape(&args.content);
             // Use <div> with whitespace preservation instead of <pre>
@@ -76,9 +74,8 @@ pub async fn generate(
         std::process::id(),
         PDF_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
     ));
-    std::fs::write(&temp_path, &html_doc).map_err(|e| {
-        ToolError::Execution(format!("Failed to write temp HTML file: {}", e))
-    })?;
+    std::fs::write(&temp_path, &html_doc)
+        .map_err(|e| ToolError::Execution(format!("Failed to write temp HTML file: {}", e)))?;
 
     let file_url = format!("file://{}", temp_path.display());
     debug!(url = %file_url, "Rendering PDF from temp HTML");
@@ -101,9 +98,8 @@ async fn render_pdf_with_chrome(
     output_path: &Path,
 ) -> Result<PdfGenerateOutput, ToolError> {
     // Find Chrome binary
-    let chrome_path = find_chromium().map_err(|e| {
-        ToolError::Execution(format!("Chrome not found: {}", e))
-    })?;
+    let chrome_path =
+        find_chromium().map_err(|e| ToolError::Execution(format!("Chrome not found: {}", e)))?;
     debug!(chrome = %chrome_path.display(), "Using Chrome binary");
 
     // Build CDP browser config
@@ -131,14 +127,15 @@ async fn render_pdf_with_chrome(
     });
 
     // Navigate to the HTML file
-    let page = browser.new_page(url).await.map_err(|e| {
-        ToolError::Execution(format!("Failed to open page: {}", e))
-    })?;
+    let page = browser
+        .new_page(url)
+        .await
+        .map_err(|e| ToolError::Execution(format!("Failed to open page: {}", e)))?;
 
     // Wait for page to load
-    page.wait_for_navigation().await.map_err(|e| {
-        ToolError::Execution(format!("Failed waiting for page navigation: {}", e))
-    })?;
+    page.wait_for_navigation()
+        .await
+        .map_err(|e| ToolError::Execution(format!("Failed waiting for page navigation: {}", e)))?;
 
     // Build PDF print parameters
     let (paper_w, paper_h) = args.page_size.dimensions_inches();
@@ -155,9 +152,10 @@ async fn render_pdf_with_chrome(
         .build();
 
     // Generate PDF
-    let pdf_bytes = page.pdf(print_params).await.map_err(|e| {
-        ToolError::Execution(format!("Failed to generate PDF: {}", e))
-    })?;
+    let pdf_bytes = page
+        .pdf(print_params)
+        .await
+        .map_err(|e| ToolError::Execution(format!("Failed to generate PDF: {}", e)))?;
 
     // Create parent directories if needed
     if let Some(parent) = output_path.parent() {
@@ -167,9 +165,8 @@ async fn render_pdf_with_chrome(
     }
 
     // Write PDF to output path
-    std::fs::write(output_path, &pdf_bytes).map_err(|e| {
-        ToolError::Execution(format!("Failed to write PDF file: {}", e))
-    })?;
+    std::fs::write(output_path, &pdf_bytes)
+        .map_err(|e| ToolError::Execution(format!("Failed to write PDF file: {}", e)))?;
 
     // Estimate page count from PDF bytes
     let page_count = estimate_page_count(&pdf_bytes);

@@ -3,8 +3,8 @@
 //! Manages the lifecycle of sub-agent executions with synchronous wait capability.
 //! Inspired by OpenCode's session-based synchronous execution model.
 
-use std::collections::HashMap;
 use crate::sync_primitives::Arc;
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -110,13 +110,16 @@ pub struct ToolCallState {
 
 impl From<&ToolCallRecord> for ToolCallSummary {
     fn from(record: &ToolCallRecord) -> Self {
-        let status = if record.success {
-            "completed"
-        } else {
-            "error"
-        };
+        let status = if record.success { "completed" } else { "error" };
         Self {
-            id: format!("{}_{}", record.name, uuid::Uuid::new_v4().to_string().get(..8).unwrap_or("00000000")),
+            id: format!(
+                "{}_{}",
+                record.name,
+                uuid::Uuid::new_v4()
+                    .to_string()
+                    .get(..8)
+                    .unwrap_or("00000000")
+            ),
             tool: record.name.clone(),
             state: ToolCallState {
                 status: status.to_string(),
@@ -326,7 +329,9 @@ impl ExecutionCoordinator {
         // Remove from pending and get the sender
         let sender = {
             let mut pending = self.pending.write().await;
-            pending.remove(&request_id).and_then(|mut exec| exec.completion_tx.take())
+            pending
+                .remove(&request_id)
+                .and_then(|mut exec| exec.completion_tx.take())
         };
 
         // Build tool summary from result
@@ -388,11 +393,16 @@ impl ExecutionCoordinator {
     /// Get the tool summary for a completed execution
     pub async fn get_tool_summary(&self, request_id: &str) -> Option<Vec<ToolCallSummary>> {
         let completed = self.completed.read().await;
-        completed.get(request_id).map(|exec| exec.tool_summary.clone())
+        completed
+            .get(request_id)
+            .map(|exec| exec.tool_summary.clone())
     }
 
     /// Acquire an execution slot (for concurrency limiting)
-    pub async fn acquire_slot(&self, wait_timeout: Duration) -> Result<ExecutionSlot, ExecutionError> {
+    pub async fn acquire_slot(
+        &self,
+        wait_timeout: Duration,
+    ) -> Result<ExecutionSlot, ExecutionError> {
         match timeout(wait_timeout, self.semaphore.clone().acquire_owned()).await {
             Ok(Ok(permit)) => Ok(ExecutionSlot { _permit: permit }),
             Ok(Err(_)) => Err(ExecutionError::Internal("Semaphore closed".to_string())),
@@ -419,7 +429,10 @@ impl ExecutionCoordinator {
         }
 
         if !expired.is_empty() {
-            info!(count = expired.len(), "Cleaned up expired execution results");
+            info!(
+                count = expired.len(),
+                "Cleaned up expired execution results"
+            );
         }
     }
 
@@ -441,14 +454,20 @@ impl ExecutionCoordinator {
                     // Send a timeout result
                     let _ = tx.send(SubAgentResult::failure(
                         id.as_str(),
-                        format!("Execution timed out after {}ms", self.config.execution_timeout_ms),
+                        format!(
+                            "Execution timed out after {}ms",
+                            self.config.execution_timeout_ms
+                        ),
                     ));
                 }
             }
         }
 
         if !timed_out.is_empty() {
-            warn!(count = timed_out.len(), "Cleaned up timed-out pending executions");
+            warn!(
+                count = timed_out.len(),
+                "Cleaned up timed-out pending executions"
+            );
         }
     }
 
@@ -603,7 +622,11 @@ mod tests {
         // Wait for all
         let results = coordinator
             .wait_for_all(
-                &["req-1".to_string(), "req-2".to_string(), "req-3".to_string()],
+                &[
+                    "req-1".to_string(),
+                    "req-2".to_string(),
+                    "req-3".to_string(),
+                ],
                 Duration::from_secs(1),
             )
             .await;

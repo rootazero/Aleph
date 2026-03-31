@@ -153,20 +153,22 @@ impl SearchTool {
                     });
                 }
                 Err(e) => {
-                    warn!("Registry search failed, falling back to direct Tavily: {}", e);
+                    warn!(
+                        "Registry search failed, falling back to direct Tavily: {}",
+                        e
+                    );
                     // Fall through to direct Tavily path
                 }
             }
         }
 
         // Fallback: Direct Tavily API call (legacy path)
-        let api_key = self
-            .api_key
-            .as_ref()
-            .ok_or_else(|| {
-                notify_tool_result(Self::NAME, "No search provider available", false);
-                ToolError::InvalidArgs("No search provider configured (no registry and no TAVILY_API_KEY)".to_string())
-            })?;
+        let api_key = self.api_key.as_ref().ok_or_else(|| {
+            notify_tool_result(Self::NAME, "No search provider available", false);
+            ToolError::InvalidArgs(
+                "No search provider configured (no registry and no TAVILY_API_KEY)".to_string(),
+            )
+        })?;
 
         info!(query = %args.query, limit = args.limit, "Executing Tavily search");
 

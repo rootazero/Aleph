@@ -162,14 +162,8 @@ mod tests {
             serde_json::to_string(&PiiAction::Block).unwrap(),
             "\"block\""
         );
-        assert_eq!(
-            serde_json::to_string(&PiiAction::Warn).unwrap(),
-            "\"warn\""
-        );
-        assert_eq!(
-            serde_json::to_string(&PiiAction::Off).unwrap(),
-            "\"off\""
-        );
+        assert_eq!(serde_json::to_string(&PiiAction::Warn).unwrap(), "\"warn\"");
+        assert_eq!(serde_json::to_string(&PiiAction::Off).unwrap(), "\"off\"");
     }
 
     #[test]

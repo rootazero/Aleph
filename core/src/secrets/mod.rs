@@ -15,7 +15,7 @@ pub mod web3_signer;
 pub use injection::{render_with_secrets, AsyncSecretResolver, InjectedSecret};
 pub use leak_detector::{LeakDecision, LeakDetector};
 pub use placeholder::{extract_secret_refs, SecretRef};
+pub use provider::ProviderStatus;
 pub use types::{DecryptedSecret, EntryMetadata, SecretError};
 pub use vault::SecretVault;
 pub use web3_signer::{EvmSigner, SecretResolver, SignIntent, SignedResult};
-pub use provider::ProviderStatus;

@@ -222,21 +222,19 @@ impl SessionStore for LanceMemoryBackend {
         let ns_value = namespace.to_namespace_value();
         let filter = format!(
             "timestamp >= {} AND namespace = '{}' AND agent = '{}'",
-            since_timestamp, escape_sql_string(&ns_value), escape_sql_string(workspace)
+            since_timestamp,
+            escape_sql_string(&ns_value),
+            escape_sql_string(workspace)
         );
 
-        let mut entries =
-            scan_memories(&self.memories_table, Some(&filter), None).await?;
+        let mut entries = scan_memories(&self.memories_table, Some(&filter), None).await?;
 
         // Sort by timestamp descending (most recent first).
         entries.sort_by(|a, b| b.context.timestamp.cmp(&a.context.timestamp));
         Ok(entries)
     }
 
-    async fn delete_older_than(
-        &self,
-        cutoff_timestamp: i64,
-    ) -> Result<u64, AlephError> {
+    async fn delete_older_than(&self, cutoff_timestamp: i64) -> Result<u64, AlephError> {
         // Count rows that will be deleted.
         let filter = format!("timestamp < {}", cutoff_timestamp);
         let count = count_rows(&self.memories_table, Some(&filter)).await? as u64;
@@ -251,18 +249,14 @@ impl SessionStore for LanceMemoryBackend {
         Ok(count)
     }
 
-    async fn clear_memories(
-        &self,
-        window_filter: Option<&str>,
-    ) -> Result<u64, AlephError> {
+    async fn clear_memories(&self, window_filter: Option<&str>) -> Result<u64, AlephError> {
         use crate::memory::store::types::escape_sql_string;
         let filter = match window_filter {
             Some(win) => format!("window_title = '{}'", escape_sql_string(win)),
             None => "true".to_string(),
         };
 
-        let count =
-            count_rows(&self.memories_table, Some(&filter)).await? as u64;
+        let count = count_rows(&self.memories_table, Some(&filter)).await? as u64;
 
         if count > 0 {
             self.memories_table
@@ -286,8 +280,7 @@ impl SessionStore for LanceMemoryBackend {
 
         // Push a safety cap to avoid unbounded scans
         let fetch_limit = Some(limit.saturating_mul(10).max(100));
-        let mut entries =
-            scan_memories(&self.memories_table, Some(&filter), fetch_limit).await?;
+        let mut entries = scan_memories(&self.memories_table, Some(&filter), fetch_limit).await?;
 
         // Sort by timestamp ascending so oldest are processed first.
         entries.sort_by(|a, b| a.context.timestamp.cmp(&b.context.timestamp));
@@ -342,13 +335,16 @@ impl DreamStore for LanceMemoryBackend {
 #[async_trait]
 impl CompressionStore for LanceMemoryBackend {
     async fn set_last_compression_timestamp(&self, timestamp: i64) -> Result<(), AlephError> {
-        self.last_compression_ts.store(timestamp, crate::sync_primitives::Ordering::Release);
+        self.last_compression_ts
+            .store(timestamp, crate::sync_primitives::Ordering::Release);
         tracing::debug!(timestamp, "Updated compression timestamp");
         Ok(())
     }
 
     async fn get_last_compression_timestamp(&self) -> Result<Option<i64>, AlephError> {
-        let ts = self.last_compression_ts.load(crate::sync_primitives::Ordering::Acquire);
+        let ts = self
+            .last_compression_ts
+            .load(crate::sync_primitives::Ordering::Acquire);
         if ts == 0 {
             Ok(None)
         } else {

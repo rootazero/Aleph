@@ -238,9 +238,7 @@ impl AlephError {
     pub fn config<S: Into<String>>(msg: S) -> Self {
         AlephError::ConfigError {
             message: msg.into(),
-            suggestion: Some(
-                "Check your configuration file at ~/.aleph/config.toml".to_string(),
-            ),
+            suggestion: Some("Check your configuration file at ~/.aleph/config.toml".to_string()),
         }
     }
 
@@ -501,9 +499,7 @@ impl AlephError {
                 )
             }
             AlephError::MissingInput {
-                task_name,
-                message,
-                ..
+                task_name, message, ..
             } => {
                 format!(
                     "任务 '{}' 需要更多信息才能继续执行。请提供所需内容后重试。\n详情: {}",
@@ -513,16 +509,28 @@ impl AlephError {
                 )
             }
             AlephError::CorruptData(msg) => {
-                format!("Data corruption detected: {}. Please try again or restore from backup.", msg)
+                format!(
+                    "Data corruption detected: {}. Please try again or restore from backup.",
+                    msg
+                )
             }
             AlephError::ChannelClosed(msg) => {
-                format!("Internal communication failed: {}. Please restart the application.", msg)
+                format!(
+                    "Internal communication failed: {}. Please restart the application.",
+                    msg
+                )
             }
             AlephError::SandboxUnavailable { reason } => {
-                format!("Sandbox unavailable: {}. Please check your system configuration.", reason)
+                format!(
+                    "Sandbox unavailable: {}. Please check your system configuration.",
+                    reason
+                )
             }
             AlephError::ExecutionTimeout { timeout_secs } => {
-                format!("Execution timed out after {} seconds. The command took too long to complete.", timeout_secs)
+                format!(
+                    "Execution timed out after {} seconds. The command took too long to complete.",
+                    timeout_secs
+                )
             }
         }
     }
@@ -786,21 +794,30 @@ mod transient_tests {
     #[test]
     fn test_transient_errors() {
         assert!(AlephError::RateLimitError {
-            message: "429".into(), suggestion: None,
-        }.is_transient());
+            message: "429".into(),
+            suggestion: None,
+        }
+        .is_transient());
         assert!(AlephError::Timeout { suggestion: None }.is_transient());
         assert!(AlephError::NetworkError {
-            message: "connection refused".into(), suggestion: None,
-        }.is_transient());
+            message: "connection refused".into(),
+            suggestion: None,
+        }
+        .is_transient());
     }
 
     #[test]
     fn test_permanent_errors() {
         assert!(!AlephError::AuthenticationError {
-            message: "invalid key".into(), provider: "openai".into(), suggestion: None,
-        }.is_transient());
+            message: "invalid key".into(),
+            provider: "openai".into(),
+            suggestion: None,
+        }
+        .is_transient());
         assert!(!AlephError::ProviderError {
-            message: "bad request".into(), suggestion: None,
-        }.is_transient());
+            message: "bad request".into(),
+            suggestion: None,
+        }
+        .is_transient());
     }
 }

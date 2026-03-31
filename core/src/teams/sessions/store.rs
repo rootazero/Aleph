@@ -40,7 +40,8 @@ fn parse_rfc3339(s: &str) -> DateTime<Utc> {
 #[async_trait]
 pub trait SessionStore: Send + Sync {
     /// Create a new active session and return it.
-    async fn create_session(&self, input: NewSession) -> crate::error::Result<CollaborativeSession>;
+    async fn create_session(&self, input: NewSession)
+        -> crate::error::Result<CollaborativeSession>;
 
     /// Fetch a session by ID, fully materialised with participants and transcript.
     async fn get_session(&self, id: &str) -> crate::error::Result<Option<CollaborativeSession>>;
@@ -159,20 +160,31 @@ impl SqliteSessionStore {
             .optional()
             .map_err(db_err)?;
 
-        let (sid, team_id, topic, trigger_json, thread_id, max_rounds, status_str, outcome_json, created_at_str) =
-            match row {
-                Some(r) => r,
-                None => {
-                    return Err(AlephError::ConfigError {
-                        message: format!("SessionStore: session not found: {id}"),
-                        suggestion: None,
-                    });
-                }
-            };
+        let (
+            sid,
+            team_id,
+            topic,
+            trigger_json,
+            thread_id,
+            max_rounds,
+            status_str,
+            outcome_json,
+            created_at_str,
+        ) = match row {
+            Some(r) => r,
+            None => {
+                return Err(AlephError::ConfigError {
+                    message: format!("SessionStore: session not found: {id}"),
+                    suggestion: None,
+                });
+            }
+        };
 
         // Participants
         let participants = conn
-            .prepare_cached("SELECT agent_id FROM session_participants WHERE session_id = ?1 ORDER BY agent_id")
+            .prepare_cached(
+                "SELECT agent_id FROM session_participants WHERE session_id = ?1 ORDER BY agent_id",
+            )
             .map_err(db_err)?
             .query_map(params![sid], |r| r.get::<_, String>(0))
             .map_err(db_err)?
@@ -198,8 +210,8 @@ impl SqliteSessionStore {
             .collect::<rusqlite::Result<Vec<_>>>()
             .map_err(db_err)?;
 
-        let trigger: SessionTrigger =
-            serde_json::from_str(&trigger_json).map_err(|e| db_err(format!("bad trigger_json: {e}")))?;
+        let trigger: SessionTrigger = serde_json::from_str(&trigger_json)
+            .map_err(|e| db_err(format!("bad trigger_json: {e}")))?;
 
         let outcome: Option<SessionOutcome> = outcome_json
             .as_deref()
@@ -228,14 +240,17 @@ impl SqliteSessionStore {
 
 #[async_trait]
 impl SessionStore for SqliteSessionStore {
-    async fn create_session(&self, input: NewSession) -> crate::error::Result<CollaborativeSession> {
+    async fn create_session(
+        &self,
+        input: NewSession,
+    ) -> crate::error::Result<CollaborativeSession> {
         let conn = self.conn.lock().await;
         let id = uuid::Uuid::new_v4().to_string();
         let now = Utc::now();
         let now_str = now.to_rfc3339();
 
-        let trigger_json =
-            serde_json::to_string(&input.trigger).map_err(|e| db_err(format!("serialize trigger: {e}")))?;
+        let trigger_json = serde_json::to_string(&input.trigger)
+            .map_err(|e| db_err(format!("serialize trigger: {e}")))?;
 
         conn.execute(
             r#"
@@ -350,8 +365,8 @@ impl SessionStore for SqliteSessionStore {
     ) -> crate::error::Result<()> {
         let conn = self.conn.lock().await;
 
-        let outcome_json =
-            serde_json::to_string(&outcome).map_err(|e| db_err(format!("serialize outcome: {e}")))?;
+        let outcome_json = serde_json::to_string(&outcome)
+            .map_err(|e| db_err(format!("serialize outcome: {e}")))?;
 
         let affected = conn
             .execute(
@@ -506,10 +521,7 @@ mod tests {
             dissent: None,
         };
 
-        store
-            .conclude_session(&session.id, outcome)
-            .await
-            .unwrap();
+        store.conclude_session(&session.id, outcome).await.unwrap();
 
         let fetched = store.get_session(&session.id).await.unwrap().unwrap();
         assert_eq!(fetched.status, SessionStatus::Concluded);

@@ -51,8 +51,8 @@
 //! ```
 
 mod cli;
-mod daemon;
 mod commands;
+mod daemon;
 mod server_init;
 
 use clap::Parser;
@@ -77,15 +77,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 DevicesAction::Revoke { device_id } => commands::handle_devices_revoke(&device_id),
             };
         }
-        other => { args.command = other; }
+        other => {
+            args.command = other;
+        }
     }
 
     // Daemonize BEFORE starting tokio (fork is not multi-thread safe)
     if args.daemon && matches!(args.command, Some(Command::Start) | None) {
         use std::path::PathBuf;
-        let log_file = args.log_file.clone().or_else(|| {
-            Some(PathBuf::from(cli::DEFAULT_LOG_FILE))
-        });
+        let log_file = args
+            .log_file
+            .clone()
+            .or_else(|| Some(PathBuf::from(cli::DEFAULT_LOG_FILE)));
         daemon::daemonize(&args.pid_file, log_file.as_ref())?;
     }
 
@@ -121,8 +124,12 @@ async fn async_main(args: Args) -> Result<(), Box<dyn std::error::Error>> {
         Some(Command::Audit { action }) => {
             return match action {
                 AuditAction::Tools => commands::handle_audit_tools().await,
-                AuditAction::Tool { name, limit } => commands::handle_audit_tool(&name, limit).await,
-                AuditAction::Escalations { limit } => commands::handle_audit_escalations(limit).await,
+                AuditAction::Tool { name, limit } => {
+                    commands::handle_audit_tool(&name, limit).await
+                }
+                AuditAction::Escalations { limit } => {
+                    commands::handle_audit_escalations(limit).await
+                }
             };
         }
         Some(Command::Plugin { action }) => {
@@ -143,8 +150,10 @@ async fn async_main(args: Args) -> Result<(), Box<dyn std::error::Error>> {
             // Continue with start logic
         }
         // Sync commands already handled in main()
-        Some(Command::Stop) | Some(Command::Secret { .. })
-        | Some(Command::Status { .. }) | Some(Command::Devices { .. }) => unreachable!(),
+        Some(Command::Stop)
+        | Some(Command::Secret { .. })
+        | Some(Command::Status { .. })
+        | Some(Command::Devices { .. }) => unreachable!(),
     }
 
     // Start the gateway server

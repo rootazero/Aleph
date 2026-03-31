@@ -358,7 +358,10 @@ mod tests {
         let batch = facts_to_record_batch(std::slice::from_ref(&fact)).unwrap();
         let out = record_batch_to_facts(&batch).unwrap();
 
-        let emb = out[0].embedding.as_ref().expect("should have 768-dim embedding");
+        let emb = out[0]
+            .embedding
+            .as_ref()
+            .expect("should have 768-dim embedding");
         assert_eq!(emb.len(), 768);
         assert!((emb[0] - 0.2).abs() < f32::EPSILON);
     }
@@ -372,7 +375,10 @@ mod tests {
         let batch = facts_to_record_batch(std::slice::from_ref(&fact)).unwrap();
         let out = record_batch_to_facts(&batch).unwrap();
 
-        let emb = out[0].embedding.as_ref().expect("should have 1536-dim embedding");
+        let emb = out[0]
+            .embedding
+            .as_ref()
+            .expect("should have 1536-dim embedding");
         assert_eq!(emb.len(), 1536);
         assert!((emb[0] - 0.3).abs() < f32::EPSILON);
     }
@@ -386,7 +392,10 @@ mod tests {
         let batch = facts_to_record_batch(std::slice::from_ref(&fact)).unwrap();
         let out = record_batch_to_facts(&batch).unwrap();
 
-        assert!(out[0].embedding.is_none(), "512-dim should be dropped (< 768)");
+        assert!(
+            out[0].embedding.is_none(),
+            "512-dim should be dropped (< 768)"
+        );
     }
 
     #[test]
@@ -398,7 +407,10 @@ mod tests {
         let batch = facts_to_record_batch(std::slice::from_ref(&fact)).unwrap();
         let out = record_batch_to_facts(&batch).unwrap();
 
-        let emb = out[0].embedding.as_ref().expect("should have truncated embedding");
+        let emb = out[0]
+            .embedding
+            .as_ref()
+            .expect("should have truncated embedding");
         assert_eq!(emb.len(), 768);
     }
 
@@ -411,7 +423,10 @@ mod tests {
         let batch = facts_to_record_batch(std::slice::from_ref(&fact)).unwrap();
         let out = record_batch_to_facts(&batch).unwrap();
 
-        let emb = out[0].embedding.as_ref().expect("should have truncated embedding");
+        let emb = out[0]
+            .embedding
+            .as_ref()
+            .expect("should have truncated embedding");
         assert_eq!(emb.len(), 1536);
     }
 

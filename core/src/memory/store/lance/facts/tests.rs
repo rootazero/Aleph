@@ -1,10 +1,10 @@
 use std::collections::HashSet;
 
+use super::super::LanceMemoryBackend;
 use crate::memory::context::{FactType, MemoryFact};
 use crate::memory::namespace::NamespaceScope;
 use crate::memory::store::types::SearchFilter;
 use crate::memory::store::MemoryStore;
-use super::super::LanceMemoryBackend;
 
 /// Helper: create a test LanceMemoryBackend in a temp directory.
 async fn create_test_backend() -> (tempfile::TempDir, LanceMemoryBackend) {
@@ -17,11 +17,7 @@ async fn create_test_backend() -> (tempfile::TempDir, LanceMemoryBackend) {
 
 /// Helper: create a test fact with optional embedding.
 fn make_test_fact(content: &str, fact_type: FactType, with_embedding: bool) -> MemoryFact {
-    let mut fact = MemoryFact::new(
-        content.to_string(),
-        fact_type,
-        vec!["mem-001".to_string()],
-    );
+    let mut fact = MemoryFact::new(content.to_string(), fact_type, vec!["mem-001".to_string()]);
     fact.confidence = 0.9;
     fact.content_hash = "hash123".to_string();
     fact.embedding_model = "test-model".to_string();
@@ -358,15 +354,15 @@ async fn test_get_facts_by_path_prefix() {
         .unwrap();
 
     assert_eq!(results.len(), 2);
-    assert!(results.iter().all(|f| f.path.starts_with("aleph://user/preferences/coding/")));
+    assert!(results
+        .iter()
+        .all(|f| f.path.starts_with("aleph://user/preferences/coding/")));
 }
 
 #[tokio::test]
 async fn test_invalidate_nonexistent_fact() {
     let (_tmp, backend) = create_test_backend().await;
-    let result = backend
-        .invalidate_fact("nonexistent", "reason")
-        .await;
+    let result = backend.invalidate_fact("nonexistent", "reason").await;
     assert!(result.is_err());
 }
 
@@ -386,10 +382,7 @@ async fn test_search_with_filter() {
     let fact1 = make_test_fact("Learning Rust", FactType::Learning, true);
     let fact2 = make_test_fact("Preference coding", FactType::Preference, true);
 
-    backend
-        .batch_insert_facts(&[fact1, fact2])
-        .await
-        .unwrap();
+    backend.batch_insert_facts(&[fact1, fact2]).await.unwrap();
 
     // Search with filter for Learning only
     let query_vec = vec![0.1_f32; 1024];

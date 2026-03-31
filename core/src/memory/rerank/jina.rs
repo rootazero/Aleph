@@ -37,7 +37,11 @@ impl JinaRerankProvider {
         if base.ends_with("/rerank") {
             return base.to_string();
         }
-        let base = if base.ends_with("/v1") { base.to_string() } else { format!("{}/v1", base) };
+        let base = if base.ends_with("/v1") {
+            base.to_string()
+        } else {
+            format!("{}/v1", base)
+        };
         format!("{}/rerank", base)
     }
 }

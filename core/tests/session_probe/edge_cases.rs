@@ -22,7 +22,10 @@ async fn p7_01_close_nonexistent_session_no_panic() {
     };
 
     // Should not panic — OK if it succeeds or returns an error
-    let _ = h.session_manager.close_session(&key, Some("topic".to_string())).await;
+    let _ = h
+        .session_manager
+        .close_session(&key, Some("topic".to_string()))
+        .await;
 }
 
 /// Close same session twice with different topics; second topic overwrites first.
@@ -104,8 +107,7 @@ fn p7_05_legacy_key_without_epoch_defaults_to_zero() {
     let main_key = RoutingKey::parse("agent:test:main").expect("Should parse main key");
     assert_eq!(main_key.epoch(), 0);
 
-    let dm_key =
-        RoutingKey::parse("agent:test:dm:user1").expect("Should parse DM key");
+    let dm_key = RoutingKey::parse("agent:test:dm:user1").expect("Should parse DM key");
     assert_eq!(dm_key.epoch(), 0);
 }
 

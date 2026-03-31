@@ -2,8 +2,8 @@
 
 use crate::sync_primitives::Arc;
 
-use crate::error::Result;
 use super::types::{DesktopArgs, DesktopOutput};
+use crate::error::Result;
 
 /// Native in-process execution methods for [`super::DesktopTool`].
 impl super::DesktopTool {
@@ -92,9 +92,7 @@ impl super::DesktopTool {
                     }
                     None => None,
                 };
-                let result = native
-                    .ocr(png_bytes.as_deref())
-                    .await;
+                let result = native.ocr(png_bytes.as_deref()).await;
                 match result {
                     Ok(ocr) => Ok(Some(DesktopOutput {
                         success: true,
@@ -161,7 +159,9 @@ impl super::DesktopTool {
                 match native.type_text(text).await {
                     Ok(()) => Ok(Some(DesktopOutput {
                         success: true,
-                        data: Some(serde_json::json!({"typed": true, "chars": text.chars().count()})),
+                        data: Some(
+                            serde_json::json!({"typed": true, "chars": text.chars().count()}),
+                        ),
                         message: None,
                     })),
                     Err(e) => Ok(Some(DesktopOutput {
@@ -209,9 +209,7 @@ impl super::DesktopTool {
                     return Ok(Some(DesktopOutput {
                         success: false,
                         data: None,
-                        message: Some(
-                            "scroll requires non-zero delta_x or delta_y".to_string(),
-                        ),
+                        message: Some("scroll requires non-zero delta_x or delta_y".to_string()),
                     }));
                 }
                 // Pick the dominant axis
@@ -243,33 +241,31 @@ impl super::DesktopTool {
                     })),
                 }
             }
-            "window_list" => {
-                match native.window_list().await {
-                    Ok(windows) => {
-                        let data: Vec<serde_json::Value> = windows
-                            .iter()
-                            .map(|w| {
-                                serde_json::json!({
-                                    "id": w.id,
-                                    "title": w.title,
-                                    "owner": w.owner,
-                                    "pid": w.pid,
-                                })
+            "window_list" => match native.window_list().await {
+                Ok(windows) => {
+                    let data: Vec<serde_json::Value> = windows
+                        .iter()
+                        .map(|w| {
+                            serde_json::json!({
+                                "id": w.id,
+                                "title": w.title,
+                                "owner": w.owner,
+                                "pid": w.pid,
                             })
-                            .collect();
-                        Ok(Some(DesktopOutput {
-                            success: true,
-                            data: Some(serde_json::json!({"windows": data})),
-                            message: None,
-                        }))
-                    }
-                    Err(e) => Ok(Some(DesktopOutput {
-                        success: false,
-                        data: None,
-                        message: Some(format!("Native desktop error: {e}")),
-                    })),
+                        })
+                        .collect();
+                    Ok(Some(DesktopOutput {
+                        success: true,
+                        data: Some(serde_json::json!({"windows": data})),
+                        message: None,
+                    }))
                 }
-            }
+                Err(e) => Ok(Some(DesktopOutput {
+                    success: false,
+                    data: None,
+                    message: Some(format!("Native desktop error: {e}")),
+                })),
+            },
             "focus_window" => {
                 let window_id = match args.window_id {
                     Some(id) => id as u64,
@@ -477,7 +473,9 @@ impl super::DesktopTool {
                 match screen.type_text(text).await {
                     Ok(()) => Ok(Some(DesktopOutput {
                         success: true,
-                        data: Some(serde_json::json!({"typed": true, "chars": text.chars().count()})),
+                        data: Some(
+                            serde_json::json!({"typed": true, "chars": text.chars().count()}),
+                        ),
                         message: None,
                     })),
                     Err(e) => Ok(Some(DesktopOutput {
@@ -522,9 +520,7 @@ impl super::DesktopTool {
                     return Ok(Some(DesktopOutput {
                         success: false,
                         data: None,
-                        message: Some(
-                            "scroll requires non-zero delta_x or delta_y".to_string(),
-                        ),
+                        message: Some("scroll requires non-zero delta_x or delta_y".to_string()),
                     }));
                 }
                 let (direction, amount) = if delta_y.abs() >= delta_x.abs() {
@@ -555,33 +551,31 @@ impl super::DesktopTool {
                     })),
                 }
             }
-            "window_list" => {
-                match screen.window_list().await {
-                    Ok(windows) => {
-                        let data: Vec<serde_json::Value> = windows
-                            .iter()
-                            .map(|w| {
-                                serde_json::json!({
-                                    "id": w.id,
-                                    "title": w.title,
-                                    "owner": w.owner,
-                                    "pid": w.pid,
-                                })
+            "window_list" => match screen.window_list().await {
+                Ok(windows) => {
+                    let data: Vec<serde_json::Value> = windows
+                        .iter()
+                        .map(|w| {
+                            serde_json::json!({
+                                "id": w.id,
+                                "title": w.title,
+                                "owner": w.owner,
+                                "pid": w.pid,
                             })
-                            .collect();
-                        Ok(Some(DesktopOutput {
-                            success: true,
-                            data: Some(serde_json::json!({"windows": data})),
-                            message: None,
-                        }))
-                    }
-                    Err(e) => Ok(Some(DesktopOutput {
-                        success: false,
-                        data: None,
-                        message: Some(format!("Screen capability error: {e}")),
-                    })),
+                        })
+                        .collect();
+                    Ok(Some(DesktopOutput {
+                        success: true,
+                        data: Some(serde_json::json!({"windows": data})),
+                        message: None,
+                    }))
                 }
-            }
+                Err(e) => Ok(Some(DesktopOutput {
+                    success: false,
+                    data: None,
+                    message: Some(format!("Screen capability error: {e}")),
+                })),
+            },
             "focus_window" => {
                 let window_id = match args.window_id {
                     Some(id) => id as u64,

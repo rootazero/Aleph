@@ -12,16 +12,15 @@ use chrono::Utc;
 use tempfile::TempDir;
 use tokio::sync::mpsc;
 
-use alephcore::gateway::{
-    AgentInstance, AgentInstanceConfig, AgentRegistry,
-    Channel, ChannelId, ChannelRegistry, ConversationId, DmPolicy, ExecutionAdapter,
-    GroupPolicy, InboundMessage, InboundMessageRouter, MessageId,
-    RouterChannelConfig, RoutingConfig, RunStatus, SqlitePairingStore, UserId,
-    AgentEnvStore, AgentEnvStoreConfig,
-};
-use alephcore::gateway::execution_engine::{ExecutionError, RunState};
 use alephcore::gateway::event_emitter::EventEmitter;
+use alephcore::gateway::execution_engine::{ExecutionError, RunState};
 use alephcore::gateway::RunRequest;
+use alephcore::gateway::{
+    AgentEnvStore, AgentEnvStoreConfig, AgentInstance, AgentInstanceConfig, AgentRegistry, Channel,
+    ChannelId, ChannelRegistry, ConversationId, DmPolicy, ExecutionAdapter, GroupPolicy,
+    InboundMessage, InboundMessageRouter, MessageId, RouterChannelConfig, RoutingConfig, RunStatus,
+    SqlitePairingStore, UserId,
+};
 
 use super::mock_channel::{CapturedReply, MockChannel};
 
@@ -39,7 +38,10 @@ pub struct TrackingExecutionAdapter {
 impl std::fmt::Debug for TrackingExecutionAdapter {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TrackingExecutionAdapter")
-            .field("execute_called", &self.execute_called.load(Ordering::SeqCst))
+            .field(
+                "execute_called",
+                &self.execute_called.load(Ordering::SeqCst),
+            )
             .field("execute_count", &self.execute_count.load(Ordering::SeqCst))
             .field("should_fail", &self.should_fail)
             .finish()
@@ -138,9 +140,8 @@ impl LinkAclHarness {
             default_profile: "default".to_string(),
             archive_after_days: 0,
         };
-        let workspace_manager = Arc::new(
-            AgentEnvStore::new(ws_config).expect("Failed to create AgentEnvStore"),
-        );
+        let workspace_manager =
+            Arc::new(AgentEnvStore::new(ws_config).expect("Failed to create AgentEnvStore"));
 
         let router = InboundMessageRouter::with_execution(
             channel_registry.clone(),
@@ -203,8 +204,7 @@ impl LinkAclHarness {
             allowed_links,
             ..AgentInstanceConfig::default()
         };
-        let instance =
-            AgentInstance::new(config).expect("Failed to create AgentInstance");
+        let instance = AgentInstance::new(config).expect("Failed to create AgentInstance");
         self.agent_registry.register(instance).await;
     }
 

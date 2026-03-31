@@ -208,7 +208,10 @@ impl SecurityContext {
         // 1. Check blacklist first (highest priority)
         if self.denied_tools.contains(tool_name) {
             return ToolPermission::Denied {
-                reason: format!("Tool '{}' is explicitly denied by security policy", tool_name),
+                reason: format!(
+                    "Tool '{}' is explicitly denied by security policy",
+                    tool_name
+                ),
             };
         }
 
@@ -216,10 +219,7 @@ impl SecurityContext {
         if let Some(ref allowed) = self.allowed_tools {
             if !allowed.contains(tool_name) {
                 return ToolPermission::Denied {
-                    reason: format!(
-                        "Tool '{}' is not in the allowed tools list",
-                        tool_name
-                    ),
+                    reason: format!("Tool '{}' is not in the allowed tools list", tool_name),
                 };
             }
         }
@@ -376,7 +376,10 @@ mod tests {
             ctx.check_tool("web_search"),
             ToolPermission::Allowed
         ));
-        assert!(matches!(ctx.check_tool("file_ops"), ToolPermission::Allowed));
+        assert!(matches!(
+            ctx.check_tool("file_ops"),
+            ToolPermission::Allowed
+        ));
         assert!(matches!(
             ctx.check_tool("any_random_tool"),
             ToolPermission::Allowed
@@ -461,7 +464,10 @@ mod tests {
             ctx.check_tool("web_search"),
             ToolPermission::Allowed
         ));
-        assert!(matches!(ctx.check_tool("file_ops"), ToolPermission::Allowed));
+        assert!(matches!(
+            ctx.check_tool("file_ops"),
+            ToolPermission::Allowed
+        ));
     }
 
     #[test]
@@ -520,7 +526,9 @@ mod tests {
         assert!(notes.iter().any(|n| n.contains("Network Access: Disabled")));
 
         // Should mention elevated operations disabled
-        assert!(notes.iter().any(|n| n.contains("Elevated Operations: Disabled")));
+        assert!(notes
+            .iter()
+            .any(|n| n.contains("Elevated Operations: Disabled")));
 
         // Should mention denied tools
         assert!(notes.iter().any(|n| n.contains("Denied Tools")));
@@ -528,7 +536,10 @@ mod tests {
 
     #[test]
     fn test_sandbox_level_descriptions() {
-        assert!(SandboxLevel::None.description().to_lowercase().contains("no"));
+        assert!(SandboxLevel::None
+            .description()
+            .to_lowercase()
+            .contains("no"));
         assert!(SandboxLevel::Standard.description().contains("Standard"));
         assert!(SandboxLevel::Strict.description().contains("Strict"));
         assert!(SandboxLevel::Untrusted.description().contains("Untrusted"));

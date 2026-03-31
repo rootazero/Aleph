@@ -18,9 +18,9 @@ use crate::config::Config;
 use crate::gateway::event_bus::{ConfigChangedEvent, GatewayEvent, GatewayEventBus};
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 use crate::gateway::security::SharedTokenManager;
-use crate::memory::rerank::{self, RerankConfig};
 #[cfg(test)]
 use crate::memory::rerank::RerankProviderType;
+use crate::memory::rerank::{self, RerankConfig};
 use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
 
@@ -53,11 +53,11 @@ pub async fn handle_get(
 ) -> JsonRpcResponse {
     let cfg = config.read().await;
 
-    let mut rerank = serde_json::to_value(&cfg.memory.rerank)
-        .unwrap_or_else(|_| json!({}));
+    let mut rerank = serde_json::to_value(&cfg.memory.rerank).unwrap_or_else(|_| json!({}));
 
     // Determine which provider's key to inject
-    let query_provider = request.params
+    let query_provider = request
+        .params
         .as_ref()
         .and_then(|p| p.get("provider"))
         .and_then(|v| v.as_str())
@@ -212,15 +212,13 @@ pub async fn handle_test(
                 }),
             )
         }
-        Err(e) => {
-            JsonRpcResponse::success(
-                request.id,
-                json!({
-                    "success": false,
-                    "error": e.to_string(),
-                }),
-            )
-        }
+        Err(e) => JsonRpcResponse::success(
+            request.id,
+            json!({
+                "success": false,
+                "error": e.to_string(),
+            }),
+        ),
     }
 }
 
@@ -236,8 +234,7 @@ mod tests {
         let vault = Arc::new(SharedTokenManager::new(store, "/tmp/test_rerank.vault"));
         let _ = vault.generate_token();
 
-        let request =
-            JsonRpcRequest::with_id("rerank_config.get", None, serde_json::json!(1));
+        let request = JsonRpcRequest::with_id("rerank_config.get", None, serde_json::json!(1));
         let response = handle_get(request, config, vault).await;
         assert!(response.is_success());
 
@@ -250,7 +247,10 @@ mod tests {
         let config = Arc::new(RwLock::new(Config::default()));
         let event_bus = Arc::new(GatewayEventBus::new());
         let store = Arc::new(crate::gateway::security::SecurityStore::in_memory().unwrap());
-        let vault = Arc::new(SharedTokenManager::new(store, "/tmp/test_rerank_update.vault"));
+        let vault = Arc::new(SharedTokenManager::new(
+            store,
+            "/tmp/test_rerank_update.vault",
+        ));
         let _ = vault.generate_token();
 
         let params = json!({
@@ -262,11 +262,8 @@ mod tests {
             "rerank_weight": 0.7,
         });
 
-        let request = JsonRpcRequest::with_id(
-            "rerank_config.update",
-            Some(params),
-            serde_json::json!(1),
-        );
+        let request =
+            JsonRpcRequest::with_id("rerank_config.update", Some(params), serde_json::json!(1));
         let response = handle_update(request, config.clone(), event_bus, vault.clone()).await;
         assert!(response.is_success());
 
@@ -274,7 +271,10 @@ mod tests {
         let cfg = config.read().await;
         assert!(cfg.memory.rerank.enabled);
         assert_eq!(cfg.memory.rerank.provider, RerankProviderType::Jina);
-        assert!(cfg.memory.rerank.api_key.is_empty(), "api_key should be empty in config");
+        assert!(
+            cfg.memory.rerank.api_key.is_empty(),
+            "api_key should be empty in config"
+        );
 
         // Verify api_key IS in vault
         let secret = vault.get_secret(&vault_key("jina")).unwrap().unwrap();
@@ -286,15 +286,15 @@ mod tests {
         let config = Arc::new(RwLock::new(Config::default()));
         let event_bus = Arc::new(GatewayEventBus::new());
         let store = Arc::new(crate::gateway::security::SecurityStore::in_memory().unwrap());
-        let vault = Arc::new(SharedTokenManager::new(store, "/tmp/test_rerank_invalid.vault"));
+        let vault = Arc::new(SharedTokenManager::new(
+            store,
+            "/tmp/test_rerank_invalid.vault",
+        ));
         let _ = vault.generate_token();
 
         let params = json!({ "provider": 42 });
-        let request = JsonRpcRequest::with_id(
-            "rerank_config.update",
-            Some(params),
-            serde_json::json!(1),
-        );
+        let request =
+            JsonRpcRequest::with_id("rerank_config.update", Some(params), serde_json::json!(1));
         let response = handle_update(request, config, event_bus, vault).await;
         assert!(response.is_error());
     }

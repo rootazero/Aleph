@@ -2,11 +2,11 @@
 
 use crate::sync_primitives::Arc;
 
+use crate::memory::store::lance::LanceMemoryBackend;
+use crate::memory::store::{MemoryBackend, MemoryStore};
 use crate::memory::{
     FactSource, FactSpecificity, FactType, MemoryFact, MemoryLayer, TemporalScope,
 };
-use crate::memory::store::{MemoryBackend, MemoryStore};
-use crate::memory::store::lance::LanceMemoryBackend;
 use crate::Result;
 
 use super::*;
@@ -66,7 +66,9 @@ fn create_test_fact(
 }
 
 /// Helper to create test database with facts (LanceDB-backed)
-async fn create_test_database_with_facts(facts: Vec<MemoryFact>) -> Result<(MemoryBackend, tempfile::TempDir)> {
+async fn create_test_database_with_facts(
+    facts: Vec<MemoryFact>,
+) -> Result<(MemoryBackend, tempfile::TempDir)> {
     let temp_dir = tempfile::tempdir()?;
     let backend = LanceMemoryBackend::open_or_create(temp_dir.path()).await?;
     let db: MemoryBackend = Arc::new(backend);

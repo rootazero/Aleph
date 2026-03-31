@@ -7,11 +7,11 @@
 //! See: core/tests/features/config/validation.feature
 
 // Test modules
-mod serialization;
-mod migration;
-mod dispatcher;
-mod tools;
-mod save_incremental;
-mod schema_integration;
 mod agents_integration;
 mod channels;
+mod dispatcher;
+mod migration;
+mod save_incremental;
+mod schema_integration;
+mod serialization;
+mod tools;

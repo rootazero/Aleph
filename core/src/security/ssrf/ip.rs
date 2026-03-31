@@ -96,7 +96,9 @@ fn extract_embedded_ipv4(ip: &Ipv6Addr) -> Option<Ipv4Addr> {
         && segments[4] == 0
         && segments[5] == 0
     {
-        return Some(Ipv4Addr::new(octets[12], octets[13], octets[14], octets[15]));
+        return Some(Ipv4Addr::new(
+            octets[12], octets[13], octets[14], octets[15],
+        ));
     }
 
     // 2002:xxxx:xxxx:: — 6to4 (RFC 3056), IPv4 in bits 16-47
@@ -188,22 +190,18 @@ pub(crate) fn is_blocked_ip(ip: IpAddr) -> bool {
 pub(crate) fn is_ip_blocked_by_policy(ip: IpAddr, policy: &SsrfPolicy) -> bool {
     if policy.allow_private_network {
         match ip {
-            IpAddr::V4(v4) => {
-                v4.is_loopback() || v4 == Ipv4Addr::new(169, 254, 169, 254)
-            }
+            IpAddr::V4(v4) => v4.is_loopback() || v4 == Ipv4Addr::new(169, 254, 169, 254),
             IpAddr::V6(v6) => {
                 if v6.is_loopback() {
                     return true;
                 }
                 // Check IPv4-mapped for loopback or metadata
                 if let Some(mapped) = v6.to_ipv4_mapped() {
-                    return mapped.is_loopback()
-                        || mapped == Ipv4Addr::new(169, 254, 169, 254);
+                    return mapped.is_loopback() || mapped == Ipv4Addr::new(169, 254, 169, 254);
                 }
                 // Check other embedded IPv4 for loopback/metadata
                 if let Some(embedded) = extract_embedded_ipv4(&v6) {
-                    return embedded.is_loopback()
-                        || embedded == Ipv4Addr::new(169, 254, 169, 254);
+                    return embedded.is_loopback() || embedded == Ipv4Addr::new(169, 254, 169, 254);
                 }
                 false
             }

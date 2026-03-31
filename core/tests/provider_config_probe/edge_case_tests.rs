@@ -162,7 +162,10 @@ fn json_multi_model_roundtrip() {
 
     let json = serde_json::to_string(&config).unwrap();
     let parsed: ProviderConfig = serde_json::from_str(&json).unwrap();
-    assert_eq!(parsed.models, vec!["gpt-4o", "gpt-4o-mini", "gpt-3.5-turbo"]);
+    assert_eq!(
+        parsed.models,
+        vec!["gpt-4o", "gpt-4o-mini", "gpt-3.5-turbo"]
+    );
 }
 
 #[test]
@@ -177,8 +180,16 @@ fn json_backward_compat_single_model() {
 fn json_serialization_uses_models_key() {
     let config = ProviderConfig::test_config("gpt-4o");
     let json = serde_json::to_string(&config).unwrap();
-    assert!(json.contains("\"models\""), "JSON should use 'models' key: {}", json);
-    assert!(!json.contains("\"model\""), "JSON should not have singular 'model' key: {}", json);
+    assert!(
+        json.contains("\"models\""),
+        "JSON should use 'models' key: {}",
+        json
+    );
+    assert!(
+        !json.contains("\"model\""),
+        "JSON should not have singular 'model' key: {}",
+        json
+    );
 }
 
 // =============================================================================

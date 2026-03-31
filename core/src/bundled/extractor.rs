@@ -16,7 +16,10 @@ use tracing::{debug, info, warn};
 /// `~/.aleph/plugins/cache/aleph-official/` if version has changed.
 pub fn extract_bundled_content(aleph_home: &Path) {
     let skills_dir = aleph_home.join("skills");
-    let plugins_cache = aleph_home.join("plugins").join("cache").join("aleph-official");
+    let plugins_cache = aleph_home
+        .join("plugins")
+        .join("cache")
+        .join("aleph-official");
 
     // Ensure directories exist
     if let Err(e) = std::fs::create_dir_all(&skills_dir) {
@@ -66,7 +69,10 @@ pub fn extract_bundled_content(aleph_home: &Path) {
     // Only update bundled_version if ALL extractions succeeded
     if skills_ok && plugins_ok {
         manifest.bundled_version = BUNDLED_VERSION.to_string();
-        info!(version = BUNDLED_VERSION, "Bundled content extraction complete");
+        info!(
+            version = BUNDLED_VERSION,
+            "Bundled content extraction complete"
+        );
     } else {
         warn!("Partial extraction failure — will retry on next startup");
     }

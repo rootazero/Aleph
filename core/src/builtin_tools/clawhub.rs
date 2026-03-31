@@ -251,25 +251,21 @@ impl ClawHubTool {
             }
 
             if let Some(parent) = out_path.parent() {
-                std::fs::create_dir_all(parent).map_err(|e| {
-                    AlephError::tool(format!("Failed to create directory: {}", e))
-                })?;
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| AlephError::tool(format!("Failed to create directory: {}", e)))?;
             }
 
             // Read and write the file
             let mut content = Vec::new();
-            entry
-                .read_to_end(&mut content)
-                .map_err(|e| AlephError::tool(format!("Failed to read ZIP entry content: {}", e)))?;
+            entry.read_to_end(&mut content).map_err(|e| {
+                AlephError::tool(format!("Failed to read ZIP entry content: {}", e))
+            })?;
 
             // Validate SKILL.md if found
             if relative_path == "SKILL.md" {
                 let text = String::from_utf8_lossy(&content);
-                crate::skill::parse_skill_content(
-                    &text,
-                    crate::domain::skill::SkillSource::Global,
-                )
-                .map_err(|e| AlephError::tool(format!("Invalid SKILL.md in package: {}", e)))?;
+                crate::skill::parse_skill_content(&text, crate::domain::skill::SkillSource::Global)
+                    .map_err(|e| AlephError::tool(format!("Invalid SKILL.md in package: {}", e)))?;
                 found_skill_md = true;
             }
 
@@ -332,9 +328,9 @@ impl AlephTool for ClawHubTool {
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         match args.action {
             ClawHubAction::Search => {
-                let query = args.query.ok_or_else(|| {
-                    AlephError::tool("clawhub search: 'query' is required")
-                })?;
+                let query = args
+                    .query
+                    .ok_or_else(|| AlephError::tool("clawhub search: 'query' is required"))?;
                 let limit = args.limit.unwrap_or(20);
 
                 let results = self.client.search(&query, limit).await?;
@@ -351,10 +347,7 @@ impl AlephTool for ClawHubTool {
             }
 
             ClawHubAction::Browse => {
-                let sort: SortOrder = args
-                    .sort
-                    .unwrap_or(ClawHubSortOrder::Downloads)
-                    .into();
+                let sort: SortOrder = args.sort.unwrap_or(ClawHubSortOrder::Downloads).into();
                 let limit = args.limit.unwrap_or(20);
                 let cursor = args.cursor.as_deref();
 
@@ -372,9 +365,9 @@ impl AlephTool for ClawHubTool {
             }
 
             ClawHubAction::Install => {
-                let slug = args.slug.ok_or_else(|| {
-                    AlephError::tool("clawhub install: 'slug' is required")
-                })?;
+                let slug = args
+                    .slug
+                    .ok_or_else(|| AlephError::tool("clawhub install: 'slug' is required"))?;
                 let version_arg = args.version.as_deref();
 
                 // Fetch detail first: determine version and check moderation
@@ -403,12 +396,8 @@ impl AlephTool for ClawHubTool {
                 // Download the ZIP (after version is known)
                 let zip_path = self.client.download(&slug, Some(&version)).await?;
 
-                let installed_version = Self::install_from_zip(
-                    &zip_path,
-                    &slug,
-                    &version,
-                    self.client.base_url(),
-                )?;
+                let installed_version =
+                    Self::install_from_zip(&zip_path, &slug, &version, self.client.base_url())?;
 
                 Ok(ClawHubOutput {
                     message: format!(
@@ -424,9 +413,9 @@ impl AlephTool for ClawHubTool {
             }
 
             ClawHubAction::Update => {
-                let slug = args.slug.ok_or_else(|| {
-                    AlephError::tool("clawhub update: 'slug' is required")
-                })?;
+                let slug = args
+                    .slug
+                    .ok_or_else(|| AlephError::tool("clawhub update: 'slug' is required"))?;
 
                 // Check installed version (sanitize to prevent path traversal)
                 let skill_name = sanitize_skill_name(&slug)?;

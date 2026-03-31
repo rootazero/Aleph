@@ -1,8 +1,12 @@
 //! YamlPolicy - Implements Policy trait for YAML-based rules
 
-use crate::daemon::dispatcher::policy::{Policy, ProposedAction, ActionType, NotificationPriority, RiskLevel as PolicyRiskLevel};
-use crate::daemon::dispatcher::yaml_policy::schema::{YamlRule, RiskLevel as YamlRiskLevel};
-use crate::daemon::dispatcher::scripting::{create_sandboxed_engine, register_duration_helpers, HistoryApi};
+use crate::daemon::dispatcher::policy::{
+    ActionType, NotificationPriority, Policy, ProposedAction, RiskLevel as PolicyRiskLevel,
+};
+use crate::daemon::dispatcher::scripting::{
+    create_sandboxed_engine, register_duration_helpers, HistoryApi,
+};
+use crate::daemon::dispatcher::yaml_policy::schema::{RiskLevel as YamlRiskLevel, YamlRule};
 use crate::daemon::events::DerivedEvent;
 use crate::daemon::worldmodel::state::EnhancedContext;
 use crate::daemon::worldmodel::WorldModel;
@@ -55,11 +59,7 @@ impl Policy for YamlPolicy {
         &self.rule.name
     }
 
-    fn evaluate(
-        &self,
-        _context: &EnhancedContext,
-        event: &DerivedEvent,
-    ) -> Option<ProposedAction> {
+    fn evaluate(&self, _context: &EnhancedContext, event: &DerivedEvent) -> Option<ProposedAction> {
         if !self.rule.enabled {
             return None;
         }
@@ -126,9 +126,9 @@ impl YamlPolicy {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::daemon::worldmodel::WorldModelConfig;
     use crate::daemon::event_bus::DaemonEventBus;
     use crate::daemon::worldmodel::state::ActivityType;
+    use crate::daemon::worldmodel::WorldModelConfig;
     use chrono::Utc;
 
     #[tokio::test]

@@ -73,10 +73,7 @@ impl CapabilityExecutor {
     ///
     /// * `memory_db` - Optional memory database for Memory capability
     /// * `memory_config` - Optional memory configuration
-    pub fn new(
-        memory_db: Option<MemoryBackend>,
-        memory_config: Option<Arc<MemoryConfig>>,
-    ) -> Self {
+    pub fn new(memory_db: Option<MemoryBackend>, memory_config: Option<Arc<MemoryConfig>>) -> Self {
         Self {
             memory_db,
             memory_config,
@@ -227,7 +224,8 @@ impl CapabilityExecutor {
         };
 
         // Create fact retrieval service
-        let fact_retrieval = FactRetrieval::new(Arc::clone(db), Arc::clone(embedder), retrieval_config);
+        let fact_retrieval =
+            FactRetrieval::new(Arc::clone(db), Arc::clone(embedder), retrieval_config);
 
         // Retrieve using fact-first strategy
         let result = fact_retrieval.retrieve(query).await?;

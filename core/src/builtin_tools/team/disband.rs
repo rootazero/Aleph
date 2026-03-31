@@ -87,9 +87,7 @@ impl AlephTool for TeamDisbandTool {
     }
 
     fn examples(&self) -> Option<Vec<String>> {
-        Some(vec![
-            "team_disband(team_id='abc123')".to_string(),
-        ])
+        Some(vec!["team_disband(team_id='abc123')".to_string()])
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
@@ -112,7 +110,10 @@ impl AlephTool for TeamDisbandTool {
             }
         }
         if let Some(ref es) = self.event_store {
-            match es.prune_events(&args.team_id, chrono::Duration::hours(24)).await {
+            match es
+                .prune_events(&args.team_id, chrono::Duration::hours(24))
+                .await
+            {
                 Ok(n) => info!(team_id = %args.team_id, pruned = n, "pruned old events"),
                 Err(e) => warn!(team_id = %args.team_id, err = %e, "failed to prune events"),
             }

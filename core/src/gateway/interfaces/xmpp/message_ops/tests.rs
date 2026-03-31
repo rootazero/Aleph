@@ -53,7 +53,10 @@ fn test_parse_jid_bare() {
 
 #[test]
 fn test_xml_escape() {
-    assert_eq!(xml_helpers::xml_escape("a<b>c&d\"e'f"), "a&lt;b&gt;c&amp;d&quot;e&apos;f");
+    assert_eq!(
+        xml_helpers::xml_escape("a<b>c&d\"e'f"),
+        "a&lt;b&gt;c&amp;d&quot;e&apos;f"
+    );
 }
 
 #[test]
@@ -72,13 +75,19 @@ fn test_xml_unescape() {
 #[test]
 fn test_extract_tag_content_body() {
     let xml = "<message><body>Hello world</body></message>";
-    assert_eq!(xml_helpers::extract_tag_content(xml, "body"), Some("Hello world"));
+    assert_eq!(
+        xml_helpers::extract_tag_content(xml, "body"),
+        Some("Hello world")
+    );
 }
 
 #[test]
 fn test_extract_tag_content_thread() {
     let xml = "<message><body>Hi</body><thread>t-123</thread></message>";
-    assert_eq!(xml_helpers::extract_tag_content(xml, "thread"), Some("t-123"));
+    assert_eq!(
+        xml_helpers::extract_tag_content(xml, "thread"),
+        Some("t-123")
+    );
 }
 
 #[test]
@@ -96,13 +105,19 @@ fn test_extract_tag_content_self_closing() {
 #[test]
 fn test_extract_attribute_from() {
     let xml = "<message from='alice@example.com' type='chat'><body>Hi</body></message>";
-    assert_eq!(xml_helpers::extract_attribute(xml, "from"), Some("alice@example.com"));
+    assert_eq!(
+        xml_helpers::extract_attribute(xml, "from"),
+        Some("alice@example.com")
+    );
 }
 
 #[test]
 fn test_extract_attribute_type() {
     let xml = "<message from='alice@example.com' type='groupchat'><body>Hi</body></message>";
-    assert_eq!(xml_helpers::extract_attribute(xml, "type"), Some("groupchat"));
+    assert_eq!(
+        xml_helpers::extract_attribute(xml, "type"),
+        Some("groupchat")
+    );
 }
 
 #[test]
@@ -114,7 +129,10 @@ fn test_extract_attribute_id() {
 #[test]
 fn test_extract_attribute_double_quotes() {
     let xml = r#"<message from="alice@example.com" type="chat"><body>Hi</body></message>"#;
-    assert_eq!(xml_helpers::extract_attribute(xml, "from"), Some("alice@example.com"));
+    assert_eq!(
+        xml_helpers::extract_attribute(xml, "from"),
+        Some("alice@example.com")
+    );
 }
 
 #[test]
@@ -355,10 +373,7 @@ fn test_extract_stanza_self_closing() {
 fn test_extract_stanza_message() {
     let buffer = "<message from='a@b.com'><body>Hi</body></message>extra";
     let (stanza, remaining) = extract_stanza(buffer).unwrap();
-    assert_eq!(
-        stanza,
-        "<message from='a@b.com'><body>Hi</body></message>"
-    );
+    assert_eq!(stanza, "<message from='a@b.com'><body>Hi</body></message>");
     assert_eq!(remaining, "extra");
 }
 
@@ -406,10 +421,7 @@ fn test_extract_stanza_multiple() {
     assert_eq!(stanza1, "<presence/>");
 
     let (stanza2, remaining2) = extract_stanza(&remaining).unwrap();
-    assert_eq!(
-        stanza2,
-        "<message from='a@b.com'><body>Hi</body></message>"
-    );
+    assert_eq!(stanza2, "<message from='a@b.com'><body>Hi</body></message>");
     assert_eq!(remaining2, "");
 }
 
@@ -428,8 +440,7 @@ fn test_convert_chat_message() {
     };
 
     let channel_id = ChannelId::new("xmpp");
-    let inbound =
-        XmppMessageOps::convert_message(&msg, &channel_id, "bot@example.com").unwrap();
+    let inbound = XmppMessageOps::convert_message(&msg, &channel_id, "bot@example.com").unwrap();
 
     assert_eq!(inbound.channel_id.as_str(), "xmpp");
     assert_eq!(inbound.conversation_id.as_str(), "alice@example.com");
@@ -453,8 +464,7 @@ fn test_convert_groupchat_message() {
     };
 
     let channel_id = ChannelId::new("xmpp");
-    let inbound =
-        XmppMessageOps::convert_message(&msg, &channel_id, "bot@example.com").unwrap();
+    let inbound = XmppMessageOps::convert_message(&msg, &channel_id, "bot@example.com").unwrap();
 
     assert!(inbound.is_group);
     assert_eq!(
@@ -546,8 +556,7 @@ fn test_convert_generates_id_when_missing() {
     };
 
     let channel_id = ChannelId::new("xmpp");
-    let inbound =
-        XmppMessageOps::convert_message(&msg, &channel_id, "bot@example.com").unwrap();
+    let inbound = XmppMessageOps::convert_message(&msg, &channel_id, "bot@example.com").unwrap();
 
     assert!(inbound.id.as_str().starts_with("xmpp-"));
 }

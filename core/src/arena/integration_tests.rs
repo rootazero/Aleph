@@ -50,7 +50,9 @@ fn peer_collaboration_full_lifecycle() {
     let researcher_artifact = Artifact {
         id: ArtifactId::new(),
         kind: ArtifactKind::Text,
-        content: ArtifactContent::Inline("Key findings: the system has 3 critical risks".to_string()),
+        content: ArtifactContent::Inline(
+            "Key findings: the system has 3 critical risks".to_string(),
+        ),
         metadata: HashMap::new(),
         created_at: Utc::now(),
     };
@@ -89,9 +91,7 @@ fn peer_collaboration_full_lifecycle() {
     assert_eq!(researcher_artifacts.len(), 1);
     assert_eq!(researcher_artifacts[0].kind, ArtifactKind::Text);
 
-    let coder_artifacts = main_handle
-        .list_artifacts(&"coder".to_string())
-        .unwrap();
+    let coder_artifacts = main_handle.list_artifacts(&"coder".to_string()).unwrap();
     assert_eq!(coder_artifacts.len(), 1);
     assert_eq!(coder_artifacts[0].kind, ArtifactKind::Code);
 
@@ -160,7 +160,9 @@ fn pipeline_collaboration_full_lifecycle() {
         metadata: HashMap::new(),
         created_at: Utc::now(),
     };
-    translator_handle.put_artifact(translation_artifact).unwrap();
+    translator_handle
+        .put_artifact(translation_artifact)
+        .unwrap();
 
     // 3. Translator adds SharedFact ("Term mapping: quantum → 量子 (quantum)")
     let fact = SharedFact {

@@ -1,16 +1,16 @@
 //! LLM-based importance scoring with performance monitoring
 
-use std::collections::HashMap;
 use crate::sync_primitives::Arc;
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
 use crate::memory::MemoryEntry;
-use crate::providers::AiProvider;
 use crate::providers::adapter::RequestPayload;
 use crate::providers::message::UnifiedMessage;
+use crate::providers::AiProvider;
 use crate::Result;
 
 /// Performance metrics for LLM scoring
@@ -145,7 +145,8 @@ impl LlmScorer {
                 let mut metrics = self.metrics.write().await;
                 metrics.total_calls += 1;
                 metrics.cache_hits += 1;
-                metrics.total_latency_ms += start.elapsed().as_millis().min(u64::MAX as u128) as u64;
+                metrics.total_latency_ms +=
+                    start.elapsed().as_millis().min(u64::MAX as u128) as u64;
 
                 debug!(
                     "LLM scorer cache hit for key: {} (score: {})",
@@ -162,7 +163,8 @@ impl LlmScorer {
                 // Update metrics - success
                 let mut metrics = self.metrics.write().await;
                 metrics.total_calls += 1;
-                metrics.total_latency_ms += start.elapsed().as_millis().min(u64::MAX as u128) as u64;
+                metrics.total_latency_ms +=
+                    start.elapsed().as_millis().min(u64::MAX as u128) as u64;
 
                 info!(
                     "LLM scored memory entry: {} (latency: {}ms)",
@@ -182,7 +184,8 @@ impl LlmScorer {
                 let mut metrics = self.metrics.write().await;
                 metrics.total_calls += 1;
                 metrics.errors += 1;
-                metrics.total_latency_ms += start.elapsed().as_millis().min(u64::MAX as u128) as u64;
+                metrics.total_latency_ms +=
+                    start.elapsed().as_millis().min(u64::MAX as u128) as u64;
 
                 warn!("LLM scoring failed: {}", e);
                 return Err(e);
@@ -203,10 +206,7 @@ impl LlmScorer {
                 let mut metrics = self.metrics.write().await;
                 metrics.timeouts += 1;
 
-                warn!(
-                    "LLM scoring timeout after {}ms",
-                    self.config.timeout_ms
-                );
+                warn!("LLM scoring timeout after {}ms", self.config.timeout_ms);
 
                 Err(crate::error::AlephError::ConfigError {
                     message: format!("LLM scoring timeout after {}ms", self.config.timeout_ms),
@@ -223,9 +223,10 @@ impl LlmScorer {
 
         // Call LLM
         let msgs = [UnifiedMessage::user(&prompt)];
-        let response = self.provider.process(
-            RequestPayload::new(&msgs).with_system(Some(&system_prompt))
-        ).await?;
+        let response = self
+            .provider
+            .process(RequestPayload::new(&msgs).with_system(Some(&system_prompt)))
+            .await?;
 
         // Parse response
         let score = self.parse_score(&response.text_content())?;
@@ -376,9 +377,18 @@ mod tests {
             &self,
             _payload: crate::providers::adapter::RequestPayload<'_>,
         ) -> std::pin::Pin<
-            Box<dyn std::future::Future<Output = Result<crate::providers::adapter::ProviderResponse>> + Send + '_>,
+            Box<
+                dyn std::future::Future<
+                        Output = Result<crate::providers::adapter::ProviderResponse>,
+                    > + Send
+                    + '_,
+            >,
         > {
-            Box::pin(async { Ok(crate::providers::adapter::ProviderResponse::text_only("0.5".to_string())) })
+            Box::pin(async {
+                Ok(crate::providers::adapter::ProviderResponse::text_only(
+                    "0.5".to_string(),
+                ))
+            })
         }
 
         fn name(&self) -> &str {

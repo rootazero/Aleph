@@ -41,10 +41,10 @@
 //! }
 //! ```
 
+use crate::sync_primitives::Arc;
 use dashmap::DashMap;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use crate::sync_primitives::Arc;
 use std::time::{Duration, Instant};
 use tracing::{debug, info};
 
@@ -173,10 +173,7 @@ impl PerformanceOptimizer {
             let keywords = self.extract_keywords(&pattern);
 
             for keyword in keywords {
-                self.rule_index
-                    .entry(keyword)
-                    .or_default()
-                    .push(rule_idx);
+                self.rule_index.entry(keyword).or_default().push(rule_idx);
             }
 
             // Try to precompile regex pattern

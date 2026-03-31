@@ -263,7 +263,10 @@ mod tests {
         impl std::io::Write for CaptureWriter {
             fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
                 let s = String::from_utf8_lossy(buf);
-                self.captured.lock().unwrap_or_else(|e| e.into_inner()).push_str(&s);
+                self.captured
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .push_str(&s);
                 Ok(buf.len())
             }
 

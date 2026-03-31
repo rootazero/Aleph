@@ -88,7 +88,6 @@ impl std::str::FromStr for DeviceRole {
     }
 }
 
-
 /// An approved device
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Device {
@@ -150,7 +149,10 @@ mod tests {
     #[test]
     fn test_device_role_conversion() {
         assert_eq!(DeviceRole::Operator.as_str(), "operator");
-        assert_eq!(DeviceRole::from_str_opt("operator"), Some(DeviceRole::Operator));
+        assert_eq!(
+            DeviceRole::from_str_opt("operator"),
+            Some(DeviceRole::Operator)
+        );
         assert_eq!(DeviceRole::from_str_opt("NODE"), Some(DeviceRole::Node));
     }
 

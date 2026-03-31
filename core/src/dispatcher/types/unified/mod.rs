@@ -198,7 +198,6 @@ pub struct UnifiedTool {
     /// and usage guidance to help LLM make accurate tool selection decisions.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub structured_meta: Option<StructuredToolMeta>,
-
 }
 
 impl UnifiedTool {

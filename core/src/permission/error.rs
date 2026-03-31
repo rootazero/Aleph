@@ -46,7 +46,11 @@ pub enum PermissionError {
 
 impl PermissionError {
     /// Create a denied error
-    pub fn denied(permission: impl Into<String>, pattern: impl Into<String>, rule: PermissionRule) -> Self {
+    pub fn denied(
+        permission: impl Into<String>,
+        pattern: impl Into<String>,
+        rule: PermissionRule,
+    ) -> Self {
         Self::Denied {
             permission: permission.into(),
             pattern: pattern.into(),

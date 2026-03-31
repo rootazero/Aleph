@@ -120,9 +120,7 @@ impl TaskTool {
         };
 
         // Publish SubAgentStarted event
-        self.bus
-            .publish(AlephEvent::SubAgentStarted(request))
-            .await;
+        self.bus.publish(AlephEvent::SubAgentStarted(request)).await;
 
         // Note: In a real implementation, we would wait for SubAgentCompleted
         // For now, return a placeholder result indicating the event was published

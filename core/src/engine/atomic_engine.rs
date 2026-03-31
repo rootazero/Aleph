@@ -1,9 +1,9 @@
 use crate::engine::{AtomicAction, AtomicExecutor, ReflexLayer};
 use crate::error::AlephError;
-use std::path::PathBuf;
-use std::pin::Pin;
 use crate::sync_primitives::Arc;
 use std::future::Future;
+use std::path::PathBuf;
+use std::pin::Pin;
 use tokio::sync::RwLock;
 
 /// Main atomic engine that orchestrates L1/L2/L3 routing and self-healing execution
@@ -94,11 +94,7 @@ impl AtomicEngine {
     }
 
     /// Suggest a fix for a failed action
-    async fn suggest_fix(
-        &self,
-        action: &AtomicAction,
-        error: &AlephError,
-    ) -> Option<AtomicAction> {
+    async fn suggest_fix(&self, action: &AtomicAction, error: &AlephError) -> Option<AtomicAction> {
         match action {
             AtomicAction::Write { path, .. } => {
                 // If write failed due to missing directory, try creating it.
@@ -378,7 +374,9 @@ mod tests {
         };
 
         // Learn from success
-        engine.learn_from_success(query.clone(), action.clone()).await;
+        engine
+            .learn_from_success(query.clone(), action.clone())
+            .await;
 
         // Should now route via L1
         let result = engine.route_query(&query).await;
@@ -394,7 +392,9 @@ mod tests {
         // Trigger some routing
         engine.route_query("git status").await; // L2
         engine.route_query("git log").await; // L2
-        engine.route_query("complex query that needs reasoning").await; // L3
+        engine
+            .route_query("complex query that needs reasoning")
+            .await; // L3
 
         let stats = engine.get_stats().await;
         assert_eq!(stats.l2_hits, 2);

@@ -62,10 +62,22 @@ fn test_fact_type_tool() {
 
 #[test]
 fn test_subagent_fact_types() {
-    assert_eq!(FactType::from_str_or_other("subagent_run"), FactType::SubagentRun);
-    assert_eq!(FactType::from_str_or_other("subagent_session"), FactType::SubagentSession);
-    assert_eq!(FactType::from_str_or_other("subagent_checkpoint"), FactType::SubagentCheckpoint);
-    assert_eq!(FactType::from_str_or_other("subagent_transcript"), FactType::SubagentTranscript);
+    assert_eq!(
+        FactType::from_str_or_other("subagent_run"),
+        FactType::SubagentRun
+    );
+    assert_eq!(
+        FactType::from_str_or_other("subagent_session"),
+        FactType::SubagentSession
+    );
+    assert_eq!(
+        FactType::from_str_or_other("subagent_checkpoint"),
+        FactType::SubagentCheckpoint
+    );
+    assert_eq!(
+        FactType::from_str_or_other("subagent_transcript"),
+        FactType::SubagentTranscript
+    );
     assert_eq!(FactType::SubagentRun.as_str(), "subagent_run");
     assert_eq!(FactType::SubagentSession.as_str(), "subagent_session");
     assert_eq!(FactType::SubagentCheckpoint.as_str(), "subagent_checkpoint");
@@ -78,8 +90,14 @@ fn test_fact_source_roundtrip() {
     assert_eq!(FactSource::Summary.as_str(), "summary");
     assert_eq!(FactSource::Document.as_str(), "document");
     assert_eq!(FactSource::Manual.as_str(), "manual");
-    assert_eq!(FactSource::from_str_or_default("summary"), FactSource::Summary);
-    assert_eq!(FactSource::from_str_or_default("unknown"), FactSource::Extracted);
+    assert_eq!(
+        FactSource::from_str_or_default("summary"),
+        FactSource::Summary
+    );
+    assert_eq!(
+        FactSource::from_str_or_default("unknown"),
+        FactSource::Extracted
+    );
 }
 
 #[test]
@@ -113,10 +131,7 @@ fn test_memory_tier_roundtrip() {
     assert_eq!(MemoryTier::Core.as_str(), "core");
     assert_eq!(MemoryTier::ShortTerm.as_str(), "short_term");
     assert_eq!(MemoryTier::LongTerm.as_str(), "long_term");
-    assert_eq!(
-        MemoryTier::from_str_or_default("core"),
-        MemoryTier::Core
-    );
+    assert_eq!(MemoryTier::from_str_or_default("core"), MemoryTier::Core);
     assert_eq!(
         MemoryTier::from_str_or_default("short_term"),
         MemoryTier::ShortTerm
@@ -158,12 +173,24 @@ fn test_memory_scope_roundtrip() {
 
 #[test]
 fn test_fact_type_default_path() {
-    assert_eq!(FactType::Preference.default_path(), "aleph://user/preferences/");
+    assert_eq!(
+        FactType::Preference.default_path(),
+        "aleph://user/preferences/"
+    );
     assert_eq!(FactType::Personal.default_path(), "aleph://user/personal/");
     assert_eq!(FactType::Plan.default_path(), "aleph://user/plans/");
-    assert_eq!(FactType::Learning.default_path(), "aleph://knowledge/learning/");
-    assert_eq!(FactType::Project.default_path(), "aleph://knowledge/projects/");
+    assert_eq!(
+        FactType::Learning.default_path(),
+        "aleph://knowledge/learning/"
+    );
+    assert_eq!(
+        FactType::Project.default_path(),
+        "aleph://knowledge/projects/"
+    );
     assert_eq!(FactType::Tool.default_path(), "aleph://agent/tools/");
     assert_eq!(FactType::Other.default_path(), "aleph://knowledge/");
-    assert_eq!(FactType::SubagentRun.default_path(), "aleph://agent/experiences/");
+    assert_eq!(
+        FactType::SubagentRun.default_path(),
+        "aleph://agent/experiences/"
+    );
 }

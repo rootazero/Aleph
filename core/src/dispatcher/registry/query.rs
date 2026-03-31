@@ -129,8 +129,7 @@ impl ToolQuery {
             .values()
             .filter(|t| {
                 t.is_active
-                    && (t.visible_channels.is_empty()
-                        || t.visible_channels.contains(&channel))
+                    && (t.visible_channels.is_empty() || t.visible_channels.contains(&channel))
             })
             .cloned()
             .collect();

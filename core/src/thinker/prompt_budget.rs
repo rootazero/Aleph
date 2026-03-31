@@ -105,7 +105,12 @@ pub fn truncate_with_head_tail(
 
     let tail_start = content.ceil_char_boundary(content.len().saturating_sub(tail_chars));
 
-    let result = format!("{}{}{}", &content[..head_end], marker, &content[tail_start..]);
+    let result = format!(
+        "{}{}{}",
+        &content[..head_end],
+        marker,
+        &content[tail_start..]
+    );
 
     // Final safety check — if still over budget, hard truncate
     if result.len() > max_chars {

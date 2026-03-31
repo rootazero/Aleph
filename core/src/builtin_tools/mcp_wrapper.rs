@@ -4,8 +4,8 @@
 //!
 //! This allows MCP tools to be added to the AlephToolServerHandle at runtime (hot-reload).
 
-use std::pin::Pin;
 use crate::sync_primitives::Arc;
+use std::pin::Pin;
 
 use futures::Future;
 

@@ -29,10 +29,7 @@ mod groups;
 mod registry;
 
 pub use config::BuiltinToolConfig;
-pub use definitions::{
-    create_tool_boxed, get_builtin_tool_names,
-    BUILTIN_TOOL_DEFINITIONS,
-};
+pub use definitions::{create_tool_boxed, get_builtin_tool_names, BUILTIN_TOOL_DEFINITIONS};
 pub use groups::TOOL_CATEGORIES;
 pub use registry::BuiltinToolRegistry;
 
@@ -97,7 +94,8 @@ mod tests {
         // Safety is enforced by CommandChecker and PathPermissionChecker
         let registry = BuiltinToolRegistry::new().await;
 
-        let check = registry.check_capability("file_ops", &serde_json::json!({"operation": "delete"}));
+        let check =
+            registry.check_capability("file_ops", &serde_json::json!({"operation": "delete"}));
         assert!(check.is_ok(), "All operations should be allowed currently");
     }
 
@@ -130,14 +128,14 @@ mod tests {
 
     mod sessions_tests {
         use super::*;
-        use crate::gateway::inter_agent_policy::AgentToAgentPolicy;
         use crate::gateway::agent_instance::AgentRegistry;
         use crate::gateway::context::GatewayContext;
+        use crate::gateway::event_emitter::EventEmitter;
         use crate::gateway::execution_adapter::ExecutionAdapter;
         use crate::gateway::execution_engine::{ExecutionError, RunRequest, RunState, RunStatus};
-        use crate::gateway::event_emitter::EventEmitter;
+        use crate::gateway::inter_agent_policy::AgentToAgentPolicy;
         use crate::gateway::session_manager::SessionManagerConfig;
-        use crate::gateway::{SessionManager, AgentInstance};
+        use crate::gateway::{AgentInstance, SessionManager};
         use async_trait::async_trait;
         use tempfile::tempdir;
 
@@ -240,15 +238,15 @@ mod tests {
             let registry = BuiltinToolRegistry::new().await;
 
             let result = registry
-                .execute_tool(
-                    "session_list",
-                    serde_json::json!({}),
-                )
+                .execute_tool("session_list", serde_json::json!({}))
                 .await;
 
             assert!(result.is_err());
             let err = result.unwrap_err();
-            assert!(err.to_string().contains("not available") || err.to_string().contains("not yet injected"));
+            assert!(
+                err.to_string().contains("not available")
+                    || err.to_string().contains("not yet injected")
+            );
         }
 
         #[tokio::test]
@@ -262,10 +260,7 @@ mod tests {
             let registry = BuiltinToolRegistry::with_config(config).await;
 
             let result = registry
-                .execute_tool(
-                    "session_list",
-                    serde_json::json!({}),
-                )
+                .execute_tool("session_list", serde_json::json!({}))
                 .await;
 
             assert!(result.is_ok());

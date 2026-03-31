@@ -74,9 +74,7 @@ impl NotificationService {
         };
 
         if let Some(config) = config {
-            if config.events.is_empty()
-                || config.events.contains(&"status-update".to_string())
-            {
+            if config.events.is_empty() || config.events.contains(&"status-update".to_string()) {
                 self.send_webhook(
                     &config,
                     &serde_json::json!({
@@ -97,9 +95,7 @@ impl NotificationService {
         };
 
         if let Some(config) = config {
-            if config.events.is_empty()
-                || config.events.contains(&"artifact-update".to_string())
-            {
+            if config.events.is_empty() || config.events.contains(&"artifact-update".to_string()) {
                 self.send_webhook(
                     &config,
                     &serde_json::json!({

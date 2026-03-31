@@ -6,9 +6,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::wizard::{
-    RpcPrompter, WizardFlow, WizardOption, WizardPrompter, WizardSessionError,
-};
+use crate::wizard::{RpcPrompter, WizardFlow, WizardOption, WizardPrompter, WizardSessionError};
 
 /// Collected onboarding data
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -45,10 +43,8 @@ impl OnboardingFlow {
         vec![
             WizardOption::new(json!("anthropic"), "Anthropic (Claude)")
                 .with_hint("Recommended - Best for coding and reasoning"),
-            WizardOption::new(json!("openai"), "OpenAI (GPT)")
-                .with_hint("GPT-4o and o3 series"),
-            WizardOption::new(json!("google"), "Google (Gemini)")
-                .with_hint("Gemini Pro and Ultra"),
+            WizardOption::new(json!("openai"), "OpenAI (GPT)").with_hint("GPT-4o and o3 series"),
+            WizardOption::new(json!("google"), "Google (Gemini)").with_hint("Gemini Pro and Ultra"),
             WizardOption::new(json!("ollama"), "Ollama (Local)")
                 .with_hint("Run models locally - No API key needed"),
             WizardOption::new(json!("openrouter"), "OpenRouter")
@@ -68,12 +64,10 @@ impl OnboardingFlow {
                     .with_hint("Fastest, good for simple tasks"),
             ],
             "openai" => vec![
-                WizardOption::new(json!("gpt-4o"), "GPT-4o")
-                    .with_hint("Best overall performance"),
+                WizardOption::new(json!("gpt-4o"), "GPT-4o").with_hint("Best overall performance"),
                 WizardOption::new(json!("gpt-4o-mini"), "GPT-4o Mini")
                     .with_hint("Faster, more economical"),
-                WizardOption::new(json!("o3-mini"), "o3-mini")
-                    .with_hint("Reasoning model"),
+                WizardOption::new(json!("o3-mini"), "o3-mini").with_hint("Reasoning model"),
             ],
             "google" => vec![
                 WizardOption::new(json!("gemini-2.0-flash"), "Gemini 2.0 Flash")
@@ -90,29 +84,27 @@ impl OnboardingFlow {
                     .with_hint("Great for code"),
             ],
             "openrouter" => vec![
-                WizardOption::new(json!("anthropic/claude-opus-4-5"), "Claude Opus 4.5 (via OpenRouter)")
-                    .with_hint("Anthropic's flagship"),
+                WizardOption::new(
+                    json!("anthropic/claude-opus-4-5"),
+                    "Claude Opus 4.5 (via OpenRouter)",
+                )
+                .with_hint("Anthropic's flagship"),
                 WizardOption::new(json!("openai/gpt-4o"), "GPT-4o (via OpenRouter)")
                     .with_hint("OpenAI's flagship"),
                 WizardOption::new(json!("google/gemini-pro"), "Gemini Pro (via OpenRouter)")
                     .with_hint("Google's flagship"),
             ],
-            _ => vec![
-                WizardOption::new(json!("auto"), "Auto-detect")
-                    .with_hint("Let Aleph choose the best model"),
-            ],
+            _ => vec![WizardOption::new(json!("auto"), "Auto-detect")
+                .with_hint("Let Aleph choose the best model")],
         }
     }
 
     /// Create thinking level options
     fn thinking_options() -> Vec<WizardOption> {
         vec![
-            WizardOption::new(json!("off"), "Off")
-                .with_hint("No extended thinking"),
-            WizardOption::new(json!("minimal"), "Minimal")
-                .with_hint("Brief reasoning"),
-            WizardOption::new(json!("low"), "Low")
-                .with_hint("Quick analysis"),
+            WizardOption::new(json!("off"), "Off").with_hint("No extended thinking"),
+            WizardOption::new(json!("minimal"), "Minimal").with_hint("Brief reasoning"),
+            WizardOption::new(json!("low"), "Low").with_hint("Quick analysis"),
             WizardOption::new(json!("medium"), "Medium (Recommended)")
                 .with_hint("Balanced - good for most tasks"),
             WizardOption::new(json!("high"), "High")
@@ -130,9 +122,9 @@ impl OnboardingFlow {
             WizardOption::new(json!("discord"), "Discord")
                 .with_hint("Gaming and community platform"),
             WizardOption::new(json!("slack"), "Slack")
-                .with_hint("Business communication").disabled(),
-            WizardOption::new(json!("imessage"), "iMessage")
-                .with_hint("macOS only"),
+                .with_hint("Business communication")
+                .disabled(),
+            WizardOption::new(json!("imessage"), "iMessage").with_hint("macOS only"),
         ]
     }
 }
@@ -150,87 +142,103 @@ impl WizardFlow for OnboardingFlow {
 
         // ===== Stage 1: Welcome =====
         prompter.intro("Welcome to Aleph").await?;
-        prompter.note(
-            "This wizard will help you set up Aleph, your personal AI assistant.\n\n\
+        prompter
+            .note(
+                "This wizard will help you set up Aleph, your personal AI assistant.\n\n\
              You'll configure:\n\
              • AI provider and model\n\
              • Optional secondary model for failover\n\
              • Thinking level for AI responses\n\
              • Messaging app integrations",
-            Some("About this wizard"),
-        ).await?;
+                Some("About this wizard"),
+            )
+            .await?;
 
         // ===== Stage 2: Provider Selection =====
-        let primary_provider: String = prompter.select(
-            "Which AI provider would you like to use?",
-            Self::provider_options(),
-        ).await?;
+        let primary_provider: String = prompter
+            .select(
+                "Which AI provider would you like to use?",
+                Self::provider_options(),
+            )
+            .await?;
         data.primary_provider = Some(primary_provider.clone());
 
         // ===== Stage 3: Credentials Input =====
         if primary_provider != "ollama" {
-            let api_key = prompter.text(
-                &format!("Enter your {} API key:", primary_provider),
-                Some("sk-..."),
-                true, // sensitive
-            ).await?;
+            let api_key = prompter
+                .text(
+                    &format!("Enter your {} API key:", primary_provider),
+                    Some("sk-..."),
+                    true, // sensitive
+                )
+                .await?;
             data.primary_api_key = Some(api_key);
         } else {
-            prompter.note(
-                "Ollama runs locally - no API key needed.\n\
+            prompter
+                .note(
+                    "Ollama runs locally - no API key needed.\n\
                  Make sure Ollama is installed and running.",
-                Some("Local Models"),
-            ).await?;
+                    Some("Local Models"),
+                )
+                .await?;
         }
 
         // ===== Stage 4: Primary Model =====
-        let primary_model: String = prompter.select(
-            "Select your primary model:",
-            Self::model_options(&primary_provider),
-        ).await?;
+        let primary_model: String = prompter
+            .select(
+                "Select your primary model:",
+                Self::model_options(&primary_provider),
+            )
+            .await?;
         data.primary_model = Some(primary_model);
 
         // ===== Stage 5: Secondary Model (Optional) =====
-        let wants_secondary = prompter.confirm(
-            "Would you like to configure a secondary model for failover?",
-            false,
-        ).await?;
+        let wants_secondary = prompter
+            .confirm(
+                "Would you like to configure a secondary model for failover?",
+                false,
+            )
+            .await?;
 
         if wants_secondary {
-            let secondary_provider: String = prompter.select(
-                "Select secondary provider:",
-                Self::provider_options(),
-            ).await?;
+            let secondary_provider: String = prompter
+                .select("Select secondary provider:", Self::provider_options())
+                .await?;
             data.secondary_provider = Some(secondary_provider.clone());
 
             if secondary_provider != "ollama" && secondary_provider != primary_provider {
-                let api_key = prompter.text(
-                    &format!("Enter your {} API key:", secondary_provider),
-                    Some("sk-..."),
-                    true,
-                ).await?;
+                let api_key = prompter
+                    .text(
+                        &format!("Enter your {} API key:", secondary_provider),
+                        Some("sk-..."),
+                        true,
+                    )
+                    .await?;
                 data.secondary_api_key = Some(api_key);
             }
 
-            let secondary_model: String = prompter.select(
-                "Select secondary model:",
-                Self::model_options(&secondary_provider),
-            ).await?;
+            let secondary_model: String = prompter
+                .select(
+                    "Select secondary model:",
+                    Self::model_options(&secondary_provider),
+                )
+                .await?;
             data.secondary_model = Some(secondary_model);
         }
 
         // ===== Stage 6: Thinking Level =====
-        let thinking: String = prompter.select(
-            "Choose the AI thinking level:",
-            Self::thinking_options(),
-        ).await?;
+        let thinking: String = prompter
+            .select("Choose the AI thinking level:", Self::thinking_options())
+            .await?;
         data.thinking_level = Some(thinking);
 
         // ===== Stage 7: Messaging Apps =====
-        let apps: Vec<String> = prompter.multi_select(
-            "Which messaging apps would you like to connect? (Optional)",
-            Self::messaging_options(),
-        ).await?;
+        let apps: Vec<String> = prompter
+            .multi_select(
+                "Which messaging apps would you like to connect? (Optional)",
+                Self::messaging_options(),
+            )
+            .await?;
         data.messaging_apps = apps;
 
         // ===== Stage 8: Review =====
@@ -244,9 +252,11 @@ impl WizardFlow for OnboardingFlow {
             data.primary_provider.as_deref().unwrap_or("Not set"),
             data.primary_model.as_deref().unwrap_or("Not set"),
             if data.secondary_provider.is_some() {
-                format!("{} / {}",
+                format!(
+                    "{} / {}",
                     data.secondary_provider.as_deref().unwrap_or(""),
-                    data.secondary_model.as_deref().unwrap_or(""))
+                    data.secondary_model.as_deref().unwrap_or("")
+                )
             } else {
                 "None".to_string()
             },
@@ -261,10 +271,7 @@ impl WizardFlow for OnboardingFlow {
         prompter.note(&review_text, Some("Review")).await?;
 
         // ===== Stage 9: Finalize =====
-        let confirmed = prompter.confirm(
-            "Apply this configuration?",
-            true,
-        ).await?;
+        let confirmed = prompter.confirm("Apply this configuration?", true).await?;
 
         if !confirmed {
             return Err(WizardSessionError::Cancelled);
@@ -280,7 +287,9 @@ impl WizardFlow for OnboardingFlow {
         progress.finish("Configuration saved");
 
         // ===== Stage 10: Complete =====
-        prompter.outro("Aleph is ready! Run 'aleph chat' to start.").await?;
+        prompter
+            .outro("Aleph is ready! Run 'aleph chat' to start.")
+            .await?;
 
         Ok(())
     }
@@ -311,14 +320,14 @@ impl WizardFlow for QuickSetupFlow {
         prompter.intro("Quick Setup").await?;
 
         // Just get the API key for Claude
-        let api_key = prompter.text(
-            "Enter your Anthropic API key:",
-            Some("sk-ant-..."),
-            true,
-        ).await?;
+        let api_key = prompter
+            .text("Enter your Anthropic API key:", Some("sk-ant-..."), true)
+            .await?;
 
         if api_key.is_empty() {
-            return Err(WizardSessionError::InvalidAnswer("API key is required".to_string()));
+            return Err(WizardSessionError::InvalidAnswer(
+                "API key is required".to_string(),
+            ));
         }
 
         let progress = prompter.progress("Setting up");
@@ -326,7 +335,9 @@ impl WizardFlow for QuickSetupFlow {
         tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
         progress.finish("Ready");
 
-        prompter.outro("Quick setup complete! Run 'aleph chat' to start.").await?;
+        prompter
+            .outro("Quick setup complete! Run 'aleph chat' to start.")
+            .await?;
 
         Ok(())
     }
@@ -355,29 +366,34 @@ impl WizardFlow for ProviderSetupFlow {
         let provider = if let Some(ref p) = self.provider {
             p.clone()
         } else {
-            prompter.select(
-                "Select provider to configure:",
-                OnboardingFlow::provider_options(),
-            ).await?
+            prompter
+                .select(
+                    "Select provider to configure:",
+                    OnboardingFlow::provider_options(),
+                )
+                .await?
         };
 
         if provider != "ollama" {
-            let _api_key = prompter.text(
-                &format!("Enter your {} API key:", provider),
-                Some("sk-..."),
-                true,
-            ).await?;
+            let _api_key = prompter
+                .text(
+                    &format!("Enter your {} API key:", provider),
+                    Some("sk-..."),
+                    true,
+                )
+                .await?;
         }
 
-        let _model: String = prompter.select(
-            "Select default model:",
-            OnboardingFlow::model_options(&provider),
-        ).await?;
+        let _model: String = prompter
+            .select(
+                "Select default model:",
+                OnboardingFlow::model_options(&provider),
+            )
+            .await?;
 
-        let confirmed = prompter.confirm(
-            "Save this provider configuration?",
-            true,
-        ).await?;
+        let confirmed = prompter
+            .confirm("Save this provider configuration?", true)
+            .await?;
 
         if !confirmed {
             return Err(WizardSessionError::Cancelled);
@@ -432,7 +448,11 @@ mod tests {
         let options = OnboardingFlow::messaging_options();
         assert_eq!(options.len(), 4);
         // Slack should be disabled
-        assert!(options.iter().find(|o| o.label == "Slack").map(|o| o.disabled).unwrap_or(false));
+        assert!(options
+            .iter()
+            .find(|o| o.label == "Slack")
+            .map(|o| o.disabled)
+            .unwrap_or(false));
     }
 
     #[test]

@@ -11,10 +11,10 @@ use std::sync::Arc;
 
 use tracing::warn;
 
-use crate::tasks::shared::clock::Clock;
 use crate::tasks::cron::config::{ExecutionResult, JobSnapshot, RunStatus, TriggerSource};
 use crate::tasks::cron::history::CronRunRecord;
 use crate::tasks::cron::store::CronStore;
+use crate::tasks::shared::clock::Clock;
 
 use super::ops::recompute_next_run_maintenance;
 
@@ -184,7 +184,9 @@ pub async fn phase3_writeback<C: Clock>(
             error: result.error.clone(),
             error_reason: result.error_reason.as_ref().map(|r| format!("{r:?}")),
             output_summary: None,
-            delivery_status: result.delivery_status.map(|s| format!("{s:?}").to_lowercase()),
+            delivery_status: result
+                .delivery_status
+                .map(|s| format!("{s:?}").to_lowercase()),
             created_at: clock.now_ms(),
         };
         if let Err(e) = guard.insert_run(&record) {
@@ -210,9 +212,9 @@ pub async fn phase3_writeback<C: Clock>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tasks::shared::clock::testing::FakeClock;
     use crate::tasks::cron::config::{CronJob, RunStatus, ScheduleKind};
     use crate::tasks::cron::service::ops::add_job;
+    use crate::tasks::shared::clock::testing::FakeClock;
     use tempfile::TempDir;
 
     fn make_test_job(id: &str) -> CronJob {
@@ -326,7 +328,10 @@ mod tests {
 
         let guard = store.lock().await;
         let job = guard.get_job("completed-job").unwrap();
-        assert!(job.state.running_at_ms.is_none(), "running_at_ms should be cleared");
+        assert!(
+            job.state.running_at_ms.is_none(),
+            "running_at_ms should be cleared"
+        );
         assert_eq!(job.state.last_run_status, Some(RunStatus::Ok));
         assert_eq!(job.state.consecutive_errors, 0, "errors should reset on Ok");
         assert!(
@@ -423,6 +428,9 @@ mod tests {
         let snapshot = phase1_mark_manual(&store, &clock, "busy-job")
             .await
             .unwrap();
-        assert!(snapshot.is_none(), "should return None for already-running job");
+        assert!(
+            snapshot.is_none(),
+            "should return None for already-running job"
+        );
     }
 }

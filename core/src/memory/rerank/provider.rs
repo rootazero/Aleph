@@ -76,7 +76,11 @@ pub struct RerankConfig {
     pub api_key: String,
 
     /// Model identifiers (first is the active model)
-    #[serde(deserialize_with = "crate::config::types::serde_helpers::deserialize_models", alias = "model", default = "default_rerank_models")]
+    #[serde(
+        deserialize_with = "crate::config::types::serde_helpers::deserialize_models",
+        alias = "model",
+        default = "default_rerank_models"
+    )]
     pub models: Vec<String>,
 
     /// Request timeout in milliseconds
@@ -122,6 +126,9 @@ impl Default for RerankConfig {
 impl RerankConfig {
     /// Returns the active model (first in the list)
     pub fn default_model(&self) -> &str {
-        self.models.first().map(|s| s.as_str()).unwrap_or("jina-reranker-v2-base-multilingual")
+        self.models
+            .first()
+            .map(|s| s.as_str())
+            .unwrap_or("jina-reranker-v2-base-multilingual")
     }
 }

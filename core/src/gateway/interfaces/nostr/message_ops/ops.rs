@@ -54,9 +54,7 @@ impl NostrMessageOps {
             let ws_stream = match ws_result {
                 Ok((stream, _)) => stream,
                 Err(e) => {
-                    tracing::warn!(
-                        "Nostr relay connection failed: {e}, retrying in {backoff:?}"
-                    );
+                    tracing::warn!("Nostr relay connection failed: {e}, retrying in {backoff:?}");
                     tokio::time::sleep(backoff).await;
                     backoff = (backoff * 2).min(max_backoff);
                     continue;
@@ -71,7 +69,9 @@ impl NostrMessageOps {
             // Send subscription request
             let sub_msg = build_subscription(&sub_id, &own_pubkey, &config.subscription_kinds);
             if let Err(e) = ws_tx
-                .send(tokio_tungstenite::tungstenite::Message::Text(sub_msg.into()))
+                .send(tokio_tungstenite::tungstenite::Message::Text(
+                    sub_msg.into(),
+                ))
                 .await
             {
                 tracing::warn!("Nostr subscription send failed: {e}");
@@ -140,7 +140,10 @@ impl NostrMessageOps {
                 let relay_msg = match parse_relay_message(&text) {
                     Some(m) => m,
                     None => {
-                        tracing::debug!("Nostr: unrecognized relay message: {}", text.get(..100).unwrap_or(&text));
+                        tracing::debug!(
+                            "Nostr: unrecognized relay message: {}",
+                            text.get(..100).unwrap_or(&text)
+                        );
                         continue;
                     }
                 };
@@ -187,9 +190,7 @@ impl NostrMessageOps {
                         if accepted {
                             tracing::debug!("Nostr: event {event_id} accepted by relay");
                         } else {
-                            tracing::warn!(
-                                "Nostr: event {event_id} rejected by relay: {message}"
-                            );
+                            tracing::warn!("Nostr: event {event_id} rejected by relay: {message}");
                         }
                     }
                     RelayMessage::Notice { message } => {

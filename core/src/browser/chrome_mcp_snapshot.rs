@@ -15,16 +15,32 @@ pub fn convert_chrome_mcp_snapshot(raw: &serde_json::Value) -> Result<AriaSnapsh
 
 fn convert_node(node: &serde_json::Value) -> AriaElement {
     let mut state = Vec::new();
-    if node.get("focused").and_then(|v| v.as_bool()).unwrap_or(false) {
+    if node
+        .get("focused")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
         state.push("focused".to_string());
     }
-    if node.get("disabled").and_then(|v| v.as_bool()).unwrap_or(false) {
+    if node
+        .get("disabled")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
         state.push("disabled".to_string());
     }
-    if node.get("expanded").and_then(|v| v.as_bool()).unwrap_or(false) {
+    if node
+        .get("expanded")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
         state.push("expanded".to_string());
     }
-    if node.get("checked").and_then(|v| v.as_bool()).unwrap_or(false) {
+    if node
+        .get("checked")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
         state.push("checked".to_string());
     }
 
@@ -35,8 +51,16 @@ fn convert_node(node: &serde_json::Value) -> AriaElement {
         .unwrap_or_default();
 
     AriaElement {
-        ref_id: node.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-        role: node.get("role").and_then(|v| v.as_str()).unwrap_or("generic").to_string(),
+        ref_id: node
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+        role: node
+            .get("role")
+            .and_then(|v| v.as_str())
+            .unwrap_or("generic")
+            .to_string(),
         name: node.get("name").and_then(|v| v.as_str()).map(String::from),
         value: node.get("value").and_then(|v| v.as_str()).map(String::from),
         state,
@@ -70,7 +94,10 @@ mod tests {
         assert_eq!(snapshot.elements[0].children.len(), 1);
         assert_eq!(snapshot.elements[0].children[0].ref_id, "btn-1");
         assert_eq!(snapshot.elements[0].children[0].role, "button");
-        assert_eq!(snapshot.elements[0].children[0].name.as_deref(), Some("Submit"));
+        assert_eq!(
+            snapshot.elements[0].children[0].name.as_deref(),
+            Some("Submit")
+        );
     }
 
     #[test]

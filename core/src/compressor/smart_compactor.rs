@@ -204,10 +204,7 @@ impl SmartCompactor {
 
         for (part_index, part) in parts.iter().enumerate() {
             // Get turn index for this part
-            let turn_index = turn_indices
-                .get(part_index)
-                .map(|(_, ti)| *ti)
-                .unwrap_or(0);
+            let turn_index = turn_indices.get(part_index).map(|(_, ti)| *ti).unwrap_or(0);
 
             // Evaluate what action to take
             let action = self.strategy.evaluate_part(part, turn_index, total_turns);
@@ -296,9 +293,7 @@ impl SmartCompactor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::components::{
-        AiResponsePart, ToolCallStatus, UserInputPart,
-    };
+    use crate::components::{AiResponsePart, ToolCallStatus, UserInputPart};
     use serde_json::json;
 
     // =========================================================================
@@ -374,13 +369,15 @@ mod tests {
 
     #[test]
     fn test_with_custom_truncator() {
-        let truncator = ToolTruncator::new(3000)
-            .with_summary_template("[Custom: {tool_name}]");
+        let truncator = ToolTruncator::new(3000).with_summary_template("[Custom: {tool_name}]");
 
         let compactor = SmartCompactor::new().with_truncator(truncator);
 
         assert_eq!(compactor.truncator().max_chars(), 3000);
-        assert_eq!(compactor.truncator().summary_template(), "[Custom: {tool_name}]");
+        assert_eq!(
+            compactor.truncator().summary_template(),
+            "[Custom: {tool_name}]"
+        );
     }
 
     #[test]

@@ -2,9 +2,9 @@
 //!
 //! Provides abstractions for collecting user input during wizard flows.
 
+use crate::sync_primitives::{Arc, RwLock};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use crate::sync_primitives::{Arc, RwLock};
 
 use async_trait::async_trait;
 use serde::de::DeserializeOwned;
@@ -116,8 +116,7 @@ impl RpcPrompter {
         debug!(step_id = %step.id, "Waiting for answer");
 
         // Wait for answer
-        rx.await
-            .map_err(|_| WizardSessionError::Cancelled)
+        rx.await.map_err(|_| WizardSessionError::Cancelled)
     }
 
     /// Send a step without waiting (for notes)
@@ -132,14 +131,12 @@ impl RpcPrompter {
 #[async_trait]
 impl WizardPrompter for RpcPrompter {
     async fn intro(&self, title: &str) -> Result<(), WizardSessionError> {
-        let step = WizardStep::note(self.next_id(), title)
-            .with_title("Welcome");
+        let step = WizardStep::note(self.next_id(), title).with_title("Welcome");
         self.prompt_no_wait(step).await
     }
 
     async fn outro(&self, message: &str) -> Result<(), WizardSessionError> {
-        let step = WizardStep::note(self.next_id(), message)
-            .with_title("Complete");
+        let step = WizardStep::note(self.next_id(), message).with_title("Complete");
         self.prompt_no_wait(step).await
     }
 
@@ -158,8 +155,7 @@ impl WizardPrompter for RpcPrompter {
     ) -> Result<T, WizardSessionError> {
         let step = WizardStep::select(self.next_id(), message, options);
         let value = self.prompt(step).await?;
-        serde_json::from_value(value)
-            .map_err(|e| WizardSessionError::InvalidAnswer(e.to_string()))
+        serde_json::from_value(value).map_err(|e| WizardSessionError::InvalidAnswer(e.to_string()))
     }
 
     async fn multi_select<T: DeserializeOwned + Send>(
@@ -172,8 +168,7 @@ impl WizardPrompter for RpcPrompter {
         step.options = Some(options);
 
         let value = self.prompt(step).await?;
-        serde_json::from_value(value)
-            .map_err(|e| WizardSessionError::InvalidAnswer(e.to_string()))
+        serde_json::from_value(value).map_err(|e| WizardSessionError::InvalidAnswer(e.to_string()))
     }
 
     async fn text(
@@ -196,8 +191,7 @@ impl WizardPrompter for RpcPrompter {
     }
 
     async fn confirm(&self, message: &str, default: bool) -> Result<bool, WizardSessionError> {
-        let step = WizardStep::confirm(self.next_id(), message)
-            .with_initial(default);
+        let step = WizardStep::confirm(self.next_id(), message).with_initial(default);
 
         let value = self.prompt(step).await?;
         value
@@ -278,7 +272,11 @@ impl WizardPrompter for CliPrompter {
         println!("\n{}", message);
         for (i, opt) in options.iter().enumerate() {
             let disabled = if opt.disabled { " (disabled)" } else { "" };
-            let hint = opt.hint.as_deref().map(|h| format!(" - {}", h)).unwrap_or_default();
+            let hint = opt
+                .hint
+                .as_deref()
+                .map(|h| format!(" - {}", h))
+                .unwrap_or_default();
             println!("  {}. {}{}{}", i + 1, opt.label, hint, disabled);
         }
 
@@ -288,7 +286,9 @@ impl WizardPrompter for CliPrompter {
             serde_json::from_value(opt.value.clone())
                 .map_err(|e| WizardSessionError::InvalidAnswer(e.to_string()))
         } else {
-            Err(WizardSessionError::InvalidAnswer("No options available".to_string()))
+            Err(WizardSessionError::InvalidAnswer(
+                "No options available".to_string(),
+            ))
         }
     }
 

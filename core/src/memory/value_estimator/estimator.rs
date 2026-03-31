@@ -49,11 +49,7 @@ impl ValueEstimator {
     }
 
     /// Estimate using LLM (hybrid approach)
-    async fn estimate_with_llm(
-        &self,
-        entry: &MemoryEntry,
-        llm_scorer: &LlmScorer,
-    ) -> Result<f32> {
+    async fn estimate_with_llm(&self, entry: &MemoryEntry, llm_scorer: &LlmScorer) -> Result<f32> {
         // Get keyword-based score
         let keyword_score = self.estimate_with_keywords(entry).await?;
 

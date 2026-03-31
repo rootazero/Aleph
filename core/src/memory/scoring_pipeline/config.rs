@@ -144,7 +144,9 @@ mod tests {
         assert!((cfg.recency_half_life_days - def.recency_half_life_days).abs() < f32::EPSILON);
         assert!((cfg.recency_weight - def.recency_weight).abs() < f32::EPSILON);
         assert_eq!(cfg.length_norm_anchor, def.length_norm_anchor);
-        assert!((cfg.time_decay_half_life_days - def.time_decay_half_life_days).abs() < f32::EPSILON);
+        assert!(
+            (cfg.time_decay_half_life_days - def.time_decay_half_life_days).abs() < f32::EPSILON
+        );
         assert!((cfg.hard_min_score - def.hard_min_score).abs() < f32::EPSILON);
         assert!((cfg.mmr_similarity_threshold - def.mmr_similarity_threshold).abs() < f32::EPSILON);
     }

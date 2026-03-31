@@ -265,10 +265,7 @@ mod tests {
     #[test]
     fn test_passthrough_small_devtools_output() {
         let output = "Clicked element at (100, 200)";
-        assert_eq!(
-            compress_tool_output("click", output),
-            output,
-        );
+        assert_eq!(compress_tool_output("click", output), output,);
     }
 
     // --- screenshot ---
@@ -303,7 +300,8 @@ mod tests {
 
     #[test]
     fn test_compress_screenshot_keeps_metadata() {
-        let output = "width: 1920\nheight: 1080\nformat: png\nsome extra info\nmore info\nbase64 data here";
+        let output =
+            "width: 1920\nheight: 1080\nformat: png\nsome extra info\nmore info\nbase64 data here";
         let result = compress_tool_output("take_screenshot", output);
         assert!(result.contains("width: 1920"));
         assert!(result.contains("format: png"));

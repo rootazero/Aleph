@@ -140,10 +140,7 @@ mod tests {
     #[test]
     fn test_user_allowed_with_list() {
         let config = SignalConfig {
-            allowed_users: vec![
-                "+1234567890".to_string(),
-                "+1111111111".to_string(),
-            ],
+            allowed_users: vec!["+1234567890".to_string(), "+1111111111".to_string()],
             ..Default::default()
         };
         assert!(config.is_user_allowed("+1234567890"));

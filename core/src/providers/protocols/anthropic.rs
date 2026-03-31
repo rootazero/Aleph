@@ -6,12 +6,10 @@ use crate::agents::thinking::ThinkLevel;
 use crate::config::ProviderConfig;
 use crate::dispatcher::DEFAULT_MAX_TOKENS;
 use crate::error::{AlephError, Result};
-use crate::providers::adapter::{
-    ProtocolAdapter, RequestPayload, StopReason, TokenUsage,
-};
+use crate::providers::adapter::{ProtocolAdapter, RequestPayload, StopReason, TokenUsage};
 use crate::providers::anthropic::{
-    AnthropicTool, ContentBlock, ImageSource, Message,
-    MessageContent, MessagesRequest, SystemBlock, ThinkingBlock,
+    AnthropicTool, ContentBlock, ImageSource, Message, MessageContent, MessagesRequest,
+    SystemBlock, ThinkingBlock,
 };
 use crate::providers::delta::{IndexIdTracker, ProviderDelta};
 use crate::providers::message::UnifiedMessage;
@@ -80,7 +78,10 @@ impl AnthropicProtocol {
                             _ => {}
                         }
                     }
-                    let image_count = blocks.iter().filter(|b| matches!(b, ContentBlock::Image { .. })).count();
+                    let image_count = blocks
+                        .iter()
+                        .filter(|b| matches!(b, ContentBlock::Image { .. }))
+                        .count();
                     if image_count > 0 {
                         tracing::info!(
                             target: "multimodal",
@@ -254,7 +255,6 @@ impl AnthropicProtocol {
             ThinkLevel::XHigh => Some(50000),
         }
     }
-
 }
 
 #[async_trait]
@@ -264,12 +264,18 @@ impl ProtocolAdapter for AnthropicProtocol {
         payload: &RequestPayload,
         config: &ProviderConfig,
     ) -> Result<reqwest::RequestBuilder> {
-        let actual_model = payload.model.as_deref().unwrap_or_else(|| config.default_model());
+        let actual_model = payload
+            .model
+            .as_deref()
+            .unwrap_or_else(|| config.default_model());
         let endpoint = Self::build_endpoint(config);
         let messages = Self::convert_messages(payload.messages);
 
         // Per-request overrides provider config
-        let max_tokens = payload.max_tokens.or(config.max_tokens).unwrap_or(DEFAULT_MAX_TOKENS);
+        let max_tokens = payload
+            .max_tokens
+            .or(config.max_tokens)
+            .unwrap_or(DEFAULT_MAX_TOKENS);
         let temperature = payload.temperature.or(config.temperature);
 
         // Build thinking config if enabled
@@ -292,7 +298,8 @@ impl ProtocolAdapter for AnthropicProtocol {
                     // backends like AWS Bedrock, which rejects schemas without it.
                     let mut schema = td.parameters.clone();
                     if let Some(obj) = schema.as_object_mut() {
-                        obj.entry("type").or_insert_with(|| serde_json::json!("object"));
+                        obj.entry("type")
+                            .or_insert_with(|| serde_json::json!("object"));
                     }
                     // Migrate schemars draft-07 schemas to draft 2020-12
                     crate::tools::schema_strictify::migrate_to_draft_2020_12(&mut schema);
@@ -342,8 +349,12 @@ impl ProtocolAdapter for AnthropicProtocol {
         if let Some(ref choice) = payload.tool_choice {
             use crate::providers::adapter::ToolChoice;
             match choice {
-                ToolChoice::Auto => { body["tool_choice"] = serde_json::json!({"type": "auto"}); }
-                ToolChoice::Required => { body["tool_choice"] = serde_json::json!({"type": "any"}); }
+                ToolChoice::Auto => {
+                    body["tool_choice"] = serde_json::json!({"type": "auto"});
+                }
+                ToolChoice::Required => {
+                    body["tool_choice"] = serde_json::json!({"type": "any"});
+                }
                 ToolChoice::Specific(name) => {
                     body["tool_choice"] = serde_json::json!({"type": "tool", "name": name});
                 }
@@ -445,9 +456,11 @@ impl ProtocolAdapter for AnthropicProtocol {
                                 &mut state.pending,
                             );
                             // If Done was queued, stop after draining pending
-                            if state.pending.iter().any(|d| {
-                                matches!(d, Ok(ProviderDelta::Done(_)))
-                            }) {
+                            if state
+                                .pending
+                                .iter()
+                                .any(|d| matches!(d, Ok(ProviderDelta::Done(_))))
+                            {
                                 state.done = true;
                             }
                         }
@@ -534,10 +547,7 @@ pub(crate) fn parse_anthropic_sse_event(
     match event_type {
         // ── content_block_start ───────────────────────────────────────────────
         "content_block_start" => {
-            let index = v
-                .get("index")
-                .and_then(|i| i.as_u64())
-                .unwrap_or(0);
+            let index = v.get("index").and_then(|i| i.as_u64()).unwrap_or(0);
             let block = match v.get("content_block") {
                 Some(b) => b,
                 None => return,
@@ -558,10 +568,7 @@ pub(crate) fn parse_anthropic_sse_event(
 
         // ── content_block_delta ───────────────────────────────────────────────
         "content_block_delta" => {
-            let index = v
-                .get("index")
-                .and_then(|i| i.as_u64())
-                .unwrap_or(0);
+            let index = v.get("index").and_then(|i| i.as_u64()).unwrap_or(0);
             let delta = match v.get("delta") {
                 Some(d) => d,
                 None => return,
@@ -580,9 +587,7 @@ pub(crate) fn parse_anthropic_sse_event(
                 }
                 "input_json_delta" => {
                     // partial_json fragment for tool_use argument streaming
-                    if let Some(partial) =
-                        delta.get("partial_json").and_then(|p| p.as_str())
-                    {
+                    if let Some(partial) = delta.get("partial_json").and_then(|p| p.as_str()) {
                         if let Some(call_id) = block_ids.get(index) {
                             out.push_back(Ok(ProviderDelta::ToolCallArgDelta {
                                 id: call_id.to_string(),
@@ -597,10 +602,7 @@ pub(crate) fn parse_anthropic_sse_event(
 
         // ── content_block_stop ────────────────────────────────────────────────
         "content_block_stop" => {
-            let index = v
-                .get("index")
-                .and_then(|i| i.as_u64())
-                .unwrap_or(0);
+            let index = v.get("index").and_then(|i| i.as_u64()).unwrap_or(0);
             // Only emit ToolCallEnd if this index was a tool_use block
             if let Some(call_id) = block_ids.get(index) {
                 out.push_back(Ok(ProviderDelta::ToolCallEnd {
@@ -1084,7 +1086,10 @@ mod stream_tests {
         assert_eq!(text_deltas, vec!["Hello"]);
 
         let done = deltas.iter().find(|d| matches!(d, ProviderDelta::Done(_)));
-        assert!(matches!(done, Some(ProviderDelta::Done(StopReason::EndTurn))));
+        assert!(matches!(
+            done,
+            Some(ProviderDelta::Done(StopReason::EndTurn))
+        ));
     }
 
     // ── Test 2: Tool use response ───────────────────────────────────────────
@@ -1100,21 +1105,27 @@ mod stream_tests {
         let deltas = parse_sequence(&events);
 
         // ToolCallStart
-        let start = deltas.iter().find(|d| matches!(d, ProviderDelta::ToolCallStart { .. }));
+        let start = deltas
+            .iter()
+            .find(|d| matches!(d, ProviderDelta::ToolCallStart { .. }));
         assert!(matches!(
             start,
             Some(ProviderDelta::ToolCallStart { id, name }) if id == "toolu_1" && name == "search"
         ));
 
         // ToolCallArgDelta
-        let arg_delta = deltas.iter().find(|d| matches!(d, ProviderDelta::ToolCallArgDelta { .. }));
+        let arg_delta = deltas
+            .iter()
+            .find(|d| matches!(d, ProviderDelta::ToolCallArgDelta { .. }));
         assert!(matches!(
             arg_delta,
             Some(ProviderDelta::ToolCallArgDelta { id, delta }) if id == "toolu_1" && delta.contains("rust")
         ));
 
         // ToolCallEnd
-        let end = deltas.iter().find(|d| matches!(d, ProviderDelta::ToolCallEnd { .. }));
+        let end = deltas
+            .iter()
+            .find(|d| matches!(d, ProviderDelta::ToolCallEnd { .. }));
         assert!(matches!(
             end,
             Some(ProviderDelta::ToolCallEnd { id }) if id == "toolu_1"
@@ -1122,7 +1133,10 @@ mod stream_tests {
 
         // Done(ToolUse)
         let done = deltas.iter().find(|d| matches!(d, ProviderDelta::Done(_)));
-        assert!(matches!(done, Some(ProviderDelta::Done(StopReason::ToolUse))));
+        assert!(matches!(
+            done,
+            Some(ProviderDelta::Done(StopReason::ToolUse))
+        ));
     }
 
     // ── Test 3: Thinking + text response ───────────────────────────────────
@@ -1140,20 +1154,27 @@ mod stream_tests {
         ];
         let deltas = parse_sequence(&events);
 
-        let thinking = deltas.iter().find(|d| matches!(d, ProviderDelta::ThinkingDelta(_)));
+        let thinking = deltas
+            .iter()
+            .find(|d| matches!(d, ProviderDelta::ThinkingDelta(_)));
         assert!(matches!(
             thinking,
             Some(ProviderDelta::ThinkingDelta(t)) if t == "Let me think"
         ));
 
-        let text = deltas.iter().find(|d| matches!(d, ProviderDelta::TextDelta(_)));
+        let text = deltas
+            .iter()
+            .find(|d| matches!(d, ProviderDelta::TextDelta(_)));
         assert!(matches!(
             text,
             Some(ProviderDelta::TextDelta(t)) if t == "Answer"
         ));
 
         let done = deltas.iter().find(|d| matches!(d, ProviderDelta::Done(_)));
-        assert!(matches!(done, Some(ProviderDelta::Done(StopReason::EndTurn))));
+        assert!(matches!(
+            done,
+            Some(ProviderDelta::Done(StopReason::EndTurn))
+        ));
     }
 
     // ── Test 4: Beta headers ────────────────────────────────────────────────
@@ -1183,10 +1204,18 @@ mod stream_tests {
 
     #[test]
     fn test_is_large_context_model() {
-        assert!(AnthropicProtocol::is_large_context_model("claude-opus-4-20250514"));
-        assert!(AnthropicProtocol::is_large_context_model("claude-sonnet-4-5"));
-        assert!(!AnthropicProtocol::is_large_context_model("claude-3-5-sonnet-20241022"));
-        assert!(!AnthropicProtocol::is_large_context_model("claude-3-opus-20240229"));
+        assert!(AnthropicProtocol::is_large_context_model(
+            "claude-opus-4-20250514"
+        ));
+        assert!(AnthropicProtocol::is_large_context_model(
+            "claude-sonnet-4-5"
+        ));
+        assert!(!AnthropicProtocol::is_large_context_model(
+            "claude-3-5-sonnet-20241022"
+        ));
+        assert!(!AnthropicProtocol::is_large_context_model(
+            "claude-3-opus-20240229"
+        ));
     }
 
     // ── Test 5: Error event ─────────────────────────────────────────────────
@@ -1209,7 +1238,10 @@ mod stream_tests {
         let usage = deltas.iter().find(|d| matches!(d, ProviderDelta::Usage(_)));
         assert!(matches!(
             usage,
-            Some(ProviderDelta::Usage(TokenUsage { output_tokens: 42, .. }))
+            Some(ProviderDelta::Usage(TokenUsage {
+                output_tokens: 42,
+                ..
+            }))
         ));
     }
 
@@ -1224,7 +1256,9 @@ mod stream_tests {
         ];
         let deltas = parse_sequence(&events);
         // There should be no ToolCallEnd
-        assert!(!deltas.iter().any(|d| matches!(d, ProviderDelta::ToolCallEnd { .. })));
+        assert!(!deltas
+            .iter()
+            .any(|d| matches!(d, ProviderDelta::ToolCallEnd { .. })));
     }
 
     // ── Test 8: prompt caching in build_request ─────────────────────────────
@@ -1272,6 +1306,8 @@ mod stream_tests {
             .get("anthropic-beta")
             .and_then(|v| v.to_str().ok());
         assert!(beta_header.is_some());
-        assert!(beta_header.unwrap().contains("interleaved-thinking-2025-05-14"));
+        assert!(beta_header
+            .unwrap()
+            .contains("interleaved-thinking-2025-05-14"));
     }
 }

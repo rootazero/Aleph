@@ -149,8 +149,7 @@ impl MarkdownCliTool {
         if let Some(aleph_meta) = &self.spec.metadata.aleph {
             matches!(
                 aleph_meta.security.confirmation,
-                super::spec::ConfirmationMode::Always
-                    | super::spec::ConfirmationMode::Write
+                super::spec::ConfirmationMode::Always | super::spec::ConfirmationMode::Write
             )
         } else {
             false // OpenClaw skills default to no confirmation
@@ -161,27 +160,31 @@ impl MarkdownCliTool {
     pub async fn call(&self, args: Value) -> Result<MarkdownToolOutput> {
         // Build CLI command from args
         let cli_args = self.args_to_cli(&args).map_err(|e| {
-            crate::error::AlephError::IoError(
-                format!("[{}] Failed to convert args to CLI: {}", self.spec.name, e)
-            )
+            crate::error::AlephError::IoError(format!(
+                "[{}] Failed to convert args to CLI: {}",
+                self.spec.name, e
+            ))
         })?;
 
         // Execute based on sandbox mode
         let output = match self.get_sandbox_mode() {
             SandboxMode::Host => self.execute_on_host(&cli_args).await.map_err(|e| {
-                crate::error::AlephError::IoError(
-                    format!("[{}] Host execution failed: {}", self.spec.name, e)
-                )
+                crate::error::AlephError::IoError(format!(
+                    "[{}] Host execution failed: {}",
+                    self.spec.name, e
+                ))
             })?,
             SandboxMode::Docker => self.execute_in_docker(&cli_args).await.map_err(|e| {
-                crate::error::AlephError::IoError(
-                    format!("[{}] Docker execution failed: {}", self.spec.name, e)
-                )
+                crate::error::AlephError::IoError(format!(
+                    "[{}] Docker execution failed: {}",
+                    self.spec.name, e
+                ))
             })?,
             SandboxMode::VirtualFs => self.execute_in_virtualfs(&cli_args).await.map_err(|e| {
-                crate::error::AlephError::IoError(
-                    format!("[{}] VirtualFs execution failed: {}", self.spec.name, e)
-                )
+                crate::error::AlephError::IoError(format!(
+                    "[{}] VirtualFs execution failed: {}",
+                    self.spec.name, e
+                ))
             })?,
         };
 
@@ -212,11 +215,7 @@ impl MarkdownCliTool {
 
         if let Some(obj) = args.as_object() {
             // Extract hints for ordering (if available)
-            let hints = self
-                .spec
-                .metadata
-                .aleph
-                .as_ref().map(|a| &a.input_hints);
+            let hints = self.spec.metadata.aleph.as_ref().map(|a| &a.input_hints);
 
             let mut cli_args = Vec::new();
 
@@ -289,7 +288,10 @@ impl AlephToolDyn for MarkdownCliTool {
         self.definition()
     }
 
-    fn call(&self, args: Value) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value>> + Send + '_>> {
+    fn call(
+        &self,
+        args: Value,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value>> + Send + '_>> {
         Box::pin(async move {
             let output = self.call(args).await?;
             Ok(serde_json::to_value(&output)?)

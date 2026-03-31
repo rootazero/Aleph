@@ -58,7 +58,6 @@ mod tests {
     use super::*;
     use crate::thinker::prompt_builder::PromptConfig;
 
-
     #[test]
     fn metadata() {
         let layer = SessionContextGuideLayer;
@@ -76,7 +75,10 @@ mod tests {
         let input = LayerInput::basic(&config, &[]);
         let mut out = String::new();
         layer.inject(&mut out, &input);
-        assert!(out.is_empty(), "should not inject when has_session_summaries is false");
+        assert!(
+            out.is_empty(),
+            "should not inject when has_session_summaries is false"
+        );
     }
 
     #[test]
@@ -86,9 +88,18 @@ mod tests {
         let input = LayerInput::basic(&config, &[]).with_session_summaries(true);
         let mut out = String::new();
         layer.inject(&mut out, &input);
-        assert!(out.contains("Session Context Notes"), "should inject guide header");
-        assert!(out.contains("session_context"), "should mention the xml tag");
-        assert!(out.contains("memory_search"), "should mention memory_search tool");
+        assert!(
+            out.contains("Session Context Notes"),
+            "should inject guide header"
+        );
+        assert!(
+            out.contains("session_context"),
+            "should mention the xml tag"
+        );
+        assert!(
+            out.contains("memory_search"),
+            "should mention memory_search tool"
+        );
     }
 
     #[test]

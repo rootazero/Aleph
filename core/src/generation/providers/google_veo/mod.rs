@@ -74,7 +74,8 @@ mod tests {
             "test-api-key",
             Some("https://custom.googleapis.com".to_string()),
             None,
-        ).unwrap();
+        )
+        .unwrap();
 
         assert_eq!(provider.name(), "google-veo");
     }
@@ -85,7 +86,8 @@ mod tests {
             "test-api-key",
             None,
             Some("veo-3.1-generate-preview".to_string()),
-        ).unwrap();
+        )
+        .unwrap();
 
         assert!(provider.is_veo3());
     }
@@ -181,7 +183,8 @@ mod tests {
             "test-api-key",
             None,
             Some("veo-3.1-generate-preview".to_string()),
-        ).unwrap();
+        )
+        .unwrap();
         let request = GenerationRequest::video("A sunset timelapse").with_params(
             GenerationParams::builder()
                 .style("9:16")
@@ -240,7 +243,8 @@ mod tests {
             "test-api-key",
             None,
             Some("veo-3.1-generate-preview".to_string()),
-        ).unwrap();
+        )
+        .unwrap();
 
         // Exact match
         let request = GenerationRequest::video("Test")

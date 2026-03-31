@@ -6,10 +6,10 @@ use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
 use crate::error::Result;
+use crate::gateway::agent_env::AgentEnvStore;
 use crate::gateway::agent_instance::AgentRegistry;
 use crate::gateway::agent_lifecycle::AgentLifecycleEvent;
 use crate::gateway::event_bus::GatewayEventBus;
-use crate::gateway::agent_env::AgentEnvStore;
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
 
@@ -77,9 +77,7 @@ impl AlephTool for AgentDeleteTool {
     type Output = AgentDeleteOutput;
 
     fn examples(&self) -> Option<Vec<String>> {
-        Some(vec![
-            "agent_delete(agent_id='trader')".to_string(),
-        ])
+        Some(vec!["agent_delete(agent_id='trader')".to_string()])
     }
 
     fn requires_confirmation(&self) -> bool {
@@ -171,7 +169,10 @@ impl AlephTool for AgentDeleteTool {
         let message = if deleted {
             format!("Agent '{}' deleted and workspace archived.", args.agent_id)
         } else {
-            format!("Agent '{}' could not be removed from registry.", args.agent_id)
+            format!(
+                "Agent '{}' could not be removed from registry.",
+                args.agent_id
+            )
         };
 
         info!(agent_id = %args.agent_id, deleted, "Agent deletion complete");

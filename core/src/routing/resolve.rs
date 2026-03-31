@@ -67,11 +67,7 @@ pub fn resolve_route(
     input: &RouteInput,
 ) -> ResolvedRoute {
     let channel = input.channel.trim().to_lowercase();
-    let account_id = input
-        .account_id
-        .as_deref()
-        .unwrap_or("default")
-        .to_string();
+    let account_id = input.account_id.as_deref().unwrap_or("default").to_string();
 
     // Filter bindings matching channel and account
     let candidates: Vec<&RouteBinding> = bindings
@@ -80,34 +76,38 @@ pub fn resolve_route(
         .filter(|b| matches_account(&b.match_rule, &account_id))
         .collect();
 
-    let build = |agent_id: &str, matched_by: MatchedBy, workspace: Option<String>| -> ResolvedRoute {
-        let agent_id = normalize_agent_id(agent_id);
-        let session_key = build_session_key(
-            &agent_id,
-            &channel,
-            input.peer.as_ref(),
-            session_cfg.dm_scope,
-            &session_cfg.identity_links,
-        );
-        let main_session_key = SessionKey::Main {
-            agent_id: agent_id.clone(),
-            main_key: DEFAULT_MAIN_KEY.to_string(),
-            epoch: 0,
+    let build =
+        |agent_id: &str, matched_by: MatchedBy, workspace: Option<String>| -> ResolvedRoute {
+            let agent_id = normalize_agent_id(agent_id);
+            let session_key = build_session_key(
+                &agent_id,
+                &channel,
+                input.peer.as_ref(),
+                session_cfg.dm_scope,
+                &session_cfg.identity_links,
+            );
+            let main_session_key = SessionKey::Main {
+                agent_id: agent_id.clone(),
+                main_key: DEFAULT_MAIN_KEY.to_string(),
+                epoch: 0,
+            };
+            ResolvedRoute {
+                agent_id,
+                channel: channel.clone(),
+                account_id: account_id.clone(),
+                session_key,
+                main_session_key,
+                matched_by,
+                workspace,
+            }
         };
-        ResolvedRoute {
-            agent_id,
-            channel: channel.clone(),
-            account_id: account_id.clone(),
-            session_key,
-            main_session_key,
-            matched_by,
-            workspace,
-        }
-    };
 
     // 1. Peer match
     if let Some(peer) = &input.peer {
-        if let Some(b) = candidates.iter().find(|b| matches_peer(&b.match_rule, peer)) {
+        if let Some(b) = candidates
+            .iter()
+            .find(|b| matches_peer(&b.match_rule, peer))
+        {
             return build(&b.agent_id, MatchedBy::Peer, b.match_rule.workspace.clone());
         }
     }
@@ -118,7 +118,11 @@ pub fn resolve_route(
             .iter()
             .find(|b| matches_guild(&b.match_rule, guild_id))
         {
-            return build(&b.agent_id, MatchedBy::Guild, b.match_rule.workspace.clone());
+            return build(
+                &b.agent_id,
+                MatchedBy::Guild,
+                b.match_rule.workspace.clone(),
+            );
         }
     }
 
@@ -143,7 +147,11 @@ pub fn resolve_route(
             && b.match_rule.guild_id.is_none()
             && b.match_rule.team_id.is_none()
     }) {
-        return build(&b.agent_id, MatchedBy::Account, b.match_rule.workspace.clone());
+        return build(
+            &b.agent_id,
+            MatchedBy::Account,
+            b.match_rule.workspace.clone(),
+        );
     }
 
     // 5. Channel match (wildcard account)
@@ -157,7 +165,11 @@ pub fn resolve_route(
             && b.match_rule.guild_id.is_none()
             && b.match_rule.team_id.is_none()
     }) {
-        return build(&b.agent_id, MatchedBy::Channel, b.match_rule.workspace.clone());
+        return build(
+            &b.agent_id,
+            MatchedBy::Channel,
+            b.match_rule.workspace.clone(),
+        );
     }
 
     // 6. Default (no binding matched, no workspace override)
@@ -186,12 +198,8 @@ fn build_session_key(
 
             SessionKey::dm(agent_id, channel, &peer_id, dm_scope)
         }
-        RoutePeerKind::Group => {
-            SessionKey::group(agent_id, channel, PeerKind::Group, &peer.id)
-        }
-        RoutePeerKind::Channel => {
-            SessionKey::group(agent_id, channel, PeerKind::Channel, &peer.id)
-        }
+        RoutePeerKind::Group => SessionKey::group(agent_id, channel, PeerKind::Group, &peer.id),
+        RoutePeerKind::Channel => SessionKey::group(agent_id, channel, PeerKind::Channel, &peer.id),
     }
 }
 
@@ -229,10 +237,7 @@ fn matches_guild(rule: &MatchRule, guild_id: &str) -> bool {
 }
 
 fn matches_team(rule: &MatchRule, team_id: &str) -> bool {
-    rule.team_id
-        .as_ref()
-        .map(|t| t == team_id)
-        .unwrap_or(false)
+    rule.team_id.as_ref().map(|t| t == team_id).unwrap_or(false)
 }
 
 #[cfg(test)]
@@ -284,13 +289,18 @@ mod tests {
 
     #[test]
     fn test_default_route() {
-        let route = resolve_route(&[], &default_session_cfg(), "main", &RouteInput {
-            channel: "telegram".to_string(),
-            account_id: None,
-            peer: None,
-            guild_id: None,
-            team_id: None,
-        });
+        let route = resolve_route(
+            &[],
+            &default_session_cfg(),
+            "main",
+            &RouteInput {
+                channel: "telegram".to_string(),
+                account_id: None,
+                peer: None,
+                guild_id: None,
+                team_id: None,
+            },
+        );
         assert_eq!(route.agent_id, "main");
         assert_eq!(route.matched_by, MatchedBy::Default);
     }
@@ -298,13 +308,18 @@ mod tests {
     #[test]
     fn test_channel_match() {
         let bindings = vec![telegram_binding("telegram-agent")];
-        let route = resolve_route(&bindings, &default_session_cfg(), "main", &RouteInput {
-            channel: "telegram".to_string(),
-            account_id: None,
-            peer: None,
-            guild_id: None,
-            team_id: None,
-        });
+        let route = resolve_route(
+            &bindings,
+            &default_session_cfg(),
+            "main",
+            &RouteInput {
+                channel: "telegram".to_string(),
+                account_id: None,
+                peer: None,
+                guild_id: None,
+                team_id: None,
+            },
+        );
         assert_eq!(route.agent_id, "telegram-agent");
         assert_eq!(route.matched_by, MatchedBy::Channel);
     }
@@ -315,13 +330,18 @@ mod tests {
             telegram_binding("generic"),
             slack_team_binding("work", "T12345"),
         ];
-        let route = resolve_route(&bindings, &default_session_cfg(), "main", &RouteInput {
-            channel: "slack".to_string(),
-            account_id: None,
-            peer: None,
-            guild_id: None,
-            team_id: Some("T12345".to_string()),
-        });
+        let route = resolve_route(
+            &bindings,
+            &default_session_cfg(),
+            "main",
+            &RouteInput {
+                channel: "slack".to_string(),
+                account_id: None,
+                peer: None,
+                guild_id: None,
+                team_id: Some("T12345".to_string()),
+            },
+        );
         assert_eq!(route.agent_id, "work");
         assert_eq!(route.matched_by, MatchedBy::Team);
     }
@@ -332,32 +352,42 @@ mod tests {
             telegram_binding("generic"),
             peer_binding("vip-agent", "telegram", "dm", "user-vip"),
         ];
-        let route = resolve_route(&bindings, &default_session_cfg(), "main", &RouteInput {
-            channel: "telegram".to_string(),
-            account_id: None,
-            peer: Some(RoutePeer {
-                kind: RoutePeerKind::Dm,
-                id: "user-vip".to_string(),
-            }),
-            guild_id: None,
-            team_id: None,
-        });
+        let route = resolve_route(
+            &bindings,
+            &default_session_cfg(),
+            "main",
+            &RouteInput {
+                channel: "telegram".to_string(),
+                account_id: None,
+                peer: Some(RoutePeer {
+                    kind: RoutePeerKind::Dm,
+                    id: "user-vip".to_string(),
+                }),
+                guild_id: None,
+                team_id: None,
+            },
+        );
         assert_eq!(route.agent_id, "vip-agent");
         assert_eq!(route.matched_by, MatchedBy::Peer);
     }
 
     #[test]
     fn test_dm_scope_per_peer() {
-        let route = resolve_route(&[], &default_session_cfg(), "main", &RouteInput {
-            channel: "telegram".to_string(),
-            account_id: None,
-            peer: Some(RoutePeer {
-                kind: RoutePeerKind::Dm,
-                id: "user123".to_string(),
-            }),
-            guild_id: None,
-            team_id: None,
-        });
+        let route = resolve_route(
+            &[],
+            &default_session_cfg(),
+            "main",
+            &RouteInput {
+                channel: "telegram".to_string(),
+                account_id: None,
+                peer: Some(RoutePeer {
+                    kind: RoutePeerKind::Dm,
+                    id: "user123".to_string(),
+                }),
+                guild_id: None,
+                team_id: None,
+            },
+        );
         assert_eq!(route.session_key.to_key_string(), "agent:main:dm:user123");
     }
 
@@ -367,16 +397,21 @@ mod tests {
             dm_scope: DmScope::PerChannelPeer,
             ..Default::default()
         };
-        let route = resolve_route(&[], &cfg, "main", &RouteInput {
-            channel: "telegram".to_string(),
-            account_id: None,
-            peer: Some(RoutePeer {
-                kind: RoutePeerKind::Dm,
-                id: "user123".to_string(),
-            }),
-            guild_id: None,
-            team_id: None,
-        });
+        let route = resolve_route(
+            &[],
+            &cfg,
+            "main",
+            &RouteInput {
+                channel: "telegram".to_string(),
+                account_id: None,
+                peer: Some(RoutePeer {
+                    kind: RoutePeerKind::Dm,
+                    id: "user123".to_string(),
+                }),
+                guild_id: None,
+                team_id: None,
+            },
+        );
         assert_eq!(
             route.session_key.to_key_string(),
             "agent:main:telegram:dm:user123"
@@ -389,16 +424,21 @@ mod tests {
             dm_scope: DmScope::Main,
             ..Default::default()
         };
-        let route = resolve_route(&[], &cfg, "main", &RouteInput {
-            channel: "telegram".to_string(),
-            account_id: None,
-            peer: Some(RoutePeer {
-                kind: RoutePeerKind::Dm,
-                id: "user123".to_string(),
-            }),
-            guild_id: None,
-            team_id: None,
-        });
+        let route = resolve_route(
+            &[],
+            &cfg,
+            "main",
+            &RouteInput {
+                channel: "telegram".to_string(),
+                account_id: None,
+                peer: Some(RoutePeer {
+                    kind: RoutePeerKind::Dm,
+                    id: "user123".to_string(),
+                }),
+                guild_id: None,
+                team_id: None,
+            },
+        );
         assert_eq!(route.session_key.to_key_string(), "agent:main:main");
     }
 
@@ -413,16 +453,21 @@ mod tests {
             dm_scope: DmScope::PerPeer,
             identity_links: links,
         };
-        let route = resolve_route(&[], &cfg, "main", &RouteInput {
-            channel: "telegram".to_string(),
-            account_id: None,
-            peer: Some(RoutePeer {
-                kind: RoutePeerKind::Dm,
-                id: "123".to_string(),
-            }),
-            guild_id: None,
-            team_id: None,
-        });
+        let route = resolve_route(
+            &[],
+            &cfg,
+            "main",
+            &RouteInput {
+                channel: "telegram".to_string(),
+                account_id: None,
+                peer: Some(RoutePeer {
+                    kind: RoutePeerKind::Dm,
+                    id: "123".to_string(),
+                }),
+                guild_id: None,
+                team_id: None,
+            },
+        );
         // Should resolve to canonical "john" instead of "123"
         assert_eq!(route.session_key.to_key_string(), "agent:main:dm:john");
     }
@@ -438,41 +483,56 @@ mod tests {
                 ..Default::default()
             },
         }];
-        let route = resolve_route(&bindings, &default_session_cfg(), "main", &RouteInput {
-            channel: "telegram".to_string(),
-            account_id: None,
-            peer: None,
-            guild_id: None,
-            team_id: None,
-        });
+        let route = resolve_route(
+            &bindings,
+            &default_session_cfg(),
+            "main",
+            &RouteInput {
+                channel: "telegram".to_string(),
+                account_id: None,
+                peer: None,
+                guild_id: None,
+                team_id: None,
+            },
+        );
         assert_eq!(route.workspace.as_deref(), Some("crypto"));
         assert_eq!(route.matched_by, MatchedBy::Channel);
     }
 
     #[test]
     fn test_default_route_no_workspace() {
-        let route = resolve_route(&[], &default_session_cfg(), "main", &RouteInput {
-            channel: "telegram".to_string(),
-            account_id: None,
-            peer: None,
-            guild_id: None,
-            team_id: None,
-        });
+        let route = resolve_route(
+            &[],
+            &default_session_cfg(),
+            "main",
+            &RouteInput {
+                channel: "telegram".to_string(),
+                account_id: None,
+                peer: None,
+                guild_id: None,
+                team_id: None,
+            },
+        );
         assert!(route.workspace.is_none());
     }
 
     #[test]
     fn test_group_session_key() {
-        let route = resolve_route(&[], &default_session_cfg(), "main", &RouteInput {
-            channel: "discord".to_string(),
-            account_id: None,
-            peer: Some(RoutePeer {
-                kind: RoutePeerKind::Group,
-                id: "guild456".to_string(),
-            }),
-            guild_id: None,
-            team_id: None,
-        });
+        let route = resolve_route(
+            &[],
+            &default_session_cfg(),
+            "main",
+            &RouteInput {
+                channel: "discord".to_string(),
+                account_id: None,
+                peer: Some(RoutePeer {
+                    kind: RoutePeerKind::Group,
+                    id: "guild456".to_string(),
+                }),
+                guild_id: None,
+                team_id: None,
+            },
+        );
         assert_eq!(
             route.session_key.to_key_string(),
             "agent:main:discord:group:guild456"

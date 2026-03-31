@@ -1,9 +1,15 @@
-use serde::Deserialize;
 use crate::gateway::channel::ChannelError;
+use serde::Deserialize;
 
-fn default_domain() -> String { "feishu".to_string() }
-fn default_true() -> bool { true }
-fn default_render_mode() -> String { "auto".to_string() }
+fn default_domain() -> String {
+    "feishu".to_string()
+}
+fn default_true() -> bool {
+    true
+}
+fn default_render_mode() -> String {
+    "auto".to_string()
+}
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct FeishuConfig {
@@ -57,7 +63,9 @@ impl FeishuConfig {
             return Err(ChannelError::ConfigError("app_id is required".to_string()));
         }
         if self.app_secret.is_empty() {
-            return Err(ChannelError::ConfigError("app_secret is required".to_string()));
+            return Err(ChannelError::ConfigError(
+                "app_secret is required".to_string(),
+            ));
         }
         Ok(())
     }

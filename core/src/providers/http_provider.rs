@@ -8,10 +8,10 @@ use crate::providers::adapter::{ProtocolAdapter, ProviderResponse, RequestPayloa
 use crate::providers::message::{ContentBlock, UnifiedMessage};
 use crate::providers::AiProvider;
 use crate::secrets::leak_detector::{LeakDecision, LeakDetector};
+use crate::sync_primitives::Arc;
 use futures::StreamExt;
 use std::future::Future;
 use std::pin::Pin;
-use crate::sync_primitives::Arc;
 use tracing::debug;
 
 /// Generic HTTP-based AI provider
@@ -101,9 +101,7 @@ impl HttpProvider {
             model: payload.model.clone(),
         };
 
-        let request = self
-            .adapter
-            .build_request(&final_payload, &self.config)?;
+        let request = self.adapter.build_request(&final_payload, &self.config)?;
         let response = request.send().await.map_err(|e| {
             if e.is_timeout() {
                 crate::error::AlephError::Timeout {
@@ -151,7 +149,9 @@ impl HttpProvider {
     pub async fn stream_raw<'a>(
         &'a self,
         payload: RequestPayload<'a>,
-    ) -> anyhow::Result<futures::stream::BoxStream<'static, anyhow::Result<crate::providers::ProviderDelta>>> {
+    ) -> anyhow::Result<
+        futures::stream::BoxStream<'static, anyhow::Result<crate::providers::ProviderDelta>>,
+    > {
         // PII filtering
         let mut filtered_messages: Vec<UnifiedMessage> = payload.messages.to_vec();
         if let Some(engine_lock) = crate::pii::PiiEngine::global() {
@@ -189,16 +189,24 @@ impl HttpProvider {
             model: payload.model.clone(),
         };
 
-        let request = self.adapter.build_request(&final_payload, &self.config)
+        let request = self
+            .adapter
+            .build_request(&final_payload, &self.config)
             .map_err(|e| anyhow::anyhow!("{}", e))?;
-        let response = request.send().await
+        let response = request
+            .send()
+            .await
             .map_err(|e| anyhow::anyhow!("Network error: {}", e))?;
-        let stream = self.adapter.stream_deltas(response).await
+        let stream = self
+            .adapter
+            .stream_deltas(response)
+            .await
             .map_err(|e| anyhow::anyhow!("{}", e))?;
 
-        Ok(stream.map(|r| r.map_err(|e| anyhow::anyhow!("{}", e))).boxed())
+        Ok(stream
+            .map(|r| r.map_err(|e| anyhow::anyhow!("{}", e)))
+            .boxed())
     }
-
 }
 
 impl AiProvider for HttpProvider {

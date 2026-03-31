@@ -5,12 +5,12 @@
 
 #![allow(clippy::arc_with_non_send_sync)]
 use super::*;
-use crate::memory::cortex::types::{Experience, EvolutionStatus};
+use crate::memory::cortex::types::{EvolutionStatus, Experience};
 use crate::memory::store::{LanceMemoryBackend, MemoryBackend};
 use crate::memory::EmbeddingProvider;
+use crate::sync_primitives::{Arc, RwLock};
 use rusqlite::Connection;
 use std::collections::HashMap;
-use crate::sync_primitives::{Arc, RwLock};
 use tempfile::TempDir;
 use uuid::Uuid;
 
@@ -23,9 +23,10 @@ fn create_test_db() -> (MemoryBackend, TempDir) {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     let db_path = temp_dir.path().join("lance_db");
     let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
-    let db: MemoryBackend = Arc::new(rt
-        .block_on(LanceMemoryBackend::open_or_create(&db_path))
-        .expect("Failed to create test database"));
+    let db: MemoryBackend = Arc::new(
+        rt.block_on(LanceMemoryBackend::open_or_create(&db_path))
+            .expect("Failed to create test database"),
+    );
     (db, temp_dir)
 }
 
@@ -118,7 +119,10 @@ fn test_complete_reactive_flow() {
 
     // Verify BehavioralAnchor properties
     let anchor = &reflection_result.anchor;
-    assert_eq!(anchor.priority, 100, "Reactive anchors should have priority 100");
+    assert_eq!(
+        anchor.priority, 100,
+        "Reactive anchors should have priority 100"
+    );
     assert_eq!(
         anchor.confidence, 0.8,
         "Reactive anchors should have confidence 0.8"
@@ -134,7 +138,10 @@ fn test_complete_reactive_flow() {
 
     // Verify anchor source
     match &anchor.source {
-        AnchorSource::ReactiveReflection { task_id, error_type } => {
+        AnchorSource::ReactiveReflection {
+            task_id,
+            error_type,
+        } => {
             assert!(!task_id.is_empty(), "Task ID should not be empty");
             assert!(!error_type.is_empty(), "Error type should not be empty");
         }
@@ -144,10 +151,7 @@ fn test_complete_reactive_flow() {
     // Verify anchor is stored
     let store = anchor_store.read().unwrap();
     let retrieved = store.get(&anchor.id);
-    assert!(
-        retrieved.is_ok(),
-        "Anchor should be retrievable from store"
-    );
+    assert!(retrieved.is_ok(), "Anchor should be retrievable from store");
     let retrieved_anchor = retrieved.unwrap();
     assert!(retrieved_anchor.is_some(), "Anchor should exist in store");
     assert_eq!(
@@ -452,7 +456,9 @@ fn test_end_to_end_flow() {
 
     {
         let mut store = anchor_store.write().unwrap();
-        store.add(test_anchor.clone()).expect("Failed to add test anchor");
+        store
+            .add(test_anchor.clone())
+            .expect("Failed to add test anchor");
     }
 
     // Step 3: Simulate similar task → Retrieve anchor → Inject into prompt
@@ -471,9 +477,7 @@ fn test_end_to_end_flow() {
     );
 
     // Verify the test anchor is retrieved (it has matching tags)
-    let found_test_anchor = retrieved_anchors
-        .iter()
-        .any(|a| a.id == test_anchor.id);
+    let found_test_anchor = retrieved_anchors.iter().any(|a| a.id == test_anchor.id);
 
     assert!(
         found_test_anchor,
@@ -497,4 +501,3 @@ fn test_end_to_end_flow() {
         "Formatted output should have proper header"
     );
 }
-

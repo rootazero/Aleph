@@ -8,10 +8,10 @@
 //! - default_model() returns first element
 //! - Serialization outputs `models = [...]`, never `model = ...`
 
-use alephcore::ProviderConfig;
-use alephcore::EmbeddingProviderConfig;
 use alephcore::memory::rerank::RerankConfig;
+use alephcore::EmbeddingProviderConfig;
 use alephcore::GenerationProviderConfig;
+use alephcore::ProviderConfig;
 
 // =============================================================================
 // ProviderConfig serde tests
@@ -34,7 +34,10 @@ fn provider_multi_model_roundtrip() {
         models = ["gpt-4o", "gpt-4o-mini", "gpt-3.5-turbo"]
     "#;
     let config: ProviderConfig = toml::from_str(toml_str).unwrap();
-    assert_eq!(config.models, vec!["gpt-4o", "gpt-4o-mini", "gpt-3.5-turbo"]);
+    assert_eq!(
+        config.models,
+        vec!["gpt-4o", "gpt-4o-mini", "gpt-3.5-turbo"]
+    );
     assert_eq!(config.default_model(), "gpt-4o");
 
     // Round-trip: serialize and deserialize
@@ -84,8 +87,15 @@ fn provider_serialization_uses_models_array() {
     let config = ProviderConfig::test_config("gpt-4o");
     let serialized = toml::to_string_pretty(&config).unwrap();
     // Should contain `models = [` not `model = `
-    assert!(serialized.contains("models = ["), "serialized output: {}", serialized);
-    assert!(!serialized.contains("model = \""), "should not have singular model key");
+    assert!(
+        serialized.contains("models = ["),
+        "serialized output: {}",
+        serialized
+    );
+    assert!(
+        !serialized.contains("model = \""),
+        "should not have singular model key"
+    );
 }
 
 #[test]
@@ -167,7 +177,10 @@ fn embedding_empty_list_rejected() {
         dimensions = 768
     "#;
     let result = toml::from_str::<EmbeddingProviderConfig>(toml_str);
-    assert!(result.is_err(), "empty models list should be rejected for embedding");
+    assert!(
+        result.is_err(),
+        "empty models list should be rejected for embedding"
+    );
 }
 
 #[test]
@@ -190,7 +203,11 @@ fn embedding_preset_factories() {
 fn embedding_serialization_uses_models_array() {
     let config = EmbeddingProviderConfig::siliconflow();
     let serialized = toml::to_string_pretty(&config).unwrap();
-    assert!(serialized.contains("models = ["), "serialized: {}", serialized);
+    assert!(
+        serialized.contains("models = ["),
+        "serialized: {}",
+        serialized
+    );
 }
 
 // =============================================================================
@@ -241,7 +258,11 @@ fn rerank_default_has_model() {
 fn rerank_serialization_uses_models_array() {
     let config = RerankConfig::default();
     let serialized = toml::to_string_pretty(&config).unwrap();
-    assert!(serialized.contains("models = ["), "serialized: {}", serialized);
+    assert!(
+        serialized.contains("models = ["),
+        "serialized: {}",
+        serialized
+    );
 }
 
 // =============================================================================
@@ -314,5 +335,9 @@ fn generation_serialization_uses_models_array() {
     let mut config = GenerationProviderConfig::new("openai");
     config.models = vec!["dall-e-3".to_string()];
     let serialized = toml::to_string_pretty(&config).unwrap();
-    assert!(serialized.contains("models = ["), "serialized: {}", serialized);
+    assert!(
+        serialized.contains("models = ["),
+        "serialized: {}",
+        serialized
+    );
 }

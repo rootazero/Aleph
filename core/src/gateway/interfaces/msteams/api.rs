@@ -4,9 +4,9 @@ use crate::sync_primitives::Arc;
 use reqwest::Client;
 use tracing::{debug, warn};
 
-use crate::gateway::channel::ChannelError;
 use super::auth::TokenCache;
 use super::types::{Activity, ActivityResponse};
+use crate::gateway::channel::ChannelError;
 
 pub struct BotFrameworkClient {
     http: Client,
@@ -86,7 +86,8 @@ impl BotFrameworkClient {
             debug!(url = %url, "Activity updated successfully");
             Ok(())
         } else {
-            let retry_after = resp.headers()
+            let retry_after = resp
+                .headers()
                 .get("retry-after")
                 .and_then(|v| v.to_str().ok())
                 .and_then(|v| v.parse::<u64>().ok());
@@ -123,7 +124,8 @@ impl BotFrameworkClient {
             debug!(url = %url, "Activity deleted successfully");
             Ok(())
         } else {
-            let retry_after = resp.headers()
+            let retry_after = resp
+                .headers()
                 .get("retry-after")
                 .and_then(|v| v.to_str().ok())
                 .and_then(|v| v.parse::<u64>().ok());
@@ -172,7 +174,8 @@ impl BotFrameworkClient {
             debug!(url = %url, id = %response.id, "Activity sent successfully");
             Ok(response)
         } else {
-            let retry_after = resp.headers()
+            let retry_after = resp
+                .headers()
                 .get("retry-after")
                 .and_then(|v| v.to_str().ok())
                 .and_then(|v| v.parse::<u64>().ok());
@@ -194,7 +197,9 @@ fn ensure_trailing_slash(url: &str) -> String {
 fn map_http_error(status: u16, body: &str, retry_after: Option<u64>) -> ChannelError {
     match status {
         401 | 403 => ChannelError::AuthFailed(format!("HTTP {}: {}", status, body)),
-        429 => ChannelError::RateLimited { retry_after_secs: retry_after.unwrap_or(5) },
+        429 => ChannelError::RateLimited {
+            retry_after_secs: retry_after.unwrap_or(5),
+        },
         404 => ChannelError::SendFailed(format!("Not found: {}", body)),
         _ => ChannelError::SendFailed(format!("HTTP {}: {}", status, body)),
     }
@@ -206,8 +211,14 @@ mod tests {
 
     #[test]
     fn test_ensure_trailing_slash() {
-        assert_eq!(ensure_trailing_slash("https://example.com"), "https://example.com/");
-        assert_eq!(ensure_trailing_slash("https://example.com/"), "https://example.com/");
+        assert_eq!(
+            ensure_trailing_slash("https://example.com"),
+            "https://example.com/"
+        );
+        assert_eq!(
+            ensure_trailing_slash("https://example.com/"),
+            "https://example.com/"
+        );
     }
 
     #[test]
@@ -219,13 +230,23 @@ mod tests {
     #[test]
     fn test_map_http_error_rate_limit() {
         let err = map_http_error(429, "too many requests", None);
-        assert!(matches!(err, ChannelError::RateLimited { retry_after_secs: 5 }));
+        assert!(matches!(
+            err,
+            ChannelError::RateLimited {
+                retry_after_secs: 5
+            }
+        ));
     }
 
     #[test]
     fn test_map_http_error_rate_limit_with_header() {
         let err = map_http_error(429, "too many requests", Some(30));
-        assert!(matches!(err, ChannelError::RateLimited { retry_after_secs: 30 }));
+        assert!(matches!(
+            err,
+            ChannelError::RateLimited {
+                retry_after_secs: 30
+            }
+        ));
     }
 
     #[test]

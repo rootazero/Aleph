@@ -13,7 +13,10 @@ fn truncate_preview(s: &str, max_len: usize) -> String {
     if s.len() <= max_len {
         s.to_string()
     } else {
-        let end = (0..=max_len).rev().find(|&i| s.is_char_boundary(i)).unwrap_or(0);
+        let end = (0..=max_len)
+            .rev()
+            .find(|&i| s.is_char_boundary(i))
+            .unwrap_or(0);
         format!("{}...", s.get(..end).unwrap_or(s))
     }
 }
@@ -176,7 +179,9 @@ impl SessionCompactor {
         for (idx, part) in session.parts.iter().enumerate() {
             if let SessionPart::ToolCall(tc) = part {
                 if tc.output.is_some() && !tc.output.as_ref().unwrap().contains("[Output pruned") {
-                    let output_tokens = tc.output.as_ref()
+                    let output_tokens = tc
+                        .output
+                        .as_ref()
                         .map(|o| TokenTracker::estimate_tokens(o))
                         .unwrap_or(0);
                     let is_protected = self.is_protected_tool(&tc.tool_name);
@@ -190,7 +195,10 @@ impl SessionCompactor {
         }
 
         // Count user turns to determine safe pruning boundary
-        let user_turns: Vec<usize> = session.parts.iter().enumerate()
+        let user_turns: Vec<usize> = session
+            .parts
+            .iter()
+            .enumerate()
             .filter_map(|(i, p)| {
                 if matches!(p, SessionPart::UserInput(_)) {
                     Some(i)
@@ -281,11 +289,20 @@ impl SessionCompactor {
                     context_parts.push(format!("Assistant: {}", response.content));
                 }
                 SessionPart::ToolCall(tc) => {
-                    let status = if tc.error.is_some() { "failed" } else { "completed" };
-                    let output_preview = tc.output.as_ref().map(|o| {
-                        truncate_preview(o, 200)
-                    }).unwrap_or_default();
-                    context_parts.push(format!("Tool {}: {} ({})", tc.tool_name, status, output_preview));
+                    let status = if tc.error.is_some() {
+                        "failed"
+                    } else {
+                        "completed"
+                    };
+                    let output_preview = tc
+                        .output
+                        .as_ref()
+                        .map(|o| truncate_preview(o, 200))
+                        .unwrap_or_default();
+                    context_parts.push(format!(
+                        "Tool {}: {} ({})",
+                        tc.tool_name, status, output_preview
+                    ));
                 }
                 SessionPart::Summary(s) => {
                     context_parts.push(format!("[Previous Summary]: {}", s.content));
@@ -294,44 +311,72 @@ impl SessionCompactor {
                     context_parts.push(format!("[Reasoning]: {}", r.content));
                 }
                 SessionPart::PlanCreated(p) => {
-                    let steps = p.steps.iter().map(|s| s.description.as_str()).collect::<Vec<_>>().join(", ");
+                    let steps = p
+                        .steps
+                        .iter()
+                        .map(|s| s.description.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ");
                     context_parts.push(format!("[Plan Created]: {} - Steps: {}", p.plan_id, steps));
                 }
                 SessionPart::SubAgentCall(sa) => {
-                    let result = sa.result.as_ref().map(|r| {
-                        truncate_preview(r, 200)
-                    }).unwrap_or_else(|| "[pending]".to_string());
-                    context_parts.push(format!("[SubAgent {}]: {} -> {}", sa.agent_id, sa.prompt, result));
+                    let result = sa
+                        .result
+                        .as_ref()
+                        .map(|r| truncate_preview(r, 200))
+                        .unwrap_or_else(|| "[pending]".to_string());
+                    context_parts.push(format!(
+                        "[SubAgent {}]: {} -> {}",
+                        sa.agent_id, sa.prompt, result
+                    ));
                 }
                 SessionPart::CompactionMarker(m) => {
                     let trigger = if m.auto { "auto" } else { "manual" };
-                    context_parts.push(format!("[Compaction Marker]: {} ({})", m.timestamp, trigger));
+                    context_parts.push(format!(
+                        "[Compaction Marker]: {} ({})",
+                        m.timestamp, trigger
+                    ));
                 }
                 SessionPart::SystemReminder(r) => {
                     context_parts.push(format!("[System Reminder]: {}", r.content));
                 }
                 // Step boundaries provide execution tracking context
                 SessionPart::StepStart(s) => {
-                    context_parts.push(format!("[Step Start]: step {} at {}", s.step_id, s.timestamp));
+                    context_parts.push(format!(
+                        "[Step Start]: step {} at {}",
+                        s.step_id, s.timestamp
+                    ));
                 }
                 SessionPart::StepFinish(s) => {
-                    context_parts.push(format!("[Step Finish]: step {} - {:?} ({}ms)",
-                        s.step_id, s.reason, s.duration_ms));
+                    context_parts.push(format!(
+                        "[Step Finish]: step {} - {:?} ({}ms)",
+                        s.step_id, s.reason, s.duration_ms
+                    ));
                 }
                 // Snapshots and patches are metadata for session revert
                 SessionPart::Snapshot(s) => {
-                    context_parts.push(format!("[Snapshot]: {} ({} files)",
-                        s.snapshot_id, s.files.len()));
+                    context_parts.push(format!(
+                        "[Snapshot]: {} ({} files)",
+                        s.snapshot_id,
+                        s.files.len()
+                    ));
                 }
                 SessionPart::Patch(p) => {
-                    context_parts.push(format!("[Patch]: {} based on {} ({} changes)",
-                        p.patch_id, p.base_snapshot_id, p.changes.len()));
+                    context_parts.push(format!(
+                        "[Patch]: {} based on {} ({} changes)",
+                        p.patch_id,
+                        p.base_snapshot_id,
+                        p.changes.len()
+                    ));
                 }
                 // Streaming text is for UI, include final content if complete
                 SessionPart::StreamingText(t) => {
                     if t.is_complete && !t.content.is_empty() {
                         let preview = if t.content.len() > 200 {
-                            let end = (0..=200).rev().find(|&i| t.content.is_char_boundary(i)).unwrap_or(0);
+                            let end = (0..=200)
+                                .rev()
+                                .find(|&i| t.content.is_char_boundary(i))
+                                .unwrap_or(0);
                             format!("{}...", &t.content[..end])
                         } else {
                             t.content.clone()
@@ -381,7 +426,10 @@ impl SessionCompactor {
             Ok(summary) => summary,
             Err(e) => {
                 // Log error and fall back to template-based summary
-                tracing::warn!("LLM summary generation failed: {}, falling back to template", e);
+                tracing::warn!(
+                    "LLM summary generation failed: {}, falling back to template",
+                    e
+                );
                 self.generate_summary(session)
             }
         }
@@ -527,7 +575,9 @@ impl SessionCompactor {
                 }
                 SessionPart::Summary(summary) => TokenTracker::estimate_tokens(&summary.content),
                 SessionPart::CompactionMarker(_) => 0, // Markers don't consume tokens
-                SessionPart::SystemReminder(reminder) => TokenTracker::estimate_tokens(&reminder.content),
+                SessionPart::SystemReminder(reminder) => {
+                    TokenTracker::estimate_tokens(&reminder.content)
+                }
                 // Step boundaries are minimal metadata, estimate fixed overhead
                 SessionPart::StepStart(_) => 10,
                 SessionPart::StepFinish(_) => 15,

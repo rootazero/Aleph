@@ -113,10 +113,7 @@ pub fn build_summary_prompt(
 
     // System-level instruction and target length hint.
     prompt.push_str(instruction);
-    prompt.push_str(&format!(
-        "\n\nTarget summary length: ~{} tokens.",
-        target
-    ));
+    prompt.push_str(&format!("\n\nTarget summary length: ~{} tokens.", target));
 
     // Inject previous context as a reminder if available.
     if let Some(ctx) = previous_context {
@@ -136,9 +133,7 @@ pub fn build_summary_prompt(
     prompt.push_str("\n--- End conversation ---");
 
     // Final instruction to the model.
-    prompt.push_str(
-        "\n\nExpand for details only when explicitly asked. Produce the summary now.",
-    );
+    prompt.push_str("\n\nExpand for details only when explicitly asked. Produce the summary now.");
 
     prompt
 }
@@ -294,8 +289,7 @@ mod tests {
     fn test_build_prompt_injects_previous_context() {
         let messages = msgs(&[("user", "What's next?")]);
         let ctx = "We decided to use Rust for the backend.";
-        let prompt =
-            build_summary_prompt(&messages, 0, Some(ctx), FallbackLevel::Normal);
+        let prompt = build_summary_prompt(&messages, 0, Some(ctx), FallbackLevel::Normal);
         assert!(
             prompt.contains(ctx),
             "prompt should include the previous context verbatim"
@@ -319,8 +313,7 @@ mod tests {
     #[test]
     fn test_build_prompt_empty_previous_context_omitted() {
         let messages = msgs(&[("user", "Hello")]);
-        let prompt =
-            build_summary_prompt(&messages, 0, Some(""), FallbackLevel::Normal);
+        let prompt = build_summary_prompt(&messages, 0, Some(""), FallbackLevel::Normal);
         assert!(
             !prompt.contains("Previous context"),
             "prompt should not contain previous context section for empty string"
@@ -385,7 +378,15 @@ mod tests {
 
     #[test]
     fn test_summary_to_fact_fields() {
-        let fact = summary_to_fact("sess-123", 0, 1, "Summary text".to_string(), 10, 500, "agent-1");
+        let fact = summary_to_fact(
+            "sess-123",
+            0,
+            1,
+            "Summary text".to_string(),
+            10,
+            500,
+            "agent-1",
+        );
         assert_eq!(fact.fact_source, FactSource::SessionCompressed);
         assert_eq!(fact.scope, MemoryScope::SessionLocal);
         assert_eq!(fact.tier, MemoryTier::ShortTerm);
@@ -432,11 +433,23 @@ mod tests {
 
     #[test]
     fn test_build_prompt_leaf_has_analysis_scratchpad() {
-        let messages = msgs(&[("user", "Fix the bug in auth.rs"), ("assistant", "I found the issue")]);
+        let messages = msgs(&[
+            ("user", "Fix the bug in auth.rs"),
+            ("assistant", "I found the issue"),
+        ]);
         let prompt = build_summary_prompt(&messages, 0, None, FallbackLevel::Normal);
-        assert!(prompt.contains("<analysis>"), "leaf prompt should have analysis scratchpad");
-        assert!(prompt.contains("</analysis>"), "leaf prompt should close analysis tag");
-        assert!(prompt.contains("<summary>"), "leaf prompt should have summary section");
+        assert!(
+            prompt.contains("<analysis>"),
+            "leaf prompt should have analysis scratchpad"
+        );
+        assert!(
+            prompt.contains("</analysis>"),
+            "leaf prompt should close analysis tag"
+        );
+        assert!(
+            prompt.contains("<summary>"),
+            "leaf prompt should have summary section"
+        );
     }
 
     #[test]

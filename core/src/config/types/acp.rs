@@ -24,7 +24,10 @@ pub struct AcpConfig {
 
     /// Registered ACP harnesses keyed by name.
     /// Preset harnesses are always present; user entries are merged on top.
-    #[serde(default = "default_harnesses", deserialize_with = "deserialize_harnesses_with_presets")]
+    #[serde(
+        default = "default_harnesses",
+        deserialize_with = "deserialize_harnesses_with_presets"
+    )]
     pub harnesses: HashMap<String, AcpHarnessEntry>,
 }
 
@@ -200,11 +203,7 @@ impl AcpHarnessEntry {
         Self {
             display_name: "Claude Code".into(),
             executable: Some("claude".into()),
-            args: vec![
-                "--print".into(),
-                "--output-format".into(),
-                "json".into(),
-            ],
+            args: vec!["--print".into(), "--output-format".into(), "json".into()],
             default_mode: HarnessModeSerde::Oneshot,
             output_format: OutputFormatSerde::Json {
                 field: "result".into(),
@@ -284,9 +283,18 @@ mod tests {
 
     #[test]
     fn test_preset_trust_levels() {
-        assert_eq!(AcpHarnessEntry::preset_claude_code().trust_level, TrustLevel::Full);
-        assert_eq!(AcpHarnessEntry::preset_codex().trust_level, TrustLevel::Full);
-        assert_eq!(AcpHarnessEntry::preset_gemini().trust_level, TrustLevel::Full);
+        assert_eq!(
+            AcpHarnessEntry::preset_claude_code().trust_level,
+            TrustLevel::Full
+        );
+        assert_eq!(
+            AcpHarnessEntry::preset_codex().trust_level,
+            TrustLevel::Full
+        );
+        assert_eq!(
+            AcpHarnessEntry::preset_gemini().trust_level,
+            TrustLevel::Full
+        );
     }
 
     #[test]
@@ -306,19 +314,22 @@ mod tests {
     fn test_preset_modes() {
         let claude_code = AcpHarnessEntry::preset_claude_code();
         assert_eq!(
-            claude_code.default_mode, HarnessModeSerde::Oneshot,
+            claude_code.default_mode,
+            HarnessModeSerde::Oneshot,
             "Claude Code preset should have default_mode=Oneshot"
         );
 
         let codex = AcpHarnessEntry::preset_codex();
         assert_eq!(
-            codex.default_mode, HarnessModeSerde::Oneshot,
+            codex.default_mode,
+            HarnessModeSerde::Oneshot,
             "Codex preset should have default_mode=Oneshot"
         );
 
         let gemini = AcpHarnessEntry::preset_gemini();
         assert_eq!(
-            gemini.default_mode, HarnessModeSerde::NativeAcp,
+            gemini.default_mode,
+            HarnessModeSerde::NativeAcp,
             "Gemini preset should have default_mode=NativeAcp"
         );
     }

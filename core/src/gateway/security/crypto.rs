@@ -181,9 +181,9 @@ mod tests {
             let code = generate_pairing_code();
             assert_eq!(code.len(), 8);
             // Should only contain allowed characters
-            assert!(code.chars().all(|c| {
-                PAIRING_CODE_CHARSET.contains(&(c as u8))
-            }));
+            assert!(code
+                .chars()
+                .all(|c| { PAIRING_CODE_CHARSET.contains(&(c as u8)) }));
             // Should not contain confusing characters
             assert!(!code.contains('0'));
             assert!(!code.contains('1'));

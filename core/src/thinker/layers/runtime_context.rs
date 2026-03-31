@@ -6,9 +6,15 @@ use crate::thinker::prompt_mode::PromptMode;
 pub struct RuntimeContextLayer;
 
 impl PromptLayer for RuntimeContextLayer {
-    fn name(&self) -> &'static str { "runtime_context" }
-    fn priority(&self) -> u32 { 1710 }
-    fn stability(&self) -> LayerStability { LayerStability::Dynamic }
+    fn name(&self) -> &'static str {
+        "runtime_context"
+    }
+    fn priority(&self) -> u32 {
+        1710
+    }
+    fn stability(&self) -> LayerStability {
+        LayerStability::Dynamic
+    }
     fn supports_mode(&self, mode: PromptMode) -> bool {
         matches!(mode, PromptMode::Full)
     }

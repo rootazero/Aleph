@@ -2,11 +2,11 @@
 
 use crate::sync_primitives::Arc;
 
+use crate::memory::store::lance::LanceMemoryBackend;
+use crate::memory::store::{MemoryBackend, MemoryStore};
 use crate::memory::{
     FactSource, FactSpecificity, FactType, MemoryCategory, MemoryFact, MemoryLayer, TemporalScope,
 };
-use crate::memory::store::{MemoryBackend, MemoryStore};
-use crate::memory::store::lance::LanceMemoryBackend;
 use crate::Result;
 
 use super::*;
@@ -80,12 +80,8 @@ async fn test_ripple_single_hop() -> Result<()> {
     let fact_c = create_test_fact("fact_c", "User prefers morning coffee", vec![0.8, 0.2, 0.0]);
 
     // Create database with facts
-    let db = create_test_database_with_facts(vec![
-        fact_a.clone(),
-        fact_b.clone(),
-        fact_c.clone(),
-    ])
-    .await?;
+    let db = create_test_database_with_facts(vec![fact_a.clone(), fact_b.clone(), fact_c.clone()])
+        .await?;
 
     // Create RippleTask with max_hops=1
     let config = RippleConfig {
@@ -150,12 +146,8 @@ async fn test_ripple_similarity_threshold() -> Result<()> {
     let fact_c = create_test_fact("fact_c", "Dissimilar fact", vec![0.0, 0.0, 1.0]);
 
     // Create database with facts
-    let db = create_test_database_with_facts(vec![
-        fact_a.clone(),
-        fact_b.clone(),
-        fact_c.clone(),
-    ])
-    .await?;
+    let db = create_test_database_with_facts(vec![fact_a.clone(), fact_b.clone(), fact_c.clone()])
+        .await?;
 
     // Create RippleTask with high similarity threshold
     let config = RippleConfig {
@@ -184,12 +176,8 @@ async fn test_ripple_no_duplicates() -> Result<()> {
     let fact_c = create_test_fact("fact_c", "Fact C", vec![0.8, 0.2, 0.0]);
 
     // Create database with facts
-    let db = create_test_database_with_facts(vec![
-        fact_a.clone(),
-        fact_b.clone(),
-        fact_c.clone(),
-    ])
-    .await?;
+    let db = create_test_database_with_facts(vec![fact_a.clone(), fact_b.clone(), fact_c.clone()])
+        .await?;
 
     // Create RippleTask
     let config = RippleConfig {
@@ -205,7 +193,11 @@ async fn test_ripple_no_duplicates() -> Result<()> {
     // Verify no duplicates
     let expanded_ids: Vec<_> = result.expanded_facts.iter().map(|f| &f.id).collect();
     let unique_ids: std::collections::HashSet<_> = expanded_ids.iter().collect();
-    assert_eq!(unique_ids.len(), expanded_ids.len(), "Found duplicate facts");
+    assert_eq!(
+        unique_ids.len(),
+        expanded_ids.len(),
+        "Found duplicate facts"
+    );
 
     Ok(())
 }

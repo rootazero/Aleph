@@ -3,9 +3,9 @@
 //! Provides isolated execution environments for agents. Each agent instance
 //! has its own workspace directory, session store, and configuration.
 
+use crate::sync_primitives::Arc;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
@@ -73,9 +73,7 @@ impl Default for AgentInstanceConfig {
 impl AgentInstanceConfig {
     /// Return the agent's tool permissions config, or a default (all-Allow).
     pub fn tool_permissions(&self) -> crate::config::types::policies::ToolPermissionsConfig {
-        self.tool_permissions
-            .clone()
-            .unwrap_or_default()
+        self.tool_permissions.clone().unwrap_or_default()
     }
 
     /// Return the agent's timeout override, if set.
@@ -226,7 +224,10 @@ impl AgentInstance {
 
     /// Get the human-readable display name (falls back to agent_id)
     pub fn display_name(&self) -> &str {
-        self.config.display_name.as_deref().unwrap_or(&self.config.agent_id)
+        self.config
+            .display_name
+            .as_deref()
+            .unwrap_or(&self.config.agent_id)
     }
 
     /// Get the agent configuration
@@ -285,11 +286,14 @@ impl AgentInstance {
 
         // Create new session in memory
         let now = chrono::Utc::now();
-        sessions.insert(key_str.clone(), SessionData {
-            messages: Vec::new(),
-            created_at: now,
-            last_active_at: now,
-        });
+        sessions.insert(
+            key_str.clone(),
+            SessionData {
+                messages: Vec::new(),
+                created_at: now,
+                last_active_at: now,
+            },
+        );
 
         // Ensure session exists in SessionManager (SQLite)
         if let Some(ref sm) = self.session_manager {
@@ -529,7 +533,10 @@ impl AgentRegistry {
 
         for (id, instance) in agents.iter() {
             let display = instance.display_name().to_lowercase();
-            if display == name_lower || display.contains(&name_lower) || name_lower.contains(&display) {
+            if display == name_lower
+                || display.contains(&name_lower)
+                || name_lower.contains(&display)
+            {
                 if matched_id.is_some() {
                     // Ambiguous: multiple agents match — prefer exact match
                     if display == name_lower {
@@ -548,7 +555,9 @@ impl AgentRegistry {
     /// Get the allowed_links for an agent (None = all allowed)
     pub async fn get_allowed_links(&self, agent_id: &str) -> Option<Option<Vec<String>>> {
         let agents = self.agents.read().await;
-        agents.get(agent_id).map(|a| a.config().allowed_links.clone())
+        agents
+            .get(agent_id)
+            .map(|a| a.config().allowed_links.clone())
     }
 
     /// Remove an agent
@@ -577,19 +586,20 @@ impl AgentRegistry {
         session_manager: Option<Arc<super::session_manager::SessionManager>>,
     ) -> Result<Arc<AgentInstance>, AgentInstanceError> {
         if self.get(id).await.is_some() {
-            return Err(AgentInstanceError::InitFailed(
-                format!("Agent '{}' already exists", id),
-            ));
+            return Err(AgentInstanceError::InitFailed(format!(
+                "Agent '{}' already exists",
+                id
+            )));
         }
 
-        let home = dirs::home_dir()
-            .unwrap_or_else(|| std::path::PathBuf::from("/tmp"));
+        let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("/tmp"));
         let workspace_path = home.join(".aleph/workspaces").join(id);
         let agent_dir = home.join(".aleph/agents").join(id);
 
         std::fs::create_dir_all(&workspace_path).map_err(|e| {
             AgentInstanceError::InitFailed(format!(
-                "Failed to create workspace for '{}': {}", id, e
+                "Failed to create workspace for '{}': {}",
+                id, e
             ))
         })?;
 
@@ -597,7 +607,8 @@ impl AgentRegistry {
         if !soul_path.exists() {
             std::fs::write(&soul_path, soul_content).map_err(|e| {
                 AgentInstanceError::InitFailed(format!(
-                    "Failed to write SOUL.md for '{}': {}", id, e
+                    "Failed to write SOUL.md for '{}': {}",
+                    id, e
                 ))
             })?;
         }
@@ -765,9 +776,7 @@ mod tests {
             agent_dir: temp.path().join("agents/main"),
             ..Default::default()
         };
-        registry
-            .register(AgentInstance::new(config).unwrap())
-            .await;
+        registry.register(AgentInstance::new(config).unwrap()).await;
         let result = registry.create_dynamic("main", "soul", None).await;
         assert!(result.is_err());
     }

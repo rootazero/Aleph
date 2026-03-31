@@ -50,9 +50,9 @@ impl SseEvent {
     /// Parse SSE event from event type and data
     pub fn parse(event_type: &str, data: &str) -> Self {
         match event_type {
-            "endpoint" => {
-                SseEvent::Endpoint { url: data.trim().to_string() }
-            }
+            "endpoint" => SseEvent::Endpoint {
+                url: data.trim().to_string(),
+            },
             "ping" => SseEvent::Ping,
             "message" | "" => {
                 // Try to parse as JSON-RPC

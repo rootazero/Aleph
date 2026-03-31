@@ -64,9 +64,8 @@ pub async fn create_prediction(
         return Err(parse_error_response(status.as_u16(), &response_text));
     }
 
-    let prediction: PredictionResponse = serde_json::from_str(&response_text).map_err(|e| {
-        GenerationError::serialization(format!("Failed to parse response: {}", e))
-    })?;
+    let prediction: PredictionResponse = serde_json::from_str(&response_text)
+        .map_err(|e| GenerationError::serialization(format!("Failed to parse response: {}", e)))?;
 
     debug!(
         id = %prediction.id,
@@ -117,10 +116,9 @@ pub async fn poll_prediction(
             return Err(parse_error_response(status.as_u16(), &response_text));
         }
 
-        let prediction: PredictionResponse =
-            serde_json::from_str(&response_text).map_err(|e| {
-                GenerationError::serialization(format!("Failed to parse response: {}", e))
-            })?;
+        let prediction: PredictionResponse = serde_json::from_str(&response_text).map_err(|e| {
+            GenerationError::serialization(format!("Failed to parse response: {}", e))
+        })?;
 
         match prediction.status.as_str() {
             "succeeded" => {

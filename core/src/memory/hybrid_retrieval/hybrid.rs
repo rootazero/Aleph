@@ -18,11 +18,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::AlephError;
 use crate::memory::context::MemoryFact;
-use crate::memory::store::types::{SearchFilter, ScoredFact};
-use crate::memory::store::{MemoryBackend, MemoryStore};
-use crate::memory::scoring_pipeline::ScoringPipeline;
 use crate::memory::scoring_pipeline::config::ScoringPipelineConfig;
 use crate::memory::scoring_pipeline::context::ScoringContext;
+use crate::memory::scoring_pipeline::ScoringPipeline;
+use crate::memory::store::types::{ScoredFact, SearchFilter};
+use crate::memory::store::{MemoryBackend, MemoryStore};
 
 /// Hybrid search configuration
 ///
@@ -299,7 +299,6 @@ impl HybridRetrieval {
         &self.database
     }
 
-
     /// Apply the scoring pipeline (if configured) to re-rank candidates.
     ///
     /// When no pipeline is present the candidates are returned unchanged.
@@ -547,13 +546,15 @@ mod tests {
             "The user prefers Rust for systems programming".to_string(),
             FactType::Preference,
             vec!["mem-1".to_string()],
-        ).with_embedding(vec![0.1f32; 1024]);
+        )
+        .with_embedding(vec![0.1f32; 1024]);
 
         let fact2 = MemoryFact::new(
             "The user is learning TypeScript".to_string(),
             FactType::Learning,
             vec!["mem-2".to_string()],
-        ).with_embedding(vec![0.2f32; 1024]);
+        )
+        .with_embedding(vec![0.2f32; 1024]);
 
         db.insert_fact(&fact1).await.unwrap();
         db.insert_fact(&fact2).await.unwrap();
@@ -562,7 +563,10 @@ mod tests {
 
         // Search with query embedding similar to first fact
         let query_embedding = vec![0.1f32; 1024];
-        let results = retrieval.search_facts(&query_embedding, "Rust programming").await.unwrap();
+        let results = retrieval
+            .search_facts(&query_embedding, "Rust programming")
+            .await
+            .unwrap();
 
         // Should find facts
         assert!(!results.is_empty());
@@ -579,11 +583,8 @@ mod tests {
         let db = create_test_db().await;
 
         // Insert fact with embedding
-        let fact = MemoryFact::new(
-            "Test fact content".to_string(),
-            FactType::Other,
-            vec![],
-        ).with_embedding(vec![0.5f32; 1024]);
+        let fact = MemoryFact::new("Test fact content".to_string(), FactType::Other, vec![])
+            .with_embedding(vec![0.5f32; 1024]);
 
         db.insert_fact(&fact).await.unwrap();
 
@@ -609,11 +610,8 @@ mod tests {
             let mut embedding = vec![0.0f32; 1024];
             embedding[0] = (i as f32) * 0.1;
 
-            let fact = MemoryFact::new(
-                format!("Fact number {}", i),
-                FactType::Other,
-                vec![],
-            ).with_embedding(embedding);
+            let fact = MemoryFact::new(format!("Fact number {}", i), FactType::Other, vec![])
+                .with_embedding(embedding);
 
             db.insert_fact(&fact).await.unwrap();
         }
@@ -622,7 +620,10 @@ mod tests {
 
         // Search with limit of 2
         let query_embedding = vec![0.0f32; 1024];
-        let results = retrieval.search_facts_with_limit(&query_embedding, "", 2).await.unwrap();
+        let results = retrieval
+            .search_facts_with_limit(&query_embedding, "", 2)
+            .await
+            .unwrap();
 
         // Should return at most 2 results
         assert!(results.len() <= 2);

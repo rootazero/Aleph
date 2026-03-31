@@ -2,14 +2,14 @@
 //!
 //! Implements shell command execution with timeout and security checks
 
-use std::path::PathBuf;
-use crate::sync_primitives::Arc;
-use std::time::Duration;
-use async_trait::async_trait;
-use tokio::process::Command;
 use crate::error::{AlephError, Result};
+use crate::sync_primitives::Arc;
+use async_trait::async_trait;
+use std::path::PathBuf;
+use std::time::Duration;
+use tokio::process::Command;
 
-use super::{BashOps, ExecutorContext, AtomicResult};
+use super::{AtomicResult, BashOps, ExecutorContext};
 
 /// Bash operations handler
 ///
@@ -43,7 +43,9 @@ impl BashOps for BashOpsHandler {
         // Security gate: validate command through exec parser before execution
         let analysis = crate::exec::parser::analyze_shell_command(command, None, None);
         if !analysis.ok {
-            let reason = analysis.reason.unwrap_or_else(|| "command rejected by security check".to_string());
+            let reason = analysis
+                .reason
+                .unwrap_or_else(|| "command rejected by security check".to_string());
             return Ok(AtomicResult {
                 success: false,
                 output: String::new(),

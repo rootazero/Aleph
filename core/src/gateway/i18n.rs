@@ -27,7 +27,9 @@ impl Locale {
 /// All user-facing system messages that need translation.
 pub enum Msg<'a> {
     // --- /new command ---
-    NewSessionStarted { topic_suffix: &'a str },
+    NewSessionStarted {
+        topic_suffix: &'a str,
+    },
 
     // --- execution errors ---
     ErrRateLimit,
@@ -35,13 +37,20 @@ pub enum Msg<'a> {
     ErrTimeout,
     ErrNetwork,
     ErrServiceUnavailable,
-    ErrGeneric { detail: &'a str },
+    ErrGeneric {
+        detail: &'a str,
+    },
 
     // --- agent loop exhaustion ---
-    ErrLoopExhausted { iterations: usize, tool_calls: usize },
+    ErrLoopExhausted {
+        iterations: usize,
+        tool_calls: usize,
+    },
 
     // --- topic generation prompt (sent to LLM, not shown to user) ---
-    TopicGenerationPrompt { conversation: &'a str },
+    TopicGenerationPrompt {
+        conversation: &'a str,
+    },
 }
 
 /// Translate a message key to the target locale.
@@ -60,37 +69,25 @@ pub fn t(msg: Msg<'_>, locale: Locale) -> String {
         // ============================================================
         // Execution errors
         // ============================================================
-        (Msg::ErrRateLimit, Locale::Zh) => {
-            "⚠️ AI 服务调用配额已用尽，请稍后再试。".into()
-        }
+        (Msg::ErrRateLimit, Locale::Zh) => "⚠️ AI 服务调用配额已用尽，请稍后再试。".into(),
         (Msg::ErrRateLimit, Locale::En) => {
             "⚠️ AI service rate limit reached. Please try again later.".into()
         }
 
-        (Msg::ErrAuth, Locale::Zh) => {
-            "⚠️ AI 服务认证失败，请检查 API Key 配置。".into()
-        }
+        (Msg::ErrAuth, Locale::Zh) => "⚠️ AI 服务认证失败，请检查 API Key 配置。".into(),
         (Msg::ErrAuth, Locale::En) => {
             "⚠️ AI service authentication failed. Please check your API key.".into()
         }
 
-        (Msg::ErrTimeout, Locale::Zh) => {
-            "⚠️ AI 服务响应超时，请稍后重试。".into()
-        }
-        (Msg::ErrTimeout, Locale::En) => {
-            "⚠️ AI service timed out. Please try again.".into()
-        }
+        (Msg::ErrTimeout, Locale::Zh) => "⚠️ AI 服务响应超时，请稍后重试。".into(),
+        (Msg::ErrTimeout, Locale::En) => "⚠️ AI service timed out. Please try again.".into(),
 
-        (Msg::ErrNetwork, Locale::Zh) => {
-            "⚠️ 网络连接异常，请检查网络后重试。".into()
-        }
+        (Msg::ErrNetwork, Locale::Zh) => "⚠️ 网络连接异常，请检查网络后重试。".into(),
         (Msg::ErrNetwork, Locale::En) => {
             "⚠️ Network error. Please check your connection and try again.".into()
         }
 
-        (Msg::ErrServiceUnavailable, Locale::Zh) => {
-            "⚠️ AI 服务暂时不可用，请稍后重试。".into()
-        }
+        (Msg::ErrServiceUnavailable, Locale::Zh) => "⚠️ AI 服务暂时不可用，请稍后重试。".into(),
         (Msg::ErrServiceUnavailable, Locale::En) => {
             "⚠️ AI service temporarily unavailable. Please try again later.".into()
         }
@@ -105,13 +102,25 @@ pub fn t(msg: Msg<'_>, locale: Locale) -> String {
         // ============================================================
         // Agent loop exhaustion
         // ============================================================
-        (Msg::ErrLoopExhausted { iterations, tool_calls }, Locale::Zh) => {
+        (
+            Msg::ErrLoopExhausted {
+                iterations,
+                tool_calls,
+            },
+            Locale::Zh,
+        ) => {
             format!(
                 "抱歉，我在处理这个请求时用了太多步骤但没能完成（{iterations} 次迭代，{tool_calls} 次工具调用）。\n\
                  请尝试更直接的指令，比如使用 /video、/image、/audio 等命令直接生成内容。"
             )
         }
-        (Msg::ErrLoopExhausted { iterations, tool_calls }, Locale::En) => {
+        (
+            Msg::ErrLoopExhausted {
+                iterations,
+                tool_calls,
+            },
+            Locale::En,
+        ) => {
             format!(
                 "Sorry, I was unable to complete the task within the allowed limits \
                  ({iterations} iterations, {tool_calls} tool calls).\n\
@@ -202,10 +211,20 @@ mod tests {
 
     #[test]
     fn test_new_session_message() {
-        let msg = t(Msg::NewSessionStarted { topic_suffix: " (测试)" }, Locale::Zh);
+        let msg = t(
+            Msg::NewSessionStarted {
+                topic_suffix: " (测试)",
+            },
+            Locale::Zh,
+        );
         assert!(msg.contains("新对话已开始"));
 
-        let msg = t(Msg::NewSessionStarted { topic_suffix: " (test)" }, Locale::En);
+        let msg = t(
+            Msg::NewSessionStarted {
+                topic_suffix: " (test)",
+            },
+            Locale::En,
+        );
         assert!(msg.contains("New conversation started"));
     }
 

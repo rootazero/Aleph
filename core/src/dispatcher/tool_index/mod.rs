@@ -21,4 +21,4 @@ pub use config::ToolRetrievalConfig;
 pub use coordinator::{ToolIndexCoordinator, ToolMeta};
 pub use inference::{InferredPurpose, SemanticPurposeInferrer};
 pub use pipeline::{HydrationPipeline, HydrationPipelineConfig, HydrationResult};
-pub use retrieval::{HydrationLevel, HydratedTool, ToolRetrieval};
+pub use retrieval::{HydratedTool, HydrationLevel, ToolRetrieval};

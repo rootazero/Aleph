@@ -75,42 +75,38 @@
 //! let result = mcp_agent.execute(request).await?;
 //! ```
 
-mod traits;
-mod mcp_agent;
-mod skill_agent;
+mod coordinator;
 mod delegate_tool;
 mod dispatcher;
-mod result_merger;
-mod coordinator;
-mod result_collector;
-mod run;
-mod registry;
+mod mcp_agent;
 mod persistence;
+mod registry;
+mod result_collector;
+mod result_merger;
+mod run;
+mod skill_agent;
+mod traits;
 
-
-pub use traits::{
-    SubAgent, SubAgentCapability, SubAgentRequest, SubAgentResult,
-    ExecutionContextInfo, StepContextInfo, ToolCallRecord, Artifact,
-};
+pub use delegate_tool::{ArtifactInfo, DelegateArgs, DelegateResult, DelegateTool, ToolCallInfo};
+pub use dispatcher::{AgentInfo, DispatcherInfo, SubAgentDispatcher, SubAgentType};
 pub use mcp_agent::McpSubAgent;
+pub use result_merger::{MergedResult, ResultMerger};
 pub use skill_agent::SkillSubAgent;
-pub use delegate_tool::{DelegateTool, DelegateArgs, DelegateResult, ArtifactInfo, ToolCallInfo};
-pub use dispatcher::{SubAgentDispatcher, SubAgentType, DispatcherInfo, AgentInfo};
-pub use result_merger::{ResultMerger, MergedResult};
+pub use traits::{
+    Artifact, ExecutionContextInfo, StepContextInfo, SubAgent, SubAgentCapability, SubAgentRequest,
+    SubAgentResult, ToolCallRecord,
+};
 
 // New synchronous execution components
 pub use coordinator::{
-    ExecutionCoordinator, CoordinatorConfig, ExecutionError, ExecutionHandle,
-    ExecutionSlot, CoordinatorStats, ToolCallSummary, ToolCallState,
-    ToolCallProgress, ToolCallStatus,
+    CoordinatorConfig, CoordinatorStats, ExecutionCoordinator, ExecutionError, ExecutionHandle,
+    ExecutionSlot, ToolCallProgress, ToolCallState, ToolCallStatus, ToolCallSummary,
 };
 pub use result_collector::{
-    ResultCollector, CollectedToolCall, CollectedToolStatus, CollectorStats,
-    truncate_for_preview,
+    truncate_for_preview, CollectedToolCall, CollectedToolStatus, CollectorStats, ResultCollector,
 };
 
 // Multi-Agent 2.0 run tracking
-pub use run::{SubAgentRun, RunStatus, RunOutcome, Lane, CleanupPolicy};
-pub use registry::{LifecycleEvent, RegistryStats, SubAgentRegistry};
 pub use persistence::SubAgentRunFact;
-
+pub use registry::{LifecycleEvent, RegistryStats, SubAgentRegistry};
+pub use run::{CleanupPolicy, Lane, RunOutcome, RunStatus, SubAgentRun};

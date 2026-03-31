@@ -19,11 +19,11 @@
 mod category;
 mod conflict;
 mod definition;
-mod tool_info;
 mod index;
 mod result;
 mod routing;
 mod safety;
+mod tool_info;
 mod unified;
 
 // =============================================================================

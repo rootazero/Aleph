@@ -8,20 +8,20 @@
 //!
 //! All modifications are persisted and broadcast as events.
 
+use crate::config::patcher::ConfigPatcher;
+use crate::gateway::device_store::DeviceStore;
+use crate::gateway::event_bus::{ConfigChangedEvent, GatewayEvent, GatewayEventBus};
+use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 use crate::sync_primitives::Arc;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INVALID_PARAMS, INTERNAL_ERROR};
-use crate::gateway::event_bus::{GatewayEventBus, GatewayEvent, ConfigChangedEvent};
-use crate::gateway::device_store::DeviceStore;
-use crate::config::patcher::ConfigPatcher;
 
 /// Write gateway.host to the config TOML file on disk.
 fn write_gateway_host_to_config(path: &std::path::Path, host: &str) -> Result<(), String> {
-    let contents = std::fs::read_to_string(path)
-        .map_err(|e| format!("Failed to read config: {e}"))?;
-    let mut doc: toml::Table = toml::from_str(&contents)
-        .map_err(|e| format!("Failed to parse config: {e}"))?;
+    let contents =
+        std::fs::read_to_string(path).map_err(|e| format!("Failed to read config: {e}"))?;
+    let mut doc: toml::Table =
+        toml::from_str(&contents).map_err(|e| format!("Failed to parse config: {e}"))?;
 
     // Create or update [gateway] section
     let gateway = doc
@@ -31,18 +31,16 @@ fn write_gateway_host_to_config(path: &std::path::Path, host: &str) -> Result<()
         t.insert("host".to_string(), toml::Value::String(host.to_string()));
     }
 
-    let new_contents = toml::to_string_pretty(&doc)
-        .map_err(|e| format!("Failed to serialize config: {e}"))?;
+    let new_contents =
+        toml::to_string_pretty(&doc).map_err(|e| format!("Failed to serialize config: {e}"))?;
 
     // Atomic write
     let temp_path = path.with_extension("tmp");
-    std::fs::write(&temp_path, &new_contents)
-        .map_err(|e| format!("Failed to write temp: {e}"))?;
-    std::fs::rename(&temp_path, path)
-        .map_err(|e| {
-            let _ = std::fs::remove_file(&temp_path);
-            format!("Failed to rename: {e}")
-        })?;
+    std::fs::write(&temp_path, &new_contents).map_err(|e| format!("Failed to write temp: {e}"))?;
+    std::fs::rename(&temp_path, path).map_err(|e| {
+        let _ = std::fs::remove_file(&temp_path);
+        format!("Failed to rename: {e}")
+    })?;
 
     Ok(())
 }
@@ -64,25 +62,56 @@ fn read_gateway_host_from_config(patcher: &ConfigPatcher) -> String {
 }
 
 /// Read SSRF settings from [security.ssrf] section in config TOML.
-fn read_ssrf_config_from_toml(patcher: &ConfigPatcher) -> (bool, bool, bool, u8, Vec<String>, Vec<String>) {
+fn read_ssrf_config_from_toml(
+    patcher: &ConfigPatcher,
+) -> (bool, bool, bool, u8, Vec<String>, Vec<String>) {
     let config_path = patcher.config_path();
     if let Ok(contents) = std::fs::read_to_string(config_path) {
         if let Ok(table) = contents.parse::<toml::Table>() {
             if let Some(security) = table.get("security").and_then(|v| v.as_table()) {
                 if let Some(ssrf) = security.get("ssrf").and_then(|v| v.as_table()) {
-                    let enabled = ssrf.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true);
-                    let tool_private = ssrf.get("allow_tool_private_network").and_then(|v| v.as_bool()).unwrap_or(false);
-                    let webhook_private = ssrf.get("allow_webhook_private_network").and_then(|v| v.as_bool()).unwrap_or(false);
-                    let max_redirects = ssrf.get("max_redirects").and_then(|v| v.as_integer()).unwrap_or(5) as u8;
-                    let allowed: Vec<String> = ssrf.get("allowed_hosts")
+                    let enabled = ssrf
+                        .get("enabled")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(true);
+                    let tool_private = ssrf
+                        .get("allow_tool_private_network")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+                    let webhook_private = ssrf
+                        .get("allow_webhook_private_network")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+                    let max_redirects = ssrf
+                        .get("max_redirects")
+                        .and_then(|v| v.as_integer())
+                        .unwrap_or(5) as u8;
+                    let allowed: Vec<String> = ssrf
+                        .get("allowed_hosts")
                         .and_then(|v| v.as_array())
-                        .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                        .map(|a| {
+                            a.iter()
+                                .filter_map(|v| v.as_str().map(String::from))
+                                .collect()
+                        })
                         .unwrap_or_default();
-                    let blocked: Vec<String> = ssrf.get("blocked_hosts")
+                    let blocked: Vec<String> = ssrf
+                        .get("blocked_hosts")
                         .and_then(|v| v.as_array())
-                        .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                        .map(|a| {
+                            a.iter()
+                                .filter_map(|v| v.as_str().map(String::from))
+                                .collect()
+                        })
                         .unwrap_or_default();
-                    return (enabled, tool_private, webhook_private, max_redirects, allowed, blocked);
+                    return (
+                        enabled,
+                        tool_private,
+                        webhook_private,
+                        max_redirects,
+                        allowed,
+                        blocked,
+                    );
                 }
             }
         }
@@ -91,11 +120,14 @@ fn read_ssrf_config_from_toml(patcher: &ConfigPatcher) -> (bool, bool, bool, u8,
 }
 
 /// Write SSRF settings to [security.ssrf] section in config TOML.
-fn write_ssrf_config_to_toml(path: &std::path::Path, config: &SecurityConfig) -> Result<(), String> {
-    let contents = std::fs::read_to_string(path)
-        .map_err(|e| format!("Failed to read config: {e}"))?;
-    let mut doc: toml::Table = toml::from_str(&contents)
-        .map_err(|e| format!("Failed to parse config: {e}"))?;
+fn write_ssrf_config_to_toml(
+    path: &std::path::Path,
+    config: &SecurityConfig,
+) -> Result<(), String> {
+    let contents =
+        std::fs::read_to_string(path).map_err(|e| format!("Failed to read config: {e}"))?;
+    let mut doc: toml::Table =
+        toml::from_str(&contents).map_err(|e| format!("Failed to parse config: {e}"))?;
 
     // Create [security] if needed
     let security = doc
@@ -109,31 +141,55 @@ fn write_ssrf_config_to_toml(path: &std::path::Path, config: &SecurityConfig) ->
             .or_insert_with(|| toml::Value::Table(toml::Table::new()));
 
         if let toml::Value::Table(ssrf_table) = ssrf {
-            ssrf_table.insert("enabled".to_string(), toml::Value::Boolean(config.ssrf_enabled));
-            ssrf_table.insert("allow_tool_private_network".to_string(), toml::Value::Boolean(config.ssrf_allow_tool_private_network));
-            ssrf_table.insert("allow_webhook_private_network".to_string(), toml::Value::Boolean(config.ssrf_allow_webhook_private_network));
-            ssrf_table.insert("max_redirects".to_string(), toml::Value::Integer(config.ssrf_max_redirects as i64));
-            ssrf_table.insert("allowed_hosts".to_string(), toml::Value::Array(
-                config.ssrf_allowed_hosts.iter().map(|s| toml::Value::String(s.clone())).collect()
-            ));
-            ssrf_table.insert("blocked_hosts".to_string(), toml::Value::Array(
-                config.ssrf_blocked_hosts.iter().map(|s| toml::Value::String(s.clone())).collect()
-            ));
+            ssrf_table.insert(
+                "enabled".to_string(),
+                toml::Value::Boolean(config.ssrf_enabled),
+            );
+            ssrf_table.insert(
+                "allow_tool_private_network".to_string(),
+                toml::Value::Boolean(config.ssrf_allow_tool_private_network),
+            );
+            ssrf_table.insert(
+                "allow_webhook_private_network".to_string(),
+                toml::Value::Boolean(config.ssrf_allow_webhook_private_network),
+            );
+            ssrf_table.insert(
+                "max_redirects".to_string(),
+                toml::Value::Integer(config.ssrf_max_redirects as i64),
+            );
+            ssrf_table.insert(
+                "allowed_hosts".to_string(),
+                toml::Value::Array(
+                    config
+                        .ssrf_allowed_hosts
+                        .iter()
+                        .map(|s| toml::Value::String(s.clone()))
+                        .collect(),
+                ),
+            );
+            ssrf_table.insert(
+                "blocked_hosts".to_string(),
+                toml::Value::Array(
+                    config
+                        .ssrf_blocked_hosts
+                        .iter()
+                        .map(|s| toml::Value::String(s.clone()))
+                        .collect(),
+                ),
+            );
         }
     }
 
-    let new_contents = toml::to_string_pretty(&doc)
-        .map_err(|e| format!("Failed to serialize config: {e}"))?;
+    let new_contents =
+        toml::to_string_pretty(&doc).map_err(|e| format!("Failed to serialize config: {e}"))?;
 
     // Atomic write
     let temp_path = path.with_extension("ssrf_tmp");
-    std::fs::write(&temp_path, &new_contents)
-        .map_err(|e| format!("Failed to write temp: {e}"))?;
-    std::fs::rename(&temp_path, path)
-        .map_err(|e| {
-            let _ = std::fs::remove_file(&temp_path);
-            format!("Failed to rename: {e}")
-        })?;
+    std::fs::write(&temp_path, &new_contents).map_err(|e| format!("Failed to write temp: {e}"))?;
+    std::fs::rename(&temp_path, path).map_err(|e| {
+        let _ = std::fs::remove_file(&temp_path);
+        format!("Failed to rename: {e}")
+    })?;
 
     Ok(())
 }
@@ -196,8 +252,12 @@ fn default_network_access() -> NetworkAccess {
     NetworkAccess::Localhost
 }
 
-fn default_true_ssrf() -> bool { true }
-fn default_max_redirects() -> u8 { 5 }
+fn default_true_ssrf() -> bool {
+    true
+}
+fn default_max_redirects() -> u8 {
+    5
+}
 
 /// Device information
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -217,8 +277,14 @@ pub async fn handle_get(
     // Read gateway.host from config file to determine network access scope
     let host = read_gateway_host_from_config(&config_patcher);
 
-    let (ssrf_enabled, ssrf_tool_private, ssrf_webhook_private, ssrf_max_redirects, ssrf_allowed, ssrf_blocked) =
-        read_ssrf_config_from_toml(&config_patcher);
+    let (
+        ssrf_enabled,
+        ssrf_tool_private,
+        ssrf_webhook_private,
+        ssrf_max_redirects,
+        ssrf_allowed,
+        ssrf_blocked,
+    ) = read_ssrf_config_from_toml(&config_patcher);
 
     let security_config = SecurityConfig {
         require_auth: false,
@@ -233,8 +299,7 @@ pub async fn handle_get(
         ssrf_blocked_hosts: ssrf_blocked,
     };
 
-    let result = serde_json::to_value(&security_config)
-        .unwrap_or_else(|_| serde_json::json!({}));
+    let result = serde_json::to_value(&security_config).unwrap_or_else(|_| serde_json::json!({}));
 
     JsonRpcResponse::success(request.id, result)
 }
@@ -253,7 +318,13 @@ pub async fn handle_update(
 
     let security_config: SecurityConfig = match serde_json::from_value(params) {
         Ok(c) => c,
-        Err(e) => return JsonRpcResponse::error(request.id, INVALID_PARAMS, format!("Invalid security config: {}", e)),
+        Err(e) => {
+            return JsonRpcResponse::error(
+                request.id,
+                INVALID_PARAMS,
+                format!("Invalid security config: {}", e),
+            )
+        }
     };
 
     // Check current host to determine if restart is needed
@@ -296,10 +367,13 @@ pub async fn handle_update(
     });
     let _ = event_bus.publish_json(&event);
 
-    JsonRpcResponse::success(request.id, serde_json::json!({
-        "success": true,
-        "needs_restart": needs_restart,
-    }))
+    JsonRpcResponse::success(
+        request.id,
+        serde_json::json!({
+            "success": true,
+            "needs_restart": needs_restart,
+        }),
+    )
 }
 
 /// Handle security_config.list_devices request
@@ -320,8 +394,7 @@ pub async fn handle_list_devices(
         })
         .collect();
 
-    let result = serde_json::to_value(&device_infos)
-        .unwrap_or_else(|_| serde_json::json!([]));
+    let result = serde_json::to_value(&device_infos).unwrap_or_else(|_| serde_json::json!([]));
 
     JsonRpcResponse::success(request.id, result)
 }
@@ -338,10 +411,17 @@ pub async fn handle_revoke_device(
         None => return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Missing params"),
     };
 
-    let device_id: String = match serde_json::from_value(params.get("device_id").cloned().unwrap_or(Value::Null)) {
-        Ok(id) => id,
-        Err(e) => return JsonRpcResponse::error(request.id, INVALID_PARAMS, format!("Invalid device_id: {}", e)),
-    };
+    let device_id: String =
+        match serde_json::from_value(params.get("device_id").cloned().unwrap_or(Value::Null)) {
+            Ok(id) => id,
+            Err(e) => {
+                return JsonRpcResponse::error(
+                    request.id,
+                    INVALID_PARAMS,
+                    format!("Invalid device_id: {}", e),
+                )
+            }
+        };
 
     match device_store.revoke_device(&device_id) {
         Ok(_) => {
@@ -355,8 +435,10 @@ pub async fn handle_revoke_device(
 
             JsonRpcResponse::success(request.id, serde_json::json!({ "success": true }))
         }
-        Err(e) => {
-            JsonRpcResponse::error(request.id, INTERNAL_ERROR, format!("Failed to revoke device: {}", e))
-        }
+        Err(e) => JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!("Failed to revoke device: {}", e),
+        ),
     }
 }

@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;
 
-use super::{Entity, AggregateRoot, ValueObject};
+use super::{AggregateRoot, Entity, ValueObject};
 
 // ---------------------------------------------------------------------------
 // SkillId
@@ -36,7 +36,9 @@ impl SkillId {
 
     /// Return the skill name (part after `:`, or the whole id if no prefix).
     pub fn skill_name(&self) -> &str {
-        self.0.split_once(':').map_or(self.0.as_str(), |(_, name)| name)
+        self.0
+            .split_once(':')
+            .map_or(self.0.as_str(), |(_, name)| name)
     }
 }
 

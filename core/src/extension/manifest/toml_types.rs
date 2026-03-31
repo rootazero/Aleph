@@ -311,9 +311,15 @@ pub struct WasmHttpToml {
     pub max_response_bytes: usize,
 }
 
-fn default_http_timeout() -> u64 { 30 }
-fn default_max_request_bytes() -> usize { 1_048_576 }
-fn default_max_response_bytes() -> usize { 10_485_760 }
+fn default_http_timeout() -> u64 {
+    30
+}
+fn default_max_request_bytes() -> usize {
+    1_048_576
+}
+fn default_max_response_bytes() -> usize {
+    10_485_760
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WasmEndpointToml {
@@ -324,7 +330,9 @@ pub struct WasmEndpointToml {
     pub methods: Vec<String>,
 }
 
-fn default_toml_path_prefix() -> String { "/".to_string() }
+fn default_toml_path_prefix() -> String {
+    "/".to_string()
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WasmCredentialToml {
@@ -338,10 +346,20 @@ pub struct WasmCredentialToml {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum WasmCredentialInjectToml {
     Bearer,
-    Basic { username: String },
-    Header { name: String, #[serde(default)] prefix: Option<String> },
-    Query { param_name: String },
-    UrlPath { placeholder: String },
+    Basic {
+        username: String,
+    },
+    Header {
+        name: String,
+        #[serde(default)]
+        prefix: Option<String>,
+    },
+    Query {
+        param_name: String,
+    },
+    UrlPath {
+        placeholder: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -360,7 +378,9 @@ pub struct WasmToolInvokeToml {
     pub max_per_execution: u32,
 }
 
-fn default_toml_max_per_execution() -> u32 { 20 }
+fn default_toml_max_per_execution() -> u32 {
+    20
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WasmSecretsToml {
@@ -387,16 +407,24 @@ pub fn convert_wasm_capabilities(caps: &CapabilitiesSection) -> Option<WasmCapab
             allowed_prefixes: w.allowed_prefixes.clone(),
         }),
         http: caps.http.as_ref().map(|h| HttpCapability {
-            allowlist: h.allowlist.iter().map(|e| EndpointPattern {
-                host: e.host.clone(),
-                path_prefix: e.path_prefix.clone(),
-                methods: e.methods.clone(),
-            }).collect(),
-            credentials: h.credentials.iter().map(|c| CredentialBinding {
-                secret_name: c.secret_name.clone(),
-                inject: convert_credential_inject(&c.inject),
-                host_patterns: c.host_patterns.clone(),
-            }).collect(),
+            allowlist: h
+                .allowlist
+                .iter()
+                .map(|e| EndpointPattern {
+                    host: e.host.clone(),
+                    path_prefix: e.path_prefix.clone(),
+                    methods: e.methods.clone(),
+                })
+                .collect(),
+            credentials: h
+                .credentials
+                .iter()
+                .map(|c| CredentialBinding {
+                    secret_name: c.secret_name.clone(),
+                    inject: convert_credential_inject(&c.inject),
+                    host_patterns: c.host_patterns.clone(),
+                })
+                .collect(),
             rate_limit: h.rate_limit.as_ref().map(|r| RateLimit {
                 requests_per_minute: r.requests_per_minute,
                 requests_per_hour: r.requests_per_hour,
@@ -418,10 +446,19 @@ pub fn convert_wasm_capabilities(caps: &CapabilitiesSection) -> Option<WasmCapab
 fn convert_credential_inject(inject: &WasmCredentialInjectToml) -> CredentialInject {
     match inject {
         WasmCredentialInjectToml::Bearer => CredentialInject::Bearer,
-        WasmCredentialInjectToml::Basic { username } => CredentialInject::Basic { username: username.clone() },
-        WasmCredentialInjectToml::Header { name, prefix } => CredentialInject::Header { name: name.clone(), prefix: prefix.clone() },
-        WasmCredentialInjectToml::Query { param_name } => CredentialInject::Query { param_name: param_name.clone() },
-        WasmCredentialInjectToml::UrlPath { placeholder } => CredentialInject::UrlPath { placeholder: placeholder.clone() },
+        WasmCredentialInjectToml::Basic { username } => CredentialInject::Basic {
+            username: username.clone(),
+        },
+        WasmCredentialInjectToml::Header { name, prefix } => CredentialInject::Header {
+            name: name.clone(),
+            prefix: prefix.clone(),
+        },
+        WasmCredentialInjectToml::Query { param_name } => CredentialInject::Query {
+            param_name: param_name.clone(),
+        },
+        WasmCredentialInjectToml::UrlPath { placeholder } => CredentialInject::UrlPath {
+            placeholder: placeholder.clone(),
+        },
     }
 }
 
@@ -436,7 +473,9 @@ pub fn convert_permissions(perms: &PermissionsSection) -> Vec<PluginPermission> 
         permissions.push(PluginPermission::Network);
     }
     match &perms.filesystem {
-        FilesystemPermission::Bool(true) => permissions.push(PluginPermission::Filesystem(FilesystemAccess::Full)),
+        FilesystemPermission::Bool(true) => {
+            permissions.push(PluginPermission::Filesystem(FilesystemAccess::Full))
+        }
         FilesystemPermission::Bool(false) => {}
         FilesystemPermission::Level(level) => match level.as_str() {
             "read" => permissions.push(PluginPermission::Filesystem(FilesystemAccess::Read)),
@@ -479,8 +518,9 @@ pub fn parse_aleph_plugin_toml_content(
 ) -> ExtensionResult<PluginManifest> {
     let toml_path = plugin_dir.join(ALEPH_PLUGIN_TOML);
 
-    let toml: AlephPluginToml = toml::from_str(content)
-        .map_err(|e| ExtensionError::invalid_manifest(&toml_path, format!("TOML parse error: {}", e)))?;
+    let toml: AlephPluginToml = toml::from_str(content).map_err(|e| {
+        ExtensionError::invalid_manifest(&toml_path, format!("TOML parse error: {}", e))
+    })?;
 
     let plugin_id = if toml.plugin.id.is_empty() {
         return Err(ExtensionError::missing_field(&toml_path, "plugin.id"));
@@ -519,17 +559,45 @@ pub fn parse_aleph_plugin_toml_content(
         license: toml.plugin.license,
         keywords: toml.plugin.keywords.unwrap_or_default(),
         extensions: toml.plugin.extensions.unwrap_or_default(),
-        tools_v2: if toml.tools.is_empty() { None } else { Some(toml.tools) },
-        hooks_v2: if toml.hooks.is_empty() { None } else { Some(toml.hooks) },
-        commands_v2: if toml.commands.is_empty() { None } else { Some(toml.commands) },
-        services_v2: if toml.services.is_empty() { None } else { Some(toml.services) },
+        tools_v2: if toml.tools.is_empty() {
+            None
+        } else {
+            Some(toml.tools)
+        },
+        hooks_v2: if toml.hooks.is_empty() {
+            None
+        } else {
+            Some(toml.hooks)
+        },
+        commands_v2: if toml.commands.is_empty() {
+            None
+        } else {
+            Some(toml.commands)
+        },
+        services_v2: if toml.services.is_empty() {
+            None
+        } else {
+            Some(toml.services)
+        },
         prompt_v2: toml.prompt,
         wasm_capabilities: convert_wasm_capabilities(&toml.capabilities),
         wasm_resource_limits: None,
         capabilities_v2: Some(toml.capabilities),
-        channels_v2: if toml.channels.is_empty() { None } else { Some(toml.channels) },
-        providers_v2: if toml.providers.is_empty() { None } else { Some(toml.providers) },
-        http_routes_v2: if toml.http_routes.is_empty() { None } else { Some(toml.http_routes) },
+        channels_v2: if toml.channels.is_empty() {
+            None
+        } else {
+            Some(toml.channels)
+        },
+        providers_v2: if toml.providers.is_empty() {
+            None
+        } else {
+            Some(toml.providers)
+        },
+        http_routes_v2: if toml.http_routes.is_empty() {
+            None
+        } else {
+            Some(toml.http_routes)
+        },
         aleph_extensions: None,
     })
 }

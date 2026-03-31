@@ -32,8 +32,14 @@ fn p5_03_single_session_id_generates_in_clause() {
         ..Default::default()
     };
     let sql = f.to_lance_filter().unwrap();
-    assert!(sql.contains("session_id IN"), "expected IN clause, got: {sql}");
-    assert!(sql.contains("agent:main:main"), "expected session id in SQL, got: {sql}");
+    assert!(
+        sql.contains("session_id IN"),
+        "expected IN clause, got: {sql}"
+    );
+    assert!(
+        sql.contains("agent:main:main"),
+        "expected session id in SQL, got: {sql}"
+    );
 }
 
 /// P5-04: Multiple session IDs all appear in the generated IN clause.
@@ -48,7 +54,10 @@ fn p5_04_multiple_session_ids_generate_in_clause() {
         ..Default::default()
     };
     let sql = f.to_lance_filter().unwrap();
-    assert!(sql.contains("session_id IN"), "expected IN clause, got: {sql}");
+    assert!(
+        sql.contains("session_id IN"),
+        "expected IN clause, got: {sql}"
+    );
     assert!(sql.contains("agent:main:main"), "missing base id in: {sql}");
     assert!(sql.contains(":s1"), "missing :s1 in: {sql}");
     assert!(sql.contains(":s2"), "missing :s2 in: {sql}");
@@ -62,7 +71,13 @@ fn p5_05_session_ids_with_special_chars_are_escaped() {
         ..Default::default()
     };
     let sql = f.to_lance_filter().unwrap();
-    assert!(sql.contains("O''Brien"), "single quote not escaped in: {sql}");
+    assert!(
+        sql.contains("O''Brien"),
+        "single quote not escaped in: {sql}"
+    );
     // Must not contain un-escaped single-interior quote
-    assert!(!sql.contains("O'Brien'"), "raw quote should be escaped in: {sql}");
+    assert!(
+        !sql.contains("O'Brien'"),
+        "raw quote should be escaped in: {sql}"
+    );
 }

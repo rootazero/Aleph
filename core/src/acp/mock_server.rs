@@ -35,10 +35,7 @@ pub mod mock {
             };
 
             let id = req.get("id").cloned();
-            let method = req
-                .get("method")
-                .and_then(|m| m.as_str())
-                .unwrap_or("");
+            let method = req.get("method").and_then(|m| m.as_str()).unwrap_or("");
 
             let response = match method {
                 "initialize" => serde_json::json!({

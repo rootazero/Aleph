@@ -1,19 +1,19 @@
 //! Audio/music generation tool — generates audio from text descriptions.
 
+use crate::sync_primitives::{Arc, RwLock};
 use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use crate::sync_primitives::{Arc, RwLock};
 use std::time::Instant;
 use tracing::info;
 
+use crate::builtin_tools::error::ToolError;
 use crate::error::Result;
+use crate::gateway::media::{detect_mime, MediaItem};
 use crate::generation::{
     GenerationData, GenerationProviderRegistry, GenerationRequest, GenerationType,
 };
-use crate::builtin_tools::error::ToolError;
 use crate::tools::AlephTool;
-use crate::gateway::media::{MediaItem, detect_mime};
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct AudioGenerateArgs {
@@ -59,7 +59,12 @@ impl AudioGenerateTool {
         let start = Instant::now();
 
         let prompt_display = if args.prompt.chars().count() > 30 {
-            let end = args.prompt.char_indices().nth(30).map(|(i, _)| i).unwrap_or(args.prompt.len());
+            let end = args
+                .prompt
+                .char_indices()
+                .nth(30)
+                .map(|(i, _)| i)
+                .unwrap_or(args.prompt.len());
             format!("{}...", &args.prompt[..end])
         } else {
             args.prompt.clone()
@@ -78,7 +83,8 @@ impl AudioGenerateTool {
                     ToolError::InvalidArgs(error_msg)
                 })?;
                 if !p.supports(GenerationType::Audio) {
-                    let error_msg = format!("Provider '{}' does not support audio generation", name);
+                    let error_msg =
+                        format!("Provider '{}' does not support audio generation", name);
                     notify_tool_result(Self::NAME, &error_msg, false);
                     return Err(ToolError::InvalidArgs(error_msg));
                 }
@@ -107,13 +113,17 @@ impl AudioGenerateTool {
             GenerationData::Url(url) => (url.clone(), "url"),
             GenerationData::LocalPath(path) => (path.clone(), "file"),
             GenerationData::Bytes(_) => {
-                let error_msg = "Audio provider returned raw bytes — expected URL or file path".to_string();
+                let error_msg =
+                    "Audio provider returned raw bytes — expected URL or file path".to_string();
                 notify_tool_result(Self::NAME, &error_msg, false);
                 return Err(ToolError::Execution(error_msg));
             }
         };
 
-        let result_summary = format!("音频生成完成 ({} ms, provider: {})", duration_ms, provider_name);
+        let result_summary = format!(
+            "音频生成完成 ({} ms, provider: {})",
+            duration_ms, provider_name
+        );
         notify_tool_result(Self::NAME, &result_summary, true);
 
         let display = if location_type == "data_url" {
@@ -146,7 +156,9 @@ impl AudioGenerateTool {
 
 impl Clone for AudioGenerateTool {
     fn clone(&self) -> Self {
-        Self { registry: Arc::clone(&self.registry) }
+        Self {
+            registry: Arc::clone(&self.registry),
+        }
     }
 }
 

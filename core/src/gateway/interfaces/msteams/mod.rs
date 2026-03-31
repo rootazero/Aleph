@@ -111,23 +111,18 @@ impl MsTeamsChannel {
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     /// Cache a conversation reference, evicting the oldest entry if over capacity.
-    async fn cache_conversation_ref(
-        &self,
-        conversation_id: &str,
-        service_url: &str,
-        bot_id: &str,
-    ) {
+    async fn cache_conversation_ref(&self, conversation_id: &str, service_url: &str, bot_id: &str) {
         let mut refs = self.conversation_refs.write().await;
 
         // Update existing or insert new
-        let entry = refs.entry(conversation_id.to_string()).or_insert_with(|| {
-            ConversationReference {
-                service_url: String::new(),
-                conversation_id: conversation_id.to_string(),
-                bot_id: String::new(),
-                last_seen: Instant::now(),
-            }
-        });
+        let entry =
+            refs.entry(conversation_id.to_string())
+                .or_insert_with(|| ConversationReference {
+                    service_url: String::new(),
+                    conversation_id: conversation_id.to_string(),
+                    bot_id: String::new(),
+                    last_seen: Instant::now(),
+                });
         entry.service_url = service_url.to_string();
         entry.bot_id = bot_id.to_string();
         entry.last_seen = Instant::now();
@@ -220,7 +215,11 @@ impl Channel for MsTeamsChannel {
                         info!("On-demand JWKS key refresh triggered by signature mismatch");
                     }
                 }
-                if status_handle.try_read().map(|s| *s == ChannelStatus::Disconnected).unwrap_or(false) {
+                if status_handle
+                    .try_read()
+                    .map(|s| *s == ChannelStatus::Disconnected)
+                    .unwrap_or(false)
+                {
                     break;
                 }
                 if let Err(e) = validator.refresh_keys().await {
@@ -242,26 +241,18 @@ impl Channel for MsTeamsChannel {
 
     async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
         let conversation_id = message.conversation_id.as_str();
-        let service_url = self
-            .get_service_url(conversation_id)
-            .await
-            .ok_or_else(|| {
-                ChannelError::SendFailed(format!(
-                    "No cached service URL for conversation '{}'",
-                    conversation_id
-                ))
-            })?;
+        let service_url = self.get_service_url(conversation_id).await.ok_or_else(|| {
+            ChannelError::SendFailed(format!(
+                "No cached service URL for conversation '{}'",
+                conversation_id
+            ))
+        })?;
 
         let activity = Self::build_outbound_activity(&message);
 
         let resp = if let Some(ref reply_to) = message.reply_to {
             self.client
-                .reply_to_activity(
-                    &service_url,
-                    conversation_id,
-                    reply_to.as_str(),
-                    &activity,
-                )
+                .reply_to_activity(&service_url, conversation_id, reply_to.as_str(), &activity)
                 .await?
         } else {
             self.client
@@ -272,7 +263,10 @@ impl Channel for MsTeamsChannel {
         // Track sent message for delete-by-id
         {
             let mut sent = self.sent_messages.write().await;
-            sent.insert(resp.id.clone(), (conversation_id.to_string(), Instant::now()));
+            sent.insert(
+                resp.id.clone(),
+                (conversation_id.to_string(), Instant::now()),
+            );
             // Cap at MAX_CONVERSATION_REFS entries, evict oldest on overflow
             if sent.len() > MAX_CONVERSATION_REFS {
                 if let Some(oldest_key) = sent
@@ -336,18 +330,24 @@ impl Channel for MsTeamsChannel {
             .await
     }
 
-    async fn delete(&self, conversation_id: &ConversationId, message_id: &MessageId) -> ChannelResult<()> {
+    async fn delete(
+        &self,
+        conversation_id: &ConversationId,
+        message_id: &MessageId,
+    ) -> ChannelResult<()> {
         // Use provided conversation_id, fall back to sent-message cache
         let conversation_id = if !conversation_id.as_str().is_empty() {
             conversation_id.as_str().to_string()
         } else {
             let sent = self.sent_messages.read().await;
-            sent.get(message_id.as_str()).map(|(cid, _)| cid.clone()).ok_or_else(|| {
-                ChannelError::SendFailed(format!(
-                    "Cannot delete message '{}': no conversation context",
-                    message_id.as_str()
-                ))
-            })?
+            sent.get(message_id.as_str())
+                .map(|(cid, _)| cid.clone())
+                .ok_or_else(|| {
+                    ChannelError::SendFailed(format!(
+                        "Cannot delete message '{}': no conversation context",
+                        message_id.as_str()
+                    ))
+                })?
         };
 
         let service_url = self
@@ -582,14 +582,14 @@ impl MsTeamsChannel {
             // Cache the ref (with eviction, matching cache_conversation_ref logic)
             {
                 let mut map = refs.write().await;
-                let entry = map.entry(conv_id.clone()).or_insert_with(|| {
-                    ConversationReference {
+                let entry = map
+                    .entry(conv_id.clone())
+                    .or_insert_with(|| ConversationReference {
                         service_url: String::new(),
                         conversation_id: conv_id.clone(),
                         bot_id: String::new(),
                         last_seen: Instant::now(),
-                    }
-                });
+                    });
                 entry.service_url = svc_url.clone();
                 entry.bot_id = bot_id_clone;
                 entry.last_seen = Instant::now();
@@ -781,7 +781,10 @@ mod tests {
         };
 
         let result = channel.handle_message(activity).await.unwrap();
-        assert!(result.is_empty(), "Message from disallowed user should be dropped");
+        assert!(
+            result.is_empty(),
+            "Message from disallowed user should be dropped"
+        );
     }
 
     #[tokio::test]

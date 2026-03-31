@@ -259,7 +259,10 @@ impl GenerationProvider for ReplicateProvider {
         self.model_mappings
             .get("default")
             .or_else(|| {
-                self.model_mappings.keys().min().and_then(|k| self.model_mappings.get(k))
+                self.model_mappings
+                    .keys()
+                    .min()
+                    .and_then(|k| self.model_mappings.get(k))
             })
             .map(|s| s.as_str())
     }

@@ -210,10 +210,7 @@ async fn reentrant_tick_skipped() {
     let h = CronTestHarness::new();
 
     // Verify initial state
-    assert!(
-        !h.state.is_running(),
-        "should start as not running"
-    );
+    assert!(!h.state.is_running(), "should start as not running");
 
     // Set running flag (simulating a tick in progress)
     h.state.set_running(true);

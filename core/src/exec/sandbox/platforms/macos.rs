@@ -6,9 +6,7 @@ use crate::error::{AlephError, Result};
 use crate::exec::sandbox::adapter::{
     ExecutionResult, SandboxAdapter, SandboxCommand, SandboxProfile,
 };
-use crate::exec::sandbox::capabilities::{
-    Capabilities, FileSystemCapability, NetworkCapability,
-};
+use crate::exec::sandbox::capabilities::{Capabilities, FileSystemCapability, NetworkCapability};
 use crate::exec::sandbox::profile::ProfileGenerator;
 use async_trait::async_trait;
 use std::time::Instant;
@@ -74,10 +72,7 @@ impl SandboxAdapter for MacOSSandbox {
                     // Deny writes to this specific path (read already allowed by default)
                     // Escape double-quotes to prevent Seatbelt profile injection
                     let path_str = path.to_string_lossy().replace('"', "\\\"");
-                    profile.push_str(&format!(
-                        "(deny file-write* (subpath \"{}\"))\n",
-                        path_str
-                    ));
+                    profile.push_str(&format!("(deny file-write* (subpath \"{}\"))\n", path_str));
                 }
                 FileSystemCapability::ReadWrite { .. } => {
                     // Both read and write allowed by default — no extra rule needed
@@ -102,7 +97,10 @@ impl SandboxAdapter for MacOSSandbox {
                 for domain in domains {
                     // Validate domain to prevent Seatbelt profile injection.
                     // Only allow safe characters: alphanumeric, dots, hyphens, underscores.
-                    if domain.chars().all(|c| c.is_alphanumeric() || matches!(c, '.' | '-' | '_')) {
+                    if domain
+                        .chars()
+                        .all(|c| c.is_alphanumeric() || matches!(c, '.' | '-' | '_'))
+                    {
                         profile.push_str(&format!(
                             "(allow network-outbound (remote tcp \"{}:*\"))\n",
                             domain
@@ -153,7 +151,8 @@ impl SandboxAdapter for MacOSSandbox {
         }
 
         // Set timeout
-        let timeout = std::time::Duration::from_secs(profile.capabilities.process.max_execution_time);
+        let timeout =
+            std::time::Duration::from_secs(profile.capabilities.process.max_execution_time);
 
         // Execute with timeout
         let output = tokio::time::timeout(timeout, cmd.output())
@@ -208,7 +207,10 @@ mod tests {
         #[cfg(not(target_os = "macos"))]
         {
             // On non-macOS, should not be supported
-            assert!(!sandbox.is_supported(), "sandbox-exec should not be available on non-macOS");
+            assert!(
+                !sandbox.is_supported(),
+                "sandbox-exec should not be available on non-macOS"
+            );
         }
     }
 
@@ -244,4 +246,3 @@ mod tests {
         sandbox.cleanup(&profile).unwrap();
     }
 }
-

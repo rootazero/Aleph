@@ -229,7 +229,6 @@ impl OllamaProvider {
         }
     }
 
-
     /// Handle error response from Ollama
     async fn handle_error(&self, response: reqwest::Response) -> AlephError {
         let status = response.status();
@@ -357,20 +356,16 @@ impl crate::providers::model_discovery::ModelDiscovery for OllamaProvider {
         &self.name
     }
 
-    async fn discover_models(&self) -> anyhow::Result<Vec<crate::providers::model_discovery::DiscoveredModel>> {
+    async fn discover_models(
+        &self,
+    ) -> anyhow::Result<Vec<crate::providers::model_discovery::DiscoveredModel>> {
         use crate::providers::model_discovery::DiscoveredModel;
 
         // Derive base URL from the /api/generate endpoint
         let base_url = self.endpoint.trim_end_matches("/api/generate");
         let url = format!("{}/api/tags", base_url);
 
-        let resp: TagsResponse = self
-            .client
-            .get(&url)
-            .send()
-            .await?
-            .json()
-            .await?;
+        let resp: TagsResponse = self.client.get(&url).send().await?.json().await?;
 
         Ok(resp
             .models

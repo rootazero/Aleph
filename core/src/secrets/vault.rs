@@ -175,8 +175,8 @@ impl SecretVault {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::crypto::SecretsCrypto;
+    use super::*;
     use tempfile::TempDir;
 
     /// Helper: create a test vault in a temp directory.

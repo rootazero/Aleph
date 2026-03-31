@@ -122,7 +122,10 @@ struct CommandTreeNode {
 }
 
 /// Known tool namespaces for hierarchical grouping.
-const TOOL_NAMESPACES: &[&str] = &["session", "agent", "cron", "skill", "vault", "memory", "image", "generate", "snapshot", "plugin", "team", "task"];
+const TOOL_NAMESPACES: &[&str] = &[
+    "session", "agent", "cron", "skill", "vault", "memory", "image", "generate", "snapshot",
+    "plugin", "team", "task",
+];
 
 /// Build a hierarchical tree from a flat list of tools.
 ///
@@ -135,13 +138,10 @@ fn build_command_tree(tools: Vec<UnifiedTool>) -> Vec<CommandTreeNode> {
 
     for tool in tools {
         let ns = TOOL_NAMESPACES.iter().find(|&&ns| {
-            tool.name.starts_with(ns) && tool.name.get(ns.len()..ns.len()+1) == Some("_")
+            tool.name.starts_with(ns) && tool.name.get(ns.len()..ns.len() + 1) == Some("_")
         });
         if let Some(&ns) = ns {
-            namespaces
-                .entry(ns.to_string())
-                .or_default()
-                .push(tool);
+            namespaces.entry(ns.to_string()).or_default().push(tool);
         } else {
             standalone.push(tool);
         }
@@ -470,8 +470,7 @@ pub async fn handle_execute(
 
             if tool_registry.is_namespace(&first_word).await {
                 // It's a known namespace
-                let children =
-                    build_namespace_children(&tool_registry, &first_word).await;
+                let children = build_namespace_children(&tool_registry, &first_word).await;
 
                 if words.len() > 1 {
                     // Had a subcommand that didn't resolve — typo
@@ -576,9 +575,7 @@ mod tests {
             let source = if id.starts_with("builtin:") {
                 ToolSource::Builtin
             } else {
-                ToolSource::Custom {
-                    rule_index: 0,
-                }
+                ToolSource::Custom { rule_index: 0 }
             };
             registry
                 .register_with_conflict_resolution(UnifiedTool::new(id, name, desc, source))
@@ -656,7 +653,10 @@ mod tests {
         let result = response.result.unwrap();
         assert_eq!(result["resolved"], true);
         assert_eq!(result["command"]["source_type"], "custom");
-        assert!(result["command"]["args"].as_str().unwrap().contains("weather"));
+        assert!(result["command"]["args"]
+            .as_str()
+            .unwrap()
+            .contains("weather"));
     }
 
     #[tokio::test]
@@ -764,11 +764,8 @@ mod tests {
     async fn test_execute_empty_input() {
         let registry = Arc::new(ToolRegistry::new());
         let parser = Arc::new(CommandParser::new(registry.clone()));
-        let request = JsonRpcRequest::with_id(
-            "command.execute",
-            Some(json!({"input": ""})),
-            json!(1),
-        );
+        let request =
+            JsonRpcRequest::with_id("command.execute", Some(json!({"input": ""})), json!(1));
         let response = handle_execute(request, parser, registry).await;
 
         assert!(response.is_error());
@@ -808,11 +805,36 @@ mod tests {
         use crate::dispatcher::ToolSource;
 
         let tools = vec![
-            UnifiedTool::new("builtin:session_new", "session_new", "New session", ToolSource::Builtin),
-            UnifiedTool::new("builtin:session_list", "session_list", "List sessions", ToolSource::Builtin),
-            UnifiedTool::new("custom:search", "search", "Web search", ToolSource::Custom { rule_index: 0 }),
-            UnifiedTool::new("builtin:plugin_install", "plugin_install", "Install plugin", ToolSource::Builtin),
-            UnifiedTool::new("builtin:plugin_list", "plugin_list", "List plugins", ToolSource::Builtin),
+            UnifiedTool::new(
+                "builtin:session_new",
+                "session_new",
+                "New session",
+                ToolSource::Builtin,
+            ),
+            UnifiedTool::new(
+                "builtin:session_list",
+                "session_list",
+                "List sessions",
+                ToolSource::Builtin,
+            ),
+            UnifiedTool::new(
+                "custom:search",
+                "search",
+                "Web search",
+                ToolSource::Custom { rule_index: 0 },
+            ),
+            UnifiedTool::new(
+                "builtin:plugin_install",
+                "plugin_install",
+                "Install plugin",
+                ToolSource::Builtin,
+            ),
+            UnifiedTool::new(
+                "builtin:plugin_list",
+                "plugin_list",
+                "List plugins",
+                ToolSource::Builtin,
+            ),
         ];
 
         let tree = build_command_tree(tools);

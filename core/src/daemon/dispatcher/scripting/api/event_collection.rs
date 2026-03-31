@@ -1,7 +1,7 @@
 //! EventCollection - Fluent API for filtering/aggregating events
 
-use crate::daemon::events::DerivedEvent;
 use crate::daemon::dispatcher::scripting::api::event::EventApi;
+use crate::daemon::events::DerivedEvent;
 use chrono::Duration;
 use rhai::{Engine, FnPtr, AST};
 
@@ -25,7 +25,12 @@ impl EventCollection {
     }
 
     /// Filter events using Rhai predicate
-    pub fn filter(&self, engine: &Engine, ast: &AST, predicate: FnPtr) -> Result<EventCollection, Box<rhai::EvalAltResult>> {
+    pub fn filter(
+        &self,
+        engine: &Engine,
+        ast: &AST,
+        predicate: FnPtr,
+    ) -> Result<EventCollection, Box<rhai::EvalAltResult>> {
         let mut filtered = Vec::new();
 
         for event in &self.events {
@@ -47,7 +52,12 @@ impl EventCollection {
     }
 
     /// Check if any event matches predicate
-    pub fn any(&self, engine: &Engine, ast: &AST, predicate: FnPtr) -> Result<bool, Box<rhai::EvalAltResult>> {
+    pub fn any(
+        &self,
+        engine: &Engine,
+        ast: &AST,
+        predicate: FnPtr,
+    ) -> Result<bool, Box<rhai::EvalAltResult>> {
         for event in &self.events {
             let event_api = EventApi::new(event.clone());
             let result: bool = predicate.call(engine, ast, (event_api,))?;
@@ -68,17 +78,15 @@ mod tests {
 
     #[test]
     fn test_event_collection_count() {
-        let events = vec![
-            DerivedEvent::ActivityChanged {
-                timestamp: Utc::now(),
-                old_activity: ActivityType::Idle,
-                new_activity: ActivityType::Programming {
-                    language: Some("rust".to_string()),
-                    project: None,
-                },
-                confidence: 0.9,
+        let events = vec![DerivedEvent::ActivityChanged {
+            timestamp: Utc::now(),
+            old_activity: ActivityType::Idle,
+            new_activity: ActivityType::Programming {
+                language: Some("rust".to_string()),
+                project: None,
             },
-        ];
+            confidence: 0.9,
+        }];
 
         let coll = EventCollection::new(events);
         assert_eq!(coll.count(), 1);

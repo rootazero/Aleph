@@ -100,9 +100,10 @@ impl ApprovalRequestPayload {
                     .as_ref()
                     .map(|r| r.executable_name.clone())
                     .unwrap_or_else(|| s.argv.first().cloned().unwrap_or_default()),
-                resolved_path: s.resolution.as_ref().and_then(|r| {
-                    r.resolved_path.as_ref().map(|p| p.to_string_lossy().into())
-                }),
+                resolved_path: s
+                    .resolution
+                    .as_ref()
+                    .and_then(|r| r.resolved_path.as_ref().map(|p| p.to_string_lossy().into())),
                 args: s.argv.iter().skip(1).cloned().collect(),
             })
             .collect();

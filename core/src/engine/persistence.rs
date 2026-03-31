@@ -35,10 +35,10 @@
 //! ```
 
 use super::{AtomicAction, NaiveBayesClassifier};
+use crate::sync_primitives::Arc;
 use rusqlite::{params, Connection, Result as SqliteResult};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use crate::sync_primitives::Arc;
 use tokio::sync::Mutex;
 use tracing::{debug, info};
 
@@ -192,8 +192,13 @@ impl Persistence {
         let patterns = stmt
             .query_map([], |row| {
                 let action_json: String = row.get(1)?;
-                let action: AtomicAction = serde_json::from_str(&action_json)
-                    .map_err(|e| rusqlite::Error::FromSqlConversionFailure(1, rusqlite::types::Type::Text, Box::new(e)))?;
+                let action: AtomicAction = serde_json::from_str(&action_json).map_err(|e| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        1,
+                        rusqlite::types::Type::Text,
+                        Box::new(e),
+                    )
+                })?;
 
                 Ok(LearnedPattern {
                     pattern: row.get(0)?,
@@ -245,8 +250,14 @@ impl Persistence {
 
         let result = stmt.query_row([], |row| {
             let state_json: String = row.get(0)?;
-            let classifier: NaiveBayesClassifier = serde_json::from_str(&state_json)
-                .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))?;
+            let classifier: NaiveBayesClassifier =
+                serde_json::from_str(&state_json).map_err(|e| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        0,
+                        rusqlite::types::Type::Text,
+                        Box::new(e),
+                    )
+                })?;
             Ok(classifier)
         });
 
@@ -341,17 +352,13 @@ impl Persistence {
     pub async fn stats(&self) -> SqliteResult<PersistenceStats> {
         let conn = self.conn.lock().await;
 
-        let pattern_count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM learned_patterns",
-            [],
-            |row| row.get(0),
-        )?;
+        let pattern_count: i64 =
+            conn.query_row("SELECT COUNT(*) FROM learned_patterns", [], |row| {
+                row.get(0)
+            })?;
 
-        let rule_count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM rule_metadata",
-            [],
-            |row| row.get(0),
-        )?;
+        let rule_count: i64 =
+            conn.query_row("SELECT COUNT(*) FROM rule_metadata", [], |row| row.get(0))?;
 
         let total_samples: i64 = conn
             .query_row(

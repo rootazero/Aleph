@@ -98,11 +98,10 @@ impl A2AMessageHandler for AgentLoopBridge {
             .await?;
 
         // Get the default agent
-        let agent = self
-            .agent_registry
-            .get_default()
-            .await
-            .ok_or_else(|| A2AError::InternalError("No default agent registered".to_string()))?;
+        let agent =
+            self.agent_registry.get_default().await.ok_or_else(|| {
+                A2AError::InternalError("No default agent registered".to_string())
+            })?;
 
         // Build and execute the run request
         let request = Self::build_run_request(task_id, &input);
@@ -112,7 +111,11 @@ impl A2AMessageHandler for AgentLoopBridge {
 
         info!(task_id, run_id = %run_id, "A2A bridge: executing synchronous run");
 
-        match self.execution_adapter.execute(request, agent, emitter).await {
+        match self
+            .execution_adapter
+            .execute(request, agent, emitter)
+            .await
+        {
             Ok(()) => {
                 // Execution succeeded — mark task as Completed with a response message
                 let response_msg = A2AMessage::text(A2ARole::Agent, "Task completed successfully");
@@ -184,11 +187,10 @@ impl A2AMessageHandler for AgentLoopBridge {
             .await;
 
         // Get the default agent
-        let agent = self
-            .agent_registry
-            .get_default()
-            .await
-            .ok_or_else(|| A2AError::InternalError("No default agent registered".to_string()))?;
+        let agent =
+            self.agent_registry.get_default().await.ok_or_else(|| {
+                A2AError::InternalError("No default agent registered".to_string())
+            })?;
 
         // Build the run request
         let request = Self::build_run_request(task_id, &input);
@@ -211,7 +213,11 @@ impl A2AMessageHandler for AgentLoopBridge {
                     let response_msg =
                         A2AMessage::text(A2ARole::Agent, "Task completed successfully");
                     if let Err(e) = task_manager
-                        .update_status(&task_id_owned, TaskState::Completed, Some(response_msg.clone()))
+                        .update_status(
+                            &task_id_owned,
+                            TaskState::Completed,
+                            Some(response_msg.clone()),
+                        )
                         .await
                     {
                         error!(task_id = %task_id_owned, error = %e, "Failed to update task to Completed");

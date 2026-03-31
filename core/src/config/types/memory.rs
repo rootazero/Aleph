@@ -203,7 +203,10 @@ pub struct EmbeddingProviderConfig {
     #[schemars(skip)]
     pub api_key: Option<String>,
     /// Model names (first entry is the active model)
-    #[serde(deserialize_with = "crate::config::types::serde_helpers::deserialize_models", alias = "model")]
+    #[serde(
+        deserialize_with = "crate::config::types::serde_helpers::deserialize_models",
+        alias = "model"
+    )]
     pub models: Vec<String>,
     /// Output vector dimensions
     pub dimensions: u32,
@@ -448,7 +451,6 @@ pub fn default_enabled() -> bool {
     true
 }
 
-
 pub fn default_max_context_items() -> u32 {
     5
 }
@@ -591,7 +593,6 @@ pub fn default_fts_tokenizer() -> String {
     "default".to_string()
 }
 
-
 // =============================================================================
 // ReflectionConfig
 // =============================================================================
@@ -645,13 +646,23 @@ fn default_reflection_cooldown() -> u32 {
 }
 
 // Hybrid retrieval defaults
-fn default_rrf_k() -> u32 { 60 }
-fn default_bm25_bonus() -> f32 { 0.15 }
+fn default_rrf_k() -> u32 {
+    60
+}
+fn default_bm25_bonus() -> f32 {
+    0.15
+}
 
 // Scoring, retrieval gate, noise filter & backup defaults
-fn default_dedup_similarity_threshold() -> f32 { 0.95 }
-fn default_backup_enabled() -> bool { true }
-fn default_backup_max_files() -> usize { 7 }
+fn default_dedup_similarity_threshold() -> f32 {
+    0.95
+}
+fn default_backup_enabled() -> bool {
+    true
+}
+fn default_backup_max_files() -> usize {
+    7
+}
 impl Default for MemoryConfig {
     fn default() -> Self {
         Self {
@@ -687,8 +698,10 @@ impl Default for MemoryConfig {
             query_expansion_enabled: false,
             rerank: crate::memory::rerank::RerankConfig::default(),
             // Scoring, retrieval gate & noise filter
-            scoring_pipeline: crate::memory::scoring_pipeline::config::ScoringPipelineConfig::default(),
-            adaptive_retrieval: crate::memory::adaptive_retrieval::AdaptiveRetrievalConfig::default(),
+            scoring_pipeline:
+                crate::memory::scoring_pipeline::config::ScoringPipelineConfig::default(),
+            adaptive_retrieval: crate::memory::adaptive_retrieval::AdaptiveRetrievalConfig::default(
+            ),
             noise_filter: crate::memory::noise_filter::NoiseFilterConfig::default(),
             // Storage
             dedup_similarity_threshold: default_dedup_similarity_threshold(),

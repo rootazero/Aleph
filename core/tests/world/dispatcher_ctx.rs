@@ -2,12 +2,12 @@
 #![allow(dead_code)]
 
 // TODO: removed — module deleted: use alephcore::dispatcher::cortex::{...};
+use alephcore::dispatcher::agent_types::{AiTask, CodeExec, Language, Task, TaskGraph, TaskType};
+use alephcore::dispatcher::scheduler::{DagScheduler, ExecutionResult, GraphTaskExecutor};
 use alephcore::dispatcher::{
     DagTaskDisplayStatus, DagTaskInfo, DagTaskPlan, ExecutionCallback, NoOpExecutionCallback,
     RiskEvaluator, RiskLevel, TaskContext, TaskOutput, UserDecision,
 };
-use alephcore::dispatcher::agent_types::{AiTask, CodeExec, Language, Task, TaskGraph, TaskType};
-use alephcore::dispatcher::scheduler::{DagScheduler, ExecutionResult, GraphTaskExecutor};
 use alephcore::Result;
 use async_trait::async_trait;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -142,7 +142,6 @@ impl std::fmt::Debug for DispatcherContext {
             .finish()
     }
 }
-
 
 impl DispatcherContext {
     // TODO: removed — cortex module deleted:
@@ -298,18 +297,22 @@ impl DispatcherContext {
 
     /// Execute the task graph
     pub async fn execute_graph(&mut self) -> Result<()> {
-        let graph = self.task_graph.take().ok_or_else(|| {
-            alephcore::AlephError::other("No task graph")
-        })?;
-        let executor = self.mock_executor.clone().ok_or_else(|| {
-            alephcore::AlephError::other("No executor")
-        })?;
-        let callback = self.collecting_callback.clone().ok_or_else(|| {
-            alephcore::AlephError::other("No callback")
-        })?;
-        let context = self.task_context.take().ok_or_else(|| {
-            alephcore::AlephError::other("No task context")
-        })?;
+        let graph = self
+            .task_graph
+            .take()
+            .ok_or_else(|| alephcore::AlephError::other("No task graph"))?;
+        let executor = self
+            .mock_executor
+            .clone()
+            .ok_or_else(|| alephcore::AlephError::other("No executor"))?;
+        let callback = self
+            .collecting_callback
+            .clone()
+            .ok_or_else(|| alephcore::AlephError::other("No callback"))?;
+        let context = self
+            .task_context
+            .take()
+            .ok_or_else(|| alephcore::AlephError::other("No task context"))?;
 
         let result = DagScheduler::execute_graph(graph, executor, callback, context, None).await?;
         self.execution_result = Some(result);

@@ -123,11 +123,7 @@ impl SmartRouter {
     }
 
     /// Tier 2: Match by skill ID or skill name
-    fn try_exact_skill(
-        &self,
-        intent: &str,
-        agents: &[RegisteredAgent],
-    ) -> Option<RoutingDecision> {
+    fn try_exact_skill(&self, intent: &str, agents: &[RegisteredAgent]) -> Option<RoutingDecision> {
         let intent_lower = intent.to_lowercase();
         for agent in agents {
             for skill in &agent.card.skills {
@@ -182,8 +178,8 @@ fn extract_quoted_name(text: &str) -> Option<String> {
 mod tests {
     use super::*;
     use crate::a2a::domain::*;
-    use chrono::Utc;
     use crate::sync_primitives::Mutex;
+    use chrono::Utc;
 
     // --- Mock AgentResolver ---
 
@@ -227,10 +223,7 @@ mod tests {
             Ok(None)
         }
 
-        async fn resolve_by_intent(
-            &self,
-            _intent: &str,
-        ) -> A2AResult<Option<RegisteredAgent>> {
+        async fn resolve_by_intent(&self, _intent: &str) -> A2AResult<Option<RegisteredAgent>> {
             Ok(None)
         }
     }
@@ -305,8 +298,7 @@ mod tests {
     fn try_exact_name_quoted_match() {
         let agent = make_agent("Trading Assistant", vec![], AgentHealth::Healthy);
         let router = SmartRouter::new(Arc::new(MockResolver::new(vec![])));
-        let result =
-            router.try_exact_name("请使用「Trading Assistant」", &[agent]);
+        let result = router.try_exact_name("请使用「Trading Assistant」", &[agent]);
         assert!(result.is_some());
         let decision = result.unwrap();
         assert_eq!(decision.confidence, 1.0);

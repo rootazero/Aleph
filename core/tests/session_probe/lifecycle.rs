@@ -107,11 +107,7 @@ async fn p1_06_old_session_retains_messages_after_new_epoch() {
     h.session_manager.get_or_create(&key1).await.unwrap();
 
     // Old session messages still accessible
-    let history = h
-        .session_manager
-        .get_history(&key0, None)
-        .await
-        .unwrap();
+    let history = h.session_manager.get_history(&key0, None).await.unwrap();
     assert_eq!(history.len(), 2);
     assert_eq!(history[0].content, "hello epoch 0");
     assert_eq!(history[1].content, "hi back");
@@ -133,11 +129,7 @@ async fn p1_07_new_epoch_starts_with_empty_history() {
     let key1 = epoch_key("agent-empty", 1);
     h.session_manager.get_or_create(&key1).await.unwrap();
 
-    let history = h
-        .session_manager
-        .get_history(&key1, None)
-        .await
-        .unwrap();
+    let history = h.session_manager.get_history(&key1, None).await.unwrap();
     assert!(history.is_empty());
 }
 

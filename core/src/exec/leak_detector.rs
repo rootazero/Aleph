@@ -218,8 +218,7 @@ mod tests {
     #[test]
     fn test_detects_github_token() {
         let detector = LeakDetector::default_patterns();
-        let result = detector
-            .scan_outbound("token=ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefgh1234");
+        let result = detector.scan_outbound("token=ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefgh1234");
         assert!(result.has_blocks(), "should detect GitHub token as block");
         // Verify the finding references github_token
         let github_finding = result
@@ -250,14 +249,16 @@ mod tests {
             .findings
             .iter()
             .find(|f| f.pattern_name == "aws_access_key");
-        assert!(aws_finding.is_some(), "should have an aws_access_key finding");
+        assert!(
+            aws_finding.is_some(),
+            "should have an aws_access_key finding"
+        );
     }
 
     #[test]
     fn test_detects_private_key_block() {
         let detector = LeakDetector::default_patterns();
-        let result =
-            detector.scan_outbound("-----BEGIN RSA PRIVATE KEY-----\nMIIE...");
+        let result = detector.scan_outbound("-----BEGIN RSA PRIVATE KEY-----\nMIIE...");
         assert!(
             result.has_blocks(),
             "should detect private key block as block"
@@ -272,8 +273,8 @@ mod tests {
     #[test]
     fn test_scan_inbound_also_works() {
         let detector = LeakDetector::default_patterns();
-        let result = detector
-            .scan_inbound("Here is a key: sk-ant-api03-abcdefghijklmnopqrstuvwxyz");
+        let result =
+            detector.scan_inbound("Here is a key: sk-ant-api03-abcdefghijklmnopqrstuvwxyz");
         assert!(
             result.has_blocks(),
             "inbound scan should detect Anthropic key"
@@ -292,8 +293,7 @@ mod tests {
     fn test_matched_text_truncation() {
         let detector = LeakDetector::default_patterns();
         // A long key that exceeds 20 chars
-        let result = detector
-            .scan_outbound("sk-abcdefghijklmnopqrstuvwxyz1234567890abcdef");
+        let result = detector.scan_outbound("sk-abcdefghijklmnopqrstuvwxyz1234567890abcdef");
         let finding = result
             .findings
             .iter()
@@ -315,10 +315,7 @@ mod tests {
     fn test_bearer_token_is_redact_not_block() {
         let detector = LeakDetector::default_patterns();
         let result = detector.scan_outbound("Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9");
-        assert!(
-            !result.is_clean(),
-            "should detect bearer token"
-        );
+        assert!(!result.is_clean(), "should detect bearer token");
         let bearer_finding = result
             .findings
             .iter()
@@ -356,11 +353,7 @@ mod tests {
     #[test]
     fn test_google_api_key_detection() {
         let detector = LeakDetector::default_patterns();
-        let result = detector
-            .scan_outbound("key=AIzaSyA1234567890abcdefghijklmnopqrstuv");
-        assert!(
-            result.has_blocks(),
-            "should detect Google API key as block"
-        );
+        let result = detector.scan_outbound("key=AIzaSyA1234567890abcdefghijklmnopqrstuv");
+        assert!(result.has_blocks(), "should detect Google API key as block");
     }
 }

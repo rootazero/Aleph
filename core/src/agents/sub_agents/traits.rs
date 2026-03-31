@@ -668,7 +668,10 @@ mod tests {
         );
 
         assert_eq!(request.prompt, "Search for Rust files");
-        assert_eq!(request.parent_session_id, Some("parent-session-123".to_string()));
+        assert_eq!(
+            request.parent_session_id,
+            Some("parent-session-123".to_string())
+        );
         assert!(request.execution_context.is_some());
 
         let ctx = request.execution_context.unwrap();

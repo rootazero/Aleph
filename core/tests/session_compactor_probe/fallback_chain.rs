@@ -49,15 +49,11 @@ async fn p6_fallback_when_llm_fails() {
     let session_key = SessionKey::main("test-agent");
     let agent = make_agent_with_messages(&agent_temp, &messages, &session_key).await;
 
-    let result = h
-        .compactor
-        .post_turn_compress(&agent, &session_key)
-        .await;
+    let result = h.compactor.post_turn_compress(&agent, &session_key).await;
 
     // 3. Assert: no error (fallback succeeded)
-    let result = result.expect(
-        "post_turn_compress should succeed even with failing LLM (deterministic fallback)"
-    );
+    let result = result
+        .expect("post_turn_compress should succeed even with failing LLM (deterministic fallback)");
 
     // 4. Assert: facts created with deterministic content
     let session_id = session_key.to_key_string();
@@ -72,11 +68,7 @@ async fn p6_fallback_when_llm_fails() {
     );
 
     // 5. Assert: metrics.fallback_count > 0
-    let fallback_count = h
-        .compactor
-        .metrics()
-        .fallback_count
-        .load(Ordering::Relaxed);
+    let fallback_count = h.compactor.metrics().fallback_count.load(Ordering::Relaxed);
     assert!(
         fallback_count > 0,
         "Expected fallback_count > 0, got {}",

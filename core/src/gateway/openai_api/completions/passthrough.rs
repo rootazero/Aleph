@@ -88,10 +88,9 @@ fn convert_messages(messages: &[ChatMessage]) -> Vec<UnifiedMessage> {
                     }
                     if let Some(tool_calls) = &msg.tool_calls {
                         for tc in tool_calls {
-                            if let (Some(id), Some(func)) = (
-                                tc.get("id").and_then(|v| v.as_str()),
-                                tc.get("function"),
-                            ) {
+                            if let (Some(id), Some(func)) =
+                                (tc.get("id").and_then(|v| v.as_str()), tc.get("function"))
+                            {
                                 content.push(ContentBlock::ToolCall {
                                     id: id.to_string(),
                                     name: func

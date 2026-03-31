@@ -94,8 +94,7 @@ pub fn strictify_schema(schema: &mut Value) {
                     }
                 }
                 // Set required to ALL property keys
-                let all_keys: Vec<Value> =
-                    props.keys().map(|k| Value::String(k.clone())).collect();
+                let all_keys: Vec<Value> = props.keys().map(|k| Value::String(k.clone())).collect();
                 obj.insert("required".into(), Value::Array(all_keys));
             }
         }
@@ -233,10 +232,7 @@ mod tests {
         // Top level
         assert_eq!(schema["additionalProperties"], json!(false));
         // address was originally required → stays non-nullable
-        assert_eq!(
-            schema["properties"]["address"]["type"],
-            json!("object")
-        );
+        assert_eq!(schema["properties"]["address"]["type"], json!("object"));
 
         // Nested object
         let address = &schema["properties"]["address"];

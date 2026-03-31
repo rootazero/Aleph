@@ -93,8 +93,7 @@ impl EmailConfig {
         let smtp_host = std::env::var("EMAIL_SMTP_HOST").ok()?;
         let username = std::env::var("EMAIL_USERNAME").ok()?;
         let password = std::env::var("EMAIL_PASSWORD").ok()?;
-        let from_address = std::env::var("EMAIL_FROM_ADDRESS")
-            .unwrap_or_else(|_| username.clone());
+        let from_address = std::env::var("EMAIL_FROM_ADDRESS").unwrap_or_else(|_| username.clone());
 
         Some(Self {
             imap_host,

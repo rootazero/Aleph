@@ -6,11 +6,21 @@ use crate::thinker::prompt_mode::PromptMode;
 pub struct InboundContextLayer;
 
 impl PromptLayer for InboundContextLayer {
-    fn name(&self) -> &'static str { "inbound_context" }
-    fn priority(&self) -> u32 { 1700 }
-    fn stability(&self) -> LayerStability { LayerStability::Dynamic }
+    fn name(&self) -> &'static str {
+        "inbound_context"
+    }
+    fn priority(&self) -> u32 {
+        1700
+    }
+    fn stability(&self) -> LayerStability {
+        LayerStability::Dynamic
+    }
     fn paths(&self) -> &'static [AssemblyPath] {
-        &[AssemblyPath::Soul, AssemblyPath::Context, AssemblyPath::Cached]
+        &[
+            AssemblyPath::Soul,
+            AssemblyPath::Context,
+            AssemblyPath::Cached,
+        ]
     }
     fn supports_mode(&self, mode: PromptMode) -> bool {
         matches!(mode, PromptMode::Full | PromptMode::Compact)
@@ -29,7 +39,9 @@ impl PromptLayer for InboundContextLayer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::thinker::inbound_context::{InboundContext, SenderInfo, ChannelContext, SessionContext};
+    use crate::thinker::inbound_context::{
+        ChannelContext, InboundContext, SenderInfo, SessionContext,
+    };
     use crate::thinker::prompt_builder::PromptConfig;
 
     #[test]

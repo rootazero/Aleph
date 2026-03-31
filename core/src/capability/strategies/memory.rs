@@ -7,13 +7,13 @@
 use crate::capability::strategy::CapabilityStrategy;
 use crate::config::MemoryConfig;
 use crate::error::{AlephError, Result};
-use crate::memory::{ai_retrieval::AiMemoryRetriever, ContextAnchor as MemoryContextAnchor};
 use crate::memory::store::{MemoryBackend, SessionStore};
+use crate::memory::{ai_retrieval::AiMemoryRetriever, ContextAnchor as MemoryContextAnchor};
 use crate::memory::{EmbeddingProvider, MemoryRetrieval};
 use crate::payload::{AgentPayload, Capability};
 use crate::providers::AiProvider;
-use async_trait::async_trait;
 use crate::sync_primitives::Arc;
+use async_trait::async_trait;
 use std::time::Duration;
 use tracing::{debug, info, warn};
 
@@ -44,10 +44,7 @@ pub struct MemoryStrategy {
 
 impl MemoryStrategy {
     /// Create a new memory strategy
-    pub fn new(
-        memory_db: Option<MemoryBackend>,
-        memory_config: Option<Arc<MemoryConfig>>,
-    ) -> Self {
+    pub fn new(memory_db: Option<MemoryBackend>, memory_config: Option<Arc<MemoryConfig>>) -> Self {
         Self {
             memory_db,
             memory_config,
@@ -243,11 +240,8 @@ impl MemoryStrategy {
         info!("Using AI-based memory retrieval");
 
         // First, fetch candidate memories using embedding search
-        let retrieval = MemoryRetrieval::new(
-            Arc::clone(db),
-            Arc::clone(embedder),
-            Arc::clone(config),
-        );
+        let retrieval =
+            MemoryRetrieval::new(Arc::clone(db), Arc::clone(embedder), Arc::clone(config));
 
         // Get more candidates than needed for AI to select from
         let candidates = retrieval
@@ -288,11 +282,8 @@ impl MemoryStrategy {
         query: &str,
     ) -> Result<Vec<crate::memory::MemoryEntry>> {
         debug!("Using embedding-based memory retrieval");
-        let retrieval = MemoryRetrieval::new(
-            Arc::clone(db),
-            Arc::clone(embedder),
-            Arc::clone(config),
-        );
+        let retrieval =
+            MemoryRetrieval::new(Arc::clone(db), Arc::clone(embedder), Arc::clone(config));
         retrieval.retrieve_memories(anchor, query).await
     }
 }

@@ -6,8 +6,12 @@ use crate::thinker::prompt_mode::PromptMode;
 pub struct SkillModeLayer;
 
 impl PromptLayer for SkillModeLayer {
-    fn name(&self) -> &'static str { "skill_mode" }
-    fn priority(&self) -> u32 { 1400 }
+    fn name(&self) -> &'static str {
+        "skill_mode"
+    }
+    fn priority(&self) -> u32 {
+        1400
+    }
     fn supports_mode(&self, mode: PromptMode) -> bool {
         matches!(mode, PromptMode::Full)
     }
@@ -23,18 +27,24 @@ impl PromptLayer for SkillModeLayer {
     fn inject(&self, output: &mut String, input: &LayerInput) {
         if input.config.skill_mode {
             output.push_str("## ⚠️ Skill Execution Mode - CRITICAL RULES\n\n");
-            output.push_str("You are executing a SKILL workflow. You MUST follow these rules EXACTLY:\n\n");
+            output.push_str(
+                "You are executing a SKILL workflow. You MUST follow these rules EXACTLY:\n\n",
+            );
             output.push_str("### 🔴 RESPONSE FORMAT (MANDATORY)\n");
             output.push_str("**EVERY response MUST be a valid JSON action object. NEVER output raw content directly!**\n\n");
             output.push_str("❌ WRONG: Outputting processed text, data, or results directly\n");
-            output.push_str("✅ CORRECT: Always return {\"reasoning\": \"...\", \"action\": {...}}\n\n");
+            output.push_str(
+                "✅ CORRECT: Always return {\"reasoning\": \"...\", \"action\": {...}}\n\n",
+            );
             output.push_str("If you need to process data and save it, use the `file_ops` tool:\n");
             output.push_str("```json\n");
             output.push_str("{\"reasoning\": \"Writing processed data to file\", \"action\": {\"type\": \"tool\", \"tool_name\": \"file_ops\", \"arguments\": {\"operation\": \"write\", \"path\": \"output.json\", \"content\": \"...\"}}}\n");
             output.push_str("```\n\n");
             output.push_str("### Workflow Requirements\n");
             output.push_str("1. Complete ALL steps in the skill workflow - NO exceptions\n");
-            output.push_str("2. Generate ALL output files specified (JSON, .mmd, .txt, images, etc.)\n");
+            output.push_str(
+                "2. Generate ALL output files specified (JSON, .mmd, .txt, images, etc.)\n",
+            );
             output.push_str("3. Use `file_ops` with `operation: \"write\"` to save each file\n");
             output.push_str("4. DO NOT skip any step, even if you think it's redundant\n");
             output.push_str("5. Before calling `complete`, verify ALL required outputs exist\n\n");
@@ -44,7 +54,9 @@ impl PromptLayer for SkillModeLayer {
             output.push_str("- Prompts: `image-prompt.txt`, `*.txt`\n");
             output.push_str("- Images: via `generate_image` tool\n");
             output.push_str("- Merged outputs: `merged-*.json`, `full-*.mmd`\n\n");
-            output.push_str("**If you output raw content instead of JSON action, you have FAILED.**\n\n");
+            output.push_str(
+                "**If you output raw content instead of JSON action, you have FAILED.**\n\n",
+            );
         }
     }
 }

@@ -3,21 +3,13 @@
 use async_trait::async_trait;
 
 use crate::event::{
-    AlephEvent,
-    AiResponse,
-    EventContext,
-    EventHandler,
-    EventType,
-    HandlerError,
-    InputEvent,
-    TaskPlan,
-    ToolCallError,
-    ToolCallResult,
+    AiResponse, AlephEvent, EventContext, EventHandler, EventType, HandlerError, InputEvent,
+    TaskPlan, ToolCallError, ToolCallResult,
 };
 
 use crate::components::{
-    AiResponsePart, PlanPart, PlanStep, SessionPart, StepStatus,
-    ToolCallPart, ToolCallStatus, UserInputPart,
+    AiResponsePart, PlanPart, PlanStep, SessionPart, StepStatus, ToolCallPart, ToolCallStatus,
+    UserInputPart,
 };
 
 use super::SessionRecorder;
@@ -197,13 +189,17 @@ impl SessionRecorder {
     fn plan_to_part(plan: &TaskPlan) -> SessionPart {
         SessionPart::PlanCreated(PlanPart {
             plan_id: plan.id.clone(),
-            steps: plan.steps.iter().map(|s| PlanStep {
-                step_id: s.id.clone(),
-                description: s.description.clone(),
-                status: StepStatus::Pending,
-                dependencies: s.depends_on.clone(),
-            }).collect(),
-            requires_confirmation: false,  // Default to false for now
+            steps: plan
+                .steps
+                .iter()
+                .map(|s| PlanStep {
+                    step_id: s.id.clone(),
+                    description: s.description.clone(),
+                    status: StepStatus::Pending,
+                    dependencies: s.depends_on.clone(),
+                })
+                .collect(),
+            requires_confirmation: false, // Default to false for now
             created_at: chrono::Utc::now().timestamp_millis(),
         })
     }

@@ -136,7 +136,9 @@ async fn test_full_pipeline_flow() {
         "enriched_text should contain original text"
     );
     assert!(
-        enriched.enriched_text.contains("[Attachment Understanding]"),
+        enriched
+            .enriched_text
+            .contains("[Attachment Understanding]"),
         "enriched_text should contain attachment understanding section"
     );
 
@@ -232,7 +234,9 @@ async fn test_debounce_merge_then_pipeline() {
 
     // Verify NO [Attachment Understanding] section (no attachments)
     assert!(
-        !enriched.enriched_text.contains("[Attachment Understanding]"),
+        !enriched
+            .enriched_text
+            .contains("[Attachment Understanding]"),
         "enriched_text should NOT contain attachment understanding for text-only messages"
     );
 

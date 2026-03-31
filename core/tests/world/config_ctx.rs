@@ -1,6 +1,6 @@
 //! Configuration test context
 
-use alephcore::{Config, MemoryConfig, BehaviorConfig};
+use alephcore::{BehaviorConfig, Config, MemoryConfig};
 
 #[derive(Debug, Default)]
 pub struct ConfigContext {

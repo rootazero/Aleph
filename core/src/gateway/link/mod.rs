@@ -1,5 +1,5 @@
-mod types;
 pub mod manager;
+mod types;
 
-pub use types::*;
 pub use manager::{LinkManager, LinkManagerError};
+pub use types::*;

@@ -200,7 +200,8 @@ mod tests {
         assert!(config.validate().is_err());
 
         // Valid length (fake token for test)
-        config.bot_token = "MTIzNDU2Nzg5MDEyMzQ1Njc4OQ.ABcDeF.1234567890abcdefghijklmnop".to_string();
+        config.bot_token =
+            "MTIzNDU2Nzg5MDEyMzQ1Njc4OQ.ABcDeF.1234567890abcdefghijklmnop".to_string();
         assert!(config.validate().is_ok());
     }
 

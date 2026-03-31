@@ -4,12 +4,12 @@ use crate::sync_primitives::Arc;
 
 use crate::memory::context::MemoryFact;
 use crate::memory::namespace::NamespaceScope;
-use crate::memory::store::{MemoryBackend, MemoryStore};
 use crate::memory::store::types::SearchFilter;
+use crate::memory::store::{MemoryBackend, MemoryStore};
+use crate::providers::adapter::RequestPayload;
+use crate::providers::message::UnifiedMessage;
 use crate::providers::AiProvider;
 use crate::Result;
-use crate::providers::message::UnifiedMessage;
-use crate::providers::adapter::RequestPayload;
 
 /// Detects contradictions between facts
 pub struct ContradictionDetector {
@@ -20,10 +20,7 @@ pub struct ContradictionDetector {
 
 impl ContradictionDetector {
     /// Create a new contradiction detector
-    pub fn new(
-        database: MemoryBackend,
-        provider: Option<Arc<dyn AiProvider>>,
-    ) -> Self {
+    pub fn new(database: MemoryBackend, provider: Option<Arc<dyn AiProvider>>) -> Self {
         Self {
             database,
             provider,
@@ -51,8 +48,7 @@ impl ContradictionDetector {
 
         // Use LLM to detect contradictions if available
         if let Some(provider) = &self.provider {
-            self.detect_with_llm(new_fact, &candidates, provider)
-                .await
+            self.detect_with_llm(new_fact, &candidates, provider).await
         } else {
             // Fallback to keyword-based detection
             Ok(self.detect_with_keywords(new_fact, &candidates))
@@ -76,9 +72,7 @@ impl ContradictionDetector {
         // Filter by similarity threshold and exclude the fact itself
         Ok(scored_facts
             .into_iter()
-            .filter(|sf| {
-                sf.fact.id != new_fact.id && sf.score >= self.similarity_threshold
-            })
+            .filter(|sf| sf.fact.id != new_fact.id && sf.score >= self.similarity_threshold)
             .map(|sf| sf.fact)
             .collect())
     }
@@ -115,9 +109,9 @@ impl ContradictionDetector {
 
         // Call LLM
         let __msgs = [UnifiedMessage::user(&prompt)];
-        let response = provider.process(
-            RequestPayload::new(&__msgs).with_system(Some(system_prompt))
-        ).await?;
+        let response = provider
+            .process(RequestPayload::new(&__msgs).with_system(Some(system_prompt)))
+            .await?;
 
         // Parse response (simple JSON parsing)
         if let Ok(parsed) = self.parse_llm_response(&response.text_content(), candidates) {
@@ -148,9 +142,9 @@ impl ContradictionDetector {
         for line in response.lines() {
             if let Some(index) = self.extract_index(line) {
                 if index > 0 && index <= candidates.len() {
-                    let reason = self.extract_reason(line).unwrap_or_else(|| {
-                        "Contradiction detected by LLM".to_string()
-                    });
+                    let reason = self
+                        .extract_reason(line)
+                        .unwrap_or_else(|| "Contradiction detected by LLM".to_string());
                     contradictions.push((candidates[index - 1].clone(), reason));
                 }
             }

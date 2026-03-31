@@ -133,10 +133,7 @@ impl AlephToolServer {
     /// let server = AlephToolServer::new()
     ///     .with_mcp_read_resource(mcp_handle);
     /// ```
-    pub fn with_mcp_read_resource(
-        self,
-        mcp_handle: crate::mcp::manager::McpManagerHandle,
-    ) -> Self {
+    pub fn with_mcp_read_resource(self, mcp_handle: crate::mcp::manager::McpManagerHandle) -> Self {
         self.tool(McpReadResourceTool::new(mcp_handle))
     }
 
@@ -147,10 +144,7 @@ impl AlephToolServer {
     /// let server = AlephToolServer::new()
     ///     .with_mcp_get_prompt(mcp_handle);
     /// ```
-    pub fn with_mcp_get_prompt(
-        self,
-        mcp_handle: crate::mcp::manager::McpManagerHandle,
-    ) -> Self {
+    pub fn with_mcp_get_prompt(self, mcp_handle: crate::mcp::manager::McpManagerHandle) -> Self {
         self.tool(McpGetPromptTool::new(mcp_handle))
     }
 
@@ -200,4 +194,3 @@ impl AlephToolServer {
         self.tool(VisionTool::new(pipeline))
     }
 }
-

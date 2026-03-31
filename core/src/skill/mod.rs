@@ -18,18 +18,23 @@ pub mod status;
 
 pub use commands::{list_available_commands, resolve_command, SkillCommandSpec};
 pub use compat::SkillInfo;
-pub use config::{InstallPreferences, NodeManager, SkillConfigUpdate, SkillEntryConfig, SkillsConfig};
+pub use config::{
+    InstallPreferences, NodeManager, SkillConfigUpdate, SkillEntryConfig, SkillsConfig,
+};
 pub use eligibility::{EligibilityResult, EligibilityService, IneligibilityReason};
 pub use events::SkillSystemEvent;
-pub use installer::{build_install_command, filter_install_specs_for_current_os, select_best_install, InstallExecutor, InstallResult};
+pub use installer::{
+    build_install_command, filter_install_specs_for_current_os, select_best_install,
+    InstallExecutor, InstallResult,
+};
 pub use manifest::{parse_skill_content, parse_skill_file, SkillParseError};
 pub use prompt::build_skills_prompt_xml;
 pub use registry::SkillRegistry;
 pub use snapshot::SkillSnapshot;
 pub use status::{InstallOption, MissingRequirements, SkillStatusEntry, SkillStatusFilter};
 
-use std::path::{Path, PathBuf};
 use crate::sync_primitives::Arc;
+use std::path::{Path, PathBuf};
 
 use tokio::sync::RwLock;
 
@@ -261,11 +266,7 @@ impl SkillSystem {
     }
 
     /// Install a dependency for a skill.
-    pub async fn install_dependency(
-        &self,
-        id: &SkillId,
-        spec_id: Option<&str>,
-    ) -> InstallResult {
+    pub async fn install_dependency(&self, id: &SkillId, spec_id: Option<&str>) -> InstallResult {
         let registry = self.inner.registry.read().await;
         let manifest = match registry.get(id) {
             Some(m) => m.clone(),
@@ -286,7 +287,11 @@ impl SkillSystem {
         drop(config);
 
         let spec = if let Some(spec_id) = spec_id {
-            manifest.install_specs().iter().find(|s| s.id == spec_id).cloned()
+            manifest
+                .install_specs()
+                .iter()
+                .find(|s| s.id == spec_id)
+                .cloned()
         } else {
             select_best_install(manifest.install_specs(), &prefs).cloned()
         };
@@ -492,9 +497,8 @@ fn guess_source(path: &Path) -> SkillSource {
             let home_skills = home.join(".aleph").join("skills");
             if path.starts_with(&home_skills) {
                 // Under ~/.aleph/skills/ — check manifest to distinguish official from user
-                let manifest = CACHED_MANIFEST.get_or_init(|| {
-                    crate::bundled::manifest::SkillManifest::load(&home_skills)
-                });
+                let manifest = CACHED_MANIFEST
+                    .get_or_init(|| crate::bundled::manifest::SkillManifest::load(&home_skills));
                 if let Some(manifest) = manifest {
                     if let Ok(relative) = path.strip_prefix(&home_skills) {
                         if let Some(skill_name) = relative.components().next() {
@@ -703,8 +707,11 @@ Content."#,
         use crate::domain::skill::{PluginId, SkillContent};
         let system = SkillSystem::new();
         let manifest = SkillManifest::new(
-            "plugin:test", "Test Plugin Skill", "From a plugin",
-            SkillContent::new("content"), SkillSource::Plugin(PluginId::new("test-plugin")),
+            "plugin:test",
+            "Test Plugin Skill",
+            "From a plugin",
+            SkillContent::new("content"),
+            SkillSource::Plugin(PluginId::new("test-plugin")),
         );
         system.register_external(vec![manifest]).await;
         let skills = system.list_skills().await;
@@ -717,8 +724,11 @@ Content."#,
         use crate::domain::skill::SkillContent;
         let system = SkillSystem::new();
         let manifest = SkillManifest::new(
-            "test:skill", "Test Skill", "A test",
-            SkillContent::new("content"), SkillSource::Bundled,
+            "test:skill",
+            "Test Skill",
+            "A test",
+            SkillContent::new("content"),
+            SkillSource::Bundled,
         );
         system.register_external(vec![manifest]).await;
         let entries = system.full_status().await;
@@ -732,13 +742,19 @@ Content."#,
         use crate::domain::skill::SkillContent;
         let system = SkillSystem::new();
         let manifest = SkillManifest::new(
-            "test:removable", "Removable", "desc",
-            SkillContent::new("c"), SkillSource::Global,
+            "test:removable",
+            "Removable",
+            "desc",
+            SkillContent::new("c"),
+            SkillSource::Global,
         );
         system.register_external(vec![manifest]).await;
         assert_eq!(system.list_skills().await.len(), 1);
 
-        let removed = system.remove_skill(&SkillId::new("test:removable")).await.unwrap();
+        let removed = system
+            .remove_skill(&SkillId::new("test:removable"))
+            .await
+            .unwrap();
         assert!(removed);
         assert_eq!(system.list_skills().await.len(), 0);
     }
@@ -748,14 +764,20 @@ Content."#,
         use crate::domain::skill::SkillContent;
         let system = SkillSystem::new();
         let manifest = SkillManifest::new(
-            "test:bundled", "Bundled Skill", "desc",
-            SkillContent::new("c"), SkillSource::Bundled,
+            "test:bundled",
+            "Bundled Skill",
+            "desc",
+            SkillContent::new("c"),
+            SkillSource::Bundled,
         );
         system.register_external(vec![manifest]).await;
 
         let result = system.remove_skill(&SkillId::new("test:bundled")).await;
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::PermissionDenied);
+        assert_eq!(
+            result.unwrap_err().kind(),
+            std::io::ErrorKind::PermissionDenied
+        );
         // Skill should still be there
         assert_eq!(system.list_skills().await.len(), 1);
     }
@@ -767,16 +789,16 @@ Content."#,
         let mut rx = system.subscribe();
 
         let manifest = SkillManifest::new(
-            "test:event", "Event Test", "desc",
-            SkillContent::new("c"), SkillSource::Global,
+            "test:event",
+            "Event Test",
+            "desc",
+            SkillContent::new("c"),
+            SkillSource::Global,
         );
         system.register_external(vec![manifest]).await;
 
         // Should receive an event
-        let event = tokio::time::timeout(
-            std::time::Duration::from_millis(100),
-            rx.recv()
-        ).await;
+        let event = tokio::time::timeout(std::time::Duration::from_millis(100), rx.recv()).await;
         assert!(event.is_ok());
     }
 }

@@ -181,8 +181,7 @@ mod tests {
 
     #[test]
     fn test_multiple_arguments() {
-        let template =
-            SkillTemplate::new("$ARGUMENTS says $ARGUMENTS", Path::new("/test/skill"));
+        let template = SkillTemplate::new("$ARGUMENTS says $ARGUMENTS", Path::new("/test/skill"));
         let rt = tokio::runtime::Runtime::new().unwrap();
         let result = rt.block_on(template.render("Hello")).unwrap();
         assert_eq!(result, "Hello says Hello");
@@ -194,10 +193,8 @@ mod tests {
         let config_path = temp.path().join("config.json");
         std::fs::write(&config_path, r#"{"key": "value"}"#).unwrap();
 
-        let template = SkillTemplate::with_base_dir(
-            "Config: @./config.json",
-            temp.path().to_path_buf(),
-        );
+        let template =
+            SkillTemplate::with_base_dir("Config: @./config.json", temp.path().to_path_buf());
 
         let result = template.render("").await.unwrap();
         assert_eq!(result, r#"Config: {"key": "value"}"#);

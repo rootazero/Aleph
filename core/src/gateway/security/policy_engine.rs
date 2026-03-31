@@ -4,7 +4,7 @@
 //! No internal state is maintained - all permission information is carried in the
 //! IdentityContext parameter.
 
-use aleph_protocol::{IdentityContext, Role, GuestScope};
+use aleph_protocol::{GuestScope, IdentityContext, Role};
 
 /// Permission check result
 #[derive(Debug, Clone, PartialEq)]
@@ -76,10 +76,7 @@ impl PolicyEngine {
     /// assert!(PolicyEngine::check_tool_permission(&guest, "translate").is_allowed());
     /// assert!(!PolicyEngine::check_tool_permission(&guest, "shell:exec").is_allowed());
     /// ```
-    pub fn check_tool_permission(
-        identity: &IdentityContext,
-        tool_name: &str,
-    ) -> PermissionResult {
+    pub fn check_tool_permission(identity: &IdentityContext, tool_name: &str) -> PermissionResult {
         match identity.role {
             Role::Owner => {
                 // Owner has unrestricted access
@@ -90,10 +87,7 @@ impl PolicyEngine {
                 // Guest must have a scope
                 let Some(ref scope) = identity.scope else {
                     return PermissionResult::Denied {
-                        reason: format!(
-                            "Guest '{}' has no permission scope",
-                            identity.identity_id
-                        ),
+                        reason: format!("Guest '{}' has no permission scope", identity.identity_id),
                     };
                 };
 
@@ -133,11 +127,7 @@ impl PolicyEngine {
     /// - Exact match: "translate" matches "translate"
     /// - Category match: "shell" matches "shell:exec"
     /// - Wildcard: "*" matches any tool
-    fn check_guest_scope(
-        scope: &GuestScope,
-        tool_name: &str,
-        guest_id: &str,
-    ) -> PermissionResult {
+    fn check_guest_scope(scope: &GuestScope, tool_name: &str, guest_id: &str) -> PermissionResult {
         // Extract tool category (e.g., "shell:exec" -> "shell")
         let tool_category = tool_name.split(':').next().unwrap_or(tool_name);
 
@@ -145,7 +135,7 @@ impl PolicyEngine {
         let allowed = scope.allowed_tools.iter().any(|allowed| {
             allowed == tool_name       // Exact match
             || allowed == tool_category // Category match
-            || allowed == "*"           // Wildcard
+            || allowed == "*" // Wildcard
         });
 
         if allowed {
@@ -159,7 +149,6 @@ impl PolicyEngine {
             }
         }
     }
-
 }
 
 impl Default for PolicyEngine {
@@ -352,5 +341,4 @@ mod tests {
         assert!(PolicyEngine::check_tool_permission(&identity, "search").is_allowed());
         assert!(!PolicyEngine::check_tool_permission(&identity, "delete").is_allowed());
     }
-
 }

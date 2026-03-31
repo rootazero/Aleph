@@ -1,12 +1,12 @@
+use super::context::format_context;
+use super::core::PromptAssembler;
+use crate::capability::CapabilityDeclaration;
 /// Intent-based prompt building
 ///
 /// This module handles building prompts based on `IntentResult`.
 use crate::intent::{IntentResult, TaskCategory};
 use crate::payload::{AgentContext, ContextFormat};
 use crate::prompt::{PromptBuilder, PromptConfig, ToolInfo};
-use crate::capability::CapabilityDeclaration;
-use super::context::format_context;
-use super::core::PromptAssembler;
 
 /// Build prompt with agent mode injection based on `IntentResult`.
 ///

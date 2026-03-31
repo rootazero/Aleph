@@ -3,20 +3,20 @@
 //! Provides session-cookie-based auth for Panel UI and
 //! Bearer token auth for /v1/* API routes.
 
-use axum::{
-    Router,
-    routing::{get, post},
-    response::{Html, IntoResponse, Redirect, Response},
-    http::{Request, StatusCode, header},
-    middleware::Next,
-    extract::{State, Form},
-    body::Body,
-};
-use serde::Deserialize;
-use crate::sync_primitives::Arc;
+use crate::gateway::config::AuthMode;
 use crate::gateway::security::SharedTokenManager;
 use crate::gateway::session::HttpSessionManager;
-use crate::gateway::config::AuthMode;
+use crate::sync_primitives::Arc;
+use axum::{
+    body::Body,
+    extract::{Form, State},
+    http::{header, Request, StatusCode},
+    middleware::Next,
+    response::{Html, IntoResponse, Redirect, Response},
+    routing::{get, post},
+    Router,
+};
+use serde::Deserialize;
 
 /// Shared state for auth middleware
 pub struct AuthState {
@@ -50,10 +50,8 @@ async fn handle_login(
     match state.shared_token_mgr.validate(&form.token) {
         Ok(true) => {
             // Create session using the HMAC hash of the token
-            let hash = crate::gateway::security::hmac_sign(
-                state.shared_token_mgr.secret(),
-                &form.token,
-            );
+            let hash =
+                crate::gateway::security::hmac_sign(state.shared_token_mgr.secret(), &form.token);
             match state.session_mgr.create_session(&hash) {
                 Ok(session_id) => {
                     let max_age = state.session_mgr.expiry_hours() * 3600;
@@ -67,7 +65,8 @@ async fn handle_login(
                             (header::LOCATION, "/".to_string()),
                             (header::SET_COOKIE, cookie),
                         ],
-                    ).into_response()
+                    )
+                        .into_response()
                 }
                 Err(_) => Html(login_page_html("Internal error")).into_response(),
             }
@@ -87,7 +86,8 @@ async fn handle_logout(State(state): State<Arc<AuthState>>) -> Response {
             (header::LOCATION, "/login".to_string()),
             (header::SET_COOKIE, cookie.to_string()),
         ],
-    ).into_response()
+    )
+        .into_response()
 }
 
 /// Extract session ID from Cookie header
@@ -96,10 +96,15 @@ fn extract_session_cookie(headers: &axum::http::HeaderMap) -> Option<String> {
         .get(header::COOKIE)
         .and_then(|v| v.to_str().ok())
         .and_then(|cookies| {
-            cookies.split(';')
+            cookies
+                .split(';')
                 .filter_map(|c| {
                     let (name, value) = c.trim().split_once('=')?;
-                    if name == "aleph_session" { Some(value.to_string()) } else { None }
+                    if name == "aleph_session" {
+                        Some(value.to_string())
+                    } else {
+                        None
+                    }
                 })
                 .next()
         })
@@ -140,7 +145,8 @@ pub async fn bearer_auth_middleware(
 
     match auth_header {
         Some(header_val) => {
-            if let Some(token) = crate::gateway::openai_api::auth::extract_bearer_token(header_val) {
+            if let Some(token) = crate::gateway::openai_api::auth::extract_bearer_token(header_val)
+            {
                 if state.shared_token_mgr.validate(token).unwrap_or(false) {
                     return next.run(request).await;
                 }
@@ -225,7 +231,10 @@ mod tests {
     #[test]
     fn test_extract_session_cookie_found() {
         let mut headers = axum::http::HeaderMap::new();
-        headers.insert(header::COOKIE, "aleph_session=abc123; other=val".parse().unwrap());
+        headers.insert(
+            header::COOKIE,
+            "aleph_session=abc123; other=val".parse().unwrap(),
+        );
         assert_eq!(extract_session_cookie(&headers), Some("abc123".to_string()));
     }
 

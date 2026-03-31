@@ -2,8 +2,8 @@
 //!
 //! This module contains all Clap-based command line argument parsing structures.
 
-use std::path::PathBuf;
 use clap::{Parser, Subcommand};
+use std::path::PathBuf;
 
 /// Default PID file location
 pub const DEFAULT_PID_FILE: &str = "~/.aleph/gateway.pid";

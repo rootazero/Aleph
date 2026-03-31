@@ -61,22 +61,25 @@ impl AlephTool for BrowserFillFormTool {
     type Output = BrowserFillFormOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
-        let (backend, tab_id) = match super::make_backend_and_tab(&self.manager, &args.profile).await {
-            Ok(pair) => pair,
-            Err(e) => {
-                return Ok(BrowserFillFormOutput {
-                    success: false,
-                    filled_count: 0,
-                    message: Some(format!("{e}")),
-                });
-            }
-        };
+        let (backend, tab_id) =
+            match super::make_backend_and_tab(&self.manager, &args.profile).await {
+                Ok(pair) => pair,
+                Err(e) => {
+                    return Ok(BrowserFillFormOutput {
+                        success: false,
+                        filled_count: 0,
+                        message: Some(format!("{e}")),
+                    });
+                }
+            };
 
         // Build (ActionTarget, value) pairs for the batch fill_form method
         let mut targets = Vec::with_capacity(args.fields.len());
         for field in &args.fields {
             let target = if let Some(ref ref_id) = field.ref_id {
-                ActionTarget::Ref { ref_id: ref_id.clone() }
+                ActionTarget::Ref {
+                    ref_id: ref_id.clone(),
+                }
             } else if let Some(ref css) = field.selector {
                 ActionTarget::Selector { css: css.clone() }
             } else {
@@ -93,7 +96,10 @@ impl AlephTool for BrowserFillFormTool {
             Ok(filled) => Ok(BrowserFillFormOutput {
                 success: true,
                 filled_count: filled,
-                message: Some(format!("Filled {} field(s) in profile '{}'", filled, args.profile)),
+                message: Some(format!(
+                    "Filled {} field(s) in profile '{}'",
+                    filled, args.profile
+                )),
             }),
             Err(e) => Ok(BrowserFillFormOutput {
                 success: false,

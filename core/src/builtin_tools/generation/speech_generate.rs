@@ -3,20 +3,20 @@
 //! Generates speech audio from text using configured AI providers.
 //! Implements AlephTool trait for AI agent integration.
 
+use crate::sync_primitives::{Arc, RwLock};
 use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use crate::sync_primitives::{Arc, RwLock};
 use std::time::Instant;
 use tracing::{debug, info};
 
+use crate::builtin_tools::error::ToolError;
 use crate::error::Result;
+use crate::gateway::media::{detect_mime, MediaItem};
 use crate::generation::{
     GenerationParams, GenerationProviderRegistry, GenerationRequest, GenerationType,
 };
-use crate::builtin_tools::error::ToolError;
 use crate::tools::AlephTool;
-use crate::gateway::media::{MediaItem, detect_mime};
 
 /// Arguments for speech generation
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -113,7 +113,10 @@ impl SpeechGenerateTool {
     }
 
     /// Execute speech generation (internal implementation)
-    async fn call_impl(&self, args: SpeechGenerateArgs) -> std::result::Result<SpeechGenerateOutput, ToolError> {
+    async fn call_impl(
+        &self,
+        args: SpeechGenerateArgs,
+    ) -> std::result::Result<SpeechGenerateOutput, ToolError> {
         // Validate arguments first
         Self::validate_args(&args)?;
 
@@ -131,9 +134,9 @@ impl SpeechGenerateTool {
             let reg = self.registry.read().unwrap_or_else(|e| e.into_inner());
 
             if let Some(name) = &args.provider {
-                let provider = reg
-                    .get(name)
-                    .ok_or_else(|| ToolError::InvalidArgs(format!("Provider '{}' not found", name)))?;
+                let provider = reg.get(name).ok_or_else(|| {
+                    ToolError::InvalidArgs(format!("Provider '{}' not found", name))
+                })?;
 
                 // Check if provider supports speech generation
                 if !provider.supports(GenerationType::Speech) {
@@ -146,10 +149,9 @@ impl SpeechGenerateTool {
                 (name.clone(), provider)
             } else {
                 // Find first provider that supports speech generation
-                reg.first_for_type(GenerationType::Speech)
-                    .ok_or_else(|| {
-                        ToolError::InvalidArgs("No speech generation provider available".to_string())
-                    })?
+                reg.first_for_type(GenerationType::Speech).ok_or_else(|| {
+                    ToolError::InvalidArgs("No speech generation provider available".to_string())
+                })?
             }
         };
 
@@ -450,7 +452,11 @@ mod tests {
         // Error is now AlephError
         let err = result.unwrap_err();
         let err_msg = err.to_string();
-        assert!(err_msg.contains("not found"), "Error should contain 'not found': {}", err_msg);
+        assert!(
+            err_msg.contains("not found"),
+            "Error should contain 'not found': {}",
+            err_msg
+        );
     }
 
     #[tokio::test]
@@ -473,7 +479,11 @@ mod tests {
         // Error is now AlephError
         let err = result.unwrap_err();
         let err_msg = err.to_string();
-        assert!(err_msg.contains("No speech generation provider"), "Error should contain 'No speech generation provider': {}", err_msg);
+        assert!(
+            err_msg.contains("No speech generation provider"),
+            "Error should contain 'No speech generation provider': {}",
+            err_msg
+        );
     }
 
     #[tokio::test]
@@ -496,7 +506,11 @@ mod tests {
         // Error is now AlephError
         let err = result.unwrap_err();
         let err_msg = err.to_string();
-        assert!(err_msg.contains("empty"), "Error should contain 'empty': {}", err_msg);
+        assert!(
+            err_msg.contains("empty"),
+            "Error should contain 'empty': {}",
+            err_msg
+        );
     }
 
     #[tokio::test]

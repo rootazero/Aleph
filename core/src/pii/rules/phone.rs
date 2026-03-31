@@ -14,10 +14,8 @@ fn phone_regex() -> &'static Regex {
 
 fn timestamp_context_regex() -> &'static Regex {
     TIMESTAMP_CONTEXT_RE.get_or_init(|| {
-        Regex::new(
-            r"(?i)(timestamp|time|date|created_at|updated_at|expires?_at|modified_at)\b",
-        )
-        .unwrap()
+        Regex::new(r"(?i)(timestamp|time|date|created_at|updated_at|expires?_at|modified_at)\b")
+            .unwrap()
     })
 }
 

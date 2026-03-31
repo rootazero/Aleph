@@ -103,9 +103,7 @@ impl MidjourneyProviderBuilder {
         let client = Client::builder()
             .timeout(Duration::from_secs(self.timeout_secs))
             .build()
-            .map_err(|e| {
-                GenerationError::network(format!("Failed to build HTTP client: {}", e))
-            })?;
+            .map_err(|e| GenerationError::network(format!("Failed to build HTTP client: {}", e)))?;
 
         // Normalize endpoint (remove trailing slash)
         let endpoint = self.endpoint.trim_end_matches('/').to_string();

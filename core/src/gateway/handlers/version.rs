@@ -2,8 +2,8 @@
 //!
 //! Returns version information about the Gateway server.
 
-use serde_json::json;
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse};
+use serde_json::json;
 
 /// Handle version requests
 ///

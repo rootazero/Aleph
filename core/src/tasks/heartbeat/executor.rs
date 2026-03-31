@@ -88,10 +88,7 @@ pub struct DefaultHeartbeatAdapter {
 }
 
 impl DefaultHeartbeatAdapter {
-    pub fn new(
-        adapter: Arc<dyn ExecutionAdapter>,
-        agent_registry: Arc<AgentRegistry>,
-    ) -> Self {
+    pub fn new(adapter: Arc<dyn ExecutionAdapter>, agent_registry: Arc<AgentRegistry>) -> Self {
         Self {
             adapter,
             agent_registry,
@@ -110,24 +107,21 @@ impl HeartbeatExecutionAdapter for DefaultHeartbeatAdapter {
         let start = std::time::Instant::now();
 
         // Resolve agent — fall back to "main" if the requested agent is not found
-        let agent = self
-            .agent_registry
-            .get(agent_id)
-            .await
-            .or_else(|| {
-                warn!(agent_id, "heartbeat agent not found, trying 'main'");
-                // Cannot await inside or_else, use blocking get pattern
-                None
-            });
+        let agent = self.agent_registry.get(agent_id).await.or_else(|| {
+            warn!(agent_id, "heartbeat agent not found, trying 'main'");
+            // Cannot await inside or_else, use blocking get pattern
+            None
+        });
 
         // If first lookup failed, try "main" separately
         let agent = match agent {
             Some(a) => a,
-            None => self
-                .agent_registry
-                .get("main")
-                .await
-                .ok_or_else(|| format!("Agent '{}' not found and fallback 'main' unavailable", agent_id))?,
+            None => self.agent_registry.get("main").await.ok_or_else(|| {
+                format!(
+                    "Agent '{}' not found and fallback 'main' unavailable",
+                    agent_id
+                )
+            })?,
         };
 
         // Build request following cron executor pattern

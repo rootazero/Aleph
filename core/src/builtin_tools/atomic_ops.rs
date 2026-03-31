@@ -6,9 +6,7 @@
 //! - Move: File/directory movement with import path updates
 
 use crate::builtin_tools::error::ToolError;
-use crate::engine::{
-    AtomicAction, AtomicExecutor, FileFilter, SearchPattern, SearchScope,
-};
+use crate::engine::{AtomicAction, AtomicExecutor, FileFilter, SearchPattern, SearchScope};
 use crate::error::Result;
 use crate::tools::AlephTool;
 use async_trait::async_trait;
@@ -114,7 +112,9 @@ impl AtomicOpsTool {
 
     /// Build search pattern from args
     fn build_pattern(&self, args: &AtomicOpsArgs) -> std::result::Result<SearchPattern, ToolError> {
-        let pattern_str = args.pattern.as_ref()
+        let pattern_str = args
+            .pattern
+            .as_ref()
             .ok_or_else(|| ToolError::InvalidArgs("pattern is required".to_string()))?;
 
         match args.pattern_type.as_str() {
@@ -164,7 +164,10 @@ impl AtomicOpsTool {
     }
 
     /// Internal implementation
-    async fn call_impl(&self, args: AtomicOpsArgs) -> std::result::Result<AtomicOpsOutput, ToolError> {
+    async fn call_impl(
+        &self,
+        args: AtomicOpsArgs,
+    ) -> std::result::Result<AtomicOpsOutput, ToolError> {
         use crate::builtin_tools::{notify_tool_result, notify_tool_start};
 
         let op_name = match &args.operation {
@@ -173,7 +176,11 @@ impl AtomicOpsTool {
             AtomicOperation::Move => "移动",
         };
 
-        let args_summary = format!("{}: {:?}", op_name, args.pattern.as_ref().or(args.source.as_ref()));
+        let args_summary = format!(
+            "{}: {:?}",
+            op_name,
+            args.pattern.as_ref().or(args.source.as_ref())
+        );
         notify_tool_start("atomic_ops", &args_summary);
 
         info!(
@@ -185,103 +192,114 @@ impl AtomicOpsTool {
 
         let executor = AtomicExecutor::new(self.workspace_root.clone());
 
-        let result: std::result::Result<AtomicOpsOutput, ToolError> = match args.operation {
-            AtomicOperation::Search => {
-                let pattern = self.build_pattern(&args)?;
-                let scope = self.build_scope(&args)?;
-                let filters = self.build_filters(&args);
+        let result: std::result::Result<AtomicOpsOutput, ToolError> =
+            match args.operation {
+                AtomicOperation::Search => {
+                    let pattern = self.build_pattern(&args)?;
+                    let scope = self.build_scope(&args)?;
+                    let filters = self.build_filters(&args);
 
-                let action = AtomicAction::Search {
-                    pattern,
-                    scope,
-                    filters,
-                };
+                    let action = AtomicAction::Search {
+                        pattern,
+                        scope,
+                        filters,
+                    };
 
-                executor.execute(&action).await
-                    .map_err(|e| ToolError::Execution(format!("Search failed: {}", e)))?;
+                    executor
+                        .execute(&action)
+                        .await
+                        .map_err(|e| ToolError::Execution(format!("Search failed: {}", e)))?;
 
-                // TODO: Parse search results from executor output
-                let matches_count = 0;
+                    // TODO: Parse search results from executor output
+                    let matches_count = 0;
 
-                Ok(AtomicOpsOutput {
-                    success: true,
-                    operation: "search".to_string(),
-                    message: format!("Found {} matches", matches_count),
-                    matches_count: Some(matches_count),
-                    replacements_count: None,
-                    moved_from: None,
-                    moved_to: None,
-                })
-            }
+                    Ok(AtomicOpsOutput {
+                        success: true,
+                        operation: "search".to_string(),
+                        message: format!("Found {} matches", matches_count),
+                        matches_count: Some(matches_count),
+                        replacements_count: None,
+                        moved_from: None,
+                        moved_to: None,
+                    })
+                }
 
-            AtomicOperation::Replace => {
-                let pattern = self.build_pattern(&args)?;
-                let replacement = args.replacement.as_ref()
-                    .ok_or_else(|| ToolError::InvalidArgs("replacement is required".to_string()))?;
-                let scope = self.build_scope(&args)?;
+                AtomicOperation::Replace => {
+                    let pattern = self.build_pattern(&args)?;
+                    let replacement = args.replacement.as_ref().ok_or_else(|| {
+                        ToolError::InvalidArgs("replacement is required".to_string())
+                    })?;
+                    let scope = self.build_scope(&args)?;
 
-                let action = AtomicAction::Replace {
-                    search: Box::new(pattern),
-                    replacement: replacement.clone(),
-                    scope,
-                    preview: args.dry_run,
-                    dry_run: args.dry_run,
-                };
+                    let action = AtomicAction::Replace {
+                        search: Box::new(pattern),
+                        replacement: replacement.clone(),
+                        scope,
+                        preview: args.dry_run,
+                        dry_run: args.dry_run,
+                    };
 
-                executor.execute(&action).await
-                    .map_err(|e| ToolError::Execution(format!("Replace failed: {}", e)))?;
+                    executor
+                        .execute(&action)
+                        .await
+                        .map_err(|e| ToolError::Execution(format!("Replace failed: {}", e)))?;
 
-                // TODO: Parse replacement results from executor output
-                let replacements_count = 0;
+                    // TODO: Parse replacement results from executor output
+                    let replacements_count = 0;
 
-                Ok(AtomicOpsOutput {
-                    success: true,
-                    operation: "replace".to_string(),
-                    message: if args.dry_run {
-                        format!("Preview: {} replacements would be made", replacements_count)
-                    } else {
-                        format!("Made {} replacements", replacements_count)
-                    },
-                    matches_count: None,
-                    replacements_count: Some(replacements_count),
-                    moved_from: None,
-                    moved_to: None,
-                })
-            }
+                    Ok(AtomicOpsOutput {
+                        success: true,
+                        operation: "replace".to_string(),
+                        message: if args.dry_run {
+                            format!("Preview: {} replacements would be made", replacements_count)
+                        } else {
+                            format!("Made {} replacements", replacements_count)
+                        },
+                        matches_count: None,
+                        replacements_count: Some(replacements_count),
+                        moved_from: None,
+                        moved_to: None,
+                    })
+                }
 
-            AtomicOperation::Move => {
-                let source = args.source.as_ref()
-                    .ok_or_else(|| ToolError::InvalidArgs("source is required".to_string()))?;
-                let destination = args.destination.as_ref()
-                    .ok_or_else(|| ToolError::InvalidArgs("destination is required".to_string()))?;
+                AtomicOperation::Move => {
+                    let source = args
+                        .source
+                        .as_ref()
+                        .ok_or_else(|| ToolError::InvalidArgs("source is required".to_string()))?;
+                    let destination = args.destination.as_ref().ok_or_else(|| {
+                        ToolError::InvalidArgs("destination is required".to_string())
+                    })?;
 
-                // Validate source and destination are within workspace boundary
-                let source_path = PathBuf::from(source);
-                let dest_path = PathBuf::from(destination);
-                validate_within_workspace(&source_path, &self.workspace_root)?;
-                validate_within_workspace(&dest_path, &self.workspace_root)?;
+                    // Validate source and destination are within workspace boundary
+                    let source_path = PathBuf::from(source);
+                    let dest_path = PathBuf::from(destination);
+                    validate_within_workspace(&source_path, &self.workspace_root)?;
+                    validate_within_workspace(&dest_path, &self.workspace_root)?;
 
-                let action = AtomicAction::Move {
-                    source: source_path,
-                    destination: dest_path,
-                    update_imports: args.update_imports,
-                    create_parent: true,
-                };
+                    let action = AtomicAction::Move {
+                        source: source_path,
+                        destination: dest_path,
+                        update_imports: args.update_imports,
+                        create_parent: true,
+                    };
 
-                executor.execute(&action).await
-                    .map_err(|e| ToolError::Execution(format!("Move failed: {}", e)))?;
+                    executor
+                        .execute(&action)
+                        .await
+                        .map_err(|e| ToolError::Execution(format!("Move failed: {}", e)))?;
 
-                Ok(AtomicOpsOutput {
-                    success: true,
-                    operation: "move".to_string(),
-                    message: format!("Moved {} to {}", source, destination),
-                    matches_count: None,
-                    replacements_count: None,
-                    moved_from: Some(source.clone()),
-                    moved_to: Some(destination.clone()),
-                })
-            }
-        };
+                    Ok(AtomicOpsOutput {
+                        success: true,
+                        operation: "move".to_string(),
+                        message: format!("Moved {} to {}", source, destination),
+                        matches_count: None,
+                        replacements_count: None,
+                        moved_from: Some(source.clone()),
+                        moved_to: Some(destination.clone()),
+                    })
+                }
+            };
 
         // Notify result
         match &result {
@@ -302,17 +320,23 @@ fn validate_within_workspace(
     path: &std::path::Path,
     workspace_root: &std::path::Path,
 ) -> std::result::Result<(), ToolError> {
-    let canonical = std::fs::canonicalize(path).or_else(|_| {
-        // For non-existent paths, canonicalize parent
-        path.parent()
-            .and_then(|p| p.canonicalize().ok())
-            .map(|p| p.join(path.file_name().unwrap_or_default()))
-            .ok_or_else(|| {
-                std::io::Error::new(std::io::ErrorKind::NotFound, "Cannot resolve path")
-            })
-    }).map_err(|e| ToolError::InvalidArgs(format!("Cannot resolve path '{}': {}", path.display(), e)))?;
+    let canonical = std::fs::canonicalize(path)
+        .or_else(|_| {
+            // For non-existent paths, canonicalize parent
+            path.parent()
+                .and_then(|p| p.canonicalize().ok())
+                .map(|p| p.join(path.file_name().unwrap_or_default()))
+                .ok_or_else(|| {
+                    std::io::Error::new(std::io::ErrorKind::NotFound, "Cannot resolve path")
+                })
+        })
+        .map_err(|e| {
+            ToolError::InvalidArgs(format!("Cannot resolve path '{}': {}", path.display(), e))
+        })?;
 
-    let canonical_root = workspace_root.canonicalize().unwrap_or_else(|_| workspace_root.to_path_buf());
+    let canonical_root = workspace_root
+        .canonicalize()
+        .unwrap_or_else(|_| workspace_root.to_path_buf());
     if !canonical.starts_with(&canonical_root) {
         return Err(ToolError::InvalidArgs(format!(
             "Path '{}' is outside workspace boundary",
@@ -372,7 +396,12 @@ mod tests {
 
         // Create test file
         let test_file = dir.path().join("test.rs");
-        fs::write(&test_file, "fn main() {\n    println!(\"TODO: implement\");\n}").await.unwrap();
+        fs::write(
+            &test_file,
+            "fn main() {\n    println!(\"TODO: implement\");\n}",
+        )
+        .await
+        .unwrap();
 
         let args = AtomicOpsArgs {
             operation: AtomicOperation::Search,

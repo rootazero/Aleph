@@ -20,8 +20,8 @@ use crate::gateway::event_bus::GatewayEventBus;
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 use crate::gateway::security::SharedTokenManager;
 use crate::memory::embedding_provider::RemoteEmbeddingProvider;
-use serde::Deserialize;
 use crate::sync_primitives::Arc;
+use serde::Deserialize;
 use tokio::sync::RwLock;
 use tracing::{error, warn};
 
@@ -73,10 +73,7 @@ fn inject_is_active(provider: &EmbeddingProviderConfig, active_id: &str) -> serd
         );
         // Panel expects "model" (string), core serializes "models" (array)
         if !obj.contains_key("model") {
-            obj.insert(
-                "model".into(),
-                serde_json::json!(provider.default_model()),
-            );
+            obj.insert("model".into(), serde_json::json!(provider.default_model()));
         }
     }
     val
@@ -189,7 +186,13 @@ pub async fn handle_add(
         let mut cfg = config.write().await;
 
         // Check if provider id already exists
-        if cfg.memory.embedding.providers.iter().any(|p| p.id == provider_config.id) {
+        if cfg
+            .memory
+            .embedding
+            .providers
+            .iter()
+            .any(|p| p.id == provider_config.id)
+        {
             return JsonRpcResponse::error(
                 request.id,
                 INVALID_PARAMS,
@@ -268,7 +271,12 @@ pub async fn handle_update(
         let mut cfg = config.write().await;
 
         // Find and update the provider — config change resets verified
-        let provider = cfg.memory.embedding.providers.iter_mut().find(|p| p.id == params.id);
+        let provider = cfg
+            .memory
+            .embedding
+            .providers
+            .iter_mut()
+            .find(|p| p.id == params.id);
 
         match provider {
             Some(existing) => {
@@ -329,7 +337,13 @@ pub async fn handle_remove(
         let mut cfg = config.write().await;
 
         // Check if provider exists
-        if !cfg.memory.embedding.providers.iter().any(|p| p.id == params.id) {
+        if !cfg
+            .memory
+            .embedding
+            .providers
+            .iter()
+            .any(|p| p.id == params.id)
+        {
             return JsonRpcResponse::error(
                 request.id,
                 INVALID_PARAMS,
@@ -400,7 +414,13 @@ pub async fn handle_set_active(
         let mut cfg = config.write().await;
 
         // Check if provider exists and is verified
-        match cfg.memory.embedding.providers.iter().find(|p| p.id == params.id) {
+        match cfg
+            .memory
+            .embedding
+            .providers
+            .iter()
+            .find(|p| p.id == params.id)
+        {
             Some(provider) => {
                 if !provider.verified {
                     return JsonRpcResponse::error(
@@ -517,7 +537,13 @@ pub async fn handle_test(
             // Persist verified=true for the provider
             {
                 let mut cfg = config.write().await;
-                if let Some(p) = cfg.memory.embedding.providers.iter_mut().find(|p| p.id == provider_config.id) {
+                if let Some(p) = cfg
+                    .memory
+                    .embedding
+                    .providers
+                    .iter_mut()
+                    .find(|p| p.id == provider_config.id)
+                {
                     p.verified = true;
                     if let Err(e) = cfg.save_incremental(&["memory"]) {
                         tracing::error!(error = %e, "Failed to save config after embedding test");
@@ -546,9 +572,7 @@ pub async fn handle_test(
     }
 }
 /// Return preset embedding provider configurations.
-pub async fn handle_presets(
-    request: JsonRpcRequest,
-) -> JsonRpcResponse {
+pub async fn handle_presets(request: JsonRpcRequest) -> JsonRpcResponse {
     let presets = vec![
         serde_json::json!({
             "preset": "silicon_flow",
@@ -598,7 +622,10 @@ mod tests {
     fn config_with_siliconflow() -> Config {
         use crate::config::types::memory::EmbeddingProviderConfig;
         let mut cfg = Config::default();
-        cfg.memory.embedding.providers.push(EmbeddingProviderConfig::siliconflow());
+        cfg.memory
+            .embedding
+            .providers
+            .push(EmbeddingProviderConfig::siliconflow());
         cfg.memory.embedding.active_provider_id = "siliconflow".to_string();
         cfg
     }
@@ -607,7 +634,8 @@ mod tests {
     async fn test_handle_list_empty_default() {
         let config = Arc::new(RwLock::new(Config::default()));
         let vault = test_vault();
-        let request = JsonRpcRequest::with_id("embedding_providers.list", None, serde_json::json!(1));
+        let request =
+            JsonRpcRequest::with_id("embedding_providers.list", None, serde_json::json!(1));
         let response = handle_list(request, config, vault).await;
         assert!(response.is_success());
 
@@ -620,7 +648,8 @@ mod tests {
     async fn test_handle_list_with_provider() {
         let config = Arc::new(RwLock::new(config_with_siliconflow()));
         let vault = test_vault();
-        let request = JsonRpcRequest::with_id("embedding_providers.list", None, serde_json::json!(1));
+        let request =
+            JsonRpcRequest::with_id("embedding_providers.list", None, serde_json::json!(1));
         let response = handle_list(request, config, vault).await;
         assert!(response.is_success());
 

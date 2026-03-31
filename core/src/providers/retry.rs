@@ -306,8 +306,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sync_primitives::{AtomicU32, Ordering};
     use crate::sync_primitives::Arc;
+    use crate::sync_primitives::{AtomicU32, Ordering};
 
     #[test]
     fn test_is_retryable() {
@@ -466,7 +466,10 @@ mod tests {
         assert_eq!(calculate_delay(3, None, false), Duration::from_millis(8000));
 
         // Fifth attempt: 32000ms but capped at 30000ms
-        assert_eq!(calculate_delay(5, None, false), Duration::from_millis(30000));
+        assert_eq!(
+            calculate_delay(5, None, false),
+            Duration::from_millis(30000)
+        );
     }
 
     #[test]

@@ -338,10 +338,8 @@ mod tests {
 
     #[test]
     fn test_topic_filter() {
-        let filter = TopicFilter::with_patterns(vec![
-            "agent.run.*".to_string(),
-            "session.*".to_string(),
-        ]);
+        let filter =
+            TopicFilter::with_patterns(vec!["agent.run.*".to_string(), "session.*".to_string()]);
 
         assert!(filter.matches("agent.run.started"));
         assert!(filter.matches("agent.run.completed"));
@@ -365,6 +363,9 @@ mod tests {
         assert!(notification.get("params").is_some());
 
         let params = notification.get("params").unwrap();
-        assert_eq!(params.get("topic").unwrap().as_str().unwrap(), "agent.run.started");
+        assert_eq!(
+            params.get("topic").unwrap().as_str().unwrap(),
+            "agent.run.started"
+        );
     }
 }

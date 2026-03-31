@@ -14,7 +14,11 @@ async fn test_collecting_emitter() {
     assert_eq!(events.len(), 2);
 
     match &events[0] {
-        StreamEvent::Reasoning { content, is_complete, .. } => {
+        StreamEvent::Reasoning {
+            content,
+            is_complete,
+            ..
+        } => {
             assert_eq!(content, "Thinking...");
             assert!(!is_complete);
         }
@@ -47,7 +51,12 @@ async fn test_tool_lifecycle() {
     let emitter = CollectingEventEmitter::new();
 
     emitter
-        .emit_tool_start("run-1", "read_file", "tool-1", serde_json::json!({"path": "/tmp/test"}))
+        .emit_tool_start(
+            "run-1",
+            "read_file",
+            "tool-1",
+            serde_json::json!({"path": "/tmp/test"}),
+        )
         .await;
     emitter
         .emit_tool_update("run-1", "tool-1", "Reading file...")
@@ -135,8 +144,12 @@ fn test_uncertainty_signal() {
 
 #[test]
 fn test_uncertainty_action_description() {
-    assert!(UncertaintyAction::ProceedWithCaution.description().contains("caution"));
-    assert!(UncertaintyAction::AskForClarification.description().contains("clarification"));
+    assert!(UncertaintyAction::ProceedWithCaution
+        .description()
+        .contains("caution"));
+    assert!(UncertaintyAction::AskForClarification
+        .description()
+        .contains("clarification"));
 }
 
 #[test]
@@ -144,7 +157,10 @@ fn test_deserialize_reasoning_block() {
     let json = r#"{"type":"reasoning_block","run_id":"r1","seq":1,"step_type":"observation","label":"Look","content":"Seeing the code","confidence":null,"is_final":false}"#;
     let event: StreamEvent = serde_json::from_str(json).unwrap();
 
-    if let StreamEvent::ReasoningBlock { step_type, label, .. } = event {
+    if let StreamEvent::ReasoningBlock {
+        step_type, label, ..
+    } = event
+    {
         assert_eq!(step_type, ReasoningStepType::Observation);
         assert_eq!(label, "Look");
     } else {
@@ -154,7 +170,10 @@ fn test_deserialize_reasoning_block() {
 
 #[test]
 fn test_output_mode_from_config() {
-    assert_eq!(OutputMode::from_config("typewriter"), OutputMode::Typewriter);
+    assert_eq!(
+        OutputMode::from_config("typewriter"),
+        OutputMode::Typewriter
+    );
     assert_eq!(OutputMode::from_config("instant"), OutputMode::Instant);
     assert_eq!(OutputMode::from_config("unknown"), OutputMode::Typewriter);
     assert_eq!(OutputMode::from_config(""), OutputMode::Typewriter);
@@ -165,10 +184,7 @@ async fn test_instant_mode_buffers_non_final_chunks() {
     use crate::gateway::event_bus::GatewayEventBus;
 
     let event_bus = Arc::new(GatewayEventBus::new());
-    let emitter = GatewayEventEmitter::with_output_mode(
-        event_bus,
-        OutputMode::Instant,
-    );
+    let emitter = GatewayEventEmitter::with_output_mode(event_bus, OutputMode::Instant);
 
     // Non-final chunks should be buffered, not emitted
     let _ = emitter
@@ -218,7 +234,10 @@ async fn test_instant_mode_buffers_non_final_chunks() {
 
     // Buffer should be empty after final
     let buffer = emitter.instant_buffer.lock().await;
-    assert!(buffer.is_empty(), "Instant buffer should be empty after final chunk");
+    assert!(
+        buffer.is_empty(),
+        "Instant buffer should be empty after final chunk"
+    );
 }
 
 #[tokio::test]
@@ -226,10 +245,7 @@ async fn test_instant_mode_passes_non_chunk_events() {
     use crate::gateway::event_bus::GatewayEventBus;
 
     let event_bus = Arc::new(GatewayEventBus::new());
-    let emitter = GatewayEventEmitter::with_output_mode(
-        event_bus.clone(),
-        OutputMode::Instant,
-    );
+    let emitter = GatewayEventEmitter::with_output_mode(event_bus.clone(), OutputMode::Instant);
 
     // Subscribe to verify events are published
     let mut rx = event_bus.subscribe();
@@ -246,7 +262,10 @@ async fn test_instant_mode_passes_non_chunk_events() {
 
     // Should receive the event
     let msg = rx.try_recv();
-    assert!(msg.is_ok(), "Non-ResponseChunk events should be emitted immediately in instant mode");
+    assert!(
+        msg.is_ok(),
+        "Non-ResponseChunk events should be emitted immediately in instant mode"
+    );
 }
 
 #[test]

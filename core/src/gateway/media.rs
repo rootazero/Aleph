@@ -63,24 +63,54 @@ mod tests {
 
     #[test]
     fn test_detect_mime_from_extension() {
-        assert_eq!(detect_mime("https://example.com/photo.png", "image"), "image/png");
-        assert_eq!(detect_mime("https://example.com/video.mp4", "video"), "video/mp4");
-        assert_eq!(detect_mime("https://example.com/song.mp3", "audio"), "audio/mpeg");
+        assert_eq!(
+            detect_mime("https://example.com/photo.png", "image"),
+            "image/png"
+        );
+        assert_eq!(
+            detect_mime("https://example.com/video.mp4", "video"),
+            "video/mp4"
+        );
+        assert_eq!(
+            detect_mime("https://example.com/song.mp3", "audio"),
+            "audio/mpeg"
+        );
     }
 
     #[test]
     fn test_detect_mime_with_query_params() {
-        assert_eq!(detect_mime("https://example.com/img.png?token=abc", "image"), "image/png");
-        assert_eq!(detect_mime("https://example.com/video.mp4?v=1.0", "video"), "video/mp4");
-        assert_eq!(detect_mime("https://cdn.example.com/file.jpg#frag", "image"), "image/jpeg");
+        assert_eq!(
+            detect_mime("https://example.com/img.png?token=abc", "image"),
+            "image/png"
+        );
+        assert_eq!(
+            detect_mime("https://example.com/video.mp4?v=1.0", "video"),
+            "video/mp4"
+        );
+        assert_eq!(
+            detect_mime("https://cdn.example.com/file.jpg#frag", "image"),
+            "image/jpeg"
+        );
     }
 
     #[test]
     fn test_detect_mime_fallback() {
-        assert_eq!(detect_mime("https://example.com/file?token=abc", "image"), "image/png");
-        assert_eq!(detect_mime("https://example.com/file?token=abc", "video"), "video/mp4");
-        assert_eq!(detect_mime("https://example.com/file?token=abc", "audio"), "audio/mpeg");
-        assert_eq!(detect_mime("https://example.com/file", "file"), "application/octet-stream");
+        assert_eq!(
+            detect_mime("https://example.com/file?token=abc", "image"),
+            "image/png"
+        );
+        assert_eq!(
+            detect_mime("https://example.com/file?token=abc", "video"),
+            "video/mp4"
+        );
+        assert_eq!(
+            detect_mime("https://example.com/file?token=abc", "audio"),
+            "audio/mpeg"
+        );
+        assert_eq!(
+            detect_mime("https://example.com/file", "file"),
+            "application/octet-stream"
+        );
     }
 
     #[test]

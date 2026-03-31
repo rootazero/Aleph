@@ -3,7 +3,9 @@
 //! Implements [`GroupChatRenderer`] and [`GroupChatCommandParser`] for the
 //! Telegram channel, using Markdown formatting and `/groupchat` commands.
 
-use crate::group_chat::channel::{DefaultGroupChatCommandParser, GroupChatCommandParser, GroupChatRenderer};
+use crate::group_chat::channel::{
+    DefaultGroupChatCommandParser, GroupChatCommandParser, GroupChatRenderer,
+};
 use crate::group_chat::protocol::*;
 
 // =============================================================================

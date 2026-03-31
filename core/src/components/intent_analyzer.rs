@@ -11,8 +11,7 @@ use once_cell::sync::Lazy;
 use regex::Regex;
 
 use crate::event::{
-    AlephEvent, EventContext, EventHandler, EventType, HandlerError, PlanRequest,
-    ToolCallRequest,
+    AlephEvent, EventContext, EventHandler, EventType, HandlerError, PlanRequest, ToolCallRequest,
 };
 
 use super::Complexity;
@@ -40,9 +39,8 @@ static ENGLISH_MULTI_STEP_KEYWORDS: &[&str] = &[
 ];
 
 /// Step marker pattern: numbered lists (1. 2. 3.) or bullet points
-static STEP_MARKER_PATTERN: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?m)(^\s*\d+[.\u{3001})]\s*|^\s*[-*•]\s+)").unwrap()
-});
+static STEP_MARKER_PATTERN: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?m)(^\s*\d+[.\u{3001})]\s*|^\s*[-*•]\s+)").unwrap());
 
 /// Chinese action verbs for multi-sentence detection
 static CHINESE_ACTION_VERBS: &[&str] = &[
@@ -333,10 +331,18 @@ mod tests {
         let analyzer = IntentAnalyzer::new();
 
         let steps = analyzer.extract_steps("打开文件然后复制内容接着保存");
-        assert!(steps.len() >= 2, "Expected at least 2 steps, got {:?}", steps);
+        assert!(
+            steps.len() >= 2,
+            "Expected at least 2 steps, got {:?}",
+            steps
+        );
 
         let steps = analyzer.extract_steps("download the file then extract it and then process");
-        assert!(steps.len() >= 2, "Expected at least 2 steps, got {:?}", steps);
+        assert!(
+            steps.len() >= 2,
+            "Expected at least 2 steps, got {:?}",
+            steps
+        );
 
         let steps = analyzer.extract_steps("打开文件");
         assert_eq!(steps.len(), 1);
@@ -346,15 +352,27 @@ mod tests {
     #[test]
     fn test_complexity_simple() {
         let analyzer = IntentAnalyzer::new();
-        assert_eq!(analyzer.analyze_complexity_for_text("打开文件"), Complexity::Simple);
-        assert_eq!(analyzer.analyze_complexity_for_text("delete the folder"), Complexity::Simple);
+        assert_eq!(
+            analyzer.analyze_complexity_for_text("打开文件"),
+            Complexity::Simple
+        );
+        assert_eq!(
+            analyzer.analyze_complexity_for_text("delete the folder"),
+            Complexity::Simple
+        );
     }
 
     #[test]
     fn test_complexity_needs_plan() {
         let analyzer = IntentAnalyzer::new();
-        assert_eq!(analyzer.analyze_complexity_for_text("打开文件然后保存"), Complexity::NeedsPlan);
-        assert_eq!(analyzer.analyze_complexity_for_text("1. Open file\n2. Edit content"), Complexity::NeedsPlan);
+        assert_eq!(
+            analyzer.analyze_complexity_for_text("打开文件然后保存"),
+            Complexity::NeedsPlan
+        );
+        assert_eq!(
+            analyzer.analyze_complexity_for_text("1. Open file\n2. Edit content"),
+            Complexity::NeedsPlan
+        );
     }
 
     #[test]

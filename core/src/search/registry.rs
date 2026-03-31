@@ -1,10 +1,10 @@
 use crate::error::{AlephError, Result};
 use crate::search::{ProviderTestResult, SearchOptions, SearchProvider, SearchResult};
+use crate::sync_primitives::{Arc, Mutex};
 /// Search provider registry and router
 ///
 /// This module manages multiple search providers and routes requests
 use std::collections::HashMap;
-use crate::sync_primitives::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 /// Registry for managing multiple search providers

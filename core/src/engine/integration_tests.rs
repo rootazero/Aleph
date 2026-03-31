@@ -10,7 +10,6 @@ mod integration_tests {
     use tempfile::TempDir;
 
     use crate::engine::{AtomicEngine, RoutingLayer};
-    
 
     #[tokio::test]
     async fn test_routing_statistics() {
@@ -27,7 +26,9 @@ mod integration_tests {
         assert!(result2.action.is_some());
 
         // Test L3 fallback
-        let result3 = engine.route_query("complex query requiring LLM reasoning").await;
+        let result3 = engine
+            .route_query("complex query requiring LLM reasoning")
+            .await;
         assert_eq!(result3.layer, RoutingLayer::L3);
         assert!(result3.action.is_none());
 
@@ -54,7 +55,9 @@ mod integration_tests {
             command: "echo test".to_string(),
             cwd: None,
         };
-        engine.learn_from_success(custom_query.clone(), action).await;
+        engine
+            .learn_from_success(custom_query.clone(), action)
+            .await;
 
         // Second query should hit L1 cache
         let result2 = engine.route_query(&custom_query).await;
@@ -99,11 +102,7 @@ mod integration_tests {
         for i in 0..10 {
             let engine_clone = engine.clone();
             let handle = tokio::spawn(async move {
-                let query = if i % 2 == 0 {
-                    "git status"
-                } else {
-                    "git log"
-                };
+                let query = if i % 2 == 0 { "git status" } else { "git log" };
                 engine_clone.route_query(query).await
             });
             handles.push(handle);

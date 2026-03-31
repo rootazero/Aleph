@@ -8,8 +8,8 @@
 
 use std::sync::Arc;
 
-use alephcore::scheduler::{LaneState, LaneScheduler, LaneConfig, ScheduleGuard};
 use alephcore::agents::sub_agents::Lane;
+use alephcore::scheduler::{LaneConfig, LaneScheduler, LaneState, ScheduleGuard};
 
 /// Scheduler test context
 #[derive(Default)]
@@ -44,9 +44,18 @@ impl std::fmt::Debug for SchedulerContext {
             .field("dequeued_run_id", &self.dequeued_run_id)
             .field("last_dequeue_result", &self.last_dequeue_result)
             .field("priority_boost", &self.priority_boost)
-            .field("lane_scheduler", &self.lane_scheduler.as_ref().map(|_| "LaneScheduler"))
-            .field("last_scheduled", &self.last_scheduled.as_ref().map(|(id, lane, _)| (id, lane)))
-            .field("anti_starvation_boost_count", &self.anti_starvation_boost_count)
+            .field(
+                "lane_scheduler",
+                &self.lane_scheduler.as_ref().map(|_| "LaneScheduler"),
+            )
+            .field(
+                "last_scheduled",
+                &self.last_scheduled.as_ref().map(|(id, lane, _)| (id, lane)),
+            )
+            .field(
+                "anti_starvation_boost_count",
+                &self.anti_starvation_boost_count,
+            )
             .field("recursion_check_result", &self.recursion_check_result)
             .field("run_counter", &self.run_counter)
             .finish()

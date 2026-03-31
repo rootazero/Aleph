@@ -126,10 +126,9 @@ impl ResultMerger {
             metadata: Default::default(),
         };
         // Add source marker
-        artifact.metadata.insert(
-            "source".to_string(),
-            Value::String("sub_agent".to_string()),
-        );
+        artifact
+            .metadata
+            .insert("source".to_string(), Value::String("sub_agent".to_string()));
         artifact
     }
 

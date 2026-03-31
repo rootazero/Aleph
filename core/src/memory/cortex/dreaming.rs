@@ -9,9 +9,9 @@ use crate::memory::cortex::{
 };
 use crate::memory::store::MemoryBackend;
 use crate::memory::value_estimator::cortex::CortexValueEstimator;
-use chrono::{Datelike, Timelike};
-use crate::sync_primitives::{AtomicBool, AtomicU64, Ordering};
 use crate::sync_primitives::Arc;
+use crate::sync_primitives::{AtomicBool, AtomicU64, Ordering};
+use chrono::{Datelike, Timelike};
 use std::time::Duration;
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
@@ -198,8 +198,7 @@ impl CortexDreamingService {
                 let now = chrono::Local::now();
                 let current_day = now.ordinal0(); // 0-based day of year
 
-                if now.hour() == config.scheduled_hour as u32 && current_day != last_scheduled_day
-                {
+                if now.hour() == config.scheduled_hour as u32 && current_day != last_scheduled_day {
                     info!("Starting scheduled batch processing");
                     last_scheduled_day = current_day;
 
@@ -271,7 +270,8 @@ impl CortexDreamingService {
         }
 
         // Sort by score (highest first)
-        scored_candidates.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        scored_candidates
+            .sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
         info!(
             "Filtered to {} high-value experiences",
@@ -316,7 +316,7 @@ impl CortexDreamingService {
         metrics.update_last_processing(
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
+                .unwrap_or_default()
                 .as_secs(),
         );
 
@@ -344,7 +344,10 @@ mod tests {
 
     async fn create_test_db() -> (MemoryBackend, TempDir) {
         let temp_dir = TempDir::new().unwrap();
-        let backend = crate::memory::store::lance::LanceMemoryBackend::open_or_create(temp_dir.path()).await.unwrap();
+        let backend =
+            crate::memory::store::lance::LanceMemoryBackend::open_or_create(temp_dir.path())
+                .await
+                .unwrap();
         (Arc::new(backend), temp_dir)
     }
 
@@ -359,12 +362,8 @@ mod tests {
         let value_estimator = Arc::new(CortexValueEstimator::default());
         let config = CortexDreamingConfig::default();
 
-        let mut service = CortexDreamingService::new(
-            db,
-            distillation_service,
-            value_estimator,
-            config,
-        );
+        let mut service =
+            CortexDreamingService::new(db, distillation_service, value_estimator, config);
 
         // Start service
         service.start().await.unwrap();
@@ -386,12 +385,7 @@ mod tests {
         let value_estimator = Arc::new(CortexValueEstimator::default());
         let config = CortexDreamingConfig::default();
 
-        let service = CortexDreamingService::new(
-            db,
-            distillation_service,
-            value_estimator,
-            config,
-        );
+        let service = CortexDreamingService::new(db, distillation_service, value_estimator, config);
 
         // Check initial metrics
         let (processed, extracted, errors, _) = service.metrics();

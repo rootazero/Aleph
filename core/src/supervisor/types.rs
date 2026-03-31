@@ -11,7 +11,10 @@ pub struct PtySize {
 
 impl Default for PtySize {
     fn default() -> Self {
-        Self { rows: 24, cols: 120 }
+        Self {
+            rows: 24,
+            cols: 120,
+        }
     }
 }
 

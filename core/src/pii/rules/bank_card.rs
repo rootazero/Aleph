@@ -20,10 +20,7 @@ impl BankCardRule {
 
     /// Luhn algorithm checksum validation
     fn luhn_check(number: &str) -> bool {
-        let digits: Vec<u32> = number
-            .chars()
-            .filter_map(|c| c.to_digit(10))
-            .collect();
+        let digits: Vec<u32> = number.chars().filter_map(|c| c.to_digit(10)).collect();
 
         if digits.len() < 16 {
             return false;
@@ -36,7 +33,11 @@ impl BankCardRule {
             .map(|(i, &d)| {
                 if i % 2 == 1 {
                     let doubled = d * 2;
-                    if doubled > 9 { doubled - 9 } else { doubled }
+                    if doubled > 9 {
+                        doubled - 9
+                    } else {
+                        doubled
+                    }
                 } else {
                     d
                 }

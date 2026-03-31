@@ -14,7 +14,7 @@ use super::config::{FeishuConfig, GroupSessionScope};
 use super::dedup::MessageDedup;
 use super::events::{extract_text_content, mark_bot_mentions, parse_ws_frame};
 use super::types::{ChatType, FeishuEvent};
-use super::user_cache::{UserProfileCache, UserProfile};
+use super::user_cache::{UserProfile, UserProfileCache};
 
 /// All context needed by the WS loop, passed as a single struct.
 pub(super) struct WsLoopContext {
@@ -128,9 +128,16 @@ async fn handle_text_frame(
 ) {
     match parse_ws_frame(text) {
         Ok(Some(FeishuEvent::MessageReceive {
-            message_id, chat_id, chat_type, sender_id,
-            sender_name, message_type, content, mut mentions,
-            parent_id, ..
+            message_id,
+            chat_id,
+            chat_type,
+            sender_id,
+            sender_name,
+            message_type,
+            content,
+            mut mentions,
+            parent_id,
+            ..
         })) => {
             // Dedup check
             {
@@ -158,12 +165,10 @@ async fn handle_text_frame(
             }
 
             let extracted_text = match message_type.as_str() {
-                "text" => {
-                    match extract_text_content(&content, &mentions) {
-                        Some(t) => t,
-                        None => return,
-                    }
-                }
+                "text" => match extract_text_content(&content, &mentions) {
+                    Some(t) => t,
+                    None => return,
+                },
                 "image" => "[Image]".to_string(),
                 other => {
                     tracing::debug!("Skipping unsupported message type: {other}");
@@ -172,9 +177,8 @@ async fn handle_text_frame(
             };
 
             // Resolve sender name: try user_cache first, then event payload
-            let resolved_name = sender_name.or_else(|| {
-                user_cache.get(&sender_id).and_then(|p| p.name.clone())
-            });
+            let resolved_name =
+                sender_name.or_else(|| user_cache.get(&sender_id).and_then(|p| p.name.clone()));
 
             // Cache the sender profile if we have a name
             if let Some(ref name) = resolved_name {

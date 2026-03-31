@@ -28,8 +28,8 @@ mod integration_test;
 pub use intent_analyzer::IntentAnalyzer;
 pub use loop_controller::{LoopConfig, LoopController};
 pub use session_compactor::{
-    CompactionConfig, EnhancedTokenUsage, LlmCallback, ModelLimit, PruneInfo, SessionCompactor,
-    TokenTracker, compaction_prompt,
+    compaction_prompt, CompactionConfig, EnhancedTokenUsage, LlmCallback, ModelLimit, PruneInfo,
+    SessionCompactor, TokenTracker,
 };
 pub use session_recorder::{RecorderError, SessionRecord, SessionRecorder};
 pub use subagent_handler::SubAgentHandler;

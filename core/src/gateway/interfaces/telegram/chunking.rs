@@ -5,7 +5,16 @@
 //! next chunk.
 
 /// Telegram-supported HTML tags.
-const TELEGRAM_TAGS: &[&str] = &["b", "i", "s", "u", "code", "pre", "blockquote", "tg-spoiler"];
+const TELEGRAM_TAGS: &[&str] = &[
+    "b",
+    "i",
+    "s",
+    "u",
+    "code",
+    "pre",
+    "blockquote",
+    "tg-spoiler",
+];
 
 /// Reserve space for closing/reopening tags at chunk boundaries.
 const TAG_OVERHEAD: usize = 200;
@@ -185,16 +194,34 @@ mod tests {
         let inner = "x".repeat(100);
         let html = format!("<b>{}</b>", inner);
         let chunks = split_html_safe(&html, 60);
-        assert!(chunks.len() >= 2, "expected >=2 chunks, got {}", chunks.len());
-        assert!(chunks[0].ends_with("</b>"), "first chunk should end with </b>: {}", chunks[0]);
-        assert!(chunks[1].starts_with("<b>"), "second chunk should start with <b>: {}", chunks[1]);
+        assert!(
+            chunks.len() >= 2,
+            "expected >=2 chunks, got {}",
+            chunks.len()
+        );
+        assert!(
+            chunks[0].ends_with("</b>"),
+            "first chunk should end with </b>: {}",
+            chunks[0]
+        );
+        assert!(
+            chunks[1].starts_with("<b>"),
+            "second chunk should start with <b>: {}",
+            chunks[1]
+        );
     }
 
     #[test]
     fn test_split_html_safe_prefers_newline() {
         let html = format!("{}\n{}", "a".repeat(50), "b".repeat(50));
         let chunks = split_html_safe(&html, 60);
-        assert_eq!(chunks.len(), 2, "expected 2 chunks, got {}: {:?}", chunks.len(), chunks);
+        assert_eq!(
+            chunks.len(),
+            2,
+            "expected 2 chunks, got {}: {:?}",
+            chunks.len(),
+            chunks
+        );
         assert_eq!(chunks[0].trim(), &"a".repeat(50));
     }
 
@@ -203,16 +230,32 @@ mod tests {
         let inner = "x".repeat(100);
         let html = format!("<b><i>{}</i></b>", inner);
         let chunks = split_html_safe(&html, 60);
-        assert!(chunks.len() >= 2, "expected >=2 chunks, got {}", chunks.len());
-        assert!(chunks[0].ends_with("</i></b>"), "first chunk should end with </i></b>: {}", chunks[0]);
-        assert!(chunks[1].starts_with("<b><i>"), "second chunk should start with <b><i>: {}", chunks[1]);
+        assert!(
+            chunks.len() >= 2,
+            "expected >=2 chunks, got {}",
+            chunks.len()
+        );
+        assert!(
+            chunks[0].ends_with("</i></b>"),
+            "first chunk should end with </i></b>: {}",
+            chunks[0]
+        );
+        assert!(
+            chunks[1].starts_with("<b><i>"),
+            "second chunk should start with <b><i>: {}",
+            chunks[1]
+        );
     }
 
     #[test]
     fn test_split_html_safe_utf8_safety() {
         let text = "你好世界".repeat(30); // 120 CJK chars
         let chunks = split_html_safe(&text, 50);
-        assert!(chunks.len() >= 2, "expected >=2 chunks, got {}", chunks.len());
+        assert!(
+            chunks.len() >= 2,
+            "expected >=2 chunks, got {}",
+            chunks.len()
+        );
         for chunk in &chunks {
             assert!(
                 chunk.chars().count() <= 55,

@@ -1,6 +1,6 @@
-use crate::daemon::{DaemonConfig, DaemonStatus, Result, ServiceStatus};
 #[cfg(not(target_os = "macos"))]
 use crate::daemon::DaemonError;
+use crate::daemon::{DaemonConfig, DaemonStatus, Result, ServiceStatus};
 use async_trait::async_trait;
 
 /// Cross-platform service management interface
@@ -35,16 +35,22 @@ pub fn create_service_manager() -> Result<Box<dyn ServiceManager>> {
 
     #[cfg(target_os = "linux")]
     {
-        Err(DaemonError::ServiceError("Linux support not yet implemented".to_string()))
+        Err(DaemonError::ServiceError(
+            "Linux support not yet implemented".to_string(),
+        ))
     }
 
     #[cfg(target_os = "windows")]
     {
-        Err(DaemonError::ServiceError("Windows support not yet implemented".to_string()))
+        Err(DaemonError::ServiceError(
+            "Windows support not yet implemented".to_string(),
+        ))
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     {
-        Err(DaemonError::ServiceError("Unsupported platform".to_string()))
+        Err(DaemonError::ServiceError(
+            "Unsupported platform".to_string(),
+        ))
     }
 }

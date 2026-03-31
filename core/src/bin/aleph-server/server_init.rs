@@ -10,9 +10,7 @@ use std::sync::Arc;
 
 use alephcore::gateway::event_bus::GatewayEventBus;
 use alephcore::gateway::router::AgentRouter;
-use alephcore::gateway::{
-    ExecutionEngine, GatewayEventEmitter, AgentRegistry,
-};
+use alephcore::gateway::{AgentRegistry, ExecutionEngine, GatewayEventEmitter};
 
 /// Serve WebChat static files
 pub async fn serve_webchat(
@@ -31,14 +29,12 @@ pub async fn serve_webchat(
         .fallback(ServeFile::new(&index_path));
 
     // Build router with CORS headers for development
-    let app = Router::new()
-        .fallback_service(serve_dir)
-        .layer(
-            tower_http::cors::CorsLayer::new()
-                .allow_origin(tower_http::cors::Any)
-                .allow_methods(tower_http::cors::Any)
-                .allow_headers(tower_http::cors::Any),
-        );
+    let app = Router::new().fallback_service(serve_dir).layer(
+        tower_http::cors::CorsLayer::new()
+            .allow_origin(tower_http::cors::Any)
+            .allow_methods(tower_http::cors::Any)
+            .allow_headers(tower_http::cors::Any),
+    );
 
     // Create listener
     let listener = tokio::net::TcpListener::bind(addr).await?;
@@ -165,10 +161,15 @@ where
     let output_mode = {
         let cfg = app_config.read().await;
         let behavior = cfg.behavior.as_ref();
-        let mode_str = behavior.map(|b| b.output_mode.as_str()).unwrap_or("typewriter");
+        let mode_str = behavior
+            .map(|b| b.output_mode.as_str())
+            .unwrap_or("typewriter");
         alephcore::gateway::OutputMode::from_config(mode_str)
     };
-    let emitter = Arc::new(GatewayEventEmitter::with_output_mode(event_bus.clone(), output_mode));
+    let emitter = Arc::new(GatewayEventEmitter::with_output_mode(
+        event_bus.clone(),
+        output_mode,
+    ));
 
     // Create run request with channel/peer metadata for agent management tools
     let mut metadata = std::collections::HashMap::new();
@@ -233,9 +234,9 @@ where
     P: alephcore::thinker::ProviderRegistry + 'static,
     R: alephcore::executor::ToolRegistry + 'static,
 {
+    use alephcore::gateway::handlers::chat::SendParams;
     use alephcore::gateway::protocol::{INTERNAL_ERROR, INVALID_PARAMS};
     use alephcore::gateway::RunRequest;
-    use alephcore::gateway::handlers::chat::SendParams;
     use serde::Serialize;
     use serde_json::{json, Value};
 
@@ -315,10 +316,15 @@ where
     let output_mode = {
         let cfg = app_config.read().await;
         let behavior = cfg.behavior.as_ref();
-        let mode_str = behavior.map(|b| b.output_mode.as_str()).unwrap_or("typewriter");
+        let mode_str = behavior
+            .map(|b| b.output_mode.as_str())
+            .unwrap_or("typewriter");
         alephcore::gateway::OutputMode::from_config(mode_str)
     };
-    let emitter = Arc::new(GatewayEventEmitter::with_output_mode(event_bus.clone(), output_mode));
+    let emitter = Arc::new(GatewayEventEmitter::with_output_mode(
+        event_bus.clone(),
+        output_mode,
+    ));
 
     // Create run request with channel/peer metadata for agent management tools
     let mut metadata = std::collections::HashMap::new();
@@ -347,9 +353,11 @@ where
                     alephcore::command::CommandContext::Skill { skill_id, .. } => {
                         (skill_id, DirectToolSource::Skill)
                     }
-                    alephcore::command::CommandContext::Mcp { server_name, tool_name, .. } => {
-                        (tool_name.unwrap_or(server_name), DirectToolSource::Mcp)
-                    }
+                    alephcore::command::CommandContext::Mcp {
+                        server_name,
+                        tool_name,
+                        ..
+                    } => (tool_name.unwrap_or(server_name), DirectToolSource::Mcp),
                     alephcore::command::CommandContext::Custom { .. } => {
                         (parsed.command_name.clone(), DirectToolSource::Custom)
                     }
@@ -366,7 +374,8 @@ where
                 })) {
                     tracing::info!(
                         "[chat.send] Slash command resolved: tool_id={}, args={:?}",
-                        tool_id, parsed.arguments
+                        tool_id,
+                        parsed.arguments
                     );
                     metadata.insert(
                         alephcore::gateway::inbound_router::SLASH_COMMAND_MODE_KEY.to_string(),

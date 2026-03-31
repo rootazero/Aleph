@@ -65,7 +65,11 @@ mod tests {
         );
 
         let score = estimator.estimate(&entry).await.unwrap();
-        assert!((0.3..=0.7).contains(&score), "Expected medium score, got {}", score);
+        assert!(
+            (0.3..=0.7).contains(&score),
+            "Expected medium score, got {}",
+            score
+        );
     }
 
     #[test]

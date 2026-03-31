@@ -166,7 +166,10 @@ impl DelegateTool {
         }
 
         // Pass execution context (prefer args context, fall back to default)
-        if let Some(exec_ctx) = args.execution_context.or_else(|| self.default_execution_context.clone()) {
+        if let Some(exec_ctx) = args
+            .execution_context
+            .or_else(|| self.default_execution_context.clone())
+        {
             request = request.with_execution_context(exec_ctx);
         }
 
@@ -175,18 +178,26 @@ impl DelegateTool {
         let result = dispatcher.dispatch(request).await?;
 
         // Convert artifacts to ArtifactInfo
-        let artifacts: Vec<ArtifactInfo> = result.artifacts.iter().map(|a| ArtifactInfo {
-            artifact_type: a.artifact_type.clone(),
-            path: a.path.clone(),
-            mime_type: a.mime_type.clone(),
-        }).collect();
+        let artifacts: Vec<ArtifactInfo> = result
+            .artifacts
+            .iter()
+            .map(|a| ArtifactInfo {
+                artifact_type: a.artifact_type.clone(),
+                path: a.path.clone(),
+                mime_type: a.mime_type.clone(),
+            })
+            .collect();
 
         // Convert tool calls to ToolCallInfo
-        let tools_called: Vec<ToolCallInfo> = result.tools_called.iter().map(|tc| ToolCallInfo {
-            name: tc.name.clone(),
-            success: tc.success,
-            result_summary: tc.result_summary.clone(),
-        }).collect();
+        let tools_called: Vec<ToolCallInfo> = result
+            .tools_called
+            .iter()
+            .map(|tc| ToolCallInfo {
+                name: tc.name.clone(),
+                success: tc.success,
+                result_summary: tc.result_summary.clone(),
+            })
+            .collect();
 
         Ok(DelegateResult {
             success: result.success,
@@ -205,7 +216,8 @@ impl DelegateTool {
 #[async_trait]
 impl AlephTool for DelegateTool {
     const NAME: &'static str = "delegate";
-    const DESCRIPTION: &'static str = "Delegate a task to a specialized sub-agent. Use this when:\n\
+    const DESCRIPTION: &'static str =
+        "Delegate a task to a specialized sub-agent. Use this when:\n\
         - You need to discover MCP tools from external servers (agent: \"mcp\")\n\
         - You need to find available skill workflows (agent: \"skill\")\n\
         - A task requires specialized tool discovery\n\n\
@@ -345,7 +357,10 @@ mod tests {
         assert_eq!(ctx.working_directory, Some("/home/user".to_string()));
         assert_eq!(ctx.current_app, Some("VSCode".to_string()));
         assert_eq!(ctx.window_title, Some("main.rs - project".to_string()));
-        assert_eq!(ctx.original_request, Some("Help me with this code".to_string()));
+        assert_eq!(
+            ctx.original_request,
+            Some("Help me with this code".to_string())
+        );
         assert!(!ctx.is_empty());
     }
 }

@@ -3,9 +3,9 @@
 //! Provides database operations for execution trace management,
 //! enabling Shadow Replay for deterministic task recovery.
 
+use super::StateDatabase;
 use crate::error::AlephError;
 use crate::resilience::{TaskTrace, TraceRole};
-use super::StateDatabase;
 use rusqlite::params;
 use rusqlite::OptionalExtension;
 

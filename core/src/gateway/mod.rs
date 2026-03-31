@@ -27,20 +27,20 @@ pub mod bridge;
 pub mod link;
 pub mod transport;
 
-pub mod formatter;
-pub mod protocol;
-pub mod server;
+pub mod auth_middleware;
 pub mod event_bus;
 pub mod event_emitter;
-pub mod tool_display;
-pub mod stream_buffer;
-pub mod message_dedup;
-pub mod router;
-pub mod auth_middleware;
-pub mod security;
-pub mod session;
+pub mod formatter;
 pub mod handlers;
 pub mod mdns_broadcaster;
+pub mod message_dedup;
+pub mod protocol;
+pub mod router;
+pub mod security;
+pub mod server;
+pub mod session;
+pub mod stream_buffer;
+pub mod tool_display;
 
 // ControlPlane: Embedded web UI
 pub mod control_plane;
@@ -49,115 +49,127 @@ pub mod control_plane;
 pub mod agent_instance;
 pub mod agent_lifecycle;
 pub mod config;
-pub mod session_manager;
 pub mod execution_engine;
+pub mod session_manager;
 // loop_callback_adapter removed (depended on old OTAF agent_loop types)
-pub mod provider_factory;
+pub mod bind_mode;
 pub mod channel;
 pub mod channel_registry;
-pub mod interfaces;
 pub mod device_store;
-pub mod presence;
-pub mod bind_mode;
 pub mod hot_reload;
 pub mod http_server;
 pub mod inbound_context;
-pub mod pipeline;
+pub mod inbound_router;
+pub mod interfaces;
 pub mod pairing_store;
+pub mod pipeline;
+pub mod presence;
+pub mod provider_factory;
 pub mod reply_emitter;
 pub mod routing_config;
-pub mod inbound_router;
 
-pub mod execution_adapter;
-pub mod session_scheduler;
-pub mod inter_agent_policy;
+pub mod agent_env;
+pub mod challenge;
 pub mod context;
+pub mod event_scope;
+pub mod execution_adapter;
+pub mod hello_snapshot;
+pub mod i18n;
 pub mod idempotency;
+pub mod inter_agent_policy;
 pub mod lane;
+pub mod media;
+pub mod openai_api;
+pub mod rate_limiter;
+pub mod run_event_bus;
+pub mod session_scheduler;
+pub mod state_version;
+pub mod streaming;
+pub mod streaming_sink;
+pub mod tailscale;
+pub mod voice;
 pub mod webhook_receiver;
 pub mod webhooks;
-pub mod run_event_bus;
-pub mod agent_env;
 pub mod workspace_loader;
-pub mod state_version;
-pub mod hello_snapshot;
-pub mod event_scope;
-pub mod rate_limiter;
-pub mod challenge;
-pub mod tailscale;
-pub mod openai_api;
-pub mod voice;
-pub mod media;
-pub mod streaming_sink;
-pub mod i18n;
-pub mod streaming;
-pub use server::GatewayServer;
-pub use protocol::{JsonRpcRequest, JsonRpcResponse, JsonRpcError};
 pub use event_bus::GatewayEventBus;
-pub use event_emitter::{EventEmitter, StreamEvent, GatewayEventEmitter, NoOpEventEmitter, DynEventEmitter, OutputMode};
-pub use tool_display::{ToolDisplay, get_tool_display, format_tool_meta, format_tool_summary, group_paths};
-pub use stream_buffer::StreamBuffer;
-pub use message_dedup::{normalize_text, is_text_duplicate, SentMessageTracker, SentRecord};
-pub use router::AgentRouter;
+pub use event_emitter::{
+    DynEventEmitter, EventEmitter, GatewayEventEmitter, NoOpEventEmitter, OutputMode, StreamEvent,
+};
 pub use mdns_broadcaster::MdnsBroadcaster;
+pub use message_dedup::{is_text_duplicate, normalize_text, SentMessageTracker, SentRecord};
+pub use protocol::{JsonRpcError, JsonRpcRequest, JsonRpcResponse};
+pub use router::AgentRouter;
+pub use server::GatewayServer;
+pub use stream_buffer::StreamBuffer;
+pub use tool_display::{
+    format_tool_meta, format_tool_summary, get_tool_display, group_paths, ToolDisplay,
+};
 
 // Phase 4 exports
 pub use agent_instance::{AgentInstance, AgentInstanceConfig, AgentRegistry, AgentState};
 pub use config::GatewayConfig;
-pub use session_manager::{SessionManager, SessionManagerConfig};
-pub use execution_engine::{ExecutionEngine, ExecutionEngineConfig, RunRequest, RunStatus, SimpleExecutionEngine};
-// EventEmittingCallback, ResponseChunkEmitter, UserQuestion removed (old OTAF types)
-pub use provider_factory::{
-    create_provider_registry_from_env, create_claude_provider_from_env,
-    create_openai_provider_from_env, can_create_provider_from_env,
-    available_provider_from_env, ProviderFactoryError
+pub use execution_engine::{
+    ExecutionEngine, ExecutionEngineConfig, RunRequest, RunStatus, SimpleExecutionEngine,
 };
+pub use session_manager::{SessionManager, SessionManagerConfig};
+// EventEmittingCallback, ResponseChunkEmitter, UserQuestion removed (old OTAF types)
+pub use bind_mode::BindMode;
 pub use channel::{
-    Channel, ChannelFactory, ChannelConfig, ChannelInfo, ChannelCapabilities,
-    ChannelId, ConversationId, UserId, MessageId,
-    InboundMessage, OutboundMessage, SendResult, Attachment,
-    ChannelStatus, ChannelError, ChannelResult,
+    Attachment, Channel, ChannelCapabilities, ChannelConfig, ChannelError, ChannelFactory,
+    ChannelId, ChannelInfo, ChannelResult, ChannelStatus, ConversationId, InboundMessage,
+    MessageId, OutboundMessage, SendResult, UserId,
 };
 pub use channel_registry::{ChannelRegistry, ChannelStatusSummary};
-pub use device_store::{DeviceStore, ApprovedDevice};
-pub use presence::{PresenceTracker, PresenceEntry};
-pub use state_version::{StateVersionTracker, StateVersion};
-pub use hello_snapshot::{HelloSnapshot, ConnectionLimits};
-pub use handlers::auth::{AuthContext, handle_connect, handle_pairing_approve, handle_pairing_reject, handle_pairing_list, handle_devices_list, handle_devices_revoke, create_hello_notification};
-pub use handlers::events::{SubscriptionManager, handle_subscribe, handle_unsubscribe, handle_list as handle_events_list};
-pub use handlers::plugins::{init_extension_manager, is_extension_manager_initialized};
-pub use event_bus::{TopicEvent, TopicFilter, topic_matches};
-pub use bind_mode::BindMode;
-pub use hot_reload::{ConfigWatcher, ConfigWatcherConfig, ConfigEvent, ConfigWatcherError, ReloadMode};
-pub use inbound_context::{InboundContext, ReplyRoute};
-pub use pairing_store::{PairingStore, PairingRequest, PairingError, SqlitePairingStore};
-pub use reply_emitter::{ReplyEmitter, ReplyEmitterConfig};
-pub use routing_config::{RoutingConfig, DmScope};
-pub use inbound_router::{InboundMessageRouter, RoutingError, ChannelConfig as RouterChannelConfig, DmPolicy, GroupPolicy};
+pub use device_store::{ApprovedDevice, DeviceStore};
+pub use event_bus::{topic_matches, TopicEvent, TopicFilter};
 pub use execution_adapter::ExecutionAdapter;
+pub use handlers::auth::{
+    create_hello_notification, handle_connect, handle_devices_list, handle_devices_revoke,
+    handle_pairing_approve, handle_pairing_list, handle_pairing_reject, AuthContext,
+};
+pub use handlers::events::{
+    handle_list as handle_events_list, handle_subscribe, handle_unsubscribe, SubscriptionManager,
+};
+pub use handlers::plugins::{init_extension_manager, is_extension_manager_initialized};
+pub use hello_snapshot::{ConnectionLimits, HelloSnapshot};
+pub use hot_reload::{
+    ConfigEvent, ConfigWatcher, ConfigWatcherConfig, ConfigWatcherError, ReloadMode,
+};
+pub use inbound_context::{InboundContext, ReplyRoute};
+pub use inbound_router::{
+    ChannelConfig as RouterChannelConfig, DmPolicy, GroupPolicy, InboundMessageRouter, RoutingError,
+};
+pub use pairing_store::{PairingError, PairingRequest, PairingStore, SqlitePairingStore};
+pub use presence::{PresenceEntry, PresenceTracker};
+pub use provider_factory::{
+    available_provider_from_env, can_create_provider_from_env, create_claude_provider_from_env,
+    create_openai_provider_from_env, create_provider_registry_from_env, ProviderFactoryError,
+};
+pub use reply_emitter::{ReplyEmitter, ReplyEmitterConfig};
+pub use routing_config::{DmScope, RoutingConfig};
+pub use state_version::{StateVersion, StateVersionTracker};
 
-pub use inter_agent_policy::AgentToAgentPolicy;
+pub use agent_env::{
+    ActiveAgentEnv, AgentEnv, AgentEnvContext, AgentEnvError, AgentEnvFilter, AgentEnvStore,
+    AgentEnvStoreConfig, CacheState, DEFAULT_AGENT,
+};
 pub use context::GatewayContext;
+pub use inter_agent_policy::AgentToAgentPolicy;
+pub use run_event_bus::{
+    wait_for_run_end, ActiveRunHandle, QueueError, RunEndResult, RunEvent,
+    RunStatus as RunEventStatus, WaitError,
+};
 pub use webhook_receiver::{WebhookHandler, WebhookReceiver};
 pub use webhooks::{
-    WebhooksConfig, WebhookEndpointConfig, SignatureFormat,
-    WebhookHandlerState, WebhookProcessor, WebhookRequest, WebhookError,
-    create_router as create_webhook_router,
-};
-pub use run_event_bus::{
-    RunEvent, RunStatus as RunEventStatus, RunEndResult,
-    WaitError, QueueError, ActiveRunHandle, wait_for_run_end,
-};
-pub use agent_env::{
-    AgentEnv, AgentEnvStore, AgentEnvStoreConfig, AgentEnvError,
-    CacheState, ActiveAgentEnv, AgentEnvFilter, AgentEnvContext, DEFAULT_AGENT,
+    create_router as create_webhook_router, SignatureFormat, WebhookEndpointConfig, WebhookError,
+    WebhookHandlerState, WebhookProcessor, WebhookRequest, WebhooksConfig,
 };
 
 // Property-based tests
 #[cfg(test)]
-mod proptest_protocol;
-#[cfg(test)]
 mod proptest_channel;
+#[cfg(test)]
+mod proptest_protocol;
 
 #[cfg(test)]
 mod auth_probe_tests;

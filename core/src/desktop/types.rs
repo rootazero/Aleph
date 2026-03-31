@@ -29,13 +29,23 @@ pub struct CanvasPosition {
 
 impl From<ScreenRegion> for CanvasPosition {
     fn from(r: ScreenRegion) -> Self {
-        CanvasPosition { x: r.x, y: r.y, width: r.width, height: r.height }
+        CanvasPosition {
+            x: r.x,
+            y: r.y,
+            width: r.width,
+            height: r.height,
+        }
     }
 }
 
 impl From<CanvasPosition> for ScreenRegion {
     fn from(p: CanvasPosition) -> Self {
-        ScreenRegion { x: p.x, y: p.y, width: p.width, height: p.height }
+        ScreenRegion {
+            x: p.x,
+            y: p.y,
+            width: p.width,
+            height: p.height,
+        }
     }
 }
 
@@ -68,9 +78,15 @@ pub struct SnapshotStats {
 #[derive(Debug, Clone)]
 pub enum DesktopRequest {
     // Perception (existing)
-    Screenshot { region: Option<ScreenRegion> },
-    Ocr { image_base64: Option<String> },
-    AxTree { app_bundle_id: Option<String> },
+    Screenshot {
+        region: Option<ScreenRegion>,
+    },
+    Ocr {
+        image_base64: Option<String>,
+    },
+    AxTree {
+        app_bundle_id: Option<String>,
+    },
 
     // Perception (new)
     Snapshot {
@@ -90,10 +106,16 @@ pub enum DesktopRequest {
         ref_id: Option<String>,
         text: String,
     },
-    KeyCombo { keys: Vec<String> },
-    LaunchApp { bundle_id: String },
+    KeyCombo {
+        keys: Vec<String>,
+    },
+    LaunchApp {
+        bundle_id: String,
+    },
     WindowList,
-    FocusWindow { window_id: u32 },
+    FocusWindow {
+        window_id: u32,
+    },
 
     // Action (new)
     Scroll {
@@ -123,12 +145,19 @@ pub enum DesktopRequest {
         x: Option<f64>,
         y: Option<f64>,
     },
-    Paste { text: String },
+    Paste {
+        text: String,
+    },
 
     // Canvas (unchanged)
-    CanvasShow { html: String, position: CanvasPosition },
+    CanvasShow {
+        html: String,
+        position: CanvasPosition,
+    },
     CanvasHide,
-    CanvasUpdate { patch: serde_json::Value },
+    CanvasUpdate {
+        patch: serde_json::Value,
+    },
 
     // Internal
     Ping,
@@ -136,54 +165,111 @@ pub enum DesktopRequest {
     // ========= PIM (Personal Information Management) =========
 
     // Calendar
-    PimCalendarList { from: String, to: String, calendar_id: Option<String> },
-    PimCalendarGet { id: String },
+    PimCalendarList {
+        from: String,
+        to: String,
+        calendar_id: Option<String>,
+    },
+    PimCalendarGet {
+        id: String,
+    },
     PimCalendarCreate {
-        title: String, start: String, end: String,
-        calendar_id: Option<String>, location: Option<String>,
-        notes: Option<String>, all_day: Option<bool>,
+        title: String,
+        start: String,
+        end: String,
+        calendar_id: Option<String>,
+        location: Option<String>,
+        notes: Option<String>,
+        all_day: Option<bool>,
     },
     PimCalendarUpdate {
-        id: String, title: Option<String>, start: Option<String>,
-        end: Option<String>, location: Option<String>, notes: Option<String>,
-        all_day: Option<bool>, calendar_id: Option<String>,
+        id: String,
+        title: Option<String>,
+        start: Option<String>,
+        end: Option<String>,
+        location: Option<String>,
+        notes: Option<String>,
+        all_day: Option<bool>,
+        calendar_id: Option<String>,
     },
-    PimCalendarDelete { id: String },
+    PimCalendarDelete {
+        id: String,
+    },
     PimCalendarCalendars,
 
     // Reminders
-    PimRemindersList { list_id: Option<String>, include_completed: Option<bool> },
-    PimRemindersGet { id: String },
-    PimRemindersCreate {
-        title: String, list_id: Option<String>,
-        due_date: Option<String>, priority: Option<i32>, notes: Option<String>,
+    PimRemindersList {
+        list_id: Option<String>,
+        include_completed: Option<bool>,
     },
-    PimRemindersComplete { id: String, completed: bool },
-    PimRemindersDelete { id: String },
+    PimRemindersGet {
+        id: String,
+    },
+    PimRemindersCreate {
+        title: String,
+        list_id: Option<String>,
+        due_date: Option<String>,
+        priority: Option<i32>,
+        notes: Option<String>,
+    },
+    PimRemindersComplete {
+        id: String,
+        completed: bool,
+    },
+    PimRemindersDelete {
+        id: String,
+    },
     PimRemindersLists,
 
     // Notes
-    PimNotesList { folder: Option<String> },
-    PimNotesGet { id: String },
-    PimNotesCreate { title: String, body: Option<String>, folder: Option<String> },
-    PimNotesUpdate { id: String, title: Option<String>, body: Option<String> },
-    PimNotesDelete { id: String },
+    PimNotesList {
+        folder: Option<String>,
+    },
+    PimNotesGet {
+        id: String,
+    },
+    PimNotesCreate {
+        title: String,
+        body: Option<String>,
+        folder: Option<String>,
+    },
+    PimNotesUpdate {
+        id: String,
+        title: Option<String>,
+        body: Option<String>,
+    },
+    PimNotesDelete {
+        id: String,
+    },
     PimNotesFolders,
 
     // Contacts
-    PimContactsSearch { query: String },
-    PimContactsGet { id: String },
+    PimContactsSearch {
+        query: String,
+    },
+    PimContactsGet {
+        id: String,
+    },
     PimContactsCreate {
-        given_name: String, family_name: Option<String>,
-        organization: Option<String>, notes: Option<String>,
-        phone_numbers: Option<Vec<String>>, emails: Option<Vec<String>>,
+        given_name: String,
+        family_name: Option<String>,
+        organization: Option<String>,
+        notes: Option<String>,
+        phone_numbers: Option<Vec<String>>,
+        emails: Option<Vec<String>>,
     },
     PimContactsUpdate {
-        id: String, given_name: Option<String>, family_name: Option<String>,
-        organization: Option<String>, notes: Option<String>,
-        phone_numbers: Option<Vec<String>>, emails: Option<Vec<String>>,
+        id: String,
+        given_name: Option<String>,
+        family_name: Option<String>,
+        organization: Option<String>,
+        notes: Option<String>,
+        phone_numbers: Option<Vec<String>>,
+        emails: Option<Vec<String>>,
     },
-    PimContactsDelete { id: String },
+    PimContactsDelete {
+        id: String,
+    },
     PimContactsGroups,
 }
 

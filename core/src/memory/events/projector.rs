@@ -8,8 +8,8 @@ use crate::sync_primitives::Arc;
 
 use crate::error::AlephError;
 use crate::memory::context::{
-    compute_parent_path, FactSpecificity, MemoryFact,
-    MemoryLayer, MemoryScope, MemoryTier, TemporalScope,
+    compute_parent_path, FactSpecificity, MemoryFact, MemoryLayer, MemoryScope, MemoryTier,
+    TemporalScope,
 };
 use crate::memory::events::{EventActor, MemoryEvent, MemoryEventEnvelope};
 use crate::resilience::database::StateDatabase;
@@ -115,9 +115,13 @@ impl EventProjector {
 
                 MemoryEvent::FactMigrated { snapshot, .. } => {
                     let migrated: MemoryFact =
-                        serde_json::from_value(snapshot.clone()).map_err(|e| AlephError::Other {
-                            message: format!("Failed to deserialize FactMigrated snapshot: {e}"),
-                            suggestion: None,
+                        serde_json::from_value(snapshot.clone()).map_err(|e| {
+                            AlephError::Other {
+                                message: format!(
+                                    "Failed to deserialize FactMigrated snapshot: {e}"
+                                ),
+                                suggestion: None,
+                            }
                         })?;
                     fact = Some(migrated);
                 }
@@ -125,9 +129,7 @@ impl EventProjector {
                 // --------------------------------------------------------
                 // Mutation events (require an initialized fact)
                 // --------------------------------------------------------
-                MemoryEvent::FactContentUpdated {
-                    new_content, ..
-                } => {
+                MemoryEvent::FactContentUpdated { new_content, .. } => {
                     if let Some(ref mut f) = fact {
                         f.content = new_content.clone();
                         f.content_hash = String::new(); // recomputed at projection time
@@ -180,17 +182,13 @@ impl EventProjector {
                     }
                 }
 
-                MemoryEvent::StrengthDecayed {
-                    new_strength, ..
-                } => {
+                MemoryEvent::StrengthDecayed { new_strength, .. } => {
                     if let Some(ref mut f) = fact {
                         f.strength = *new_strength;
                     }
                 }
 
-                MemoryEvent::FactInvalidated {
-                    reason, actor, ..
-                } => {
+                MemoryEvent::FactInvalidated { reason, actor, .. } => {
                     if let Some(ref mut f) = fact {
                         f.is_valid = false;
                         f.invalidation_reason = Some(reason.clone());
@@ -200,9 +198,7 @@ impl EventProjector {
                     }
                 }
 
-                MemoryEvent::FactRestored {
-                    new_strength, ..
-                } => {
+                MemoryEvent::FactRestored { new_strength, .. } => {
                     if let Some(ref mut f) = fact {
                         f.is_valid = true;
                         f.invalidation_reason = None;
@@ -231,10 +227,7 @@ impl EventProjector {
     }
 
     /// Rebuild a fact by loading all events from the store and folding them.
-    pub async fn rebuild_fact(
-        &self,
-        fact_id: &str,
-    ) -> Result<Option<MemoryFact>, AlephError> {
+    pub async fn rebuild_fact(&self, fact_id: &str) -> Result<Option<MemoryFact>, AlephError> {
         let events = self.db.get_memory_events_for_fact(fact_id).await?;
         Self::fold_events_to_fact(&events)
     }

@@ -519,10 +519,7 @@ mod tests {
         // OpenAI model should have specific hint
         let openai_hint = hints.get_hint("providers.openai.model");
         assert!(openai_hint.is_some());
-        assert_eq!(
-            openai_hint.unwrap().label,
-            Some("OpenAI Model".to_string())
-        );
+        assert_eq!(openai_hint.unwrap().label, Some("OpenAI Model".to_string()));
 
         // Unknown provider should fall back to wildcard
         let unknown_hint = hints.get_hint("providers.unknown.model");
@@ -550,18 +547,14 @@ mod tests {
         let hints = build_ui_hints();
 
         // API keys should be sensitive
-        assert!(hints
-            .get_hint("providers.openai.api_key")
-            .unwrap()
-            .sensitive);
-        assert!(hints
-            .get_hint("channels.telegram.token")
-            .unwrap()
-            .sensitive);
-        assert!(hints
-            .get_hint("channels.discord.token")
-            .unwrap()
-            .sensitive);
+        assert!(
+            hints
+                .get_hint("providers.openai.api_key")
+                .unwrap()
+                .sensitive
+        );
+        assert!(hints.get_hint("channels.telegram.token").unwrap().sensitive);
+        assert!(hints.get_hint("channels.discord.token").unwrap().sensitive);
 
         // Regular fields should not be sensitive
         assert!(!hints.get_hint("general.language").unwrap().sensitive);
@@ -572,10 +565,12 @@ mod tests {
         let hints = build_ui_hints();
 
         // Base URL should be advanced
-        assert!(hints
-            .get_hint("providers.openai.base_url")
-            .unwrap()
-            .advanced);
+        assert!(
+            hints
+                .get_hint("providers.openai.base_url")
+                .unwrap()
+                .advanced
+        );
 
         // MCP should be advanced
         assert!(hints.get_hint("mcp.enabled").unwrap().advanced);
@@ -588,11 +583,7 @@ mod tests {
     fn test_all_groups_have_order() {
         let hints = build_ui_hints();
         for (id, meta) in &hints.groups {
-            assert!(
-                meta.order > 0,
-                "Group {} should have a positive order",
-                id
-            );
+            assert!(meta.order > 0, "Group {} should have a positive order", id);
         }
     }
 

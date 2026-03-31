@@ -35,7 +35,10 @@ impl ImageMediaProvider {
         }
     }
 
-    fn convert_input(input: &MediaInput, _media_type: &MediaType) -> Result<ImageInput, MediaError> {
+    fn convert_input(
+        input: &MediaInput,
+        _media_type: &MediaType,
+    ) -> Result<ImageInput, MediaError> {
         match input {
             MediaInput::FilePath { path } => Ok(ImageInput::FilePath { path: path.clone() }),
             MediaInput::Url { url } => Ok(ImageInput::Url { url: url.clone() }),
@@ -80,7 +83,11 @@ impl MediaProvider for ImageMediaProvider {
         let image_input = Self::convert_input(input, media_type)?;
 
         if let Some(prompt_text) = prompt {
-            match self.pipeline.understand_image(&image_input, prompt_text).await {
+            match self
+                .pipeline
+                .understand_image(&image_input, prompt_text)
+                .await
+            {
                 Ok(result) => Ok(MediaOutput::Description {
                     text: result.description,
                     confidence: result.confidence,

@@ -133,9 +133,9 @@ impl ActionResult {
     /// Check if the result indicates success
     pub fn is_success(&self) -> bool {
         match self {
-            ActionResult::ToolResults { results } => {
-                results.iter().all(|r| matches!(r.result, SingleToolResult::Success { .. }))
-            }
+            ActionResult::ToolResults { results } => results
+                .iter()
+                .all(|r| matches!(r.result, SingleToolResult::Success { .. })),
             ActionResult::UserResponse { .. } | ActionResult::UserResponseRich { .. } => true,
             ActionResult::Completed => true,
             ActionResult::Failed => false,
@@ -145,9 +145,15 @@ impl ActionResult {
     /// Check if the result is a non-retryable error
     pub fn is_non_retryable_error(&self) -> bool {
         match self {
-            ActionResult::ToolResults { results } => {
-                results.iter().any(|r| matches!(r.result, SingleToolResult::Error { retryable: false, .. }))
-            }
+            ActionResult::ToolResults { results } => results.iter().any(|r| {
+                matches!(
+                    r.result,
+                    SingleToolResult::Error {
+                        retryable: false,
+                        ..
+                    }
+                )
+            }),
             ActionResult::Failed => true,
             _ => false,
         }

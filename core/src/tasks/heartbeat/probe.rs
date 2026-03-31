@@ -51,9 +51,8 @@ impl DefaultProbeExecutor {
 impl ProbeExecutor for DefaultProbeExecutor {
     async fn execute(&self, tool_name: &str, params: Option<&Value>) -> Result<Value, String> {
         let arguments = params.cloned().unwrap_or(serde_json::json!({}));
-        let result: crate::error::Result<Value> = self.registry
-            .execute_tool(tool_name, arguments)
-            .await;
+        let result: crate::error::Result<Value> =
+            self.registry.execute_tool(tool_name, arguments).await;
         result.map_err(|e| format!("Probe tool '{}' failed: {}", tool_name, e))
     }
 }
@@ -134,33 +133,93 @@ mod tests {
 
     #[test]
     fn test_non_empty_triggers_on_non_empty() {
-        assert!(evaluate_trigger(&TriggerCondition::NonEmpty, &json!("hello"), None));
-        assert!(evaluate_trigger(&TriggerCondition::NonEmpty, &json!(42), None));
-        assert!(evaluate_trigger(&TriggerCondition::NonEmpty, &json!([1, 2]), None));
-        assert!(evaluate_trigger(&TriggerCondition::NonEmpty, &json!(true), None));
+        assert!(evaluate_trigger(
+            &TriggerCondition::NonEmpty,
+            &json!("hello"),
+            None
+        ));
+        assert!(evaluate_trigger(
+            &TriggerCondition::NonEmpty,
+            &json!(42),
+            None
+        ));
+        assert!(evaluate_trigger(
+            &TriggerCondition::NonEmpty,
+            &json!([1, 2]),
+            None
+        ));
+        assert!(evaluate_trigger(
+            &TriggerCondition::NonEmpty,
+            &json!(true),
+            None
+        ));
     }
 
     #[test]
     fn test_non_empty_does_not_trigger_on_empty() {
-        assert!(!evaluate_trigger(&TriggerCondition::NonEmpty, &json!(""), None));
-        assert!(!evaluate_trigger(&TriggerCondition::NonEmpty, &json!(0), None));
-        assert!(!evaluate_trigger(&TriggerCondition::NonEmpty, &json!([]), None));
-        assert!(!evaluate_trigger(&TriggerCondition::NonEmpty, &json!({}), None));
-        assert!(!evaluate_trigger(&TriggerCondition::NonEmpty, &Value::Null, None));
-        assert!(!evaluate_trigger(&TriggerCondition::NonEmpty, &json!(false), None));
+        assert!(!evaluate_trigger(
+            &TriggerCondition::NonEmpty,
+            &json!(""),
+            None
+        ));
+        assert!(!evaluate_trigger(
+            &TriggerCondition::NonEmpty,
+            &json!(0),
+            None
+        ));
+        assert!(!evaluate_trigger(
+            &TriggerCondition::NonEmpty,
+            &json!([]),
+            None
+        ));
+        assert!(!evaluate_trigger(
+            &TriggerCondition::NonEmpty,
+            &json!({}),
+            None
+        ));
+        assert!(!evaluate_trigger(
+            &TriggerCondition::NonEmpty,
+            &Value::Null,
+            None
+        ));
+        assert!(!evaluate_trigger(
+            &TriggerCondition::NonEmpty,
+            &json!(false),
+            None
+        ));
     }
 
     #[test]
     fn test_greater_than_triggers_when_above_threshold() {
-        assert!(evaluate_trigger(&TriggerCondition::GreaterThan(5.0), &json!(6), None));
-        assert!(evaluate_trigger(&TriggerCondition::GreaterThan(0.0), &json!(0.1), None));
+        assert!(evaluate_trigger(
+            &TriggerCondition::GreaterThan(5.0),
+            &json!(6),
+            None
+        ));
+        assert!(evaluate_trigger(
+            &TriggerCondition::GreaterThan(0.0),
+            &json!(0.1),
+            None
+        ));
     }
 
     #[test]
     fn test_greater_than_does_not_trigger_when_at_or_below_threshold() {
-        assert!(!evaluate_trigger(&TriggerCondition::GreaterThan(5.0), &json!(5), None));
-        assert!(!evaluate_trigger(&TriggerCondition::GreaterThan(5.0), &json!(4.9), None));
-        assert!(!evaluate_trigger(&TriggerCondition::GreaterThan(5.0), &json!("text"), None));
+        assert!(!evaluate_trigger(
+            &TriggerCondition::GreaterThan(5.0),
+            &json!(5),
+            None
+        ));
+        assert!(!evaluate_trigger(
+            &TriggerCondition::GreaterThan(5.0),
+            &json!(4.9),
+            None
+        ));
+        assert!(!evaluate_trigger(
+            &TriggerCondition::GreaterThan(5.0),
+            &json!("text"),
+            None
+        ));
     }
 
     #[test]
@@ -212,15 +271,31 @@ mod tests {
 
     #[test]
     fn test_changed_triggers_when_no_previous_result() {
-        assert!(evaluate_trigger(&TriggerCondition::Changed, &json!(1), None));
+        assert!(evaluate_trigger(
+            &TriggerCondition::Changed,
+            &json!(1),
+            None
+        ));
     }
 
     #[test]
     fn test_always_triggers_unconditionally() {
-        assert!(evaluate_trigger(&TriggerCondition::Always, &Value::Null, None));
+        assert!(evaluate_trigger(
+            &TriggerCondition::Always,
+            &Value::Null,
+            None
+        ));
         assert!(evaluate_trigger(&TriggerCondition::Always, &json!(0), None));
-        assert!(evaluate_trigger(&TriggerCondition::Always, &json!(""), None));
-        assert!(evaluate_trigger(&TriggerCondition::Always, &json!(false), None));
+        assert!(evaluate_trigger(
+            &TriggerCondition::Always,
+            &json!(""),
+            None
+        ));
+        assert!(evaluate_trigger(
+            &TriggerCondition::Always,
+            &json!(false),
+            None
+        ));
     }
 
     // ── execute_probe ───────────────────────────────────────────────────────
@@ -231,7 +306,11 @@ mod tests {
 
     #[async_trait]
     impl ProbeExecutor for MockExecutor {
-        async fn execute(&self, _tool_name: &str, _params: Option<&Value>) -> Result<Value, String> {
+        async fn execute(
+            &self,
+            _tool_name: &str,
+            _params: Option<&Value>,
+        ) -> Result<Value, String> {
             Ok(self.result.clone())
         }
     }
@@ -240,7 +319,11 @@ mod tests {
 
     #[async_trait]
     impl ProbeExecutor for FailingExecutor {
-        async fn execute(&self, _tool_name: &str, _params: Option<&Value>) -> Result<Value, String> {
+        async fn execute(
+            &self,
+            _tool_name: &str,
+            _params: Option<&Value>,
+        ) -> Result<Value, String> {
             Err("tool execution failed".to_string())
         }
     }

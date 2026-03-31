@@ -73,7 +73,10 @@ pub async fn handle_audit_tools() -> Result<(), Box<dyn std::error::Error>> {
     let db_path = get_audit_db_path();
 
     if !db_path.exists() {
-        println!("No audit data found. Database does not exist at: {}", db_path.display());
+        println!(
+            "No audit data found. Database does not exist at: {}",
+            db_path.display()
+        );
         return Ok(());
     }
 
@@ -119,11 +122,17 @@ pub async fn handle_audit_tools() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// Handle audit tool command - show detailed tool info and execution history
-pub async fn handle_audit_tool(tool_name: &str, limit: usize) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn handle_audit_tool(
+    tool_name: &str,
+    limit: usize,
+) -> Result<(), Box<dyn std::error::Error>> {
     let db_path = get_audit_db_path();
 
     if !db_path.exists() {
-        eprintln!("Error: No audit data found. Database does not exist at: {}", db_path.display());
+        eprintln!(
+            "Error: No audit data found. Database does not exist at: {}",
+            db_path.display()
+        );
         std::process::exit(1);
     }
 
@@ -137,7 +146,12 @@ pub async fn handle_audit_tool(tool_name: &str, limit: usize) -> Result<(), Box<
     // Print tool summary
     println!("\n{}Tool: {}{}", COLOR_BOLD, tool_name, COLOR_RESET);
     println!("{}", "=".repeat(80));
-    println!("Risk Level:      {}{}{}", risk_level.color(), risk_level.name(), COLOR_RESET);
+    println!(
+        "Risk Level:      {}{}{}",
+        risk_level.color(),
+        risk_level.name(),
+        COLOR_RESET
+    );
     println!("Risk Score:      {}", summary.risk_score);
     println!("Executions:      {}", summary.execution_count);
     println!("Escalations:     {}", summary.escalation_count);
@@ -160,7 +174,10 @@ pub async fn handle_audit_tool(tool_name: &str, limit: usize) -> Result<(), Box<
     let history = audit.get_tool_execution_history(tool_name, limit).await?;
 
     if !history.is_empty() {
-        println!("\n{}Execution History (last {}):{}", COLOR_BOLD, limit, COLOR_RESET);
+        println!(
+            "\n{}Execution History (last {}):{}",
+            COLOR_BOLD, limit, COLOR_RESET
+        );
         println!("{}", "-".repeat(80));
 
         for record in history {
@@ -179,7 +196,10 @@ pub async fn handle_audit_escalations(limit: usize) -> Result<(), Box<dyn std::e
     let db_path = get_audit_db_path();
 
     if !db_path.exists() {
-        println!("No audit data found. Database does not exist at: {}", db_path.display());
+        println!(
+            "No audit data found. Database does not exist at: {}",
+            db_path.display()
+        );
         return Ok(());
     }
 
@@ -195,7 +215,10 @@ pub async fn handle_audit_escalations(limit: usize) -> Result<(), Box<dyn std::e
     }
 
     // Print header
-    println!("\n{}Escalation Events (last {}){}", COLOR_BOLD, limit, COLOR_RESET);
+    println!(
+        "\n{}Escalation Events (last {}){}",
+        COLOR_BOLD, limit, COLOR_RESET
+    );
     println!("{}", "=".repeat(100));
 
     for record in escalations {
@@ -241,7 +264,7 @@ async fn get_all_tool_names(db_path: &PathBuf) -> Result<Vec<String>, Box<dyn st
         "SELECT DISTINCT tool_name FROM tool_executions
          UNION
          SELECT DISTINCT tool_name FROM capability_escalations
-         ORDER BY tool_name"
+         ORDER BY tool_name",
     )?;
 
     let tool_names = stmt
@@ -332,7 +355,10 @@ mod tests {
         assert_eq!(summary.last_executed_at, None);
 
         // Get execution history for non-existent tool
-        let history = audit.get_tool_execution_history("test_tool", 10).await.unwrap();
+        let history = audit
+            .get_tool_execution_history("test_tool", 10)
+            .await
+            .unwrap();
         assert_eq!(history.len(), 0);
 
         // Get all escalations from empty database

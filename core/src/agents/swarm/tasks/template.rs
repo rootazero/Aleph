@@ -98,12 +98,16 @@ pub fn parse_template(content: &str) -> Result<ParsedTemplate> {
 
     // Body starts after the closing `---` line (skip "\n---" plus optional "\n")
     let after_close = &after_open[end_pos + 4..]; // skip "\n---"
-    let body = after_close.strip_prefix('\n').unwrap_or(after_close).to_string();
+    let body = after_close
+        .strip_prefix('\n')
+        .unwrap_or(after_close)
+        .to_string();
 
-    let frontmatter: TeamTemplate = serde_yaml::from_str(yaml_str).map_err(|e| AlephError::Other {
-        message: format!("Failed to parse template YAML frontmatter: {}", e),
-        suggestion: Some("Check the frontmatter for YAML syntax errors".to_string()),
-    })?;
+    let frontmatter: TeamTemplate =
+        serde_yaml::from_str(yaml_str).map_err(|e| AlephError::Other {
+            message: format!("Failed to parse template YAML frontmatter: {}", e),
+            suggestion: Some("Check the frontmatter for YAML syntax errors".to_string()),
+        })?;
 
     Ok(ParsedTemplate { frontmatter, body })
 }
@@ -142,13 +146,8 @@ pub fn find_template(name: &str) -> Result<String> {
     // Reject plugin-namespaced names for now
     if name.contains(':') {
         return Err(AlephError::Other {
-            message: format!(
-                "Plugin-namespaced template '{}' is not yet supported",
-                name
-            ),
-            suggestion: Some(
-                "Use a plain template name from ~/.aleph/templates/".to_string(),
-            ),
+            message: format!("Plugin-namespaced template '{}' is not yet supported", name),
+            suggestion: Some("Use a plain template name from ~/.aleph/templates/".to_string()),
         });
     }
 
@@ -157,12 +156,14 @@ pub fn find_template(name: &str) -> Result<String> {
         suggestion: None,
     })?;
 
-    let path = home.join(".aleph").join("templates").join(format!("{}.md", name));
+    let path = home
+        .join(".aleph")
+        .join("templates")
+        .join(format!("{}.md", name));
 
     if path.exists() {
-        std::fs::read_to_string(&path).map_err(|e| {
-            AlephError::IoError(format!("Failed to read template '{}': {}", name, e))
-        })
+        std::fs::read_to_string(&path)
+            .map_err(|e| AlephError::IoError(format!("Failed to read template '{}': {}", name, e)))
     } else {
         Err(AlephError::NotFound(format!(
             "Template '{}' not found at {}",
@@ -292,13 +293,22 @@ You are {agent_name}, {agent_role}.
         let fm = &parsed.frontmatter;
 
         assert_eq!(fm.name, "code-review-team");
-        assert_eq!(fm.description, "Code review team with architect + reviewers + summarizer");
+        assert_eq!(
+            fm.description,
+            "Code review team with architect + reviewers + summarizer"
+        );
         assert_eq!(fm.leader, "architect");
 
         assert_eq!(fm.members.len(), 3);
         assert_eq!(fm.members[0].name, "architect");
-        assert_eq!(fm.members[0].role, "Architect, assigns review tasks and makes final decisions");
-        assert_eq!(fm.members[0].model.as_deref(), Some("claude-sonnet-4-20250514"));
+        assert_eq!(
+            fm.members[0].role,
+            "Architect, assigns review tasks and makes final decisions"
+        );
+        assert_eq!(
+            fm.members[0].model.as_deref(),
+            Some("claude-sonnet-4-20250514")
+        );
         assert_eq!(fm.members[1].name, "reviewer-1");
         assert!(fm.members[1].model.is_none());
 
@@ -388,7 +398,11 @@ You are {agent_name}, {agent_role}.
         tmpl.tasks.push(dup);
 
         let err = validate_template(&tmpl).expect_err("should fail with duplicate task key");
-        assert!(err.to_string().contains("analyze"), "error should name the duplicate: {}", err);
+        assert!(
+            err.to_string().contains("analyze"),
+            "error should name the duplicate: {}",
+            err
+        );
     }
 
     #[test]

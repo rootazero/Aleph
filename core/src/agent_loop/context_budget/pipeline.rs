@@ -1,12 +1,12 @@
 //! CompactionPipeline — ordered strategy execution.
 
-use crate::providers::message::{ContentBlock, UnifiedMessage};
-use crate::agent_loop::tool::ToolDefinition;
-use super::pressure::{PressureSensor, estimate_tokens_smart};
+use super::pressure::{estimate_tokens_smart, PressureSensor};
 use super::ContextPressure;
+use crate::agent_loop::tool::ToolDefinition;
 use crate::memory::session_compactor::context_window::{
     is_tool_result_consumed, partition_fresh_tail,
 };
+use crate::providers::message::{ContentBlock, UnifiedMessage};
 
 // =============================================================================
 // CompactionStage trait
@@ -21,11 +21,7 @@ pub trait CompactionStage: Send + Sync {
     ///
     /// `fresh_tail_count` messages at the tail are protected and must not be
     /// modified. Returns the number of tokens freed (estimated).
-    fn compact(
-        &self,
-        messages: &mut [UnifiedMessage],
-        fresh_tail_count: usize,
-    ) -> usize;
+    fn compact(&self, messages: &mut [UnifiedMessage], fresh_tail_count: usize) -> usize;
 }
 
 // =============================================================================
@@ -178,10 +174,7 @@ impl CompactionStage for MicroCompact {
         // Collect candidate indices: tool results in the compressible zone that
         // have been consumed (an assistant turn follows them).
         let candidates: Vec<usize> = (0..partition)
-            .filter(|&i| {
-                messages[i].is_tool_result()
-                    && is_tool_result_consumed(messages, i)
-            })
+            .filter(|&i| messages[i].is_tool_result() && is_tool_result_consumed(messages, i))
             .collect();
 
         let mut total_freed: usize = 0;
@@ -263,8 +256,7 @@ pub struct RoundDrop {
     pub ratio: f64,
 }
 
-const ROUND_DROP_NOTICE: &str =
-    "[SYSTEM] Earlier conversation history was truncated \
+const ROUND_DROP_NOTICE: &str = "[SYSTEM] Earlier conversation history was truncated \
      to fit the model's context window. Continue based on the remaining context.";
 
 impl CompactionStage for RoundDrop {
@@ -344,9 +336,9 @@ impl CompactionStage for RoundDrop {
 
 #[cfg(test)]
 mod tests {
+    use super::super::pressure::PressureSensor;
     use super::*;
     use crate::providers::message::UnifiedMessage;
-    use super::super::pressure::PressureSensor;
 
     struct MockStage {
         name: &'static str,
@@ -366,8 +358,14 @@ mod tests {
     #[test]
     fn pipeline_runs_stages_in_order() {
         let pipeline = CompactionPipeline::new(vec![
-            Box::new(MockStage { name: "stage_a", tokens_to_free: 100 }),
-            Box::new(MockStage { name: "stage_b", tokens_to_free: 200 }),
+            Box::new(MockStage {
+                name: "stage_a",
+                tokens_to_free: 100,
+            }),
+            Box::new(MockStage {
+                name: "stage_b",
+                tokens_to_free: 200,
+            }),
         ]);
         let mut msgs = vec![UnifiedMessage::user("test")];
         let sensor = PressureSensor::new(3.5);
@@ -380,21 +378,37 @@ mod tests {
     #[test]
     fn pipeline_stops_early_when_pressure_below_target() {
         let pipeline = CompactionPipeline::new(vec![
-            Box::new(MockStage { name: "stage_a", tokens_to_free: 100 }),
-            Box::new(MockStage { name: "stage_b", tokens_to_free: 200 }),
+            Box::new(MockStage {
+                name: "stage_a",
+                tokens_to_free: 100,
+            }),
+            Box::new(MockStage {
+                name: "stage_b",
+                tokens_to_free: 200,
+            }),
         ]);
         let mut msgs = vec![UnifiedMessage::user("x")];
         let sensor = PressureSensor::new(3.5);
         // Budget=10000, messages tiny → ratio ≈ 0.0, target=0.70 → already below
         let result = pipeline.run(&mut msgs, &sensor, "", &[], 10_000, 0.70, 2);
-        assert_eq!(result.stages_run.len(), 0, "should skip all stages when already under target");
+        assert_eq!(
+            result.stages_run.len(),
+            0,
+            "should skip all stages when already under target"
+        );
     }
 
     #[test]
     fn pipeline_result_tracks_total_freed() {
         let pipeline = CompactionPipeline::new(vec![
-            Box::new(MockStage { name: "a", tokens_to_free: 100 }),
-            Box::new(MockStage { name: "b", tokens_to_free: 250 }),
+            Box::new(MockStage {
+                name: "a",
+                tokens_to_free: 100,
+            }),
+            Box::new(MockStage {
+                name: "b",
+                tokens_to_free: 250,
+            }),
         ]);
         let mut msgs = vec![UnifiedMessage::user("test")];
         let sensor = PressureSensor::new(3.5);
@@ -406,19 +420,20 @@ mod tests {
     fn image_stripper_replaces_image_blocks() {
         use crate::providers::message::ContentBlock;
         let mut msgs = vec![
-            UnifiedMessage::user_with_content(vec![
-                ContentBlock::Image {
-                    data: "base64data".repeat(100),
-                    mime_type: "image/png".into(),
-                },
-            ]),
+            UnifiedMessage::user_with_content(vec![ContentBlock::Image {
+                data: "base64data".repeat(100),
+                mime_type: "image/png".into(),
+            }]),
             UnifiedMessage::assistant("I see the image"),
             UnifiedMessage::user("latest question"),
         ];
         let stage = ImageStripper;
         let freed = stage.compact(&mut msgs, 1); // fresh_tail=1, protects last msg
         let content = msgs[0].text_content();
-        assert!(content.contains("[image"), "image should be replaced, got: {content}");
+        assert!(
+            content.contains("[image"),
+            "image should be replaced, got: {content}"
+        );
         assert!(freed > 0, "should have freed tokens");
     }
 
@@ -427,12 +442,10 @@ mod tests {
         use crate::providers::message::ContentBlock;
         let mut msgs = vec![
             UnifiedMessage::user("old text"),
-            UnifiedMessage::user_with_content(vec![
-                ContentBlock::Image {
-                    data: "base64data".repeat(100),
-                    mime_type: "image/png".into(),
-                },
-            ]),
+            UnifiedMessage::user_with_content(vec![ContentBlock::Image {
+                data: "base64data".repeat(100),
+                mime_type: "image/png".into(),
+            }]),
         ];
         let stage = ImageStripper;
         let freed = stage.compact(&mut msgs, 2); // all in fresh tail
@@ -494,11 +507,19 @@ mod tests {
             UnifiedMessage::assistant("I read the file"),
             UnifiedMessage::user("latest"),
         ];
-        let stage = ToolCompactStage { token_budget: 100, threshold: 0.01, ratio: 3.5 };
+        let stage = ToolCompactStage {
+            token_budget: 100,
+            threshold: 0.01,
+            ratio: 3.5,
+        };
         let freed = stage.compact(&mut msgs, 1);
         let (_, content) = msgs[1].tool_result_info().unwrap();
         // Should be compressed to summary like "[Read file, ...]" or "[Old result cleared]"
-        assert!(content.len() < 200, "should be compressed, got len: {}", content.len());
+        assert!(
+            content.len() < 200,
+            "should be compressed, got len: {}",
+            content.len()
+        );
         assert!(freed > 0);
     }
 
@@ -513,12 +534,16 @@ mod tests {
             UnifiedMessage::assistant("new answer"),
         ];
         // budget=1, ratio=1.0 → effective budget = 1 token → forces drop of round 1
-        let stage = RoundDrop { token_budget: 1, ratio: 1.0 };
+        let stage = RoundDrop {
+            token_budget: 1,
+            ratio: 1.0,
+        };
         let freed = stage.compact(&mut msgs, 2); // fresh_tail=2, protects round 2
         assert!(freed > 0);
         // First message should be truncation notice
         assert!(
-            msgs[0].text_content().contains("truncated") || msgs[0].text_content().contains("SYSTEM"),
+            msgs[0].text_content().contains("truncated")
+                || msgs[0].text_content().contains("SYSTEM"),
             "first msg should be truncation notice, got: {}",
             msgs[0].text_content()
         );
@@ -535,7 +560,10 @@ mod tests {
             UnifiedMessage::user("next step"),
             UnifiedMessage::assistant("doing it"),
         ];
-        let stage = RoundDrop { token_budget: 1, ratio: 1.0 };
+        let stage = RoundDrop {
+            token_budget: 1,
+            ratio: 1.0,
+        };
         let freed = stage.compact(&mut msgs, 2);
         // Should drop entire round 1 (user + tool_result + assistant)
         assert!(freed > 0);
@@ -547,7 +575,10 @@ mod tests {
             UnifiedMessage::user("hi"),
             UnifiedMessage::assistant("hello"),
         ];
-        let stage = RoundDrop { token_budget: 100_000, ratio: 3.5 };
+        let stage = RoundDrop {
+            token_budget: 100_000,
+            ratio: 3.5,
+        };
         let freed = stage.compact(&mut msgs, 2);
         assert_eq!(freed, 0);
         assert_eq!(msgs.len(), 2);

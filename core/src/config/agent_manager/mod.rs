@@ -5,9 +5,9 @@
 //!
 //! Uses `toml_edit` for format-preserving edits and atomic file saves.
 
+mod agent_files;
 mod crud;
 mod toml_ops;
-mod agent_files;
 
 #[cfg(test)]
 mod tests;

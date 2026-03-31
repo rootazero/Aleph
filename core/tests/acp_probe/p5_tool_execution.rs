@@ -83,7 +83,10 @@ async fn p5_02_codex_tool_calls_manager() {
 #[tokio::test]
 async fn p5_03_gemini_tool_calls_manager() {
     let manager = make_manager_with_mock_scripts();
-    let result = manager.prompt("gemini-mock", "test", "/tmp", None, true, None).await.unwrap();
+    let result = manager
+        .prompt("gemini-mock", "test", "/tmp", None, true, None)
+        .await
+        .unwrap();
     assert!(result.contains("codex response:"), "got: {}", result);
 }
 
@@ -104,7 +107,9 @@ async fn p5_04_tool_returns_harness_output() {
 #[tokio::test]
 async fn p5_05_tool_unavailable_harness_error() {
     let manager = AcpHarnessManager::from_entries(HashMap::new());
-    let result = manager.prompt("nonexistent", "test", "/tmp", None, true, None).await;
+    let result = manager
+        .prompt("nonexistent", "test", "/tmp", None, true, None)
+        .await;
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();
     assert!(
@@ -118,7 +123,9 @@ async fn p5_05_tool_unavailable_harness_error() {
 async fn p5_06_switch_tool_validates_target() {
     // Prompting an unknown harness should fail
     let manager = make_manager_with_mock_scripts();
-    let result = manager.prompt("unknown-target", "test", "/tmp", None, true, None).await;
+    let result = manager
+        .prompt("unknown-target", "test", "/tmp", None, true, None)
+        .await;
     assert!(result.is_err());
 }
 
@@ -140,7 +147,10 @@ async fn p5_07_tool_cwd_passed_through() {
     let manager = AcpHarnessManager::from_entries(entries);
     let tmp_dir = tempfile::TempDir::new().unwrap();
     let cwd = tmp_dir.path().to_str().unwrap();
-    let result = manager.prompt("cwd-tool", "test", cwd, None, true, None).await.unwrap();
+    let result = manager
+        .prompt("cwd-tool", "test", cwd, None, true, None)
+        .await
+        .unwrap();
     let expected = std::fs::canonicalize(cwd).unwrap();
     let actual = std::fs::canonicalize(result.trim()).unwrap();
     assert_eq!(actual, expected);
@@ -159,7 +169,14 @@ async fn p5_08_mode_override_native_acp_accepted() {
     // NativeAcp requires a real ACP-capable binary — mock_claude.sh does not speak ACP,
     // so the spawn/init handshake will fail. But the error must NOT be "does not support".
     let result = manager
-        .prompt("claude-code", "test", "/tmp", Some(HarnessMode::NativeAcp), true, None)
+        .prompt(
+            "claude-code",
+            "test",
+            "/tmp",
+            Some(HarnessMode::NativeAcp),
+            true,
+            None,
+        )
         .await;
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();
@@ -183,7 +200,10 @@ fn p5_09_session_key_equality() {
 fn p5_10_session_key_different_harness() {
     let k1 = SessionKey::new("claude-code", "/tmp");
     let k2 = SessionKey::new("codex", "/tmp");
-    assert_ne!(k1, k2, "Different harness IDs must produce different SessionKeys");
+    assert_ne!(
+        k1, k2,
+        "Different harness IDs must produce different SessionKeys"
+    );
 }
 
 /// SessionKey inequality: different cwds produce different keys.
@@ -200,10 +220,21 @@ async fn p5_12_prompt_reuse_session_false() {
     let manager = make_manager_with_mock_scripts();
     // Oneshot harnesses ignore reuse_session (no persistent session) — call succeeds.
     let result = manager
-        .prompt("codex", "hello", "/tmp", Some(HarnessMode::Oneshot), false, None)
+        .prompt(
+            "codex",
+            "hello",
+            "/tmp",
+            Some(HarnessMode::Oneshot),
+            false,
+            None,
+        )
         .await;
     // mock_codex.sh is available so oneshot should succeed regardless of reuse_session
-    assert!(result.is_ok(), "Oneshot with reuse_session=false should succeed: {:?}", result);
+    assert!(
+        result.is_ok(),
+        "Oneshot with reuse_session=false should succeed: {:?}",
+        result
+    );
 }
 
 /// Custom harness has only Oneshot in supported_modes — requesting NativeAcp should
@@ -227,7 +258,14 @@ async fn p5_13_custom_harness_unsupported_mode_rejected() {
 
     // CustomHarness.supported_modes() returns only [Oneshot] — NativeAcp must be rejected.
     let result = manager
-        .prompt("oneshot-only", "test", "/tmp", Some(HarnessMode::NativeAcp), true, None)
+        .prompt(
+            "oneshot-only",
+            "test",
+            "/tmp",
+            Some(HarnessMode::NativeAcp),
+            true,
+            None,
+        )
         .await;
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();

@@ -8,10 +8,10 @@ use serde::{Deserialize, Serialize};
 use crate::error::AlephError;
 use crate::memory::context::{MemoryEntry, MemoryFact};
 use crate::memory::namespace::NamespaceScope;
-use crate::memory::EmbeddingProvider;
-use crate::sync_primitives::Arc;
 use crate::memory::store::types::{MemoryFilter, SearchFilter};
 use crate::memory::store::{MemoryBackend, MemoryStore, SessionStore};
+use crate::memory::EmbeddingProvider;
+use crate::sync_primitives::Arc;
 
 /// Configuration for fact retrieval
 #[derive(Debug, Clone)]
@@ -99,7 +99,12 @@ impl FactRetrieval {
         let filter = SearchFilter::valid_only(Some(NamespaceScope::Owner));
         let scored_facts = self
             .database
-            .vector_search(&query_embedding, dim_hint, &filter, self.config.max_facts as usize)
+            .vector_search(
+                &query_embedding,
+                dim_hint,
+                &filter,
+                self.config.max_facts as usize,
+            )
             .await?;
 
         // Map ScoredFact -> MemoryFact with similarity_score, and filter by threshold
@@ -177,11 +182,16 @@ impl FactRetrieval {
     ) -> Result<RetrievalResult, AlephError> {
         // Build search filter with workspace scope
         let dim_hint = query_embedding.len() as u32;
-        let search_filter = SearchFilter::valid_only(Some(NamespaceScope::Owner))
-            .with_agent_filter(filter.clone());
+        let search_filter =
+            SearchFilter::valid_only(Some(NamespaceScope::Owner)).with_agent_filter(filter.clone());
         let scored_facts = self
             .database
-            .vector_search(query_embedding, dim_hint, &search_filter, self.config.max_facts as usize)
+            .vector_search(
+                query_embedding,
+                dim_hint,
+                &search_filter,
+                self.config.max_facts as usize,
+            )
             .await?;
 
         let facts: Vec<MemoryFact> = scored_facts
@@ -251,7 +261,11 @@ impl FactRetrieval {
 
         let raw_memories = if facts.len() < max_facts as usize && max_raw_fallback > 0 {
             self.database
-                .search_memories(&query_embedding, &MemoryFilter::default(), max_raw_fallback as usize)
+                .search_memories(
+                    &query_embedding,
+                    &MemoryFilter::default(),
+                    max_raw_fallback as usize,
+                )
                 .await?
         } else {
             Vec::new()
@@ -354,7 +368,10 @@ impl FactRetrieval {
 
         // Phase 1: Search primary workspace
         let primary = self
-            .retrieve_with_embedding(&query_embedding, AgentEnvFilter::Single(primary_workspace.to_string()))
+            .retrieve_with_embedding(
+                &query_embedding,
+                AgentEnvFilter::Single(primary_workspace.to_string()),
+            )
             .await?;
 
         // Evaluate trigger conditions
@@ -424,7 +441,11 @@ impl FactRetrieval {
             .collect();
 
         // Sort by relevance and take top N
-        cross_facts.sort_by(|a, b| b.relevance_score.partial_cmp(&a.relevance_score).unwrap_or(std::cmp::Ordering::Equal));
+        cross_facts.sort_by(|a, b| {
+            b.relevance_score
+                .partial_cmp(&a.relevance_score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         cross_facts.truncate(config.max_cross_results);
 
         debug!(
@@ -500,9 +521,11 @@ mod tests {
 
         let temp_dir = tempdir().unwrap();
         let path = temp_dir.path().to_path_buf();
-        let database: MemoryBackend = Arc::new(LanceMemoryBackend::open_or_create(&path).await.unwrap());
+        let database: MemoryBackend =
+            Arc::new(LanceMemoryBackend::open_or_create(&path).await.unwrap());
 
-        let embedder: Arc<dyn EmbeddingProvider> = Arc::new(MockEmbeddingProvider::new(1024, "mock-model"));
+        let embedder: Arc<dyn EmbeddingProvider> =
+            Arc::new(MockEmbeddingProvider::new(1024, "mock-model"));
 
         // Leak the temp_dir to prevent cleanup during test
         std::mem::forget(temp_dir);
@@ -662,7 +685,9 @@ mod tests {
         assert_eq!(result.cross_workspace.len(), 2);
         assert_eq!(result.cross_workspace[0].source_workspace, "health");
         assert_eq!(result.cross_workspace[1].source_workspace, "reading");
-        assert!(result.cross_workspace[0].relevance_score > result.cross_workspace[1].relevance_score);
+        assert!(
+            result.cross_workspace[0].relevance_score > result.cross_workspace[1].relevance_score
+        );
     }
 
     #[test]

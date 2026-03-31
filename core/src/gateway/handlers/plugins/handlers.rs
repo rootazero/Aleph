@@ -2,15 +2,15 @@
 //!
 //! Handlers for plugin management: list, install, uninstall, enable, disable.
 
+use crate::sync_primitives::Arc;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use once_cell::sync::OnceCell;
 use serde_json::json;
-use crate::sync_primitives::Arc;
 
-use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
-use crate::gateway::handlers::parse_params;
-use crate::extension::ExtensionManager;
 use crate::extension::manifest::adapter::AdapterRegistry;
+use crate::extension::ExtensionManager;
+use crate::gateway::handlers::parse_params;
+use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 
 use super::types::*;
 
@@ -37,9 +37,7 @@ static EXTENSION_MANAGER: OnceCell<Arc<ExtensionManager>> = OnceCell::new();
 ///
 /// * `Ok(())` if initialization succeeded
 /// * `Err(manager)` if already initialized (returns the passed manager)
-pub fn init_extension_manager(
-    manager: Arc<ExtensionManager>,
-) -> Result<(), Arc<ExtensionManager>> {
+pub fn init_extension_manager(manager: Arc<ExtensionManager>) -> Result<(), Arc<ExtensionManager>> {
     EXTENSION_MANAGER.set(manager)
 }
 
@@ -67,12 +65,12 @@ pub fn is_extension_manager_initialized() -> bool {
 // Internal helper — build MarketplaceManager from config
 // ============================================================================
 
-fn build_marketplace_manager() -> Result<crate::extension::marketplace::MarketplaceManager, String> {
+fn build_marketplace_manager() -> Result<crate::extension::marketplace::MarketplaceManager, String>
+{
     use crate::extension::marketplace::types::{MarketplaceConfig, MarketplaceSourceType};
     use std::collections::HashMap;
 
-    let config = crate::config::Config::load()
-        .map_err(|e| format!("Config error: {e}"))?;
+    let config = crate::config::Config::load().map_err(|e| format!("Config error: {e}"))?;
 
     let marketplace_configs: HashMap<String, MarketplaceConfig> = config
         .plugin_marketplaces
@@ -158,9 +156,7 @@ pub async fn handle_marketplace_add(request: JsonRpcRequest) -> JsonRpcResponse 
 
     let mut config = match crate::config::Config::load() {
         Ok(c) => c,
-        Err(e) => {
-            return JsonRpcResponse::error(request.id, -32000, format!("Config error: {e}"))
-        }
+        Err(e) => return JsonRpcResponse::error(request.id, -32000, format!("Config error: {e}")),
     };
 
     config.plugin_marketplaces.insert(
@@ -190,9 +186,7 @@ pub async fn handle_marketplace_remove(request: JsonRpcRequest) -> JsonRpcRespon
 
     let mut config = match crate::config::Config::load() {
         Ok(c) => c,
-        Err(e) => {
-            return JsonRpcResponse::error(request.id, -32000, format!("Config error: {e}"))
-        }
+        Err(e) => return JsonRpcResponse::error(request.id, -32000, format!("Config error: {e}")),
     };
 
     // Build a temporary manager just to perform the remove (handles cache cleanup + builtin guard)
@@ -258,12 +252,7 @@ pub async fn handle_marketplace_install(request: JsonRpcRequest) -> JsonRpcRespo
     };
 
     // project_dir is None for now; project/local scope support requires workspace detection
-    match manager.install_to_scope(
-        &params.name,
-        params.marketplace.as_deref(),
-        scope,
-        None,
-    ) {
+    match manager.install_to_scope(&params.name, params.marketplace.as_deref(), scope, None) {
         Ok(dest) => JsonRpcResponse::success(
             request.id,
             json!({
@@ -446,7 +435,10 @@ pub async fn handle_install_from_zip(request: JsonRpcRequest) -> JsonRpcResponse
 
     // Return list of installed plugin names
     // For simplicity, return empty list - caller should use plugins.list to refresh
-    JsonRpcResponse::success(request.id, json!({ "installedNames": Vec::<String>::new() }))
+    JsonRpcResponse::success(
+        request.id,
+        json!({ "installedNames": Vec::<String>::new() }),
+    )
 }
 
 // ============================================================================
@@ -652,9 +644,9 @@ pub async fn handle_execute_command(request: JsonRpcRequest) -> JsonRpcResponse 
     // Look up the command in the plugin registry
     let command_handler = {
         let registry = manager.get_plugin_registry().await;
-        registry.get_command(&params.command_name).map(|cmd| {
-            (cmd.plugin_id.clone(), cmd.handler.clone())
-        })
+        registry
+            .get_command(&params.command_name)
+            .map(|cmd| (cmd.plugin_id.clone(), cmd.handler.clone()))
     };
 
     let (registered_plugin_id, handler) = match command_handler {
@@ -663,10 +655,7 @@ pub async fn handle_execute_command(request: JsonRpcRequest) -> JsonRpcResponse 
             return JsonRpcResponse::error(
                 request.id,
                 -32001, // Custom error code for "command not found"
-                format!(
-                    "Command '{}' not found in registry",
-                    params.command_name
-                ),
+                format!("Command '{}' not found in registry", params.command_name),
             );
         }
     };
@@ -688,16 +677,14 @@ pub async fn handle_execute_command(request: JsonRpcRequest) -> JsonRpcResponse 
         .execute_plugin_command(&params.plugin_id, &handler, params.args)
         .await
     {
-        Ok(cmd_result) => {
-            match serde_json::to_value(cmd_result) {
-                Ok(v) => JsonRpcResponse::success(request.id, v),
-                Err(e) => JsonRpcResponse::error(
-                    request.id,
-                    INTERNAL_ERROR,
-                    format!("Failed to serialize command result: {}", e),
-                ),
-            }
-        }
+        Ok(cmd_result) => match serde_json::to_value(cmd_result) {
+            Ok(v) => JsonRpcResponse::success(request.id, v),
+            Err(e) => JsonRpcResponse::error(
+                request.id,
+                INTERNAL_ERROR,
+                format!("Failed to serialize command result: {}", e),
+            ),
+        },
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,

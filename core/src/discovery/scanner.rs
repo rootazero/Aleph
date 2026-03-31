@@ -179,10 +179,7 @@ impl DirectoryScanner {
                             // system, not an extension agent.
                             if let Some(marker) = component_marker_file(component_name) {
                                 if !path.join(marker).exists() {
-                                    trace!(
-                                        "Skipping {:?}: missing marker file '{}'",
-                                        path, marker
-                                    );
+                                    trace!("Skipping {:?}: missing marker file '{}'", path, marker);
                                     continue;
                                 }
                             }
@@ -358,14 +355,22 @@ mod tests {
         let aleph_dir = root.join(".aleph");
         std::fs::create_dir_all(aleph_dir.join("skills/my-skill")).unwrap();
         // Add required SKILL.md marker so discover_component recognizes this dir
-        std::fs::write(aleph_dir.join("skills/my-skill/SKILL.md"), "---\nname: my-skill\n---\n").unwrap();
+        std::fs::write(
+            aleph_dir.join("skills/my-skill/SKILL.md"),
+            "---\nname: my-skill\n---\n",
+        )
+        .unwrap();
         std::fs::create_dir_all(aleph_dir.join("commands/my-cmd")).unwrap();
         std::fs::create_dir_all(aleph_dir.join("plugins")).unwrap();
 
         // Create project-level .claude
         std::fs::create_dir_all(root.join("project/.claude/skills/project-skill")).unwrap();
         // Add required SKILL.md marker for project-level skill
-        std::fs::write(root.join("project/.claude/skills/project-skill/SKILL.md"), "---\nname: project-skill\n---\n").unwrap();
+        std::fs::write(
+            root.join("project/.claude/skills/project-skill/SKILL.md"),
+            "---\nname: project-skill\n---\n",
+        )
+        .unwrap();
 
         root.to_path_buf()
     }
@@ -395,7 +400,9 @@ mod tests {
 
         // Should have Aleph global + project .claude
         assert!(!dirs.is_empty());
-        assert!(dirs.iter().any(|d| d.source == DiscoverySource::AlephGlobal));
+        assert!(dirs
+            .iter()
+            .any(|d| d.source == DiscoverySource::AlephGlobal));
     }
 
     #[test]
@@ -466,7 +473,11 @@ mod tests {
         // Create plugin with aleph.plugin.toml
         let plugins_dir = root.join(".aleph/plugins/my-plugin");
         std::fs::create_dir_all(&plugins_dir).unwrap();
-        std::fs::write(plugins_dir.join("aleph.plugin.toml"), "[plugin]\nid = \"my-plugin\"").unwrap();
+        std::fs::write(
+            plugins_dir.join("aleph.plugin.toml"),
+            "[plugin]\nid = \"my-plugin\"",
+        )
+        .unwrap();
 
         let scanner = DirectoryScanner {
             aleph_home: root.join(".aleph"),
@@ -492,7 +503,11 @@ mod tests {
         let llm = mono_dir.join("llm-task");
         std::fs::create_dir_all(&diag).unwrap();
         std::fs::create_dir_all(&llm).unwrap();
-        std::fs::write(diag.join("aleph.plugin.toml"), "[plugin]\nid = \"diagnostics\"").unwrap();
+        std::fs::write(
+            diag.join("aleph.plugin.toml"),
+            "[plugin]\nid = \"diagnostics\"",
+        )
+        .unwrap();
         std::fs::write(llm.join("aleph.plugin.toml"), "[plugin]\nid = \"llm-task\"").unwrap();
         // Also create a non-plugin dir (README, etc) — should be skipped
         std::fs::write(mono_dir.join("README.md"), "readme").unwrap();

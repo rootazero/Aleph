@@ -42,7 +42,10 @@ mod tests {
         let cache = UserProfileCache::new();
         assert!(cache.get("ou_123").is_none());
 
-        cache.insert(UserProfile { open_id: "ou_123".into(), name: Some("Alice".into()) });
+        cache.insert(UserProfile {
+            open_id: "ou_123".into(),
+            name: Some("Alice".into()),
+        });
         let p = cache.get("ou_123").unwrap();
         assert_eq!(p.name.as_deref(), Some("Alice"));
     }

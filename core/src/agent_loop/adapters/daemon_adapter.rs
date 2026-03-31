@@ -4,9 +4,9 @@
 //! - `DaemonQueryTool` — query active system events and notifications
 //! - `DaemonSubscribeTool` — subscribe to new event monitoring rules
 
+use crate::sync_primitives::Arc;
 use async_trait::async_trait;
 use serde_json::{json, Value};
-use crate::sync_primitives::Arc;
 
 use super::super::tool::{LoopTool, ToolResult};
 
@@ -242,9 +242,7 @@ mod tests {
         let backend = Arc::new(FakeDaemon::new(vec![]));
         let tool = DaemonSubscribeTool::new(Arc::clone(&backend));
 
-        let result = tool
-            .execute(json!({ "rule": "file:~/project/**" }))
-            .await;
+        let result = tool.execute(json!({ "rule": "file:~/project/**" })).await;
 
         match result {
             ToolResult::Success { output } | ToolResult::SuccessAndStopLoop { output } => {
@@ -268,7 +266,9 @@ mod tests {
                 assert!(error.contains("missing required parameter: rule"));
                 assert!(!retryable);
             }
-            ToolResult::Success { .. } | ToolResult::SuccessAndStopLoop { .. } => panic!("expected error"),
+            ToolResult::Success { .. } | ToolResult::SuccessAndStopLoop { .. } => {
+                panic!("expected error")
+            }
         }
     }
 }

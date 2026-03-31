@@ -1,8 +1,8 @@
 //! Tools context for BDD tests
 #![allow(dead_code)]
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -13,23 +13,17 @@ use tokio::sync::RwLock;
 use alephcore::agents::sub_agents::{
     DelegateResult, ExecutionContextInfo, MergedResult, SubAgentRequest,
 };
-use alephcore::builtin_tools::meta_tools::{
-    GetToolSchemaOutput, ListToolsOutput,
-};
-use alephcore::builtin_tools::sessions::{
-    SessionsListOutput, SessionsSendOutput,
-};
-use alephcore::dispatcher::{
-    ToolIndex, ToolIndexEntry, ToolRegistry, ToolDefinition, UnifiedTool,
-};
-use alephcore::gateway::inter_agent_policy::AgentToAgentPolicy;
+use alephcore::builtin_tools::meta_tools::{GetToolSchemaOutput, ListToolsOutput};
+use alephcore::builtin_tools::sessions::{SessionsListOutput, SessionsSendOutput};
+use alephcore::dispatcher::{ToolDefinition, ToolIndex, ToolIndexEntry, ToolRegistry, UnifiedTool};
 use alephcore::gateway::agent_instance::{AgentInstance, AgentInstanceConfig, AgentRegistry};
 use alephcore::gateway::context::GatewayContext as AlephGatewayContext;
-use alephcore::gateway::event_emitter::{EventEmitter, EventEmitError, StreamEvent};
+use alephcore::gateway::event_emitter::{EventEmitError, EventEmitter, StreamEvent};
 use alephcore::gateway::execution_adapter::ExecutionAdapter;
 use alephcore::gateway::execution_engine::{ExecutionError, RunRequest, RunState, RunStatus};
-use alephcore::gateway::session_manager::{SessionManager, SessionManagerConfig};
+use alephcore::gateway::inter_agent_policy::AgentToAgentPolicy;
 use alephcore::gateway::router::SessionKey;
+use alephcore::gateway::session_manager::{SessionManager, SessionManagerConfig};
 use alephcore::tools::{AlephToolServer, AlephToolServerHandle, ToolUpdateInfo};
 
 /// Context for tool server tests
@@ -115,12 +109,14 @@ pub struct LatencyMeasurements {
     pub generate_index_us: Option<u128>,
 }
 
-
 impl std::fmt::Debug for ToolsContext {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ToolsContext")
             .field("server", &self.server.as_ref().map(|_| "AlephToolServer"))
-            .field("handle", &self.handle.as_ref().map(|_| "AlephToolServerHandle"))
+            .field(
+                "handle",
+                &self.handle.as_ref().map(|_| "AlephToolServerHandle"),
+            )
             .field("tool_definition", &self.tool_definition)
             .field("llm_context", &self.llm_context)
             .field("update_info", &self.update_info)
@@ -128,20 +124,53 @@ impl std::fmt::Debug for ToolsContext {
             .field("replacement_count", &self.replacement_count)
             .field("unified_tool", &self.unified_tool.as_ref().map(|t| &t.name))
             .field("index_entry", &self.index_entry)
-            .field("tool_index", &self.tool_index.as_ref().map(|i| i.total_count()))
-            .field("tool_registry", &self.tool_registry.as_ref().map(|_| "ToolRegistry"))
-            .field("list_result", &self.list_result.as_ref().map(|_| "ListToolsOutput"))
-            .field("schema_result", &self.schema_result.as_ref().map(|r| &r.name))
+            .field(
+                "tool_index",
+                &self.tool_index.as_ref().map(|i| i.total_count()),
+            )
+            .field(
+                "tool_registry",
+                &self.tool_registry.as_ref().map(|_| "ToolRegistry"),
+            )
+            .field(
+                "list_result",
+                &self.list_result.as_ref().map(|_| "ListToolsOutput"),
+            )
+            .field(
+                "schema_result",
+                &self.schema_result.as_ref().map(|r| &r.name),
+            )
             .field("prompt", &self.prompt.as_ref().map(|p| p.len()))
             .field("full_schema_size", &self.full_schema_size)
             .field("index_size", &self.index_size)
             .field("latencies", &self.latencies)
-            .field("delegate_result", &self.delegate_result.as_ref().map(|d| d.success))
-            .field("merged_result", &self.merged_result.as_ref().map(|m| m.success))
-            .field("gateway_context", &self.gateway_context.as_ref().map(|_| "GatewayContext"))
-            .field("tracking_adapter", &self.tracking_adapter.as_ref().map(|_| "TestExecutionAdapter"))
-            .field("sessions_list_result", &self.sessions_list_result.as_ref().map(|r| r.count))
-            .field("sessions_send_result", &self.sessions_send_result.as_ref().map(|r| &r.status))
+            .field(
+                "delegate_result",
+                &self.delegate_result.as_ref().map(|d| d.success),
+            )
+            .field(
+                "merged_result",
+                &self.merged_result.as_ref().map(|m| m.success),
+            )
+            .field(
+                "gateway_context",
+                &self.gateway_context.as_ref().map(|_| "GatewayContext"),
+            )
+            .field(
+                "tracking_adapter",
+                &self
+                    .tracking_adapter
+                    .as_ref()
+                    .map(|_| "TestExecutionAdapter"),
+            )
+            .field(
+                "sessions_list_result",
+                &self.sessions_list_result.as_ref().map(|r| r.count),
+            )
+            .field(
+                "sessions_send_result",
+                &self.sessions_send_result.as_ref().map(|r| &r.status),
+            )
             .finish()
     }
 }

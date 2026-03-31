@@ -3,8 +3,8 @@
 //! Implements `MemoryStore`, `GraphStore`, and `SessionStore` traits
 //! using LanceDB as the underlying vector database engine.
 
-use std::path::Path;
 use crate::sync_primitives::{Arc, AtomicI64};
+use std::path::Path;
 
 use lancedb::connection::Connection;
 use lancedb::Table;
@@ -47,22 +47,20 @@ impl LanceMemoryBackend {
     /// All four tables are created if they do not already exist.
     pub async fn open_or_create(data_dir: &Path) -> Result<Self, AlephError> {
         let db_path = data_dir.join("memory.lance");
-        let db_path_str = db_path.to_str().ok_or_else(|| {
-            AlephError::config("LanceDB path contains invalid UTF-8")
-        })?;
+        let db_path_str = db_path
+            .to_str()
+            .ok_or_else(|| AlephError::config("LanceDB path contains invalid UTF-8"))?;
         let db = lancedb::connect(db_path_str)
             .execute()
             .await
             .map_err(|e| AlephError::config(format!("LanceDB connect failed: {}", e)))?;
 
-        let facts_table =
-            Self::ensure_table(&db, "facts", schema::facts_schema()).await?;
+        let facts_table = Self::ensure_table(&db, "facts", schema::facts_schema()).await?;
         let nodes_table =
             Self::ensure_table(&db, "graph_nodes", schema::graph_nodes_schema()).await?;
         let edges_table =
             Self::ensure_table(&db, "graph_edges", schema::graph_edges_schema()).await?;
-        let memories_table =
-            Self::ensure_table(&db, "memories", schema::memories_schema()).await?;
+        let memories_table = Self::ensure_table(&db, "memories", schema::memories_schema()).await?;
 
         tracing::info!(
             subsystem = "memory",
@@ -253,9 +251,7 @@ impl LanceMemoryBackend {
             .replace(true)
             .execute()
             .await
-            .map_err(|e| {
-                AlephError::config(format!("FTS index on '{}': {}", column, e))
-            })?;
+            .map_err(|e| AlephError::config(format!("FTS index on '{}': {}", column, e)))?;
         Ok(())
     }
 
@@ -268,17 +264,15 @@ impl LanceMemoryBackend {
         table: &Table,
         column: &str,
     ) -> Result<(), AlephError> {
-        use lancedb::index::Index;
         use lancedb::index::scalar::BTreeIndexBuilder;
+        use lancedb::index::Index;
 
         table
             .create_index(&[column], Index::BTree(BTreeIndexBuilder::default()))
             .replace(true)
             .execute()
             .await
-            .map_err(|e| {
-                AlephError::config(format!("BTree index on '{}': {}", column, e))
-            })?;
+            .map_err(|e| AlephError::config(format!("BTree index on '{}': {}", column, e)))?;
         Ok(())
     }
 }

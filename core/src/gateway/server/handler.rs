@@ -3,29 +3,34 @@
 //! Contains the connection lifecycle: upgrade, authentication, message dispatch,
 //! event forwarding, and cleanup.
 
-use std::collections::HashMap;
-use std::net::SocketAddr;
 use crate::sync_primitives::Arc;
-use tokio::sync::RwLock;
-use futures_util::{StreamExt, SinkExt};
-use tracing::{info, warn, error, debug};
 use axum::{
-    extract::{State, ConnectInfo, ws::{WebSocket, WebSocketUpgrade, Message as WsMessage}},
+    extract::{
+        ws::{Message as WsMessage, WebSocket, WebSocketUpgrade},
+        ConnectInfo, State,
+    },
     response::IntoResponse,
 };
+use futures_util::{SinkExt, StreamExt};
+use std::collections::HashMap;
+use std::net::SocketAddr;
+use tokio::sync::RwLock;
+use tracing::{debug, error, info, warn};
 
-use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, AUTH_REQUIRED, PARSE_ERROR, RATE_LIMITED, INTERNAL_ERROR};
-use crate::gateway::event_bus::{GatewayEventBus, TopicEvent};
-use crate::gateway::handlers::HandlerRegistry;
-use crate::gateway::handlers::events::{
-    SubscriptionManager, handle_subscribe, handle_unsubscribe, handle_list as handle_events_list,
-};
-use crate::gateway::presence::{PresenceTracker, PresenceEntry};
-use crate::gateway::state_version::StateVersionTracker;
-use crate::gateway::rate_limiter::{RateLimiter, RateLimitKey, scope_for_method, RateLimitError};
-use crate::gateway::lane::LaneManager;
-use crate::gateway::event_scope::EventScopeGuard;
 use crate::gateway::config::AuthMode;
+use crate::gateway::event_bus::{GatewayEventBus, TopicEvent};
+use crate::gateway::event_scope::EventScopeGuard;
+use crate::gateway::handlers::events::{
+    handle_list as handle_events_list, handle_subscribe, handle_unsubscribe, SubscriptionManager,
+};
+use crate::gateway::handlers::HandlerRegistry;
+use crate::gateway::lane::LaneManager;
+use crate::gateway::presence::{PresenceEntry, PresenceTracker};
+use crate::gateway::protocol::{
+    JsonRpcRequest, JsonRpcResponse, AUTH_REQUIRED, INTERNAL_ERROR, PARSE_ERROR, RATE_LIMITED,
+};
+use crate::gateway::rate_limiter::{scope_for_method, RateLimitError, RateLimitKey, RateLimiter};
+use crate::gateway::state_version::StateVersionTracker;
 
 use super::{ConnectionState, GatewaySharedState, MAX_AUTH_ATTEMPTS};
 
@@ -55,7 +60,11 @@ pub(super) async fn ws_upgrade_handler(
     let current = state.connections.read().await.len();
     if current >= state.max_connections {
         warn!("Connection limit reached, rejecting {}", peer_addr);
-        return (axum::http::StatusCode::SERVICE_UNAVAILABLE, "Connection limit reached").into_response();
+        return (
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            "Connection limit reached",
+        )
+            .into_response();
     }
 
     ws.on_upgrade(move |socket| async move {
@@ -654,7 +663,10 @@ async fn handle_connection(
     // Remove presence and emit departure event
     if let Some(_entry) = ctx.presence.remove(&conn_id) {
         ctx.state_versions.bump_presence();
-        let _ = ctx.event_bus.publish_json(&TopicEvent::new("presence.left", serde_json::json!({"conn_id": &conn_id})));
+        let _ = ctx.event_bus.publish_json(&TopicEvent::new(
+            "presence.left",
+            serde_json::json!({"conn_id": &conn_id}),
+        ));
     }
 
     // Remove subscriptions for this connection

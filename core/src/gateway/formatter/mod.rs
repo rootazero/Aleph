@@ -111,9 +111,7 @@ impl MessageFormatter {
     /// Normalize platform-specific markup back to standard Markdown (inbound direction).
     pub fn normalize(platform_text: &str, source: MarkupFormat) -> String {
         match source {
-            MarkupFormat::Markdown | MarkupFormat::DiscordMarkdown => {
-                platform_text.to_string()
-            }
+            MarkupFormat::Markdown | MarkupFormat::DiscordMarkdown => platform_text.to_string(),
             MarkupFormat::TelegramHtml => telegram_html_to_markdown(platform_text),
             MarkupFormat::SlackMrkdwn => slack_mrkdwn_to_markdown(platform_text),
             MarkupFormat::IrcFormatting => irc_to_markdown(platform_text),

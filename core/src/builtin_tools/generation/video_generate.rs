@@ -1,19 +1,19 @@
 //! Video generation tool — generates videos from text descriptions.
 
+use crate::sync_primitives::{Arc, RwLock};
 use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use crate::sync_primitives::{Arc, RwLock};
 use std::time::Instant;
 use tracing::info;
 
+use crate::builtin_tools::error::ToolError;
 use crate::error::Result;
+use crate::gateway::media::{detect_mime, MediaItem};
 use crate::generation::{
     GenerationData, GenerationProviderRegistry, GenerationRequest, GenerationType,
 };
-use crate::builtin_tools::error::ToolError;
 use crate::tools::AlephTool;
-use crate::gateway::media::{MediaItem, detect_mime};
 
 /// Arguments for the video generation tool.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -71,7 +71,8 @@ impl VideoGenerateTool {
 
         // Truncate prompt for display (UTF-8 safe)
         let prompt_display = if args.prompt.chars().count() > 30 {
-            let end = args.prompt
+            let end = args
+                .prompt
                 .char_indices()
                 .nth(30)
                 .map(|(i, _)| i)
@@ -95,7 +96,8 @@ impl VideoGenerateTool {
                     ToolError::InvalidArgs(error_msg)
                 })?;
                 if !p.supports(GenerationType::Video) {
-                    let error_msg = format!("Provider '{}' does not support video generation", name);
+                    let error_msg =
+                        format!("Provider '{}' does not support video generation", name);
                     notify_tool_result(Self::NAME, &error_msg, false);
                     return Err(ToolError::InvalidArgs(error_msg));
                 }
@@ -132,7 +134,8 @@ impl VideoGenerateTool {
             GenerationData::Url(url) => (url.clone(), "url"),
             GenerationData::LocalPath(path) => (path.clone(), "file"),
             GenerationData::Bytes(_) => {
-                let error_msg = "Video provider returned raw bytes — expected URL or file path".to_string();
+                let error_msg =
+                    "Video provider returned raw bytes — expected URL or file path".to_string();
                 notify_tool_result(Self::NAME, &error_msg, false);
                 return Err(ToolError::Execution(error_msg));
             }

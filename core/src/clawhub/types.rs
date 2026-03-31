@@ -139,10 +139,7 @@ pub struct RawVersionItem {
 
 impl From<RawVersionItem> for VersionInfo {
     fn from(item: RawVersionItem) -> Self {
-        let published_at = item
-            .created_at
-            .map(unix_ms_to_rfc3339)
-            .unwrap_or_default();
+        let published_at = item.created_at.map(unix_ms_to_rfc3339).unwrap_or_default();
         Self {
             number: item.version,
             changelog: item.changelog.unwrap_or_default(),

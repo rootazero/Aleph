@@ -3,9 +3,9 @@
 //! Routes incoming requests to the appropriate agent based on session key,
 //! channel, or peer information.
 
-use serde::{Deserialize, Serialize};
-use crate::sync_primitives::Arc;
 use crate::routing::config::RouteBinding;
+use crate::sync_primitives::Arc;
+use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
 // Re-export new routing types for backward compatibility.
@@ -74,12 +74,16 @@ impl SessionKey {
     /// Return a clone with the given epoch
     pub fn with_epoch(&self, epoch: u32) -> Self {
         match self {
-            Self::Main { agent_id, main_key, .. } => Self::Main {
+            Self::Main {
+                agent_id, main_key, ..
+            } => Self::Main {
                 agent_id: agent_id.clone(),
                 main_key: main_key.clone(),
                 epoch,
             },
-            Self::PerPeer { agent_id, peer_id, .. } => Self::PerPeer {
+            Self::PerPeer {
+                agent_id, peer_id, ..
+            } => Self::PerPeer {
                 agent_id: agent_id.clone(),
                 peer_id: peer_id.clone(),
                 epoch,
@@ -130,13 +134,29 @@ impl SessionKey {
     /// Convert to a string key for storage/lookup
     pub fn to_key_string(&self) -> String {
         match self {
-            Self::Main { agent_id, main_key, epoch } => {
+            Self::Main {
+                agent_id,
+                main_key,
+                epoch,
+            } => {
                 let base = format!("agent:{}:{}", agent_id, main_key);
-                if *epoch > 0 { format!("{}:s{}", base, epoch) } else { base }
+                if *epoch > 0 {
+                    format!("{}:s{}", base, epoch)
+                } else {
+                    base
+                }
             }
-            Self::PerPeer { agent_id, peer_id, epoch } => {
+            Self::PerPeer {
+                agent_id,
+                peer_id,
+                epoch,
+            } => {
                 let base = format!("agent:{}:peer:{}", agent_id, peer_id);
-                if *epoch > 0 { format!("{}:s{}", base, epoch) } else { base }
+                if *epoch > 0 {
+                    format!("{}:s{}", base, epoch)
+                } else {
+                    base
+                }
             }
             Self::Task {
                 agent_id,
@@ -153,8 +173,12 @@ impl SessionKey {
     /// Return the base key string WITHOUT epoch suffix (for DB LIKE queries)
     pub fn base_key_pattern(&self) -> String {
         match self {
-            Self::Main { agent_id, main_key, .. } => format!("agent:{}:{}", agent_id, main_key),
-            Self::PerPeer { agent_id, peer_id, .. } => format!("agent:{}:peer:{}", agent_id, peer_id),
+            Self::Main {
+                agent_id, main_key, ..
+            } => format!("agent:{}:{}", agent_id, main_key),
+            Self::PerPeer {
+                agent_id, peer_id, ..
+            } => format!("agent:{}:peer:{}", agent_id, peer_id),
             _ => self.to_key_string(),
         }
     }
@@ -200,13 +224,11 @@ impl SessionKey {
                 agent_id,
                 ephemeral_id: eid.to_string(),
             }),
-            [tt @ ("cron" | "webhook" | "scheduled"), tid] => {
-                Some(Self::Task {
-                    agent_id,
-                    task_type: tt.to_string(),
-                    task_id: tid.to_string(),
-                })
-            }
+            [tt @ ("cron" | "webhook" | "scheduled"), tid] => Some(Self::Task {
+                agent_id,
+                task_type: tt.to_string(),
+                task_id: tid.to_string(),
+            }),
             [main_key] => Some(Self::Main {
                 agent_id,
                 main_key: main_key.to_string(),
@@ -222,24 +244,39 @@ impl SessionKey {
     /// Convert legacy SessionKey to new routing SessionKey
     pub fn to_new(&self) -> crate::routing::SessionKey {
         match self {
-            Self::Main { agent_id, main_key, epoch } => crate::routing::SessionKey::Main {
+            Self::Main {
+                agent_id,
+                main_key,
+                epoch,
+            } => crate::routing::SessionKey::Main {
                 agent_id: agent_id.clone(),
                 main_key: main_key.clone(),
                 epoch: *epoch,
             },
-            Self::PerPeer { agent_id, peer_id, epoch } => crate::routing::SessionKey::DirectMessage {
+            Self::PerPeer {
+                agent_id,
+                peer_id,
+                epoch,
+            } => crate::routing::SessionKey::DirectMessage {
                 agent_id: agent_id.clone(),
                 channel: String::new(),
                 peer_id: peer_id.clone(),
                 dm_scope: crate::routing::DmScope::PerPeer,
                 epoch: *epoch,
             },
-            Self::Task { agent_id, task_type, task_id } => crate::routing::SessionKey::Task {
+            Self::Task {
+                agent_id,
+                task_type,
+                task_id,
+            } => crate::routing::SessionKey::Task {
                 agent_id: agent_id.clone(),
                 task_type: task_type.clone(),
                 task_id: task_id.clone(),
             },
-            Self::Ephemeral { agent_id, ephemeral_id } => crate::routing::SessionKey::Ephemeral {
+            Self::Ephemeral {
+                agent_id,
+                ephemeral_id,
+            } => crate::routing::SessionKey::Ephemeral {
                 agent_id: agent_id.clone(),
                 ephemeral_id: ephemeral_id.clone(),
             },
@@ -249,28 +286,46 @@ impl SessionKey {
     /// Create legacy SessionKey from new routing SessionKey
     pub fn from_new(key: &crate::routing::SessionKey) -> Self {
         match key {
-            crate::routing::SessionKey::Main { agent_id, main_key, epoch } => Self::Main {
+            crate::routing::SessionKey::Main {
+                agent_id,
+                main_key,
+                epoch,
+            } => Self::Main {
                 agent_id: agent_id.clone(),
                 main_key: main_key.clone(),
                 epoch: *epoch,
             },
-            crate::routing::SessionKey::DirectMessage { agent_id, peer_id, epoch, .. } => Self::PerPeer {
+            crate::routing::SessionKey::DirectMessage {
+                agent_id,
+                peer_id,
+                epoch,
+                ..
+            } => Self::PerPeer {
                 agent_id: agent_id.clone(),
                 peer_id: peer_id.clone(),
                 epoch: *epoch,
             },
-            crate::routing::SessionKey::Group { agent_id, peer_id, .. } => Self::PerPeer {
+            crate::routing::SessionKey::Group {
+                agent_id, peer_id, ..
+            } => Self::PerPeer {
                 agent_id: agent_id.clone(),
                 peer_id: peer_id.clone(),
                 epoch: 0,
             },
-            crate::routing::SessionKey::Task { agent_id, task_type, task_id } => Self::Task {
+            crate::routing::SessionKey::Task {
+                agent_id,
+                task_type,
+                task_id,
+            } => Self::Task {
                 agent_id: agent_id.clone(),
                 task_type: task_type.clone(),
                 task_id: task_id.clone(),
             },
             crate::routing::SessionKey::Subagent { parent_key, .. } => Self::from_new(parent_key),
-            crate::routing::SessionKey::Ephemeral { agent_id, ephemeral_id } => Self::Ephemeral {
+            crate::routing::SessionKey::Ephemeral {
+                agent_id,
+                ephemeral_id,
+            } => Self::Ephemeral {
                 agent_id: agent_id.clone(),
                 ephemeral_id: ephemeral_id.clone(),
             },
@@ -519,7 +574,9 @@ mod tests {
     #[tokio::test]
     async fn test_router_explicit_key() {
         let router = AgentRouter::new();
-        let key = router.route(Some("agent:work:main"), None, None, None).await;
+        let key = router
+            .route(Some("agent:work:main"), None, None, None)
+            .await;
         assert_eq!(key.agent_id(), "work");
     }
 
@@ -540,7 +597,9 @@ mod tests {
     #[tokio::test]
     async fn test_router_peer_creates_peer_session() {
         let router = AgentRouter::new();
-        let key = router.route(None, Some("gui:window1"), Some("telegram:123"), None).await;
+        let key = router
+            .route(None, Some("gui:window1"), Some("telegram:123"), None)
+            .await;
 
         assert!(matches!(key, SessionKey::PerPeer { peer_id, .. } if peer_id == "telegram:123"));
     }

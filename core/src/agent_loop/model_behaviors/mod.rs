@@ -14,7 +14,9 @@ const BUILTIN_OLLAMA: &str = include_str!("ollama.md");
 fn is_valid_behavior_name(name: &str) -> bool {
     !name.is_empty()
         && name.len() <= 64
-        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
 /// Load model behavior content by name (async).
@@ -29,7 +31,9 @@ pub async fn load_model_behavior(name: &str) -> Option<String> {
 
     // 1. Check user override (async I/O, silently skip if home_dir unavailable)
     if let Some(home) = dirs::home_dir() {
-        let user_path = home.join(".aleph/model_behaviors").join(format!("{name}.md"));
+        let user_path = home
+            .join(".aleph/model_behaviors")
+            .join(format!("{name}.md"));
         if let Ok(content) = tokio::fs::read_to_string(&user_path).await {
             return Some(content);
         }

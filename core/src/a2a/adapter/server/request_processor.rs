@@ -107,10 +107,10 @@ impl A2ARequestProcessor {
             "tasks/get" => self.handle_tasks_get(request, auth).await,
             "tasks/cancel" => self.handle_tasks_cancel(request, auth).await,
             "tasks/list" => self.handle_tasks_list(request, auth).await,
-            "tasks/pushNotificationConfig/set" | "tasks/pushNotificationConfig/get"
-            | "tasks/pushNotificationConfig/list" | "tasks/pushNotificationConfig/delete" => {
-                self.handle_push_config(request, auth).await
-            }
+            "tasks/pushNotificationConfig/set"
+            | "tasks/pushNotificationConfig/get"
+            | "tasks/pushNotificationConfig/list"
+            | "tasks/pushNotificationConfig/delete" => self.handle_push_config(request, auth).await,
             _ => JsonRpcResponse::error(
                 request.id,
                 -32601,
@@ -126,13 +126,20 @@ impl A2ARequestProcessor {
         request: JsonRpcRequest,
         auth: A2AAuthPrincipal,
     ) -> JsonRpcResponse {
-        if let Err(resp) = self.authorize(&request, &auth, &A2AAction::SendMessage).await {
+        if let Err(resp) = self
+            .authorize(&request, &auth, &A2AAction::SendMessage)
+            .await
+        {
             return resp;
         }
 
         // Extract params
         let message: A2AMessage = match serde_json::from_value(
-            request.params.get("message").cloned().unwrap_or(Value::Null),
+            request
+                .params
+                .get("message")
+                .cloned()
+                .unwrap_or(Value::Null),
         ) {
             Ok(m) => m,
             Err(e) => {
@@ -187,11 +194,7 @@ impl A2ARequestProcessor {
         let id = match request.params.get("id").and_then(|v| v.as_str()) {
             Some(id) => id,
             None => {
-                return JsonRpcResponse::error(
-                    request.id,
-                    -32602,
-                    "Invalid params: missing 'id'",
-                );
+                return JsonRpcResponse::error(request.id, -32602, "Invalid params: missing 'id'");
             }
         };
 
@@ -204,11 +207,9 @@ impl A2ARequestProcessor {
         match self.state.task_manager.get_task(id, history_length).await {
             Ok(task) => match serde_json::to_value(&task) {
                 Ok(v) => JsonRpcResponse::success(request.id, v),
-                Err(e) => JsonRpcResponse::error(
-                    request.id,
-                    -32603,
-                    &format!("Internal error: {}", e),
-                ),
+                Err(e) => {
+                    JsonRpcResponse::error(request.id, -32603, &format!("Internal error: {}", e))
+                }
             },
             Err(e) => JsonRpcResponse::from_a2a_error(request.id, &e),
         }
@@ -219,29 +220,26 @@ impl A2ARequestProcessor {
         request: JsonRpcRequest,
         auth: A2AAuthPrincipal,
     ) -> JsonRpcResponse {
-        if let Err(resp) = self.authorize(&request, &auth, &A2AAction::CancelTask).await {
+        if let Err(resp) = self
+            .authorize(&request, &auth, &A2AAction::CancelTask)
+            .await
+        {
             return resp;
         }
 
         let id = match request.params.get("id").and_then(|v| v.as_str()) {
             Some(id) => id,
             None => {
-                return JsonRpcResponse::error(
-                    request.id,
-                    -32602,
-                    "Invalid params: missing 'id'",
-                );
+                return JsonRpcResponse::error(request.id, -32602, "Invalid params: missing 'id'");
             }
         };
 
         match self.state.task_manager.cancel_task(id).await {
             Ok(task) => match serde_json::to_value(&task) {
                 Ok(v) => JsonRpcResponse::success(request.id, v),
-                Err(e) => JsonRpcResponse::error(
-                    request.id,
-                    -32603,
-                    &format!("Internal error: {}", e),
-                ),
+                Err(e) => {
+                    JsonRpcResponse::error(request.id, -32603, &format!("Internal error: {}", e))
+                }
             },
             Err(e) => JsonRpcResponse::from_a2a_error(request.id, &e),
         }
@@ -276,11 +274,9 @@ impl A2ARequestProcessor {
         match self.state.task_manager.list_tasks(params).await {
             Ok(result) => match serde_json::to_value(&result) {
                 Ok(v) => JsonRpcResponse::success(request.id, v),
-                Err(e) => JsonRpcResponse::error(
-                    request.id,
-                    -32603,
-                    &format!("Internal error: {}", e),
-                ),
+                Err(e) => {
+                    JsonRpcResponse::error(request.id, -32603, &format!("Internal error: {}", e))
+                }
             },
             Err(e) => JsonRpcResponse::from_a2a_error(request.id, &e),
         }
@@ -417,7 +413,8 @@ mod tests {
 
     #[test]
     fn jsonrpc_response_error() {
-        let resp = JsonRpcResponse::error(Some(Value::Number(2.into())), -32601, "Method not found");
+        let resp =
+            JsonRpcResponse::error(Some(Value::Number(2.into())), -32601, "Method not found");
         assert_eq!(resp.jsonrpc, "2.0");
         assert!(resp.result.is_none());
         let err = resp.error.unwrap();
@@ -511,10 +508,7 @@ mod tests {
 
         #[async_trait::async_trait]
         impl A2AAuthenticator for AllowAllAuth {
-            async fn authenticate(
-                &self,
-                _context: &A2AAuthContext,
-            ) -> A2AResult<A2AAuthPrincipal> {
+            async fn authenticate(&self, _context: &A2AAuthContext) -> A2AResult<A2AAuthPrincipal> {
                 Ok(A2AAuthPrincipal {
                     agent_id: None,
                     trust_level: TrustLevel::Local,
@@ -540,11 +534,7 @@ mod tests {
 
         #[async_trait::async_trait]
         impl A2ATaskManager for MockTaskManager {
-            async fn create_task(
-                &self,
-                task_id: &str,
-                context_id: &str,
-            ) -> A2AResult<A2ATask> {
+            async fn create_task(&self, task_id: &str, context_id: &str) -> A2AResult<A2ATask> {
                 Ok(A2ATask::new(task_id, context_id))
             }
 
@@ -569,21 +559,14 @@ mod tests {
                 Ok(A2ATask::new(task_id, "ctx-default"))
             }
 
-            async fn list_tasks(
-                &self,
-                _params: ListTasksParams,
-            ) -> A2AResult<ListTasksResult> {
+            async fn list_tasks(&self, _params: ListTasksParams) -> A2AResult<ListTasksResult> {
                 Ok(ListTasksResult {
                     tasks: vec![],
                     next_cursor: None,
                 })
             }
 
-            async fn add_artifact(
-                &self,
-                _task_id: &str,
-                _artifact: Artifact,
-            ) -> A2AResult<()> {
+            async fn add_artifact(&self, _task_id: &str, _artifact: Artifact) -> A2AResult<()> {
                 Ok(())
             }
         }
@@ -607,8 +590,7 @@ mod tests {
                 _task_id: &str,
                 _message: A2AMessage,
                 _session_id: Option<&str>,
-            ) -> A2AResult<Pin<Box<dyn Stream<Item = A2AResult<UpdateEvent>> + Send>>>
-            {
+            ) -> A2AResult<Pin<Box<dyn Stream<Item = A2AResult<UpdateEvent>> + Send>>> {
                 Ok(Box::pin(futures::stream::empty()))
             }
         }
@@ -621,26 +603,23 @@ mod tests {
             async fn subscribe_status(
                 &self,
                 _task_id: &str,
-            ) -> A2AResult<
-                Pin<Box<dyn Stream<Item = A2AResult<TaskStatusUpdateEvent>> + Send>>,
-            > {
+            ) -> A2AResult<Pin<Box<dyn Stream<Item = A2AResult<TaskStatusUpdateEvent>> + Send>>>
+            {
                 Ok(Box::pin(futures::stream::empty()))
             }
 
             async fn subscribe_artifacts(
                 &self,
                 _task_id: &str,
-            ) -> A2AResult<
-                Pin<Box<dyn Stream<Item = A2AResult<TaskArtifactUpdateEvent>> + Send>>,
-            > {
+            ) -> A2AResult<Pin<Box<dyn Stream<Item = A2AResult<TaskArtifactUpdateEvent>> + Send>>>
+            {
                 Ok(Box::pin(futures::stream::empty()))
             }
 
             async fn subscribe_all(
                 &self,
                 _task_id: &str,
-            ) -> A2AResult<Pin<Box<dyn Stream<Item = A2AResult<UpdateEvent>> + Send>>>
-            {
+            ) -> A2AResult<Pin<Box<dyn Stream<Item = A2AResult<UpdateEvent>> + Send>>> {
                 Ok(Box::pin(futures::stream::empty()))
             }
 

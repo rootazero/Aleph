@@ -32,11 +32,11 @@
 use crate::event::bus::EventBus;
 use crate::event::filter::EventFilter;
 use crate::event::types::AlephEvent;
+use crate::sync_primitives::Arc;
+use crate::sync_primitives::{AtomicU64, Ordering};
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use crate::sync_primitives::{AtomicU64, Ordering};
-use crate::sync_primitives::Arc;
 use std::sync::Weak;
 use tokio::sync::{broadcast, RwLock};
 use tracing::{debug, trace};
@@ -667,11 +667,8 @@ mod tests {
             .await;
 
         // Receive via broadcast channel
-        let received = tokio::time::timeout(
-            tokio::time::Duration::from_millis(100),
-            receiver.recv(),
-        )
-        .await;
+        let received =
+            tokio::time::timeout(tokio::time::Duration::from_millis(100), receiver.recv()).await;
 
         assert!(received.is_ok());
         let event = received.unwrap().unwrap();

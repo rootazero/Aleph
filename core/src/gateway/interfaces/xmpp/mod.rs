@@ -36,11 +36,10 @@ pub use message_ops::XmppMessageOps;
 
 use crate::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
-    ChannelResult, ChannelState, ChannelStatus, ConversationId,
-    OutboundMessage, SendResult,
+    ChannelResult, ChannelState, ChannelStatus, ConversationId, OutboundMessage, SendResult,
 };
-use async_trait::async_trait;
 use crate::sync_primitives::Arc;
+use async_trait::async_trait;
 use tokio::sync::{mpsc, watch, RwLock};
 
 /// XMPP channel implementation using raw TCP (RFC 6120/6121 + XEP-0045 MUC).
@@ -88,15 +87,14 @@ impl XmppChannel {
             replies: false,
             editing: false,
             deletion: false,
-            typing_indicator: true,  // XEP-0085 Chat State Notifications
-            read_receipts: true,     // XEP-0184 Message Delivery Receipts
-            rich_text: false,        // Using plain text for simplicity
+            typing_indicator: true, // XEP-0085 Chat State Notifications
+            read_receipts: true,    // XEP-0184 Message Delivery Receipts
+            rich_text: false,       // Using plain text for simplicity
             max_message_length: 65535,
             max_attachment_size: 0,
             stream_protocol: Default::default(),
         }
     }
-
 }
 
 #[async_trait]
@@ -111,11 +109,11 @@ impl Channel for XmppChannel {
 
     async fn start(&mut self) -> ChannelResult<()> {
         // Validate configuration
-        self.config
-            .validate()
-            .map_err(ChannelError::ConfigError)?;
+        self.config.validate().map_err(ChannelError::ConfigError)?;
 
-        self.channel_state.set_status(ChannelStatus::Connecting).await;
+        self.channel_state
+            .set_status(ChannelStatus::Connecting)
+            .await;
         tracing::info!(
             "Starting XMPP channel (jid={}, rooms={})...",
             self.config.jid,
@@ -151,7 +149,9 @@ impl Channel for XmppChannel {
             *status.write().await = ChannelStatus::Disconnected;
         });
 
-        self.channel_state.set_status(ChannelStatus::Connected).await;
+        self.channel_state
+            .set_status(ChannelStatus::Connected)
+            .await;
         Ok(())
     }
 
@@ -165,16 +165,16 @@ impl Channel for XmppChannel {
         // Clear write channel
         *self.write_tx.write().await = None;
 
-        self.channel_state.set_status(ChannelStatus::Disconnected).await;
+        self.channel_state
+            .set_status(ChannelStatus::Disconnected)
+            .await;
         Ok(())
     }
 
     async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
         let write_tx = self.write_tx.read().await;
         let write_tx = write_tx.as_ref().ok_or_else(|| {
-            ChannelError::NotConnected(
-                "XMPP adapter not started - call start() first".to_string(),
-            )
+            ChannelError::NotConnected("XMPP adapter not started - call start() first".to_string())
         })?;
 
         // Determine message type based on conversation ID
@@ -188,7 +188,6 @@ impl Channel for XmppChannel {
         };
 
         XmppMessageOps::send_message(write_tx, conversation, &message.text, msg_type).await
-
     }
 
     async fn send_typing(&self, conversation_id: &ConversationId) -> ChannelResult<()> {
@@ -205,9 +204,7 @@ impl Channel for XmppChannel {
             let _ = write_tx.send(stanza).await;
         }
         Ok(())
-
     }
-
 }
 
 /// Factory for creating XMPP channels

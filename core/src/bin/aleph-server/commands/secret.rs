@@ -6,7 +6,7 @@
 use std::error::Error;
 use std::io::Write;
 
-use alephcore::gateway::security::{SharedTokenManager, store::SecurityStore};
+use alephcore::gateway::security::{store::SecurityStore, SharedTokenManager};
 use alephcore::utils::paths;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -35,7 +35,8 @@ pub fn validate_secret_name(name: &str) -> Result<String, String> {
         .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.' | ':'));
     if !valid {
         return Err(
-            "Secret name can only contain ASCII letters, digits, '_', '-', '.', and ':'".to_string(),
+            "Secret name can only contain ASCII letters, digits, '_', '-', '.', and ':'"
+                .to_string(),
         );
     }
 
@@ -45,11 +46,11 @@ pub fn validate_secret_name(name: &str) -> Result<String, String> {
 /// Build a SharedTokenManager and load the existing token from DB.
 /// Returns an error if no token exists (server must be started at least once).
 fn open_token_manager() -> Result<SharedTokenManager, Box<dyn Error>> {
-    let security_store_path = paths::get_security_db_path()
-        .unwrap_or_else(|_| PathBuf::from("/tmp/aleph_security.db"));
+    let security_store_path =
+        paths::get_security_db_path().unwrap_or_else(|_| PathBuf::from("/tmp/aleph_security.db"));
     let security_store = Arc::new(
         SecurityStore::open(&security_store_path)
-            .map_err(|e| format!("Failed to open security store: {}", e))?
+            .map_err(|e| format!("Failed to open security store: {}", e))?,
     );
 
     let data_dir = dirs::home_dir()
@@ -83,7 +84,8 @@ fn resolve_secret_value(value: Option<String>) -> Result<String, Box<dyn Error>>
 
 fn handle_secret_init() -> Result<(), Box<dyn Error>> {
     let manager = open_token_manager()?;
-    let count = manager.list_secret_names()
+    let count = manager
+        .list_secret_names()
         .map(|names| names.len())
         .unwrap_or(0);
     println!("Secret vault ready ({} entries)", count);
@@ -95,7 +97,8 @@ fn handle_secret_set(name: String, value: Option<String>) -> Result<(), Box<dyn 
     let value = resolve_secret_value(value)?;
 
     let manager = open_token_manager()?;
-    manager.store_secret(&name, &value)
+    manager
+        .store_secret(&name, &value)
         .map_err(|e| format!("Failed to store secret: {}", e))?;
 
     println!("Stored secret '{}'", name);
@@ -104,7 +107,8 @@ fn handle_secret_set(name: String, value: Option<String>) -> Result<(), Box<dyn 
 
 fn handle_secret_list() -> Result<(), Box<dyn Error>> {
     let manager = open_token_manager()?;
-    let mut names = manager.list_secret_names()
+    let mut names = manager
+        .list_secret_names()
         .map_err(|e| format!("Failed to list secrets: {}", e))?;
     names.sort();
 
@@ -125,7 +129,8 @@ fn handle_secret_delete(name: String) -> Result<(), Box<dyn Error>> {
     let name = validate_secret_name(&name)?;
     let manager = open_token_manager()?;
 
-    let deleted = manager.delete_secret(&name)
+    let deleted = manager
+        .delete_secret(&name)
         .map_err(|e| format!("Failed to delete secret: {}", e))?;
     if deleted {
         println!("Deleted secret '{}'", name);

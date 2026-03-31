@@ -33,7 +33,10 @@ pub enum CompressionSignal {
         completion_indicator: String,
     },
     /// User is switching context/topic
-    ContextSwitch { from_topic: String, to_topic: String },
+    ContextSwitch {
+        from_topic: String,
+        to_topic: String,
+    },
 }
 
 /// Priority level for compression

@@ -6,23 +6,23 @@
 //! - Context injection for situational awareness
 //! - Collective memory for shared knowledge
 
-pub mod events;
-pub mod bus;
 pub mod aggregator;
-pub mod rules;
-pub mod context_injector;
+pub mod bus;
 pub mod collective_memory;
-pub mod coordinator;
-pub mod tools;
+pub mod context_injector;
 pub mod context_provider;
+pub mod coordinator;
+pub mod events;
+pub mod rules;
 pub mod tasks;
+pub mod tools;
 
-pub use events::{AgentEvent, CriticalEvent, ImportantEvent, InfoEvent, EventTier, FileOperation};
+pub use aggregator::{IntelligenceLayer, SemanticAggregator, SlidingWindow};
 pub use bus::AgentMessageBus;
-pub use aggregator::{SemanticAggregator, IntelligenceLayer, SlidingWindow};
-pub use rules::{AggregationRule, EventPattern, RuleEngine};
-pub use context_injector::{ContextInjector, SwarmContextEntry};
 pub use collective_memory::{CollectiveMemory, TeamHistoryQuery};
-pub use coordinator::{SwarmCoordinator, SwarmConfig, SwarmStatistics};
-pub use tools::GetTeamActivityTool;
+pub use context_injector::{ContextInjector, SwarmContextEntry};
 pub use context_provider::SwarmContextProvider;
+pub use coordinator::{SwarmConfig, SwarmCoordinator, SwarmStatistics};
+pub use events::{AgentEvent, CriticalEvent, EventTier, FileOperation, ImportantEvent, InfoEvent};
+pub use rules::{AggregationRule, EventPattern, RuleEngine};
+pub use tools::GetTeamActivityTool;

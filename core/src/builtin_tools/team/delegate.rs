@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
 use crate::agents::swarm::tasks::{
-    CoordTaskStore, CoordTaskStatus, CoordTaskUpdate, NewCoordTask, Priority,
+    CoordTaskStatus, CoordTaskStore, CoordTaskUpdate, NewCoordTask, Priority,
 };
 use crate::error::{AlephError, Result};
 use crate::gateway::context::GatewayContext;
@@ -205,10 +205,13 @@ impl AlephTool for TeamDelegateTool {
 
         // Mark task as running
         self.coord_store
-            .update_task(&task.id, CoordTaskUpdate {
-                status: Some(CoordTaskStatus::InProgress),
-                ..Default::default()
-            })
+            .update_task(
+                &task.id,
+                CoordTaskUpdate {
+                    status: Some(CoordTaskStatus::InProgress),
+                    ..Default::default()
+                },
+            )
             .await?;
 
         // 3. Look up the target agent in the registry
@@ -217,11 +220,17 @@ impl AlephTool for TeamDelegateTool {
             Some(agent) => agent,
             None => {
                 self.coord_store
-                    .update_task(&task.id, CoordTaskUpdate {
-                        status: Some(CoordTaskStatus::Failed),
-                        result: Some(format!("Agent '{}' not found in registry", args.agent_id)),
-                        ..Default::default()
-                    })
+                    .update_task(
+                        &task.id,
+                        CoordTaskUpdate {
+                            status: Some(CoordTaskStatus::Failed),
+                            result: Some(format!(
+                                "Agent '{}' not found in registry",
+                                args.agent_id
+                            )),
+                            ..Default::default()
+                        },
+                    )
                     .await?;
                 return Err(AlephError::other(format!(
                     "Agent '{}' not found in registry",
@@ -272,11 +281,14 @@ impl AlephTool for TeamDelegateTool {
                 let reply_text = reply.unwrap_or_else(|| "(No reply content)".to_string());
 
                 self.coord_store
-                    .update_task(&task.id, CoordTaskUpdate {
-                        status: Some(CoordTaskStatus::Completed),
-                        result: Some(reply_text.clone()),
-                        ..Default::default()
-                    })
+                    .update_task(
+                        &task.id,
+                        CoordTaskUpdate {
+                            status: Some(CoordTaskStatus::Completed),
+                            result: Some(reply_text.clone()),
+                            ..Default::default()
+                        },
+                    )
                     .await?;
 
                 // Persist delegation result as an artifact (best-effort)
@@ -315,11 +327,14 @@ impl AlephTool for TeamDelegateTool {
                 );
 
                 self.coord_store
-                    .update_task(&task.id, CoordTaskUpdate {
-                        status: Some(CoordTaskStatus::Failed),
-                        result: Some(error_msg.clone()),
-                        ..Default::default()
-                    })
+                    .update_task(
+                        &task.id,
+                        CoordTaskUpdate {
+                            status: Some(CoordTaskStatus::Failed),
+                            result: Some(error_msg.clone()),
+                            ..Default::default()
+                        },
+                    )
                     .await?;
 
                 Ok(TeamDelegateOutput {
@@ -334,11 +349,14 @@ impl AlephTool for TeamDelegateTool {
                 warn!(task_id = %task.id, "team_delegate: task panicked");
 
                 self.coord_store
-                    .update_task(&task.id, CoordTaskUpdate {
-                        status: Some(CoordTaskStatus::Failed),
-                        result: Some(error_msg.clone()),
-                        ..Default::default()
-                    })
+                    .update_task(
+                        &task.id,
+                        CoordTaskUpdate {
+                            status: Some(CoordTaskStatus::Failed),
+                            result: Some(error_msg.clone()),
+                            ..Default::default()
+                        },
+                    )
                     .await?;
 
                 Ok(TeamDelegateOutput {
@@ -360,11 +378,14 @@ impl AlephTool for TeamDelegateTool {
                 );
 
                 self.coord_store
-                    .update_task(&task.id, CoordTaskUpdate {
-                        status: Some(CoordTaskStatus::Failed),
-                        result: Some(error_msg.clone()),
-                        ..Default::default()
-                    })
+                    .update_task(
+                        &task.id,
+                        CoordTaskUpdate {
+                            status: Some(CoordTaskStatus::Failed),
+                            result: Some(error_msg.clone()),
+                            ..Default::default()
+                        },
+                    )
                     .await?;
 
                 Ok(TeamDelegateOutput {

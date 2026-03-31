@@ -128,8 +128,8 @@ You can also read additional resources within a skill by specifying file_name:
 
     /// Create a ReadSkillTool with auto-discovery
     pub fn with_auto_discover(project_dir: Option<&Path>) -> Self {
-        let skills_dirs = crate::utils::paths::get_all_skills_dirs(project_dir)
-            .unwrap_or_else(|_| vec![]);
+        let skills_dirs =
+            crate::utils::paths::get_all_skills_dirs(project_dir).unwrap_or_else(|_| vec![]);
 
         if skills_dirs.is_empty() {
             // Fallback to default directory
@@ -168,7 +168,9 @@ You can also read additional resources within a skill by specifying file_name:
     fn validate_skill_id(&self, skill_id: &str) -> std::result::Result<(), ToolError> {
         // Check for empty
         if skill_id.is_empty() {
-            return Err(ToolError::InvalidArgs("skill_id cannot be empty".to_string()));
+            return Err(ToolError::InvalidArgs(
+                "skill_id cannot be empty".to_string(),
+            ));
         }
 
         // Check for path traversal attempts
@@ -229,7 +231,10 @@ You can also read additional resources within a skill by specifying file_name:
     }
 
     /// Execute the read_skill operation (internal implementation)
-    async fn call_impl(&self, args: ReadSkillArgs) -> std::result::Result<ReadSkillOutput, ToolError> {
+    async fn call_impl(
+        &self,
+        args: ReadSkillArgs,
+    ) -> std::result::Result<ReadSkillOutput, ToolError> {
         let args_summary = format!(
             "Reading skill: {} (file: {})",
             args.skill_id,
@@ -280,9 +285,8 @@ You can also read additional resources within a skill by specifying file_name:
         }
 
         // Read file content
-        let content = fs::read_to_string(&file_path).map_err(|e| {
-            ToolError::ExecutionFailed(format!("Failed to read file: {}", e))
-        })?;
+        let content = fs::read_to_string(&file_path)
+            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to read file: {}", e)))?;
 
         // List available files
         let available_files = self.list_skill_files(&skill_dir);
@@ -445,8 +449,8 @@ After finding a relevant skill, use skill.read(skill_id) to load its full instru
 
     /// Create a ListSkillsTool with auto-discovery
     pub fn with_auto_discover(project_dir: Option<&Path>) -> Self {
-        let skills_dirs = crate::utils::paths::get_all_skills_dirs(project_dir)
-            .unwrap_or_else(|_| vec![]);
+        let skills_dirs =
+            crate::utils::paths::get_all_skills_dirs(project_dir).unwrap_or_else(|_| vec![]);
 
         if skills_dirs.is_empty() {
             // Fallback to default directory
@@ -486,11 +490,9 @@ After finding a relevant skill, use skill.read(skill_id) to load its full instru
         let id = skill_dir.file_name()?.to_str()?.to_string();
 
         // Parse frontmatter using v2 parser
-        let manifest = crate::skill::parse_skill_content(
-            &content,
-            crate::domain::skill::SkillSource::Global,
-        )
-        .ok()?;
+        let manifest =
+            crate::skill::parse_skill_content(&content, crate::domain::skill::SkillSource::Global)
+                .ok()?;
 
         // List files
         let files = self.list_skill_files(skill_dir);
@@ -503,7 +505,7 @@ After finding a relevant skill, use skill.read(skill_id) to load its full instru
             name: manifest.name().to_string(),
             description: manifest.description().to_string(),
             location: skill_dir.to_string_lossy().to_string(),
-            triggers: Vec::new(),  // v2 doesn't use triggers
+            triggers: Vec::new(), // v2 doesn't use triggers
             files,
             source: Some(source),
         })
@@ -532,7 +534,10 @@ After finding a relevant skill, use skill.read(skill_id) to load its full instru
     }
 
     /// Execute the list_skills operation (internal implementation)
-    async fn call_impl(&self, args: ListSkillsArgs) -> std::result::Result<ListSkillsOutput, ToolError> {
+    async fn call_impl(
+        &self,
+        args: ListSkillsArgs,
+    ) -> std::result::Result<ListSkillsOutput, ToolError> {
         let args_summary = match &args.filter {
             Some(f) => format!("Listing skills (filter: {})", f),
             None => "Listing all skills".to_string(),
@@ -581,10 +586,14 @@ After finding a relevant skill, use skill.read(skill_id) to load its full instru
                                     let filter_lower = filter.to_lowercase();
                                     let matches = summary.id.to_lowercase().contains(&filter_lower)
                                         || summary.name.to_lowercase().contains(&filter_lower)
-                                        || summary.description.to_lowercase().contains(&filter_lower)
-                                        || summary.triggers.iter().any(|t| {
-                                            t.to_lowercase().contains(&filter_lower)
-                                        });
+                                        || summary
+                                            .description
+                                            .to_lowercase()
+                                            .contains(&filter_lower)
+                                        || summary
+                                            .triggers
+                                            .iter()
+                                            .any(|t| t.to_lowercase().contains(&filter_lower));
 
                                     if !matches {
                                         continue;
@@ -757,7 +766,11 @@ Follow them carefully.
         let result = AlephTool::call(&tool, args).await;
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
-        assert!(err_msg.contains("not found") || err_msg.contains("NotFound"), "Error should indicate not found: {}", err_msg);
+        assert!(
+            err_msg.contains("not found") || err_msg.contains("NotFound"),
+            "Error should indicate not found: {}",
+            err_msg
+        );
     }
 
     #[tokio::test]
@@ -859,8 +872,18 @@ Follow them carefully.
         let skills_dir2 = temp_dir2.path().to_path_buf();
 
         // Create same skill ID in both directories
-        create_test_skill(&skills_dir1, "same-skill", "Skill From Dir1", "First directory");
-        create_test_skill(&skills_dir2, "same-skill", "Skill From Dir2", "Second directory");
+        create_test_skill(
+            &skills_dir1,
+            "same-skill",
+            "Skill From Dir1",
+            "First directory",
+        );
+        create_test_skill(
+            &skills_dir2,
+            "same-skill",
+            "Skill From Dir2",
+            "Second directory",
+        );
 
         // Test that first occurrence wins
         let tool = ListSkillsTool::with_directories(vec![skills_dir1.clone(), skills_dir2.clone()]);

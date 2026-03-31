@@ -248,12 +248,42 @@ impl OpenAiTtsProvider {
     /// Return the static list of available voices for this provider
     pub fn static_voice_list() -> Vec<VoiceInfo> {
         vec![
-            VoiceInfo { id: "alloy".into(), name: "Alloy".into(), gender: "neutral".into(), description: "Neutral, balanced".into() },
-            VoiceInfo { id: "echo".into(), name: "Echo".into(), gender: "male".into(), description: "Warm, conversational".into() },
-            VoiceInfo { id: "fable".into(), name: "Fable".into(), gender: "neutral".into(), description: "Expressive, animated".into() },
-            VoiceInfo { id: "onyx".into(), name: "Onyx".into(), gender: "male".into(), description: "Deep, authoritative".into() },
-            VoiceInfo { id: "nova".into(), name: "Nova".into(), gender: "female".into(), description: "Warm, friendly".into() },
-            VoiceInfo { id: "shimmer".into(), name: "Shimmer".into(), gender: "female".into(), description: "Clear, bright".into() },
+            VoiceInfo {
+                id: "alloy".into(),
+                name: "Alloy".into(),
+                gender: "neutral".into(),
+                description: "Neutral, balanced".into(),
+            },
+            VoiceInfo {
+                id: "echo".into(),
+                name: "Echo".into(),
+                gender: "male".into(),
+                description: "Warm, conversational".into(),
+            },
+            VoiceInfo {
+                id: "fable".into(),
+                name: "Fable".into(),
+                gender: "neutral".into(),
+                description: "Expressive, animated".into(),
+            },
+            VoiceInfo {
+                id: "onyx".into(),
+                name: "Onyx".into(),
+                gender: "male".into(),
+                description: "Deep, authoritative".into(),
+            },
+            VoiceInfo {
+                id: "nova".into(),
+                name: "Nova".into(),
+                gender: "female".into(),
+                description: "Warm, friendly".into(),
+            },
+            VoiceInfo {
+                id: "shimmer".into(),
+                name: "Shimmer".into(),
+                gender: "female".into(),
+                description: "Clear, bright".into(),
+            },
         ]
     }
 
@@ -537,7 +567,10 @@ mod tests {
         let provider = OpenAiTtsProvider::new("sk-test-key", None, None, None, None).unwrap();
 
         assert_eq!(provider.api_key, "sk-test-key");
-        assert_eq!(provider.endpoint, format!("{}/v1/audio/speech", DEFAULT_ENDPOINT));
+        assert_eq!(
+            provider.endpoint,
+            format!("{}/v1/audio/speech", DEFAULT_ENDPOINT)
+        );
         assert_eq!(provider.model, DEFAULT_MODEL);
         assert_eq!(provider.default_voice, DEFAULT_VOICE);
     }
@@ -553,14 +586,22 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(provider.endpoint, "https://custom.openai.com/v1/audio/speech");
+        assert_eq!(
+            provider.endpoint,
+            "https://custom.openai.com/v1/audio/speech"
+        );
     }
 
     #[test]
     fn test_new_with_custom_model() {
-        let provider =
-            OpenAiTtsProvider::new("sk-test-key", None, Some("tts-1-hd".to_string()), None, None)
-                .unwrap();
+        let provider = OpenAiTtsProvider::new(
+            "sk-test-key",
+            None,
+            Some("tts-1-hd".to_string()),
+            None,
+            None,
+        )
+        .unwrap();
 
         assert_eq!(provider.model, "tts-1-hd");
     }
@@ -568,7 +609,8 @@ mod tests {
     #[test]
     fn test_new_with_custom_voice() {
         let provider =
-            OpenAiTtsProvider::new("sk-test-key", None, None, Some("nova".to_string()), None).unwrap();
+            OpenAiTtsProvider::new("sk-test-key", None, None, Some("nova".to_string()), None)
+                .unwrap();
 
         assert_eq!(provider.default_voice, "nova");
     }
@@ -594,16 +636,26 @@ mod tests {
     #[test]
     fn test_new_unknown_voice_succeeds() {
         // Unknown voices are allowed (with warning) for third-party/newer voices
-        let result =
-            OpenAiTtsProvider::new("sk-test-key", None, None, Some("future-voice".to_string()), None);
+        let result = OpenAiTtsProvider::new(
+            "sk-test-key",
+            None,
+            None,
+            Some("future-voice".to_string()),
+            None,
+        );
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_new_unknown_model_succeeds() {
         // Unknown models are allowed (with warning) for newer API versions
-        let result =
-            OpenAiTtsProvider::new("sk-test-key", None, Some("gpt-4o-mini-tts".to_string()), None, None);
+        let result = OpenAiTtsProvider::new(
+            "sk-test-key",
+            None,
+            Some("gpt-4o-mini-tts".to_string()),
+            None,
+            None,
+        );
         assert!(result.is_ok());
     }
 
@@ -710,9 +762,14 @@ mod tests {
         let provider = OpenAiTtsProvider::new("sk-test-key", None, None, None, None).unwrap();
         assert_eq!(provider.default_model(), Some("tts-1"));
 
-        let custom_provider =
-            OpenAiTtsProvider::new("sk-test-key", None, Some("tts-1-hd".to_string()), None, None)
-                .unwrap();
+        let custom_provider = OpenAiTtsProvider::new(
+            "sk-test-key",
+            None,
+            Some("tts-1-hd".to_string()),
+            None,
+            None,
+        )
+        .unwrap();
         assert_eq!(custom_provider.default_model(), Some("tts-1-hd"));
     }
 

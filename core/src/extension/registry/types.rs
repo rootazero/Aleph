@@ -396,8 +396,7 @@ impl AgentRegistration {
     pub fn is_primary(&self) -> bool {
         matches!(
             self.mode,
-            crate::extension::types::AgentMode::Primary
-                | crate::extension::types::AgentMode::All
+            crate::extension::types::AgentMode::Primary | crate::extension::types::AgentMode::All
         )
     }
 
@@ -405,8 +404,7 @@ impl AgentRegistration {
     pub fn is_subagent(&self) -> bool {
         matches!(
             self.mode,
-            crate::extension::types::AgentMode::Subagent
-                | crate::extension::types::AgentMode::All
+            crate::extension::types::AgentMode::Subagent | crate::extension::types::AgentMode::All
         )
     }
 }
@@ -528,10 +526,7 @@ mod tests {
         let provider = ProviderRegistration {
             id: "anthropic".to_string(),
             name: "Anthropic".to_string(),
-            models: vec![
-                "claude-opus-4-5".to_string(),
-                "claude-sonnet-4".to_string(),
-            ],
+            models: vec!["claude-opus-4-5".to_string(), "claude-sonnet-4".to_string()],
             plugin_id: "anthropic-plugin".to_string(),
         };
         assert_eq!(provider.models.len(), 2);

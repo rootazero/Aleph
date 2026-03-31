@@ -28,10 +28,10 @@
 //! manager.complete_item(0).await?;
 //! ```
 
-pub mod template;
-mod manager;
 mod history;
+mod manager;
+pub mod template;
 
-pub use manager::{ScratchpadManager, ScratchpadConfig};
-pub use history::{SessionHistory, HistoryEntry};
-pub use template::{DEFAULT_TEMPLATE, generate_scratchpad};
+pub use history::{HistoryEntry, SessionHistory};
+pub use manager::{ScratchpadConfig, ScratchpadManager};
+pub use template::{generate_scratchpad, DEFAULT_TEMPLATE};

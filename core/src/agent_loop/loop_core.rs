@@ -219,7 +219,10 @@ impl<P: LoopProvider> AgentLoop<P> {
 
     /// Attach a [`ContextBudget`](super::context_budget::ContextBudget) for pressure sensing and budget tracking.
     pub fn with_context_budget(self, budget: Option<super::context_budget::ContextBudget>) -> Self {
-        *self.context_budget.lock().unwrap_or_else(|e| e.into_inner()) = budget;
+        *self
+            .context_budget
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = budget;
         self
     }
 
@@ -308,14 +311,21 @@ impl<P: LoopProvider> AgentLoop<P> {
             // --- Context budget evaluation (single lock scope) ---
             let mut budget_directive = super::context_budget::LoopDirective::Continue;
             {
-                let mut ctx_budget_ref = self.context_budget.lock().unwrap_or_else(|e| e.into_inner());
+                let mut ctx_budget_ref = self
+                    .context_budget
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 if let Some(ref mut ctx_budget) = *ctx_budget_ref {
-                    budget_directive = ctx_budget.before_turn(&messages, &system_prompt, &tool_defs);
+                    budget_directive =
+                        ctx_budget.before_turn(&messages, &system_prompt, &tool_defs);
 
                     match budget_directive {
                         super::context_budget::LoopDirective::CompactAndContinue => {
                             let result = {
-                                let sensor = self.pressure_sensor.lock().unwrap_or_else(|e| e.into_inner());
+                                let sensor = self
+                                    .pressure_sensor
+                                    .lock()
+                                    .unwrap_or_else(|e| e.into_inner());
                                 self.compaction_pipeline.run(
                                     &mut messages,
                                     &sensor,
@@ -331,12 +341,17 @@ impl<P: LoopProvider> AgentLoop<P> {
                             {
                                 ctx_budget.notify_compaction_success();
                             }
-                            self.diagnostics.lock().unwrap_or_else(|e| e.into_inner())
+                            self.diagnostics
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner())
                                 .record_pipeline(result);
                         }
                         super::context_budget::LoopDirective::FinalReply => {
                             let result = {
-                                let sensor = self.pressure_sensor.lock().unwrap_or_else(|e| e.into_inner());
+                                let sensor = self
+                                    .pressure_sensor
+                                    .lock()
+                                    .unwrap_or_else(|e| e.into_inner());
                                 self.compaction_pipeline.run(
                                     &mut messages,
                                     &sensor,
@@ -347,7 +362,9 @@ impl<P: LoopProvider> AgentLoop<P> {
                                     ctx_budget.fresh_tail_count(),
                                 )
                             };
-                            self.diagnostics.lock().unwrap_or_else(|e| e.into_inner())
+                            self.diagnostics
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner())
                                 .record_pipeline(result);
                             messages.push(UnifiedMessage::user(CRITICAL_CONTEXT_NOTICE));
                         }
@@ -364,7 +381,8 @@ impl<P: LoopProvider> AgentLoop<P> {
                 || self.provider.stream(&messages, &system_prompt, &tool_defs),
                 &self.cancel_token,
                 3,
-            ).await?;
+            )
+            .await?;
 
             let mut collector = DeltaCollector::new();
             futures::pin_mut!(delta_stream);
@@ -400,7 +418,9 @@ impl<P: LoopProvider> AgentLoop<P> {
             if let Some(usage) = &response.usage {
                 total_tokens += (usage.input_tokens + usage.output_tokens) as usize;
                 // Anchor pressure sensor to API-reported usage
-                self.pressure_sensor.lock().unwrap_or_else(|e| e.into_inner())
+                self.pressure_sensor
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
                     .update_anchor(usage.input_tokens as usize, messages.len());
             }
 
@@ -491,7 +511,7 @@ impl<P: LoopProvider> AgentLoop<P> {
                     );
                     messages.push(UnifiedMessage::user(
                         "[SYSTEM] Your previous response was truncated due to output token limit. \
-                         Continue exactly where you left off. Do not repeat any content."
+                         Continue exactly where you left off. Do not repeat any content.",
                     ));
                     continue;
                 }
@@ -543,7 +563,8 @@ impl<P: LoopProvider> AgentLoop<P> {
                     &self.safety_guard,
                     &self.cancel_token,
                     callback,
-                ).await;
+                )
+                .await;
 
                 for outcome in &outcomes {
                     if outcome.is_error {
@@ -595,7 +616,10 @@ impl<P: LoopProvider> AgentLoop<P> {
 
             // --- After-turn: record metrics for diminishing returns detection ---
             {
-                let mut ctx_budget_ref = self.context_budget.lock().unwrap_or_else(|e| e.into_inner());
+                let mut ctx_budget_ref = self
+                    .context_budget
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 if let Some(ref mut ctx_budget) = *ctx_budget_ref {
                     let turn_productive = response.has_tool_calls()
                         && !skip_tools
@@ -606,13 +630,12 @@ impl<P: LoopProvider> AgentLoop<P> {
                         .as_ref()
                         .map(|u| u.output_tokens as usize)
                         .unwrap_or(0);
-                    let post_directive = ctx_budget.after_turn(
-                        super::context_budget::TurnMetrics {
+                    let post_directive =
+                        ctx_budget.after_turn(super::context_budget::TurnMetrics {
                             output_tokens,
                             tool_calls: response.tool_calls.len(),
                             productive: turn_productive,
-                        },
-                    );
+                        });
                     if post_directive == super::context_budget::LoopDirective::StopDiminishing {
                         messages.push(UnifiedMessage::user(DIMINISHING_RETURNS_NOTICE));
                     }
@@ -665,8 +688,8 @@ mod tests {
     use super::*;
     use crate::providers::adapter::{NativeToolCall, ProviderResponse, TokenUsage};
     use crate::providers::message::ContentBlock;
-    use serde_json::json;
     use crate::sync_primitives::{Arc, Mutex};
+    use serde_json::json;
     use tokio_util::sync::CancellationToken;
 
     struct MockProvider {
@@ -919,7 +942,7 @@ mod tests {
                     input_tokens: 20,
                     output_tokens: 10,
                     cache_read_tokens: None,
-                thinking_tokens: None,
+                    thinking_tokens: None,
                 }),
             },
             ProviderResponse {
@@ -931,7 +954,7 @@ mod tests {
                     input_tokens: 30,
                     output_tokens: 5,
                     cache_read_tokens: None,
-                thinking_tokens: None,
+                    thinking_tokens: None,
                 }),
             },
         ]);
@@ -940,7 +963,10 @@ mod tests {
         let mut cb = TrackingCallback::default();
         let result = agent.run("Echo something", &mut cb).await.unwrap();
 
-        assert_eq!(result.final_text.as_deref(), Some("Done echoing. <task-complete/>"));
+        assert_eq!(
+            result.final_text.as_deref(),
+            Some("Done echoing. <task-complete/>")
+        );
         assert_eq!(result.iterations, 2);
         assert_eq!(result.tool_calls_made, 1);
         assert_eq!(result.total_tokens, 65);
@@ -965,7 +991,7 @@ mod tests {
                     input_tokens: 5,
                     output_tokens: 5,
                     cache_read_tokens: None,
-                thinking_tokens: None,
+                    thinking_tokens: None,
                 }),
             })
             .collect();
@@ -1037,7 +1063,10 @@ mod tests {
         let mut cb = TrackingCallback::default();
         let result = agent.run("delete everything", &mut cb).await.unwrap();
 
-        assert_eq!(result.final_text.as_deref(), Some("I cannot do that. <task-complete/>"));
+        assert_eq!(
+            result.final_text.as_deref(),
+            Some("I cannot do that. <task-complete/>")
+        );
         assert_eq!(result.iterations, 2);
         assert_eq!(result.tool_calls_made, 1);
         assert!(!result.hit_limit);
@@ -1069,7 +1098,7 @@ mod tests {
                         input_tokens: 10,
                         output_tokens: 5,
                         cache_read_tokens: None,
-                thinking_tokens: None,
+                        thinking_tokens: None,
                     }),
                 },
                 // Turn 2: call tool B (echo again with different input)
@@ -1086,7 +1115,7 @@ mod tests {
                         input_tokens: 15,
                         output_tokens: 5,
                         cache_read_tokens: None,
-                thinking_tokens: None,
+                        thinking_tokens: None,
                     }),
                 },
                 // Turn 3: final text
@@ -1099,7 +1128,7 @@ mod tests {
                         input_tokens: 20,
                         output_tokens: 5,
                         cache_read_tokens: None,
-                thinking_tokens: None,
+                        thinking_tokens: None,
                     }),
                 },
             ],
@@ -1125,7 +1154,10 @@ mod tests {
 
         assert_eq!(result.iterations, 3);
         assert_eq!(result.tool_calls_made, 2);
-        assert_eq!(result.final_text.as_deref(), Some("All done. <task-complete/>"));
+        assert_eq!(
+            result.final_text.as_deref(),
+            Some("All done. <task-complete/>")
+        );
         assert!(!result.hit_limit);
 
         // Verify history accumulates: each call should have more messages
@@ -1181,7 +1213,10 @@ mod tests {
 
         assert_eq!(result.iterations, 2);
         assert_eq!(result.tool_calls_made, 2);
-        assert_eq!(result.final_text.as_deref(), Some("Both done. <task-complete/>"));
+        assert_eq!(
+            result.final_text.as_deref(),
+            Some("Both done. <task-complete/>")
+        );
         assert!(!result.hit_limit);
         assert_eq!(cb.tool_starts, vec!["echo", "echo"]);
     }
@@ -1321,7 +1356,10 @@ mod tests {
         let result = agent.run("alternate errors", &mut cb).await.unwrap();
 
         assert!(!result.hit_limit);
-        assert_eq!(result.final_text.as_deref(), Some("Survived. <task-complete/>"));
+        assert_eq!(
+            result.final_text.as_deref(),
+            Some("Survived. <task-complete/>")
+        );
         // 5 fails + 1 echo + 5 fails = 11 tool calls, +1 nudge iteration
         assert_eq!(result.tool_calls_made, 11);
         // 11 tool iterations + 1 EndTurn (nudge fires) + 1 post-nudge EndTurn = 13
@@ -1402,7 +1440,7 @@ mod tests {
                     input_tokens: 100,
                     output_tokens: 4096,
                     cache_read_tokens: None,
-                thinking_tokens: None,
+                    thinking_tokens: None,
                 }),
             },
             ProviderResponse {
@@ -1599,7 +1637,7 @@ mod tests {
                     input_tokens: 20,
                     output_tokens: 10,
                     cache_read_tokens: None,
-                thinking_tokens: None,
+                    thinking_tokens: None,
                 }),
             },
             // Turn 2: another tool call consuming 30 more (total: 60, over budget of 50)
@@ -1616,7 +1654,7 @@ mod tests {
                     input_tokens: 20,
                     output_tokens: 10,
                     cache_read_tokens: None,
-                thinking_tokens: None,
+                    thinking_tokens: None,
                 }),
             },
             // Turn 3: should not be reached
@@ -1790,7 +1828,10 @@ mod tests {
 
         // The loop continued past the first EndTurn thanks to the nudge
         assert_eq!(result.iterations, 3);
-        assert_eq!(result.final_text.as_deref(), Some("Verified. <task-complete/>"));
+        assert_eq!(
+            result.final_text.as_deref(),
+            Some("Verified. <task-complete/>")
+        );
         assert!(!result.hit_limit);
 
         // Verify the nudge message was injected
@@ -1997,7 +2038,10 @@ mod tests {
         let result = agent.run("clean task", &mut cb).await.unwrap();
 
         assert_eq!(result.iterations, 2);
-        assert_eq!(result.final_text.as_deref(), Some("All good. <task-complete/>"));
+        assert_eq!(
+            result.final_text.as_deref(),
+            Some("All good. <task-complete/>")
+        );
 
         // No nudge should have been injected (completion tag was present)
         let caps = captured.lock().unwrap_or_else(|e| e.into_inner());
@@ -2015,7 +2059,10 @@ mod tests {
                     false
                 }
             });
-            assert!(!has_nudge, "No nudge should fire when completion tag is present");
+            assert!(
+                !has_nudge,
+                "No nudge should fire when completion tag is present"
+            );
         }
     }
 
@@ -2058,7 +2105,10 @@ mod tests {
         // Final text goes to texts
         assert_eq!(cb.texts, vec!["Here are the results. <task-complete/>"]);
         // final_text should be the last text produced
-        assert_eq!(result.final_text.as_deref(), Some("Here are the results. <task-complete/>"));
+        assert_eq!(
+            result.final_text.as_deref(),
+            Some("Here are the results. <task-complete/>")
+        );
     }
 
     // =========================================================================
@@ -2094,7 +2144,10 @@ mod tests {
             },
             // Turn 3: LLM repeats intermediate texts at the start of final response
             ProviderResponse {
-                text: Some("Let me set up the team. Team is ready. Here are the results. <task-complete/>".to_string()),
+                text: Some(
+                    "Let me set up the team. Team is ready. Here are the results. <task-complete/>"
+                        .to_string(),
+                ),
                 tool_calls: vec![],
                 thinking: None,
                 stop_reason: StopReason::EndTurn,
@@ -2107,10 +2160,10 @@ mod tests {
         let result = agent.run("analyze stocks", &mut cb).await.unwrap();
 
         assert_eq!(result.iterations, 3);
-        assert_eq!(cb.intermediate_texts, vec![
-            "Let me set up the team.",
-            "Team is ready.",
-        ]);
+        assert_eq!(
+            cb.intermediate_texts,
+            vec!["Let me set up the team.", "Team is ready.",]
+        );
         // Repeated intermediate text should be stripped from the final
         assert_eq!(cb.texts, vec!["Here are the results. <task-complete/>"]);
         assert_eq!(
@@ -2136,7 +2189,10 @@ mod tests {
 
         let agent = make_loop(provider);
         let mut cb = TrackingCallback::default();
-        let result = agent.run("What is the meaning of life?", &mut cb).await.unwrap();
+        let result = agent
+            .run("What is the meaning of life?", &mut cb)
+            .await
+            .unwrap();
 
         assert_eq!(result.iterations, 1);
         assert_eq!(result.tool_calls_made, 0);
@@ -2179,7 +2235,10 @@ mod tests {
 
         assert_eq!(result.iterations, 2);
         assert_eq!(result.tool_calls_made, 1);
-        assert_eq!(result.final_text.as_deref(), Some("Now truly done. <task-complete/>"));
+        assert_eq!(
+            result.final_text.as_deref(),
+            Some("Now truly done. <task-complete/>")
+        );
     }
 
     // =========================================================================
@@ -2257,10 +2316,7 @@ mod tests {
 
     #[test]
     fn test_strip_repeated_intermediate_multiple() {
-        let intermediates = vec![
-            "Step 1 done.".to_string(),
-            "Step 2 done.".to_string(),
-        ];
+        let intermediates = vec!["Step 1 done.".to_string(), "Step 2 done.".to_string()];
         let text = "Step 1 done. Step 2 done. Final answer.";
         let result = strip_repeated_intermediate(text, &intermediates);
         assert_eq!(result, "Final answer.");
@@ -2277,10 +2333,7 @@ mod tests {
     #[test]
     fn test_strip_repeated_intermediate_partial_match() {
         // Only first intermediate matches, second doesn't — stops stripping
-        let intermediates = vec![
-            "First part.".to_string(),
-            "Nonexistent.".to_string(),
-        ];
+        let intermediates = vec!["First part.".to_string(), "Nonexistent.".to_string()];
         let text = "First part. Actual content here.";
         let result = strip_repeated_intermediate(text, &intermediates);
         assert_eq!(result, "Actual content here.");

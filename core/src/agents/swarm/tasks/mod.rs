@@ -22,7 +22,9 @@ pub type AgentId = String;
 // Priority
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum Priority {
     Low,
@@ -172,7 +174,11 @@ pub trait CoordTaskStore: Send + Sync {
 
     async fn create_task(&self, task: NewCoordTask) -> crate::error::Result<CoordTask>;
     async fn get_task(&self, id: &str) -> crate::error::Result<Option<CoordTask>>;
-    async fn update_task(&self, id: &str, update: CoordTaskUpdate) -> crate::error::Result<CoordTask>;
+    async fn update_task(
+        &self,
+        id: &str,
+        update: CoordTaskUpdate,
+    ) -> crate::error::Result<CoordTask>;
     async fn list_tasks(&self, filter: CoordTaskFilter) -> crate::error::Result<Vec<CoordTask>>;
 
     // --- DAG queries (read-only — dependency edges are immutable after creation) ---
@@ -180,6 +186,6 @@ pub trait CoordTaskStore: Send + Sync {
     async fn get_dependencies(&self, id: &str) -> crate::error::Result<Vec<CoordTaskId>>;
     async fn get_dependents(&self, id: &str) -> crate::error::Result<Vec<CoordTaskId>>;
     /// Returns tasks whose ALL dependencies are now Completed after completing `completed_id`
-    async fn get_newly_unblocked(&self, completed_id: &str) -> crate::error::Result<Vec<CoordTask>>;
-
+    async fn get_newly_unblocked(&self, completed_id: &str)
+        -> crate::error::Result<Vec<CoordTask>>;
 }

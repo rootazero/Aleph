@@ -34,11 +34,10 @@ pub use message_ops::IrcMessageOps;
 
 use crate::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
-    ChannelResult, ChannelState, ChannelStatus,
-    OutboundMessage, SendResult,
+    ChannelResult, ChannelState, ChannelStatus, OutboundMessage, SendResult,
 };
-use async_trait::async_trait;
 use crate::sync_primitives::Arc;
+use async_trait::async_trait;
 use tokio::sync::{mpsc, watch, RwLock};
 
 /// IRC channel implementation using raw TCP (RFC 2812).
@@ -88,13 +87,12 @@ impl IrcChannel {
             deletion: false,
             typing_indicator: false,
             read_receipts: false,
-            rich_text: false, // IRC has minimal formatting (mIRC codes)
+            rich_text: false,        // IRC has minimal formatting (mIRC codes)
             max_message_length: 400, // Conservative PRIVMSG limit
             max_attachment_size: 0,
             stream_protocol: Default::default(),
         }
     }
-
 }
 
 #[async_trait]
@@ -109,11 +107,11 @@ impl Channel for IrcChannel {
 
     async fn start(&mut self) -> ChannelResult<()> {
         // Validate configuration
-        self.config
-            .validate()
-            .map_err(ChannelError::ConfigError)?;
+        self.config.validate().map_err(ChannelError::ConfigError)?;
 
-        self.channel_state.set_status(ChannelStatus::Connecting).await;
+        self.channel_state
+            .set_status(ChannelStatus::Connecting)
+            .await;
         tracing::info!(
             "Starting IRC channel (server={}, nick={})...",
             self.config.server,
@@ -137,19 +135,15 @@ impl Channel for IrcChannel {
         tokio::spawn(async move {
             *status.write().await = ChannelStatus::Connected;
 
-            IrcMessageOps::run_irc_loop(
-                config,
-                channel_id,
-                inbound_tx,
-                write_cmd_rx,
-                shutdown_rx,
-            )
-            .await;
+            IrcMessageOps::run_irc_loop(config, channel_id, inbound_tx, write_cmd_rx, shutdown_rx)
+                .await;
 
             *status.write().await = ChannelStatus::Disconnected;
         });
 
-        self.channel_state.set_status(ChannelStatus::Connected).await;
+        self.channel_state
+            .set_status(ChannelStatus::Connected)
+            .await;
         Ok(())
     }
 
@@ -163,27 +157,20 @@ impl Channel for IrcChannel {
         // Clear write channel
         *self.write_tx.write().await = None;
 
-        self.channel_state.set_status(ChannelStatus::Disconnected).await;
+        self.channel_state
+            .set_status(ChannelStatus::Disconnected)
+            .await;
         Ok(())
     }
 
     async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
         let write_tx = self.write_tx.read().await;
         let write_tx = write_tx.as_ref().ok_or_else(|| {
-            ChannelError::NotConnected(
-                "IRC adapter not started - call start() first".to_string(),
-            )
+            ChannelError::NotConnected("IRC adapter not started - call start() first".to_string())
         })?;
 
-        IrcMessageOps::send_message(
-            write_tx,
-            message.conversation_id.as_str(),
-            &message.text,
-        )
-        .await
-
+        IrcMessageOps::send_message(write_tx, message.conversation_id.as_str(), &message.text).await
     }
-
 }
 
 /// Factory for creating IRC channels

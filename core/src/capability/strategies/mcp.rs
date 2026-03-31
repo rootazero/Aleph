@@ -8,9 +8,9 @@ use crate::config::McpConfig;
 use crate::error::Result;
 use crate::mcp::McpClient;
 use crate::payload::{AgentPayload, Capability};
+use crate::sync_primitives::Arc;
 use async_trait::async_trait;
 use std::collections::HashMap;
-use crate::sync_primitives::Arc;
 use tracing::{debug, info};
 
 /// MCP capability strategy

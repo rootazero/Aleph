@@ -6,11 +6,11 @@
 #[cfg(feature = "plugin-wasm")]
 mod tests {
     // Use public re-exports from the wasm module
-    use alephcore::extension::runtime::wasm::{
-        WasmCapabilities, WasmCapabilityKernel, WasmResourceLimits,
-        WorkspaceCapability, HttpCapability, EndpointPattern,
-    };
     use alephcore::exec::leak_detector::LeakDetector;
+    use alephcore::extension::runtime::wasm::{
+        EndpointPattern, HttpCapability, WasmCapabilities, WasmCapabilityKernel,
+        WasmResourceLimits, WorkspaceCapability,
+    };
 
     #[test]
     fn test_full_capability_lifecycle() {

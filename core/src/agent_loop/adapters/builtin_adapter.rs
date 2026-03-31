@@ -3,9 +3,9 @@
 //! Wraps an existing `AlephToolDyn` trait object so it can be used
 //! seamlessly within the agent loop.
 
+use crate::sync_primitives::Arc;
 use async_trait::async_trait;
 use serde_json::Value;
-use crate::sync_primitives::Arc;
 
 use crate::tools::AlephToolDyn;
 
@@ -174,7 +174,9 @@ mod tests {
                 assert!(error.contains("fake tool error"));
                 assert!(retryable);
             }
-            ToolResult::Success { .. } | ToolResult::SuccessAndStopLoop { .. } => panic!("expected error"),
+            ToolResult::Success { .. } | ToolResult::SuccessAndStopLoop { .. } => {
+                panic!("expected error")
+            }
         }
     }
 }

@@ -118,10 +118,9 @@ impl PlaywrightMcpDriver {
         };
 
         let client = McpClient::new();
-        client
-            .start_external_server(config)
-            .await
-            .map_err(|e| BrowserError::PlaywrightError(format!("Failed to start Playwright MCP: {e}")))?;
+        client.start_external_server(config).await.map_err(|e| {
+            BrowserError::PlaywrightError(format!("Failed to start Playwright MCP: {e}"))
+        })?;
 
         tracing::info!("Playwright MCP session started for key '{session_key}'");
         Ok(PlaywrightMcpSession { client })

@@ -420,7 +420,9 @@ impl PluginRegistry {
         let short_key = command.name.clone();
 
         // Register under short name for backward compat (first-come wins)
-        self.commands.entry(short_key).or_insert_with(|| command.clone());
+        self.commands
+            .entry(short_key)
+            .or_insert_with(|| command.clone());
         // Always register under namespaced key
         self.commands.insert(namespaced_key, command);
     }
@@ -448,7 +450,9 @@ impl PluginRegistry {
         let short_key = skill.name.clone();
 
         // Register under short name for backward compat (first-come wins)
-        self.skills.entry(short_key).or_insert_with(|| skill.clone());
+        self.skills
+            .entry(short_key)
+            .or_insert_with(|| skill.clone());
         // Always register under namespaced key
         self.skills.insert(namespaced_key, skill);
     }
@@ -476,7 +480,9 @@ impl PluginRegistry {
         let short_key = agent.name.clone();
 
         // Register under short name for backward compat (first-come wins)
-        self.agents.entry(short_key).or_insert_with(|| agent.clone());
+        self.agents
+            .entry(short_key)
+            .or_insert_with(|| agent.clone());
         // Always register under namespaced key
         self.agents.insert(namespaced_key, agent);
     }

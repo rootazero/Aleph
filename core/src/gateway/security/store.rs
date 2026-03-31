@@ -4,9 +4,9 @@
 //!
 //! Manages devices, tokens, pairing requests, and approved senders.
 
+use crate::sync_primitives::Mutex;
 use rusqlite::{params, Connection, Result as SqliteResult};
 use std::path::Path;
-use crate::sync_primitives::Mutex;
 use tracing::{debug, info};
 
 /// Schema version for migrations
@@ -56,11 +56,7 @@ impl SecurityStore {
         let version = self.get_schema_version()?;
 
         if version < 2 {
-            info!(
-                from = version,
-                to = 2,
-                "Migrating security schema to v2"
-            );
+            info!(from = version, to = 2, "Migrating security schema to v2");
 
             let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
 
@@ -84,11 +80,7 @@ impl SecurityStore {
         }
 
         if version < 3 {
-            info!(
-                from = version,
-                to = 3,
-                "Migrating security schema to v3"
-            );
+            info!(from = version, to = 3, "Migrating security schema to v3");
 
             let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
             conn.execute_batch(SCHEMA_V3)?;
@@ -387,9 +379,17 @@ impl SecurityStore {
                 channel, sender_id, remote_addr, created_at, expires_at)
                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)"#,
             params![
-                data.request_id, data.code, data.pairing_type, data.device_name,
-                data.device_type, data.public_key, data.channel, data.sender_id,
-                data.remote_addr, now, data.expires_at
+                data.request_id,
+                data.code,
+                data.pairing_type,
+                data.device_name,
+                data.device_type,
+                data.public_key,
+                data.channel,
+                data.sender_id,
+                data.remote_addr,
+                now,
+                data.expires_at
             ],
         )?;
         Ok(())
@@ -419,7 +419,10 @@ impl SecurityStore {
     /// Delete a pairing request
     pub fn delete_pairing_request(&self, code: &str) -> SqliteResult<bool> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let rows = conn.execute("DELETE FROM pairing_requests WHERE code = ?1", params![code])?;
+        let rows = conn.execute(
+            "DELETE FROM pairing_requests WHERE code = ?1",
+            params![code],
+        )?;
         Ok(rows > 0)
     }
 
@@ -460,7 +463,10 @@ impl SecurityStore {
     pub fn delete_expired_pairing_requests(&self) -> SqliteResult<u64> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let now = current_timestamp_ms();
-        let rows = conn.execute("DELETE FROM pairing_requests WHERE expires_at < ?1", params![now])?;
+        let rows = conn.execute(
+            "DELETE FROM pairing_requests WHERE expires_at < ?1",
+            params![now],
+        )?;
         Ok(rows as u64)
     }
 
@@ -517,7 +523,12 @@ impl SecurityStore {
     }
 
     /// Store shared token hash together with the HMAC secret and plaintext for persistence across restarts.
-    pub fn set_shared_token_with_secret(&self, hash: &str, secret: &[u8; 32], plaintext: &str) -> SqliteResult<()> {
+    pub fn set_shared_token_with_secret(
+        &self,
+        hash: &str,
+        secret: &[u8; 32],
+        plaintext: &str,
+    ) -> SqliteResult<()> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute("DELETE FROM shared_token", [])?;
         conn.execute(
@@ -569,11 +580,8 @@ impl SecurityStore {
     /// Check if any shared token hash exists in the store.
     pub fn has_shared_token(&self) -> SqliteResult<bool> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM shared_token",
-            [],
-            |row| row.get(0),
-        )?;
+        let count: i64 =
+            conn.query_row("SELECT COUNT(*) FROM shared_token", [], |row| row.get(0))?;
         Ok(count > 0)
     }
 
@@ -722,7 +730,10 @@ impl SecurityStore {
     // ========== Channel Policy Operations ==========
 
     /// Get DM policy for a channel. Returns None if not persisted (use config default).
-    pub fn get_channel_dm_policy(&self, channel_id: &str) -> SqliteResult<Option<(String, Option<String>)>> {
+    pub fn get_channel_dm_policy(
+        &self,
+        channel_id: &str,
+    ) -> SqliteResult<Option<(String, Option<String>)>> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn.prepare(
             "SELECT policy, allowlist FROM channel_policies WHERE channel_id = ?1 AND policy_type = 'dm'"
@@ -1089,7 +1100,14 @@ mod tests {
 
         // Insert token
         store
-            .insert_token("tok-1", "dev-1", "hash123", "operator", &["*".to_string()], expires)
+            .insert_token(
+                "tok-1",
+                "dev-1",
+                "hash123",
+                "operator",
+                &["*".to_string()],
+                expires,
+            )
             .unwrap();
 
         // Get token
@@ -1141,19 +1159,25 @@ mod tests {
         assert!(store.get_channel_dm_policy("telegram").unwrap().is_none());
 
         // Set policy
-        store.set_channel_dm_policy("telegram", "pairing", None).unwrap();
+        store
+            .set_channel_dm_policy("telegram", "pairing", None)
+            .unwrap();
         let (policy, allowlist) = store.get_channel_dm_policy("telegram").unwrap().unwrap();
         assert_eq!(policy, "pairing");
         assert!(allowlist.is_none());
 
         // Set with allowlist
-        store.set_channel_dm_policy("discord", "allowlist", Some("[\"user1\",\"user2\"]")).unwrap();
+        store
+            .set_channel_dm_policy("discord", "allowlist", Some("[\"user1\",\"user2\"]"))
+            .unwrap();
         let (policy, allowlist) = store.get_channel_dm_policy("discord").unwrap().unwrap();
         assert_eq!(policy, "allowlist");
         assert_eq!(allowlist.unwrap(), "[\"user1\",\"user2\"]");
 
         // Update existing
-        store.set_channel_dm_policy("telegram", "open", None).unwrap();
+        store
+            .set_channel_dm_policy("telegram", "open", None)
+            .unwrap();
         let (policy, _) = store.get_channel_dm_policy("telegram").unwrap().unwrap();
         assert_eq!(policy, "open");
     }

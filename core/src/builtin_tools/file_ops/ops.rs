@@ -4,10 +4,10 @@ use std::fs;
 use std::path::Path;
 use tracing::{debug, info};
 
-use crate::builtin_tools::error::ToolError;
 use super::path_utils::check_and_resolve_path;
 use super::state::record_written_file;
 use super::types::{FileInfo, FileOpsOutput};
+use crate::builtin_tools::error::ToolError;
 
 /// Execute a list operation
 pub async fn execute_list(
@@ -373,9 +373,8 @@ pub async fn execute_mkdir(
     }
 
     if create_parents {
-        fs::create_dir_all(&canonical).map_err(|e| {
-            ToolError::Execution(format!("Failed to create directories: {}", e))
-        })?;
+        fs::create_dir_all(&canonical)
+            .map_err(|e| ToolError::Execution(format!("Failed to create directories: {}", e)))?;
     } else {
         fs::create_dir(&canonical)
             .map_err(|e| ToolError::Execution(format!("Failed to create directory: {}", e)))?;

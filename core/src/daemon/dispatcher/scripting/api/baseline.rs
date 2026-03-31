@@ -1,10 +1,10 @@
 //! BaselineApi - Lazy calculation of baseline metrics with TTL caching
 
-use crate::sync_primitives::{Arc, Mutex};
-use std::collections::HashMap;
-use chrono::{DateTime, Utc, Duration};
-use crate::daemon::worldmodel::WorldModel;
 use crate::daemon::events::DerivedEvent;
+use crate::daemon::worldmodel::WorldModel;
+use crate::sync_primitives::{Arc, Mutex};
+use chrono::{DateTime, Duration, Utc};
+use std::collections::HashMap;
 
 #[derive(Clone)]
 struct CachedBaseline {
@@ -52,10 +52,13 @@ impl BaselineApi {
         // Store in cache
         {
             let mut cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
-            cache.insert(cache_key, CachedBaseline {
-                value,
-                expires_at: Utc::now() + self.ttl,
-            });
+            cache.insert(
+                cache_key,
+                CachedBaseline {
+                    value,
+                    expires_at: Utc::now() + self.ttl,
+                },
+            );
         }
 
         value
@@ -79,7 +82,9 @@ impl BaselineApi {
                 }
             };
             rt.block_on(async {
-                worldmodel.query_derived_events(now - target_window, now).await
+                worldmodel
+                    .query_derived_events(now - target_window, now)
+                    .await
             })
         })
         .join()
@@ -97,7 +102,8 @@ impl BaselineApi {
         match metric.as_str() {
             "file_changes" => {
                 // Count file change events per hour
-                let count = events.iter()
+                let count = events
+                    .iter()
                     .filter(|e| matches!(e, DerivedEvent::Aggregated { .. }))
                     .count();
                 let hours = target_window.num_hours().max(1);
@@ -119,8 +125,8 @@ impl BaselineApi {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::daemon::worldmodel::WorldModelConfig;
     use crate::daemon::event_bus::DaemonEventBus;
+    use crate::daemon::worldmodel::WorldModelConfig;
 
     #[tokio::test]
     async fn test_baseline_api_avg_caching() {

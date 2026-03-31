@@ -10,8 +10,8 @@ use crate::config::agent_manager::AgentManager;
 use crate::config::agent_resolver::initialize_agent_identity;
 use crate::config::types::agents_def::AgentDefinition;
 use crate::error::Result;
-use crate::gateway::agent_instance::{AgentInstance, AgentInstanceConfig, AgentRegistry};
 use crate::gateway::agent_env::AgentEnvStore;
+use crate::gateway::agent_instance::{AgentInstance, AgentInstanceConfig, AgentRegistry};
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
 
@@ -71,10 +71,7 @@ pub fn validate_agent_id(id: &str) -> std::result::Result<(), String> {
         return Err("Agent ID cannot be empty".to_string());
     }
     if id.len() > 64 {
-        return Err(format!(
-            "Agent ID too long ({} chars, max 64)",
-            id.len()
-        ));
+        return Err(format!("Agent ID too long ({} chars, max 64)", id.len()));
     }
     let mut chars = id.chars();
     let first = chars.next().unwrap(); // safe: checked non-empty above
@@ -153,10 +150,7 @@ pub struct AgentCreateTool {
 }
 
 impl AgentCreateTool {
-    pub fn new(
-        registry: Arc<AgentRegistry>,
-        workspace_mgr: Arc<AgentEnvStore>,
-    ) -> Self {
+    pub fn new(registry: Arc<AgentRegistry>, workspace_mgr: Arc<AgentEnvStore>) -> Self {
         Self {
             registry,
             workspace_mgr,
@@ -192,13 +186,15 @@ impl AlephTool for AgentCreateTool {
         // Auto-resolve name and id from raw slash command input
         // e.g., /agent_create 交易助手 → name="交易助手", id="agent-{hash}"
         if args.id.is_empty() {
-            let raw_name = args.name.clone()
+            let raw_name = args
+                .name
+                .clone()
                 .or_else(|| args.input.as_ref().map(|s| s.trim().to_string()))
                 .unwrap_or_default();
 
             if raw_name.is_empty() {
                 return Err(crate::error::AlephError::other(
-                    "Agent name or id is required. Usage: /agent_create <name>"
+                    "Agent name or id is required. Usage: /agent_create <name>",
                 ));
             }
 
@@ -237,18 +233,20 @@ impl AlephTool for AgentCreateTool {
 
         // 4. Initialize agent identity directory (SOUL.md, AGENTS.md, etc.)
         let display_name = args.name.as_deref().unwrap_or(&args.id);
-        initialize_agent_identity(&agent_state_dir, display_name)
-            .map_err(|e| crate::error::AlephError::other(format!(
+        initialize_agent_identity(&agent_state_dir, display_name).map_err(|e| {
+            crate::error::AlephError::other(format!(
                 "Failed to initialize identity files for '{}': {}",
                 args.id, e
-            )))?;
+            ))
+        })?;
 
         // Initialize agent state directory (sessions/)
-        crate::config::agent_resolver::initialize_agent_dir(&agent_state_dir)
-            .map_err(|e| crate::error::AlephError::other(format!(
+        crate::config::agent_resolver::initialize_agent_dir(&agent_state_dir).map_err(|e| {
+            crate::error::AlephError::other(format!(
                 "Failed to initialize agent state dir for '{}': {}",
                 args.id, e
-            )))?;
+            ))
+        })?;
 
         // Create workspace directory for tool output
         std::fs::create_dir_all(&workspace_path).map_err(|e| {
@@ -270,9 +268,7 @@ impl AlephTool for AgentCreateTool {
                 display_name, prompt
             );
             std::fs::write(&agents_md, content).map_err(|e| {
-                crate::error::AlephError::other(format!(
-                    "Failed to write AGENTS.md: {}", e
-                ))
+                crate::error::AlephError::other(format!("Failed to write AGENTS.md: {}", e))
             })?;
         }
 
@@ -312,7 +308,8 @@ impl AlephTool for AgentCreateTool {
 
         let tools_path = agent_state_dir.join("TOOLS.md");
         if !tools_path.exists() {
-            let tools_content = "# Tool Notes\n\nRecord your tool usage preferences and notes here.\n";
+            let tools_content =
+                "# Tool Notes\n\nRecord your tool usage preferences and notes here.\n";
             let _ = std::fs::write(&tools_path, tools_content);
         }
 
@@ -327,11 +324,12 @@ impl AlephTool for AgentCreateTool {
             ..Default::default()
         };
 
-        let instance = AgentInstance::new(config)
-            .map_err(|e| crate::error::AlephError::other(format!(
+        let instance = AgentInstance::new(config).map_err(|e| {
+            crate::error::AlephError::other(format!(
                 "Failed to create agent instance '{}': {}",
                 args.id, e
-            )))?;
+            ))
+        })?;
 
         // 8. Register in AgentRegistry (runtime)
         self.registry.register(instance).await;
@@ -417,8 +415,14 @@ mod tests {
 
     #[test]
     fn test_generate_id_ascii_name() {
-        assert_eq!(generate_agent_id_from_name("Trading Assistant"), "trading-assistant");
-        assert_eq!(generate_agent_id_from_name("code-reviewer"), "code-reviewer");
+        assert_eq!(
+            generate_agent_id_from_name("Trading Assistant"),
+            "trading-assistant"
+        );
+        assert_eq!(
+            generate_agent_id_from_name("code-reviewer"),
+            "code-reviewer"
+        );
         assert_eq!(generate_agent_id_from_name("my_agent"), "my-agent");
     }
 
@@ -427,7 +431,11 @@ mod tests {
         // Chinese names should produce a deterministic hash-based id
         let id = generate_agent_id_from_name("交易助手");
         assert!(id.starts_with("agent-"), "Got: {}", id);
-        assert!(validate_agent_id(&id).is_ok(), "Generated id should be valid: {}", id);
+        assert!(
+            validate_agent_id(&id).is_ok(),
+            "Generated id should be valid: {}",
+            id
+        );
 
         // Same name should produce same id (deterministic)
         assert_eq!(id, generate_agent_id_from_name("交易助手"));
@@ -445,7 +453,11 @@ mod tests {
     fn test_generate_id_single_char() {
         // Too short slug → hash fallback
         let id = generate_agent_id_from_name("A");
-        assert!(id.starts_with("agent-"), "Single char should fallback: {}", id);
+        assert!(
+            id.starts_with("agent-"),
+            "Single char should fallback: {}",
+            id
+        );
     }
 
     #[test]

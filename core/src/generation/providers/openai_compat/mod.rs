@@ -51,7 +51,9 @@ pub(crate) use types::{DEFAULT_COLOR, DEFAULT_MODEL, DEFAULT_TIMEOUT_SECS};
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::generation::{GenerationParams, GenerationProvider, GenerationRequest, GenerationType};
+    use crate::generation::{
+        GenerationParams, GenerationProvider, GenerationRequest, GenerationType,
+    };
     use types::{ImageGenerationRequest, ImageGenerationResponse};
 
     // === Builder tests ===
@@ -134,11 +136,18 @@ mod tests {
 
     #[test]
     fn test_builder_build_strips_trailing_slash() {
-        let provider = OpenAiCompatProviderBuilder::new("proxy", "key", "https://api.example.com/v1/images/generations/")
-            .build()
-            .unwrap();
+        let provider = OpenAiCompatProviderBuilder::new(
+            "proxy",
+            "key",
+            "https://api.example.com/v1/images/generations/",
+        )
+        .build()
+        .unwrap();
 
-        assert_eq!(provider.endpoint, "https://api.example.com/v1/images/generations");
+        assert_eq!(
+            provider.endpoint,
+            "https://api.example.com/v1/images/generations"
+        );
     }
 
     // === Validation tests ===
@@ -317,33 +326,57 @@ mod tests {
     #[test]
     fn test_generations_url() {
         let provider = OpenAiCompatProvider::new(
-            "proxy", "key", "https://api.example.com/v1/images/generations", None,
-        ).unwrap();
-        assert_eq!(provider.generations_url(), "https://api.example.com/v1/images/generations");
+            "proxy",
+            "key",
+            "https://api.example.com/v1/images/generations",
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            provider.generations_url(),
+            "https://api.example.com/v1/images/generations"
+        );
     }
 
     #[test]
     fn test_generations_url_with_trailing_slash() {
         let provider = OpenAiCompatProvider::new(
-            "proxy", "key", "https://api.example.com/v1/images/generations/", None,
-        ).unwrap();
-        assert_eq!(provider.generations_url(), "https://api.example.com/v1/images/generations");
+            "proxy",
+            "key",
+            "https://api.example.com/v1/images/generations/",
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            provider.generations_url(),
+            "https://api.example.com/v1/images/generations"
+        );
     }
 
     #[test]
     fn test_generations_url_custom_endpoint() {
-        let provider = OpenAiCompatProvider::new(
-            "proxy", "key", "https://ai.t8star.cn/suno/generate", None,
-        ).unwrap();
-        assert_eq!(provider.generations_url(), "https://ai.t8star.cn/suno/generate");
+        let provider =
+            OpenAiCompatProvider::new("proxy", "key", "https://ai.t8star.cn/suno/generate", None)
+                .unwrap();
+        assert_eq!(
+            provider.generations_url(),
+            "https://ai.t8star.cn/suno/generate"
+        );
     }
 
     #[test]
     fn test_generations_url_video_endpoint() {
         let provider = OpenAiCompatProvider::new(
-            "proxy", "key", "https://ai.t8star.cn/v2/videos/generations", None,
-        ).unwrap();
-        assert_eq!(provider.generations_url(), "https://ai.t8star.cn/v2/videos/generations");
+            "proxy",
+            "key",
+            "https://ai.t8star.cn/v2/videos/generations",
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            provider.generations_url(),
+            "https://ai.t8star.cn/v2/videos/generations"
+        );
     }
 
     // === Request building tests ===
@@ -625,25 +658,39 @@ mod tests {
     #[test]
     fn test_edits_url_derived() {
         let provider = OpenAiCompatProvider::new(
-            "proxy", "key", "https://api.example.com/v1/images/generations", None,
-        ).unwrap();
-        assert_eq!(provider.edits_url(), "https://api.example.com/v1/images/edits");
+            "proxy",
+            "key",
+            "https://api.example.com/v1/images/generations",
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            provider.edits_url(),
+            "https://api.example.com/v1/images/edits"
+        );
     }
 
     #[test]
     fn test_edits_url_explicit() {
-        let provider = OpenAiCompatProvider::builder("proxy", "key", "https://api.example.com/v1/images/generations")
-            .edit_endpoint("https://api.example.com/v1/images/edits")
-            .build()
-            .unwrap();
-        assert_eq!(provider.edits_url(), "https://api.example.com/v1/images/edits");
+        let provider = OpenAiCompatProvider::builder(
+            "proxy",
+            "key",
+            "https://api.example.com/v1/images/generations",
+        )
+        .edit_endpoint("https://api.example.com/v1/images/edits")
+        .build()
+        .unwrap();
+        assert_eq!(
+            provider.edits_url(),
+            "https://api.example.com/v1/images/edits"
+        );
     }
 
     #[test]
     fn test_edits_url_non_standard_unchanged() {
-        let provider = OpenAiCompatProvider::new(
-            "proxy", "key", "https://ai.t8star.cn/suno/generate", None,
-        ).unwrap();
+        let provider =
+            OpenAiCompatProvider::new("proxy", "key", "https://ai.t8star.cn/suno/generate", None)
+                .unwrap();
         // No "/generations" to replace, returns unchanged
         assert_eq!(provider.edits_url(), "https://ai.t8star.cn/suno/generate");
     }

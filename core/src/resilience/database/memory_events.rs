@@ -3,9 +3,9 @@
 //! Implements MemoryEventStore for StateDatabase.
 //! Follows the same pattern as events.rs (agent_events).
 
+use super::StateDatabase;
 use crate::error::AlephError;
 use crate::memory::events::{EventActor, MemoryEvent, MemoryEventEnvelope};
-use super::StateDatabase;
 use rusqlite::params;
 
 impl StateDatabase {
@@ -20,7 +20,11 @@ impl StateDatabase {
     ) -> Result<i64, AlephError> {
         let event_json = serde_json::to_string(&envelope.event)
             .map_err(|e| AlephError::other(format!("Failed to serialize event: {e}")))?;
-        let tier = if envelope.event.is_skeleton() { "skeleton" } else { "pulse" };
+        let tier = if envelope.event.is_skeleton() {
+            "skeleton"
+        } else {
+            "pulse"
+        };
 
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         conn.execute(
@@ -66,7 +70,11 @@ impl StateDatabase {
         for envelope in envelopes {
             let event_json = serde_json::to_string(&envelope.event)
                 .map_err(|e| AlephError::other(format!("Failed to serialize event: {e}")))?;
-            let tier = if envelope.event.is_skeleton() { "skeleton" } else { "pulse" };
+            let tier = if envelope.event.is_skeleton() {
+                "skeleton"
+            } else {
+                "pulse"
+            };
 
             stmt.execute(params![
                 envelope.fact_id,
@@ -132,7 +140,10 @@ impl StateDatabase {
             .map_err(|e| AlephError::other(format!("Failed to prepare statement: {e}")))?;
 
         let rows = stmt
-            .query_map(params![fact_id, i64::try_from(since_seq).unwrap_or(i64::MAX)], MemoryEventRow::from_row)
+            .query_map(
+                params![fact_id, i64::try_from(since_seq).unwrap_or(i64::MAX)],
+                MemoryEventRow::from_row,
+            )
             .map_err(|e| AlephError::other(format!("Failed to query events: {e}")))?;
 
         let mut envelopes = Vec::new();
@@ -194,7 +205,14 @@ impl StateDatabase {
             .map_err(|e| AlephError::other(format!("Failed to prepare statement: {e}")))?;
 
         let rows = stmt
-            .query_map(params![from_timestamp, to_timestamp, i64::try_from(limit).unwrap_or(i64::MAX)], MemoryEventRow::from_row)
+            .query_map(
+                params![
+                    from_timestamp,
+                    to_timestamp,
+                    i64::try_from(limit).unwrap_or(i64::MAX)
+                ],
+                MemoryEventRow::from_row,
+            )
             .map_err(|e| AlephError::other(format!("Failed to query events: {e}")))?;
 
         let mut envelopes = Vec::new();
@@ -285,7 +303,9 @@ impl MemoryEventRow {
     fn into_envelope(self) -> Result<MemoryEventEnvelope, AlephError> {
         let event: MemoryEvent = serde_json::from_str(&self.event_json)
             .map_err(|e| AlephError::other(format!("Failed to deserialize event: {e}")))?;
-        let actor: EventActor = self.actor.parse()
+        let actor: EventActor = self
+            .actor
+            .parse()
             .map_err(|e: String| AlephError::other(e))?;
         Ok(MemoryEventEnvelope {
             id: self.id,
@@ -329,9 +349,8 @@ mod tests {
     async fn test_append_and_retrieve_event() {
         let db = make_test_db();
         let event = make_created_event("fact-001");
-        let envelope = MemoryEventEnvelope::new(
-            "fact-001".into(), 1, event, EventActor::Agent, None,
-        );
+        let envelope =
+            MemoryEventEnvelope::new("fact-001".into(), 1, event, EventActor::Agent, None);
 
         let id = db.append_memory_event(&envelope).await.unwrap();
         assert!(id > 0);
@@ -346,21 +365,23 @@ mod tests {
     #[tokio::test]
     async fn test_batch_append() {
         let db = make_test_db();
-        let envelopes: Vec<_> = (1..=5).map(|i| {
-            MemoryEventEnvelope::new(
-                "fact-002".into(),
-                i,
-                MemoryEvent::FactAccessed {
-                    fact_id: "fact-002".into(),
-                    query: Some(format!("query-{i}")),
-                    relevance_score: Some(0.9),
-                    used_in_response: true,
-                    new_access_count: i as u32,
-                },
-                EventActor::Agent,
-                None,
-            )
-        }).collect();
+        let envelopes: Vec<_> = (1..=5)
+            .map(|i| {
+                MemoryEventEnvelope::new(
+                    "fact-002".into(),
+                    i,
+                    MemoryEvent::FactAccessed {
+                        fact_id: "fact-002".into(),
+                        query: Some(format!("query-{i}")),
+                        relevance_score: Some(0.9),
+                        used_in_response: true,
+                        new_access_count: i as u32,
+                    },
+                    EventActor::Agent,
+                    None,
+                )
+            })
+            .collect();
 
         db.append_memory_events(&envelopes).await.unwrap();
 
@@ -375,9 +396,11 @@ mod tests {
         let db = make_test_db();
         for i in 1..=3 {
             let envelope = MemoryEventEnvelope::new(
-                "fact-003".into(), i,
+                "fact-003".into(),
+                i,
                 make_created_event("fact-003"),
-                EventActor::Agent, None,
+                EventActor::Agent,
+                None,
             );
             db.append_memory_event(&envelope).await.unwrap();
         }
@@ -391,21 +414,26 @@ mod tests {
     async fn test_get_events_until_timestamp() {
         let db = make_test_db();
         let mut e1 = MemoryEventEnvelope::new(
-            "fact-004".into(), 1, make_created_event("fact-004"),
-            EventActor::Agent, None,
+            "fact-004".into(),
+            1,
+            make_created_event("fact-004"),
+            EventActor::Agent,
+            None,
         );
         e1.timestamp = 1000;
         db.append_memory_event(&e1).await.unwrap();
 
         let mut e2 = MemoryEventEnvelope::new(
-            "fact-004".into(), 2,
+            "fact-004".into(),
+            2,
             MemoryEvent::FactContentUpdated {
                 fact_id: "fact-004".into(),
                 old_content: "old".into(),
                 new_content: "new".into(),
                 reason: "correction".into(),
             },
-            EventActor::User, None,
+            EventActor::User,
+            None,
         );
         e2.timestamp = 2000;
         db.append_memory_event(&e2).await.unwrap();
@@ -425,15 +453,20 @@ mod tests {
         let db = make_test_db();
         for (i, ts) in [1000i64, 2000, 3000].iter().enumerate() {
             let mut envelope = MemoryEventEnvelope::new(
-                format!("fact-range-{i}"), 1,
+                format!("fact-range-{i}"),
+                1,
                 make_created_event(&format!("fact-range-{i}")),
-                EventActor::Agent, None,
+                EventActor::Agent,
+                None,
             );
             envelope.timestamp = *ts;
             db.append_memory_event(&envelope).await.unwrap();
         }
 
-        let events = db.get_memory_events_in_range(1500, 2500, 100).await.unwrap();
+        let events = db
+            .get_memory_events_in_range(1500, 2500, 100)
+            .await
+            .unwrap();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].fact_id, "fact-range-1");
     }
@@ -441,13 +474,18 @@ mod tests {
     #[tokio::test]
     async fn test_latest_seq() {
         let db = make_test_db();
-        assert_eq!(db.get_memory_event_latest_seq("nonexistent").await.unwrap(), 0);
+        assert_eq!(
+            db.get_memory_event_latest_seq("nonexistent").await.unwrap(),
+            0
+        );
 
         for i in 1..=3 {
             let envelope = MemoryEventEnvelope::new(
-                "fact-seq".into(), i,
+                "fact-seq".into(),
+                i,
                 make_created_event("fact-seq"),
-                EventActor::Agent, None,
+                EventActor::Agent,
+                None,
             );
             db.append_memory_event(&envelope).await.unwrap();
         }
@@ -458,35 +496,58 @@ mod tests {
     async fn test_count_events() {
         let db = make_test_db();
         let e1 = MemoryEventEnvelope::new(
-            "f1".into(), 1, make_created_event("f1"), EventActor::Agent, None,
+            "f1".into(),
+            1,
+            make_created_event("f1"),
+            EventActor::Agent,
+            None,
         );
         let e2 = MemoryEventEnvelope::new(
-            "f2".into(), 1,
+            "f2".into(),
+            1,
             MemoryEvent::FactAccessed {
-                fact_id: "f2".into(), query: None, relevance_score: None,
-                used_in_response: false, new_access_count: 1,
+                fact_id: "f2".into(),
+                query: None,
+                relevance_score: None,
+                used_in_response: false,
+                new_access_count: 1,
             },
-            EventActor::Agent, None,
+            EventActor::Agent,
+            None,
         );
         db.append_memory_event(&e1).await.unwrap();
         db.append_memory_event(&e2).await.unwrap();
 
         assert_eq!(db.count_memory_events(None).await.unwrap(), 2);
-        assert_eq!(db.count_memory_events(Some("FactCreated")).await.unwrap(), 1);
-        assert_eq!(db.count_memory_events(Some("FactAccessed")).await.unwrap(), 1);
+        assert_eq!(
+            db.count_memory_events(Some("FactCreated")).await.unwrap(),
+            1
+        );
+        assert_eq!(
+            db.count_memory_events(Some("FactAccessed")).await.unwrap(),
+            1
+        );
     }
 
     #[tokio::test]
     async fn test_unique_constraint() {
         let db = make_test_db();
         let e1 = MemoryEventEnvelope::new(
-            "fact-dup".into(), 1, make_created_event("fact-dup"), EventActor::Agent, None,
+            "fact-dup".into(),
+            1,
+            make_created_event("fact-dup"),
+            EventActor::Agent,
+            None,
         );
         db.append_memory_event(&e1).await.unwrap();
 
         // Same fact_id + seq should fail
         let e2 = MemoryEventEnvelope::new(
-            "fact-dup".into(), 1, make_created_event("fact-dup"), EventActor::Agent, None,
+            "fact-dup".into(),
+            1,
+            make_created_event("fact-dup"),
+            EventActor::Agent,
+            None,
         );
         assert!(db.append_memory_event(&e2).await.is_err());
     }

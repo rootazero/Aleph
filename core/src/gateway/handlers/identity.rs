@@ -13,9 +13,9 @@
 //!
 //! These handlers require an IdentityResolver to be wired at Gateway initialization.
 
+use crate::sync_primitives::Arc;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
 
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
@@ -79,7 +79,10 @@ pub struct IdentityListResponse {
 ///     "id": 1
 /// }
 /// ```
-pub async fn handle_get(request: JsonRpcRequest, resolver: SharedIdentityResolver) -> JsonRpcResponse {
+pub async fn handle_get(
+    request: JsonRpcRequest,
+    resolver: SharedIdentityResolver,
+) -> JsonRpcResponse {
     let resolver = resolver.read().await;
 
     let response = IdentityGetResponse {
@@ -120,7 +123,10 @@ pub async fn handle_get(request: JsonRpcRequest, resolver: SharedIdentityResolve
 /// ```json
 /// {"jsonrpc":"2.0","result":{"success":true},"id":1}
 /// ```
-pub async fn handle_set(request: JsonRpcRequest, resolver: SharedIdentityResolver) -> JsonRpcResponse {
+pub async fn handle_set(
+    request: JsonRpcRequest,
+    resolver: SharedIdentityResolver,
+) -> JsonRpcResponse {
     let params = match &request.params {
         Some(params) => params,
         None => {
@@ -162,7 +168,10 @@ pub async fn handle_set(request: JsonRpcRequest, resolver: SharedIdentityResolve
 /// ```json
 /// {"jsonrpc":"2.0","result":{"success":true,"had_override":true},"id":1}
 /// ```
-pub async fn handle_clear(request: JsonRpcRequest, resolver: SharedIdentityResolver) -> JsonRpcResponse {
+pub async fn handle_clear(
+    request: JsonRpcRequest,
+    resolver: SharedIdentityResolver,
+) -> JsonRpcResponse {
     let mut resolver = resolver.write().await;
     let had_override = resolver.has_session_override();
     resolver.clear_session_override();
@@ -206,7 +215,10 @@ pub async fn handle_clear(request: JsonRpcRequest, resolver: SharedIdentityResol
 ///     "id": 1
 /// }
 /// ```
-pub async fn handle_list(request: JsonRpcRequest, resolver: SharedIdentityResolver) -> JsonRpcResponse {
+pub async fn handle_list(
+    request: JsonRpcRequest,
+    resolver: SharedIdentityResolver,
+) -> JsonRpcResponse {
     let resolver = resolver.read().await;
 
     let response = IdentityListResponse {

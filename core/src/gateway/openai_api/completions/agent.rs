@@ -13,6 +13,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use tokio::sync::mpsc;
 
+use crate::gateway::agent_instance::MessageRole;
 use crate::gateway::event_emitter::{EventEmitError, EventEmitter, StreamEvent};
 use crate::gateway::execution_adapter::ExecutionAdapter;
 use crate::gateway::execution_engine::RunRequest;
@@ -20,7 +21,6 @@ use crate::gateway::media::PendingMedia;
 use crate::gateway::openai_api::auth::ApiError;
 use crate::gateway::openai_api::state::OpenAiApiState;
 use crate::gateway::openai_api::stream::{self, SSE_DONE};
-use crate::gateway::agent_instance::MessageRole;
 use crate::gateway::openai_api::types::{
     ChatChoice, ChatCompletionChunk, ChatCompletionRequest, ChatCompletionResponse, ChatMessage,
     Delta, DeltaFunction, DeltaToolCall, StreamChoice, Usage,
@@ -56,11 +56,7 @@ impl SseEventEmitter {
     }
 
     /// Build a `ChatCompletionChunk` with the given delta and optional finish reason.
-    fn make_chunk(
-        &self,
-        delta: Delta,
-        finish_reason: Option<String>,
-    ) -> ChatCompletionChunk {
+    fn make_chunk(&self, delta: Delta, finish_reason: Option<String>) -> ChatCompletionChunk {
         ChatCompletionChunk {
             id: self.completion_id.clone(),
             object: "chat.completion.chunk".to_string(),
@@ -79,8 +75,7 @@ impl SseEventEmitter {
 #[async_trait]
 impl EventEmitter for SseEventEmitter {
     fn next_seq(&self) -> u64 {
-        self.seq
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+        self.seq.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
     }
 
     async fn emit(&self, event: StreamEvent) -> Result<(), EventEmitError> {
@@ -138,8 +133,7 @@ impl EventEmitter for SseEventEmitter {
                         Some(Usage {
                             prompt_tokens: 0,
                             completion_tokens: 0,
-                            total_tokens: u32::try_from(summary.total_tokens)
-                                .unwrap_or(u32::MAX),
+                            total_tokens: u32::try_from(summary.total_tokens).unwrap_or(u32::MAX),
                         })
                     } else {
                         None
@@ -226,8 +220,7 @@ impl CollectingEmitter {
 #[async_trait]
 impl EventEmitter for CollectingEmitter {
     fn next_seq(&self) -> u64 {
-        self.seq
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+        self.seq.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
     }
 
     async fn emit(&self, event: StreamEvent) -> Result<(), EventEmitError> {
@@ -250,25 +243,18 @@ pub async fn handle(
     let adapter = state
         .execution_adapter
         .as_ref()
-        .ok_or_else(|| {
-            ApiError::ServiceUnavailable("Execution adapter not available".into())
-        })?
+        .ok_or_else(|| ApiError::ServiceUnavailable("Execution adapter not available".into()))?
         .clone();
 
     // 2. Get agent registry
     let registry = state
         .agent_registry
         .as_ref()
-        .ok_or_else(|| {
-            ApiError::ServiceUnavailable("Agent registry not available".into())
-        })?
+        .ok_or_else(|| ApiError::ServiceUnavailable("Agent registry not available".into()))?
         .clone();
 
     // 3. Parse agent_id from model name: "aleph/iris" → "iris", "aleph/default" → default
-    let suffix = req
-        .model
-        .strip_prefix("aleph/")
-        .unwrap_or("default");
+    let suffix = req.model.strip_prefix("aleph/").unwrap_or("default");
 
     let agent = if suffix == "default" {
         registry.get_default().await
@@ -429,9 +415,7 @@ async fn handle_non_streaming(
 
     for event in &events {
         match event {
-            StreamEvent::ResponseChunk {
-                content: chunk, ..
-            } => {
+            StreamEvent::ResponseChunk { content: chunk, .. } => {
                 content.push_str(chunk);
             }
             StreamEvent::RunComplete { summary, .. } => {

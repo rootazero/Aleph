@@ -5,8 +5,7 @@
 //! modify the store and recompute next due times as needed.
 
 use crate::tasks::heartbeat::config::{
-    DedupConfig, HeartbeatTask, HeartbeatTaskView, ProbeConfig,
-    error_backoff_ms,
+    error_backoff_ms, DedupConfig, HeartbeatTask, HeartbeatTaskView, ProbeConfig,
 };
 use crate::tasks::heartbeat::store::HeartbeatStore;
 use crate::tasks::shared::clock::Clock;
@@ -59,7 +58,11 @@ pub struct HeartbeatTaskUpdates {
 
 /// Add a new task to the store. Sets state defaults and computes next due time.
 /// Returns the task ID.
-pub fn add_task<C: Clock>(store: &mut HeartbeatStore, mut task: HeartbeatTask, clock: &C) -> String {
+pub fn add_task<C: Clock>(
+    store: &mut HeartbeatStore,
+    mut task: HeartbeatTask,
+    clock: &C,
+) -> String {
     let now = clock.now_ms();
     task.created_at = now;
     task.updated_at = now;
@@ -274,7 +277,13 @@ mod tests {
     fn update_nonexistent_returns_error() {
         let mut store = make_store();
         let clock = FakeClock::new(1_000_000);
-        assert!(update_task(&mut store, "nonexistent", HeartbeatTaskUpdates::default(), &clock).is_err());
+        assert!(update_task(
+            &mut store,
+            "nonexistent",
+            HeartbeatTaskUpdates::default(),
+            &clock
+        )
+        .is_err());
     }
 
     #[test]

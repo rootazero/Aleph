@@ -122,15 +122,12 @@ impl ExecApprovalForwarder {
              `/approve {id} deny`",
         );
 
-        let remaining = record
-            .expires_at_ms
-            .saturating_sub(
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-                    .as_millis() as u64,
-            )
-            / 1000;
+        let remaining = record.expires_at_ms.saturating_sub(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64,
+        ) / 1000;
 
         let text = template
             .replace("{id}", &record.id)
@@ -226,7 +223,9 @@ impl ExecApprovalForwarder {
     pub fn handle_message(&self, message: &str, sender: &str) -> Option<bool> {
         let (id, decision) = Self::parse_approve_command(message)?;
 
-        let resolved = self.manager.resolve(&id, decision, Some(sender.to_string()));
+        let resolved = self
+            .manager
+            .resolve(&id, decision, Some(sender.to_string()));
 
         if resolved {
             info!(id = %id, ?decision, sender = %sender, "Approval resolved via chat");
@@ -251,10 +250,9 @@ impl ExecApprovalForwarder {
             ForwardMode::Both => {
                 let mut targets = self.config.targets.clone();
                 if let Some(session_target) = self.parse_session_target(&record.session_key) {
-                    if !targets
-                        .iter()
-                        .any(|t| t.channel == session_target.channel && t.target == session_target.target)
-                    {
+                    if !targets.iter().any(|t| {
+                        t.channel == session_target.channel && t.target == session_target.target
+                    }) {
                         targets.push(session_target);
                     }
                 }
@@ -347,7 +345,8 @@ mod tests {
         );
 
         let record = mock_record();
-        let message = forwarder.format_resolved(&record, ApprovalDecisionType::AllowOnce, Some("alice"));
+        let message =
+            forwarder.format_resolved(&record, ApprovalDecisionType::AllowOnce, Some("alice"));
 
         assert!(message.text.contains("allowed"));
         assert!(message.text.contains("alice"));

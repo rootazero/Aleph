@@ -5,7 +5,7 @@ use rusqlite::params;
 use std::collections::HashMap;
 use tracing::{debug, info};
 
-use super::{CacheState, AgentEnv, AgentEnvError, AgentEnvStore};
+use super::{AgentEnv, AgentEnvError, AgentEnvStore, CacheState};
 
 impl AgentEnvStore {
     // =========================================================================
@@ -43,9 +43,10 @@ impl AgentEnvStore {
             allowed_tools: Vec::new(),
         };
 
-        let conn = self.conn.lock().map_err(|e| {
-            AgentEnvError::Database(format!("Lock error: {}", e))
-        })?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AgentEnvError::Database(format!("Lock error: {}", e)))?;
 
         conn.execute(
             "INSERT INTO agent_envs (id, profile, created_at, last_active_at, description, name)
@@ -74,9 +75,10 @@ impl AgentEnvStore {
 
     /// Get an agent environment by ID
     pub async fn get(&self, id: &str) -> Result<Option<AgentEnv>, AgentEnvError> {
-        let conn = self.conn.lock().map_err(|e| {
-            AgentEnvError::Database(format!("Lock error: {}", e))
-        })?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AgentEnvError::Database(format!("Lock error: {}", e)))?;
 
         let result = conn.query_row(
             "SELECT id, profile, created_at, last_active_at, cache_state, env_vars, description,
@@ -84,9 +86,7 @@ impl AgentEnvStore {
                     default_model, system_prompt_override, allowed_tools
              FROM agent_envs WHERE id = ? AND archived = 0",
             params![id],
-            |row| {
-                Self::row_to_agent_env(row)
-            },
+            |row| Self::row_to_agent_env(row),
         );
 
         match result {
@@ -98,9 +98,10 @@ impl AgentEnvStore {
 
     /// List all agent environments
     pub async fn list(&self, include_archived: bool) -> Result<Vec<AgentEnv>, AgentEnvError> {
-        let conn = self.conn.lock().map_err(|e| {
-            AgentEnvError::Database(format!("Lock error: {}", e))
-        })?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AgentEnvError::Database(format!("Lock error: {}", e)))?;
 
         let query = if include_archived {
             "SELECT id, profile, created_at, last_active_at, cache_state, env_vars, description,
@@ -114,7 +115,8 @@ impl AgentEnvStore {
              FROM agent_envs WHERE archived = 0 ORDER BY last_active_at DESC"
         };
 
-        let mut stmt = conn.prepare(query)
+        let mut stmt = conn
+            .prepare(query)
             .map_err(|e| AgentEnvError::Database(e.to_string()))?;
 
         let envs = stmt
@@ -144,9 +146,10 @@ impl AgentEnvStore {
 
         // Scope the MutexGuard so it is dropped before any .await
         let affected = {
-            let conn = self.conn.lock().map_err(|e| {
-                AgentEnvError::Database(format!("Lock error: {}", e))
-            })?;
+            let conn = self
+                .conn
+                .lock()
+                .map_err(|e| AgentEnvError::Database(format!("Lock error: {}", e)))?;
 
             let now = Utc::now().timestamp();
             let name_owned = name.map(|s| s.to_string());
@@ -175,9 +178,10 @@ impl AgentEnvStore {
 
     /// Update last active timestamp
     pub async fn touch(&self, id: &str) -> Result<(), AgentEnvError> {
-        let conn = self.conn.lock().map_err(|e| {
-            AgentEnvError::Database(format!("Lock error: {}", e))
-        })?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AgentEnvError::Database(format!("Lock error: {}", e)))?;
 
         conn.execute(
             "UPDATE agent_envs SET last_active_at = ? WHERE id = ?",
@@ -194,9 +198,10 @@ impl AgentEnvStore {
         id: &str,
         cache_state: &CacheState,
     ) -> Result<(), AgentEnvError> {
-        let conn = self.conn.lock().map_err(|e| {
-            AgentEnvError::Database(format!("Lock error: {}", e))
-        })?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AgentEnvError::Database(format!("Lock error: {}", e)))?;
 
         let cache_json = serde_json::to_string(cache_state)
             .map_err(|e| AgentEnvError::Database(format!("Serialize error: {}", e)))?;
@@ -218,12 +223,16 @@ impl AgentEnvStore {
             return Err(AgentEnvError::CannotModifyGlobal);
         }
 
-        let conn = self.conn.lock().map_err(|e| {
-            AgentEnvError::Database(format!("Lock error: {}", e))
-        })?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AgentEnvError::Database(format!("Lock error: {}", e)))?;
 
         let affected = conn
-            .execute("UPDATE agent_envs SET archived = 1 WHERE id = ?", params![id])
+            .execute(
+                "UPDATE agent_envs SET archived = 1 WHERE id = ?",
+                params![id],
+            )
             .map_err(|e| AgentEnvError::Database(e.to_string()))?;
 
         if affected > 0 {
@@ -239,9 +248,10 @@ impl AgentEnvStore {
             return Err(AgentEnvError::CannotModifyGlobal);
         }
 
-        let conn = self.conn.lock().map_err(|e| {
-            AgentEnvError::Database(format!("Lock error: {}", e))
-        })?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AgentEnvError::Database(format!("Lock error: {}", e)))?;
 
         // Remove any channel_active_agent references pointing to this agent (agent_id = agent_id in 1:1 model)
         conn.execute(
@@ -280,13 +290,15 @@ impl AgentEnvStore {
         conn.execute(
             "DELETE FROM channel_active_agent WHERE channel = ?1",
             params![channel],
-        ).map_err(|e| AgentEnvError::Database(e.to_string()))?;
+        )
+        .map_err(|e| AgentEnvError::Database(e.to_string()))?;
 
         conn.execute(
             "INSERT INTO channel_active_agent (channel, agent_id, updated_at)
              VALUES (?1, ?2, ?3)",
             params![channel, agent_id, now],
-        ).map_err(|e| AgentEnvError::Database(e.to_string()))?;
+        )
+        .map_err(|e| AgentEnvError::Database(e.to_string()))?;
         Ok(())
     }
 
@@ -299,7 +311,8 @@ impl AgentEnvStore {
         conn.execute(
             "DELETE FROM channel_active_agent WHERE channel = ?1",
             params![channel],
-        ).map_err(|e| AgentEnvError::Database(e.to_string()))?;
+        )
+        .map_err(|e| AgentEnvError::Database(e.to_string()))?;
         Ok(())
     }
 
@@ -308,9 +321,9 @@ impl AgentEnvStore {
     /// Returns the agent_id bound to this channel, or None if unbound.
     pub fn get_active_agent(&self, channel: &str) -> Result<Option<String>, AgentEnvError> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let mut stmt = conn.prepare(
-            "SELECT agent_id FROM channel_active_agent WHERE channel = ?1"
-        ).map_err(|e| AgentEnvError::Database(e.to_string()))?;
+        let mut stmt = conn
+            .prepare("SELECT agent_id FROM channel_active_agent WHERE channel = ?1")
+            .map_err(|e| AgentEnvError::Database(e.to_string()))?;
         let result = stmt.query_row(params![channel], |row| row.get::<_, String>(0));
         match result {
             Ok(id) => Ok(Some(id)),
@@ -322,9 +335,9 @@ impl AgentEnvStore {
     /// Reverse lookup: which channel is this agent bound to?
     pub fn get_channel_for_agent(&self, agent_id: &str) -> Result<Option<String>, AgentEnvError> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let mut stmt = conn.prepare(
-            "SELECT channel FROM channel_active_agent WHERE agent_id = ?1 LIMIT 1"
-        ).map_err(|e| AgentEnvError::Database(e.to_string()))?;
+        let mut stmt = conn
+            .prepare("SELECT channel FROM channel_active_agent WHERE agent_id = ?1 LIMIT 1")
+            .map_err(|e| AgentEnvError::Database(e.to_string()))?;
         let result = stmt.query_row(params![agent_id], |row| row.get::<_, String>(0));
         match result {
             Ok(ch) => Ok(Some(ch)),
@@ -334,14 +347,18 @@ impl AgentEnvStore {
     }
 
     /// Get all agent→channel bindings (for Panel agents.bindings RPC).
-    pub fn get_all_agent_bindings(&self) -> Result<std::collections::HashMap<String, String>, AgentEnvError> {
+    pub fn get_all_agent_bindings(
+        &self,
+    ) -> Result<std::collections::HashMap<String, String>, AgentEnvError> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let mut stmt = conn.prepare(
-            "SELECT DISTINCT agent_id, channel FROM channel_active_agent"
-        ).map_err(|e| AgentEnvError::Database(e.to_string()))?;
-        let rows = stmt.query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        }).map_err(|e| AgentEnvError::Database(e.to_string()))?;
+        let mut stmt = conn
+            .prepare("SELECT DISTINCT agent_id, channel FROM channel_active_agent")
+            .map_err(|e| AgentEnvError::Database(e.to_string()))?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(|e| AgentEnvError::Database(e.to_string()))?;
         let mut map = std::collections::HashMap::new();
         for row in rows {
             let (agent_id, channel) = row.map_err(|e| AgentEnvError::Database(e.to_string()))?;
@@ -360,12 +377,13 @@ impl AgentEnvStore {
             return Ok(0);
         }
 
-        let threshold = Utc::now().timestamp()
-            - (self.config.archive_after_days as i64 * 24 * 60 * 60);
+        let threshold =
+            Utc::now().timestamp() - (self.config.archive_after_days as i64 * 24 * 60 * 60);
 
-        let conn = self.conn.lock().map_err(|e| {
-            AgentEnvError::Database(format!("Lock error: {}", e))
-        })?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AgentEnvError::Database(format!("Lock error: {}", e)))?;
 
         let affected = conn
             .execute(
@@ -393,14 +411,14 @@ impl AgentEnvStore {
         let permanent_fact_types_json: Option<String> = row.get(11)?;
         let allowed_tools_json: Option<String> = row.get(14)?;
         let ws_id: String = row.get(0)?;
-        let name: String = row.get::<_, Option<String>>(7)?
+        let name: String = row
+            .get::<_, Option<String>>(7)?
             .unwrap_or_else(|| ws_id.clone());
 
         Ok(AgentEnv {
             id: ws_id,
             profile: row.get(1)?,
-            created_at: DateTime::from_timestamp(row.get::<_, i64>(2)?, 0)
-                .unwrap_or_else(Utc::now),
+            created_at: DateTime::from_timestamp(row.get::<_, i64>(2)?, 0).unwrap_or_else(Utc::now),
             last_active_at: DateTime::from_timestamp(row.get::<_, i64>(3)?, 0)
                 .unwrap_or_else(Utc::now),
             cache_state: cache_state_json

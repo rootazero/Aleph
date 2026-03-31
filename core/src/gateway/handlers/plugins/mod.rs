@@ -1,7 +1,7 @@
 //! Plugins handler types and handlers
 
-pub mod types;
 mod handlers;
+pub mod types;
 
-pub use types::*;
 pub use handlers::*;
+pub use types::*;

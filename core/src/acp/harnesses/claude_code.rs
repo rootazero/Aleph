@@ -76,7 +76,10 @@ impl AcpHarness for ClaudeCodeHarness {
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
 
-        debug!(harness = "claude-code", "Spawning oneshot Claude Code process");
+        debug!(
+            harness = "claude-code",
+            "Spawning oneshot Claude Code process"
+        );
 
         let output = cmd.output().await.map_err(|e| {
             AlephError::tool(format!(

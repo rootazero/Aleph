@@ -80,9 +80,10 @@ pub(super) async fn call_with_repair_impl(
                 )
             } else if snake_name != name && snake_name != lower_name {
                 // 3. snake_case conversion
-                tools.get(&snake_name).map(Arc::clone).map_or(
-                    (None, None),
-                    |t| {
+                tools
+                    .get(&snake_name)
+                    .map(Arc::clone)
+                    .map_or((None, None), |t| {
                         (
                             Some(t),
                             Some(ToolRepairInfo {
@@ -91,16 +92,16 @@ pub(super) async fn call_with_repair_impl(
                                 repair_type: ToolRepairType::SnakeCase,
                             }),
                         )
-                    },
-                )
+                    })
             } else {
                 (None, None)
             }
         } else if snake_name != name {
             // 3. snake_case conversion (name was already lowercase)
-            tools.get(&snake_name).map(Arc::clone).map_or(
-                (None, None),
-                |t| {
+            tools
+                .get(&snake_name)
+                .map(Arc::clone)
+                .map_or((None, None), |t| {
                     (
                         Some(t),
                         Some(ToolRepairInfo {
@@ -109,8 +110,7 @@ pub(super) async fn call_with_repair_impl(
                             repair_type: ToolRepairType::SnakeCase,
                         }),
                     )
-                },
-            )
+                })
         } else {
             (None, None)
         }

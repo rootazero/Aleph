@@ -57,7 +57,16 @@ pub async fn reembed_all(
 
     // Phase 1: Facts
     info!(target_dim, batch_size, "[reembed] Starting facts phase");
-    reembed_facts(database, embedder, target_dim, batch_size, &progress_tx, &cancel, &mut result).await?;
+    reembed_facts(
+        database,
+        embedder,
+        target_dim,
+        batch_size,
+        &progress_tx,
+        &cancel,
+        &mut result,
+    )
+    .await?;
 
     if cancel.load(Ordering::Relaxed) {
         info!("[reembed] Cancelled after facts phase");
@@ -66,7 +75,16 @@ pub async fn reembed_all(
 
     // Phase 2: Memories
     info!(target_dim, batch_size, "[reembed] Starting memories phase");
-    reembed_memories(database, embedder, target_dim, batch_size, &progress_tx, &cancel, &mut result).await?;
+    reembed_memories(
+        database,
+        embedder,
+        target_dim,
+        batch_size,
+        &progress_tx,
+        &cancel,
+        &mut result,
+    )
+    .await?;
 
     info!(
         facts_updated = result.facts_updated,
@@ -108,7 +126,10 @@ async fn reembed_facts(
         return Ok(());
     }
 
-    info!(needs_reembed = needs_reembed.len(), "[reembed] Facts needing re-embedding");
+    info!(
+        needs_reembed = needs_reembed.len(),
+        "[reembed] Facts needing re-embedding"
+    );
 
     let mut completed = 0usize;
     let mut failed = 0usize;
@@ -132,7 +153,12 @@ async fn reembed_facts(
                             "[reembed] Dimension mismatch, skipping"
                         );
                         failed += 1;
-                        result.errors.push(format!("fact {}: dimension mismatch (got {}, expected {})", fact.id, embedding.len(), target_dim));
+                        result.errors.push(format!(
+                            "fact {}: dimension mismatch (got {}, expected {})",
+                            fact.id,
+                            embedding.len(),
+                            target_dim
+                        ));
                         continue;
                     }
                     let mut updated_fact = (*fact).clone();
@@ -187,7 +213,10 @@ async fn reembed_memories(
         return Ok(());
     }
 
-    info!(needs_reembed = needs_reembed.len(), "[reembed] Memories needing re-embedding");
+    info!(
+        needs_reembed = needs_reembed.len(),
+        "[reembed] Memories needing re-embedding"
+    );
 
     let mut completed = 0usize;
     let mut failed = 0usize;
@@ -216,7 +245,9 @@ async fn reembed_memories(
                             "[reembed] Dimension mismatch, skipping"
                         );
                         failed += 1;
-                        result.errors.push(format!("memory {}: dimension mismatch", memory.id));
+                        result
+                            .errors
+                            .push(format!("memory {}: dimension mismatch", memory.id));
                         continue;
                     }
                     let mut updated = memory.clone();
@@ -226,13 +257,17 @@ async fn reembed_memories(
                     if let Err(e) = database.delete_memory(&memory.id).await {
                         warn!(memory_id = %memory.id, error = %e, "[reembed] Failed to delete memory");
                         failed += 1;
-                        result.errors.push(format!("memory {}: delete failed: {}", memory.id, e));
+                        result
+                            .errors
+                            .push(format!("memory {}: delete failed: {}", memory.id, e));
                         continue;
                     }
                     if let Err(e) = database.insert_memory(&updated).await {
                         warn!(memory_id = %memory.id, error = %e, "[reembed] Failed to insert memory");
                         failed += 1;
-                        result.errors.push(format!("memory {}: insert failed: {}", memory.id, e));
+                        result
+                            .errors
+                            .push(format!("memory {}: insert failed: {}", memory.id, e));
                     } else {
                         completed += 1;
                     }
@@ -245,7 +280,13 @@ async fn reembed_memories(
             }
         }
 
-        send_progress(progress_tx, "memories", result.memories_total, completed, failed);
+        send_progress(
+            progress_tx,
+            "memories",
+            result.memories_total,
+            completed,
+            failed,
+        );
     }
 
     result.memories_updated = completed;

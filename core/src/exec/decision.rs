@@ -313,7 +313,10 @@ mod tests {
     fn test_is_safe_bin_usage() {
         assert!(is_safe_bin_usage("echo", &["echo".into(), "hello".into()]));
         assert!(is_safe_bin_usage("ls", &["ls".into(), "-la".into()]));
-        assert!(!is_safe_bin_usage("cat", &["cat".into(), "/etc/passwd".into()]));
+        assert!(!is_safe_bin_usage(
+            "cat",
+            &["cat".into(), "/etc/passwd".into()]
+        ));
         assert!(!is_safe_bin_usage("npm", &["npm".into(), "install".into()]));
     }
 

@@ -51,9 +51,9 @@ mod tests {
     use super::*;
     use crate::thinker::prompt_builder::PromptConfig;
 
-    use crate::thinker::memory_context::{MemoryContext, MemorySummary};
-    use crate::memory::store::types::ScoredFact;
     use crate::memory::context::{FactType, MemoryFact};
+    use crate::memory::store::types::ScoredFact;
+    use crate::thinker::memory_context::{MemoryContext, MemorySummary};
 
     #[test]
     fn metadata() {
@@ -98,12 +98,13 @@ mod tests {
         let layer = MemoryAugmentationLayer;
         let config = PromptConfig::default();
 
-        let fact = MemoryFact::new("User prefers dark mode".to_string(), FactType::Preference, vec![]);
+        let fact = MemoryFact::new(
+            "User prefers dark mode".to_string(),
+            FactType::Preference,
+            vec![],
+        );
         let ctx = MemoryContext {
-            facts: vec![ScoredFact {
-                fact,
-                score: 0.9,
-            }],
+            facts: vec![ScoredFact { fact, score: 0.9 }],
             memory_summaries: vec![MemorySummary {
                 date: "2026-03-05".to_string(),
                 user_input: "How to configure embedding?".to_string(),

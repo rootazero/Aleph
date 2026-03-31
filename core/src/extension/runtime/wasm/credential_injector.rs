@@ -58,8 +58,7 @@ pub fn inject_credential(
     secrets: &[(String, String)],
 ) -> Result<Option<String>, CredentialError> {
     // 1. Parse URL to extract host.
-    let parsed =
-        Url::parse(url).map_err(|e| CredentialError::InvalidUrl(format!("{}", e)))?;
+    let parsed = Url::parse(url).map_err(|e| CredentialError::InvalidUrl(format!("{}", e)))?;
 
     let host = parsed
         .host_str()
@@ -97,10 +96,7 @@ pub fn inject_credential(
             use base64::{engine::general_purpose, Engine as _};
             let encoded =
                 general_purpose::STANDARD.encode(format!("{}:{}", username, secret_value));
-            headers.push((
-                "Authorization".to_string(),
-                format!("Basic {}", encoded),
-            ));
+            headers.push(("Authorization".to_string(), format!("Basic {}", encoded)));
             Ok(None)
         }
 
@@ -151,8 +147,12 @@ mod tests {
         let mut headers = Vec::new();
         let secrets = vec![("slack_token".to_string(), "xoxb-secret-value".to_string())];
 
-        let result =
-            inject_credential(&binding, "https://slack.com/api/test", &mut headers, &secrets);
+        let result = inject_credential(
+            &binding,
+            "https://slack.com/api/test",
+            &mut headers,
+            &secrets,
+        );
 
         assert!(result.is_ok());
         assert!(result.unwrap().is_none());
@@ -242,8 +242,12 @@ mod tests {
         let mut headers = Vec::new();
         let secrets = vec![("slack_token".to_string(), "xoxb-secret".to_string())];
 
-        let result =
-            inject_credential(&binding, "https://evil.com/api/steal", &mut headers, &secrets);
+        let result = inject_credential(
+            &binding,
+            "https://evil.com/api/steal",
+            &mut headers,
+            &secrets,
+        );
 
         assert!(result.is_ok());
         assert!(result.unwrap().is_none());
@@ -265,8 +269,12 @@ mod tests {
         let mut headers = Vec::new();
         let secrets: Vec<(String, String)> = vec![]; // empty
 
-        let result =
-            inject_credential(&binding, "https://slack.com/api/test", &mut headers, &secrets);
+        let result = inject_credential(
+            &binding,
+            "https://slack.com/api/test",
+            &mut headers,
+            &secrets,
+        );
 
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -307,8 +315,7 @@ mod tests {
 
         // Verify Base64 encoding: "admin:s3cret" -> "YWRtaW46czNjcmV0"
         use base64::{engine::general_purpose, Engine as _};
-        let expected =
-            format!("Basic {}", general_purpose::STANDARD.encode("admin:s3cret"));
+        let expected = format!("Basic {}", general_purpose::STANDARD.encode("admin:s3cret"));
         assert_eq!(headers[0].1, expected);
     }
 

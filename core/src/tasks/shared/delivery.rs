@@ -6,11 +6,11 @@
 //! This module is task-type-agnostic: cron, heartbeat, or any future
 //! task type can use it by constructing a `DeliveryPayload`.
 
+use crate::sync_primitives::Arc;
 use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use crate::sync_primitives::Arc;
 
 // ── Delivery type definitions ────────────────────────────────────────
 
@@ -410,7 +410,11 @@ mod tests {
         let outcomes = engine.deliver(&payload, &config).await;
         assert_eq!(outcomes.len(), 1);
         assert!(!outcomes[0].success);
-        assert!(outcomes[0].message.as_ref().unwrap().contains("not registered"));
+        assert!(outcomes[0]
+            .message
+            .as_ref()
+            .unwrap()
+            .contains("not registered"));
     }
 
     #[test]

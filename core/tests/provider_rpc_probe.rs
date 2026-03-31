@@ -5,8 +5,8 @@
 //! including config persistence, error paths, and concurrent access.
 
 mod provider_rpc_probe {
-    pub mod harness;
     pub mod endpoint_tests;
     pub mod error_tests;
+    pub mod harness;
     pub mod robustness_tests;
 }

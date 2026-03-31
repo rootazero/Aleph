@@ -40,7 +40,9 @@ pub enum PatchError {
         file_lines: usize,
     },
 
-    #[error("Content mismatch at lines {start}-{end}:\nExpected:\n{expected}\n\nActual:\n{actual}")]
+    #[error(
+        "Content mismatch at lines {start}-{end}:\nExpected:\n{expected}\n\nActual:\n{actual}"
+    )]
     ContentMismatch {
         start: usize,
         end: usize,
@@ -280,7 +282,10 @@ mod tests {
 
         let result = patch.validate(content);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), PatchError::ContentMismatch { .. }));
+        assert!(matches!(
+            result.unwrap_err(),
+            PatchError::ContentMismatch { .. }
+        ));
     }
 
     #[test]
@@ -295,7 +300,10 @@ mod tests {
 
         let result = patch.validate(content);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), PatchError::InvalidLineRange { .. }));
+        assert!(matches!(
+            result.unwrap_err(),
+            PatchError::InvalidLineRange { .. }
+        ));
     }
 
     #[test]
@@ -337,7 +345,10 @@ mod tests {
         };
 
         let result = patch.apply(content).unwrap();
-        assert_eq!(result, "line1\nnew_line2\nextra_line\nanother_line\nline3\n");
+        assert_eq!(
+            result,
+            "line1\nnew_line2\nextra_line\nanother_line\nline3\n"
+        );
     }
 
     #[test]
@@ -476,7 +487,10 @@ mod tests {
         let applier = PatchApplier::new(vec![patch1, patch2]);
         let result = applier.apply_all(content);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), PatchError::ConflictDetected(_)));
+        assert!(matches!(
+            result.unwrap_err(),
+            PatchError::ConflictDetected(_)
+        ));
     }
 
     #[test]

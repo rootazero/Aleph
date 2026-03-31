@@ -32,11 +32,11 @@ pub use message_ops::MattermostMessageOps;
 
 use crate::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
-    ChannelResult, ChannelState, ChannelStatus, ConversationId, MessageId,
-    OutboundMessage, SendResult,
+    ChannelResult, ChannelState, ChannelStatus, ConversationId, MessageId, OutboundMessage,
+    SendResult,
 };
-use async_trait::async_trait;
 use crate::sync_primitives::Arc;
+use async_trait::async_trait;
 use tokio::sync::{watch, RwLock};
 
 /// Mattermost channel implementation using WebSocket + REST API v4.
@@ -114,21 +114,16 @@ impl Channel for MattermostChannel {
 
     async fn start(&mut self) -> ChannelResult<()> {
         // Validate configuration
-        self.config
-            .validate()
-            .map_err(ChannelError::ConfigError)?;
+        self.config.validate().map_err(ChannelError::ConfigError)?;
 
         self.set_status(ChannelStatus::Connecting).await;
         tracing::info!("Starting Mattermost channel...");
 
         // Validate bot token via /api/v4/users/me
         let server = self.config.server_url_trimmed().to_string();
-        match MattermostMessageOps::get_me(&self.client, &server, &self.config.bot_token).await
-        {
+        match MattermostMessageOps::get_me(&self.client, &server, &self.config.bot_token).await {
             Ok((user_id, username)) => {
-                tracing::info!(
-                    "Mattermost bot authenticated as {username} (user_id: {user_id})"
-                );
+                tracing::info!("Mattermost bot authenticated as {username} (user_id: {user_id})");
                 *self.bot_user_id.write().await = Some(user_id);
             }
             Err(e) => {
@@ -211,7 +206,6 @@ impl Channel for MattermostChannel {
             root_id.as_deref(),
         )
         .await
-
     }
 
     async fn send_typing(&self, conversation_id: &ConversationId) -> ChannelResult<()> {
@@ -227,10 +221,14 @@ impl Channel for MattermostChannel {
         } else {
             Ok(())
         }
-
     }
 
-    async fn edit(&self, _conversation_id: &ConversationId, message_id: &MessageId, new_text: &str) -> ChannelResult<()> {
+    async fn edit(
+        &self,
+        _conversation_id: &ConversationId,
+        message_id: &MessageId,
+        new_text: &str,
+    ) -> ChannelResult<()> {
         // Mattermost edit requires PUT /api/v4/posts/{post_id}
         let server = self.config.server_url_trimmed().to_string();
         let url = format!("{server}/api/v4/posts/{}", message_id.as_str());
@@ -258,10 +256,13 @@ impl Channel for MattermostChannel {
         }
 
         Ok(())
-
     }
 
-    async fn delete(&self, _conversation_id: &ConversationId, message_id: &MessageId) -> ChannelResult<()> {
+    async fn delete(
+        &self,
+        _conversation_id: &ConversationId,
+        message_id: &MessageId,
+    ) -> ChannelResult<()> {
         // Mattermost delete: DELETE /api/v4/posts/{post_id}
         let server = self.config.server_url_trimmed().to_string();
         let url = format!("{server}/api/v4/posts/{}", message_id.as_str());
@@ -283,10 +284,14 @@ impl Channel for MattermostChannel {
         }
 
         Ok(())
-
     }
 
-    async fn react(&self, _conversation_id: &ConversationId, message_id: &MessageId, reaction: &str) -> ChannelResult<()> {
+    async fn react(
+        &self,
+        _conversation_id: &ConversationId,
+        message_id: &MessageId,
+        reaction: &str,
+    ) -> ChannelResult<()> {
         // Mattermost reaction: POST /api/v4/reactions
         let server = self.config.server_url_trimmed().to_string();
         let url = format!("{server}/api/v4/reactions");
@@ -320,7 +325,6 @@ impl Channel for MattermostChannel {
         }
 
         Ok(())
-
     }
 }
 
@@ -337,9 +341,7 @@ impl ChannelFactory for MattermostChannelFactory {
         let config: MattermostConfig = serde_json::from_value(config)
             .map_err(|e| ChannelError::ConfigError(format!("Invalid Mattermost config: {}", e)))?;
 
-        config
-            .validate()
-            .map_err(ChannelError::ConfigError)?;
+        config.validate().map_err(ChannelError::ConfigError)?;
 
         Ok(Box::new(MattermostChannel::new("mattermost", config)))
     }

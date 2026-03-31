@@ -47,9 +47,9 @@
 //! ```
 
 use crate::dispatcher::{RoutingLayer, UnifiedTool};
+use crate::sync_primitives::{Arc, RwLock};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use crate::sync_primitives::{Arc, RwLock};
 use std::time::{Duration, Instant};
 use uuid::Uuid;
 
@@ -321,7 +321,10 @@ impl PendingConfirmationStore {
     ///
     /// Returns false if store is full
     pub fn insert(&self, confirmation: PendingConfirmation) -> bool {
-        let mut confirmations = self.confirmations.write().unwrap_or_else(|e| e.into_inner());
+        let mut confirmations = self
+            .confirmations
+            .write()
+            .unwrap_or_else(|e| e.into_inner());
 
         // Cleanup expired confirmations first
         confirmations.retain(|_, c| !c.is_expired());
@@ -343,7 +346,10 @@ impl PendingConfirmationStore {
 
     /// Remove and return a pending confirmation by ID
     pub fn remove(&self, id: &str) -> Option<PendingConfirmation> {
-        let mut confirmations = self.confirmations.write().unwrap_or_else(|e| e.into_inner());
+        let mut confirmations = self
+            .confirmations
+            .write()
+            .unwrap_or_else(|e| e.into_inner());
         confirmations.remove(id)
     }
 
@@ -377,7 +383,10 @@ impl PendingConfirmationStore {
     ///
     /// Returns a list of confirmation IDs that were expired and removed.
     pub fn cleanup_expired_with_ids(&self) -> Vec<String> {
-        let mut confirmations = self.confirmations.write().unwrap_or_else(|e| e.into_inner());
+        let mut confirmations = self
+            .confirmations
+            .write()
+            .unwrap_or_else(|e| e.into_inner());
         let expired_ids: Vec<String> = confirmations
             .iter()
             .filter(|(_, c)| c.is_expired())
@@ -389,7 +398,10 @@ impl PendingConfirmationStore {
 
     /// Clear all pending confirmations
     pub fn clear(&self) {
-        let mut confirmations = self.confirmations.write().unwrap_or_else(|e| e.into_inner());
+        let mut confirmations = self
+            .confirmations
+            .write()
+            .unwrap_or_else(|e| e.into_inner());
         confirmations.clear();
     }
 

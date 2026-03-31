@@ -15,8 +15,8 @@
 //! | `discord.audit_permissions` | Audit bot permissions in a guild     |
 //! | `discord.update_allowlists` | Update guild/channel allowlists      |
 
-use serde_json::{json, Value};
 use crate::sync_primitives::Arc;
+use serde_json::{json, Value};
 use tracing::{debug, info};
 
 use crate::gateway::channel::{ChannelId, ChannelStatus};
@@ -86,11 +86,7 @@ pub async fn handle_validate_token(request: JsonRpcRequest) -> JsonRpcResponse {
     let params = match &request.params {
         Some(Value::Object(map)) => map,
         _ => {
-            return JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                "Missing params object",
-            );
+            return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Missing params object");
         }
     };
 
@@ -146,11 +142,7 @@ pub async fn handle_save_config(request: JsonRpcRequest) -> JsonRpcResponse {
     let params = match &request.params {
         Some(Value::Object(map)) => map,
         _ => {
-            return JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                "Missing params object",
-            );
+            return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Missing params object");
         }
     };
 
@@ -171,7 +163,10 @@ pub async fn handle_save_config(request: JsonRpcRequest) -> JsonRpcResponse {
 
     // TODO: persist config to disk / config store
     info!("discord.save_config called (persistence not yet implemented)");
-    debug!("Config keys received: {:?}", params.keys().collect::<Vec<_>>());
+    debug!(
+        "Config keys received: {:?}",
+        params.keys().collect::<Vec<_>>()
+    );
 
     JsonRpcResponse::success(request.id, json!({ "success": true }))
 }
@@ -187,10 +182,7 @@ pub async fn handle_list_guilds(
     request: JsonRpcRequest,
     registry: Arc<ChannelRegistry>,
 ) -> JsonRpcResponse {
-    let params = request
-        .params
-        .as_ref()
-        .and_then(|v| v.as_object());
+    let params = request.params.as_ref().and_then(|v| v.as_object());
 
     let channel_id = params
         .and_then(|p| param_str(p, "channel_id"))
@@ -243,11 +235,7 @@ pub async fn handle_list_channels(
     let params = match &request.params {
         Some(Value::Object(map)) => map,
         _ => {
-            return JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                "Missing params object",
-            );
+            return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Missing params object");
         }
     };
 
@@ -314,11 +302,7 @@ pub async fn handle_audit_permissions(
     let params = match &request.params {
         Some(Value::Object(map)) => map,
         _ => {
-            return JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                "Missing params object",
-            );
+            return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Missing params object");
         }
     };
 
@@ -387,11 +371,7 @@ pub async fn handle_update_allowlists(
     let params = match &request.params {
         Some(Value::Object(map)) => map,
         _ => {
-            return JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                "Missing params object",
-            );
+            return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Missing params object");
         }
     };
 
@@ -510,7 +490,10 @@ mod tests {
     #[tokio::test]
     async fn test_list_guilds_channel_not_found() {
         let registry = Arc::new(ChannelRegistry::new());
-        let req = make_request("discord.list_guilds", json!({ "channel_id": "nonexistent" }));
+        let req = make_request(
+            "discord.list_guilds",
+            json!({ "channel_id": "nonexistent" }),
+        );
         let res = handle_list_guilds(req, registry).await;
         assert!(res.is_error());
         assert!(res.error.unwrap().message.contains("not found"));
@@ -532,7 +515,10 @@ mod tests {
     #[tokio::test]
     async fn test_audit_permissions_missing_guild_id() {
         let registry = Arc::new(ChannelRegistry::new());
-        let req = make_request("discord.audit_permissions", json!({ "channel_id": "discord" }));
+        let req = make_request(
+            "discord.audit_permissions",
+            json!({ "channel_id": "discord" }),
+        );
         let res = handle_audit_permissions(req, registry).await;
         assert!(res.is_error());
         assert!(res.error.unwrap().message.contains("guild_id"));

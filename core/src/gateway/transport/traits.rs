@@ -26,9 +26,7 @@ pub enum BridgeEvent {
     Ready,
 
     /// Bridge status changed (e.g. "connecting", "connected", "disconnected").
-    StatusChange {
-        status: String,
-    },
+    StatusChange { status: String },
 
     /// Pairing flow progress update (QR code, scan, sync, etc.).
     PairingUpdate(PairingEvent),
@@ -66,9 +64,7 @@ pub enum BridgeEvent {
     },
 
     /// An error reported by the bridge process.
-    Error {
-        message: String,
-    },
+    Error { message: String },
 }
 
 /// Pairing flow events, tagged by `"phase"`.
@@ -95,9 +91,7 @@ pub enum PairingEvent {
         identifier: String,
     },
     /// Pairing failed with an error.
-    Failed {
-        error: String,
-    },
+    Failed { error: String },
 }
 
 /// A file attachment carried within a [`BridgeEvent::Message`].
@@ -288,10 +282,8 @@ mod tests {
             let back: BridgeEvent = serde_json::from_str(&json).expect("deserialize");
 
             // Verify the round-trip preserves the discriminant tag.
-            let json_orig: serde_json::Value =
-                serde_json::from_str(&json).expect("parse original");
-            let json_back: serde_json::Value =
-                serde_json::to_value(&back).expect("re-serialize");
+            let json_orig: serde_json::Value = serde_json::from_str(&json).expect("parse original");
+            let json_back: serde_json::Value = serde_json::to_value(&back).expect("re-serialize");
             assert_eq!(json_orig, json_back, "round-trip mismatch for: {json}");
         }
     }
@@ -318,10 +310,8 @@ mod tests {
         for event in &events {
             let json = serde_json::to_string(event).expect("serialize");
             let back: PairingEvent = serde_json::from_str(&json).expect("deserialize");
-            let json_orig: serde_json::Value =
-                serde_json::from_str(&json).expect("parse original");
-            let json_back: serde_json::Value =
-                serde_json::to_value(&back).expect("re-serialize");
+            let json_orig: serde_json::Value = serde_json::from_str(&json).expect("parse original");
+            let json_back: serde_json::Value = serde_json::to_value(&back).expect("re-serialize");
             assert_eq!(json_orig, json_back, "round-trip mismatch for: {json}");
         }
     }

@@ -15,12 +15,7 @@ fn make_store() -> (CronStore, TempDir) {
     (store, dir)
 }
 
-fn insert_job(
-    store: &mut CronStore,
-    id: &str,
-    on_success: Option<&str>,
-    interval_ms: i64,
-) {
+fn insert_job(store: &mut CronStore, id: &str, on_success: Option<&str>, interval_ms: i64) {
     let mut job = CronJob::new(
         id,
         "test-agent",
@@ -50,7 +45,10 @@ fn chain_on_success() {
     let now = 1_000_000;
     let triggered = trigger_chain_job(&mut store, "job-b", now).unwrap();
 
-    assert!(triggered, "trigger_chain_job should return true for enabled target");
+    assert!(
+        triggered,
+        "trigger_chain_job should return true for enabled target"
+    );
     let job_b = store.get_job("job-b").unwrap();
     assert_eq!(
         job_b.state.next_run_at_ms,
@@ -81,7 +79,10 @@ fn chain_disabled_target_skipped() {
     store.add_job(job);
 
     let result = trigger_chain_job(&mut store, "disabled-target", 1_000_000);
-    assert!(result.is_ok(), "trigger_chain_job should not panic on disabled target");
+    assert!(
+        result.is_ok(),
+        "trigger_chain_job should not panic on disabled target"
+    );
     assert!(
         !result.unwrap(),
         "trigger_chain_job should return false for disabled target"
@@ -103,10 +104,7 @@ fn chain_cycle_rejected() {
     // detect_cycle(store, start_id="b", new_target="a")
     // This follows from "a" through its chain: a→b, which leads back to "b" (start_id)
     let is_cycle = detect_cycle(&store, "b", "a").unwrap();
-    assert!(
-        is_cycle,
-        "A→B→A should be detected as a cycle"
-    );
+    assert!(is_cycle, "A→B→A should be detected as a cycle");
 }
 
 // ── 4. chain_no_cycle_linear ────────────────────────────────────────────

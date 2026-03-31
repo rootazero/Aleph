@@ -222,9 +222,8 @@ pub async fn handle_create(
         }
     };
 
-    let mut task = crate::tasks::heartbeat::config::HeartbeatTask::new(
-        name, agent_id, interval_ms, probe,
-    );
+    let mut task =
+        crate::tasks::heartbeat::config::HeartbeatTask::new(name, agent_id, interval_ms, probe);
 
     // Optional: enabled
     if let Some(enabled) = params.get("enabled").and_then(|v| v.as_bool()) {
@@ -238,9 +237,7 @@ pub async fn handle_create(
         Some(view) => {
             JsonRpcResponse::success(request.id, json!({ "task": task_view_to_json(&view) }))
         }
-        None => {
-            JsonRpcResponse::success(request.id, json!({ "task": { "id": task_id } }))
-        }
+        None => JsonRpcResponse::success(request.id, json!({ "task": { "id": task_id } })),
     }
 }
 
@@ -358,7 +355,10 @@ pub async fn handle_toggle(
             enabled: Some(enabled),
             ..Default::default()
         };
-        service.update_task(&task_id, updates, &clock).await.map(|()| enabled)
+        service
+            .update_task(&task_id, updates, &clock)
+            .await
+            .map(|()| enabled)
     } else {
         service.toggle_task(&task_id, &clock).await
     };
@@ -476,10 +476,7 @@ pub async fn handle_runs(
                     })
                 })
                 .collect();
-            JsonRpcResponse::success(
-                request.id,
-                json!({ "task_id": task_id, "runs": runs_json }),
-            )
+            JsonRpcResponse::success(request.id, json!({ "task_id": task_id, "runs": runs_json }))
         }
         Err(e) => JsonRpcResponse::error(
             request.id,

@@ -90,7 +90,12 @@ mod tests {
     #[test]
     fn test_deterministic_truncate_long() {
         let messages: Vec<(String, String)> = (0..100)
-            .map(|i| ("user".to_string(), format!("Message number {} with content.", i)))
+            .map(|i| {
+                (
+                    "user".to_string(),
+                    format!("Message number {} with content.", i),
+                )
+            })
             .collect();
         let result = deterministic_truncate(&messages, 512);
         assert!(result.ends_with("[Truncated]"));

@@ -16,17 +16,28 @@ Current Channel has voice mode enabled. Your replies will be converted to speech
 "#;
 
 impl PromptLayer for VoiceModeLayer {
-    fn name(&self) -> &'static str { "voice_mode" }
-    fn priority(&self) -> u32 { 1710 }
-    fn stability(&self) -> LayerStability { LayerStability::Dynamic }
+    fn name(&self) -> &'static str {
+        "voice_mode"
+    }
+    fn priority(&self) -> u32 {
+        1710
+    }
+    fn stability(&self) -> LayerStability {
+        LayerStability::Dynamic
+    }
     fn paths(&self) -> &'static [AssemblyPath] {
-        &[AssemblyPath::Soul, AssemblyPath::Context, AssemblyPath::Cached]
+        &[
+            AssemblyPath::Soul,
+            AssemblyPath::Context,
+            AssemblyPath::Cached,
+        ]
     }
     fn supports_mode(&self, mode: PromptMode) -> bool {
         matches!(mode, PromptMode::Full | PromptMode::Compact)
     }
     fn inject(&self, output: &mut String, input: &LayerInput) {
-        let active = input.inbound
+        let active = input
+            .inbound
             .map(|ctx| ctx.voice_mode_active)
             .unwrap_or(false);
         if active {

@@ -93,7 +93,11 @@ fn test_context_verbosity_prompt_generation() {
     let goal = Goal::new("Find config");
     let mut ctx = ExecutionContext::new(intent, goal);
     ctx.add_knowledge(Knowledge::new("project_type", "rust", "analysis").with_confidence(0.95));
-    ctx.add_decision("Analyze project first", "Need to understand structure", vec![]);
+    ctx.add_decision(
+        "Analyze project first",
+        "Need to understand structure",
+        vec![],
+    );
 
     let minimal = ctx.to_prompt(ContextVerbosity::Minimal);
     assert!(minimal.contains("Find config"));
@@ -169,7 +173,8 @@ fn test_part_update_data_creation() {
     assert!(!added.part_json.is_empty());
 
     // Test updated event with delta
-    let updated = PartUpdateData::updated("session-1", &tool_call, Some("output chunk".to_string()));
+    let updated =
+        PartUpdateData::updated("session-1", &tool_call, Some("output chunk".to_string()));
     assert_eq!(updated.event_type, PartEventType::Updated);
     assert_eq!(updated.delta, Some("output chunk".to_string()));
 
@@ -391,7 +396,8 @@ fn test_new_session_part_type_names() {
     let step_start = SessionPart::StepStart(StepStartPart::new(1));
     assert_eq!(step_start.type_name(), "step_start");
 
-    let step_finish = SessionPart::StepFinish(StepFinishPart::new(1, StepFinishReason::Completed, 100));
+    let step_finish =
+        SessionPart::StepFinish(StepFinishPart::new(1, StepFinishReason::Completed, 100));
     assert_eq!(step_finish.type_name(), "step_finish");
 
     let snapshot = SessionPart::Snapshot(SnapshotPart::new("s-001"));
@@ -409,7 +415,8 @@ fn test_new_session_part_ids() {
     let step_start = SessionPart::StepStart(StepStartPart::new(5));
     assert_eq!(step_start.part_id(), "step_start_5");
 
-    let step_finish = SessionPart::StepFinish(StepFinishPart::new(5, StepFinishReason::Completed, 100));
+    let step_finish =
+        SessionPart::StepFinish(StepFinishPart::new(5, StepFinishReason::Completed, 100));
     assert_eq!(step_finish.part_id(), "step_finish_5");
 
     let snapshot = SessionPart::Snapshot(SnapshotPart::new("snap-123"));

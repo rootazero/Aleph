@@ -6,9 +6,9 @@
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
     use std::future::Future;
     use std::pin::Pin;
-    use serde_json::json;
 
     use tokio_util::sync::CancellationToken;
 
@@ -199,7 +199,7 @@ mod tests {
                         input_tokens: 10,
                         output_tokens: 5,
                         cache_read_tokens: None,
-                thinking_tokens: None,
+                        thinking_tokens: None,
                     }),
                 },
                 // Turn 2: final text
@@ -212,7 +212,7 @@ mod tests {
                         input_tokens: 20,
                         output_tokens: 5,
                         cache_read_tokens: None,
-                thinking_tokens: None,
+                        thinking_tokens: None,
                     }),
                 },
             ],
@@ -225,7 +225,10 @@ mod tests {
 
         assert_eq!(result.iterations, 2);
         assert_eq!(result.tool_calls_made, 1);
-        assert_eq!(result.final_text.as_deref(), Some("Echo complete. <task-complete/>"));
+        assert_eq!(
+            result.final_text.as_deref(),
+            Some("Echo complete. <task-complete/>")
+        );
 
         // Verify captured requests show history accumulation
         let caps = captured.lock().unwrap_or_else(|e| e.into_inner());
@@ -297,7 +300,10 @@ mod tests {
             .unwrap();
 
         assert_eq!(result.iterations, 1);
-        assert_eq!(result.final_text.as_deref(), Some("Handled with repaired history."));
+        assert_eq!(
+            result.final_text.as_deref(),
+            Some("Handled with repaired history.")
+        );
 
         // Verify the bridge's transform_messages inserted a synthetic ToolResult
         let caps = captured.lock().unwrap_or_else(|e| e.into_inner());
@@ -389,10 +395,16 @@ mod tests {
         assert_eq!(caps.len(), 1);
 
         // System prompt should be non-empty and contain tool description
-        let sys = caps[0].system_prompt.as_ref().expect("system prompt should be set");
+        let sys = caps[0]
+            .system_prompt
+            .as_ref()
+            .expect("system prompt should be set");
         assert!(!sys.is_empty());
         // The prompt builder includes tool descriptions in "Available Tools" section
-        assert!(sys.contains("echo"), "system prompt should mention the echo tool");
+        assert!(
+            sys.contains("echo"),
+            "system prompt should mention the echo tool"
+        );
         assert!(
             sys.contains("Echoes the input back"),
             "system prompt should contain tool description"

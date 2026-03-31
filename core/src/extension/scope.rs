@@ -1,10 +1,13 @@
 //! Plugin scope path resolution
 
-use std::path::{Path, PathBuf};
 use crate::extension::types::PluginScope;
+use std::path::{Path, PathBuf};
 
 /// Resolve the plugin install directory for a given scope
-pub fn scope_install_dir(scope: PluginScope, project_dir: Option<&Path>) -> Result<PathBuf, String> {
+pub fn scope_install_dir(
+    scope: PluginScope,
+    project_dir: Option<&Path>,
+) -> Result<PathBuf, String> {
     match scope {
         PluginScope::User => {
             let home = crate::discovery::aleph_home_dir()
@@ -31,7 +34,10 @@ pub fn scope_dirs_by_priority(
 
     if let Some(aid) = agent_id {
         if let Ok(home) = crate::discovery::aleph_home_dir() {
-            dirs.push(("agent".to_string(), home.join(format!("agents/{}/plugins", aid))));
+            dirs.push((
+                "agent".to_string(),
+                home.join(format!("agents/{}/plugins", aid)),
+            ));
         }
     }
     if let Some(project) = project_dir {
@@ -51,7 +57,10 @@ pub fn parse_scope(s: &str) -> Result<PluginScope, String> {
         "user" => Ok(PluginScope::User),
         "project" => Ok(PluginScope::Project),
         "local" => Ok(PluginScope::Local),
-        _ => Err(format!("Invalid scope '{}'. Expected: user, project, local", s)),
+        _ => Err(format!(
+            "Invalid scope '{}'. Expected: user, project, local",
+            s
+        )),
     }
 }
 
@@ -64,7 +73,11 @@ mod tests {
     fn test_scope_install_dir_user() {
         // User scope should resolve to ~/.aleph/plugins/installed
         let result = scope_install_dir(PluginScope::User, None);
-        assert!(result.is_ok(), "User scope should succeed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "User scope should succeed: {:?}",
+            result.err()
+        );
         let path = result.unwrap();
         assert!(
             path.to_string_lossy().contains("plugins/installed"),
@@ -99,7 +112,10 @@ mod tests {
         let result = scope_install_dir(PluginScope::Project, None);
         assert!(result.is_err());
         let msg = result.unwrap_err();
-        assert!(msg.contains("Project scope requires a project directory"), "got: {msg}");
+        assert!(
+            msg.contains("Project scope requires a project directory"),
+            "got: {msg}"
+        );
     }
 
     #[test]
@@ -107,7 +123,10 @@ mod tests {
         let result = scope_install_dir(PluginScope::Local, None);
         assert!(result.is_err());
         let msg = result.unwrap_err();
-        assert!(msg.contains("Local scope requires a project directory"), "got: {msg}");
+        assert!(
+            msg.contains("Local scope requires a project directory"),
+            "got: {msg}"
+        );
     }
 
     #[test]
@@ -124,7 +143,10 @@ mod tests {
         let err = parse_scope("global").unwrap_err();
         assert!(err.contains("Invalid scope"), "got: {err}");
         let err2 = parse_scope("workspace").unwrap_err();
-        assert!(err2.contains("Expected: user, project, local"), "got: {err2}");
+        assert!(
+            err2.contains("Expected: user, project, local"),
+            "got: {err2}"
+        );
     }
 
     #[test]

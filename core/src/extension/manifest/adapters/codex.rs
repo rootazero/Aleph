@@ -93,24 +93,18 @@ impl ManifestAdapter for CodexAdapter {
 
         Ok(AdapterOutput {
             plugin_id: plugin_id.clone(),
-            name: json
-                .get("name")
-                .and_then(|v| v.as_str())
-                .map(String::from),
+            name: json.get("name").and_then(|v| v.as_str()).map(String::from),
             version: json
                 .get("version")
                 .and_then(|v| v.as_str())
                 .map(String::from),
-            description: json
-                .get("description")
-                .and_then(|v| v.as_str())
-                .map(|d| {
-                    if json.get("apps").is_some() {
-                        format!("{} [has Codex apps]", d)
-                    } else {
-                        d.to_string()
-                    }
-                }),
+            description: json.get("description").and_then(|v| v.as_str()).map(|d| {
+                if json.get("apps").is_some() {
+                    format!("{} [has Codex apps]", d)
+                } else {
+                    d.to_string()
+                }
+            }),
             capabilities: caps,
             source: CapabilitySource {
                 plugin_id,

@@ -3,7 +3,7 @@
 //! Provides command implementations for listing, showing, adding, editing, and managing facts.
 
 use crate::error::AlephError;
-use crate::memory::context::{FactType, MemoryFact, FactSpecificity, TemporalScope};
+use crate::memory::context::{FactSpecificity, FactType, MemoryFact, TemporalScope};
 use crate::memory::store::{MemoryBackend, MemoryStore};
 use crate::memory::EmbeddingProvider;
 use crate::sync_primitives::Arc;
@@ -211,7 +211,11 @@ impl MemoryCommands {
             .collect();
 
         // Sort by strength descending
-        summaries.sort_by(|a, b| b.strength.partial_cmp(&a.strength).unwrap_or(std::cmp::Ordering::Equal));
+        summaries.sort_by(|a, b| {
+            b.strength
+                .partial_cmp(&a.strength)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         // Apply limit
         if let Some(limit) = filter.limit {
@@ -227,7 +231,7 @@ impl MemoryCommands {
         if let Some(fact) = self.db.get_fact(id).await? {
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
+                .unwrap_or_default()
                 .as_secs() as i64;
             let days_old = (now - fact.updated_at) as f32 / 86400.0;
             let strength = if fact.is_valid {
@@ -248,7 +252,7 @@ impl MemoryCommands {
                 let fact = matches[0];
                 let now = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
+                    .unwrap_or_default()
                     .as_secs() as i64;
                 let days_old = (now - fact.updated_at) as f32 / 86400.0;
                 let strength = if fact.is_valid {
@@ -272,9 +276,8 @@ impl MemoryCommands {
             OutputFormat::Table => {
                 let mut output = String::new();
                 output.push_str("ID          TYPE         STRENGTH  CONTENT\n");
-                output.push_str(
-                    "---------------------------------------------------------------\n",
-                );
+                output
+                    .push_str("---------------------------------------------------------------\n");
                 for s in summaries {
                     output.push_str(&s.to_table_row());
                     output.push('\n');
@@ -371,9 +374,7 @@ impl MemoryCommands {
         // Update in database
         // TODO: Handle embedding update separately if needed
         let _ = embedding; // embedding update not supported in new API
-        self.db
-            .update_fact_content(&full_id, new_content)
-            .await?;
+        self.db.update_fact_content(&full_id, new_content).await?;
 
         Ok(full_id)
     }
@@ -396,7 +397,9 @@ impl MemoryCommands {
 
         // TODO: Implement restore via new store API (update fact to set is_valid = true)
         // self.db.restore_fact(&full_id).await?;
-        return Err(AlephError::other("restore_fact not yet implemented in new store API"));
+        return Err(AlephError::other(
+            "restore_fact not yet implemented in new store API",
+        ));
 
         #[allow(unreachable_code)]
         Ok(_full_id)
@@ -430,9 +433,15 @@ impl MemoryCommands {
     pub async fn gc(&self, retention_days: u32) -> Result<GcResult, AlephError> {
         // TODO: Implement purge via new store API
         let deleted = 0usize; // self.db.purge_old_invalidated_facts(retention_days).await?;
-        let valid_facts = self.db.count_facts(&crate::memory::store::types::SearchFilter::valid_only(None)).await?;
+        let valid_facts = self
+            .db
+            .count_facts(&crate::memory::store::types::SearchFilter::valid_only(None))
+            .await?;
         let remaining_invalid = {
-            let all = self.db.count_facts(&crate::memory::store::types::SearchFilter::new()).await?;
+            let all = self
+                .db
+                .count_facts(&crate::memory::store::types::SearchFilter::new())
+                .await?;
             all.saturating_sub(valid_facts)
         };
 
@@ -452,7 +461,7 @@ impl MemoryCommands {
             version: 1,
             exported_at: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
+                .unwrap_or_default()
                 .as_secs() as i64,
             facts: facts.into_iter().map(ExportedFact::from).collect(),
         };
@@ -525,9 +534,15 @@ impl MemoryCommands {
 
     /// Get statistics about the memory database
     pub async fn stats(&self) -> Result<MemoryStats, AlephError> {
-        let valid = self.db.count_facts(&crate::memory::store::types::SearchFilter::valid_only(None)).await?;
+        let valid = self
+            .db
+            .count_facts(&crate::memory::store::types::SearchFilter::valid_only(None))
+            .await?;
         let invalid = {
-            let all = self.db.count_facts(&crate::memory::store::types::SearchFilter::new()).await?;
+            let all = self
+                .db
+                .count_facts(&crate::memory::store::types::SearchFilter::new())
+                .await?;
             all.saturating_sub(valid)
         };
 

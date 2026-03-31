@@ -12,10 +12,17 @@ use std::collections::HashMap;
 /// Outcome of a tool execution.
 #[derive(Debug, Clone)]
 pub enum ToolResult {
-    Success { output: Value },
-    Error { error: String, retryable: bool },
+    Success {
+        output: Value,
+    },
+    Error {
+        error: String,
+        retryable: bool,
+    },
     /// Tool succeeded and the agent loop should stop after this iteration.
-    SuccessAndStopLoop { output: Value },
+    SuccessAndStopLoop {
+        output: Value,
+    },
 }
 
 // =============================================================================
@@ -258,7 +265,9 @@ mod tests {
                 assert!(error.contains("unknown tool"));
                 assert!(!retryable);
             }
-            ToolResult::Success { .. } | ToolResult::SuccessAndStopLoop { .. } => panic!("expected error"),
+            ToolResult::Success { .. } | ToolResult::SuccessAndStopLoop { .. } => {
+                panic!("expected error")
+            }
         }
     }
 
@@ -313,10 +322,7 @@ mod tests {
         // Sorted by name: echo < fail
         assert_eq!(defs[0].name, "echo");
         assert_eq!(defs[0].description, "Echoes the input back");
-        assert_eq!(
-            defs[0].parameters["required"],
-            json!(["message"])
-        );
+        assert_eq!(defs[0].parameters["required"], json!(["message"]));
 
         assert_eq!(defs[1].name, "fail");
         assert_eq!(defs[1].description, "Always fails");

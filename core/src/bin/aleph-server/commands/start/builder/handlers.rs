@@ -7,31 +7,28 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use alephcore::gateway::GatewayServer;
-use alephcore::gateway::handlers::session as session_handlers;
-use alephcore::gateway::handlers::channel as channel_handlers;
-use alephcore::gateway::handlers::discord_panel as discord_panel_handlers;
-use alephcore::gateway::handlers::oauth as oauth_handlers;
-use alephcore::gateway::handlers::config as config_handlers;
 use alephcore::gateway::handlers::auth as auth_handlers;
 use alephcore::gateway::handlers::auth_tools as auth_tools_handlers;
-use alephcore::gateway::handlers::memory as memory_handlers;
-use alephcore::gateway::handlers::workspace as workspace_handlers;
-use alephcore::gateway::handlers::identity as identity_handlers;
-use alephcore::gateway::handlers::identity::SharedIdentityResolver;
+use alephcore::gateway::handlers::channel as channel_handlers;
+use alephcore::gateway::handlers::config as config_handlers;
+use alephcore::gateway::handlers::discord_panel as discord_panel_handlers;
 use alephcore::gateway::handlers::group_chat as group_chat_handlers;
 use alephcore::gateway::handlers::group_chat::SharedOrchestrator;
-use alephcore::group_chat::GroupChatExecutor;
+use alephcore::gateway::handlers::identity as identity_handlers;
+use alephcore::gateway::handlers::identity::SharedIdentityResolver;
+use alephcore::gateway::handlers::memory as memory_handlers;
+use alephcore::gateway::handlers::oauth as oauth_handlers;
+use alephcore::gateway::handlers::session as session_handlers;
+use alephcore::gateway::handlers::workspace as workspace_handlers;
+use alephcore::gateway::GatewayServer;
 use alephcore::gateway::{
-    SessionManager,
-    ChannelRegistry,
-    ConfigWatcher, ConfigWatcherConfig, ConfigEvent,
-    AgentEnvStore,
+    AgentEnvStore, ChannelRegistry, ConfigEvent, ConfigWatcher, ConfigWatcherConfig, SessionManager,
 };
+use alephcore::group_chat::GroupChatExecutor;
 use alephcore::memory::store::MemoryBackend;
 
-use crate::server_init::serve_webchat;
 use crate::cli::Args;
+use crate::server_init::serve_webchat;
 
 /// Register a JSON-RPC handler with shared context via Arc.
 ///
@@ -40,9 +37,9 @@ use crate::cli::Args;
 macro_rules! register_handler {
     // No context args (stateless handler)
     ($server:expr, $method:expr, $handler:path) => {{
-        $server.handlers_mut().register($method, |req| async move {
-            $handler(req).await
-        });
+        $server
+            .handlers_mut()
+            .register($method, |req| async move { $handler(req).await });
     }};
     // 1 context arg
     ($server:expr, $method:expr, $handler:path, $ctx1:expr) => {{
@@ -83,17 +80,62 @@ pub(in crate::commands::start) fn register_auth_handlers(
     auth_ctx: &Arc<auth_handlers::AuthContext>,
 ) {
     register_handler!(server, "connect", auth_handlers::handle_connect, auth_ctx);
-    register_handler!(server, "pairing.approve", auth_handlers::handle_pairing_approve, auth_ctx);
-    register_handler!(server, "pairing.reject", auth_handlers::handle_pairing_reject, auth_ctx);
-    register_handler!(server, "pairing.list", auth_handlers::handle_pairing_list, auth_ctx);
-    register_handler!(server, "devices.list", auth_handlers::handle_devices_list, auth_ctx);
-    register_handler!(server, "devices.revoke", auth_handlers::handle_devices_revoke, auth_ctx);
+    register_handler!(
+        server,
+        "pairing.approve",
+        auth_handlers::handle_pairing_approve,
+        auth_ctx
+    );
+    register_handler!(
+        server,
+        "pairing.reject",
+        auth_handlers::handle_pairing_reject,
+        auth_ctx
+    );
+    register_handler!(
+        server,
+        "pairing.list",
+        auth_handlers::handle_pairing_list,
+        auth_ctx
+    );
+    register_handler!(
+        server,
+        "devices.list",
+        auth_handlers::handle_devices_list,
+        auth_ctx
+    );
+    register_handler!(
+        server,
+        "devices.revoke",
+        auth_handlers::handle_devices_revoke,
+        auth_ctx
+    );
 
     // Auth management tools (R9: Everything is a Tool)
-    register_handler!(server, "auth.show_token", auth_tools_handlers::handle_auth_show_token, auth_ctx);
-    register_handler!(server, "auth.reset_token", auth_tools_handlers::handle_auth_reset_token, auth_ctx);
-    register_handler!(server, "auth.list_sessions", auth_tools_handlers::handle_auth_list_sessions, auth_ctx);
-    register_handler!(server, "auth.revoke_session", auth_tools_handlers::handle_auth_revoke_session, auth_ctx);
+    register_handler!(
+        server,
+        "auth.show_token",
+        auth_tools_handlers::handle_auth_show_token,
+        auth_ctx
+    );
+    register_handler!(
+        server,
+        "auth.reset_token",
+        auth_tools_handlers::handle_auth_reset_token,
+        auth_ctx
+    );
+    register_handler!(
+        server,
+        "auth.list_sessions",
+        auth_tools_handlers::handle_auth_list_sessions,
+        auth_ctx
+    );
+    register_handler!(
+        server,
+        "auth.revoke_session",
+        auth_tools_handlers::handle_auth_revoke_session,
+        auth_ctx
+    );
 }
 
 // ─── register_guest_handlers ─────────────────────────────────────────────────
@@ -106,12 +148,45 @@ pub(in crate::commands::start) fn register_guest_handlers(
 ) {
     use alephcore::gateway::handlers::guests;
 
-    register_handler!(server, "guests.createInvitation", guests::handle_create_invitation, invitation_manager, event_bus);
-    register_handler!(server, "guests.listPending", guests::handle_list_guests, invitation_manager);
-    register_handler!(server, "guests.revokeInvitation", guests::handle_revoke_invitation, invitation_manager, event_bus);
-    register_handler!(server, "guests.listSessions", guests::handle_list_sessions, session_manager);
-    register_handler!(server, "guests.terminateSession", guests::handle_terminate_session, session_manager, event_bus);
-    register_handler!(server, "guests.getActivityLogs", guests::handle_get_activity_logs, session_manager);
+    register_handler!(
+        server,
+        "guests.createInvitation",
+        guests::handle_create_invitation,
+        invitation_manager,
+        event_bus
+    );
+    register_handler!(
+        server,
+        "guests.listPending",
+        guests::handle_list_guests,
+        invitation_manager
+    );
+    register_handler!(
+        server,
+        "guests.revokeInvitation",
+        guests::handle_revoke_invitation,
+        invitation_manager,
+        event_bus
+    );
+    register_handler!(
+        server,
+        "guests.listSessions",
+        guests::handle_list_sessions,
+        session_manager
+    );
+    register_handler!(
+        server,
+        "guests.terminateSession",
+        guests::handle_terminate_session,
+        session_manager,
+        event_bus
+    );
+    register_handler!(
+        server,
+        "guests.getActivityLogs",
+        guests::handle_get_activity_logs,
+        session_manager
+    );
 }
 
 // ─── register_session_handlers ───────────────────────────────────────────────
@@ -121,15 +196,60 @@ pub(in crate::commands::start) fn register_session_handlers(
     session_manager: &Arc<SessionManager>,
     daemon: bool,
 ) {
-    register_handler!(server, "sessions.list", session_handlers::handle_list_db, session_manager);
-    register_handler!(server, "sessions.history", session_handlers::handle_history_db, session_manager);
-    register_handler!(server, "sessions.reset", session_handlers::handle_reset_db, session_manager);
-    register_handler!(server, "sessions.delete", session_handlers::handle_delete_db, session_manager);
-    register_handler!(server, "session.create", session_handlers::handle_create_db, session_manager);
-    register_handler!(server, "session.usage", session_handlers::handle_usage_db, session_manager);
-    register_handler!(server, "session.compact", session_handlers::handle_compact_db, session_manager);
-    register_handler!(server, "sessions.new", session_handlers::handle_new_session_db, session_manager);
-    register_handler!(server, "sessions.set_topic", session_handlers::handle_set_topic_db, session_manager);
+    register_handler!(
+        server,
+        "sessions.list",
+        session_handlers::handle_list_db,
+        session_manager
+    );
+    register_handler!(
+        server,
+        "sessions.history",
+        session_handlers::handle_history_db,
+        session_manager
+    );
+    register_handler!(
+        server,
+        "sessions.reset",
+        session_handlers::handle_reset_db,
+        session_manager
+    );
+    register_handler!(
+        server,
+        "sessions.delete",
+        session_handlers::handle_delete_db,
+        session_manager
+    );
+    register_handler!(
+        server,
+        "session.create",
+        session_handlers::handle_create_db,
+        session_manager
+    );
+    register_handler!(
+        server,
+        "session.usage",
+        session_handlers::handle_usage_db,
+        session_manager
+    );
+    register_handler!(
+        server,
+        "session.compact",
+        session_handlers::handle_compact_db,
+        session_manager
+    );
+    register_handler!(
+        server,
+        "sessions.new",
+        session_handlers::handle_new_session_db,
+        session_manager
+    );
+    register_handler!(
+        server,
+        "sessions.set_topic",
+        session_handlers::handle_set_topic_db,
+        session_manager
+    );
 
     if !daemon {
         println!("Session methods:");
@@ -154,22 +274,96 @@ pub(in crate::commands::start) fn register_channel_handlers(
     app_config: &Arc<tokio::sync::RwLock<alephcore::Config>>,
     vault: &Arc<alephcore::gateway::security::SharedTokenManager>,
 ) {
-    register_handler!(server, "channels.list", channel_handlers::handle_list, channel_registry, app_config);
-    register_handler!(server, "channels.status", channel_handlers::handle_status, channel_registry);
-    register_handler!(server, "channel.start", channel_handlers::handle_start, channel_registry, app_config, vault);
-    register_handler!(server, "channel.stop", channel_handlers::handle_stop, channel_registry);
-    register_handler!(server, "channel.pairing_data", channel_handlers::handle_pairing_data, channel_registry);
-    register_handler!(server, "channel.send", channel_handlers::handle_send, channel_registry);
-    register_handler!(server, "channel.create", channel_handlers::handle_create, channel_registry, app_config, vault);
-    register_handler!(server, "channel.delete", channel_handlers::handle_delete, channel_registry, app_config);
+    register_handler!(
+        server,
+        "channels.list",
+        channel_handlers::handle_list,
+        channel_registry,
+        app_config
+    );
+    register_handler!(
+        server,
+        "channels.status",
+        channel_handlers::handle_status,
+        channel_registry
+    );
+    register_handler!(
+        server,
+        "channel.start",
+        channel_handlers::handle_start,
+        channel_registry,
+        app_config,
+        vault
+    );
+    register_handler!(
+        server,
+        "channel.stop",
+        channel_handlers::handle_stop,
+        channel_registry
+    );
+    register_handler!(
+        server,
+        "channel.pairing_data",
+        channel_handlers::handle_pairing_data,
+        channel_registry
+    );
+    register_handler!(
+        server,
+        "channel.send",
+        channel_handlers::handle_send,
+        channel_registry
+    );
+    register_handler!(
+        server,
+        "channel.create",
+        channel_handlers::handle_create,
+        channel_registry,
+        app_config,
+        vault
+    );
+    register_handler!(
+        server,
+        "channel.delete",
+        channel_handlers::handle_delete,
+        channel_registry,
+        app_config
+    );
 
     // ---- Discord Control Plane panel handlers ----
-    register_handler!(server, "discord.validate_token", discord_panel_handlers::handle_validate_token);
-    register_handler!(server, "discord.save_config", discord_panel_handlers::handle_save_config);
-    register_handler!(server, "discord.list_guilds", discord_panel_handlers::handle_list_guilds, channel_registry);
-    register_handler!(server, "discord.list_channels", discord_panel_handlers::handle_list_channels, channel_registry);
-    register_handler!(server, "discord.audit_permissions", discord_panel_handlers::handle_audit_permissions, channel_registry);
-    register_handler!(server, "discord.update_allowlists", discord_panel_handlers::handle_update_allowlists, channel_registry);
+    register_handler!(
+        server,
+        "discord.validate_token",
+        discord_panel_handlers::handle_validate_token
+    );
+    register_handler!(
+        server,
+        "discord.save_config",
+        discord_panel_handlers::handle_save_config
+    );
+    register_handler!(
+        server,
+        "discord.list_guilds",
+        discord_panel_handlers::handle_list_guilds,
+        channel_registry
+    );
+    register_handler!(
+        server,
+        "discord.list_channels",
+        discord_panel_handlers::handle_list_channels,
+        channel_registry
+    );
+    register_handler!(
+        server,
+        "discord.audit_permissions",
+        discord_panel_handlers::handle_audit_permissions,
+        channel_registry
+    );
+    register_handler!(
+        server,
+        "discord.update_allowlists",
+        discord_panel_handlers::handle_update_allowlists,
+        channel_registry
+    );
 }
 
 // ─── setup_config_watcher ────────────────────────────────────────────────────
@@ -185,7 +379,10 @@ pub(in crate::commands::start) async fn setup_config_watcher(
 
     if !path.exists() {
         if !daemon_mode {
-            println!("No config file found at {}, hot reload disabled", path.display());
+            println!(
+                "No config file found at {}, hot reload disabled",
+                path.display()
+            );
             println!();
         }
         return None;
@@ -203,12 +400,28 @@ pub(in crate::commands::start) async fn setup_config_watcher(
 
             // Register config handlers
             if let Some(ref ac) = app_config {
-                register_handler!(server, "config.reload", config_handlers::handle_reload_with_subsystems, watcher, ac);
+                register_handler!(
+                    server,
+                    "config.reload",
+                    config_handlers::handle_reload_with_subsystems,
+                    watcher,
+                    ac
+                );
             } else {
-                register_handler!(server, "config.reload", config_handlers::handle_reload, watcher);
+                register_handler!(
+                    server,
+                    "config.reload",
+                    config_handlers::handle_reload,
+                    watcher
+                );
             }
             register_handler!(server, "config.get", config_handlers::handle_get, watcher);
-            register_handler!(server, "config.validate", config_handlers::handle_validate, watcher);
+            register_handler!(
+                server,
+                "config.validate",
+                config_handlers::handle_validate,
+                watcher
+            );
             register_handler!(server, "config.path", config_handlers::handle_path, watcher);
 
             if !daemon_mode {
@@ -236,14 +449,20 @@ pub(in crate::commands::start) async fn setup_config_watcher(
                     match event {
                         ConfigEvent::Reloaded(new_config) => {
                             if !daemon_mode {
-                                println!("Configuration reloaded: {} agents", new_config.agents.len());
+                                println!(
+                                    "Configuration reloaded: {} agents",
+                                    new_config.agents.len()
+                                );
                             }
 
                             // Hot-reload PII filtering config if privacy settings changed
                             if new_config.privacy != last_privacy {
                                 alephcore::pii::PiiEngine::reload(new_config.privacy.clone());
                                 if !daemon_mode {
-                                    println!("PII filtering config reloaded (enabled: {})", new_config.privacy.pii_filtering);
+                                    println!(
+                                        "PII filtering config reloaded (enabled: {})",
+                                        new_config.privacy.pii_filtering
+                                    );
                                 }
                                 last_privacy = new_config.privacy.clone();
                             }
@@ -303,7 +522,11 @@ pub(in crate::commands::start) async fn setup_config_watcher(
 
 // ─── start_webchat_server ────────────────────────────────────────────────────
 
-pub(in crate::commands::start) async fn start_webchat_server(args: &Args, final_bind: &str, final_port: u16) {
+pub(in crate::commands::start) async fn start_webchat_server(
+    args: &Args,
+    final_bind: &str,
+    final_port: u16,
+) {
     use std::net::SocketAddr;
 
     let webchat_dir = args.webchat_dir.clone().or_else(|| {
@@ -357,76 +580,123 @@ pub(in crate::commands::start) async fn start_webchat_server(args: &Args, final_
 pub(in crate::commands::start) fn register_memory_handlers(
     server: &mut GatewayServer,
     memory_db: &MemoryBackend,
-    compression_service: &Option<std::sync::Arc<alephcore::memory::compression::CompressionService>>,
+    compression_service: &Option<
+        std::sync::Arc<alephcore::memory::compression::CompressionService>,
+    >,
     embedder: &Option<std::sync::Arc<dyn alephcore::memory::EmbeddingProvider>>,
     event_bus: &std::sync::Arc<alephcore::gateway::event_bus::GatewayEventBus>,
     daemon: bool,
 ) {
-    register_handler!(server, "memory.search", memory_handlers::handle_search, memory_db);
-    register_handler!(server, "memory.stats", memory_handlers::handle_stats, memory_db);
-    register_handler!(server, "memory.delete", memory_handlers::handle_delete, memory_db);
-    register_handler!(server, "memory.clear", memory_handlers::handle_clear, memory_db);
-    register_handler!(server, "memory.listFacts", memory_handlers::handle_list_facts, memory_db);
-    register_handler!(server, "memory.clearFacts", memory_handlers::handle_clear_facts, memory_db);
-    register_handler!(server, "memory.appList", memory_handlers::handle_app_list, memory_db);
+    register_handler!(
+        server,
+        "memory.search",
+        memory_handlers::handle_search,
+        memory_db
+    );
+    register_handler!(
+        server,
+        "memory.stats",
+        memory_handlers::handle_stats,
+        memory_db
+    );
+    register_handler!(
+        server,
+        "memory.delete",
+        memory_handlers::handle_delete,
+        memory_db
+    );
+    register_handler!(
+        server,
+        "memory.clear",
+        memory_handlers::handle_clear,
+        memory_db
+    );
+    register_handler!(
+        server,
+        "memory.listFacts",
+        memory_handlers::handle_list_facts,
+        memory_db
+    );
+    register_handler!(
+        server,
+        "memory.clearFacts",
+        memory_handlers::handle_clear_facts,
+        memory_db
+    );
+    register_handler!(
+        server,
+        "memory.appList",
+        memory_handlers::handle_app_list,
+        memory_db
+    );
     if let Some(cs) = compression_service {
-        register_handler!(server, "memory.compress", memory_handlers::handle_compress, cs);
+        register_handler!(
+            server,
+            "memory.compress",
+            memory_handlers::handle_compress,
+            cs
+        );
     } else {
-        server.handlers_mut().register("memory.compress", |req| async move {
-            alephcore::gateway::protocol::JsonRpcResponse::error(
-                req.id,
-                alephcore::gateway::protocol::INTERNAL_ERROR,
-                "Compression not available: missing AI or embedding provider".to_string(),
-            )
-        });
+        server
+            .handlers_mut()
+            .register("memory.compress", |req| async move {
+                alephcore::gateway::protocol::JsonRpcResponse::error(
+                    req.id,
+                    alephcore::gateway::protocol::INTERNAL_ERROR,
+                    "Compression not available: missing AI or embedding provider".to_string(),
+                )
+            });
     }
 
     // Reembed migration handlers
     if let Some(emb) = embedder {
-        let reembed_state = std::sync::Arc::new(
-            alephcore::gateway::handlers::memory::ReembedState::new()
-        );
+        let reembed_state =
+            std::sync::Arc::new(alephcore::gateway::handlers::memory::ReembedState::new());
 
         {
             let db = ::std::sync::Arc::clone(memory_db);
             let emb = ::std::sync::Arc::clone(emb);
             let eb = ::std::sync::Arc::clone(event_bus);
             let rs = ::std::sync::Arc::clone(&reembed_state);
-            server.handlers_mut().register("memory.reembed", move |req| {
-                let db = ::std::sync::Arc::clone(&db);
-                let emb = ::std::sync::Arc::clone(&emb);
-                let eb = ::std::sync::Arc::clone(&eb);
-                let rs = ::std::sync::Arc::clone(&rs);
-                async move {
-                    memory_handlers::handle_reembed(req, db, emb, eb, rs).await
-                }
-            });
+            server
+                .handlers_mut()
+                .register("memory.reembed", move |req| {
+                    let db = ::std::sync::Arc::clone(&db);
+                    let emb = ::std::sync::Arc::clone(&emb);
+                    let eb = ::std::sync::Arc::clone(&eb);
+                    let rs = ::std::sync::Arc::clone(&rs);
+                    async move { memory_handlers::handle_reembed(req, db, emb, eb, rs).await }
+                });
         }
 
         {
             let rs = ::std::sync::Arc::clone(&reembed_state);
-            server.handlers_mut().register("memory.reembed.cancel", move |req| {
-                let rs = ::std::sync::Arc::clone(&rs);
-                async move {
-                    memory_handlers::handle_reembed_cancel(req, rs).await
-                }
-            });
+            server
+                .handlers_mut()
+                .register("memory.reembed.cancel", move |req| {
+                    let rs = ::std::sync::Arc::clone(&rs);
+                    async move { memory_handlers::handle_reembed_cancel(req, rs).await }
+                });
         }
     } else {
-        server.handlers_mut().register("memory.reembed", |req| async move {
-            alephcore::gateway::protocol::JsonRpcResponse::error(
-                req.id,
-                alephcore::gateway::protocol::INTERNAL_ERROR,
-                "Reembed not available: missing embedding provider".to_string(),
-            )
-        });
-        server.handlers_mut().register("memory.reembed.cancel", |req| async move {
-            alephcore::gateway::protocol::JsonRpcResponse::error(
-                req.id,
-                alephcore::gateway::protocol::INTERNAL_ERROR,
-                "Reembed not available: missing embedding provider".to_string(),
-            )
-        });
+        server
+            .handlers_mut()
+            .register("memory.reembed", |req| async move {
+                alephcore::gateway::protocol::JsonRpcResponse::error(
+                    req.id,
+                    alephcore::gateway::protocol::INTERNAL_ERROR,
+                    "Reembed not available: missing embedding provider".to_string(),
+                )
+            });
+        server
+            .handlers_mut()
+            .register("memory.reembed.cancel", |req| async move {
+                alephcore::gateway::protocol::JsonRpcResponse::error(
+                    req.id,
+                    alephcore::gateway::protocol::INTERNAL_ERROR,
+                    "Reembed not available: missing embedding provider".to_string(),
+                )
+            });
     }
 
     if !daemon {
@@ -464,8 +734,10 @@ pub(in crate::commands::start) fn init_compression_service(
     let _handle = service.clone().start_background_task();
 
     if !daemon {
-        println!("Compression service started (interval: {}s, turn threshold: {})",
-            policy.background_interval_seconds, policy.turn_threshold);
+        println!(
+            "Compression service started (interval: {}s, turn threshold: {})",
+            policy.background_interval_seconds, policy.turn_threshold
+        );
     }
 
     service
@@ -491,13 +763,48 @@ pub(in crate::commands::start) fn register_workspace_handlers(
     _memory_db: &MemoryBackend,
     daemon: bool,
 ) {
-    register_handler!(server, "workspace.create", workspace_handlers::handle_create, workspace_manager);
-    register_handler!(server, "workspace.list", workspace_handlers::handle_list, workspace_manager);
-    register_handler!(server, "workspace.get", workspace_handlers::handle_get, workspace_manager);
-    register_handler!(server, "workspace.update", workspace_handlers::handle_update, workspace_manager);
-    register_handler!(server, "workspace.archive", workspace_handlers::handle_archive, workspace_manager);
-    register_handler!(server, "channels.set_agent", workspace_handlers::handle_set_agent, workspace_manager);
-    register_handler!(server, "agents.bindings", workspace_handlers::handle_agent_bindings, workspace_manager);
+    register_handler!(
+        server,
+        "workspace.create",
+        workspace_handlers::handle_create,
+        workspace_manager
+    );
+    register_handler!(
+        server,
+        "workspace.list",
+        workspace_handlers::handle_list,
+        workspace_manager
+    );
+    register_handler!(
+        server,
+        "workspace.get",
+        workspace_handlers::handle_get,
+        workspace_manager
+    );
+    register_handler!(
+        server,
+        "workspace.update",
+        workspace_handlers::handle_update,
+        workspace_manager
+    );
+    register_handler!(
+        server,
+        "workspace.archive",
+        workspace_handlers::handle_archive,
+        workspace_manager
+    );
+    register_handler!(
+        server,
+        "channels.set_agent",
+        workspace_handlers::handle_set_agent,
+        workspace_manager
+    );
+    register_handler!(
+        server,
+        "agents.bindings",
+        workspace_handlers::handle_agent_bindings,
+        workspace_manager
+    );
 
     if !daemon {
         println!("Workspace methods:");
@@ -525,136 +832,541 @@ pub(in crate::commands::start) fn register_config_handlers(
     shared_token_mgr: Arc<alephcore::gateway::security::SharedTokenManager>,
     acp_manager: Option<Arc<alephcore::acp::manager::AcpHarnessManager>>,
 ) {
+    use alephcore::gateway::handlers::agent_config;
+    use alephcore::gateway::handlers::behavior_config;
+    use alephcore::gateway::handlers::browser_config;
     use alephcore::gateway::handlers::config::{handle_get_full_config, handle_patch_config};
-    use alephcore::gateway::handlers::providers;
-    use alephcore::gateway::handlers::routing_rules;
+    use alephcore::gateway::handlers::embedding_providers;
+    use alephcore::gateway::handlers::execution_config;
+    use alephcore::gateway::handlers::general_config;
+    use alephcore::gateway::handlers::generation_config;
+    use alephcore::gateway::handlers::generation_providers;
     use alephcore::gateway::handlers::mcp_config;
     use alephcore::gateway::handlers::memory_config;
+    use alephcore::gateway::handlers::providers;
     use alephcore::gateway::handlers::rerank_config;
-    use alephcore::gateway::handlers::security_config;
-    use alephcore::gateway::handlers::generation_providers;
-    use alephcore::gateway::handlers::embedding_providers;
-    use alephcore::gateway::handlers::agent_config;
-    use alephcore::gateway::handlers::general_config;
-    use alephcore::gateway::handlers::browser_config;
-    use alephcore::gateway::handlers::behavior_config;
-    use alephcore::gateway::handlers::generation_config;
+    use alephcore::gateway::handlers::routing_rules;
     use alephcore::gateway::handlers::search_config;
-    use alephcore::gateway::handlers::execution_config;
+    use alephcore::gateway::handlers::security_config;
 
     // Config CRUD
     register_handler!(server, "config.get", handle_get_full_config, config);
-    register_handler!(server, "config.patch", handle_patch_config, config_patcher, event_bus);
+    register_handler!(
+        server,
+        "config.patch",
+        handle_patch_config,
+        config_patcher,
+        event_bus
+    );
 
     // Global tool permissions
-    register_handler!(server, "config.get_tool_permissions", config_handlers::handle_get_tool_permissions, config);
-    register_handler!(server, "config.update_tool_permissions", config_handlers::handle_update_tool_permissions, config, event_bus);
+    register_handler!(
+        server,
+        "config.get_tool_permissions",
+        config_handlers::handle_get_tool_permissions,
+        config
+    );
+    register_handler!(
+        server,
+        "config.update_tool_permissions",
+        config_handlers::handle_update_tool_permissions,
+        config,
+        event_bus
+    );
 
     // Providers (vault-backed API key storage)
-    register_handler!(server, "providers.list", providers::handle_list, config, shared_token_mgr);
-    register_handler!(server, "providers.get", providers::handle_get, config, shared_token_mgr);
-    register_handler!(server, "providers.create", providers::handle_create, config, event_bus, shared_token_mgr);
-    register_handler!(server, "providers.update", providers::handle_update, config, event_bus, shared_token_mgr);
-    register_handler!(server, "providers.delete", providers::handle_delete, config, event_bus, shared_token_mgr);
+    register_handler!(
+        server,
+        "providers.list",
+        providers::handle_list,
+        config,
+        shared_token_mgr
+    );
+    register_handler!(
+        server,
+        "providers.get",
+        providers::handle_get,
+        config,
+        shared_token_mgr
+    );
+    register_handler!(
+        server,
+        "providers.create",
+        providers::handle_create,
+        config,
+        event_bus,
+        shared_token_mgr
+    );
+    register_handler!(
+        server,
+        "providers.update",
+        providers::handle_update,
+        config,
+        event_bus,
+        shared_token_mgr
+    );
+    register_handler!(
+        server,
+        "providers.delete",
+        providers::handle_delete,
+        config,
+        event_bus,
+        shared_token_mgr
+    );
     // providers.setDefault needs the swappable registry for hot-switching
     if let Some(ref registry) = multi_registry {
-        register_handler!(server, "providers.setDefault", providers::handle_set_default, config, event_bus, registry);
+        register_handler!(
+            server,
+            "providers.setDefault",
+            providers::handle_set_default,
+            config,
+            event_bus,
+            registry
+        );
     } else {
         // Fallback: config-only update without runtime provider swap
-        register_handler!(server, "providers.setDefault", providers::handle_set_default_config_only, config, event_bus);
+        register_handler!(
+            server,
+            "providers.setDefault",
+            providers::handle_set_default_config_only,
+            config,
+            event_bus
+        );
     }
     if let Some(ref registry) = multi_registry {
-        register_handler!(server, "providers.test", providers::handle_test, config, shared_token_mgr, registry);
+        register_handler!(
+            server,
+            "providers.test",
+            providers::handle_test,
+            config,
+            shared_token_mgr,
+            registry
+        );
     } else {
-        register_handler!(server, "providers.test", providers::handle_test_no_registry, config, shared_token_mgr);
+        register_handler!(
+            server,
+            "providers.test",
+            providers::handle_test_no_registry,
+            config,
+            shared_token_mgr
+        );
     }
-    register_handler!(server, "providers.needsSetup", providers::handle_needs_setup, config);
+    register_handler!(
+        server,
+        "providers.needsSetup",
+        providers::handle_needs_setup,
+        config
+    );
 
     // Routing rules
-    register_handler!(server, "routing_rules.list", routing_rules::handle_list, config);
-    register_handler!(server, "routing_rules.get", routing_rules::handle_get, config);
-    register_handler!(server, "routing_rules.create", routing_rules::handle_create, config, event_bus);
-    register_handler!(server, "routing_rules.update", routing_rules::handle_update, config, event_bus);
-    register_handler!(server, "routing_rules.delete", routing_rules::handle_delete, config, event_bus);
-    register_handler!(server, "routing_rules.move", routing_rules::handle_move, config, event_bus);
+    register_handler!(
+        server,
+        "routing_rules.list",
+        routing_rules::handle_list,
+        config
+    );
+    register_handler!(
+        server,
+        "routing_rules.get",
+        routing_rules::handle_get,
+        config
+    );
+    register_handler!(
+        server,
+        "routing_rules.create",
+        routing_rules::handle_create,
+        config,
+        event_bus
+    );
+    register_handler!(
+        server,
+        "routing_rules.update",
+        routing_rules::handle_update,
+        config,
+        event_bus
+    );
+    register_handler!(
+        server,
+        "routing_rules.delete",
+        routing_rules::handle_delete,
+        config,
+        event_bus
+    );
+    register_handler!(
+        server,
+        "routing_rules.move",
+        routing_rules::handle_move,
+        config,
+        event_bus
+    );
 
     // MCP config
     register_handler!(server, "mcp_config.list", mcp_config::handle_list, config);
     register_handler!(server, "mcp_config.get", mcp_config::handle_get, config);
-    register_handler!(server, "mcp_config.create", mcp_config::handle_create, config, event_bus);
-    register_handler!(server, "mcp_config.update", mcp_config::handle_update, config, event_bus);
-    register_handler!(server, "mcp_config.delete", mcp_config::handle_delete, config, event_bus);
+    register_handler!(
+        server,
+        "mcp_config.create",
+        mcp_config::handle_create,
+        config,
+        event_bus
+    );
+    register_handler!(
+        server,
+        "mcp_config.update",
+        mcp_config::handle_update,
+        config,
+        event_bus
+    );
+    register_handler!(
+        server,
+        "mcp_config.delete",
+        mcp_config::handle_delete,
+        config,
+        event_bus
+    );
 
     // Memory config
-    register_handler!(server, "memory_config.get", memory_config::handle_get, config);
-    register_handler!(server, "memory_config.update", memory_config::handle_update, config, event_bus);
+    register_handler!(
+        server,
+        "memory_config.get",
+        memory_config::handle_get,
+        config
+    );
+    register_handler!(
+        server,
+        "memory_config.update",
+        memory_config::handle_update,
+        config,
+        event_bus
+    );
 
     // Rerank config (dedicated handlers, API key in vault)
-    register_handler!(server, "rerank_config.get", rerank_config::handle_get, config, shared_token_mgr);
-    register_handler!(server, "rerank_config.update", rerank_config::handle_update, config, event_bus, shared_token_mgr);
-    register_handler!(server, "rerank_config.test", rerank_config::handle_test, config, shared_token_mgr);
+    register_handler!(
+        server,
+        "rerank_config.get",
+        rerank_config::handle_get,
+        config,
+        shared_token_mgr
+    );
+    register_handler!(
+        server,
+        "rerank_config.update",
+        rerank_config::handle_update,
+        config,
+        event_bus,
+        shared_token_mgr
+    );
+    register_handler!(
+        server,
+        "rerank_config.test",
+        rerank_config::handle_test,
+        config,
+        shared_token_mgr
+    );
 
     // Security config
-    register_handler!(server, "security_config.get", security_config::handle_get, config_patcher);
-    register_handler!(server, "security_config.update", security_config::handle_update, config_patcher, event_bus);
-    register_handler!(server, "security_config.list_devices", security_config::handle_list_devices, device_store);
-    register_handler!(server, "security_config.revoke_device", security_config::handle_revoke_device, device_store, event_bus);
+    register_handler!(
+        server,
+        "security_config.get",
+        security_config::handle_get,
+        config_patcher
+    );
+    register_handler!(
+        server,
+        "security_config.update",
+        security_config::handle_update,
+        config_patcher,
+        event_bus
+    );
+    register_handler!(
+        server,
+        "security_config.list_devices",
+        security_config::handle_list_devices,
+        device_store
+    );
+    register_handler!(
+        server,
+        "security_config.revoke_device",
+        security_config::handle_revoke_device,
+        device_store,
+        event_bus
+    );
 
     // Generation providers (vault-backed API key storage)
-    register_handler!(server, "generation_providers.list", generation_providers::handle_list, config, shared_token_mgr);
-    register_handler!(server, "generation_providers.get", generation_providers::handle_get, config, shared_token_mgr);
-    register_handler!(server, "generation_providers.create", generation_providers::handle_create, config, event_bus, shared_token_mgr);
-    register_handler!(server, "generation_providers.update", generation_providers::handle_update, config, event_bus, shared_token_mgr);
-    register_handler!(server, "generation_providers.delete", generation_providers::handle_delete, config, event_bus, shared_token_mgr);
-    register_handler!(server, "generation_providers.setDefault", generation_providers::handle_set_default, config, event_bus);
-    register_handler!(server, "generation_providers.test", generation_providers::handle_test_connection, config, shared_token_mgr);
-    register_handler!(server, "generation_providers.voices", generation_providers::handle_voices, config, shared_token_mgr);
+    register_handler!(
+        server,
+        "generation_providers.list",
+        generation_providers::handle_list,
+        config,
+        shared_token_mgr
+    );
+    register_handler!(
+        server,
+        "generation_providers.get",
+        generation_providers::handle_get,
+        config,
+        shared_token_mgr
+    );
+    register_handler!(
+        server,
+        "generation_providers.create",
+        generation_providers::handle_create,
+        config,
+        event_bus,
+        shared_token_mgr
+    );
+    register_handler!(
+        server,
+        "generation_providers.update",
+        generation_providers::handle_update,
+        config,
+        event_bus,
+        shared_token_mgr
+    );
+    register_handler!(
+        server,
+        "generation_providers.delete",
+        generation_providers::handle_delete,
+        config,
+        event_bus,
+        shared_token_mgr
+    );
+    register_handler!(
+        server,
+        "generation_providers.setDefault",
+        generation_providers::handle_set_default,
+        config,
+        event_bus
+    );
+    register_handler!(
+        server,
+        "generation_providers.test",
+        generation_providers::handle_test_connection,
+        config,
+        shared_token_mgr
+    );
+    register_handler!(
+        server,
+        "generation_providers.voices",
+        generation_providers::handle_voices,
+        config,
+        shared_token_mgr
+    );
 
     // Embedding providers (vault-backed API key storage)
-    register_handler!(server, "embedding_providers.list", embedding_providers::handle_list, config, shared_token_mgr);
-    register_handler!(server, "embedding_providers.get", embedding_providers::handle_get, config, shared_token_mgr);
-    register_handler!(server, "embedding_providers.add", embedding_providers::handle_add, config, event_bus, shared_token_mgr);
-    register_handler!(server, "embedding_providers.update", embedding_providers::handle_update, config, event_bus, shared_token_mgr);
-    register_handler!(server, "embedding_providers.remove", embedding_providers::handle_remove, config, event_bus, shared_token_mgr);
-    register_handler!(server, "embedding_providers.setActive", embedding_providers::handle_set_active, config, event_bus);
-    register_handler!(server, "embedding_providers.test", embedding_providers::handle_test, config, shared_token_mgr);
-    register_handler!(server, "embedding_providers.presets", embedding_providers::handle_presets);
+    register_handler!(
+        server,
+        "embedding_providers.list",
+        embedding_providers::handle_list,
+        config,
+        shared_token_mgr
+    );
+    register_handler!(
+        server,
+        "embedding_providers.get",
+        embedding_providers::handle_get,
+        config,
+        shared_token_mgr
+    );
+    register_handler!(
+        server,
+        "embedding_providers.add",
+        embedding_providers::handle_add,
+        config,
+        event_bus,
+        shared_token_mgr
+    );
+    register_handler!(
+        server,
+        "embedding_providers.update",
+        embedding_providers::handle_update,
+        config,
+        event_bus,
+        shared_token_mgr
+    );
+    register_handler!(
+        server,
+        "embedding_providers.remove",
+        embedding_providers::handle_remove,
+        config,
+        event_bus,
+        shared_token_mgr
+    );
+    register_handler!(
+        server,
+        "embedding_providers.setActive",
+        embedding_providers::handle_set_active,
+        config,
+        event_bus
+    );
+    register_handler!(
+        server,
+        "embedding_providers.test",
+        embedding_providers::handle_test,
+        config,
+        shared_token_mgr
+    );
+    register_handler!(
+        server,
+        "embedding_providers.presets",
+        embedding_providers::handle_presets
+    );
 
     // Agent config
     register_handler!(server, "agent_config.get", agent_config::handle_get, config);
-    register_handler!(server, "agent_config.update", agent_config::handle_update, config, event_bus);
-    register_handler!(server, "agent_config.get_file_ops", agent_config::handle_get_file_ops, config);
-    register_handler!(server, "agent_config.update_file_ops", agent_config::handle_update_file_ops, config, event_bus);
-    register_handler!(server, "agent_config.get_code_exec", agent_config::handle_get_code_exec, config);
-    register_handler!(server, "agent_config.update_code_exec", agent_config::handle_update_code_exec, config, event_bus);
-    register_handler!(server, "agent_config.get_tool_permissions", agent_config::handle_get_tool_permissions, config);
-    register_handler!(server, "agent_config.update_tool_permissions", agent_config::handle_update_tool_permissions, config, event_bus);
+    register_handler!(
+        server,
+        "agent_config.update",
+        agent_config::handle_update,
+        config,
+        event_bus
+    );
+    register_handler!(
+        server,
+        "agent_config.get_file_ops",
+        agent_config::handle_get_file_ops,
+        config
+    );
+    register_handler!(
+        server,
+        "agent_config.update_file_ops",
+        agent_config::handle_update_file_ops,
+        config,
+        event_bus
+    );
+    register_handler!(
+        server,
+        "agent_config.get_code_exec",
+        agent_config::handle_get_code_exec,
+        config
+    );
+    register_handler!(
+        server,
+        "agent_config.update_code_exec",
+        agent_config::handle_update_code_exec,
+        config,
+        event_bus
+    );
+    register_handler!(
+        server,
+        "agent_config.get_tool_permissions",
+        agent_config::handle_get_tool_permissions,
+        config
+    );
+    register_handler!(
+        server,
+        "agent_config.update_tool_permissions",
+        agent_config::handle_update_tool_permissions,
+        config,
+        event_bus
+    );
 
     // General config
-    register_handler!(server, "general_config.get", general_config::handle_get, config);
-    register_handler!(server, "general_config.update", general_config::handle_update, config, event_bus);
+    register_handler!(
+        server,
+        "general_config.get",
+        general_config::handle_get,
+        config
+    );
+    register_handler!(
+        server,
+        "general_config.update",
+        general_config::handle_update,
+        config,
+        event_bus
+    );
 
     // Browser config
-    register_handler!(server, "browser_config.get", browser_config::handle_get, config);
-    register_handler!(server, "browser_config.update", browser_config::handle_update, config, event_bus);
+    register_handler!(
+        server,
+        "browser_config.get",
+        browser_config::handle_get,
+        config
+    );
+    register_handler!(
+        server,
+        "browser_config.update",
+        browser_config::handle_update,
+        config,
+        event_bus
+    );
 
     // Behavior config
-    register_handler!(server, "behavior_config.get", behavior_config::handle_get, config);
-    register_handler!(server, "behavior_config.update", behavior_config::handle_update, config, event_bus);
+    register_handler!(
+        server,
+        "behavior_config.get",
+        behavior_config::handle_get,
+        config
+    );
+    register_handler!(
+        server,
+        "behavior_config.update",
+        behavior_config::handle_update,
+        config,
+        event_bus
+    );
 
     // Generation config
-    register_handler!(server, "generation_config.get", generation_config::handle_get, config);
-    register_handler!(server, "generation_config.update", generation_config::handle_update, config, event_bus);
+    register_handler!(
+        server,
+        "generation_config.get",
+        generation_config::handle_get,
+        config
+    );
+    register_handler!(
+        server,
+        "generation_config.update",
+        generation_config::handle_update,
+        config,
+        event_bus
+    );
 
     // Search config (vault-backed API key storage)
-    register_handler!(server, "search_config.get", search_config::handle_get, config, shared_token_mgr);
-    register_handler!(server, "search_config.update", search_config::handle_update, config, event_bus, shared_token_mgr);
-    register_handler!(server, "search_config.test", search_config::handle_test, config, shared_token_mgr);
-    register_handler!(server, "search_config.deleteBackend", search_config::handle_delete_backend, config, event_bus, shared_token_mgr);
+    register_handler!(
+        server,
+        "search_config.get",
+        search_config::handle_get,
+        config,
+        shared_token_mgr
+    );
+    register_handler!(
+        server,
+        "search_config.update",
+        search_config::handle_update,
+        config,
+        event_bus,
+        shared_token_mgr
+    );
+    register_handler!(
+        server,
+        "search_config.test",
+        search_config::handle_test,
+        config,
+        shared_token_mgr
+    );
+    register_handler!(
+        server,
+        "search_config.deleteBackend",
+        search_config::handle_delete_backend,
+        config,
+        event_bus,
+        shared_token_mgr
+    );
 
     // Execution config
-    register_handler!(server, "execution_config.get", execution_config::handle_get, config);
-    register_handler!(server, "execution_config.update", execution_config::handle_update, config, event_bus);
+    register_handler!(
+        server,
+        "execution_config.get",
+        execution_config::handle_get,
+        config
+    );
+    register_handler!(
+        server,
+        "execution_config.update",
+        execution_config::handle_update,
+        config,
+        event_bus
+    );
 
     // ACP harness config (only if ACP manager is available)
     if let Some(ref acp) = acp_manager {
@@ -662,11 +1374,39 @@ pub(in crate::commands::start) fn register_config_handlers(
 
         register_handler!(server, "acp.list", acp_config::handle_list, acp, config);
         register_handler!(server, "acp.get", acp_config::handle_get, acp, config);
-        register_handler!(server, "acp.create", acp_config::handle_create, acp, config, event_bus);
-        register_handler!(server, "acp.update", acp_config::handle_update, acp, config, event_bus);
-        register_handler!(server, "acp.delete", acp_config::handle_delete, acp, config, event_bus);
+        register_handler!(
+            server,
+            "acp.create",
+            acp_config::handle_create,
+            acp,
+            config,
+            event_bus
+        );
+        register_handler!(
+            server,
+            "acp.update",
+            acp_config::handle_update,
+            acp,
+            config,
+            event_bus
+        );
+        register_handler!(
+            server,
+            "acp.delete",
+            acp_config::handle_delete,
+            acp,
+            config,
+            event_bus
+        );
         register_handler!(server, "acp.test", acp_config::handle_test, acp);
-        register_handler!(server, "acp.set_enabled", acp_config::handle_set_enabled, acp, config, event_bus);
+        register_handler!(
+            server,
+            "acp.set_enabled",
+            acp_config::handle_set_enabled,
+            acp,
+            config,
+            event_bus
+        );
         register_handler!(server, "acp.presets", acp_config::handle_presets);
     }
 }
@@ -709,9 +1449,30 @@ pub(in crate::commands::start) fn register_oauth_handlers(
     vault: &Arc<alephcore::gateway::security::SharedTokenManager>,
     daemon: bool,
 ) {
-    register_handler!(server, "providers.oauthLogin", oauth_handlers::handle_oauth_login, oauth_state, config, vault);
-    register_handler!(server, "providers.oauthLogout", oauth_handlers::handle_oauth_logout, oauth_state, config, vault);
-    register_handler!(server, "providers.oauthStatus", oauth_handlers::handle_oauth_status, oauth_state, config, vault);
+    register_handler!(
+        server,
+        "providers.oauthLogin",
+        oauth_handlers::handle_oauth_login,
+        oauth_state,
+        config,
+        vault
+    );
+    register_handler!(
+        server,
+        "providers.oauthLogout",
+        oauth_handlers::handle_oauth_logout,
+        oauth_state,
+        config,
+        vault
+    );
+    register_handler!(
+        server,
+        "providers.oauthStatus",
+        oauth_handlers::handle_oauth_status,
+        oauth_state,
+        config,
+        vault
+    );
 
     if !daemon {
         println!("OAuth methods:");
@@ -728,10 +1489,30 @@ pub(in crate::commands::start) fn register_identity_handlers(
     server: &mut GatewayServer,
     resolver: &SharedIdentityResolver,
 ) {
-    register_handler!(server, "identity.get", identity_handlers::handle_get, resolver);
-    register_handler!(server, "identity.set", identity_handlers::handle_set, resolver);
-    register_handler!(server, "identity.clear", identity_handlers::handle_clear, resolver);
-    register_handler!(server, "identity.list", identity_handlers::handle_list, resolver);
+    register_handler!(
+        server,
+        "identity.get",
+        identity_handlers::handle_get,
+        resolver
+    );
+    register_handler!(
+        server,
+        "identity.set",
+        identity_handlers::handle_set,
+        resolver
+    );
+    register_handler!(
+        server,
+        "identity.clear",
+        identity_handlers::handle_clear,
+        resolver
+    );
+    register_handler!(
+        server,
+        "identity.list",
+        identity_handlers::handle_list,
+        resolver
+    );
 }
 
 // ─── register_group_chat_handlers ───────────────────────────────────────────
@@ -742,12 +1523,45 @@ pub(in crate::commands::start) fn register_group_chat_handlers(
     executor: &Arc<GroupChatExecutor>,
     daemon: bool,
 ) {
-    register_handler!(server, "group_chat.start", group_chat_handlers::handle_start, orch, executor);
-    register_handler!(server, "group_chat.continue", group_chat_handlers::handle_continue, orch, executor);
-    register_handler!(server, "group_chat.mention", group_chat_handlers::handle_mention, orch, executor);
-    register_handler!(server, "group_chat.end", group_chat_handlers::handle_end, orch);
-    register_handler!(server, "group_chat.list", group_chat_handlers::handle_list, orch);
-    register_handler!(server, "group_chat.history", group_chat_handlers::handle_history, orch);
+    register_handler!(
+        server,
+        "group_chat.start",
+        group_chat_handlers::handle_start,
+        orch,
+        executor
+    );
+    register_handler!(
+        server,
+        "group_chat.continue",
+        group_chat_handlers::handle_continue,
+        orch,
+        executor
+    );
+    register_handler!(
+        server,
+        "group_chat.mention",
+        group_chat_handlers::handle_mention,
+        orch,
+        executor
+    );
+    register_handler!(
+        server,
+        "group_chat.end",
+        group_chat_handlers::handle_end,
+        orch
+    );
+    register_handler!(
+        server,
+        "group_chat.list",
+        group_chat_handlers::handle_list,
+        orch
+    );
+    register_handler!(
+        server,
+        "group_chat.history",
+        group_chat_handlers::handle_history,
+        orch
+    );
 
     if !daemon {
         println!("Group Chat methods:");
@@ -772,19 +1586,65 @@ pub(in crate::commands::start) fn register_agents_handlers(
 
     register_handler!(server, "agents.list", agents::handle_list, manager);
     register_handler!(server, "agents.get", agents::handle_get, manager);
-    register_handler!(server, "agents.create", agents::handle_create, manager, event_bus);
-    register_handler!(server, "agents.update", agents::handle_update, manager, event_bus);
-    register_handler!(server, "agents.delete", agents::handle_delete, manager, event_bus);
-    register_handler!(server, "agents.set_default", agents::handle_set_default, manager, event_bus);
-    register_handler!(server, "agents.files.list", agents::handle_files_list, manager);
-    register_handler!(server, "agents.files.get", agents::handle_files_get, manager);
-    register_handler!(server, "agents.files.set", agents::handle_files_set, manager);
-    register_handler!(server, "agents.files.delete", agents::handle_files_delete, manager);
+    register_handler!(
+        server,
+        "agents.create",
+        agents::handle_create,
+        manager,
+        event_bus
+    );
+    register_handler!(
+        server,
+        "agents.update",
+        agents::handle_update,
+        manager,
+        event_bus
+    );
+    register_handler!(
+        server,
+        "agents.delete",
+        agents::handle_delete,
+        manager,
+        event_bus
+    );
+    register_handler!(
+        server,
+        "agents.set_default",
+        agents::handle_set_default,
+        manager,
+        event_bus
+    );
+    register_handler!(
+        server,
+        "agents.files.list",
+        agents::handle_files_list,
+        manager
+    );
+    register_handler!(
+        server,
+        "agents.files.get",
+        agents::handle_files_get,
+        manager
+    );
+    register_handler!(
+        server,
+        "agents.files.set",
+        agents::handle_files_set,
+        manager
+    );
+    register_handler!(
+        server,
+        "agents.files.delete",
+        agents::handle_files_delete,
+        manager
+    );
 
     // Stateless handler — no manager dependency
-    server.handlers_mut().register("agents.tools_schema", |req| async move {
-        agents::handle_tools_schema(req).await
-    });
+    server
+        .handlers_mut()
+        .register("agents.tools_schema", |req| async move {
+            agents::handle_tools_schema(req).await
+        });
 }
 
 // ─── register_cron_handlers ─────────────────────────────────────────────────
@@ -821,14 +1681,54 @@ pub(in crate::commands::start) fn register_heartbeat_handlers(
 ) {
     use alephcore::gateway::handlers::heartbeat;
 
-    register_handler!(server, "heartbeat.list", heartbeat::handle_list, heartbeat_service);
-    register_handler!(server, "heartbeat.get", heartbeat::handle_get, heartbeat_service);
-    register_handler!(server, "heartbeat.create", heartbeat::handle_create, heartbeat_service);
-    register_handler!(server, "heartbeat.update", heartbeat::handle_update, heartbeat_service);
-    register_handler!(server, "heartbeat.delete", heartbeat::handle_delete, heartbeat_service);
-    register_handler!(server, "heartbeat.toggle", heartbeat::handle_toggle, heartbeat_service);
-    register_handler!(server, "heartbeat.wake", heartbeat::handle_wake, heartbeat_service);
-    register_handler!(server, "heartbeat.runs", heartbeat::handle_runs, heartbeat_service);
+    register_handler!(
+        server,
+        "heartbeat.list",
+        heartbeat::handle_list,
+        heartbeat_service
+    );
+    register_handler!(
+        server,
+        "heartbeat.get",
+        heartbeat::handle_get,
+        heartbeat_service
+    );
+    register_handler!(
+        server,
+        "heartbeat.create",
+        heartbeat::handle_create,
+        heartbeat_service
+    );
+    register_handler!(
+        server,
+        "heartbeat.update",
+        heartbeat::handle_update,
+        heartbeat_service
+    );
+    register_handler!(
+        server,
+        "heartbeat.delete",
+        heartbeat::handle_delete,
+        heartbeat_service
+    );
+    register_handler!(
+        server,
+        "heartbeat.toggle",
+        heartbeat::handle_toggle,
+        heartbeat_service
+    );
+    register_handler!(
+        server,
+        "heartbeat.wake",
+        heartbeat::handle_wake,
+        heartbeat_service
+    );
+    register_handler!(
+        server,
+        "heartbeat.runs",
+        heartbeat::handle_runs,
+        heartbeat_service
+    );
 
     if !daemon {
         println!("Heartbeat service: enabled (RPC handlers registered)");

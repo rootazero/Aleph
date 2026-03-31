@@ -31,10 +31,9 @@ fn test_resolved_channels_with_explicit_type() {
 #[test]
 fn test_resolved_channels_infers_type_from_key() {
     let mut config = Config::default();
-    config.channels.insert(
-        "telegram".to_string(),
-        json!({ "bot_token": "123:ABC" }),
-    );
+    config
+        .channels
+        .insert("telegram".to_string(), json!({ "bot_token": "123:ABC" }));
 
     let instances = config.resolved_channels();
     assert_eq!(instances.len(), 1);
@@ -58,10 +57,9 @@ fn test_resolved_channels_unknown_key_no_type_skipped() {
 #[test]
 fn test_resolved_channels_mixed_old_and_new_format() {
     let mut config = Config::default();
-    config.channels.insert(
-        "telegram".to_string(),
-        json!({ "bot_token": "old-token" }),
-    );
+    config
+        .channels
+        .insert("telegram".to_string(), json!({ "bot_token": "old-token" }));
     config.channels.insert(
         "telegram-work".to_string(),
         json!({ "type": "telegram", "bot_token": "new-token" }),
@@ -81,9 +79,19 @@ fn test_resolved_channels_mixed_old_and_new_format() {
 fn test_resolved_channels_all_known_platforms() {
     let mut config = Config::default();
     let platforms = [
-        "telegram", "discord", "whatsapp", "slack", "imessage",
-        "email", "matrix", "signal", "mattermost", "irc",
-        "webhook", "xmpp", "nostr",
+        "telegram",
+        "discord",
+        "whatsapp",
+        "slack",
+        "imessage",
+        "email",
+        "matrix",
+        "signal",
+        "mattermost",
+        "irc",
+        "webhook",
+        "xmpp",
+        "nostr",
     ];
     for name in &platforms {
         config.channels.insert(name.to_string(), json!({}));

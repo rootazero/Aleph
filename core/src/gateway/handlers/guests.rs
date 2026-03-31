@@ -15,12 +15,12 @@
 //!
 //! These handlers require an InvitationManager and GuestSessionManager to be wired at Gateway initialization.
 
+use crate::sync_primitives::Arc;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use crate::sync_primitives::Arc;
 
-use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 use super::super::event_bus::{GatewayEventBus, TopicEvent};
+use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 use crate::gateway::security::{
     ActivityLogQuery, ActivityLogQueryResult, ActivityStatus, GuestSessionManager,
     InvitationManager,
@@ -145,7 +145,7 @@ pub async fn handle_create_invitation(
                 }),
                 timestamp: std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
+                    .unwrap_or_default()
                     .as_millis() as u64,
             };
             let _ = event_bus.publish_json(&event);
@@ -279,7 +279,7 @@ pub async fn handle_revoke_invitation(
                 }),
                 timestamp: std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
+                    .unwrap_or_default()
                     .as_millis() as u64,
             };
             let _ = event_bus.publish_json(&event);
@@ -474,7 +474,7 @@ pub async fn handle_terminate_session(
                 }),
                 timestamp: std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
+                    .unwrap_or_default()
                     .as_millis() as u64,
             };
             let _ = event_bus.publish_json(&event);
@@ -697,7 +697,10 @@ mod tests {
         let request = JsonRpcRequest::with_id(
             "guests.revokeInvitation",
             Some(
-                serde_json::to_value(&RevokeInvitationRequest { token: token.clone() }).unwrap(),
+                serde_json::to_value(&RevokeInvitationRequest {
+                    token: token.clone(),
+                })
+                .unwrap(),
             ),
             serde_json::json!(1),
         );

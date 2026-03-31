@@ -166,7 +166,9 @@ impl SessionScheduler {
         let reply_config = match &self.app_config {
             Some(cfg) => {
                 let cfg = cfg.read().await;
-                let mode = cfg.behavior.as_ref()
+                let mode = cfg
+                    .behavior
+                    .as_ref()
                     .map(|b| b.output_mode.as_str())
                     .unwrap_or("typewriter");
                 ReplyEmitterConfig::from_output_mode(mode)
@@ -175,25 +177,25 @@ impl SessionScheduler {
         };
         let pending_media: crate::gateway::media::PendingMedia =
             std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let reply_emitter: Arc<dyn EventEmitter + Send + Sync> = Arc::new(ReplyEmitter::with_config(
-            self.channel_registry.clone(),
-            enriched.merged.primary_context.reply_route.clone(),
-            run_id.clone(),
-            reply_config,
-            pending_media.clone(),
-        ));
+        let reply_emitter: Arc<dyn EventEmitter + Send + Sync> =
+            Arc::new(ReplyEmitter::with_config(
+                self.channel_registry.clone(),
+                enriched.merged.primary_context.reply_route.clone(),
+                run_id.clone(),
+                reply_config,
+                pending_media.clone(),
+            ));
 
         // Wrap with scheduler event listener
-        let listener: Arc<dyn EventEmitter + Send + Sync> =
-            Arc::new(SchedulerEventListener {
-                inner: reply_emitter,
-                queues: Arc::clone(&self.queues),
-                session_key: session_key_str.to_string(),
-                execution_adapter: Arc::clone(&self.execution_adapter),
-                agent_registry: Arc::clone(&self.agent_registry),
-                channel_registry: Arc::clone(&self.channel_registry),
-                app_config: self.app_config.clone(),
-            });
+        let listener: Arc<dyn EventEmitter + Send + Sync> = Arc::new(SchedulerEventListener {
+            inner: reply_emitter,
+            queues: Arc::clone(&self.queues),
+            session_key: session_key_str.to_string(),
+            execution_adapter: Arc::clone(&self.execution_adapter),
+            agent_registry: Arc::clone(&self.agent_registry),
+            channel_registry: Arc::clone(&self.channel_registry),
+            app_config: self.app_config.clone(),
+        });
 
         // Build metadata
         let mut metadata = HashMap::new();
@@ -386,7 +388,9 @@ async fn execute_next(
     let reply_config = match &app_config {
         Some(cfg) => {
             let cfg = cfg.read().await;
-            let mode = cfg.behavior.as_ref()
+            let mode = cfg
+                .behavior
+                .as_ref()
                 .map(|b| b.output_mode.as_str())
                 .unwrap_or("typewriter");
             ReplyEmitterConfig::from_output_mode(mode)
@@ -404,16 +408,15 @@ async fn execute_next(
     ));
 
     // Wrap with a new listener for the next run
-    let listener: Arc<dyn EventEmitter + Send + Sync> =
-        Arc::new(SchedulerEventListener {
-            inner: reply_emitter,
-            queues: Arc::clone(&queues),
-            session_key: session_key_str.to_string(),
-            execution_adapter: Arc::clone(&execution_adapter),
-            agent_registry: Arc::clone(&agent_registry),
-            channel_registry: Arc::clone(&channel_registry),
-            app_config,
-        });
+    let listener: Arc<dyn EventEmitter + Send + Sync> = Arc::new(SchedulerEventListener {
+        inner: reply_emitter,
+        queues: Arc::clone(&queues),
+        session_key: session_key_str.to_string(),
+        execution_adapter: Arc::clone(&execution_adapter),
+        agent_registry: Arc::clone(&agent_registry),
+        channel_registry: Arc::clone(&channel_registry),
+        app_config,
+    });
 
     // Build metadata
     let mut metadata = HashMap::new();
@@ -471,9 +474,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_queue_depth_empty() {
-        
-        use crate::gateway::execution_engine::{ExecutionError, RunRequest, RunStatus};
         use crate::gateway::agent_instance::AgentInstance;
+        use crate::gateway::execution_engine::{ExecutionError, RunRequest, RunStatus};
 
         // Minimal mock adapter
         struct NoOpAdapter;

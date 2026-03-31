@@ -4,7 +4,7 @@
 //! LLM consumption. Supports role-based filtering, depth limits, and character
 //! truncation to control token usage.
 
-use super::types::{AriaElement, AriaSnapshot, content_roles, interactive_roles, structural_roles};
+use super::types::{content_roles, interactive_roles, structural_roles, AriaElement, AriaSnapshot};
 
 /// Options controlling how the snapshot is formatted.
 #[derive(Debug, Clone)]
@@ -41,7 +41,10 @@ pub struct SnapshotFormatResult {
 }
 
 /// Format an [`AriaSnapshot`] as an AI-friendly text tree.
-pub fn format_snapshot(snapshot: &AriaSnapshot, opts: &SnapshotFormatOptions) -> SnapshotFormatResult {
+pub fn format_snapshot(
+    snapshot: &AriaSnapshot,
+    opts: &SnapshotFormatOptions,
+) -> SnapshotFormatResult {
     let mut lines = Vec::new();
     let mut ref_count = 0;
 
@@ -165,7 +168,12 @@ mod tests {
         }
     }
 
-    fn el_with_children(ref_id: &str, role: &str, name: Option<&str>, children: Vec<AriaElement>) -> AriaElement {
+    fn el_with_children(
+        ref_id: &str,
+        role: &str,
+        name: Option<&str>,
+        children: Vec<AriaElement>,
+    ) -> AriaElement {
         AriaElement {
             ref_id: ref_id.to_string(),
             role: role.to_string(),
@@ -203,12 +211,15 @@ mod tests {
 
     #[test]
     fn test_nested_format() {
-        let snapshot = snap(vec![
-            el_with_children("nav-1", "navigation", Some("Main"), vec![
+        let snapshot = snap(vec![el_with_children(
+            "nav-1",
+            "navigation",
+            Some("Main"),
+            vec![
                 el("link-1", "link", Some("Home")),
                 el("link-2", "link", Some("About")),
-            ]),
-        ]);
+            ],
+        )]);
 
         let result = format_snapshot(&snapshot, &SnapshotFormatOptions::default());
         assert!(result.text.contains("- navigation \"Main\" [ref=nav-1]"));
@@ -220,10 +231,15 @@ mod tests {
     #[test]
     fn test_interactive_only() {
         let snapshot = snap(vec![
-            el_with_children("nav-1", "navigation", Some("Main"), vec![
-                el("link-1", "link", Some("Home")),
-                el("h1", "heading", Some("Title")),
-            ]),
+            el_with_children(
+                "nav-1",
+                "navigation",
+                Some("Main"),
+                vec![
+                    el("link-1", "link", Some("Home")),
+                    el("h1", "heading", Some("Title")),
+                ],
+            ),
             el("btn-1", "button", Some("Click")),
         ]);
 
@@ -242,12 +258,13 @@ mod tests {
     #[test]
     fn test_compact_skips_unnamed_structural() {
         let snapshot = snap(vec![
-            el_with_children("", "group", None, vec![
-                el("btn-1", "button", Some("OK")),
-            ]),
-            el_with_children("", "list", None, vec![
-                el("item-1", "listitem", Some("Item 1")),
-            ]),
+            el_with_children("", "group", None, vec![el("btn-1", "button", Some("OK"))]),
+            el_with_children(
+                "",
+                "list",
+                None,
+                vec![el("item-1", "listitem", Some("Item 1"))],
+            ),
         ]);
 
         let opts = SnapshotFormatOptions {
@@ -267,7 +284,11 @@ mod tests {
     #[test]
     fn test_truncation() {
         let snapshot = snap(vec![
-            el("btn-1", "button", Some("A very long button name that takes up space")),
+            el(
+                "btn-1",
+                "button",
+                Some("A very long button name that takes up space"),
+            ),
             el("btn-2", "button", Some("Another button with a long name")),
         ]);
 
@@ -282,13 +303,17 @@ mod tests {
 
     #[test]
     fn test_max_depth() {
-        let snapshot = snap(vec![
-            el_with_children("nav-1", "navigation", Some("Main"), vec![
-                el_with_children("list-1", "list", Some("Links"), vec![
-                    el("link-1", "link", Some("Deep")),
-                ]),
-            ]),
-        ]);
+        let snapshot = snap(vec![el_with_children(
+            "nav-1",
+            "navigation",
+            Some("Main"),
+            vec![el_with_children(
+                "list-1",
+                "list",
+                Some("Links"),
+                vec![el("link-1", "link", Some("Deep"))],
+            )],
+        )]);
 
         let opts = SnapshotFormatOptions {
             max_depth: Some(1),
@@ -314,7 +339,9 @@ mod tests {
         }]);
 
         let result = format_snapshot(&snapshot, &SnapshotFormatOptions::default());
-        assert!(result.text.contains("- textbox \"Email\" [ref=input-1] value=\"user@test.com\" (focused, required)"));
+        assert!(result.text.contains(
+            "- textbox \"Email\" [ref=input-1] value=\"user@test.com\" (focused, required)"
+        ));
     }
 
     #[test]

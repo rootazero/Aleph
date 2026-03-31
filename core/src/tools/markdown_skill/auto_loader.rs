@@ -3,8 +3,8 @@
 //! Automatically generates and loads skills when Evolution Pipeline
 //! detects solidification patterns.
 
-use std::path::PathBuf;
 use crate::sync_primitives::Arc;
+use std::path::PathBuf;
 use tracing::{info, warn};
 
 use crate::error::Result;
@@ -164,12 +164,18 @@ impl EvolutionAutoLoader {
 
     /// Get the list of generated skill directories
     pub fn get_generated_skills(&self) -> Vec<PathBuf> {
-        self.generated_skills.read().unwrap_or_else(|e| e.into_inner()).clone()
+        self.generated_skills
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     /// Clear the generated skills tracking list
     pub fn clear_tracking(&self) {
-        self.generated_skills.write().unwrap_or_else(|e| e.into_inner()).clear();
+        self.generated_skills
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
     }
 }
 
@@ -208,8 +214,8 @@ impl BatchLoadResult {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::generator::SkillMetrics;
+    use super::*;
     use std::collections::HashMap;
     use tempfile::TempDir;
 

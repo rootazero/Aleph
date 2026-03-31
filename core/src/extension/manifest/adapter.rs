@@ -75,14 +75,17 @@ impl AdapterRegistry {
         registry.register(Box::new(super::cc_plugin_json::ClaudeCodeJsonAdapter));
         registry.register(Box::new(super::adapters::codex::CodexAdapter));
         registry.register(Box::new(super::adapters::cursor::CursorAdapter));
-        registry.register(Box::new(super::adapters::auto_discover::AutoDiscoverAdapter));
+        registry.register(Box::new(
+            super::adapters::auto_discover::AutoDiscoverAdapter,
+        ));
         registry
     }
 
     /// Register a new adapter. Adapters are sorted by descending priority.
     pub fn register(&mut self, adapter: Box<dyn ManifestAdapter>) {
         self.adapters.push(adapter);
-        self.adapters.sort_by(|a, b| b.priority().cmp(&a.priority()));
+        self.adapters
+            .sort_by(|a, b| b.priority().cmp(&a.priority()));
     }
 
     /// Try each adapter in priority order; return the first successful parse.

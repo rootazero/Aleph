@@ -198,10 +198,7 @@ differences:
         let def: ProtocolDefinition =
             serde_yaml::from_str(&yaml).expect("Failed to parse exotic-ai.yaml");
         assert_eq!(def.name, "exotic-ai");
-        assert_eq!(
-            def.base_url,
-            Some("https://api.exotic.ai".to_string())
-        );
+        assert_eq!(def.base_url, Some("https://api.exotic.ai".to_string()));
         assert!(def.custom.is_some());
 
         let custom = def.custom.unwrap();

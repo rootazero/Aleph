@@ -5,12 +5,14 @@
 
 #[cfg(test)]
 mod tests {
+    use crate::gateway::agent_env::{
+        AgentEnvContext, AgentEnvFilter, AgentEnvStore, AgentEnvStoreConfig, DEFAULT_AGENT,
+    };
     use crate::memory::context::{FactType, MemoryFact};
     use crate::memory::namespace::NamespaceScope;
     use crate::memory::store::lance::LanceMemoryBackend;
     use crate::memory::store::types::SearchFilter;
     use crate::memory::store::{GraphNode, GraphStore, MemoryStore};
-    use crate::gateway::agent_env::{AgentEnvContext, AgentEnvFilter, AgentEnvStore, AgentEnvStoreConfig, DEFAULT_AGENT};
 
     /// Helper: create a MemoryFact with a synthetic embedding and assigned workspace.
     fn make_fact(content: &str, workspace: &str, embedding: Vec<f32>) -> MemoryFact {
@@ -44,35 +46,44 @@ mod tests {
         backend.insert_fact(&fact_b).await.unwrap();
 
         // Search in workspace A — should only return A's fact
-        let filter_a = SearchFilter::new()
-            .with_agent_filter(AgentEnvFilter::Single("ws-a".into()));
+        let filter_a = SearchFilter::new().with_agent_filter(AgentEnvFilter::Single("ws-a".into()));
         let results_a = backend
             .vector_search(&emb_a, 1024, &filter_a, 10)
             .await
             .unwrap();
-        assert_eq!(results_a.len(), 1, "workspace ws-a should have exactly 1 fact");
+        assert_eq!(
+            results_a.len(),
+            1,
+            "workspace ws-a should have exactly 1 fact"
+        );
         assert_eq!(results_a[0].fact.content, "Bitcoin price is $100k");
         assert_eq!(results_a[0].fact.agent, "ws-a");
 
         // Search in workspace B — should only return B's fact
-        let filter_b = SearchFilter::new()
-            .with_agent_filter(AgentEnvFilter::Single("ws-b".into()));
+        let filter_b = SearchFilter::new().with_agent_filter(AgentEnvFilter::Single("ws-b".into()));
         let results_b = backend
             .vector_search(&emb_b, 1024, &filter_b, 10)
             .await
             .unwrap();
-        assert_eq!(results_b.len(), 1, "workspace ws-b should have exactly 1 fact");
+        assert_eq!(
+            results_b.len(),
+            1,
+            "workspace ws-b should have exactly 1 fact"
+        );
         assert_eq!(results_b[0].fact.content, "Chapter 3 outline complete");
         assert_eq!(results_b[0].fact.agent, "ws-b");
 
         // Search with All — should return both
-        let filter_all = SearchFilter::new()
-            .with_agent_filter(AgentEnvFilter::All);
+        let filter_all = SearchFilter::new().with_agent_filter(AgentEnvFilter::All);
         let results_all = backend
             .vector_search(&emb_a, 1024, &filter_all, 10)
             .await
             .unwrap();
-        assert_eq!(results_all.len(), 2, "All workspaces should return both facts");
+        assert_eq!(
+            results_all.len(),
+            2,
+            "All workspaces should return both facts"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -163,7 +174,11 @@ mod tests {
             .vector_search(&emb, 1024, &filter_default, 10)
             .await
             .unwrap();
-        assert_eq!(results.len(), 1, "should find the fact in the default workspace");
+        assert_eq!(
+            results.len(),
+            1,
+            "should find the fact in the default workspace"
+        );
         assert_eq!(results[0].fact.content, "User prefers dark mode");
 
         // Search in a nonexistent workspace — should find nothing
@@ -214,10 +229,7 @@ mod tests {
         // Verify default_owner() context produces default workspace
         let default_ctx = AgentEnvContext::default_owner();
         assert_eq!(default_ctx.agent_id(), DEFAULT_AGENT);
-        let default_sql = default_ctx
-            .to_search_filter()
-            .to_lance_filter()
-            .unwrap();
+        let default_sql = default_ctx.to_search_filter().to_lance_filter().unwrap();
         assert!(default_sql.contains("agent = 'main'"));
     }
 
@@ -238,11 +250,17 @@ mod tests {
         manager.load_profiles(std::collections::HashMap::new()); // registers "default" profile
 
         // Create a workspace
-        let ws = manager.create("crypto", "default", Some("Crypto Research")).await.unwrap();
+        let ws = manager
+            .create("crypto", "default", Some("Crypto Research"))
+            .await
+            .unwrap();
         assert_eq!(ws.id, "crypto");
 
         // Update name
-        let updated = manager.update("crypto", Some("Crypto Research"), None, None).await.unwrap();
+        let updated = manager
+            .update("crypto", Some("Crypto Research"), None, None)
+            .await
+            .unwrap();
         assert!(updated.is_some());
         assert_eq!(updated.unwrap().name, "Crypto Research");
 

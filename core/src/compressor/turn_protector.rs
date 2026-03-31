@@ -429,10 +429,7 @@ mod tests {
     #[test]
     fn test_calculate_turn_index_single_turn() {
         let protector = TurnProtector::new(2);
-        let parts = vec![
-            create_user_input("Hello"),
-            create_ai_response("Hi there!"),
-        ];
+        let parts = vec![create_user_input("Hello"), create_ai_response("Hi there!")];
 
         let indices = protector.calculate_turn_index(&parts);
 
@@ -505,10 +502,7 @@ mod tests {
     #[test]
     fn test_count_turns_single() {
         let protector = TurnProtector::new(2);
-        let parts = vec![
-            create_user_input("Hello"),
-            create_ai_response("Hi!"),
-        ];
+        let parts = vec![create_user_input("Hello"), create_ai_response("Hi!")];
         assert_eq!(protector.count_turns(&parts), 1);
     }
 
@@ -544,10 +538,10 @@ mod tests {
     fn test_is_part_protected_simple() {
         let protector = TurnProtector::new(1);
         let parts = vec![
-            create_user_input("Hello"),      // Turn 0, part 0
-            create_ai_response("Hi!"),       // Turn 0, part 1
-            create_user_input("Question"),   // Turn 1, part 2
-            create_ai_response("Answer"),    // Turn 1, part 3
+            create_user_input("Hello"),    // Turn 0, part 0
+            create_ai_response("Hi!"),     // Turn 0, part 1
+            create_user_input("Question"), // Turn 1, part 2
+            create_ai_response("Answer"),  // Turn 1, part 3
         ];
 
         // With 2 turns and 1 protected, only turn 1 (parts 2,3) is protected
@@ -560,10 +554,7 @@ mod tests {
     #[test]
     fn test_is_part_protected_out_of_bounds() {
         let protector = TurnProtector::new(2);
-        let parts = vec![
-            create_user_input("Hello"),
-            create_ai_response("Hi!"),
-        ];
+        let parts = vec![create_user_input("Hello"), create_ai_response("Hi!")];
 
         assert!(!protector.is_part_protected(&parts, 10)); // Out of bounds
     }
@@ -584,10 +575,10 @@ mod tests {
     fn test_protected_part_indices_simple() {
         let protector = TurnProtector::new(1);
         let parts = vec![
-            create_user_input("Hello"),      // Turn 0, part 0
-            create_ai_response("Hi!"),       // Turn 0, part 1
-            create_user_input("Question"),   // Turn 1, part 2
-            create_ai_response("Answer"),    // Turn 1, part 3
+            create_user_input("Hello"),    // Turn 0, part 0
+            create_ai_response("Hi!"),     // Turn 0, part 1
+            create_user_input("Question"), // Turn 1, part 2
+            create_ai_response("Answer"),  // Turn 1, part 3
         ];
 
         let protected = protector.protected_part_indices(&parts);
@@ -615,10 +606,7 @@ mod tests {
     #[test]
     fn test_protected_part_indices_none_protected() {
         let protector = TurnProtector::new(0);
-        let parts = vec![
-            create_user_input("Hello"),
-            create_ai_response("Hi!"),
-        ];
+        let parts = vec![create_user_input("Hello"), create_ai_response("Hi!")];
 
         let protected = protector.protected_part_indices(&parts);
 

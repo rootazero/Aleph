@@ -5,9 +5,9 @@
 //! Tracks active guest sessions, including connection time, last activity,
 //! and tool usage statistics.
 
+use crate::sync_primitives::Arc;
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
-use crate::sync_primitives::Arc;
 use thiserror::Error;
 
 use aleph_protocol::GuestScope;
@@ -276,7 +276,7 @@ impl Default for GuestSessionManager {
 fn current_timestamp_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
+        .unwrap_or_default()
         .as_millis() as i64
 }
 

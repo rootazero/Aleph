@@ -18,7 +18,10 @@ pub fn handle_devices_list() -> Result<(), Box<dyn std::error::Error>> {
         println!("No approved devices");
     } else {
         println!("Approved devices:");
-        println!("{:<36} {:<20} {:<10} {:<20}", "DEVICE ID", "NAME", "TYPE", "APPROVED AT");
+        println!(
+            "{:<36} {:<20} {:<10} {:<20}",
+            "DEVICE ID", "NAME", "TYPE", "APPROVED AT"
+        );
         println!("{}", "-".repeat(90));
         for device in devices {
             let device_type = device.device_type.unwrap_or_else(|| "-".to_string());

@@ -11,11 +11,11 @@
 //! Uses macOS FSEvents for efficient file system monitoring with debouncing.
 
 use crate::error::{AlephError, Result};
+use crate::sync_primitives::{Arc, Mutex};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use notify_debouncer_full::{new_debouncer, DebounceEventResult, Debouncer, FileIdMap};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use crate::sync_primitives::{Arc, Mutex};
 use std::time::Duration;
 use tracing::{debug, error, info, warn};
 
@@ -186,11 +186,7 @@ impl ExtensionWatcher {
                             .map(|p| ExtensionChangeType::from_path(p))
                             .unwrap_or(ExtensionChangeType::Unknown);
 
-                        debug!(
-                            ?changed_paths,
-                            ?change_type,
-                            "Extension files changed"
-                        );
+                        debug!(?changed_paths, ?change_type, "Extension files changed");
 
                         callback(ExtensionChangeEvent {
                             changed_paths,
@@ -263,19 +259,18 @@ impl ExtensionWatcher {
     pub fn add_watch_dir(&self, dir: PathBuf) -> Result<()> {
         let debouncer_lock = self.debouncer.lock().unwrap_or_else(|e| e.into_inner());
 
-        if debouncer_lock.is_some()
-            && dir.exists() {
-                // Note: We can't call watch on debouncer.watcher() because it's behind Arc<Mutex<>>
-                // For now, restart is required to add new directories
-                drop(debouncer_lock);
-                warn!(
-                    dir = %dir.display(),
-                    "Adding watch directory requires restart"
-                );
-                return Err(AlephError::config(
-                    "Cannot add directory to running watcher. Please restart the watcher.",
-                ));
-            }
+        if debouncer_lock.is_some() && dir.exists() {
+            // Note: We can't call watch on debouncer.watcher() because it's behind Arc<Mutex<>>
+            // For now, restart is required to add new directories
+            drop(debouncer_lock);
+            warn!(
+                dir = %dir.display(),
+                "Adding watch directory requires restart"
+            );
+            return Err(AlephError::config(
+                "Cannot add directory to running watcher. Please restart the watcher.",
+            ));
+        }
 
         Ok(())
     }
@@ -290,8 +285,8 @@ impl Drop for ExtensionWatcher {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
     use crate::sync_primitives::{AtomicBool, Ordering};
+    use std::fs;
     use std::thread;
     use tempfile::TempDir;
 

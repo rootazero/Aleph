@@ -36,7 +36,10 @@ pub struct ProviderConfig {
     pub api_key: Option<String>,
     /// Model names (e.g., ["gpt-4o", "gpt-4o-mini"]). First model is the default.
     /// Accepts both `model = "xxx"` (backward compat) and `models = ["xxx", ...]`.
-    #[serde(deserialize_with = "crate::config::types::serde_helpers::deserialize_models", alias = "model")]
+    #[serde(
+        deserialize_with = "crate::config::types::serde_helpers::deserialize_models",
+        alias = "model"
+    )]
     pub models: Vec<String>,
     /// Base URL for API endpoint (optional, defaults to official API)
     #[serde(default)]
@@ -140,7 +143,10 @@ impl ProviderConfig {
     /// If the first entry is a comma-separated string of fallback models
     /// (e.g. "gpt-5.4,gpt-5.3-codex"), returns only the first model name.
     pub fn default_model(&self) -> &str {
-        debug_assert!(!self.models.is_empty(), "models should never be empty after deserialization");
+        debug_assert!(
+            !self.models.is_empty(),
+            "models should never be empty after deserialization"
+        );
         let first = &self.models[0];
         // Handle comma-separated model lists stored as a single string
         first.split(',').next().unwrap_or(first).trim()

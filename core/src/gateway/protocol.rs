@@ -9,12 +9,22 @@ use serde_json::Value;
 // Re-export core protocol types from aleph-protocol
 pub use aleph_protocol::jsonrpc::{
     JsonRpcError,
-    // Error codes
-    AUTH_REQUIRED, INTERNAL_ERROR, INVALID_PARAMS, INVALID_REQUEST, METHOD_NOT_FOUND, PARSE_ERROR,
-    PERMISSION_DENIED, RATE_LIMITED, RESOURCE_NOT_FOUND, TIMEOUT_ERROR, TOOL_ERROR,
     // Tool call types (from aleph-protocol)
-    ToolCallContext as ProtoToolCallContext, ToolCallParams as ProtoToolCallParams,
+    ToolCallContext as ProtoToolCallContext,
+    ToolCallParams as ProtoToolCallParams,
     ToolCallResult as ProtoToolCallResult,
+    // Error codes
+    AUTH_REQUIRED,
+    INTERNAL_ERROR,
+    INVALID_PARAMS,
+    INVALID_REQUEST,
+    METHOD_NOT_FOUND,
+    PARSE_ERROR,
+    PERMISSION_DENIED,
+    RATE_LIMITED,
+    RESOURCE_NOT_FOUND,
+    TIMEOUT_ERROR,
+    TOOL_ERROR,
 };
 
 // Additional error codes specific to Gateway (not in aleph-protocol)
@@ -193,7 +203,10 @@ impl JsonRpcErrorExt for JsonRpcError {
     }
 
     fn auth_failed(reason: impl Into<String>) -> JsonRpcError {
-        JsonRpcError::new(AUTH_FAILED, format!("Authentication failed: {}", reason.into()))
+        JsonRpcError::new(
+            AUTH_FAILED,
+            format!("Authentication failed: {}", reason.into()),
+        )
     }
 }
 
@@ -274,7 +287,8 @@ mod tests {
 
     #[test]
     fn test_request_serialization() {
-        let request = JsonRpcRequest::new("echo", Some(json!({"message": "hello"})), Some(json!(1)));
+        let request =
+            JsonRpcRequest::new("echo", Some(json!({"message": "hello"})), Some(json!(1)));
         let json = serde_json::to_string(&request).unwrap();
         assert!(json.contains("\"jsonrpc\":\"2.0\""));
         assert!(json.contains("\"method\":\"echo\""));

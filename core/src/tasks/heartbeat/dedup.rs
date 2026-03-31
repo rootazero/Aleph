@@ -8,8 +8,8 @@
 
 use std::sync::Arc;
 
+use rusqlite::{params, Connection};
 use tokio::sync::Mutex;
-use rusqlite::{Connection, params};
 
 use crate::memory::EmbeddingProvider;
 use crate::tasks::heartbeat::config::DedupConfig;
@@ -52,7 +52,11 @@ impl DedupEngine {
         conn: Arc<Mutex<Connection>>,
         embedding_provider: Option<Arc<dyn EmbeddingProvider>>,
     ) -> Self {
-        Self { config, conn, embedding_provider }
+        Self {
+            config,
+            conn,
+            embedding_provider,
+        }
     }
 
     /// Create a no-op DedupEngine backed by an in-memory connection.
@@ -217,11 +221,7 @@ fn insert_dedup_record(
 }
 
 /// Delete the oldest records beyond `max_history` for a given task.
-fn prune_dedup_records(
-    conn: &Connection,
-    task_id: &str,
-    max_history: usize,
-) -> Result<(), String> {
+fn prune_dedup_records(conn: &Connection, task_id: &str, max_history: usize) -> Result<(), String> {
     conn.execute(
         "DELETE FROM heartbeat_dedup
          WHERE task_id = ?1

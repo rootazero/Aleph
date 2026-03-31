@@ -12,12 +12,10 @@ mod permission;
 
 mod types;
 
-pub use types::{
-    ChannelConfig, DmPolicy, GroupPolicy, RoutingError, SLASH_COMMAND_MODE_KEY,
-};
+pub use types::{ChannelConfig, DmPolicy, GroupPolicy, RoutingError, SLASH_COMMAND_MODE_KEY};
 
-use std::collections::HashMap;
 use crate::sync_primitives::Arc;
+use std::collections::HashMap;
 use tokio::sync::{mpsc, Mutex};
 use tracing::{error, info, warn};
 
@@ -27,9 +25,9 @@ use super::channel_registry::ChannelRegistry;
 use super::execution_adapter::ExecutionAdapter;
 use super::handlers::group_chat::SharedOrchestrator;
 
+use super::agent_env::AgentEnvStore;
 use super::pairing_store::PairingStore;
 use super::routing_config::RoutingConfig;
-use super::agent_env::AgentEnvStore;
 use crate::command::CommandParser;
 use crate::group_chat::GroupChatExecutor;
 use crate::routing::config::{RouteBinding, SessionConfig};
@@ -108,7 +106,8 @@ pub struct InboundMessageRouter {
     /// Generation provider registry for TTS
     pub(super) generation_registry: Option<Arc<crate::generation::GenerationProviderRegistry>>,
     /// Generation config for TTS
-    pub(super) generation_config: Option<Arc<tokio::sync::RwLock<crate::config::types::generation::GenerationConfig>>>,
+    pub(super) generation_config:
+        Option<Arc<tokio::sync::RwLock<crate::config::types::generation::GenerationConfig>>>,
 }
 
 impl InboundMessageRouter {
@@ -207,7 +206,10 @@ impl InboundMessageRouter {
     }
 
     /// Set the debounce buffer for message merging
-    pub fn with_debounce_buffer(mut self, buffer: Arc<crate::gateway::pipeline::DebounceBuffer>) -> Self {
+    pub fn with_debounce_buffer(
+        mut self,
+        buffer: Arc<crate::gateway::pipeline::DebounceBuffer>,
+    ) -> Self {
         self.debounce_buffer = Some(buffer);
         self
     }
@@ -263,7 +265,9 @@ impl InboundMessageRouter {
                 if !tracker.check_and_record(&dedup_key) {
                     warn!(
                         "Duplicate message detected and dropped: {} from {}:{}",
-                        dedup_key, msg.channel_id.as_str(), msg.sender_id.as_str()
+                        dedup_key,
+                        msg.channel_id.as_str(),
+                        msg.sender_id.as_str()
                     );
                     continue;
                 }
@@ -291,7 +295,9 @@ impl InboundMessageRouter {
         );
 
         // Resolve agent ID via multi-tier route bindings with fallback
-        let (agent_id, resolved_route) = self.resolve_agent_id_async(&msg).await
+        let (agent_id, resolved_route) = self
+            .resolve_agent_id_async(&msg)
+            .await
             .unwrap_or_else(|| (self.default_agent_id.clone(), None));
 
         // Check link access control
@@ -310,16 +316,26 @@ impl InboundMessageRouter {
         }
 
         // Build context with resolved agent
-        let ctx = self.build_context_with_agent(&msg, &agent_id, resolved_route.as_ref()).await;
+        let ctx = self
+            .build_context_with_agent(&msg, &agent_id, resolved_route.as_ref())
+            .await;
 
         // Check permissions
         let mut ctx = match self.check_permission(ctx).await {
             Ok(ctx) => {
-                info!("[Router] Permission granted for {}:{}", channel_id, ctx.sender_normalized);
+                info!(
+                    "[Router] Permission granted for {}:{}",
+                    channel_id, ctx.sender_normalized
+                );
                 ctx
             }
             Err(e) => {
-                info!("[Router] Permission denied for {}:{} — {}", channel_id, msg.sender_id.as_str(), e);
+                info!(
+                    "[Router] Permission denied for {}:{} — {}",
+                    channel_id,
+                    msg.sender_id.as_str(),
+                    e
+                );
                 return Ok(());
             }
         };
@@ -327,14 +343,17 @@ impl InboundMessageRouter {
         // Voice STT: transcribe audio attachments before further processing
         let has_stt = self.stt_config.is_some();
         let has_audio = super::voice::inbound::has_audio_attachment(&ctx.message);
-        tracing::debug!(has_stt = has_stt, has_audio = has_audio, attachments = ctx.message.attachments.len(), "Voice STT check");
+        tracing::debug!(
+            has_stt = has_stt,
+            has_audio = has_audio,
+            attachments = ctx.message.attachments.len(),
+            "Voice STT check"
+        );
         if let Some(ref stt_config) = self.stt_config {
             if has_audio {
-                let result = super::voice::inbound::process_inbound_voice(
-                    ctx.message.clone(),
-                    stt_config,
-                )
-                .await;
+                let result =
+                    super::voice::inbound::process_inbound_voice(ctx.message.clone(), stt_config)
+                        .await;
                 ctx.message = result.message;
                 if result.transcribed {
                     ctx.voice_reply_hint = true;
@@ -352,21 +371,39 @@ impl InboundMessageRouter {
                 // Strip leading underscore (Telegram may send /voice_on from button callback)
                 let args = args.trim_start_matches('_');
                 let (enabled, reply) = match args {
-                    "on" | "open" | "开" | "开启" => (true, "Voice mode enabled. I'll reply with voice from now on."),
-                    "off" | "close" | "关" | "关闭" => (false, "Voice mode disabled. Switching back to text replies."),
+                    "on" | "open" | "开" | "开启" => (
+                        true,
+                        "Voice mode enabled. I'll reply with voice from now on.",
+                    ),
+                    "off" | "close" | "关" | "关闭" => (
+                        false,
+                        "Voice mode disabled. Switching back to text replies.",
+                    ),
                     "" => {
                         // No args: show inline keyboard with voice sub-commands
                         use super::channel::{InlineButton, InlineKeyboard};
                         let state = self.channel_registry.get_voice_state("default").await;
-                        let ch_state = self.channel_registry.get_voice_state(ctx.reply_route.channel_id.as_str()).await;
+                        let ch_state = self
+                            .channel_registry
+                            .get_voice_state(ctx.reply_route.channel_id.as_str())
+                            .await;
                         let is_on = state.is_active() || ch_state.is_active();
                         let status = if is_on { "🔊 ON" } else { "🔇 OFF" };
 
                         let mut keyboard = InlineKeyboard::new();
                         keyboard.rows.push(vec![
-                            InlineButton { text: "🔊 On".to_string(), callback_data: "/voice on".to_string() },
-                            InlineButton { text: "🔇 Off".to_string(), callback_data: "/voice off".to_string() },
-                            InlineButton { text: "📊 Status".to_string(), callback_data: "/voice status".to_string() },
+                            InlineButton {
+                                text: "🔊 On".to_string(),
+                                callback_data: "/voice on".to_string(),
+                            },
+                            InlineButton {
+                                text: "🔇 Off".to_string(),
+                                callback_data: "/voice off".to_string(),
+                            },
+                            InlineButton {
+                                text: "📊 Status".to_string(),
+                                callback_data: "/voice status".to_string(),
+                            },
                         ]);
 
                         let reply_msg = super::channel::OutboundMessage {
@@ -377,24 +414,36 @@ impl InboundMessageRouter {
                             inline_keyboard: Some(keyboard),
                             metadata: Default::default(),
                         };
-                        let _ = self.channel_registry.send(&ctx.reply_route.channel_id, reply_msg).await;
+                        let _ = self
+                            .channel_registry
+                            .send(&ctx.reply_route.channel_id, reply_msg)
+                            .await;
                         return Ok(());
                     }
                     "status" | "状态" => {
                         // Show current status as text
                         let state = self.channel_registry.get_voice_state("default").await;
-                        let ch_state = self.channel_registry.get_voice_state(ctx.reply_route.channel_id.as_str()).await;
+                        let ch_state = self
+                            .channel_registry
+                            .get_voice_state(ctx.reply_route.channel_id.as_str())
+                            .await;
                         let is_on = state.is_active() || ch_state.is_active();
-                        let provider = state.provider.as_deref()
+                        let provider = state
+                            .provider
+                            .as_deref()
                             .or(ch_state.provider.as_deref())
                             .unwrap_or("auto");
-                        let voice = state.voice.as_deref()
+                        let voice = state
+                            .voice
+                            .as_deref()
                             .or(ch_state.voice.as_deref())
                             .unwrap_or("default");
                         let status_text = format!(
                             "🎙 Voice Mode: {}\nProvider: {}\nVoice: {}\nFailures: {}",
                             if is_on { "ON" } else { "OFF" },
-                            provider, voice, ch_state.consecutive_failures
+                            provider,
+                            voice,
+                            ch_state.consecutive_failures
                         );
                         let reply_msg = super::channel::OutboundMessage {
                             conversation_id: ctx.reply_route.conversation_id.clone(),
@@ -404,27 +453,39 @@ impl InboundMessageRouter {
                             inline_keyboard: None,
                             metadata: Default::default(),
                         };
-                        let _ = self.channel_registry.send(&ctx.reply_route.channel_id, reply_msg).await;
+                        let _ = self
+                            .channel_registry
+                            .send(&ctx.reply_route.channel_id, reply_msg)
+                            .await;
                         return Ok(());
                     }
                     _ => (true, "Voice mode enabled."),
                 };
-                self.channel_registry.update_voice_state("default", |s| {
-                    s.enabled = enabled;
-                    s.consecutive_failures = 0;
-                }).await;
+                self.channel_registry
+                    .update_voice_state("default", |s| {
+                        s.enabled = enabled;
+                        s.consecutive_failures = 0;
+                    })
+                    .await;
                 // Also set for the specific channel
-                self.channel_registry.update_voice_state(ctx.reply_route.channel_id.as_str(), |s| {
-                    s.enabled = enabled;
-                    s.consecutive_failures = 0;
-                }).await;
+                self.channel_registry
+                    .update_voice_state(ctx.reply_route.channel_id.as_str(), |s| {
+                        s.enabled = enabled;
+                        s.consecutive_failures = 0;
+                    })
+                    .await;
                 // Send confirmation — as voice if enabling, as text if disabling
                 if enabled {
                     // Try voice reply for confirmation
-                    if let (Some(ref gen_reg), Some(ref gen_cfg)) = (&self.generation_registry, &self.generation_config) {
+                    if let (Some(ref gen_reg), Some(ref gen_cfg)) =
+                        (&self.generation_registry, &self.generation_config)
+                    {
                         let voice_state = self.channel_registry.get_voice_state("default").await;
                         let cfg = gen_cfg.read().await.clone();
-                        if let Some(attachment) = super::voice::outbound::generate_tts(reply, &voice_state, gen_reg, &cfg).await {
+                        if let Some(attachment) =
+                            super::voice::outbound::generate_tts(reply, &voice_state, gen_reg, &cfg)
+                                .await
+                        {
                             let voice_msg = super::channel::OutboundMessage {
                                 conversation_id: ctx.reply_route.conversation_id.clone(),
                                 text: String::new(),
@@ -433,7 +494,10 @@ impl InboundMessageRouter {
                                 inline_keyboard: None,
                                 metadata: Default::default(),
                             };
-                            let _ = self.channel_registry.send(&ctx.reply_route.channel_id, voice_msg).await;
+                            let _ = self
+                                .channel_registry
+                                .send(&ctx.reply_route.channel_id, voice_msg)
+                                .await;
                             return Ok(());
                         }
                     }
@@ -447,7 +511,10 @@ impl InboundMessageRouter {
                     inline_keyboard: None,
                     metadata: Default::default(),
                 };
-                let _ = self.channel_registry.send(&ctx.reply_route.channel_id, reply_msg).await;
+                let _ = self
+                    .channel_registry
+                    .send(&ctx.reply_route.channel_id, reply_msg)
+                    .await;
                 return Ok(());
             }
         }
@@ -482,7 +549,8 @@ impl InboundMessageRouter {
                             "[Router] Slash command resolved: source=unified, name={}",
                             ctx.message.text.split_whitespace().next().unwrap_or("")
                         );
-                        self.execute_for_context_with_metadata(&ctx, mode_json).await?;
+                        self.execute_for_context_with_metadata(&ctx, mode_json)
+                            .await?;
                         return Ok(());
                     }
                 } else {
@@ -493,12 +561,13 @@ impl InboundMessageRouter {
                         .split_whitespace()
                         .next()
                         .unwrap_or("")
-                        .split('@')  // Strip @botname suffix
+                        .split('@') // Strip @botname suffix
                         .next()
                         .unwrap_or("");
                     // Skip namespace check for shorthand aliases — these are resolved
                     // by slash_command.rs fast-path (e.g. /image → image_generate).
-                    let is_shorthand = matches!(namespace, "image" | "video" | "audio" | "speech" | "rename");
+                    let is_shorthand =
+                        matches!(namespace, "image" | "video" | "audio" | "speech" | "rename");
                     if !namespace.is_empty() && !is_shorthand {
                         let registry = parser.tool_registry();
                         if registry.is_namespace(namespace).await {
@@ -518,7 +587,9 @@ impl InboundMessageRouter {
                                     inline_keyboard: Some(keyboard),
                                     metadata: Default::default(),
                                 };
-                                if let Err(e) = self.channel_registry.send(&msg.channel_id, reply).await {
+                                if let Err(e) =
+                                    self.channel_registry.send(&msg.channel_id, reply).await
+                                {
                                     error!("[Router] Failed to send namespace keyboard: {}", e);
                                 }
                                 return Ok(());
@@ -580,10 +651,7 @@ impl InboundMessageRouter {
         let buttons: Vec<InlineButton> = children
             .iter()
             .map(|tool| {
-                let sub_name = tool
-                    .name
-                    .strip_prefix(&prefix)
-                    .unwrap_or(&tool.name);
+                let sub_name = tool.name.strip_prefix(&prefix).unwrap_or(&tool.name);
                 let display = sub_name.to_string();
                 // Callback data: "/namespace sub" format for re-injection
                 let callback = format!("/{} {}", namespace, sub_name);
@@ -600,5 +668,4 @@ impl InboundMessageRouter {
         }
         keyboard
     }
-
 }

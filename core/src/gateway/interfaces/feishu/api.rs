@@ -1,5 +1,5 @@
-use std::sync::Arc;
 use reqwest::multipart;
+use std::sync::Arc;
 
 use super::auth::TokenManager;
 use super::types::*;
@@ -52,20 +52,30 @@ impl FeishuApi {
         let token = self.auth.get_token().await?;
         let url = format!("{}/open-apis/bot/v3/info", self.base_url);
 
-        let resp = self.http.get(&url)
+        let resp = self
+            .http
+            .get(&url)
             .header("Authorization", format!("Bearer {token}"))
             .send()
             .await
             .map_err(|e| format!("Bot info request failed: {e}"))?;
 
-        let info: BotInfoResponse = resp.json().await
+        let info: BotInfoResponse = resp
+            .json()
+            .await
             .map_err(|e| format!("Bot info parse failed: {e}"))?;
 
         if info.code != 0 {
-            return Err(format!("Bot info error: code={}, msg={}", info.code, info.msg.unwrap_or_default()));
+            return Err(format!(
+                "Bot info error: code={}, msg={}",
+                info.code,
+                info.msg.unwrap_or_default()
+            ));
         }
 
-        let bot = info.bot.ok_or_else(|| "No bot info in response".to_string())?;
+        let bot = info
+            .bot
+            .ok_or_else(|| "No bot info in response".to_string())?;
 
         if let Some(ref oid) = bot.open_id {
             *self.bot_open_id.write().await = Some(oid.clone());
@@ -80,7 +90,9 @@ impl FeishuApi {
         let token = self.auth.get_token().await?;
         let url = format!("{}/open-apis/callback/ws/endpoint", self.base_url);
 
-        let resp = self.http.post(&url)
+        let resp = self
+            .http
+            .post(&url)
             .header("Authorization", format!("Bearer {token}"))
             .header("Content-Type", "application/json; charset=utf-8")
             .json(&serde_json::json!({}))
@@ -88,26 +100,47 @@ impl FeishuApi {
             .await
             .map_err(|e| format!("WS endpoint request failed: {e}"))?;
 
-        let ws_resp: WsEndpointResponse = resp.json().await
+        let ws_resp: WsEndpointResponse = resp
+            .json()
+            .await
             .map_err(|e| format!("WS endpoint parse failed: {e}"))?;
 
         if ws_resp.code != 0 {
-            return Err(format!("WS endpoint error: code={}, msg={}", ws_resp.code, ws_resp.msg));
+            return Err(format!(
+                "WS endpoint error: code={}, msg={}",
+                ws_resp.code, ws_resp.msg
+            ));
         }
 
-        let data = ws_resp.data.ok_or_else(|| "No data in WS endpoint response".to_string())?;
+        let data = ws_resp
+            .data
+            .ok_or_else(|| "No data in WS endpoint response".to_string())?;
         Ok(data.url)
     }
 
     // ── Send Messages ──
 
-    pub async fn send_text(&self, chat_id: &str, text: &str, reply_to: Option<&str>) -> Result<String, FeishuSendError> {
+    pub async fn send_text(
+        &self,
+        chat_id: &str,
+        text: &str,
+        reply_to: Option<&str>,
+    ) -> Result<String, FeishuSendError> {
         if let Some(msg_id) = reply_to {
-            return self.reply_message(msg_id, "text", &serde_json::json!({"text": text}).to_string()).await;
+            return self
+                .reply_message(
+                    msg_id,
+                    "text",
+                    &serde_json::json!({"text": text}).to_string(),
+                )
+                .await;
         }
 
         let token = self.auth.get_token().await?;
-        let url = format!("{}/open-apis/im/v1/messages?receive_id_type=chat_id", self.base_url);
+        let url = format!(
+            "{}/open-apis/im/v1/messages?receive_id_type=chat_id",
+            self.base_url
+        );
 
         let body = serde_json::json!({
             "receive_id": chat_id,
@@ -115,7 +148,9 @@ impl FeishuApi {
             "content": serde_json::json!({"text": text}).to_string(),
         });
 
-        let resp = self.http.post(&url)
+        let resp = self
+            .http
+            .post(&url)
             .header("Authorization", format!("Bearer {token}"))
             .header("Content-Type", "application/json; charset=utf-8")
             .json(&body)
@@ -126,13 +161,27 @@ impl FeishuApi {
         self.parse_send_response(resp).await
     }
 
-    pub async fn send_image(&self, chat_id: &str, image_key: &str, reply_to: Option<&str>) -> Result<String, FeishuSendError> {
+    pub async fn send_image(
+        &self,
+        chat_id: &str,
+        image_key: &str,
+        reply_to: Option<&str>,
+    ) -> Result<String, FeishuSendError> {
         if let Some(msg_id) = reply_to {
-            return self.reply_message(msg_id, "image", &serde_json::json!({"image_key": image_key}).to_string()).await;
+            return self
+                .reply_message(
+                    msg_id,
+                    "image",
+                    &serde_json::json!({"image_key": image_key}).to_string(),
+                )
+                .await;
         }
 
         let token = self.auth.get_token().await?;
-        let url = format!("{}/open-apis/im/v1/messages?receive_id_type=chat_id", self.base_url);
+        let url = format!(
+            "{}/open-apis/im/v1/messages?receive_id_type=chat_id",
+            self.base_url
+        );
 
         let body = serde_json::json!({
             "receive_id": chat_id,
@@ -140,7 +189,9 @@ impl FeishuApi {
             "content": serde_json::json!({"image_key": image_key}).to_string(),
         });
 
-        let resp = self.http.post(&url)
+        let resp = self
+            .http
+            .post(&url)
             .header("Authorization", format!("Bearer {token}"))
             .header("Content-Type", "application/json; charset=utf-8")
             .json(&body)
@@ -151,16 +202,26 @@ impl FeishuApi {
         self.parse_send_response(resp).await
     }
 
-    async fn reply_message(&self, message_id: &str, msg_type: &str, content: &str) -> Result<String, FeishuSendError> {
+    async fn reply_message(
+        &self,
+        message_id: &str,
+        msg_type: &str,
+        content: &str,
+    ) -> Result<String, FeishuSendError> {
         let token = self.auth.get_token().await?;
-        let url = format!("{}/open-apis/im/v1/messages/{}/reply", self.base_url, message_id);
+        let url = format!(
+            "{}/open-apis/im/v1/messages/{}/reply",
+            self.base_url, message_id
+        );
 
         let body = serde_json::json!({
             "msg_type": msg_type,
             "content": content,
         });
 
-        let resp = self.http.post(&url)
+        let resp = self
+            .http
+            .post(&url)
             .header("Authorization", format!("Bearer {token}"))
             .header("Content-Type", "application/json; charset=utf-8")
             .json(&body)
@@ -171,24 +232,36 @@ impl FeishuApi {
         self.parse_send_response(resp).await
     }
 
-    async fn parse_send_response(&self, resp: reqwest::Response) -> Result<String, FeishuSendError> {
+    async fn parse_send_response(
+        &self,
+        resp: reqwest::Response,
+    ) -> Result<String, FeishuSendError> {
         if resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
-            let retry_after = resp.headers()
+            let retry_after = resp
+                .headers()
                 .get("retry-after")
                 .and_then(|v| v.to_str().ok())
                 .and_then(|v| v.parse::<u64>().ok())
                 .unwrap_or(5);
-            return Err(FeishuSendError::RateLimited { retry_after_secs: retry_after });
+            return Err(FeishuSendError::RateLimited {
+                retry_after_secs: retry_after,
+            });
         }
 
-        let send_resp: SendMessageResponse = resp.json().await
+        let send_resp: SendMessageResponse = resp
+            .json()
+            .await
             .map_err(|e| FeishuSendError::Other(format!("Send response parse failed: {e}")))?;
 
         if send_resp.code != 0 {
-            return Err(FeishuSendError::Other(format!("Send error: code={}, msg={}", send_resp.code, send_resp.msg)));
+            return Err(FeishuSendError::Other(format!(
+                "Send error: code={}, msg={}",
+                send_resp.code, send_resp.msg
+            )));
         }
 
-        let msg_id = send_resp.data
+        let msg_id = send_resp
+            .data
             .and_then(|d| d.message_id)
             .unwrap_or_default();
 
@@ -210,21 +283,29 @@ impl FeishuApi {
             .text("image_type", "message")
             .part("image", part);
 
-        let resp = self.http.post(&url)
+        let resp = self
+            .http
+            .post(&url)
             .header("Authorization", format!("Bearer {token}"))
             .multipart(form)
             .send()
             .await
             .map_err(|e| format!("Upload image failed: {e}"))?;
 
-        let upload_resp: UploadImageResponse = resp.json().await
+        let upload_resp: UploadImageResponse = resp
+            .json()
+            .await
             .map_err(|e| format!("Upload response parse failed: {e}"))?;
 
         if upload_resp.code != 0 {
-            return Err(format!("Upload error: code={}, msg={}", upload_resp.code, upload_resp.msg));
+            return Err(format!(
+                "Upload error: code={}, msg={}",
+                upload_resp.code, upload_resp.msg
+            ));
         }
 
-        upload_resp.data
+        upload_resp
+            .data
             .and_then(|d| d.image_key)
             .ok_or_else(|| "No image_key in upload response".to_string())
     }
@@ -258,7 +339,9 @@ impl FeishuApi {
             "data": card_body.to_string(),
         });
 
-        let resp = self.http.post(&url)
+        let resp = self
+            .http
+            .post(&url)
             .header("Authorization", format!("Bearer {token}"))
             .header("Content-Type", "application/json; charset=utf-8")
             .json(&body)
@@ -266,14 +349,20 @@ impl FeishuApi {
             .await
             .map_err(|e| format!("Create streaming card failed: {e}"))?;
 
-        let card_resp: CardCreateResponse = resp.json().await
+        let card_resp: CardCreateResponse = resp
+            .json()
+            .await
             .map_err(|e| format!("Card create response parse failed: {e}"))?;
 
         if card_resp.code != 0 {
-            return Err(format!("Card create error: code={}, msg={}", card_resp.code, card_resp.msg));
+            return Err(format!(
+                "Card create error: code={}, msg={}",
+                card_resp.code, card_resp.msg
+            ));
         }
 
-        card_resp.data
+        card_resp
+            .data
             .and_then(|d| d.card_id)
             .ok_or_else(|| "No card_id in response".to_string())
     }
@@ -291,11 +380,16 @@ impl FeishuApi {
         });
 
         if let Some(msg_id) = reply_to {
-            return self.reply_message(msg_id, "interactive", &content.to_string()).await;
+            return self
+                .reply_message(msg_id, "interactive", &content.to_string())
+                .await;
         }
 
         let token = self.auth.get_token().await?;
-        let url = format!("{}/open-apis/im/v1/messages?receive_id_type=chat_id", self.base_url);
+        let url = format!(
+            "{}/open-apis/im/v1/messages?receive_id_type=chat_id",
+            self.base_url
+        );
 
         let body = serde_json::json!({
             "receive_id": chat_id,
@@ -303,7 +397,9 @@ impl FeishuApi {
             "content": content.to_string(),
         });
 
-        let resp = self.http.post(&url)
+        let resp = self
+            .http
+            .post(&url)
             .header("Authorization", format!("Bearer {token}"))
             .header("Content-Type", "application/json; charset=utf-8")
             .json(&body)
@@ -333,7 +429,9 @@ impl FeishuApi {
             "uuid": format!("s_{}_{}", card_id, sequence),
         });
 
-        let resp = self.http.put(&url)
+        let resp = self
+            .http
+            .put(&url)
             .header("Authorization", format!("Bearer {token}"))
             .header("Content-Type", "application/json; charset=utf-8")
             .json(&body)
@@ -355,7 +453,10 @@ impl FeishuApi {
         sequence: u32,
     ) -> Result<(), String> {
         let token = self.auth.get_token().await?;
-        let url = format!("{}/open-apis/cardkit/v1/cards/{}/settings", self.base_url, card_id);
+        let url = format!(
+            "{}/open-apis/cardkit/v1/cards/{}/settings",
+            self.base_url, card_id
+        );
 
         let settings = serde_json::json!({
             "config": {
@@ -372,7 +473,9 @@ impl FeishuApi {
             "uuid": format!("c_{}_{}", card_id, sequence),
         });
 
-        let resp = self.http.patch(&url)
+        let resp = self
+            .http
+            .patch(&url)
             .header("Authorization", format!("Bearer {token}"))
             .header("Content-Type", "application/json; charset=utf-8")
             .json(&body)
@@ -404,11 +507,16 @@ impl FeishuApi {
         });
 
         if let Some(msg_id) = reply_to {
-            return self.reply_message(msg_id, "interactive", &card.to_string()).await;
+            return self
+                .reply_message(msg_id, "interactive", &card.to_string())
+                .await;
         }
 
         let token = self.auth.get_token().await?;
-        let url = format!("{}/open-apis/im/v1/messages?receive_id_type=chat_id", self.base_url);
+        let url = format!(
+            "{}/open-apis/im/v1/messages?receive_id_type=chat_id",
+            self.base_url
+        );
 
         let body = serde_json::json!({
             "receive_id": chat_id,
@@ -416,7 +524,9 @@ impl FeishuApi {
             "content": card.to_string(),
         });
 
-        let resp = self.http.post(&url)
+        let resp = self
+            .http
+            .post(&url)
             .header("Authorization", format!("Bearer {token}"))
             .header("Content-Type", "application/json; charset=utf-8")
             .json(&body)
@@ -441,7 +551,9 @@ impl FeishuApi {
             "reaction_type": { "emoji_type": emoji_type }
         });
 
-        let resp = self.http.post(&url)
+        let resp = self
+            .http
+            .post(&url)
             .header("Authorization", format!("Bearer {token}"))
             .header("Content-Type", "application/json; charset=utf-8")
             .json(&body)
@@ -449,14 +561,20 @@ impl FeishuApi {
             .await
             .map_err(|e| format!("Add reaction failed: {e}"))?;
 
-        let reaction_resp: ReactionResponse = resp.json().await
+        let reaction_resp: ReactionResponse = resp
+            .json()
+            .await
             .map_err(|e| format!("Reaction response parse failed: {e}"))?;
 
         if reaction_resp.code != 0 {
-            return Err(format!("Reaction error: code={}, msg={}", reaction_resp.code, reaction_resp.msg));
+            return Err(format!(
+                "Reaction error: code={}, msg={}",
+                reaction_resp.code, reaction_resp.msg
+            ));
         }
 
-        reaction_resp.data
+        reaction_resp
+            .data
             .and_then(|d| d.reaction_id)
             .ok_or_else(|| "No reaction_id in response".to_string())
     }
@@ -469,7 +587,9 @@ impl FeishuApi {
             self.base_url, message_id, reaction_id
         );
 
-        let resp = self.http.delete(&url)
+        let resp = self
+            .http
+            .delete(&url)
             .header("Authorization", format!("Bearer {token}"))
             .send()
             .await

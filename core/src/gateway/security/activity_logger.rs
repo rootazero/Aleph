@@ -8,8 +8,8 @@
 use super::activity_log::{
     ActivityLogQuery, ActivityLogQueryResult, ActivityStatus, ActivityType, GuestActivityLog,
 };
-use dashmap::DashMap;
 use crate::sync_primitives::Arc;
+use dashmap::DashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{debug, warn};
 
@@ -49,10 +49,7 @@ impl GuestActivityLogger {
             "Logging guest activity"
         );
 
-        self.logs
-            .entry(session_id.clone())
-            .or_default()
-            .push(log);
+        self.logs.entry(session_id.clone()).or_default().push(log);
 
         // Enforce max logs limit
         if let Some(mut logs) = self.logs.get_mut(&session_id) {
@@ -173,11 +170,7 @@ impl GuestActivityLogger {
     }
 
     /// Query activity logs for a session
-    pub fn query_logs(
-        &self,
-        session_id: &str,
-        query: &ActivityLogQuery,
-    ) -> ActivityLogQueryResult {
+    pub fn query_logs(&self, session_id: &str, query: &ActivityLogQuery) -> ActivityLogQueryResult {
         let logs = match self.logs.get(session_id) {
             Some(logs) => logs.clone(),
             None => {
@@ -235,8 +228,7 @@ impl GuestActivityLogger {
             .unwrap_or_default()
             .as_millis() as i64;
 
-        self.session_end_times
-            .insert(session_id.to_string(), now);
+        self.session_end_times.insert(session_id.to_string(), now);
 
         debug!(session_id = %session_id, "Marked session as ended");
     }

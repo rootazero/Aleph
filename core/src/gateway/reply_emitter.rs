@@ -15,20 +15,20 @@
 
 use std::time::Duration;
 
-use async_trait::async_trait;
-use crate::sync_primitives::{AtomicBool, AtomicU64, Ordering};
 use crate::sync_primitives::Arc;
+use crate::sync_primitives::{AtomicBool, AtomicU64, Ordering};
+use async_trait::async_trait;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
-use crate::gateway::media::PendingMedia;
-use crate::gateway::streaming::{StreamingController, StreamingConfig, StreamAction};
-use crate::media::cache::MediaCache;
 use super::channel::OutboundMessage;
 use super::channel_registry::ChannelRegistry;
 use super::event_emitter::{EventEmitError, EventEmitter, StreamEvent};
 use super::inbound_context::ReplyRoute;
+use crate::gateway::media::PendingMedia;
+use crate::gateway::streaming::{StreamAction, StreamingConfig, StreamingController};
+use crate::media::cache::MediaCache;
 
 /// Configuration for ReplyEmitter behavior
 #[derive(Debug, Clone)]
@@ -98,7 +98,8 @@ pub struct ReplyEmitter {
     /// Generation provider registry for TTS (voice mode)
     generation_registry: Option<Arc<crate::generation::GenerationProviderRegistry>>,
     /// Generation config for TTS (voice mode)
-    generation_config: Option<Arc<tokio::sync::RwLock<crate::config::types::generation::GenerationConfig>>>,
+    generation_config:
+        Option<Arc<tokio::sync::RwLock<crate::config::types::generation::GenerationConfig>>>,
     /// Per-channel voice state
     voice_state: Mutex<super::voice::VoiceState>,
 
@@ -210,7 +211,9 @@ impl ReplyEmitter {
         mut self,
         voice_state: super::voice::VoiceState,
         generation_registry: Arc<crate::generation::GenerationProviderRegistry>,
-        generation_config: Arc<tokio::sync::RwLock<crate::config::types::generation::GenerationConfig>>,
+        generation_config: Arc<
+            tokio::sync::RwLock<crate::config::types::generation::GenerationConfig>,
+        >,
     ) -> Self {
         self.voice_state = Mutex::new(voice_state);
         self.generation_registry = Some(generation_registry);
@@ -220,7 +223,10 @@ impl ReplyEmitter {
 
     /// Attach a native stream handler, enabling real-time streaming for
     /// channels that support `StreamProtocol::Native` (e.g., Microsoft Teams).
-    pub fn with_native_handler(mut self, handler: Arc<dyn crate::gateway::channel::NativeStreamHandler>) -> Self {
+    pub fn with_native_handler(
+        mut self,
+        handler: Arc<dyn crate::gateway::channel::NativeStreamHandler>,
+    ) -> Self {
         self.native_handler = Some(handler);
         self
     }
@@ -242,14 +248,22 @@ impl ReplyEmitter {
         // voice_mode_set tool is called without explicit channel_id)
         let channel_id = self.route.channel_id.as_str();
         let live_state = self.channel_registry.get_voice_state(channel_id).await;
-        debug!("should_voice: channel={}, enabled={}", channel_id, live_state.is_active());
+        debug!(
+            "should_voice: channel={}, enabled={}",
+            channel_id,
+            live_state.is_active()
+        );
         if live_state.is_active() {
             return true;
         }
         // Fallback: check "default" key (used when tool doesn't know channel)
         if channel_id != "default" {
             let default_state = self.channel_registry.get_voice_state("default").await;
-            debug!("should_voice: fallback 'default' enabled={}, has_gen_registry={}", default_state.is_active(), self.generation_registry.is_some());
+            debug!(
+                "should_voice: fallback 'default' enabled={}, has_gen_registry={}",
+                default_state.is_active(),
+                self.generation_registry.is_some()
+            );
             if default_state.is_active() {
                 debug!("should_voice => TRUE (default fallback)");
                 return true;
@@ -265,7 +279,11 @@ impl ReplyEmitter {
     /// On failure it records the failure on `voice_state` and falls back to
     /// plain text via `send_to_channel`.
     async fn send_as_voice(&self, text: &str) {
-        debug!("send_as_voice called, text_len={}, has_gen_registry={}", text.len(), self.generation_registry.is_some());
+        debug!(
+            "send_as_voice called, text_len={}, has_gen_registry={}",
+            text.len(),
+            self.generation_registry.is_some()
+        );
         if let Some(ref registry) = self.generation_registry {
             // Read live voice state from registry (not the stale local copy)
             // Check channel-specific first, then "default" fallback
@@ -282,13 +300,9 @@ impl ReplyEmitter {
                 }
             };
 
-            if let Some(attachment) = super::voice::outbound::generate_tts(
-                text,
-                &voice_state,
-                registry,
-                &gen_config,
-            )
-            .await
+            if let Some(attachment) =
+                super::voice::outbound::generate_tts(text, &voice_state, registry, &gen_config)
+                    .await
             {
                 // Success — reset failure counter
                 self.voice_state.lock().await.record_success();
@@ -345,11 +359,14 @@ impl ReplyEmitter {
 
     /// Drain pending media, download in parallel via MediaCache, return Attachments.
     async fn drain_and_send_media(&self) -> Vec<crate::gateway::channel::Attachment> {
-        let pending_count = self.pending_media.lock().unwrap_or_else(|e| e.into_inner()).len();
+        let pending_count = self
+            .pending_media
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .len();
         debug!(run_id = %self.run_id, pending_count = pending_count, "drain_and_send_media called");
-        let media_items = std::mem::take(
-            &mut *self.pending_media.lock().unwrap_or_else(|e| e.into_inner())
-        );
+        let media_items =
+            std::mem::take(&mut *self.pending_media.lock().unwrap_or_else(|e| e.into_inner()));
         if media_items.is_empty() {
             return vec![];
         }
@@ -362,8 +379,11 @@ impl ReplyEmitter {
         );
 
         let attachments = futures::future::join_all(
-            media_items.iter().map(|item| self.media_cache.download_media_item(item, &self.run_id))
-        ).await;
+            media_items
+                .iter()
+                .map(|item| self.media_cache.download_media_item(item, &self.run_id)),
+        )
+        .await;
 
         for att in &attachments {
             info!(
@@ -381,7 +401,9 @@ impl ReplyEmitter {
 
     /// Send media as a separate standalone message.
     async fn send_media_standalone(&self, attachments: Vec<crate::gateway::channel::Attachment>) {
-        if attachments.is_empty() { return; }
+        if attachments.is_empty() {
+            return;
+        }
         let count = attachments.len();
         info!(
             run_id = %self.run_id,
@@ -397,8 +419,14 @@ impl ReplyEmitter {
             inline_keyboard: None,
             metadata: Default::default(),
         };
-        match self.channel_registry.send(&self.route.channel_id, message).await {
-            Ok(_) => info!(run_id = %self.run_id, count = count, "Media standalone message sent successfully"),
+        match self
+            .channel_registry
+            .send(&self.route.channel_id, message)
+            .await
+        {
+            Ok(_) => {
+                info!(run_id = %self.run_id, count = count, "Media standalone message sent successfully")
+            }
             Err(e) => warn!(error = %e, "Failed to send media standalone message"),
         }
     }
@@ -626,7 +654,10 @@ impl EventEmitter for ReplyEmitter {
     async fn emit(&self, event: StreamEvent) -> Result<(), EventEmitError> {
         match event {
             StreamEvent::ResponseChunk {
-                content, is_final, is_intermediate, ..
+                content,
+                is_final,
+                is_intermediate,
+                ..
             } => {
                 if is_intermediate {
                     if content.is_empty() {
@@ -640,42 +671,46 @@ impl EventEmitter for ReplyEmitter {
                                 let mut ctrl = self.streaming.lock().await;
                                 ctrl.reset();
                             } else {
-                            // Streaming mode: the text was already delivered via
-                            // real-time edits.  Finalize the current streamed
-                            // message (perform any pending edit), then reset the
-                            // controller so the next iteration starts a fresh
-                            // message.  Do NOT send a new standalone message —
-                            // the text is already visible to the user.
-                            let mut ctrl = self.streaming.lock().await;
-                            match ctrl.finalize() {
-                                StreamAction::EditFinal(text) => {
-                                    if let Some(msg_id) = ctrl.message_id().cloned() {
-                                        let _ = self.channel_registry.edit(
-                                            &self.route.channel_id,
-                                            &self.route.conversation_id,
-                                            &msg_id, &text,
-                                        ).await;
+                                // Streaming mode: the text was already delivered via
+                                // real-time edits.  Finalize the current streamed
+                                // message (perform any pending edit), then reset the
+                                // controller so the next iteration starts a fresh
+                                // message.  Do NOT send a new standalone message —
+                                // the text is already visible to the user.
+                                let mut ctrl = self.streaming.lock().await;
+                                match ctrl.finalize() {
+                                    StreamAction::EditFinal(text) => {
+                                        if let Some(msg_id) = ctrl.message_id().cloned() {
+                                            let _ = self
+                                                .channel_registry
+                                                .edit(
+                                                    &self.route.channel_id,
+                                                    &self.route.conversation_id,
+                                                    &msg_id,
+                                                    &text,
+                                                )
+                                                .await;
+                                        }
                                     }
+                                    StreamAction::SendFinal(text) => {
+                                        // Rare: text never reached initial threshold.
+                                        // Send it now as a new message.
+                                        drop(ctrl);
+                                        self.send_to_channel(&text).await;
+                                        // Re-acquire for reset below
+                                        let mut ctrl = self.streaming.lock().await;
+                                        ctrl.reset();
+                                        let mut buffer = self.buffer.lock().await;
+                                        let _ = std::mem::take(&mut *buffer);
+                                        return Ok(());
+                                    }
+                                    _ => {}
                                 }
-                                StreamAction::SendFinal(text) => {
-                                    // Rare: text never reached initial threshold.
-                                    // Send it now as a new message.
-                                    drop(ctrl);
-                                    self.send_to_channel(&text).await;
-                                    // Re-acquire for reset below
-                                    let mut ctrl = self.streaming.lock().await;
-                                    ctrl.reset();
-                                    let mut buffer = self.buffer.lock().await;
-                                    let _ = std::mem::take(&mut *buffer);
-                                    return Ok(());
-                                }
-                                _ => {}
-                            }
-                            ctrl.reset();
-                            drop(ctrl);
-                            // Clear buffer (text was already streamed)
-                            let mut buffer = self.buffer.lock().await;
-                            let _ = std::mem::take(&mut *buffer);
+                                ctrl.reset();
+                                drop(ctrl);
+                                // Clear buffer (text was already streamed)
+                                let mut buffer = self.buffer.lock().await;
+                                let _ = std::mem::take(&mut *buffer);
                             } // end else (non-voice)
                         } else {
                             // Non-streaming: flush buffer as standalone message
@@ -714,7 +749,10 @@ impl EventEmitter for ReplyEmitter {
                     // Real-time streaming: push chunks to controller and act
                     // Skip streaming text when voice mode is active — buffer only,
                     // voice reply will be sent on RunComplete.
-                    if self.config.stream_enabled && !content.is_empty() && !self.should_voice().await {
+                    if self.config.stream_enabled
+                        && !content.is_empty()
+                        && !self.should_voice().await
+                    {
                         let mut ctrl = self.streaming.lock().await;
                         ctrl.push_chunk(&content);
                         match ctrl.poll_action() {
@@ -727,7 +765,11 @@ impl EventEmitter for ReplyEmitter {
                                     inline_keyboard: None,
                                     metadata: Default::default(),
                                 };
-                                if let Ok(result) = self.channel_registry.send(&self.route.channel_id, message).await {
+                                if let Ok(result) = self
+                                    .channel_registry
+                                    .send(&self.route.channel_id, message)
+                                    .await
+                                {
                                     ctrl.record_sent(result.message_id);
                                     self.has_sent.store(true, Ordering::SeqCst);
                                 }
@@ -735,11 +777,17 @@ impl EventEmitter for ReplyEmitter {
                             StreamAction::Edit(text) => {
                                 if let Some(msg_id) = ctrl.message_id() {
                                     let msg_id = msg_id.clone();
-                                    if self.channel_registry.edit(
-                                        &self.route.channel_id,
-                                        &self.route.conversation_id,
-                                        &msg_id, &text,
-                                    ).await.is_ok() {
+                                    if self
+                                        .channel_registry
+                                        .edit(
+                                            &self.route.channel_id,
+                                            &self.route.conversation_id,
+                                            &msg_id,
+                                            &text,
+                                        )
+                                        .await
+                                        .is_ok()
+                                    {
                                         ctrl.record_edit();
                                     }
                                 }
@@ -759,8 +807,12 @@ impl EventEmitter for ReplyEmitter {
                             let mut state = self.native_stream_state.lock().await;
                             if state.is_none() && accumulated.chars().count() >= 20 {
                                 // First chunk with enough content: start streaming
-                                let status = crate::gateway::interfaces::msteams::types::pick_status_text();
-                                match handler.stream_start(&self.route.conversation_id, status).await {
+                                let status =
+                                    crate::gateway::interfaces::msteams::types::pick_status_text();
+                                match handler
+                                    .stream_start(&self.route.conversation_id, status)
+                                    .await
+                                {
                                     Ok(stream_id) => {
                                         *state = Some(NativeStreamState {
                                             stream_id,
@@ -775,11 +827,18 @@ impl EventEmitter for ReplyEmitter {
                                 }
                             } else if let Some(ref mut s) = *state {
                                 // Throttle updates at 1500ms
-                                if s.last_update.elapsed() >= std::time::Duration::from_millis(1500) {
+                                if s.last_update.elapsed() >= std::time::Duration::from_millis(1500)
+                                {
                                     s.sequence += 1;
-                                    if let Err(e) = handler.stream_update(
-                                        &self.route.conversation_id, &s.stream_id, &accumulated, s.sequence
-                                    ).await {
+                                    if let Err(e) = handler
+                                        .stream_update(
+                                            &self.route.conversation_id,
+                                            &s.stream_id,
+                                            &accumulated,
+                                            s.sequence,
+                                        )
+                                        .await
+                                    {
                                         warn!("Native stream_update failed: {}", e);
                                         // Don't disable — try to finalize later
                                     }
@@ -821,11 +880,17 @@ impl EventEmitter for ReplyEmitter {
                             };
                             if !text.is_empty() {
                                 let message = OutboundMessage::text(
-                                    self.route.conversation_id.as_str(), &text
+                                    self.route.conversation_id.as_str(),
+                                    &text,
                                 );
-                                match handler.stream_finalize(
-                                    &self.route.conversation_id, &s.stream_id, message
-                                ).await {
+                                match handler
+                                    .stream_finalize(
+                                        &self.route.conversation_id,
+                                        &s.stream_id,
+                                        message,
+                                    )
+                                    .await
+                                {
                                     Ok(_result) => {
                                         self.has_sent.store(true, Ordering::SeqCst);
                                         // Stop typing, react success, clean up media — then return
@@ -881,15 +946,23 @@ impl EventEmitter for ReplyEmitter {
                                 let msg_id = ctrl.message_id().cloned();
                                 drop(ctrl);
                                 if let Some(msg_id) = msg_id {
-                                    let _ = self.channel_registry.edit(
-                                        &self.route.channel_id,
-                                        &self.route.conversation_id,
-                                        &msg_id, &final_text,
-                                    ).await;
+                                    let _ = self
+                                        .channel_registry
+                                        .edit(
+                                            &self.route.channel_id,
+                                            &self.route.conversation_id,
+                                            &msg_id,
+                                            &final_text,
+                                        )
+                                        .await;
                                 }
                             }
-                            StreamAction::Done => { drop(ctrl); }
-                            _ => { drop(ctrl); }
+                            StreamAction::Done => {
+                                drop(ctrl);
+                            }
+                            _ => {
+                                drop(ctrl);
+                            }
                         }
                         let media = self.drain_and_send_media().await;
                         self.send_media_standalone(media).await;
@@ -1032,7 +1105,12 @@ mod tests {
         );
 
         let registry = Arc::new(ChannelRegistry::new());
-        let emitter = ReplyEmitter::new(registry, route.clone(), "run-123".to_string(), std::sync::Arc::new(std::sync::Mutex::new(Vec::new())));
+        let emitter = ReplyEmitter::new(
+            registry,
+            route.clone(),
+            "run-123".to_string(),
+            std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+        );
 
         assert_eq!(emitter.run_id(), "run-123");
         assert_eq!(emitter.route().channel_id.as_str(), "imessage");
@@ -1041,10 +1119,7 @@ mod tests {
 
     #[test]
     fn test_custom_config() {
-        let route = ReplyRoute::new(
-            ChannelId::new("telegram"),
-            ConversationId::new("12345"),
-        );
+        let route = ReplyRoute::new(ChannelId::new("telegram"), ConversationId::new("12345"));
 
         let config = ReplyEmitterConfig {
             buffer_threshold: 1000,
@@ -1068,13 +1143,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_sequence_counter() {
-        let route = ReplyRoute::new(
-            ChannelId::new("test"),
-            ConversationId::new("conv-1"),
-        );
+        let route = ReplyRoute::new(ChannelId::new("test"), ConversationId::new("conv-1"));
 
         let registry = Arc::new(ChannelRegistry::new());
-        let emitter = ReplyEmitter::new(registry, route, "run-789".to_string(), std::sync::Arc::new(std::sync::Mutex::new(Vec::new())));
+        let emitter = ReplyEmitter::new(
+            registry,
+            route,
+            "run-789".to_string(),
+            std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+        );
 
         assert_eq!(emitter.next_seq(), 0);
         assert_eq!(emitter.next_seq(), 1);
@@ -1083,13 +1160,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_buffer_accumulation() {
-        let route = ReplyRoute::new(
-            ChannelId::new("test"),
-            ConversationId::new("conv-1"),
-        );
+        let route = ReplyRoute::new(ChannelId::new("test"), ConversationId::new("conv-1"));
 
         let registry = Arc::new(ChannelRegistry::new());
-        let emitter = ReplyEmitter::new(registry, route, "run-test".to_string(), std::sync::Arc::new(std::sync::Mutex::new(Vec::new())));
+        let emitter = ReplyEmitter::new(
+            registry,
+            route,
+            "run-test".to_string(),
+            std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+        );
 
         emitter.buffer.lock().await.push_str("Hello ");
         emitter.buffer.lock().await.push_str("World!");
@@ -1167,5 +1246,4 @@ mod tests {
             );
         }
     }
-
 }

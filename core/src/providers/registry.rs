@@ -4,8 +4,8 @@
 /// It ensures providers are uniquely registered and provides convenient lookup methods.
 use crate::error::{AlephError, Result};
 use crate::providers::AiProvider;
-use std::collections::HashMap;
 use crate::sync_primitives::Arc;
+use std::collections::HashMap;
 
 /// Registry for managing AI providers
 ///
@@ -342,7 +342,10 @@ mod tests {
 
         let provider = registry.get("test").unwrap();
         let msgs = [crate::providers::message::UnifiedMessage::user("input")];
-        let response = provider.process(crate::providers::adapter::RequestPayload::new(&msgs)).await.unwrap();
+        let response = provider
+            .process(crate::providers::adapter::RequestPayload::new(&msgs))
+            .await
+            .unwrap();
         assert_eq!(response.text_content(), "AI response");
     }
 

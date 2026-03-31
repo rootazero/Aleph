@@ -3,9 +3,7 @@
 //! Provides helpers to construct MemoryFact instances with
 //! controlled timestamps, tiers, access counts, and embeddings.
 
-use alephcore::memory::context::{
-    FactSource, FactType, MemoryFact, MemoryTier,
-};
+use alephcore::memory::context::{FactSource, FactType, MemoryFact, MemoryTier};
 use alephcore::memory::decay::MemoryStrength;
 use alephcore::memory::scoring_pipeline::{ScoringContext, ScoringPipeline, ScoringPipelineConfig};
 use alephcore::memory::store::types::ScoredFact;

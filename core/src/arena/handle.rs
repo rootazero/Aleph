@@ -126,9 +126,7 @@ impl ArenaHandle {
     /// Create a snapshot of the arena state suitable for swarm context injection.
     ///
     /// Returns `(arena_id, goal, active_agents, completed_steps, total_steps, latest_artifacts)`.
-    pub fn snapshot_for_context(
-        &self,
-    ) -> (String, String, Vec<String>, usize, usize, Vec<String>) {
+    pub fn snapshot_for_context(&self) -> (String, String, Vec<String>, usize, usize, Vec<String>) {
         let arena = self.arena.read().unwrap_or_else(|e| e.into_inner());
         let arena_id = arena.id().to_string();
         let goal = arena.manifest().goal.clone();
@@ -231,7 +229,10 @@ mod tests {
         let handle = make_handle(&arena, "worker-1", ParticipantRole::Worker);
 
         let result = handle.put_artifact(test_artifact());
-        assert!(result.is_ok(), "Worker should be able to put artifact to own slot");
+        assert!(
+            result.is_ok(),
+            "Worker should be able to put artifact to own slot"
+        );
 
         let artifacts = handle.list_artifacts(&"worker-1".to_string()).unwrap();
         assert_eq!(artifacts.len(), 1);
@@ -246,8 +247,13 @@ mod tests {
         let handle = make_handle(&arena, "observer-1", ParticipantRole::Observer);
 
         let result = handle.put_artifact(test_artifact());
-        assert!(result.is_err(), "Observer should not be able to put artifacts");
-        assert!(result.unwrap_err().contains("does not have write permission"));
+        assert!(
+            result.is_err(),
+            "Observer should not be able to put artifacts"
+        );
+        assert!(result
+            .unwrap_err()
+            .contains("does not have write permission"));
     }
 
     #[test]
@@ -279,13 +285,21 @@ mod tests {
         // Worker cannot begin settling
         let worker_handle = make_handle(&arena, "worker-1", ParticipantRole::Worker);
         let result = worker_handle.begin_settling();
-        assert!(result.is_err(), "Worker should not be able to begin settling");
-        assert!(result.unwrap_err().contains("does not have merge permission"));
+        assert!(
+            result.is_err(),
+            "Worker should not be able to begin settling"
+        );
+        assert!(result
+            .unwrap_err()
+            .contains("does not have merge permission"));
 
         // Coordinator can begin settling
         let coord_handle = make_handle(&arena, "coordinator", ParticipantRole::Coordinator);
         let result = coord_handle.begin_settling();
-        assert!(result.is_ok(), "Coordinator should be able to begin settling");
+        assert!(
+            result.is_ok(),
+            "Coordinator should be able to begin settling"
+        );
     }
 
     #[test]
@@ -300,7 +314,9 @@ mod tests {
         coord_handle.put_artifact(test_artifact()).unwrap();
 
         // Report some progress
-        coord_handle.report_progress(Some("analyzing".to_string()), Some(1)).unwrap();
+        coord_handle
+            .report_progress(Some("analyzing".to_string()), Some(1))
+            .unwrap();
 
         let worker_handle = make_handle(&arena, "worker-1", ParticipantRole::Worker);
         let (arena_id, goal, active_agents, completed, total, artifacts) =

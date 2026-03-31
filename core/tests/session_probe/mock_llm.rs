@@ -10,8 +10,8 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Mutex;
 
+use alephcore::providers::{adapter, AiProvider, ProviderResponse};
 use alephcore::Result;
-use alephcore::providers::{AiProvider, ProviderResponse, adapter};
 
 /// Mock LLM provider with call tracking and queued responses.
 pub struct MockLlmProvider {
@@ -56,7 +56,10 @@ impl MockLlmProvider {
 
     /// Push multiple responses.
     pub fn enqueue_many(&self, responses: impl IntoIterator<Item = impl Into<String>>) {
-        let mut q = self.response_queue.lock().unwrap_or_else(|e| e.into_inner());
+        let mut q = self
+            .response_queue
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         for r in responses {
             q.push(r.into());
         }
@@ -101,7 +104,10 @@ impl AiProvider for MockLlmProvider {
         let response = if should_fail {
             None
         } else {
-            let mut q = self.response_queue.lock().unwrap_or_else(|e| e.into_inner());
+            let mut q = self
+                .response_queue
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             if q.is_empty() {
                 Some(self.default_response.clone())
             } else {
@@ -156,9 +162,27 @@ mod tests {
         let msgs_a = [UnifiedMessage::user("a")];
         let msgs_b = [UnifiedMessage::user("b")];
         let msgs_c = [UnifiedMessage::user("c")];
-        assert_eq!(p.process(make_payload(&msgs_a)).await.unwrap().text_content(), "first");
-        assert_eq!(p.process(make_payload(&msgs_b)).await.unwrap().text_content(), "second");
-        assert_eq!(p.process(make_payload(&msgs_c)).await.unwrap().text_content(), "default");
+        assert_eq!(
+            p.process(make_payload(&msgs_a))
+                .await
+                .unwrap()
+                .text_content(),
+            "first"
+        );
+        assert_eq!(
+            p.process(make_payload(&msgs_b))
+                .await
+                .unwrap()
+                .text_content(),
+            "second"
+        );
+        assert_eq!(
+            p.process(make_payload(&msgs_c))
+                .await
+                .unwrap()
+                .text_content(),
+            "default"
+        );
         assert_eq!(p.call_count(), 3);
     }
 

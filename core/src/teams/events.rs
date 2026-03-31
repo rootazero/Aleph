@@ -203,11 +203,7 @@ fn read_event_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TeamEvent> {
     let timestamp = DateTime::parse_from_rfc3339(&ts_str)
         .map(|dt| dt.with_timezone(&Utc))
         .map_err(|e| {
-            rusqlite::Error::FromSqlConversionFailure(
-                5,
-                rusqlite::types::Type::Text,
-                Box::new(e),
-            )
+            rusqlite::Error::FromSqlConversionFailure(5, rusqlite::types::Type::Text, Box::new(e))
         })?;
 
     Ok(TeamEvent {
@@ -430,26 +426,24 @@ mod tests {
 
         // Query with since = 2 hours ago — should exclude e1
         let since = base - chrono::Duration::hours(2);
-        let events = store
-            .get_events("team-3", Some(since), None)
-            .await
-            .unwrap();
+        let events = store.get_events("team-3", Some(since), None).await.unwrap();
         assert_eq!(events.len(), 2);
         assert_eq!(events[0].id, "e2");
         assert_eq!(events[1].id, "e3");
 
         // Query with until = 2 hours ago — should include only e1
         let until = base - chrono::Duration::hours(2);
-        let events = store
-            .get_events("team-3", None, Some(until))
-            .await
-            .unwrap();
+        let events = store.get_events("team-3", None, Some(until)).await.unwrap();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].id, "e1");
 
         // Query with both since and until — should include only e2
         let events = store
-            .get_events("team-3", Some(since), Some(until + chrono::Duration::hours(1)))
+            .get_events(
+                "team-3",
+                Some(since),
+                Some(until + chrono::Duration::hours(1)),
+            )
             .await
             .unwrap();
         // since = base-2h, until = base-1h — should get e2

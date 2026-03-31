@@ -488,7 +488,11 @@ mod tests {
             Ok(output) => assert!(output.exit_code == 0 || output.success),
             Err(e) => {
                 // Any error is acceptable EXCEPT a "blocked by code_exec" error
-                assert!(!format!("{}", e).contains("blocked"), "Unexpected local block: {}", e);
+                assert!(
+                    !format!("{}", e).contains("blocked"),
+                    "Unexpected local block: {}",
+                    e
+                );
             }
         }
     }

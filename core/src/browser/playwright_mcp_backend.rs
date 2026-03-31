@@ -77,7 +77,10 @@ impl PlaywrightMcpBackend {
 
             // Parse: role "name" [ref=xxx] or role "name" [attr=val]
             let (role, rest) = match content.find(' ') {
-                Some(pos) => (content.get(..pos).unwrap_or(content), content.get(pos + 1..).unwrap_or("")),
+                Some(pos) => (
+                    content.get(..pos).unwrap_or(content),
+                    content.get(pos + 1..).unwrap_or(""),
+                ),
                 None => (content, ""),
             };
 
@@ -245,7 +248,9 @@ impl BrowserBackend for PlaywrightMcpBackend {
         _tab_id: &str,
         _opts: ScreenshotOpts,
     ) -> Result<ScreenshotResult, BrowserError> {
-        let result = self.call("browser_screenshot", json!({ "raw": true })).await?;
+        let result = self
+            .call("browser_screenshot", json!({ "raw": true }))
+            .await?;
         // Check if result has image content type
         if let Some(content) = result.get("content").and_then(|v| v.as_array()) {
             for item in content {
@@ -302,12 +307,22 @@ impl BrowserBackend for PlaywrightMcpBackend {
     }
 
     async fn press_key(&self, _tab_id: &str, key: &str) -> Result<(), BrowserError> {
-        self.call("browser_press_key", json!({ "key": key })).await?;
+        self.call("browser_press_key", json!({ "key": key }))
+            .await?;
         Ok(())
     }
 
-    async fn wait_for_text(&self, _tab_id: &str, text: &str, timeout_ms: u64) -> Result<bool, BrowserError> {
-        self.call("browser_wait_for_text", json!({ "text": text, "timeout": timeout_ms })).await?;
+    async fn wait_for_text(
+        &self,
+        _tab_id: &str,
+        text: &str,
+        timeout_ms: u64,
+    ) -> Result<bool, BrowserError> {
+        self.call(
+            "browser_wait_for_text",
+            json!({ "text": text, "timeout": timeout_ms }),
+        )
+        .await?;
         Ok(true)
     }
 
@@ -315,18 +330,26 @@ impl BrowserBackend for PlaywrightMcpBackend {
         let result = self.call("browser_console_messages", json!({})).await?;
         let text = Self::extract_text(&result);
         // Parse "[level] message" lines
-        Ok(text.lines().filter_map(|line| {
-            let line = line.trim();
-            if line.is_empty() { return None; }
-            if line.starts_with('[') {
-                if let Some(end) = line.find(']') {
-                    let level = line.get(1..end).unwrap_or("log").to_lowercase();
-                    let msg = line.get(end + 1..).unwrap_or("").trim().to_string();
-                    return Some(ConsoleMessage { level, text: msg });
+        Ok(text
+            .lines()
+            .filter_map(|line| {
+                let line = line.trim();
+                if line.is_empty() {
+                    return None;
                 }
-            }
-            Some(ConsoleMessage { level: "log".to_string(), text: line.to_string() })
-        }).collect())
+                if line.starts_with('[') {
+                    if let Some(end) = line.find(']') {
+                        let level = line.get(1..end).unwrap_or("log").to_lowercase();
+                        let msg = line.get(end + 1..).unwrap_or("").trim().to_string();
+                        return Some(ConsoleMessage { level, text: msg });
+                    }
+                }
+                Some(ConsoleMessage {
+                    level: "log".to_string(),
+                    text: line.to_string(),
+                })
+            })
+            .collect())
     }
 }
 

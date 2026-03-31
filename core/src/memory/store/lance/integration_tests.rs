@@ -68,7 +68,7 @@ async fn test_full_memory_lifecycle() {
         decay_score: 1.0,
         created_at: 1700000000,
         updated_at: 1700000000,
-            agent: "default".to_string(),
+        agent: "default".to_string(),
     };
     backend.upsert_node(&node, "default").await.unwrap();
 
@@ -101,7 +101,10 @@ async fn test_full_memory_lifecycle() {
         !text_results.is_empty(),
         "FTS search for 'WebSocket' should return results after index creation"
     );
-    assert_eq!(text_results[0].fact.content, "Aleph uses WebSocket for gateway");
+    assert_eq!(
+        text_results[0].fact.content,
+        "Aleph uses WebSocket for gateway"
+    );
 
     // -----------------------------------------------------------------------
     // 5. Graph operations — verify node retrieval
@@ -160,11 +163,7 @@ async fn test_ensure_indexes_idempotent() {
         .unwrap();
 
     // Insert minimum data so index creation succeeds
-    let mut fact = MemoryFact::new(
-        "Test fact".to_string(),
-        FactType::Other,
-        vec![],
-    );
+    let mut fact = MemoryFact::new("Test fact".to_string(), FactType::Other, vec![]);
     fact.embedding = Some(vec![0.1f32; 1024]);
     fact.content_hash = "hash-test".to_string();
     fact.embedding_model = "test".to_string();
@@ -179,7 +178,7 @@ async fn test_ensure_indexes_idempotent() {
         decay_score: 1.0,
         created_at: 0,
         updated_at: 0,
-            agent: "default".to_string(),
+        agent: "default".to_string(),
     };
     backend.upsert_node(&node, "default").await.unwrap();
 

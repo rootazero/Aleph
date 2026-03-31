@@ -19,9 +19,7 @@ pub use cooldown::{
     calculate_billing_cooldown_ms, calculate_cooldown_ms, clear_profile_cooldown,
     mark_profile_failure, mark_profile_good, mark_profile_used, CooldownConfig,
 };
-pub use credentials::{
-    ApiKeyCredential, AuthProfileCredential, OAuthCredential, TokenCredential,
-};
+pub use credentials::{ApiKeyCredential, AuthProfileCredential, OAuthCredential, TokenCredential};
 pub use failure::{AuthProfileFailureReason, ProfileUsageStats};
 pub use ordering::resolve_profile_order;
 pub use store::AuthProfileStore;

@@ -6,8 +6,12 @@ use crate::thinker::prompt_sanitizer::{sanitize_for_prompt, SanitizeLevel};
 pub struct LanguageLayer;
 
 impl PromptLayer for LanguageLayer {
-    fn name(&self) -> &'static str { "language" }
-    fn priority(&self) -> u32 { 1600 }
+    fn name(&self) -> &'static str {
+        "language"
+    }
+    fn priority(&self) -> u32 {
+        1600
+    }
     fn paths(&self) -> &'static [AssemblyPath] {
         &[
             AssemblyPath::Basic,

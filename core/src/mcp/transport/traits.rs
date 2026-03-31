@@ -105,9 +105,9 @@ pub trait McpTransport: Send + Sync + std::any::Any {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
-    use crate::sync_primitives::{AtomicBool, AtomicUsize, Ordering};
     use crate::sync_primitives::Arc;
+    use crate::sync_primitives::{AtomicBool, AtomicUsize, Ordering};
+    use serde_json::json;
     use tokio::sync::Mutex;
 
     /// Mock transport for testing the trait contract
@@ -183,14 +183,17 @@ mod tests {
             *self.last_request.lock().await = Some(request.clone());
 
             // Return predetermined response or a default success response
-            let response = self.response.lock().await.clone().unwrap_or_else(|| {
-                JsonRpcResponse {
+            let response = self
+                .response
+                .lock()
+                .await
+                .clone()
+                .unwrap_or_else(|| JsonRpcResponse {
                     jsonrpc: "2.0".to_string(),
                     id: Some(request.id),
                     result: Some(json!({"status": "ok"})),
                     error: None,
-                }
-            });
+                });
 
             Ok(response)
         }

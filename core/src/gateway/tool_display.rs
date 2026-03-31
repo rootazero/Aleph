@@ -13,16 +13,46 @@ pub struct ToolDisplay {
 /// Get display metadata for a tool
 pub fn get_tool_display(tool_name: &str) -> ToolDisplay {
     match tool_name {
-        "exec" | "shell" | "bash" | "run_command" => ToolDisplay { emoji: "🔨", label: "Exec".to_string() },
-        "read" | "read_file" | "cat" => ToolDisplay { emoji: "📄", label: "Read".to_string() },
-        "write" | "write_file" => ToolDisplay { emoji: "✏️", label: "Write".to_string() },
-        "edit" | "edit_file" | "patch" => ToolDisplay { emoji: "📝", label: "Edit".to_string() },
-        "web_fetch" | "fetch" | "http" => ToolDisplay { emoji: "🌐", label: "Fetch".to_string() },
-        "search" | "grep" | "find" | "ripgrep" => ToolDisplay { emoji: "🔍", label: "Search".to_string() },
-        "list" | "ls" | "dir" => ToolDisplay { emoji: "📁", label: "List".to_string() },
-        "think" | "reason" => ToolDisplay { emoji: "💭", label: "Think".to_string() },
-        "memory" | "remember" => ToolDisplay { emoji: "🧠", label: "Memory".to_string() },
-        _ => ToolDisplay { emoji: "⚙️", label: tool_name.to_string() },
+        "exec" | "shell" | "bash" | "run_command" => ToolDisplay {
+            emoji: "🔨",
+            label: "Exec".to_string(),
+        },
+        "read" | "read_file" | "cat" => ToolDisplay {
+            emoji: "📄",
+            label: "Read".to_string(),
+        },
+        "write" | "write_file" => ToolDisplay {
+            emoji: "✏️",
+            label: "Write".to_string(),
+        },
+        "edit" | "edit_file" | "patch" => ToolDisplay {
+            emoji: "📝",
+            label: "Edit".to_string(),
+        },
+        "web_fetch" | "fetch" | "http" => ToolDisplay {
+            emoji: "🌐",
+            label: "Fetch".to_string(),
+        },
+        "search" | "grep" | "find" | "ripgrep" => ToolDisplay {
+            emoji: "🔍",
+            label: "Search".to_string(),
+        },
+        "list" | "ls" | "dir" => ToolDisplay {
+            emoji: "📁",
+            label: "List".to_string(),
+        },
+        "think" | "reason" => ToolDisplay {
+            emoji: "💭",
+            label: "Think".to_string(),
+        },
+        "memory" | "remember" => ToolDisplay {
+            emoji: "🧠",
+            label: "Memory".to_string(),
+        },
+        _ => ToolDisplay {
+            emoji: "⚙️",
+            label: tool_name.to_string(),
+        },
     }
 }
 
@@ -77,7 +107,11 @@ fn format_edit_params(params: &Value) -> String {
 fn format_exec_params(params: &Value) -> String {
     let mut parts = Vec::new();
 
-    if params.get("elevated").and_then(|v| v.as_bool()).unwrap_or(false) {
+    if params
+        .get("elevated")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
         parts.push("sudo".to_string());
     }
     if params.get("pty").and_then(|v| v.as_bool()).unwrap_or(false) {
@@ -106,7 +140,11 @@ fn format_search_params(params: &Value) -> String {
     if pattern.is_empty() {
         shorten_path(path)
     } else {
-        format!("\"{}\" in {}", truncate_str(pattern, 20), shorten_path(path))
+        format!(
+            "\"{}\" in {}",
+            truncate_str(pattern, 20),
+            shorten_path(path)
+        )
     }
 }
 
@@ -224,7 +262,9 @@ mod tests {
     fn test_group_paths() {
         let paths = vec!["/tmp/file1.txt", "/tmp/file2.txt", "/home/test.rs"];
         let result = group_paths(&paths);
-        assert!(result.contains("{file1.txt, file2.txt}") || result.contains("{file2.txt, file1.txt}"));
+        assert!(
+            result.contains("{file1.txt, file2.txt}") || result.contains("{file2.txt, file1.txt}")
+        );
     }
 
     #[test]

@@ -77,11 +77,7 @@ impl DesktopTool {
     /// Returns `None` if the action is allowed (or no policy is configured),
     /// or `Some(DesktopOutput)` if the action is denied or requires user
     /// confirmation.
-    async fn check_approval(
-        &self,
-        action_type: ActionType,
-        target: &str,
-    ) -> Option<DesktopOutput> {
+    async fn check_approval(&self, action_type: ActionType, target: &str) -> Option<DesktopOutput> {
         let policy = self.approval_policy.as_ref()?;
 
         let request = ActionRequest {
@@ -180,11 +176,7 @@ Examples:
         let approval_check = match args.action.as_str() {
             "click" => Some((
                 ActionType::DesktopClick,
-                format!(
-                    "({},{})",
-                    args.x.unwrap_or(0.0),
-                    args.y.unwrap_or(0.0)
-                ),
+                format!("({},{})", args.x.unwrap_or(0.0), args.y.unwrap_or(0.0)),
             )),
             "type_text" => Some((
                 ActionType::DesktopType,
@@ -192,10 +184,7 @@ Examples:
             )),
             "key_combo" => Some((
                 ActionType::DesktopKeyCombo,
-                args.keys
-                    .as_ref()
-                    .map(|k| k.join("+"))
-                    .unwrap_or_default(),
+                args.keys.as_ref().map(|k| k.join("+")).unwrap_or_default(),
             )),
             "launch_app" => Some((
                 ActionType::DesktopLaunchApp,
@@ -212,29 +201,19 @@ Examples:
                     args.y.unwrap_or(0.0)
                 ),
             )),
-            "drag" => Some((
-                ActionType::DesktopClick,
-                "drag operation".to_string(),
-            )),
+            "drag" => Some((ActionType::DesktopClick, "drag operation".to_string())),
             "hover" => Some((
                 ActionType::DesktopClick,
-                format!(
-                    "hover({},{})",
-                    args.x.unwrap_or(0.0),
-                    args.y.unwrap_or(0.0)
-                ),
+                format!("hover({},{})", args.x.unwrap_or(0.0), args.y.unwrap_or(0.0)),
             )),
-            "scroll" => Some((
-                ActionType::DesktopClick,
-                "scroll operation".to_string(),
-            )),
+            "scroll" => Some((ActionType::DesktopClick, "scroll operation".to_string())),
             "paste" => Some((
                 ActionType::DesktopType,
                 args.text.clone().unwrap_or_default(),
             )),
             // Read-only actions skip approval
-            "screenshot" | "ocr" | "ax_tree" | "window_list" | "focus_window"
-            | "canvas_show" | "canvas_hide" | "canvas_update" | "snapshot" => None,
+            "screenshot" | "ocr" | "ax_tree" | "window_list" | "focus_window" | "canvas_show"
+            | "canvas_hide" | "canvas_update" | "snapshot" => None,
             // Unknown actions default to requiring approval for safety
             _ => Some((
                 ActionType::DesktopClick,

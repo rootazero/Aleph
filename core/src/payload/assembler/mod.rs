@@ -11,7 +11,6 @@
 /// - `tools`: Tool list formatting
 /// - `intent`: Intent-based prompt building
 /// - `formatters`: Individual content formatters
-
 mod capability;
 mod context;
 mod core;
@@ -54,13 +53,7 @@ impl PromptAssembler {
         context: Option<&super::AgentContext>,
         config: Option<&crate::prompt::PromptConfig>,
     ) -> String {
-        intent::build_prompt_for_intent(
-            &self.context_format,
-            result,
-            tools,
-            context,
-            config,
-        )
+        intent::build_prompt_for_intent(&self.context_format, result, tools, context, config)
     }
 }
 
@@ -97,8 +90,7 @@ mod tests {
 
         let anchor = ContextAnchor::new(None);
 
-        let memory_anchor =
-            MemoryContextAnchor::with_timestamp("Window".to_string(), 1000);
+        let memory_anchor = MemoryContextAnchor::with_timestamp("Window".to_string(), 1000);
 
         let memories = vec![MemoryEntry {
             id: "test-id".to_string(),
@@ -337,8 +329,7 @@ mod tests {
 
         let anchor = ContextAnchor::new(None);
 
-        let memory_anchor =
-            MemoryContextAnchor::with_timestamp("Window".to_string(), 1000);
+        let memory_anchor = MemoryContextAnchor::with_timestamp("Window".to_string(), 1000);
 
         let memories = vec![MemoryEntry {
             id: "test-id".to_string(),
@@ -455,8 +446,7 @@ mod tests {
         let capabilities = vec![CapabilityDeclaration::search()];
 
         // Create a context with memory
-        let memory_anchor =
-            MemoryContextAnchor::with_timestamp("Window".to_string(), 1000);
+        let memory_anchor = MemoryContextAnchor::with_timestamp("Window".to_string(), 1000);
 
         let memories = vec![MemoryEntry {
             id: "test-id".to_string(),
@@ -510,7 +500,8 @@ mod tests {
             },
         };
 
-        let prompt = assembler.build_prompt_with_intent_result("Base prompt.", &[], None, Some(&result));
+        let prompt =
+            assembler.build_prompt_with_intent_result("Base prompt.", &[], None, Some(&result));
 
         // Should contain base prompt
         assert!(prompt.contains("Base prompt."));
@@ -527,7 +518,8 @@ mod tests {
 
         let result = IntentResult::Converse { confidence: 0.8 };
 
-        let prompt = assembler.build_prompt_with_intent_result("Base prompt.", &[], None, Some(&result));
+        let prompt =
+            assembler.build_prompt_with_intent_result("Base prompt.", &[], None, Some(&result));
 
         // Should contain base prompt
         assert!(prompt.contains("Base prompt."));

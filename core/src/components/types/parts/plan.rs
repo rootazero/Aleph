@@ -14,7 +14,7 @@ pub struct PlanPart {
 pub struct PlanStep {
     pub step_id: String,
     pub description: String,
-    pub status: StepStatus,       // Pending/Running/Completed/Failed
+    pub status: StepStatus,        // Pending/Running/Completed/Failed
     pub dependencies: Vec<String>, // Dependent step_ids
 }
 

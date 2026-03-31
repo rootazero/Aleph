@@ -58,11 +58,7 @@ mod tests {
     #[test]
     fn filters_below_threshold() {
         let stage = HardMinScoreStage;
-        let candidates = vec![
-            scored("high", 0.9),
-            scored("low", 0.1),
-            scored("mid", 0.5),
-        ];
+        let candidates = vec![scored("high", 0.9), scored("low", 0.1), scored("mid", 0.5)];
         let ctx = ctx_with_threshold(0.35);
         let result = stage.apply(candidates, &ctx);
         assert_eq!(result.len(), 2);

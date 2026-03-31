@@ -11,7 +11,9 @@ use serde_json::json;
 use tokio::sync::RwLock;
 use tracing::{debug, info};
 
-use super::traits::{SubAgent, SubAgentCapability, SubAgentRequest, SubAgentResult, ToolCallRecord};
+use super::traits::{
+    SubAgent, SubAgentCapability, SubAgentRequest, SubAgentResult, ToolCallRecord,
+};
 use crate::dispatcher::{ToolRegistry, ToolSource, UnifiedTool};
 use crate::error::Result;
 
@@ -49,7 +51,11 @@ impl SkillSubAgent {
     }
 
     /// Find tools matching a query
-    fn find_matching_skills<'a>(&self, prompt: &str, skills: &'a [UnifiedTool]) -> Vec<&'a UnifiedTool> {
+    fn find_matching_skills<'a>(
+        &self,
+        prompt: &str,
+        skills: &'a [UnifiedTool],
+    ) -> Vec<&'a UnifiedTool> {
         let prompt_lower = prompt.to_lowercase();
         let keywords: Vec<&str> = prompt_lower.split_whitespace().collect();
 
@@ -60,9 +66,9 @@ impl SkillSubAgent {
                 let desc_lower = skill.description.to_lowercase();
 
                 // Check for keyword matches
-                keywords.iter().any(|kw| {
-                    kw.len() > 2 && (name_lower.contains(kw) || desc_lower.contains(kw))
-                })
+                keywords
+                    .iter()
+                    .any(|kw| kw.len() > 2 && (name_lower.contains(kw) || desc_lower.contains(kw)))
             })
             .collect()
     }
@@ -143,7 +149,10 @@ impl SubAgent for SkillSubAgent {
             })));
         }
 
-        debug!("Skill Agent has {} skills available", available_skills.len());
+        debug!(
+            "Skill Agent has {} skills available",
+            available_skills.len()
+        );
 
         // Find matching skills based on the prompt or target
         let matching_skills = if let Some(ref target) = request.target {
@@ -245,7 +254,9 @@ mod tests {
 
         assert_eq!(agent.id(), "skill_agent");
         assert_eq!(agent.name(), "Skill Agent");
-        assert!(agent.capabilities().contains(&SubAgentCapability::SkillExecution));
+        assert!(agent
+            .capabilities()
+            .contains(&SubAgentCapability::SkillExecution));
     }
 
     #[tokio::test]

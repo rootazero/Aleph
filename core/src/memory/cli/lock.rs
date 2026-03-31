@@ -21,9 +21,7 @@ pub enum LockError {
     /// Failed to acquire read lock
     ReadLockFailed,
     /// Failed to acquire write lock - Gateway may be running
-    WriteLockFailed {
-        hint: String,
-    },
+    WriteLockFailed { hint: String },
     /// IO error
     IoError(std::io::Error),
 }
@@ -97,9 +95,10 @@ impl MemoryLock {
                 return match mode {
                     LockMode::Read => Err(LockError::ReadLockFailed),
                     LockMode::Write => Err(LockError::WriteLockFailed {
-                        hint: "Gateway may be running. Use read-only commands (list, show, status) \
+                        hint:
+                            "Gateway may be running. Use read-only commands (list, show, status) \
                                or stop Gateway first."
-                            .into(),
+                                .into(),
                     }),
                 };
             }

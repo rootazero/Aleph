@@ -12,12 +12,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::sync_primitives::Arc;
 
-use crate::gateway::media::{MediaItem, PendingMedia, MAX_MEDIA_PER_RUN};
-use crate::gateway::streaming_sink::StreamingDeltaSink;
 use super::{ExecutionError, RunRequest, RunStatus};
 use crate::gateway::agent_instance::{AgentInstance, MessageRole};
 use crate::gateway::event_emitter::{DynEventEmitter, EventEmitter, StreamEvent};
 use crate::gateway::execution_adapter::ExecutionAdapter;
+use crate::gateway::media::{MediaItem, PendingMedia, MAX_MEDIA_PER_RUN};
+use crate::gateway::streaming_sink::StreamingDeltaSink;
 
 use crate::executor::ToolRegistry;
 use crate::thinker::ProviderRegistry as ThinkerProviderRegistry;
@@ -41,12 +41,11 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         deadline: Arc<tokio::sync::Mutex<tokio::time::Instant>>,
         cancel_token: CancellationToken,
     ) -> Result<String, ExecutionError> {
-        use crate::agent_loop::{
-            AgentLoop, PromptBuilder, SafetyGuard, LoopConfig,
-            adapters::build_registry_from_tools,
-            provider_bridge::AiProviderBridge,
-        };
         use crate::agent_loop::model_behaviors::{load_model_behavior, protocol_to_behavior};
+        use crate::agent_loop::{
+            adapters::build_registry_from_tools, provider_bridge::AiProviderBridge, AgentLoop,
+            LoopConfig, PromptBuilder, SafetyGuard,
+        };
 
         info!(run_id = run_id, "Starting agent loop (think->act)");
 
@@ -59,7 +58,11 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     *tc = ctx;
                 }
                 Err(e) => {
-                    tracing::warn!("Failed to create ToolContext from workspace {}: {}", workspace_path.display(), e);
+                    tracing::warn!(
+                        "Failed to create ToolContext from workspace {}: {}",
+                        workspace_path.display(),
+                        e
+                    );
                 }
             }
         }
@@ -90,11 +93,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             let sub_allowed = sub_allowed_tools.clone();
             let sub_dir = sub_working_dir_ref.clone();
             move || {
-                build_registry_from_tools(
-                    sub_tool_registry.clone(),
-                    &sub_allowed,
-                    sub_dir.clone(),
-                )
+                build_registry_from_tools(sub_tool_registry.clone(), &sub_allowed, sub_dir.clone())
             }
         });
 
@@ -151,12 +150,18 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
 
         // Pre-process multimodal attachments (constant across retries)
         let multimodal_messages: Option<Vec<crate::providers::message::UnifiedMessage>> =
-            if let (false, Some(media_processor)) =
-                (request.attachments.is_empty(), self.media_processor.as_ref())
-            {
+            if let (false, Some(media_processor)) = (
+                request.attachments.is_empty(),
+                self.media_processor.as_ref(),
+            ) {
                 let supports_vision = true;
                 let media_blocks = media_processor
-                    .process(&request.attachments, supports_vision, &request.session_key.to_key_string(), run_id)
+                    .process(
+                        &request.attachments,
+                        supports_vision,
+                        &request.session_key.to_key_string(),
+                        run_id,
+                    )
                     .await;
 
                 let mut content = vec![crate::providers::message::ContentBlock::Text {
@@ -164,9 +169,15 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 }];
                 content.extend(media_blocks);
 
-                let has_images = content.iter().any(|b| matches!(b, crate::providers::message::ContentBlock::Image { .. }));
+                let has_images = content
+                    .iter()
+                    .any(|b| matches!(b, crate::providers::message::ContentBlock::Image { .. }));
                 let has_transcripts = content.iter().any(|b| {
-                    if let crate::providers::message::ContentBlock::Text { text } = b { text.starts_with("[Voice message transcript]") } else { false }
+                    if let crate::providers::message::ContentBlock::Text { text } = b {
+                        text.starts_with("[Voice message transcript]")
+                    } else {
+                        false
+                    }
                 });
                 tracing::info!(
                     target: "multimodal",
@@ -195,7 +206,8 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             attempt += 1;
 
             // Resolve model with health-aware fallback
-            let resolved = self.provider_registry
+            let resolved = self
+                .provider_registry
                 .resolve_with_fallback(&agent.config().model, &agent.config().fallback_models)
                 .map_err(|e| ExecutionError::Failed(e.to_string()))?;
 
@@ -227,12 +239,15 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 })
                 .await;
 
-            let provider = self.provider_registry.get(&resolved.provider_name)
+            let provider = self
+                .provider_registry
+                .get(&resolved.provider_name)
                 .unwrap_or_else(|| self.provider_registry.default_provider());
 
             // Resolve model behavior: config override > protocol auto-mapping
             let behavior_content = {
-                let behavior_name = provider.model_behavior_override()
+                let behavior_name = provider
+                    .model_behavior_override()
                     .or_else(|| protocol_to_behavior(&provider.protocol().to_string()));
                 let content = match behavior_name {
                     Some(name) => load_model_behavior(name).await,
@@ -309,7 +324,8 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             let has_emitted_text = Arc::new(AtomicBool::new(false));
             let streaming_sink = StreamingDeltaSink::new(
                 run_id.to_string(),
-                emitter.clone() as Arc<dyn crate::gateway::event_emitter::EventEmitter + Send + Sync>,
+                emitter.clone()
+                    as Arc<dyn crate::gateway::event_emitter::EventEmitter + Send + Sync>,
                 has_emitted_text.clone(),
             );
 
@@ -351,15 +367,20 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
 
             // Run the agent loop with history
             let loop_result = if let Some(ref messages) = multimodal_messages {
-                agent_loop.run_with_history_messages(messages.clone(), &mut callback).await
+                agent_loop
+                    .run_with_history_messages(messages.clone(), &mut callback)
+                    .await
             } else {
-                agent_loop.run_with_history(&request.input, history.clone(), &mut callback).await
+                agent_loop
+                    .run_with_history(&request.input, history.clone(), &mut callback)
+                    .await
             };
 
             match loop_result {
                 Ok(result) => {
                     // Report success for health tracking
-                    self.provider_registry.report_outcome(&resolved.provider_name, Ok(()));
+                    self.provider_registry
+                        .report_outcome(&resolved.provider_name, Ok(()));
 
                     // Cleanup media if attachments were processed
                     if multimodal_messages.is_some() {
@@ -376,7 +397,13 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                         hit_limit = result.hit_limit,
                         "Agent loop completed"
                     );
-                    let response = if result.hit_limit && result.final_text.as_ref().map(|t| t.is_empty()).unwrap_or(true) {
+                    let response = if result.hit_limit
+                        && result
+                            .final_text
+                            .as_ref()
+                            .map(|t| t.is_empty())
+                            .unwrap_or(true)
+                    {
                         warn!(
                             run_id = run_id,
                             iterations = result.iterations,
@@ -384,7 +411,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                             "Agent hit iteration/token limit without producing a response"
                         );
                         let locale = crate::gateway::i18n::Locale::from_config(
-                            request.metadata.get("locale").map(|s| s.as_str())
+                            request.metadata.get("locale").map(|s| s.as_str()),
                         );
                         crate::gateway::i18n::t(
                             crate::gateway::i18n::Msg::ErrLoopExhausted {
@@ -405,18 +432,26 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     let mut is_retryable = false;
 
                     if let Some(aleph_err) = e.downcast_ref::<crate::error::AlephError>() {
-                        let provider_err: Option<crate::providers::health::ProviderError> = aleph_err.into();
+                        let provider_err: Option<crate::providers::health::ProviderError> =
+                            aleph_err.into();
                         if let Some(pe) = provider_err {
                             is_retryable = true;
-                            self.provider_registry.report_outcome(&resolved.provider_name, Err(pe));
+                            self.provider_registry
+                                .report_outcome(&resolved.provider_name, Err(pe));
                         }
                     } else {
                         // stream_raw wraps errors as anyhow strings — classify via message
                         let msg = e.to_string();
-                        let is_network = msg.contains("Network error") || msg.contains("error sending request")
-                            || msg.contains("connection") || msg.contains("dns") || msg.contains("timed out");
-                        let is_auth = msg.contains("401") || msg.contains("403") || msg.contains("Unauthorized");
-                        let is_server = msg.contains("500") || msg.contains("502") || msg.contains("503");
+                        let is_network = msg.contains("Network error")
+                            || msg.contains("error sending request")
+                            || msg.contains("connection")
+                            || msg.contains("dns")
+                            || msg.contains("timed out");
+                        let is_auth = msg.contains("401")
+                            || msg.contains("403")
+                            || msg.contains("Unauthorized");
+                        let is_server =
+                            msg.contains("500") || msg.contains("502") || msg.contains("503");
 
                         if is_network || is_server {
                             is_retryable = true;
@@ -443,9 +478,12 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     if is_retryable && attempt < MAX_FALLBACK_ATTEMPTS {
                         // Check if a different provider is available
                         match self.provider_registry.resolve_with_fallback(
-                            &agent.config().model, &agent.config().fallback_models
+                            &agent.config().model,
+                            &agent.config().fallback_models,
                         ) {
-                            Ok(new_resolved) if new_resolved.provider_name != resolved.provider_name => {
+                            Ok(new_resolved)
+                                if new_resolved.provider_name != resolved.provider_name =>
+                            {
                                 warn!(
                                     run_id = run_id,
                                     attempt = attempt,
@@ -491,9 +529,11 @@ async fn build_loop_history(
     let mut msgs: Vec<UnifiedMessage> = Vec::new();
 
     // Skip the last message if it's the current user input we just stored
-    let history_slice = if session_history.last().map(|m| {
-        m.role == MessageRole::User && m.content == current_input
-    }).unwrap_or(false) {
+    let history_slice = if session_history
+        .last()
+        .map(|m| m.role == MessageRole::User && m.content == current_input)
+        .unwrap_or(false)
+    {
         // safe: last() returned Some, so len() >= 1
         &session_history[..session_history.len().saturating_sub(1)]
     } else {
@@ -644,7 +684,8 @@ impl<E: EventEmitter + Send + Sync + 'static> crate::agent_loop::LoopCallback
                             urls = ?items.iter().map(|i| &i.url).collect::<Vec<_>>(),
                             "Extracted _media from tool output"
                         );
-                        let mut pending = self.pending_media.lock().unwrap_or_else(|e| e.into_inner());
+                        let mut pending =
+                            self.pending_media.lock().unwrap_or_else(|e| e.into_inner());
                         let remaining = MAX_MEDIA_PER_RUN.saturating_sub(pending.len());
                         if remaining < items.len() {
                             tracing::warn!(
@@ -742,10 +783,7 @@ pub(super) async fn write_conversation_memory(
 ) {
     use crate::memory::context::{ContextAnchor, MemoryEntry};
 
-    let context = ContextAnchor::with_session(
-        session_key.clone(),
-        session_key,
-    );
+    let context = ContextAnchor::with_session(session_key.clone(), session_key);
     let mut entry = MemoryEntry::new(
         uuid::Uuid::new_v4().to_string(),
         context,

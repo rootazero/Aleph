@@ -1,8 +1,8 @@
 //! Skills RPC Handlers — unified interface for skill management via SkillSystem.
 
-use std::sync::OnceLock;
 use serde::Deserialize;
 use serde_json::json;
+use std::sync::OnceLock;
 
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 use super::parse_params;
@@ -63,7 +63,8 @@ pub async fn handle_update(request: JsonRpcRequest) -> JsonRpcResponse {
             .await
         {
             return JsonRpcResponse::error(
-                request.id, INTERNAL_ERROR,
+                request.id,
+                INTERNAL_ERROR,
                 format!("Failed to update config: {}", e),
             );
         }
@@ -75,14 +76,21 @@ pub async fn handle_update(request: JsonRpcRequest) -> JsonRpcResponse {
             "tool" => PromptScope::Tool,
             "standalone" => PromptScope::Standalone,
             "disabled" => PromptScope::Disabled,
-            _ => return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Invalid scope value".to_string()),
+            _ => {
+                return JsonRpcResponse::error(
+                    request.id,
+                    INVALID_PARAMS,
+                    "Invalid scope value".to_string(),
+                )
+            }
         };
         if let Err(e) = system
             .update_config(&skill_id, SkillConfigUpdate::SetScope(scope))
             .await
         {
             return JsonRpcResponse::error(
-                request.id, INTERNAL_ERROR,
+                request.id,
+                INTERNAL_ERROR,
                 format!("Failed to update scope: {}", e),
             );
         }
@@ -90,9 +98,16 @@ pub async fn handle_update(request: JsonRpcRequest) -> JsonRpcResponse {
 
     // Return updated status for this skill
     let entries = system.full_status().await;
-    match entries.into_iter().find(|e| e.id.as_str() == params.skill_id) {
+    match entries
+        .into_iter()
+        .find(|e| e.id.as_str() == params.skill_id)
+    {
         Some(entry) => JsonRpcResponse::success(request.id, json!({ "skill": entry })),
-        None => JsonRpcResponse::error(request.id, INTERNAL_ERROR, "Skill not found after update".to_string()),
+        None => JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            "Skill not found after update".to_string(),
+        ),
     }
 }
 
@@ -120,12 +135,17 @@ pub async fn handle_install_dep(request: JsonRpcRequest) -> JsonRpcResponse {
         .await;
 
     let entries = system.full_status().await;
-    let skill = entries.into_iter().find(|e| e.id.as_str() == params.skill_id);
+    let skill = entries
+        .into_iter()
+        .find(|e| e.id.as_str() == params.skill_id);
 
-    JsonRpcResponse::success(request.id, json!({
-        "result": result,
-        "skill": skill,
-    }))
+    JsonRpcResponse::success(
+        request.id,
+        json!({
+            "result": result,
+            "skill": skill,
+        }),
+    )
 }
 
 // ============================================================================
@@ -147,7 +167,8 @@ pub async fn handle_remove(request: JsonRpcRequest) -> JsonRpcResponse {
     match shared_system().remove_skill(&skill_id).await {
         Ok(removed) => JsonRpcResponse::success(request.id, json!({ "ok": removed })),
         Err(e) => JsonRpcResponse::error(
-            request.id, INTERNAL_ERROR,
+            request.id,
+            INTERNAL_ERROR,
             format!("Failed to remove skill: {}", e),
         ),
     }

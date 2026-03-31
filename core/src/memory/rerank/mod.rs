@@ -15,9 +15,9 @@
 //! let blended = blend_scores(&originals, &results, config.rerank_weight);
 //! ```
 
-pub mod provider;
 pub mod jina;
 pub mod pinecone;
+pub mod provider;
 pub mod siliconflow;
 pub mod vllm;
 pub mod voyage;
@@ -34,9 +34,7 @@ use voyage::VoyageRerankProvider;
 pub fn build_provider(config: &RerankConfig) -> Box<dyn RerankProvider> {
     match config.provider {
         RerankProviderType::Jina => Box::new(JinaRerankProvider::new(config.clone())),
-        RerankProviderType::SiliconFlow => {
-            Box::new(SiliconFlowRerankProvider::new(config.clone()))
-        }
+        RerankProviderType::SiliconFlow => Box::new(SiliconFlowRerankProvider::new(config.clone())),
         RerankProviderType::Voyage => Box::new(VoyageRerankProvider::new(config.clone())),
         RerankProviderType::Pinecone => Box::new(PineconeRerankProvider::new(config.clone())),
         RerankProviderType::Vllm => Box::new(VllmRerankProvider::new(config.clone())),
@@ -88,8 +86,14 @@ mod tests {
             ("doc_c".to_string(), 0.7),
         ];
         let reranked = vec![
-            RerankResult { index: 2, relevance_score: 0.95 },
-            RerankResult { index: 0, relevance_score: 0.5 },
+            RerankResult {
+                index: 2,
+                relevance_score: 0.95,
+            },
+            RerankResult {
+                index: 0,
+                relevance_score: 0.5,
+            },
         ];
 
         let result = blend_scores(&originals, &reranked, 0.6);
@@ -105,13 +109,11 @@ mod tests {
 
     #[test]
     fn test_blend_scores_zero_weight() {
-        let originals = vec![
-            ("a".to_string(), 0.5),
-            ("b".to_string(), 0.9),
-        ];
-        let reranked = vec![
-            RerankResult { index: 0, relevance_score: 1.0 },
-        ];
+        let originals = vec![("a".to_string(), 0.5), ("b".to_string(), 0.9)];
+        let reranked = vec![RerankResult {
+            index: 0,
+            relevance_score: 1.0,
+        }];
 
         let result = blend_scores(&originals, &reranked, 0.0);
         // Pure original scores: b=0.9, a=0.5
@@ -121,13 +123,11 @@ mod tests {
 
     #[test]
     fn test_blend_scores_full_weight() {
-        let originals = vec![
-            ("a".to_string(), 0.9),
-            ("b".to_string(), 0.1),
-        ];
-        let reranked = vec![
-            RerankResult { index: 1, relevance_score: 1.0 },
-        ];
+        let originals = vec![("a".to_string(), 0.9), ("b".to_string(), 0.1)];
+        let reranked = vec![RerankResult {
+            index: 1,
+            relevance_score: 1.0,
+        }];
 
         let result = blend_scores(&originals, &reranked, 1.0);
         // Pure rerank scores: b=1.0, a=0.0

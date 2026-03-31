@@ -4,21 +4,27 @@ use rusqlite::{params, OptionalExtension};
 use tracing::{debug, info};
 
 use super::{
-    SessionManager, SessionManagerError, SessionMetadata, SessionIdentityMeta,
-    StoredMessage, session_type_str,
+    session_type_str, SessionIdentityMeta, SessionManager, SessionManagerError, SessionMetadata,
+    StoredMessage,
 };
 use crate::gateway::router::SessionKey;
-use aleph_protocol::{IdentityContext, Role, GuestScope};
+use aleph_protocol::{GuestScope, IdentityContext, Role};
 
 impl SessionManager {
     /// Get or create a session
-    pub async fn get_or_create(&self, key: &SessionKey) -> Result<SessionMetadata, SessionManagerError> {
+    pub async fn get_or_create(
+        &self,
+        key: &SessionKey,
+    ) -> Result<SessionMetadata, SessionManagerError> {
         let key_str = key.to_key_string();
         let agent_id = key.agent_id().to_string();
         let session_type = session_type_str(key);
         let now = chrono::Utc::now().timestamp();
 
-        let conn = self.conn.lock().map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {}", e)))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {}", e)))?;
 
         // Try to get existing session
         let existing: Option<SessionMetadata> = conn
@@ -89,14 +95,19 @@ impl SessionManager {
 
         // Use scope block to ensure lock is released before any await
         let (message_id, needs_compaction) = {
-            let conn = self.conn.lock().map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {}", e)))?;
+            let conn = self
+                .conn
+                .lock()
+                .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {}", e)))?;
 
             // Insert message
             conn.execute(
                 "INSERT INTO messages (session_key, role, content, timestamp) VALUES (?, ?, ?, ?)",
                 params![&key_str, role, content, now],
             )
-            .map_err(|e| SessionManagerError::DatabaseError(format!("Insert message failed: {}", e)))?;
+            .map_err(|e| {
+                SessionManagerError::DatabaseError(format!("Insert message failed: {}", e))
+            })?;
 
             let message_id = conn.last_insert_rowid();
 
@@ -133,7 +144,10 @@ impl SessionManager {
         limit: Option<usize>,
     ) -> Result<Vec<StoredMessage>, SessionManagerError> {
         let key_str = key.to_key_string();
-        let conn = self.conn.lock().map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {}", e)))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {}", e)))?;
 
         let query = match limit {
             Some(n) => format!(
@@ -176,10 +190,16 @@ impl SessionManager {
     /// Reset (clear) a session
     pub async fn reset_session(&self, key: &SessionKey) -> Result<bool, SessionManagerError> {
         let key_str = key.to_key_string();
-        let conn = self.conn.lock().map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {}", e)))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {}", e)))?;
 
         let deleted = conn
-            .execute("DELETE FROM messages WHERE session_key = ?", params![&key_str])
+            .execute(
+                "DELETE FROM messages WHERE session_key = ?",
+                params![&key_str],
+            )
             .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
 
         conn.execute(
@@ -196,11 +216,17 @@ impl SessionManager {
     /// Delete a session entirely
     pub async fn delete_session(&self, key: &SessionKey) -> Result<bool, SessionManagerError> {
         let key_str = key.to_key_string();
-        let conn = self.conn.lock().map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {}", e)))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {}", e)))?;
 
         // Delete messages first
-        conn.execute("DELETE FROM messages WHERE session_key = ?", params![&key_str])
-            .ok();
+        conn.execute(
+            "DELETE FROM messages WHERE session_key = ?",
+            params![&key_str],
+        )
+        .ok();
 
         // Delete session
         let deleted = conn
@@ -217,7 +243,10 @@ impl SessionManager {
         &self,
         agent_id: Option<&str>,
     ) -> Result<Vec<SessionMetadata>, SessionManagerError> {
-        let conn = self.conn.lock().map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {}", e)))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {}", e)))?;
 
         let sessions = if let Some(id) = agent_id {
             let mut stmt = conn
@@ -281,7 +310,10 @@ impl SessionManager {
         let key_str = key.to_key_string();
         let keep = self.config.compaction_keep as i64;
 
-        let conn = self.conn.lock().map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {}", e)))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {}", e)))?;
 
         // Get the ID threshold
         let threshold_id: Option<i64> = conn
@@ -316,7 +348,10 @@ impl SessionManager {
             )
             .ok();
 
-            info!("Compacted session {}: removed {} messages", key_str, deleted);
+            info!(
+                "Compacted session {}: removed {} messages",
+                key_str, deleted
+            );
 
             return Ok(deleted);
         }
@@ -333,9 +368,10 @@ impl SessionManager {
         session_key: &str,
         source_channel: &str,
     ) -> Result<IdentityContext, SessionManagerError> {
-        let conn = self.conn.lock().map_err(|e| {
-            SessionManagerError::DatabaseError(format!("Lock error: {}", e))
-        })?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {}", e)))?;
 
         // Query session metadata
         let metadata_json: Option<String> = {
@@ -355,10 +391,9 @@ impl SessionManager {
 
         // Construct IdentityContext
         let identity = match identity_meta.role {
-            Role::Owner => IdentityContext::owner(
-                session_key.to_string(),
-                identity_meta.source_channel,
-            ),
+            Role::Owner => {
+                IdentityContext::owner(session_key.to_string(), identity_meta.source_channel)
+            }
             Role::Guest => {
                 // Guest must have a scope; if missing, create minimal scope
                 let scope = identity_meta.scope.unwrap_or_else(|| GuestScope {
@@ -375,10 +410,7 @@ impl SessionManager {
             }
             Role::Anonymous => {
                 // Anonymous sessions are treated as Owner for backward compatibility
-                IdentityContext::owner(
-                    session_key.to_string(),
-                    identity_meta.source_channel,
-                )
+                IdentityContext::owner(session_key.to_string(), identity_meta.source_channel)
             }
         };
 
@@ -392,12 +424,18 @@ impl SessionManager {
         topic: Option<String>,
     ) -> Result<(), SessionManagerError> {
         let key_str = key.to_key_string();
-        let conn = self.conn.lock().map_err(|e|
-            SessionManagerError::DatabaseError(format!("Lock error: {}", e)))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {}", e)))?;
 
         // Get existing metadata
         let existing_json: Option<String> = conn
-            .query_row("SELECT metadata FROM sessions WHERE key = ?", params![&key_str], |row| row.get(0))
+            .query_row(
+                "SELECT metadata FROM sessions WHERE key = ?",
+                params![&key_str],
+                |row| row.get(0),
+            )
             .optional()
             .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?
             .flatten();
@@ -420,7 +458,8 @@ impl SessionManager {
         conn.execute(
             "UPDATE sessions SET metadata = ? WHERE key = ?",
             params![&meta_json, &key_str],
-        ).map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
+        )
+        .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
 
         Ok(())
     }
@@ -433,12 +472,18 @@ impl SessionManager {
         topic: &str,
     ) -> Result<(), SessionManagerError> {
         let key_str = key.to_key_string();
-        let conn = self.conn.lock().map_err(|e|
-            SessionManagerError::DatabaseError(format!("Lock error: {}", e)))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {}", e)))?;
 
         // Get existing metadata
         let existing_json: Option<String> = conn
-            .query_row("SELECT metadata FROM sessions WHERE key = ?", params![&key_str], |row| row.get(0))
+            .query_row(
+                "SELECT metadata FROM sessions WHERE key = ?",
+                params![&key_str],
+                |row| row.get(0),
+            )
             .optional()
             .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?
             .flatten();
@@ -458,7 +503,8 @@ impl SessionManager {
         conn.execute(
             "UPDATE sessions SET metadata = ? WHERE key = ?",
             params![&meta_json, &key_str],
-        ).map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
+        )
+        .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
 
         Ok(())
     }
@@ -468,8 +514,10 @@ impl SessionManager {
         &self,
         base_key_pattern: &str,
     ) -> Result<u32, SessionManagerError> {
-        let conn = self.conn.lock().map_err(|e|
-            SessionManagerError::DatabaseError(format!("Lock error: {}", e)))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {}", e)))?;
 
         let like_pattern = format!("{}%", base_key_pattern);
         let latest_key: Option<String> = conn
@@ -502,11 +550,17 @@ impl SessionManager {
         key: &SessionKey,
     ) -> Result<Option<String>, SessionManagerError> {
         let key_str = key.to_key_string();
-        let conn = self.conn.lock().map_err(|e|
-            SessionManagerError::DatabaseError(format!("Lock error: {}", e)))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {}", e)))?;
 
         let metadata_json: Option<String> = conn
-            .query_row("SELECT metadata FROM sessions WHERE key = ?", params![&key_str], |row| row.get(0))
+            .query_row(
+                "SELECT metadata FROM sessions WHERE key = ?",
+                params![&key_str],
+                |row| row.get(0),
+            )
             .optional()
             .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?
             .flatten();
@@ -525,7 +579,10 @@ impl SessionManager {
         let expiry_threshold =
             chrono::Utc::now().timestamp() - self.config.session_expiry_secs as i64;
 
-        let conn = self.conn.lock().map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {}", e)))?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {}", e)))?;
 
         // Get sessions to delete
         let keys: Vec<String> = {

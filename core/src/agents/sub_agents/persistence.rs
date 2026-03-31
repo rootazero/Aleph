@@ -19,9 +19,8 @@ impl SubAgentRunFact {
     /// Returns `Err` if serialization fails (avoids storing empty content
     /// that would corrupt the FactsDB on deserialization).
     pub fn from_run(run: &SubAgentRun) -> Result<MemoryFact> {
-        let content = serde_json::to_string(run).map_err(|e| {
-            AlephError::config(format!("Failed to serialize SubAgentRun: {}", e))
-        })?;
+        let content = serde_json::to_string(run)
+            .map_err(|e| AlephError::config(format!("Failed to serialize SubAgentRun: {}", e)))?;
         let id = format!("subagent:run:{}", run.run_id);
 
         Ok(MemoryFact {
@@ -119,5 +118,4 @@ mod tests {
         let id = SubAgentRunFact::fact_id("abc-123");
         assert_eq!(id, "subagent:run:abc-123");
     }
-
 }

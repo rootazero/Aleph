@@ -149,13 +149,20 @@ async fn then_section_appears_before(w: &mut AlephWorld, first: String, second: 
     let ctx = w.thinker.as_ref().expect("Thinker context not initialized");
     let prompt = ctx.system_prompt.as_ref().expect("No system prompt built");
 
-    let first_pos = prompt.find(&first).unwrap_or_else(|| panic!("'{}' not found in prompt", first));
-    let second_pos = prompt.find(&second).unwrap_or_else(|| panic!("'{}' not found in prompt", second));
+    let first_pos = prompt
+        .find(&first)
+        .unwrap_or_else(|| panic!("'{}' not found in prompt", first));
+    let second_pos = prompt
+        .find(&second)
+        .unwrap_or_else(|| panic!("'{}' not found in prompt", second));
 
     assert!(
         first_pos < second_pos,
         "'{}' (at {}) should appear before '{}' (at {})",
-        first, first_pos, second, second_pos
+        first,
+        first_pos,
+        second,
+        second_pos
     );
 }
 
@@ -200,35 +207,36 @@ async fn then_second_part_not_cached(w: &mut AlephWorld) {
 async fn then_headers_identical(w: &mut AlephWorld) {
     let ctx = w.thinker.as_ref().expect("Thinker context not initialized");
 
-    let first_header = ctx.cached_parts
+    let first_header = ctx
+        .cached_parts
         .as_ref()
         .and_then(|v: &Vec<_>| v.first())
         .map(|p| &p.content)
         .expect("No first cached parts");
 
-    let second_header = ctx.second_cached_parts
+    let second_header = ctx
+        .second_cached_parts
         .as_ref()
         .and_then(|v: &Vec<_>| v.first())
         .map(|p| &p.content)
         .expect("No second cached parts");
 
-    assert_eq!(
-        first_header, second_header,
-        "Headers should be identical"
-    );
+    assert_eq!(first_header, second_header, "Headers should be identical");
 }
 
 #[then("the first part headers should be different")]
 async fn then_headers_different(w: &mut AlephWorld) {
     let ctx = w.thinker.as_ref().expect("Thinker context not initialized");
 
-    let first_header = ctx.cached_parts
+    let first_header = ctx
+        .cached_parts
         .as_ref()
         .and_then(|v: &Vec<_>| v.first())
         .map(|p| &p.content)
         .expect("No first cached parts");
 
-    let second_header = ctx.second_cached_parts
+    let second_header = ctx
+        .second_cached_parts
         .as_ref()
         .and_then(|v: &Vec<_>| v.first())
         .map(|p| &p.content)
@@ -244,13 +252,15 @@ async fn then_headers_different(w: &mut AlephWorld) {
 async fn then_dynamic_parts_different(w: &mut AlephWorld) {
     let ctx = w.thinker.as_ref().expect("Thinker context not initialized");
 
-    let first_dynamic = ctx.cached_parts
+    let first_dynamic = ctx
+        .cached_parts
         .as_ref()
         .and_then(|v: &Vec<_>| v.get(1))
         .map(|p| &p.content)
         .expect("No first cached parts");
 
-    let second_dynamic = ctx.second_cached_parts
+    let second_dynamic = ctx
+        .second_cached_parts
         .as_ref()
         .and_then(|v: &Vec<_>| v.get(1))
         .map(|p| &p.content)
@@ -338,13 +348,17 @@ async fn given_background_manifest(w: &mut AlephWorld) {
 #[given("a standard sandbox security context")]
 async fn given_standard_security(w: &mut AlephWorld) {
     let ctx = w.thinker.get_or_insert_with(ThinkerContext::new);
-    ctx.security = Some(SecurityContext::standard_sandbox(PathBuf::from("/workspace")));
+    ctx.security = Some(SecurityContext::standard_sandbox(PathBuf::from(
+        "/workspace",
+    )));
 }
 
 #[given("a strict readonly security context")]
 async fn given_strict_security(w: &mut AlephWorld) {
     let ctx = w.thinker.get_or_insert_with(ThinkerContext::new);
-    ctx.security = Some(SecurityContext::strict_readonly(PathBuf::from("/workspace")));
+    ctx.security = Some(SecurityContext::strict_readonly(PathBuf::from(
+        "/workspace",
+    )));
 }
 
 #[given("a permissive security context")]
@@ -417,10 +431,7 @@ async fn then_tool_available(w: &mut AlephWorld, tool_name: String) {
     let ctx = w.thinker.as_ref().expect("No thinker context");
     let resolved = ctx.resolved.as_ref().expect("No resolved context");
     assert!(
-        resolved
-            .available_tools
-            .iter()
-            .any(|t| t.name == tool_name),
+        resolved.available_tools.iter().any(|t| t.name == tool_name),
         "Expected tool '{}' to be available, but it wasn't. Available: {:?}",
         tool_name,
         resolved
@@ -436,8 +447,11 @@ async fn then_requires_approval(w: &mut AlephWorld, tool_name: String) {
     let ctx = w.thinker.as_ref().expect("No thinker context");
     let resolved = ctx.resolved.as_ref().expect("No resolved context");
     assert!(
-        resolved.disabled_tools.iter().any(|d| d.name == tool_name
-            && matches!(d.reason, DisableReason::RequiresApproval { .. })),
+        resolved
+            .disabled_tools
+            .iter()
+            .any(|d| d.name == tool_name
+                && matches!(d.reason, DisableReason::RequiresApproval { .. })),
         "Expected tool '{}' to require approval, but it didn't. Disabled tools: {:?}",
         tool_name,
         resolved
@@ -453,8 +467,11 @@ async fn then_blocked(w: &mut AlephWorld, tool_name: String) {
     let ctx = w.thinker.as_ref().expect("No thinker context");
     let resolved = ctx.resolved.as_ref().expect("No resolved context");
     assert!(
-        resolved.disabled_tools.iter().any(|d| d.name == tool_name
-            && matches!(d.reason, DisableReason::BlockedByPolicy { .. })),
+        resolved
+            .disabled_tools
+            .iter()
+            .any(|d| d.name == tool_name
+                && matches!(d.reason, DisableReason::BlockedByPolicy { .. })),
         "Expected tool '{}' to be blocked by policy, but it wasn't. Disabled tools: {:?}",
         tool_name,
         resolved

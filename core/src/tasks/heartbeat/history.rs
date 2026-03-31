@@ -163,7 +163,12 @@ mod tests {
         conn
     }
 
-    fn make_record(id: &str, task_id: &str, l1_status: &str, created_at: i64) -> HeartbeatRunRecord {
+    fn make_record(
+        id: &str,
+        task_id: &str,
+        l1_status: &str,
+        created_at: i64,
+    ) -> HeartbeatRunRecord {
         HeartbeatRunRecord {
             id: id.to_string(),
             task_id: task_id.to_string(),
@@ -196,7 +201,12 @@ mod tests {
     fn test_query_returns_most_recent_first() {
         let conn = setup_db();
         for i in 0..5_i64 {
-            let record = make_record(&format!("run-{i}"), "task-a", "Triggered", 1_000_000 + i * 10_000);
+            let record = make_record(
+                &format!("run-{i}"),
+                "task-a",
+                "Triggered",
+                1_000_000 + i * 10_000,
+            );
             insert_run_record(&conn, &record).unwrap();
         }
         let runs = get_run_records(&conn, "task-a", 10).unwrap();

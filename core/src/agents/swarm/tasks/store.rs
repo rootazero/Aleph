@@ -11,8 +11,8 @@ use rusqlite::{params, Connection, OptionalExtension};
 use tokio::sync::Mutex;
 
 use super::{
-    CoordTask, CoordTaskFilter, CoordTaskId, CoordTaskStatus, CoordTaskStore,
-    CoordTaskUpdate, NewCoordTask, Priority,
+    CoordTask, CoordTaskFilter, CoordTaskId, CoordTaskStatus, CoordTaskStore, CoordTaskUpdate,
+    NewCoordTask, Priority,
 };
 use crate::error::AlephError;
 
@@ -50,7 +50,8 @@ fn read_task_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<CoordTask> {
         owner: row.get(5)?,
         priority: Priority::from_stored(&priority_str).unwrap_or_default(),
         result: result_val,
-        metadata: serde_json::from_str(&metadata_str).unwrap_or(serde_json::Value::Object(Default::default())),
+        metadata: serde_json::from_str(&metadata_str)
+            .unwrap_or(serde_json::Value::Object(Default::default())),
         dependencies: Vec::new(), // filled separately
         created_at: row.get(9)?,
         started_at: row.get(10)?,
@@ -60,9 +61,8 @@ fn read_task_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<CoordTask> {
 
 /// Load dependency list for a task.
 fn load_dependencies(conn: &Connection, task_id: &str) -> rusqlite::Result<Vec<CoordTaskId>> {
-    let mut stmt = conn.prepare_cached(
-        "SELECT depends_on FROM coord_task_dependencies WHERE task_id = ?1",
-    )?;
+    let mut stmt =
+        conn.prepare_cached("SELECT depends_on FROM coord_task_dependencies WHERE task_id = ?1")?;
     let rows = stmt.query_map(params![task_id], |row| row.get(0))?;
     rows.collect()
 }
@@ -84,7 +84,11 @@ fn has_unresolved_deps(conn: &Connection, task_id: &str) -> rusqlite::Result<boo
 }
 
 /// Derive the effective status for a task (Blocked is computed, not stored).
-fn derive_status(conn: &Connection, task_id: &str, stored: CoordTaskStatus) -> rusqlite::Result<CoordTaskStatus> {
+fn derive_status(
+    conn: &Connection,
+    task_id: &str,
+    stored: CoordTaskStatus,
+) -> rusqlite::Result<CoordTaskStatus> {
     if stored == CoordTaskStatus::Pending && has_unresolved_deps(conn, task_id)? {
         Ok(CoordTaskStatus::Blocked)
     } else {
@@ -97,9 +101,7 @@ fn load_task(conn: &Connection, task_id: &str) -> rusqlite::Result<Option<CoordT
     let mut stmt = conn.prepare_cached(
         "SELECT id, team_id, subject, description, status, owner, priority, result, metadata, created_at, started_at, completed_at FROM coord_tasks WHERE id = ?1",
     )?;
-    let task_opt: Option<CoordTask> = stmt
-        .query_row(params![task_id], read_task_row)
-        .optional()?;
+    let task_opt: Option<CoordTask> = stmt.query_row(params![task_id], read_task_row).optional()?;
 
     match task_opt {
         Some(mut task) => {
@@ -296,7 +298,11 @@ impl CoordTaskStore for SqliteCoordTaskStore {
         load_task(&conn, id).map_err(db_err)
     }
 
-    async fn update_task(&self, id: &str, update: CoordTaskUpdate) -> crate::error::Result<CoordTask> {
+    async fn update_task(
+        &self,
+        id: &str,
+        update: CoordTaskUpdate,
+    ) -> crate::error::Result<CoordTask> {
         let conn = self.conn.lock().await;
         let now = now_epoch();
 
@@ -360,7 +366,8 @@ impl CoordTaskStore for SqliteCoordTaskStore {
         );
         values.push(Box::new(id.to_string()));
 
-        let params_ref: Vec<&dyn rusqlite::types::ToSql> = values.iter().map(|v| v.as_ref()).collect();
+        let params_ref: Vec<&dyn rusqlite::types::ToSql> =
+            values.iter().map(|v| v.as_ref()).collect();
         let affected = conn.execute(&sql, params_ref.as_slice()).map_err(db_err)?;
 
         if affected == 0 {
@@ -418,7 +425,8 @@ impl CoordTaskStore for SqliteCoordTaskStore {
             "SELECT t.id, t.team_id, t.subject, t.description, t.status, t.owner, t.priority, t.result, t.metadata, t.created_at, t.started_at, t.completed_at FROM coord_tasks t {where_sql} ORDER BY t.created_at ASC"
         );
 
-        let params_ref: Vec<&dyn rusqlite::types::ToSql> = values.iter().map(|v| v.as_ref()).collect();
+        let params_ref: Vec<&dyn rusqlite::types::ToSql> =
+            values.iter().map(|v| v.as_ref()).collect();
         let mut stmt = conn.prepare(&sql).map_err(db_err)?;
         let rows = stmt
             .query_map(params_ref.as_slice(), read_task_row)
@@ -456,7 +464,9 @@ impl CoordTaskStore for SqliteCoordTaskStore {
         let mut stmt = conn
             .prepare_cached("SELECT task_id FROM coord_task_dependencies WHERE depends_on = ?1")
             .map_err(db_err)?;
-        let rows = stmt.query_map(params![id], |row| row.get(0)).map_err(db_err)?;
+        let rows = stmt
+            .query_map(params![id], |row| row.get(0))
+            .map_err(db_err)?;
         let mut ids = Vec::new();
         for r in rows {
             ids.push(r.map_err(db_err)?);
@@ -464,7 +474,10 @@ impl CoordTaskStore for SqliteCoordTaskStore {
         Ok(ids)
     }
 
-    async fn get_newly_unblocked(&self, completed_id: &str) -> crate::error::Result<Vec<CoordTask>> {
+    async fn get_newly_unblocked(
+        &self,
+        completed_id: &str,
+    ) -> crate::error::Result<Vec<CoordTask>> {
         let conn = self.conn.lock().await;
         let mut stmt = conn
             .prepare_cached(
@@ -483,7 +496,9 @@ impl CoordTaskStore for SqliteCoordTaskStore {
             )
             .map_err(db_err)?;
 
-        let rows = stmt.query_map(params![completed_id], read_task_row).map_err(db_err)?;
+        let rows = stmt
+            .query_map(params![completed_id], read_task_row)
+            .map_err(db_err)?;
 
         let mut tasks = Vec::new();
         for row in rows {
@@ -495,7 +510,6 @@ impl CoordTaskStore for SqliteCoordTaskStore {
         }
         Ok(tasks)
     }
-
 }
 
 // ---------------------------------------------------------------------------
@@ -609,7 +623,9 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(by_owner.len(), 2);
-        assert!(by_owner.iter().all(|t| t.owner.as_deref() == Some("agent-1")));
+        assert!(by_owner
+            .iter()
+            .all(|t| t.owner.as_deref() == Some("agent-1")));
 
         // No filter
         let all = store.list_tasks(CoordTaskFilter::default()).await.unwrap();
@@ -748,5 +764,4 @@ mod tests {
         assert_eq!(unblocked2.len(), 1);
         assert_eq!(unblocked2[0].id, c.id);
     }
-
 }

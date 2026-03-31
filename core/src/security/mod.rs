@@ -6,7 +6,7 @@
 //! - Content sanitization
 //! - Persistent audit logging
 
+pub mod audit;
+pub mod content_sanitizer;
 pub mod headers;
 pub mod ssrf;
-pub mod content_sanitizer;
-pub mod audit;

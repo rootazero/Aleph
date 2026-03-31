@@ -6,10 +6,10 @@
 //! - Classifying tools into hydration levels (full/summary/indexed)
 //! - Ensuring core tools are always included
 
-use crate::error::AlephError;
-use crate::memory::EmbeddingProvider;
 use super::config::ToolRetrievalConfig;
 use super::retrieval::{HydratedTool, ToolRetrieval};
+use crate::error::AlephError;
+use crate::memory::EmbeddingProvider;
 use crate::sync_primitives::Arc;
 
 /// Configuration for the hydration pipeline
@@ -100,7 +100,11 @@ impl HydrationResult {
 
     /// Get all tool names for debugging
     pub fn all_tool_names(&self) -> Vec<&str> {
-        let mut names: Vec<&str> = self.full_schema_tools.iter().map(|t| t.name.as_str()).collect();
+        let mut names: Vec<&str> = self
+            .full_schema_tools
+            .iter()
+            .map(|t| t.name.as_str())
+            .collect();
         names.extend(self.summary_tools.iter().map(|t| t.name.as_str()));
         names.extend(self.indexed_tool_names.iter().map(|s| s.as_str()));
         names
@@ -169,10 +173,7 @@ impl HydrationPipeline {
             .cloned()
             .collect();
 
-        let indexed_tool_names: Vec<String> = minimal
-            .into_iter()
-            .map(|t| t.name.clone())
-            .collect();
+        let indexed_tool_names: Vec<String> = minimal.into_iter().map(|t| t.name.clone()).collect();
 
         // 5. Ensure core tools are in full_schema_tools
         // Note: Core tools should ideally come from the registry with full schema
@@ -206,7 +207,10 @@ impl HydrationPipeline {
         let query_embedding = self.embedder.embed(query).await?;
 
         // 2. Use hybrid retrieval
-        let tools = self.retrieval.retrieve_hybrid(&query_embedding, query).await?;
+        let tools = self
+            .retrieval
+            .retrieve_hybrid(&query_embedding, query)
+            .await?;
 
         // 3. Partition and build result (same as hydrate)
         let (full, summary, minimal) = ToolRetrieval::partition_by_hydration(&tools);
@@ -223,10 +227,7 @@ impl HydrationPipeline {
             .cloned()
             .collect();
 
-        let indexed_tool_names: Vec<String> = minimal
-            .into_iter()
-            .map(|t| t.name.clone())
-            .collect();
+        let indexed_tool_names: Vec<String> = minimal.into_iter().map(|t| t.name.clone()).collect();
 
         Ok(HydrationResult {
             full_schema_tools,

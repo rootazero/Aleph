@@ -2,7 +2,9 @@
 
 use crate::config::types::memory::{EmbeddingProviderConfig, EmbeddingSettings};
 use crate::error::AlephError;
-use crate::memory::embedding_provider::{create_provider, EmbeddingProvider, RemoteEmbeddingProvider};
+use crate::memory::embedding_provider::{
+    create_provider, EmbeddingProvider, RemoteEmbeddingProvider,
+};
 use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
 use tracing::{info, warn};
@@ -28,7 +30,11 @@ impl EmbeddingManager {
         let (active_id, config) = {
             let settings = self.settings.read().await;
             let active_id = settings.active_provider_id.clone();
-            let config = settings.providers.iter().find(|p| p.id == active_id).cloned();
+            let config = settings
+                .providers
+                .iter()
+                .find(|p| p.id == active_id)
+                .cloned();
             (active_id, config)
         }; // settings lock released
 

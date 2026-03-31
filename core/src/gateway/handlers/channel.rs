@@ -2,19 +2,19 @@
 //!
 //! RPC handlers for channel operations: list, status, send, start, stop.
 
+use crate::sync_primitives::Arc;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use crate::sync_primitives::Arc;
 use tracing::debug;
 
 use std::sync::OnceLock;
 use tokio::sync::RwLock;
 
-use crate::Config;
 use crate::gateway::channel::{ChannelId, ChannelInfo, ChannelStatus, OutboundMessage};
 use crate::gateway::channel_registry::ChannelRegistry;
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 use crate::gateway::security::SharedTokenManager;
+use crate::Config;
 
 // ── Vault helpers for channel secrets ────────────���───────────────────────────
 
@@ -53,7 +53,10 @@ pub fn inject_channel_secrets(channel_id: &str, config: &mut Value, vault: &Shar
         let key = channel_vault_key(channel_id, field);
         match vault.get_secret(&key) {
             Ok(Some(secret)) => {
-                obj.insert(field.to_string(), Value::String(secret.expose().to_string()));
+                obj.insert(
+                    field.to_string(),
+                    Value::String(secret.expose().to_string()),
+                );
             }
             Ok(None) => {}
             Err(e) => {
@@ -65,7 +68,11 @@ pub fn inject_channel_secrets(channel_id: &str, config: &mut Value, vault: &Shar
 
 /// Extract secret fields from config, store them in vault, and remove from config.
 /// Returns the number of secrets migrated.
-pub fn store_and_strip_channel_secrets(channel_id: &str, config: &mut Value, vault: &SharedTokenManager) -> usize {
+pub fn store_and_strip_channel_secrets(
+    channel_id: &str,
+    config: &mut Value,
+    vault: &SharedTokenManager,
+) -> usize {
     let obj = match config.as_object_mut() {
         Some(o) => o,
         None => return 0,
@@ -90,7 +97,6 @@ pub fn store_and_strip_channel_secrets(channel_id: &str, config: &mut Value, vau
     }
     count
 }
-
 
 /// Cached ToolRegistry for Telegram channel recreation.
 ///
@@ -185,7 +191,8 @@ pub async fn handle_list(
     debug!("Handling channels.list");
 
     let channels = registry.list().await;
-    let mut infos: Vec<ChannelInfoResponse> = channels.iter().map(ChannelInfoResponse::from).collect();
+    let mut infos: Vec<ChannelInfoResponse> =
+        channels.iter().map(ChannelInfoResponse::from).collect();
     let summary = registry.status_summary().await;
 
     // Merge channels from config that aren't in the registry (pending_config)
@@ -194,7 +201,9 @@ pub async fn handle_list(
         let registered_ids: std::collections::HashSet<String> =
             infos.iter().map(|i| i.id.clone()).collect();
 
-        let pending: Vec<ChannelInfoResponse> = cfg.channels.iter()
+        let pending: Vec<ChannelInfoResponse> = cfg
+            .channels
+            .iter()
             .filter(|(id, _)| !registered_ids.contains(id.as_str()))
             .map(|(id, val)| {
                 let channel_type = val
@@ -325,7 +334,9 @@ pub async fn handle_start(
         // Inject secrets from vault into the config
         inject_channel_secrets(channel_id.as_str(), &mut clean_config, &vault);
 
-        if let Some(mut new_channel) = create_channel_from_config(channel_id.as_str(), &channel_type, clean_config.clone()) {
+        if let Some(mut new_channel) =
+            create_channel_from_config(channel_id.as_str(), &channel_type, clean_config.clone())
+        {
             // Re-attach ToolRegistry for telegram channels so slash commands are registered
             if channel_type == "telegram" {
                 use crate::gateway::interfaces::telegram::{TelegramChannel, TelegramConfig};
@@ -339,7 +350,10 @@ pub async fn handle_start(
             }
             // Replace old channel with freshly configured one
             registry.register(new_channel).await;
-            debug!("Replaced channel {} with fresh config from app config", channel_id);
+            debug!(
+                "Replaced channel {} with fresh config from app config",
+                channel_id
+            );
         }
     }
     drop(config_snapshot);
@@ -365,53 +379,78 @@ pub async fn handle_start(
 /// `id` is the instance identifier (e.g. "telegram", "tg-work", "discord-gaming").
 /// `channel_type` is the platform type (e.g. "telegram", "discord").
 /// `config` is the remaining config with the `type` field already stripped.
-pub fn create_channel_from_config(id: &str, channel_type: &str, config: Value) -> Option<Box<dyn crate::gateway::channel::Channel>> {
-    use crate::gateway::interfaces::telegram::{TelegramChannel, TelegramConfig};
+pub fn create_channel_from_config(
+    id: &str,
+    channel_type: &str,
+    config: Value,
+) -> Option<Box<dyn crate::gateway::channel::Channel>> {
     use crate::gateway::interfaces::discord::{DiscordChannel, DiscordConfig};
-    use crate::gateway::interfaces::whatsapp::{WhatsAppChannel, WhatsAppConfig};
-    use crate::gateway::interfaces::slack::{SlackChannel, SlackConfig};
     use crate::gateway::interfaces::email::{EmailChannel, EmailConfig};
-    use crate::gateway::interfaces::matrix::{MatrixChannel, MatrixConfig};
-    use crate::gateway::interfaces::signal::{SignalChannel, SignalConfig};
-    use crate::gateway::interfaces::mattermost::{MattermostChannel, MattermostConfig};
-    use crate::gateway::interfaces::irc::{IrcChannel, IrcConfig};
-    use crate::gateway::interfaces::webhook::{WebhookChannel, WebhookChannelConfig as WebhookConfig};
-    use crate::gateway::interfaces::xmpp::{XmppChannel, XmppConfig};
-    use crate::gateway::interfaces::nostr::{NostrChannel, NostrConfig};
     use crate::gateway::interfaces::feishu::{FeishuChannel, FeishuConfig};
+    use crate::gateway::interfaces::irc::{IrcChannel, IrcConfig};
+    use crate::gateway::interfaces::matrix::{MatrixChannel, MatrixConfig};
+    use crate::gateway::interfaces::mattermost::{MattermostChannel, MattermostConfig};
     use crate::gateway::interfaces::msteams::{MsTeamsChannel, MsTeamsConfig};
+    use crate::gateway::interfaces::nostr::{NostrChannel, NostrConfig};
+    use crate::gateway::interfaces::signal::{SignalChannel, SignalConfig};
+    use crate::gateway::interfaces::slack::{SlackChannel, SlackConfig};
+    use crate::gateway::interfaces::telegram::{TelegramChannel, TelegramConfig};
+    use crate::gateway::interfaces::webhook::{
+        WebhookChannel, WebhookChannelConfig as WebhookConfig,
+    };
+    use crate::gateway::interfaces::whatsapp::{WhatsAppChannel, WhatsAppConfig};
+    use crate::gateway::interfaces::xmpp::{XmppChannel, XmppConfig};
 
     match channel_type {
-        "telegram" => serde_json::from_value::<TelegramConfig>(config).ok()
-            .map(|cfg| Box::new(TelegramChannel::new(id, cfg)) as Box<dyn crate::gateway::channel::Channel>),
-        "discord" => serde_json::from_value::<DiscordConfig>(config).ok()
+        "telegram" => serde_json::from_value::<TelegramConfig>(config)
+            .ok()
+            .map(|cfg| {
+                Box::new(TelegramChannel::new(id, cfg)) as Box<dyn crate::gateway::channel::Channel>
+            }),
+        "discord" => serde_json::from_value::<DiscordConfig>(config)
+            .ok()
             .map(|cfg| Box::new(DiscordChannel::new(id, cfg)) as _),
-        "whatsapp" => serde_json::from_value::<WhatsAppConfig>(config).ok()
+        "whatsapp" => serde_json::from_value::<WhatsAppConfig>(config)
+            .ok()
             .map(|cfg| Box::new(WhatsAppChannel::new(id, cfg)) as _),
-        "slack" => serde_json::from_value::<SlackConfig>(config).ok()
+        "slack" => serde_json::from_value::<SlackConfig>(config)
+            .ok()
             .map(|cfg| Box::new(SlackChannel::new(id, cfg)) as _),
-        "email" => serde_json::from_value::<EmailConfig>(config).ok()
+        "email" => serde_json::from_value::<EmailConfig>(config)
+            .ok()
             .map(|cfg| Box::new(EmailChannel::new(id, cfg)) as _),
-        "matrix" => serde_json::from_value::<MatrixConfig>(config).ok()
+        "matrix" => serde_json::from_value::<MatrixConfig>(config)
+            .ok()
             .map(|cfg| Box::new(MatrixChannel::new(id, cfg)) as _),
-        "signal" => serde_json::from_value::<SignalConfig>(config).ok()
+        "signal" => serde_json::from_value::<SignalConfig>(config)
+            .ok()
             .map(|cfg| Box::new(SignalChannel::new(id, cfg)) as _),
-        "mattermost" => serde_json::from_value::<MattermostConfig>(config).ok()
+        "mattermost" => serde_json::from_value::<MattermostConfig>(config)
+            .ok()
             .map(|cfg| Box::new(MattermostChannel::new(id, cfg)) as _),
-        "irc" => serde_json::from_value::<IrcConfig>(config).ok()
+        "irc" => serde_json::from_value::<IrcConfig>(config)
+            .ok()
             .map(|cfg| Box::new(IrcChannel::new(id, cfg)) as _),
-        "webhook" => serde_json::from_value::<WebhookConfig>(config).ok()
+        "webhook" => serde_json::from_value::<WebhookConfig>(config)
+            .ok()
             .map(|cfg| Box::new(WebhookChannel::new(id, cfg)) as _),
-        "xmpp" => serde_json::from_value::<XmppConfig>(config).ok()
+        "xmpp" => serde_json::from_value::<XmppConfig>(config)
+            .ok()
             .map(|cfg| Box::new(XmppChannel::new(id, cfg)) as _),
-        "nostr" => serde_json::from_value::<NostrConfig>(config).ok()
+        "nostr" => serde_json::from_value::<NostrConfig>(config)
+            .ok()
             .map(|cfg| Box::new(NostrChannel::new(id, cfg)) as _),
-        "feishu" => serde_json::from_value::<FeishuConfig>(config).ok()
+        "feishu" => serde_json::from_value::<FeishuConfig>(config)
+            .ok()
             .and_then(|cfg| match FeishuChannel::new(id, cfg) {
                 Ok(ch) => Some(Box::new(ch) as _),
-                Err(e) => { tracing::warn!("Invalid feishu config: {}", e); None }
+                Err(e) => {
+                    tracing::warn!("Invalid feishu config: {}", e);
+                    None
+                }
             }),
-        "msteams" => serde_json::from_value::<MsTeamsConfig>(config).ok()
+        "msteams" => serde_json::from_value::<MsTeamsConfig>(config)
+            .ok()
             .and_then(|cfg| {
                 if let Err(e) = cfg.validate() {
                     tracing::warn!("Invalid msteams config: {}", e);
@@ -625,7 +664,9 @@ pub async fn handle_create(
             serde_json::Map::new()
         };
         config_to_save.insert("type".to_string(), Value::String(channel_type.clone()));
-        app_cfg.channels.insert(id.clone(), Value::Object(config_to_save));
+        app_cfg
+            .channels
+            .insert(id.clone(), Value::Object(config_to_save));
     }
 
     // Try to create and register channel instance (with secrets injected).
@@ -739,7 +780,10 @@ mod tests {
     #[test]
     fn test_status_to_string() {
         assert_eq!(status_to_string(ChannelStatus::Connected), "connected");
-        assert_eq!(status_to_string(ChannelStatus::Disconnected), "disconnected");
+        assert_eq!(
+            status_to_string(ChannelStatus::Disconnected),
+            "disconnected"
+        );
         assert_eq!(status_to_string(ChannelStatus::Error), "error");
     }
 }

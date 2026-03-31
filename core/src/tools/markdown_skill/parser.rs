@@ -2,8 +2,8 @@
 //!
 //! Parses SKILL.md files with YAML frontmatter into AlephSkillSpec.
 
-use anyhow::{Context, Result};
 use super::spec::AlephSkillSpec;
+use anyhow::{Context, Result};
 
 /// Parse a SKILL.md file into AlephSkillSpec
 pub fn parse_skill_file(content: &str) -> Result<AlephSkillSpec> {
@@ -13,8 +13,8 @@ pub fn parse_skill_file(content: &str) -> Result<AlephSkillSpec> {
     let (frontmatter, markdown) = extract_frontmatter(&content)?;
 
     // 2. Parse YAML frontmatter
-    let mut spec: AlephSkillSpec = serde_yaml::from_str(frontmatter)
-        .context("Failed to parse skill frontmatter")?;
+    let mut spec: AlephSkillSpec =
+        serde_yaml::from_str(frontmatter).context("Failed to parse skill frontmatter")?;
 
     // 3. Attach markdown content
     spec.markdown_content = markdown.to_string();
@@ -35,11 +35,13 @@ fn extract_frontmatter(content: &str) -> Result<(&str, &str)> {
     }
 
     // Find closing delimiter ("---" is ASCII, so byte offset 3 is always a char boundary)
-    let after_first = content.get(3..)
+    let after_first = content
+        .get(3..)
         .ok_or_else(|| anyhow::anyhow!("Frontmatter too short"))?;
 
     // Try "\n---\n" first, then "\n---" at end-of-string (no trailing newline)
-    let end_pos = after_first.find("\n---\n")
+    let end_pos = after_first
+        .find("\n---\n")
         .or_else(|| {
             let suffix = "\n---";
             if after_first.ends_with(suffix) {
@@ -50,7 +52,8 @@ fn extract_frontmatter(content: &str) -> Result<(&str, &str)> {
         })
         .ok_or_else(|| anyhow::anyhow!("Frontmatter must be closed with --- on a new line"))?;
 
-    let frontmatter = after_first.get(..end_pos)
+    let frontmatter = after_first
+        .get(..end_pos)
         .ok_or_else(|| anyhow::anyhow!("Invalid frontmatter boundary"))?
         .trim();
     // After "\n---\n" there are 5 bytes; after "\n---" at EOF there may be nothing
@@ -92,9 +95,7 @@ pub fn extract_markdown_section(content: &str, heading: &str) -> Option<String> 
         let after_heading = &content[start + search.len()..];
 
         // Find next ## heading or end of document
-        let end = after_heading
-            .find("\n## ")
-            .unwrap_or(after_heading.len());
+        let end = after_heading.find("\n## ").unwrap_or(after_heading.len());
 
         Some(after_heading[..end].trim().to_string())
     } else {
@@ -191,7 +192,10 @@ metadata:
 Content"#;
         let result = parse_skill_file(content);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("name cannot be empty"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("name cannot be empty"));
     }
 
     #[test]

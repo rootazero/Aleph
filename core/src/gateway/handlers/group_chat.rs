@@ -231,7 +231,10 @@ async fn handle_continue_with_targets(
         );
     }
 
-    match executor.execute_round(&mut session, &message, targets).await {
+    match executor
+        .execute_round(&mut session, &message, targets)
+        .await
+    {
         Ok(messages) => {
             let messages_json: Vec<Value> = messages.iter().map(message_to_json).collect();
             JsonRpcResponse::success(
@@ -446,8 +449,8 @@ pub async fn handle_history_placeholder(req: JsonRpcRequest) -> JsonRpcResponse 
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
     use crate::gateway::protocol::JsonRpcRequest;
+    use serde_json::json;
 
     #[test]
     fn test_group_chat_handlers_registered() {

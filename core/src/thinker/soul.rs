@@ -73,7 +73,9 @@ impl RelationshipMode {
     /// Get description for prompt injection
     pub fn description(&self) -> &str {
         match self {
-            Self::Peer => "We collaborate as equals, sharing ideas and working toward shared goals.",
+            Self::Peer => {
+                "We collaborate as equals, sharing ideas and working toward shared goals."
+            }
             Self::Mentor => "I guide and teach, helping you grow while solving problems together.",
             Self::Assistant => "I help you accomplish your goals efficiently and effectively.",
             Self::Expert => "I provide expert consultation and professional advice in my domains.",
@@ -239,8 +241,16 @@ impl SoulManifest {
         // Find the closing ---
         let after_first = trimmed.get(3..).unwrap_or_default();
         if let Some(end_pos) = after_first.find("\n---") {
-            let frontmatter = after_first.get(..end_pos).unwrap_or_default().trim().to_string();
-            let body = after_first.get(end_pos + 4..).unwrap_or_default().trim_start().to_string();
+            let frontmatter = after_first
+                .get(..end_pos)
+                .unwrap_or_default()
+                .trim()
+                .to_string();
+            let body = after_first
+                .get(end_pos + 4..)
+                .unwrap_or_default()
+                .trim_start()
+                .to_string();
             Ok((frontmatter, body))
         } else {
             Err(SoulLoadError::Parse(
@@ -344,7 +354,10 @@ impl SoulManifest {
             .lines()
             .filter_map(|line| {
                 let trimmed = line.trim();
-                if let Some(rest) = trimmed.strip_prefix("- ").or_else(|| trimmed.strip_prefix("* ")) {
+                if let Some(rest) = trimmed
+                    .strip_prefix("- ")
+                    .or_else(|| trimmed.strip_prefix("* "))
+                {
                     Some(rest.trim().to_string())
                 } else if !trimmed.is_empty() {
                     // Continuation of previous item or standalone text
@@ -651,7 +664,10 @@ mod tests {
         assert_eq!(deserialized.identity, soul.identity);
         assert_eq!(deserialized.voice.tone, soul.voice.tone);
         assert_eq!(deserialized.voice.verbosity, soul.voice.verbosity);
-        assert_eq!(deserialized.voice.formatting_style, soul.voice.formatting_style);
+        assert_eq!(
+            deserialized.voice.formatting_style,
+            soul.voice.formatting_style
+        );
         assert_eq!(deserialized.voice.language_notes, soul.voice.language_notes);
         assert_eq!(deserialized.directives, soul.directives);
         assert_eq!(deserialized.anti_patterns, soul.anti_patterns);

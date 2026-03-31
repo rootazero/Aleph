@@ -108,7 +108,9 @@ impl AuthProfileManager {
         let profiles = configs.profiles_for_provider(provider);
 
         if profiles.is_empty() {
-            return Err(ProfileManagerError::NoProfilesAvailable(provider.to_string()));
+            return Err(ProfileManagerError::NoProfilesAvailable(
+                provider.to_string(),
+            ));
         }
 
         // Load agent state for budget checking
@@ -116,7 +118,11 @@ impl AuthProfileManager {
 
         // Find first available profile
         let mut all_in_cooldown = true;
-        let mut best_cooldown_profile: Option<(&String, &crate::providers::profile_config::ProfileConfig, u64)> = None;
+        let mut best_cooldown_profile: Option<(
+            &String,
+            &crate::providers::profile_config::ProfileConfig,
+            u64,
+        )> = None;
 
         for (profile_id, config) in profiles {
             // Skip if disabled in agent state
@@ -128,7 +134,8 @@ impl AuthProfileManager {
             // Check budget
             if agent_state.exceeds_budget(profile_id) {
                 let usage = agent_state.get_usage(profile_id);
-                let budget = agent_state.get_override(profile_id)
+                let budget = agent_state
+                    .get_override(profile_id)
                     .and_then(|o| o.max_budget_usd)
                     .unwrap_or(0.0);
                 let used = usage.map(|u| u.total_cost_usd).unwrap_or(0.0);
@@ -169,7 +176,9 @@ impl AuthProfileManager {
                 }
             } else {
                 // Track profile with shortest cooldown remaining
-                let remaining = status.and_then(|s| s.cooldown_remaining_ms()).unwrap_or(u64::MAX);
+                let remaining = status
+                    .and_then(|s| s.cooldown_remaining_ms())
+                    .unwrap_or(u64::MAX);
                 if best_cooldown_profile.is_none()
                     || remaining < best_cooldown_profile.as_ref().unwrap().2
                 {
@@ -193,10 +202,14 @@ impl AuthProfileManager {
                     return Ok(effective);
                 }
             }
-            return Err(ProfileManagerError::AllProfilesInCooldown(provider.to_string()));
+            return Err(ProfileManagerError::AllProfilesInCooldown(
+                provider.to_string(),
+            ));
         }
 
-        Err(ProfileManagerError::NoProfilesAvailable(provider.to_string()))
+        Err(ProfileManagerError::NoProfilesAvailable(
+            provider.to_string(),
+        ))
     }
 
     /// Mark a profile as failed (triggers cooldown)
@@ -206,9 +219,7 @@ impl AuthProfileManager {
         reason: AuthProfileFailureReason,
     ) -> ProfileManagerResult<()> {
         let mut status_map = self.status.write().unwrap_or_else(|e| e.into_inner());
-        let status = status_map
-            .entry(profile_id.to_string())
-            .or_default();
+        let status = status_map.entry(profile_id.to_string()).or_default();
 
         status.failure_count += 1;
         status.last_failure_reason = Some(reason);
@@ -233,9 +244,7 @@ impl AuthProfileManager {
     /// Mark a profile as successful (resets failure count)
     pub fn mark_success(&self, profile_id: &str) -> ProfileManagerResult<()> {
         let mut status_map = self.status.write().unwrap_or_else(|e| e.into_inner());
-        let status = status_map
-            .entry(profile_id.to_string())
-            .or_default();
+        let status = status_map.entry(profile_id.to_string()).or_default();
 
         status.failure_count = 0;
         status.is_rate_limited = false;
@@ -259,12 +268,10 @@ impl AuthProfileManager {
         let mut agent_states = self.agent_states.write().unwrap_or_else(|e| e.into_inner());
 
         // Load or get cached state
-        let state = agent_states
-            .entry(agent_id.to_string())
-            .or_insert_with(|| {
-                let path = self.agent_state_path(agent_id);
-                AgentState::load(&path).unwrap_or_default()
-            });
+        let state = agent_states.entry(agent_id.to_string()).or_insert_with(|| {
+            let path = self.agent_state_path(agent_id);
+            AgentState::load(&path).unwrap_or_default()
+        });
 
         // Update usage
         let usage = state.get_or_create_usage(profile_id);
@@ -330,7 +337,11 @@ impl AuthProfileManager {
 
     /// Get profile count
     pub fn profile_count(&self) -> usize {
-        self.configs.read().unwrap_or_else(|e| e.into_inner()).profiles.len()
+        self.configs
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .profiles
+            .len()
     }
 
     /// Get agent state path
@@ -374,16 +385,12 @@ impl AuthProfileManager {
     ) -> ProfileManagerResult<()> {
         let mut agent_states = self.agent_states.write().unwrap_or_else(|e| e.into_inner());
 
-        let state = agent_states
-            .entry(agent_id.to_string())
-            .or_insert_with(|| {
-                let path = self.agent_state_path(agent_id);
-                AgentState::load(&path).unwrap_or_default()
-            });
+        let state = agent_states.entry(agent_id.to_string()).or_insert_with(|| {
+            let path = self.agent_state_path(agent_id);
+            AgentState::load(&path).unwrap_or_default()
+        });
 
-        let override_ = state.overrides
-            .entry(profile_id.to_string())
-            .or_default();
+        let override_ = state.overrides.entry(profile_id.to_string()).or_default();
         override_.max_budget_usd = max_budget_usd;
 
         let path = self.agent_state_path(agent_id);
@@ -408,16 +415,12 @@ impl AuthProfileManager {
     ) -> ProfileManagerResult<()> {
         let mut agent_states = self.agent_states.write().unwrap_or_else(|e| e.into_inner());
 
-        let state = agent_states
-            .entry(agent_id.to_string())
-            .or_insert_with(|| {
-                let path = self.agent_state_path(agent_id);
-                AgentState::load(&path).unwrap_or_default()
-            });
+        let state = agent_states.entry(agent_id.to_string()).or_insert_with(|| {
+            let path = self.agent_state_path(agent_id);
+            AgentState::load(&path).unwrap_or_default()
+        });
 
-        let override_ = state.overrides
-            .entry(profile_id.to_string())
-            .or_default();
+        let override_ = state.overrides.entry(profile_id.to_string()).or_default();
         override_.disabled = disabled;
 
         let path = self.agent_state_path(agent_id);

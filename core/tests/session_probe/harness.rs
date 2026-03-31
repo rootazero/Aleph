@@ -13,22 +13,20 @@ use chrono::Utc;
 use tempfile::TempDir;
 use tokio::sync::mpsc;
 
-use alephcore::gateway::{
-    AgentInstance, AgentInstanceConfig, AgentRegistry,
-    Channel, ChannelId, ChannelRegistry, ConversationId, DmPolicy,
-    GroupPolicy, InboundMessage, InboundMessageRouter, MessageId,
-    RouterChannelConfig, RoutingConfig, RunStatus, SqlitePairingStore, UserId,
-    AgentEnvStore, AgentEnvStoreConfig,
-    SessionManager, SessionManagerConfig,
-};
 use alephcore::gateway::channel::{
-    ChannelCapabilities, ChannelInfo, ChannelResult, ChannelState,
-    ChannelStatus, OutboundMessage, SendResult,
+    ChannelCapabilities, ChannelInfo, ChannelResult, ChannelState, ChannelStatus, OutboundMessage,
+    SendResult,
 };
-use alephcore::gateway::execution_engine::{ExecutionError, RunState};
 use alephcore::gateway::event_emitter::EventEmitter;
-use alephcore::gateway::RunRequest;
+use alephcore::gateway::execution_engine::{ExecutionError, RunState};
 use alephcore::gateway::router::SessionKey;
+use alephcore::gateway::RunRequest;
+use alephcore::gateway::{
+    AgentEnvStore, AgentEnvStoreConfig, AgentInstance, AgentInstanceConfig, AgentRegistry, Channel,
+    ChannelId, ChannelRegistry, ConversationId, DmPolicy, GroupPolicy, InboundMessage,
+    InboundMessageRouter, MessageId, RouterChannelConfig, RoutingConfig, RunStatus, SessionManager,
+    SessionManagerConfig, SqlitePairingStore, UserId,
+};
 
 use super::mock_llm::MockLlmProvider;
 
@@ -199,9 +197,8 @@ impl SessionProbeHarness {
             auto_reset_hour: None,
             session_expiry_secs: 0,
         };
-        let session_manager = Arc::new(
-            SessionManager::new(sm_config).expect("Failed to create SessionManager"),
-        );
+        let session_manager =
+            Arc::new(SessionManager::new(sm_config).expect("Failed to create SessionManager"));
 
         let channel_registry = Arc::new(ChannelRegistry::new());
         let store = Arc::new(SqlitePairingStore::in_memory().unwrap());
@@ -216,9 +213,8 @@ impl SessionProbeHarness {
             default_profile: "default".to_string(),
             archive_after_days: 0,
         };
-        let workspace_manager = Arc::new(
-            AgentEnvStore::new(ws_config).expect("Failed to create AgentEnvStore"),
-        );
+        let workspace_manager =
+            Arc::new(AgentEnvStore::new(ws_config).expect("Failed to create AgentEnvStore"));
 
         let mut router = InboundMessageRouter::with_execution(
             channel_registry.clone(),

@@ -2,10 +2,10 @@
 
 use super::*;
 use crate::config::{Config, ProviderConfig};
-use crate::sync_primitives::Arc;
-use tokio::sync::RwLock;
-use serde_json::json;
 use crate::gateway::protocol::JsonRpcRequest;
+use crate::sync_primitives::Arc;
+use serde_json::json;
+use tokio::sync::RwLock;
 
 #[test]
 fn test_update_params() {

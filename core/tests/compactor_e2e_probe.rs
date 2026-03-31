@@ -11,8 +11,8 @@
 //! Run manually: `cargo test -p alephcore --test compactor_e2e_probe -- --ignored`
 
 mod compactor_e2e_probe {
+    pub mod compression_depth;
     pub mod harness;
     pub mod multi_turn;
-    pub mod compression_depth;
     pub mod session_recall;
 }

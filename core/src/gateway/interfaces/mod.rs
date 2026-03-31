@@ -26,37 +26,40 @@ pub mod cli;
 #[cfg(target_os = "macos")]
 pub mod imessage;
 
-pub mod telegram;
 pub mod discord;
-pub mod whatsapp;
-pub mod slack;
 pub mod email;
-pub mod matrix;
-pub mod signal;
-pub mod mattermost;
-pub mod irc;
-pub mod webhook;
-pub mod xmpp;
-pub mod nostr;
 pub mod feishu;
+pub mod irc;
+pub mod matrix;
+pub mod mattermost;
 pub mod msteams;
+pub mod nostr;
+pub mod signal;
+pub mod slack;
+pub mod telegram;
+pub mod webhook;
+pub mod whatsapp;
+pub mod xmpp;
 
 pub use cli::{CliChannel, CliChannelConfig, CliChannelFactory};
 
 #[cfg(target_os = "macos")]
-pub use imessage::{IMessageChannel, IMessageChannelFactory, IMessageConfig, IMessageTarget, MessageSender, MessagesDb};
+pub use imessage::{
+    IMessageChannel, IMessageChannelFactory, IMessageConfig, IMessageTarget, MessageSender,
+    MessagesDb,
+};
 
-pub use telegram::{TelegramChannel, TelegramChannelFactory, TelegramConfig};
 pub use discord::{DiscordChannel, DiscordChannelFactory, DiscordConfig};
-pub use whatsapp::{WhatsAppChannel, WhatsAppChannelFactory, WhatsAppConfig};
-pub use slack::{SlackChannel, SlackChannelFactory, SlackConfig};
 pub use email::{EmailChannel, EmailChannelFactory, EmailConfig};
-pub use matrix::{MatrixChannel, MatrixChannelFactory, MatrixConfig};
-pub use signal::{SignalChannel, SignalChannelFactory, SignalConfig};
-pub use mattermost::{MattermostChannel, MattermostChannelFactory, MattermostConfig};
-pub use irc::{IrcChannel, IrcChannelFactory, IrcConfig};
-pub use webhook::{WebhookChannel, WebhookChannelFactory, WebhookChannelConfig};
-pub use xmpp::{XmppChannel, XmppChannelFactory, XmppConfig};
-pub use nostr::{NostrChannel, NostrChannelFactory, NostrConfig};
 pub use feishu::{FeishuChannel, FeishuConfig};
+pub use irc::{IrcChannel, IrcChannelFactory, IrcConfig};
+pub use matrix::{MatrixChannel, MatrixChannelFactory, MatrixConfig};
+pub use mattermost::{MattermostChannel, MattermostChannelFactory, MattermostConfig};
 pub use msteams::{MsTeamsChannel, MsTeamsConfig};
+pub use nostr::{NostrChannel, NostrChannelFactory, NostrConfig};
+pub use signal::{SignalChannel, SignalChannelFactory, SignalConfig};
+pub use slack::{SlackChannel, SlackChannelFactory, SlackConfig};
+pub use telegram::{TelegramChannel, TelegramChannelFactory, TelegramConfig};
+pub use webhook::{WebhookChannel, WebhookChannelConfig, WebhookChannelFactory};
+pub use whatsapp::{WhatsAppChannel, WhatsAppChannelFactory, WhatsAppConfig};
+pub use xmpp::{XmppChannel, XmppChannelFactory, XmppConfig};

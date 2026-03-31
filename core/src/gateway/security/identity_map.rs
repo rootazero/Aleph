@@ -13,7 +13,7 @@ pub enum UserId {
 /// External platform identity
 #[derive(Debug, Clone)]
 pub struct PlatformIdentity {
-    pub platform: String,      // "telegram", "whatsapp"
+    pub platform: String,         // "telegram", "whatsapp"
     pub platform_user_id: String, // "+1234567890", "user123"
 }
 
@@ -47,7 +47,8 @@ impl IdentityMap {
     /// Add or update mapping
     pub fn add_mapping(&self, platform: &str, platform_user_id: &str, user_id: UserId) {
         let key = Self::make_key(platform, platform_user_id);
-        self.external_to_internal.insert(key.clone(), user_id.clone());
+        self.external_to_internal
+            .insert(key.clone(), user_id.clone());
 
         // Update reverse mapping
         self.internal_to_external

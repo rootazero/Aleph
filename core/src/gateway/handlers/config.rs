@@ -2,18 +2,18 @@
 //!
 //! RPC handlers for configuration operations: reload, get, validate, schema.
 
+use crate::sync_primitives::Arc;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, info};
 
 use crate::config::patcher::{ConfigPatcher, PatchRequest};
 use crate::config::{build_ui_hints, generate_config_schema_json, Config, ConfigUiHints};
 use crate::gateway::event_bus::{ConfigChangedEvent, GatewayEvent, GatewayEventBus};
+use crate::gateway::handlers::parse_params;
 use crate::gateway::hot_reload::ConfigWatcher;
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
-use crate::gateway::handlers::parse_params;
 
 /// Handle config.reload RPC request
 ///
@@ -142,14 +142,12 @@ pub async fn handle_reload_with_subsystems(
 /// Handle config.get RPC request
 ///
 /// Returns the current configuration.
-pub async fn handle_get(
-    request: JsonRpcRequest,
-    watcher: Arc<ConfigWatcher>,
-) -> JsonRpcResponse {
+pub async fn handle_get(request: JsonRpcRequest, watcher: Arc<ConfigWatcher>) -> JsonRpcResponse {
     debug!("Handling config.get");
 
     // Check for specific section request
-    let section = request.params
+    let section = request
+        .params
         .as_ref()
         .and_then(|p| p.get("section"))
         .and_then(|v| v.as_str());
@@ -243,42 +241,35 @@ pub async fn handle_validate(
     debug!("Handling config.validate");
 
     match watcher.validate() {
-        Ok(config) => {
-            JsonRpcResponse::success(
-                request.id,
-                json!({
-                    "valid": true,
-                    "config_path": watcher.config_path().display().to_string(),
-                    "summary": {
-                        "agents": config.agents.keys().collect::<Vec<_>>(),
-                        "bindings_count": config.bindings.len(),
-                        "gateway_port": config.gateway.port,
-                    },
-                    "message": "Configuration is valid",
-                }),
-            )
-        }
-        Err(e) => {
-            JsonRpcResponse::success(
-                request.id,
-                json!({
-                    "valid": false,
-                    "config_path": watcher.config_path().display().to_string(),
-                    "error": e.to_string(),
-                    "message": "Configuration validation failed",
-                }),
-            )
-        }
+        Ok(config) => JsonRpcResponse::success(
+            request.id,
+            json!({
+                "valid": true,
+                "config_path": watcher.config_path().display().to_string(),
+                "summary": {
+                    "agents": config.agents.keys().collect::<Vec<_>>(),
+                    "bindings_count": config.bindings.len(),
+                    "gateway_port": config.gateway.port,
+                },
+                "message": "Configuration is valid",
+            }),
+        ),
+        Err(e) => JsonRpcResponse::success(
+            request.id,
+            json!({
+                "valid": false,
+                "config_path": watcher.config_path().display().to_string(),
+                "error": e.to_string(),
+                "message": "Configuration validation failed",
+            }),
+        ),
     }
 }
 
 /// Handle config.path RPC request
 ///
 /// Returns the path to the configuration file being watched.
-pub async fn handle_path(
-    request: JsonRpcRequest,
-    watcher: Arc<ConfigWatcher>,
-) -> JsonRpcResponse {
+pub async fn handle_path(request: JsonRpcRequest, watcher: Arc<ConfigWatcher>) -> JsonRpcResponse {
     debug!("Handling config.path");
 
     JsonRpcResponse::success(
@@ -432,13 +423,17 @@ pub async fn handle_get_full_config(
     };
 
     // If a specific section is requested, return just that section
-    let section = req.params
+    let section = req
+        .params
         .as_ref()
         .and_then(|p| p.get("section"))
         .and_then(|v| v.as_str());
 
     if let Some(section) = section {
-        let section_value = config_json.get(section).cloned().unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+        let section_value = config_json
+            .get(section)
+            .cloned()
+            .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
         JsonRpcResponse::success(req.id, section_value)
     } else {
         JsonRpcResponse::success(
@@ -507,11 +502,7 @@ pub async fn handle_patch_config(
     if patch_request.patch == serde_json::Value::Null
         || patch_request.patch == serde_json::Value::Object(Default::default())
     {
-        return JsonRpcResponse::error(
-            req.id,
-            INVALID_PARAMS,
-            "Patch cannot be empty".to_string(),
-        );
+        return JsonRpcResponse::error(req.id, INVALID_PARAMS, "Patch cannot be empty".to_string());
     }
 
     let path = patch_request.path.clone();
@@ -663,10 +654,10 @@ pub async fn handle_update_tool_permissions(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
-    use tempfile::NamedTempFile;
     use crate::gateway::hot_reload::ConfigWatcherConfig;
+    use std::io::Write;
     use std::time::Duration;
+    use tempfile::NamedTempFile;
 
     async fn create_test_watcher() -> (Arc<ConfigWatcher>, NamedTempFile) {
         let mut temp_file = NamedTempFile::new().unwrap();

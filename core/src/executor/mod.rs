@@ -34,17 +34,17 @@ mod builtin_registry;
 mod cache_config;
 #[allow(dead_code)]
 mod cache_store;
+mod exec_security_gate;
 #[allow(dead_code)]
 mod single_step;
 #[allow(dead_code)]
 mod types;
-mod exec_security_gate;
 
 pub use builtin_registry::{
-    create_tool_boxed, get_builtin_tool_names, BuiltinToolConfig,
-    BuiltinToolRegistry, BUILTIN_TOOL_DEFINITIONS, TOOL_CATEGORIES,
+    create_tool_boxed, get_builtin_tool_names, BuiltinToolConfig, BuiltinToolRegistry,
+    BUILTIN_TOOL_DEFINITIONS, TOOL_CATEGORIES,
 };
-pub use single_step::ToolRegistry;
-pub use types::{ExecutionContext, ExecutionResult, ToolCallRecord};
 pub use exec_security_gate::ExecSecurityGate;
 pub(crate) use exec_security_gate::PreExecDecision;
+pub use single_step::ToolRegistry;
+pub use types::{ExecutionContext, ExecutionResult, ToolCallRecord};

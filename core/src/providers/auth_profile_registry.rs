@@ -40,16 +40,16 @@
 //! registry.mark_failure("mock:key1", AuthProfileFailureReason::RateLimit);
 //! ```
 
-use std::collections::HashMap;
 use crate::sync_primitives::{Arc, RwLock};
+use std::collections::HashMap;
 use tracing::{debug, info, warn};
 
 use crate::config::ProviderConfig;
 use crate::error::AlephError;
 use crate::providers::{
     auth_profiles::{
-        AuthProfileCredential, AuthProfileFailureReason, AuthProfileStore,
-        CooldownConfig, mark_profile_failure, mark_profile_used, resolve_profile_order,
+        mark_profile_failure, mark_profile_used, resolve_profile_order, AuthProfileCredential,
+        AuthProfileFailureReason, AuthProfileStore, CooldownConfig,
     },
     create_provider, AiProvider,
 };
@@ -219,7 +219,10 @@ impl AuthProfileProviderRegistry {
 
     /// Get the currently active profile ID
     pub fn active_profile_id(&self) -> Option<String> {
-        self.active_profile.read().unwrap_or_else(|e| e.into_inner()).clone()
+        self.active_profile
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     /// Get all available profile IDs
@@ -230,7 +233,10 @@ impl AuthProfileProviderRegistry {
 
     /// Get profile count
     pub fn profile_count(&self) -> usize {
-        self.providers.read().unwrap_or_else(|e| e.into_inner()).len()
+        self.providers
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .len()
     }
 
     /// Check all OAuth credentials and refresh any that are near expiry.
@@ -259,7 +265,9 @@ impl AuthProfileProviderRegistry {
 
         let profiles_to_check: Vec<(String, super::OAuthCredential)> = {
             let store = self.store.read().unwrap_or_else(|e| e.into_inner());
-            store.profiles.iter()
+            store
+                .profiles
+                .iter()
                 .filter_map(|(id, cred)| {
                     if let AuthProfileCredential::OAuth(oauth) = cred {
                         if oauth_refresh::needs_refresh(oauth) {
@@ -276,10 +284,7 @@ impl AuthProfileProviderRegistry {
                 Ok(refreshed) => {
                     info!(profile_id = %profile_id, "OAuth token refreshed successfully");
                     let mut store = self.store.write().unwrap_or_else(|e| e.into_inner());
-                    store.upsert_profile(
-                        profile_id,
-                        AuthProfileCredential::OAuth(refreshed),
-                    );
+                    store.upsert_profile(profile_id, AuthProfileCredential::OAuth(refreshed));
                     drop(store);
                     self.refresh_providers();
                 }
@@ -314,7 +319,10 @@ impl ProviderRegistry for AuthProfileProviderRegistry {
             let providers = self.providers.read().unwrap_or_else(|e| e.into_inner());
             if let Some(provider) = providers.get(id) {
                 // Update active profile
-                *self.active_profile.write().unwrap_or_else(|e| e.into_inner()) = Some(id.clone());
+                *self
+                    .active_profile
+                    .write()
+                    .unwrap_or_else(|e| e.into_inner()) = Some(id.clone());
                 debug!(profile_id = %id, "Selected provider from auth profile");
                 let result: Arc<dyn AiProvider> = provider.clone();
                 return result;
@@ -323,13 +331,19 @@ impl ProviderRegistry for AuthProfileProviderRegistry {
 
         // Fallback: return first available provider (sorted for deterministic selection)
         let providers = self.providers.read().unwrap_or_else(|e| e.into_inner());
-        let first = providers.keys().min().and_then(|k| providers.get_key_value(k));
+        let first = providers
+            .keys()
+            .min()
+            .and_then(|k| providers.get_key_value(k));
         if let Some((id, provider)) = first {
             warn!(
                 profile_id = %id,
                 "Falling back to first available provider (no healthy profiles)"
             );
-            *self.active_profile.write().unwrap_or_else(|e| e.into_inner()) = Some(id.clone());
+            *self
+                .active_profile
+                .write()
+                .unwrap_or_else(|e| e.into_inner()) = Some(id.clone());
             let result: Arc<dyn AiProvider> = provider.clone();
             return result;
         }
@@ -347,10 +361,17 @@ impl AiProvider for NoProfileProvider {
     fn process(
         &self,
         _payload: crate::providers::adapter::RequestPayload<'_>,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = crate::error::Result<crate::providers::adapter::ProviderResponse>> + Send + '_>> {
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = crate::error::Result<crate::providers::adapter::ProviderResponse>,
+                > + Send
+                + '_,
+        >,
+    > {
         Box::pin(async {
             Err(AlephError::provider(
-                "No auth profiles configured. Please add an API key to ~/.aleph/auth-profiles.json"
+                "No auth profiles configured. Please add an API key to ~/.aleph/auth-profiles.json",
             ))
         })
     }

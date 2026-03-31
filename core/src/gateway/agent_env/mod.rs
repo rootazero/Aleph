@@ -29,12 +29,12 @@
 //! let agent_id = store.get_active_agent("telegram")?;
 //! ```
 
+use crate::sync_primitives::{Arc, Mutex};
 use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use crate::sync_primitives::{Arc, Mutex};
 use thiserror::Error;
 use tracing::{debug, info};
 
@@ -129,9 +129,7 @@ impl AgentEnvContext {
     pub fn to_search_filter(&self) -> SearchFilter {
         SearchFilter::new()
             .with_namespace(self.namespace.clone())
-            .with_agent_filter(AgentEnvFilter::Single(
-                self.agent_id.clone(),
-            ))
+            .with_agent_filter(AgentEnvFilter::Single(self.agent_id.clone()))
             .with_valid_only()
     }
 
@@ -297,7 +295,10 @@ impl CacheState {
     pub fn is_active(&self) -> bool {
         match self {
             CacheState::None => false,
-            CacheState::Ephemeral { cache_breakpoint_index, .. } => cache_breakpoint_index.is_some(),
+            CacheState::Ephemeral {
+                cache_breakpoint_index,
+                ..
+            } => cache_breakpoint_index.is_some(),
             CacheState::Persistent { expires_at, .. } => *expires_at > Utc::now(),
             CacheState::Transparent => true,
         }
@@ -348,10 +349,7 @@ impl ActiveAgentEnv {
     /// Resolves the profile binding and builds a memory filter.
     ///
     /// Falls back to a default global agent environment if not found.
-    pub async fn from_manager(
-        manager: &AgentEnvStore,
-        agent_id: &str,
-    ) -> Self {
+    pub async fn from_manager(manager: &AgentEnvStore, agent_id: &str) -> Self {
         let env = manager
             .get(agent_id)
             .await
@@ -362,18 +360,15 @@ impl ActiveAgentEnv {
                 AgentEnv::new("global", "default")
             });
 
-        let profile = manager
-            .get_profile(&env.profile)
-            .unwrap_or_else(|| {
-                debug!(
-                    "Profile '{}' not found for agent '{}', using default",
-                    env.profile, env.id
-                );
-                ProfileConfig::default()
-            });
+        let profile = manager.get_profile(&env.profile).unwrap_or_else(|| {
+            debug!(
+                "Profile '{}' not found for agent '{}', using default",
+                env.profile, env.id
+            );
+            ProfileConfig::default()
+        });
 
-        let memory_filter =
-            AgentEnvFilter::Single(env.id.clone());
+        let memory_filter = AgentEnvFilter::Single(env.id.clone());
 
         let agent_env_path = Self::resolve_agent_env_path(&env.id);
 
@@ -398,18 +393,15 @@ impl ActiveAgentEnv {
             .flatten()
             .unwrap_or_else(|| AgentEnv::new(agent_id, &manager.config.default_profile));
 
-        let profile = manager
-            .get_profile(&env.profile)
-            .unwrap_or_else(|| {
-                debug!(
-                    "Profile '{}' not found for agent '{}', using default",
-                    env.profile, env.id
-                );
-                ProfileConfig::default()
-            });
+        let profile = manager.get_profile(&env.profile).unwrap_or_else(|| {
+            debug!(
+                "Profile '{}' not found for agent '{}', using default",
+                env.profile, env.id
+            );
+            ProfileConfig::default()
+        });
 
-        let memory_filter =
-            AgentEnvFilter::Single(env.id.clone());
+        let memory_filter = AgentEnvFilter::Single(env.id.clone());
 
         let agent_env_path = Self::resolve_agent_env_path(&env.id);
 
@@ -429,9 +421,7 @@ impl ActiveAgentEnv {
         Self {
             agent_id: "global".to_string(),
             profile: ProfileConfig::default(),
-            memory_filter: AgentEnvFilter::Single(
-                "global".to_string(),
-            ),
+            memory_filter: AgentEnvFilter::Single("global".to_string()),
             agent_env_path: dirs::home_dir().map(|h| h.join(".aleph")),
         }
     }
@@ -489,9 +479,8 @@ impl AgentEnvStore {
             })?;
         }
 
-        let conn = Connection::open(&config.db_path).map_err(|e| {
-            AgentEnvError::Database(format!("Failed to open database: {}", e))
-        })?;
+        let conn = Connection::open(&config.db_path)
+            .map_err(|e| AgentEnvError::Database(format!("Failed to open database: {}", e)))?;
 
         Self::init_schema(&conn)?;
 
@@ -558,7 +547,7 @@ impl AgentEnvStore {
             "ALTER TABLE agent_envs ADD COLUMN allowed_tools TEXT",
         ];
         for sql in &migrations {
-            let _ = conn.execute(sql, []);  // ignore "duplicate column" errors
+            let _ = conn.execute(sql, []); // ignore "duplicate column" errors
         }
 
         // Ensure global agent environment exists
@@ -680,15 +669,21 @@ mod tests {
 
         // Load default profile
         let mut profiles = HashMap::new();
-        profiles.insert("coding".to_string(), ProfileConfig {
-            description: Some("Coding profile".to_string()),
-            model: Some("claude-sonnet".to_string()),
-            tools: vec!["git_*".to_string()],
-            ..Default::default()
-        });
+        profiles.insert(
+            "coding".to_string(),
+            ProfileConfig {
+                description: Some("Coding profile".to_string()),
+                model: Some("claude-sonnet".to_string()),
+                tools: vec!["git_*".to_string()],
+                ..Default::default()
+            },
+        );
         manager.load_profiles(profiles);
 
-        let ws = manager.create("project-x", "coding", Some("My project")).await.unwrap();
+        let ws = manager
+            .create("project-x", "coding", Some("My project"))
+            .await
+            .unwrap();
 
         assert_eq!(ws.id, "project-x");
         assert_eq!(ws.profile, "coding");
@@ -760,9 +755,10 @@ mod tests {
         let config = test_config(temp.path().join("test.db"));
         let manager = AgentEnvStore::new(config).unwrap();
 
-        manager.load_profiles(HashMap::from([
-            ("coding".to_string(), ProfileConfig::default()),
-        ]));
+        manager.load_profiles(HashMap::from([(
+            "coding".to_string(),
+            ProfileConfig::default(),
+        )]));
 
         manager.create("test-ws", "coding", None).await.unwrap();
 
@@ -773,7 +769,10 @@ mod tests {
             tokens_cached: 50000,
         };
 
-        manager.update_cache_state("test-ws", &cache_state).await.unwrap();
+        manager
+            .update_cache_state("test-ws", &cache_state)
+            .await
+            .unwrap();
 
         let ws = manager.get("test-ws").await.unwrap().unwrap();
         assert!(matches!(ws.cache_state, CacheState::Persistent { .. }));
@@ -805,12 +804,16 @@ mod tests {
             temperature: Some(0.2),
             ..Default::default()
         };
-        manager.load_profiles(HashMap::from([
-            ("coding".to_string(), coding_profile.clone()),
-        ]));
+        manager.load_profiles(HashMap::from([(
+            "coding".to_string(),
+            coding_profile.clone(),
+        )]));
 
         // Create an agent environment bound to the "coding" profile (agent_id = agent_id in 1:1 model)
-        manager.create("project-x", "coding", Some("Test project")).await.unwrap();
+        manager
+            .create("project-x", "coding", Some("Test project"))
+            .await
+            .unwrap();
 
         // Resolve active agent environment by agent_id — should get "project-x" with "coding" profile
         let active = ActiveAgentEnv::from_manager(&manager, "project-x").await;

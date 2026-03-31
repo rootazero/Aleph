@@ -184,7 +184,10 @@ async fn test_close_session_with_topic() {
     manager.get_or_create(&key).await.unwrap();
     manager.add_message(&key, "user", "Hello").await.unwrap();
 
-    manager.close_session(&key, Some("测试对话".to_string())).await.unwrap();
+    manager
+        .close_session(&key, Some("测试对话".to_string()))
+        .await
+        .unwrap();
 
     // Verify topic can be retrieved
     let topic = manager.get_session_topic(&key).await.unwrap();

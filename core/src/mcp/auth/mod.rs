@@ -38,7 +38,9 @@ mod provider;
 mod refresh;
 mod storage;
 
-pub use callback::{CallbackResult, CallbackServer, DEFAULT_CALLBACK_PORT, DEFAULT_CALLBACK_TIMEOUT};
+pub use callback::{
+    CallbackResult, CallbackServer, DEFAULT_CALLBACK_PORT, DEFAULT_CALLBACK_TIMEOUT,
+};
 pub use provider::{AuthorizationRequest, OAuthProvider, OAuthServerMetadata};
 pub use refresh::{TokenRefreshConfig, TokenRefreshManager};
 pub use storage::{ClientInfo, OAuthEntry, OAuthStorage, OAuthTokens};

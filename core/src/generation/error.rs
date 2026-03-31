@@ -852,10 +852,7 @@ mod tests {
         let gen_err = GenerationError::authentication("Invalid key", "openai");
         let aleph_err: AlephError = gen_err.into();
 
-        assert!(matches!(
-            aleph_err,
-            AlephError::AuthenticationError { .. }
-        ));
+        assert!(matches!(aleph_err, AlephError::AuthenticationError { .. }));
     }
 
     #[test]

@@ -110,7 +110,8 @@ impl GroupChatOrchestrator {
             source_session_key.clone(),
         );
         let handle = Arc::new(tokio::sync::Mutex::new(session));
-        self.sessions.insert(session_id.clone(), Arc::clone(&handle));
+        self.sessions
+            .insert(session_id.clone(), Arc::clone(&handle));
 
         // 6. Persist to database if available
         if let Some(db) = &self.db {
@@ -298,12 +299,7 @@ mod tests {
             PersonaSource::Preset("arch".into()),
             PersonaSource::Preset("nonexistent".into()),
         ];
-        let result = orch.create_session(
-            sources,
-            None,
-            "cli".into(),
-            "cli:1".into(),
-        );
+        let result = orch.create_session(sources, None, "cli".into(), "cli:1".into());
 
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -326,12 +322,7 @@ mod tests {
             PersonaSource::Preset("arch".into()),
             PersonaSource::Preset("pm".into()),
         ];
-        let result = orch.create_session(
-            sources,
-            None,
-            "cli".into(),
-            "cli:1".into(),
-        );
+        let result = orch.create_session(sources, None, "cli".into(), "cli:1".into());
 
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -346,16 +337,21 @@ mod tests {
     async fn test_create_session_invalid_inline_persona() {
         let mut orch = GroupChatOrchestrator::new(test_config(), &test_personas());
 
-        let sources = vec![PersonaSource::Inline(crate::group_chat::protocol::Persona {
-            id: "".into(), // empty id -> invalid
-            name: "Bad".into(),
-            system_prompt: "prompt".into(),
-            provider: None,
-            model: None,
-            thinking_level: None,
-        })];
+        let sources = vec![PersonaSource::Inline(
+            crate::group_chat::protocol::Persona {
+                id: "".into(), // empty id -> invalid
+                name: "Bad".into(),
+                system_prompt: "prompt".into(),
+                provider: None,
+                model: None,
+                thinking_level: None,
+            },
+        )];
         let result = orch.create_session(sources, None, "cli".into(), "cli:1".into());
-        assert!(matches!(result.unwrap_err(), GroupChatError::InvalidPersona(_)));
+        assert!(matches!(
+            result.unwrap_err(),
+            GroupChatError::InvalidPersona(_)
+        ));
     }
 
     #[tokio::test]
@@ -371,7 +367,11 @@ mod tests {
 
         // End session via orchestrator — removes from map
         let handle = orch.end_session(&session_id).expect("session should exist");
-        assert_eq!(orch.all_sessions().len(), 0, "session should be removed from map");
+        assert_eq!(
+            orch.all_sessions().len(),
+            0,
+            "session should be removed from map"
+        );
 
         let session = handle.lock().await;
         // Note: end_session removes from map but doesn't call session.end() —
@@ -394,12 +394,22 @@ mod tests {
         // Create two sessions
         let sources_a = vec![PersonaSource::Preset("arch".into())];
         let (id_a, _) = orch
-            .create_session(sources_a, Some("Session A".into()), "cli".into(), "cli:a".into())
+            .create_session(
+                sources_a,
+                Some("Session A".into()),
+                "cli".into(),
+                "cli:a".into(),
+            )
             .unwrap();
 
         let sources_b = vec![PersonaSource::Preset("pm".into())];
         let (_id_b, _) = orch
-            .create_session(sources_b, Some("Session B".into()), "cli".into(), "cli:b".into())
+            .create_session(
+                sources_b,
+                Some("Session B".into()),
+                "cli".into(),
+                "cli:b".into(),
+            )
             .unwrap();
 
         assert_eq!(orch.all_sessions().len(), 2);

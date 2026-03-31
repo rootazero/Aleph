@@ -1,8 +1,6 @@
-use crate::daemon::{
-    create_service_manager, DaemonConfig, DaemonEventBus, Result,
-};
-use clap::{Parser, Subcommand};
+use crate::daemon::{create_service_manager, DaemonConfig, DaemonEventBus, Result};
 use crate::sync_primitives::Arc;
+use clap::{Parser, Subcommand};
 use tracing::{error, info};
 
 #[derive(Debug, Parser)]
@@ -107,9 +105,9 @@ impl DaemonCli {
     }
 
     async fn run(&self) -> Result<()> {
+        use crate::daemon::dispatcher::{Dispatcher, DispatcherConfig};
         #[cfg(unix)]
         use crate::daemon::ipc::IpcServer;
-        use crate::daemon::dispatcher::{Dispatcher, DispatcherConfig};
         use crate::daemon::worldmodel::{WorldModel, WorldModelConfig};
 
         info!("Starting Aleph daemon with WorldModel and Dispatcher...");

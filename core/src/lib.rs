@@ -36,10 +36,11 @@
 
 pub mod agent_loop;
 pub mod agents;
-pub(crate) mod arena;
 pub mod approval;
+pub(crate) mod arena;
 pub mod browser;
 pub mod builtin_tools;
+pub mod bundled;
 pub mod capability;
 pub mod clarification;
 mod clipboard;
@@ -65,8 +66,8 @@ mod init_unified;
 pub mod intent;
 pub mod logging;
 pub mod markdown;
-pub mod media;
 pub mod mcp;
+pub mod media;
 pub mod memory;
 pub mod metrics;
 pub mod payload;
@@ -78,7 +79,6 @@ pub mod routing;
 pub mod runtimes;
 pub mod search;
 pub mod skill;
-pub mod bundled;
 
 pub(crate) mod supervisor;
 pub mod thinker;
@@ -88,9 +88,9 @@ pub mod utils;
 pub mod vision;
 pub mod wizard;
 
+pub mod daemon;
 pub mod resilience;
 pub mod resilient;
-pub mod daemon;
 pub mod scheduler;
 pub mod secrets;
 pub mod security;
@@ -103,9 +103,9 @@ pub mod initialization {
 
 pub mod a2a;
 pub mod acp;
+pub mod clawhub;
 pub mod gateway;
 pub mod group_chat;
-pub mod clawhub;
 pub mod tasks;
 pub mod teams;
 
@@ -121,17 +121,17 @@ pub use crate::error::{AlephError, AlephException, Result};
 
 // Configuration (main entry points and commonly used types)
 pub use crate::config::{
-    Config, FullConfig, ChannelInstanceConfig, PluginMarketplaceEntry, ProviderConfig, RoutingRuleConfig,
-    MemoryConfig, BehaviorConfig, GeneralConfig, SmartFlowConfig,
-    EmbeddingProviderConfig, GenerationProviderConfig,
-    types::generation::GenerationConfig,
-    backup::ConfigBackup,
-    patcher::ConfigPatcher,
-    agent_resolver::{AgentDefinitionResolver, ResolvedAgent},
     agent_manager::AgentManager,
+    agent_resolver::{AgentDefinitionResolver, ResolvedAgent},
+    backup::ConfigBackup,
     guides::deploy_guides,
+    patcher::ConfigPatcher,
     policies::CompressionPolicy,
     types::acp::{AcpConfig, AcpHarnessEntry, HarnessModeSerde, OutputFormatSerde},
+    types::generation::GenerationConfig,
+    BehaviorConfig, ChannelInstanceConfig, Config, EmbeddingProviderConfig, FullConfig,
+    GeneralConfig, GenerationProviderConfig, MemoryConfig, PluginMarketplaceEntry, ProviderConfig,
+    RoutingRuleConfig, SmartFlowConfig,
 };
 
 // Initialization
@@ -148,12 +148,13 @@ pub use crate::logging::{create_pii_scrubbing_layer, LogLevel, PiiScrubbingLayer
 
 // Agent Loop (agent loop types)
 pub use crate::agent_loop::{
-    LoopCallback, LoopConfig as AgentLoopConfig, LoopRunResult,
-    AgentLoop,
+    AgentLoop, LoopCallback, LoopConfig as AgentLoopConfig, LoopRunResult,
 };
 
 // Thinker (LLM layer - provider registry)
-pub use crate::thinker::{ProviderRegistry, SingleProviderRegistry, SwappableProviderRegistry, MultiProviderRegistry};
+pub use crate::thinker::{
+    MultiProviderRegistry, ProviderRegistry, SingleProviderRegistry, SwappableProviderRegistry,
+};
 
 // =============================================================================
 // Tool System Exports
@@ -164,20 +165,24 @@ pub use crate::tools::{AlephTool, AlephToolDyn, AlephToolServer, AlephToolServer
 
 // Dispatcher (tool registry)
 pub use crate::dispatcher::{
-    DispatcherConfig, ToolCategory, ToolDefinition, ToolRegistry, ToolResult,
-    ToolSafetyLevel, ToolSource, ToolSourceType, UnifiedTool, UnifiedToolInfo,
+    DispatcherConfig, ToolCategory, ToolDefinition, ToolRegistry, ToolResult, ToolSafetyLevel,
+    ToolSource, ToolSourceType, UnifiedTool, UnifiedToolInfo,
 };
 
 // Tool Index (Tool-as-Resource)
 pub use crate::dispatcher::tool_index::{
+    HydratedTool,
+    // Retrieval
+    HydrationLevel,
+    // Inference
+    InferredPurpose,
+    SemanticPurposeInferrer,
+    // Coordinator
+    ToolIndexCoordinator,
+    ToolMeta,
+    ToolRetrieval,
     // Config
     ToolRetrievalConfig,
-    // Inference
-    InferredPurpose, SemanticPurposeInferrer,
-    // Coordinator
-    ToolIndexCoordinator, ToolMeta,
-    // Retrieval
-    HydrationLevel, HydratedTool, ToolRetrieval,
 };
 
 // =============================================================================
@@ -185,8 +190,8 @@ pub use crate::dispatcher::tool_index::{
 // =============================================================================
 
 pub use crate::extension::{
-    ExtensionConfig, ExtensionError,
-    ExtensionManager, ExtensionResult, LoadSummary, PluginInfo, SyncExtensionManager,
+    ExtensionConfig, ExtensionError, ExtensionManager, ExtensionResult, LoadSummary, PluginInfo,
+    SyncExtensionManager,
 };
 
 // =============================================================================
@@ -196,9 +201,8 @@ pub use crate::extension::{
 pub use crate::skill::SkillInfo;
 
 pub use crate::skill::{
-    SkillSystem, SkillStatusEntry, SkillStatusFilter,
-    SkillsConfig, SkillConfigUpdate,
-    InstallExecutor, InstallResult,
+    InstallExecutor, InstallResult, SkillConfigUpdate, SkillStatusEntry, SkillStatusFilter,
+    SkillSystem, SkillsConfig,
 };
 
 pub use crate::mcp::{
@@ -210,15 +214,13 @@ pub use crate::mcp::{
 // =============================================================================
 
 pub use crate::exec::{
-    ApprovalDecision, ApprovalRequest, ExecContext,
-    ExecApprovalManager, PendingApproval, SecurityKernel,
-    analyze_shell_command, decide_exec_approval, match_allowlist,
+    analyze_shell_command, decide_exec_approval, match_allowlist, ApprovalDecision,
+    ApprovalRequest, ExecApprovalManager, ExecContext, PendingApproval, SecurityKernel,
 };
 
 // =============================================================================
 // Supervisor Exports
 // =============================================================================
-
 
 // =============================================================================
 // Wizard Exports
@@ -242,9 +244,7 @@ pub use crate::resilient::{
 // Daemon Subsystem Exports (Phase 3+4: Proactive AI)
 // =============================================================================
 
-pub use crate::daemon::{
-    DaemonCli, DaemonCommand, DaemonConfig, DaemonEventBus, DaemonStatus,
-};
+pub use crate::daemon::{DaemonCli, DaemonCommand, DaemonConfig, DaemonEventBus, DaemonStatus};
 
 // WorldModel (Phase 3)
 pub use crate::daemon::worldmodel::{
@@ -254,8 +254,8 @@ pub use crate::daemon::worldmodel::{
 // Dispatcher (Phase 4) - Note: Using ProactiveDispatcher* to avoid conflict with tool system
 pub use crate::daemon::dispatcher::{
     ActionExecutor, ActionType, Dispatcher as ProactiveDispatcher,
-    DispatcherConfig as ProactiveDispatcherConfig, DispatcherMode,
-    NotificationPriority, Policy, PolicyEngine, ProposedAction, RiskLevel,
+    DispatcherConfig as ProactiveDispatcherConfig, DispatcherMode, NotificationPriority, Policy,
+    PolicyEngine, ProposedAction, RiskLevel,
 };
 
 // Events
@@ -275,7 +275,9 @@ pub use crate::search::{ProviderTestResult, SearchProviderTestConfig};
 // Vision & Generation Exports
 // =============================================================================
 
-pub use crate::generation::{GenerationProvider, GenerationProviderRegistry, GenerationType, VoiceInfo};
+pub use crate::generation::{
+    GenerationProvider, GenerationProviderRegistry, GenerationType, VoiceInfo,
+};
 
 // Media Pipeline Exports
 pub use crate::media::{
@@ -289,7 +291,6 @@ pub use crate::media::{
 
 pub use crate::conversation::{ConversationManager, ConversationSession, ConversationTurn};
 
-
 // =============================================================================
 // Provider Exports
 // =============================================================================
@@ -301,8 +302,8 @@ pub use crate::providers::AiProvider;
 // =============================================================================
 
 pub use crate::clipboard::{ImageData, ImageFormat};
-pub use crate::utils::paths::{get_skills_dir, get_skills_dir_string};
 pub use crate::metrics::StageTimer;
+pub use crate::utils::paths::{get_skills_dir, get_skills_dir_string};
 
 // Event handler types (for backward compatibility)
 pub use crate::event_handler::{ErrorType, McpServerError, McpStartupReport, ProcessingState};

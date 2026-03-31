@@ -260,15 +260,60 @@ impl ElevenLabsProvider {
     /// Return the static list of available voices for this provider
     pub fn static_voice_list() -> Vec<VoiceInfo> {
         vec![
-            VoiceInfo { id: "rachel".into(), name: "Rachel".into(), gender: "female".into(), description: "Calm, young".into() },
-            VoiceInfo { id: "domi".into(), name: "Domi".into(), gender: "female".into(), description: "Strong, confident".into() },
-            VoiceInfo { id: "bella".into(), name: "Bella".into(), gender: "female".into(), description: "Soft, warm".into() },
-            VoiceInfo { id: "antoni".into(), name: "Antoni".into(), gender: "male".into(), description: "Crisp, well-rounded".into() },
-            VoiceInfo { id: "elli".into(), name: "Elli".into(), gender: "female".into(), description: "Emotional, young".into() },
-            VoiceInfo { id: "josh".into(), name: "Josh".into(), gender: "male".into(), description: "Deep, warm".into() },
-            VoiceInfo { id: "arnold".into(), name: "Arnold".into(), gender: "male".into(), description: "Crisp, bold".into() },
-            VoiceInfo { id: "adam".into(), name: "Adam".into(), gender: "male".into(), description: "Deep, narrative".into() },
-            VoiceInfo { id: "sam".into(), name: "Sam".into(), gender: "male".into(), description: "Raspy, young".into() },
+            VoiceInfo {
+                id: "rachel".into(),
+                name: "Rachel".into(),
+                gender: "female".into(),
+                description: "Calm, young".into(),
+            },
+            VoiceInfo {
+                id: "domi".into(),
+                name: "Domi".into(),
+                gender: "female".into(),
+                description: "Strong, confident".into(),
+            },
+            VoiceInfo {
+                id: "bella".into(),
+                name: "Bella".into(),
+                gender: "female".into(),
+                description: "Soft, warm".into(),
+            },
+            VoiceInfo {
+                id: "antoni".into(),
+                name: "Antoni".into(),
+                gender: "male".into(),
+                description: "Crisp, well-rounded".into(),
+            },
+            VoiceInfo {
+                id: "elli".into(),
+                name: "Elli".into(),
+                gender: "female".into(),
+                description: "Emotional, young".into(),
+            },
+            VoiceInfo {
+                id: "josh".into(),
+                name: "Josh".into(),
+                gender: "male".into(),
+                description: "Deep, warm".into(),
+            },
+            VoiceInfo {
+                id: "arnold".into(),
+                name: "Arnold".into(),
+                gender: "male".into(),
+                description: "Crisp, bold".into(),
+            },
+            VoiceInfo {
+                id: "adam".into(),
+                name: "Adam".into(),
+                gender: "male".into(),
+                description: "Deep, narrative".into(),
+            },
+            VoiceInfo {
+                id: "sam".into(),
+                name: "Sam".into(),
+                gender: "male".into(),
+                description: "Raspy, young".into(),
+            },
         ]
     }
 

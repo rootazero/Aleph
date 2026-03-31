@@ -6,8 +6,8 @@ use super::types::*;
 /// Returns `Ok(Some(event))` for business events.
 /// Returns `Err` if the JSON is malformed.
 pub fn parse_ws_frame(raw: &str) -> Result<Option<FeishuEvent>, String> {
-    let envelope: WsEventEnvelope = serde_json::from_str(raw)
-        .map_err(|e| format!("Failed to parse WS frame: {e}"))?;
+    let envelope: WsEventEnvelope =
+        serde_json::from_str(raw).map_err(|e| format!("Failed to parse WS frame: {e}"))?;
 
     // Handle ping/pong frames (no header)
     if let Some(frame_type) = &envelope.frame_type {
@@ -34,16 +34,24 @@ pub fn parse_ws_frame(raw: &str) -> Result<Option<FeishuEvent>, String> {
 fn parse_message_event(envelope: &WsEventEnvelope) -> Result<Option<FeishuEvent>, String> {
     let event_value = match &envelope.event {
         Some(v) => v,
-        None => return Ok(Some(FeishuEvent::Unknown("message event without body".to_string()))),
+        None => {
+            return Ok(Some(FeishuEvent::Unknown(
+                "message event without body".to_string(),
+            )))
+        }
     };
 
     let payload: MessageEventPayload = serde_json::from_value(event_value.clone())
         .map_err(|e| format!("Failed to parse message event: {e}"))?;
 
-    let message = payload.message.as_ref()
+    let message = payload
+        .message
+        .as_ref()
         .ok_or_else(|| "Missing message field".to_string())?;
 
-    let sender_id = payload.sender.as_ref()
+    let sender_id = payload
+        .sender
+        .as_ref()
         .and_then(|s| s.sender_id.as_ref())
         .and_then(|sid| sid.open_id.clone())
         .unwrap_or_default();
@@ -53,13 +61,23 @@ fn parse_message_event(envelope: &WsEventEnvelope) -> Result<Option<FeishuEvent>
         _ => ChatType::Group,
     };
 
-    let mentions = message.mentions.as_ref()
-        .map(|ms| ms.iter().map(|m| Mention {
-            key: m.key.clone().unwrap_or_default(),
-            id: m.id.as_ref().and_then(|mid| mid.open_id.clone()).unwrap_or_default(),
-            name: m.name.clone().unwrap_or_default(),
-            is_bot: false, // Will be determined by comparing with bot's open_id
-        }).collect())
+    let mentions = message
+        .mentions
+        .as_ref()
+        .map(|ms| {
+            ms.iter()
+                .map(|m| Mention {
+                    key: m.key.clone().unwrap_or_default(),
+                    id: m
+                        .id
+                        .as_ref()
+                        .and_then(|mid| mid.open_id.clone())
+                        .unwrap_or_default(),
+                    name: m.name.clone().unwrap_or_default(),
+                    is_bot: false, // Will be determined by comparing with bot's open_id
+                })
+                .collect()
+        })
         .unwrap_or_default();
 
     Ok(Some(FeishuEvent::MessageReceive {
@@ -79,30 +97,46 @@ fn parse_message_event(envelope: &WsEventEnvelope) -> Result<Option<FeishuEvent>
 fn parse_card_action(envelope: &WsEventEnvelope) -> Result<Option<FeishuEvent>, String> {
     let event_value = match &envelope.event {
         Some(v) => v,
-        None => return Ok(Some(FeishuEvent::Unknown("card action without body".to_string()))),
+        None => {
+            return Ok(Some(FeishuEvent::Unknown(
+                "card action without body".to_string(),
+            )))
+        }
     };
 
-    let operator_id = event_value.pointer("/operator/open_id")
+    let operator_id = event_value
+        .pointer("/operator/open_id")
         .and_then(|v| v.as_str())
         .unwrap_or_default()
         .to_string();
 
-    let chat_id = event_value.pointer("/context/open_chat_id")
+    let chat_id = event_value
+        .pointer("/context/open_chat_id")
         .and_then(|v| v.as_str())
         .unwrap_or_default()
         .to_string();
 
-    let message_id = event_value.pointer("/context/open_message_id")
+    let message_id = event_value
+        .pointer("/context/open_message_id")
         .and_then(|v| v.as_str())
         .unwrap_or_default()
         .to_string();
 
-    let action_value = event_value.pointer("/action/value")
-        .map(|v| if let Some(s) = v.as_str() { s.to_string() } else { v.to_string() })
+    let action_value = event_value
+        .pointer("/action/value")
+        .map(|v| {
+            if let Some(s) = v.as_str() {
+                s.to_string()
+            } else {
+                v.to_string()
+            }
+        })
         .unwrap_or_default();
 
     if action_value.is_empty() {
-        return Ok(Some(FeishuEvent::Unknown("card action with empty value".to_string())));
+        return Ok(Some(FeishuEvent::Unknown(
+            "card action with empty value".to_string(),
+        )));
     }
 
     Ok(Some(FeishuEvent::CardAction {
@@ -131,7 +165,11 @@ pub fn extract_text_content(content: &str, mentions: &[Mention]) -> Option<Strin
     }
 
     let text = text.trim().to_string();
-    if text.is_empty() { None } else { Some(text) }
+    if text.is_empty() {
+        None
+    } else {
+        Some(text)
+    }
 }
 
 /// Mark mentions that refer to the bot, given the bot's open_id.
@@ -202,7 +240,15 @@ mod tests {
         let result = parse_ws_frame(raw).unwrap().unwrap();
         match result {
             FeishuEvent::MessageReceive {
-                message_id, chat_id, chat_type, sender_id, message_type, content, mentions, parent_id, ..
+                message_id,
+                chat_id,
+                chat_type,
+                sender_id,
+                message_type,
+                content,
+                mentions,
+                parent_id,
+                ..
             } => {
                 assert_eq!(message_id, "msg_001");
                 assert_eq!(chat_id, "oc_chat1");
@@ -246,7 +292,10 @@ mod tests {
         let result = parse_ws_frame(raw).unwrap().unwrap();
         match result {
             FeishuEvent::MessageReceive {
-                chat_type, mentions, parent_id, ..
+                chat_type,
+                mentions,
+                parent_id,
+                ..
             } => {
                 assert_eq!(chat_type, ChatType::Group);
                 assert_eq!(mentions.len(), 1);
@@ -295,8 +344,18 @@ mod tests {
     #[test]
     fn test_mark_bot_mentions() {
         let mut mentions = vec![
-            Mention { key: "@_user_1".into(), id: "ou_bot".into(), name: "Bot".into(), is_bot: false },
-            Mention { key: "@_user_2".into(), id: "ou_human".into(), name: "Human".into(), is_bot: false },
+            Mention {
+                key: "@_user_1".into(),
+                id: "ou_bot".into(),
+                name: "Bot".into(),
+                is_bot: false,
+            },
+            Mention {
+                key: "@_user_2".into(),
+                id: "ou_human".into(),
+                name: "Human".into(),
+                is_bot: false,
+            },
         ];
         mark_bot_mentions(&mut mentions, "ou_bot");
         assert!(mentions[0].is_bot);
@@ -315,7 +374,12 @@ mod tests {
         }"#;
         let result = parse_ws_frame(raw).unwrap().unwrap();
         match result {
-            FeishuEvent::CardAction { chat_id, sender_id, action_value, message_id } => {
+            FeishuEvent::CardAction {
+                chat_id,
+                sender_id,
+                action_value,
+                message_id,
+            } => {
                 assert_eq!(chat_id, "oc_chat1");
                 assert_eq!(sender_id, "ou_user1");
                 assert_eq!(action_value, "start_conversation");

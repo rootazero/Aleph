@@ -79,8 +79,13 @@ mod tests {
     fn test_render_basic_variables() {
         let clock = SystemClock;
         let job = make_job("Daily News");
-        let result =
-            render_template("Hello {{job_name}}, run #{{run_count}}", &job, None, 5, &clock);
+        let result = render_template(
+            "Hello {{job_name}}, run #{{run_count}}",
+            &job,
+            None,
+            5,
+            &clock,
+        );
         assert_eq!(result, "Hello Daily News, run #5");
     }
 
@@ -97,8 +102,7 @@ mod tests {
         let clock = SystemClock;
         let job = make_job("Test");
         let run = JobRun::new("job-1").success(Some("AI response here".to_string()));
-        let result =
-            render_template("Based on: {{last_output}}", &job, Some(&run), 1, &clock);
+        let result = render_template("Based on: {{last_output}}", &job, Some(&run), 1, &clock);
         assert_eq!(result, "Based on: AI response here");
     }
 
@@ -115,8 +119,7 @@ mod tests {
         let clock = SystemClock;
         std::env::set_var("ALEPH_CRON_TEST_VAR", "hello_world");
         let job = make_job("Test");
-        let result =
-            render_template("Val: {{env:ALEPH_CRON_TEST_VAR}}", &job, None, 0, &clock);
+        let result = render_template("Val: {{env:ALEPH_CRON_TEST_VAR}}", &job, None, 0, &clock);
         assert_eq!(result, "Val: hello_world");
         std::env::remove_var("ALEPH_CRON_TEST_VAR");
     }

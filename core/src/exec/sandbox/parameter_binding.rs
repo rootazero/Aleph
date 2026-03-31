@@ -61,7 +61,7 @@ pub struct CapabilityOverrides {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileSystemOverride {
     #[serde(rename = "type")]
-    pub fs_type: String,  // "read_only", "read_write"
+    pub fs_type: String, // "read_only", "read_write"
     pub path: String,
     pub reason: String,
 }

@@ -29,9 +29,10 @@ pub mod prompter;
 pub mod session;
 pub mod types;
 
-pub use flows::{OnboardingFlow, onboarding::{OnboardingData, ProviderSetupFlow, QuickSetupFlow}};
+pub use flows::{
+    onboarding::{OnboardingData, ProviderSetupFlow, QuickSetupFlow},
+    OnboardingFlow,
+};
 pub use prompter::{CliPrompter, ProgressHandle, RpcPrompter, WizardPrompter};
 pub use session::{WizardFlow, WizardSession, WizardSessionError};
-pub use types::{
-    StepExecutor, StepType, WizardNextResult, WizardOption, WizardStatus, WizardStep,
-};
+pub use types::{StepExecutor, StepType, WizardNextResult, WizardOption, WizardStatus, WizardStep};

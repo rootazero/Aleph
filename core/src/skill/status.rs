@@ -1,6 +1,6 @@
 //! Status reporting — rich, serializable view of skill status for Panel UI, CLI, and LLM Tools.
 
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 use crate::domain::skill::{InstallKind, PromptScope, SkillId, SkillManifest, SkillSource};
 use crate::domain::Entity;
@@ -75,7 +75,9 @@ impl SkillStatusEntry {
                 for reason in reasons {
                     match reason {
                         IneligibilityReason::MissingBinary(bin) => missing.bins.push(bin.clone()),
-                        IneligibilityReason::MissingAnyBinary(bins) => missing.bins.extend(bins.iter().cloned()),
+                        IneligibilityReason::MissingAnyBinary(bins) => {
+                            missing.bins.extend(bins.iter().cloned())
+                        }
                         IneligibilityReason::MissingEnv(env) => missing.env.push(env.clone()),
                         IneligibilityReason::MissingConfig(cfg) => missing.config.push(cfg.clone()),
                         _ => {}
@@ -143,7 +145,13 @@ mod tests {
     use crate::domain::skill::{SkillContent, SkillManifest, SkillSource};
 
     fn make_manifest(name: &str) -> SkillManifest {
-        SkillManifest::new(name, name, format!("{} desc", name), SkillContent::new("c"), SkillSource::Bundled)
+        SkillManifest::new(
+            name,
+            name,
+            format!("{} desc", name),
+            SkillContent::new("c"),
+            SkillSource::Bundled,
+        )
     }
 
     #[test]
@@ -167,7 +175,10 @@ mod tests {
     #[test]
     fn disabled_by_config() {
         let m = make_manifest("test:skill");
-        let cfg = SkillEntryConfig { enabled: Some(false), scope_override: None };
+        let cfg = SkillEntryConfig {
+            enabled: Some(false),
+            scope_override: None,
+        };
         let e = SkillStatusEntry::build(&m, &EligibilityResult::Eligible, Some(&cfg), false);
         assert!(e.disabled);
     }
@@ -192,7 +203,12 @@ mod tests {
     fn filter_matching() {
         let m = make_manifest("test:skill");
         let ready = SkillStatusEntry::build(&m, &EligibilityResult::Eligible, None, false);
-        let needs = SkillStatusEntry::build(&m, &EligibilityResult::Ineligible(vec![IneligibilityReason::MissingBinary("x".into())]), None, false);
+        let needs = SkillStatusEntry::build(
+            &m,
+            &EligibilityResult::Ineligible(vec![IneligibilityReason::MissingBinary("x".into())]),
+            None,
+            false,
+        );
         assert!(ready.matches_filter(SkillStatusFilter::Ready));
         assert!(!ready.matches_filter(SkillStatusFilter::NeedsSetup));
         assert!(needs.matches_filter(SkillStatusFilter::NeedsSetup));

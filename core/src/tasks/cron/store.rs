@@ -89,7 +89,9 @@ impl CronStore {
             return Ok(());
         }
 
-        let tx = self.conn.transaction()
+        let tx = self
+            .conn
+            .transaction()
             .map_err(|e| format!("failed to begin transaction: {e}"))?;
 
         // Delete all existing rows and re-insert from memory.
@@ -199,8 +201,9 @@ fn init_schema(conn: &Connection) -> Result<(), String> {
         CREATE TABLE IF NOT EXISTS cron_meta (
             key   TEXT PRIMARY KEY,
             value TEXT NOT NULL
-        );"
-    ).map_err(|e| format!("failed to create cron schema: {e}"))?;
+        );",
+    )
+    .map_err(|e| format!("failed to create cron schema: {e}"))?;
 
     // Set initial version if not present
     let version: Option<String> = conn
@@ -216,7 +219,8 @@ fn init_schema(conn: &Connection) -> Result<(), String> {
         conn.execute(
             "INSERT INTO cron_meta (key, value) VALUES ('version', ?1)",
             params![CURRENT_VERSION.to_string()],
-        ).map_err(|e| format!("failed to set schema version: {e}"))?;
+        )
+        .map_err(|e| format!("failed to set schema version: {e}"))?;
     }
 
     Ok(())
@@ -239,7 +243,8 @@ fn migrate_schema(conn: &Connection) -> Result<(), String> {
         conn.execute(
             "UPDATE cron_meta SET value = ?1 WHERE key = 'version'",
             params![CURRENT_VERSION.to_string()],
-        ).map_err(|e| format!("failed to update schema version: {e}"))?;
+        )
+        .map_err(|e| format!("failed to update schema version: {e}"))?;
         info!(from = version, to = CURRENT_VERSION, "Cron schema migrated");
     }
 

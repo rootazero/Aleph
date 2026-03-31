@@ -22,9 +22,7 @@ pub enum DaemonEvent {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum RawEvent {
     /// Heartbeat to ensure daemon is alive
-    Heartbeat {
-        timestamp: DateTime<Utc>,
-    },
+    Heartbeat { timestamp: DateTime<Utc> },
 
     /// Time-based event
     TimeEvent {
@@ -194,9 +192,7 @@ pub enum SystemEvent {
     },
 
     /// Configuration reloaded
-    ConfigReloaded {
-        timestamp: DateTime<Utc>,
-    },
+    ConfigReloaded { timestamp: DateTime<Utc> },
 
     /// System error occurred
     Error {

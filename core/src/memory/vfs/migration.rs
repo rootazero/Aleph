@@ -13,7 +13,9 @@ use tracing::info;
 ///
 /// With the LanceDB backend, all facts are created with paths at insertion time,
 /// so this function is a no-op. It is retained for backward compatibility.
-pub async fn migrate_existing_facts_to_paths(_database: &MemoryBackend) -> Result<usize, AlephError> {
+pub async fn migrate_existing_facts_to_paths(
+    _database: &MemoryBackend,
+) -> Result<usize, AlephError> {
     info!("No facts need path migration (LanceDB backend assigns paths at insertion)");
     Ok(0)
 }

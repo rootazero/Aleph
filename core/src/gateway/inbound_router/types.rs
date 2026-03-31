@@ -17,7 +17,9 @@ pub enum RoutingError {
     #[error("Agent not found: {0}")]
     AgentNotFound(String),
 
-    #[error("Link access denied: link \"{link_id}\" is not allowed to access agent \"{agent_id}\"")]
+    #[error(
+        "Link access denied: link \"{link_id}\" is not allowed to access agent \"{agent_id}\""
+    )]
     LinkNotAllowed { link_id: String, agent_id: String },
 
     #[error("Pairing error: {0}")]

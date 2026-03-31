@@ -93,21 +93,19 @@ impl ExtensionManager {
         qualified_name: &str,
         arguments: &str,
     ) -> ExtensionResult<String> {
-        let skill = self.get_skill(qualified_name).await.ok_or_else(|| {
-            ExtensionError::SkillNotFound(qualified_name.to_string())
-        })?;
+        let skill = self
+            .get_skill(qualified_name)
+            .await
+            .ok_or_else(|| ExtensionError::SkillNotFound(qualified_name.to_string()))?;
         Ok(skill.with_arguments(arguments))
     }
 
     /// Execute a command with arguments
-    pub async fn execute_command(
-        &self,
-        name: &str,
-        arguments: &str,
-    ) -> ExtensionResult<String> {
-        let cmd = self.get_command(name).await.ok_or_else(|| {
-            ExtensionError::CommandNotFound(name.to_string())
-        })?;
+    pub async fn execute_command(&self, name: &str, arguments: &str) -> ExtensionResult<String> {
+        let cmd = self
+            .get_command(name)
+            .await
+            .ok_or_else(|| ExtensionError::CommandNotFound(name.to_string()))?;
         Ok(cmd.with_arguments(arguments))
     }
 
@@ -121,9 +119,10 @@ impl ExtensionManager {
         ctx: &SkillContext,
     ) -> ExtensionResult<SkillToolResult> {
         self.ensure_loaded().await?;
-        let skill = self.get_skill(qualified_name).await.ok_or_else(|| {
-            ExtensionError::SkillNotFound(qualified_name.to_string())
-        })?;
+        let skill = self
+            .get_skill(qualified_name)
+            .await
+            .ok_or_else(|| ExtensionError::SkillNotFound(qualified_name.to_string()))?;
         super::skill_tool::invoke_skill(&skill, arguments, ctx).await
     }
 
@@ -135,7 +134,11 @@ impl ExtensionManager {
         event: HookEvent,
         context: &super::hooks::HookContext,
     ) -> ExtensionResult<super::hooks::HookResult> {
-        self.hook_executor.read().await.execute(event, context).await
+        self.hook_executor
+            .read()
+            .await
+            .execute(event, context)
+            .await
     }
 
     /// Get the number of registered hooks
@@ -152,17 +155,24 @@ impl ExtensionManager {
         if let Some(mcp) = self.config_manager.get_mcp_servers() {
             for (name, cfg) in mcp {
                 match cfg {
-                    config::McpConfig::Local { command, environment, .. } => {
+                    config::McpConfig::Local {
+                        command,
+                        environment,
+                        ..
+                    } => {
                         let (cmd, args) = if command.is_empty() {
                             (String::new(), Vec::new())
                         } else {
                             (command[0].clone(), command[1..].to_vec())
                         };
-                        servers.insert(name.clone(), McpServerConfig {
-                            command: cmd,
-                            args,
-                            env: environment.clone(),
-                        });
+                        servers.insert(
+                            name.clone(),
+                            McpServerConfig {
+                                command: cmd,
+                                args,
+                                env: environment.clone(),
+                            },
+                        );
                     }
                     config::McpConfig::Remote { url, .. } => {
                         tracing::debug!("Remote MCP server {} at {} not yet supported", name, url);

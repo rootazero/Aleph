@@ -83,7 +83,9 @@ fn format_event(event: &TeamEvent) -> String {
     let agent = &event.agent_id;
 
     // Extract a brief summary from the payload
-    let brief = if event.payload.is_null() || event.payload == serde_json::Value::Object(Default::default()) {
+    let brief = if event.payload.is_null()
+        || event.payload == serde_json::Value::Object(Default::default())
+    {
         String::new()
     } else if let Some(obj) = event.payload.as_object() {
         // Pick the most informative fields
@@ -150,9 +152,7 @@ impl AlephTool for TeamDigestTool {
             .team_store
             .get_team(&args.team_id)
             .await?
-            .ok_or_else(|| {
-                AlephError::other(format!("Team '{}' not found", args.team_id))
-            })?;
+            .ok_or_else(|| AlephError::other(format!("Team '{}' not found", args.team_id)))?;
 
         let now = Utc::now();
         let since = now - Duration::hours(args.hours as i64);
@@ -167,7 +167,11 @@ impl AlephTool for TeamDigestTool {
         let events_summary = if events.is_empty() {
             "No events recorded in this period.".to_string()
         } else {
-            events.iter().map(format_event).collect::<Vec<_>>().join("\n")
+            events
+                .iter()
+                .map(format_event)
+                .collect::<Vec<_>>()
+                .join("\n")
         };
 
         let is_leader = team.leader_id == self.current_agent_id;

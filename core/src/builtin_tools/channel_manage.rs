@@ -179,10 +179,7 @@ impl AlephTool for ChannelPairingTool {
             PairingAction::List => {
                 let channel = channel_handle.read().await;
                 let active_codes = channel.list_active_pairing_codes().await.map_err(|e| {
-                    crate::error::AlephError::tool(format!(
-                        "Failed to list pairing codes: {}",
-                        e
-                    ))
+                    crate::error::AlephError::tool(format!("Failed to list pairing codes: {}", e))
                 })?;
 
                 let entries: Vec<PairingCodeEntry> = active_codes
@@ -198,10 +195,7 @@ impl AlephTool for ChannelPairingTool {
 
                 Ok(ChannelPairingOutput {
                     message: if count == 0 {
-                        format!(
-                            "No active pairing codes for channel '{}'.",
-                            channel_id
-                        )
+                        format!("No active pairing codes for channel '{}'.", channel_id)
                     } else {
                         format!(
                             "{} active pairing code(s) for channel '{}'.",

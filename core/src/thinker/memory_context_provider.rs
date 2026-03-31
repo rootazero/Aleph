@@ -3,12 +3,12 @@
 //! PromptLayer::inject() is sync, so we pre-fetch LanceDB results here
 //! and store them in MemoryContext for the layer to format.
 
-use crate::memory::EmbeddingProvider;
-use crate::memory::store::{MemoryBackend, MemoryStore, SessionStore};
-use crate::memory::store::types::{SearchFilter, MemoryFilter, ScoredFact};
-use crate::gateway::agent_env::AgentEnvFilter;
-use crate::sync_primitives::Arc;
 use super::memory_context::{MemoryContext, MemorySummary};
+use crate::gateway::agent_env::AgentEnvFilter;
+use crate::memory::store::types::{MemoryFilter, ScoredFact, SearchFilter};
+use crate::memory::store::{MemoryBackend, MemoryStore, SessionStore};
+use crate::memory::EmbeddingProvider;
+use crate::sync_primitives::Arc;
 use tracing::{debug, warn};
 
 /// Configuration for memory context retrieval.
@@ -43,10 +43,7 @@ pub struct MemoryContextProvider {
 
 impl MemoryContextProvider {
     /// Create a new provider.
-    pub fn new(
-        memory_db: MemoryBackend,
-        embedder: Arc<dyn EmbeddingProvider>,
-    ) -> Self {
+    pub fn new(memory_db: MemoryBackend, embedder: Arc<dyn EmbeddingProvider>) -> Self {
         Self {
             memory_db,
             embedder,
@@ -71,7 +68,12 @@ impl MemoryContextProvider {
     ///
     /// When `session_id` is provided, memory search is scoped to that session.
     /// Returns empty context on any failure (never blocks LLM calls).
-    pub async fn fetch(&self, query: &str, agent_id: &str, session_id: Option<&str>) -> MemoryContext {
+    pub async fn fetch(
+        &self,
+        query: &str,
+        agent_id: &str,
+        session_id: Option<&str>,
+    ) -> MemoryContext {
         if query.trim().is_empty() {
             return MemoryContext::default();
         }
@@ -118,8 +120,8 @@ impl MemoryContextProvider {
         dim: u32,
         agent_id: &str,
     ) -> Result<Vec<ScoredFact>, ()> {
-        let filter = SearchFilter::new()
-            .with_agent_filter(AgentEnvFilter::Single(agent_id.to_string()));
+        let filter =
+            SearchFilter::new().with_agent_filter(AgentEnvFilter::Single(agent_id.to_string()));
         self.memory_db
             .vector_search(embedding, dim, &filter, self.config.max_facts)
             .await
@@ -149,7 +151,9 @@ impl MemoryContextProvider {
             .map(|entries| {
                 entries
                     .into_iter()
-                    .filter(|e| e.similarity_score.unwrap_or(0.0) >= self.config.similarity_threshold)
+                    .filter(|e| {
+                        e.similarity_score.unwrap_or(0.0) >= self.config.similarity_threshold
+                    })
                     .map(|e| {
                         let date = chrono::DateTime::from_timestamp(e.context.timestamp, 0)
                             .map(|dt| dt.format("%Y-%m-%d").to_string())
@@ -170,10 +174,13 @@ impl MemoryContextProvider {
 
     fn truncate_to_budget(&self, ctx: &mut MemoryContext) {
         // Remove memories first (lower priority), then facts
-        while ctx.format_for_prompt().len() > self.config.max_output_chars && !ctx.memory_summaries.is_empty() {
+        while ctx.format_for_prompt().len() > self.config.max_output_chars
+            && !ctx.memory_summaries.is_empty()
+        {
             ctx.memory_summaries.pop();
         }
-        while ctx.format_for_prompt().len() > self.config.max_output_chars && !ctx.facts.is_empty() {
+        while ctx.format_for_prompt().len() > self.config.max_output_chars && !ctx.facts.is_empty()
+        {
             ctx.facts.pop();
         }
     }

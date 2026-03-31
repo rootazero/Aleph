@@ -1,10 +1,10 @@
 //! Installer — converts `InstallSpec` values into executable shell commands
 //! and filters specs by the current operating system.
 
-use serde::Serialize;
 use crate::domain::skill::{InstallKind, InstallSpec};
 use crate::skill::config::InstallPreferences;
 use crate::skill::eligibility::current_os;
+use serde::Serialize;
 
 /// Build a shell command string for the given install spec.
 ///
@@ -29,14 +29,12 @@ pub fn build_install_command(spec: &InstallSpec) -> Option<String> {
         InstallKind::Npm => Some(format!("npm install -g {}", spec.package)),
         InstallKind::Uv => Some(format!("uv pip install {}", spec.package)),
         InstallKind::Go => Some(format!("go install {}", spec.package)),
-        InstallKind::Download => {
-            spec.url.as_ref().and_then(|url| {
-                if !is_safe_shell_arg(url) {
-                    return None;
-                }
-                Some(format!("curl -fsSL -o {} {}", spec.package, url))
-            })
-        }
+        InstallKind::Download => spec.url.as_ref().and_then(|url| {
+            if !is_safe_shell_arg(url) {
+                return None;
+            }
+            Some(format!("curl -fsSL -o {} {}", spec.package, url))
+        }),
     }
 }
 
@@ -221,7 +219,10 @@ mod tests {
             url: Some("https://example.com/tool".to_string()),
         };
         let cmd = build_install_command(&spec).unwrap();
-        assert_eq!(cmd, "curl -fsSL -o /usr/local/bin/tool https://example.com/tool");
+        assert_eq!(
+            cmd,
+            "curl -fsSL -o /usr/local/bin/tool https://example.com/tool"
+        );
     }
 
     #[test]

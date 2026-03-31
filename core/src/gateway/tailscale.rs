@@ -152,7 +152,7 @@ mod tests {
         assert!(!is_tailscale_ip("192.168.1.1"));
         assert!(!is_tailscale_ip("10.0.0.1"));
         assert!(!is_tailscale_ip("100.63.255.255")); // second octet too low
-        assert!(!is_tailscale_ip("100.128.0.0"));    // second octet too high
+        assert!(!is_tailscale_ip("100.128.0.0")); // second octet too high
 
         // Invalid formats
         assert!(!is_tailscale_ip("not-an-ip"));

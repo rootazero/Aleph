@@ -42,18 +42,24 @@ impl EventApi {
 
     /// Check if event is coding activity
     pub fn is_coding(&self) -> bool {
-        matches!(&self.inner, DerivedEvent::ActivityChanged {
-            new_activity: ActivityType::Programming { .. },
-            ..
-        })
+        matches!(
+            &self.inner,
+            DerivedEvent::ActivityChanged {
+                new_activity: ActivityType::Programming { .. },
+                ..
+            }
+        )
     }
 
     /// Check if event is idle
     pub fn is_idle(&self) -> bool {
-        matches!(&self.inner, DerivedEvent::ActivityChanged {
-            new_activity: ActivityType::Idle,
-            ..
-        })
+        matches!(
+            &self.inner,
+            DerivedEvent::ActivityChanged {
+                new_activity: ActivityType::Idle,
+                ..
+            }
+        )
     }
 }
 

@@ -12,21 +12,23 @@
 //! channel.start().await?;
 //! ```
 
-use std::io::{self, BufRead, Write};
 use crate::sync_primitives::Arc;
 use async_trait::async_trait;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
+use std::io::{self, BufRead, Write};
 use tokio::sync::{mpsc, RwLock};
 use tracing::{debug, info};
 use uuid::Uuid;
 
 use crate::gateway::channel::{
-    Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelProvider,
-    ChannelId, ChannelInfo, ChannelResult, ChannelState, ChannelStatus, ConversationId,
-    InboundMessage, MessageId, OutboundMessage, SendResult, UserId,
+    Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
+    ChannelProvider, ChannelResult, ChannelState, ChannelStatus, ConversationId, InboundMessage,
+    MessageId, OutboundMessage, SendResult, UserId,
 };
-use crate::thinker::interaction::{InteractionConstraints, InteractionManifest, InteractionParadigm};
+use crate::thinker::interaction::{
+    InteractionConstraints, InteractionManifest, InteractionParadigm,
+};
 
 /// CLI channel configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -117,9 +119,7 @@ impl CliChannel {
             },
         };
 
-        let cli_state = CliChannelState {
-            shutdown_tx: None,
-        };
+        let cli_state = CliChannelState { shutdown_tx: None };
 
         Self {
             info,
@@ -168,7 +168,9 @@ impl Channel for CliChannel {
             return Ok(());
         }
 
-        self.channel_state.set_status(ChannelStatus::Connecting).await;
+        self.channel_state
+            .set_status(ChannelStatus::Connecting)
+            .await;
 
         // Create shutdown channel
         let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel();
@@ -234,7 +236,9 @@ impl Channel for CliChannel {
 
         let mut cli_state = self.cli_state.write().await;
         cli_state.shutdown_tx = Some(shutdown_tx);
-        self.channel_state.set_status(ChannelStatus::Connected).await;
+        self.channel_state
+            .set_status(ChannelStatus::Connected)
+            .await;
 
         info!("CLI channel started: {}", self.info.id);
         Ok(())
@@ -248,7 +252,9 @@ impl Channel for CliChannel {
         }
         drop(cli_state);
 
-        self.channel_state.set_status(ChannelStatus::Disconnected).await;
+        self.channel_state
+            .set_status(ChannelStatus::Disconnected)
+            .await;
 
         info!("CLI channel stopped: {}", self.info.id);
         Ok(())
@@ -256,14 +262,17 @@ impl Channel for CliChannel {
 
     async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
         if self.channel_state.status() != ChannelStatus::Connected {
-            return Err(ChannelError::NotConnected("CLI channel not connected".to_string()));
+            return Err(ChannelError::NotConnected(
+                "CLI channel not connected".to_string(),
+            ));
         }
 
         // Write to stdout
         let mut stdout = io::stdout().lock();
         writeln!(stdout, "\n{}", message.text)
             .map_err(|e| ChannelError::SendFailed(format!("Failed to write to stdout: {}", e)))?;
-        stdout.flush()
+        stdout
+            .flush()
             .map_err(|e| ChannelError::SendFailed(format!("Failed to flush stdout: {}", e)))?;
 
         // Print prompt for next input
@@ -276,17 +285,17 @@ impl Channel for CliChannel {
             timestamp: Utc::now(),
         })
     }
-
 }
 
 impl ChannelProvider for CliChannel {
     fn interaction_manifest(&self) -> InteractionManifest {
-        InteractionManifest::new(InteractionParadigm::CLI)
-            .with_constraints(InteractionConstraints {
-                max_output_chars: None,  // CLI has no limit
+        InteractionManifest::new(InteractionParadigm::CLI).with_constraints(
+            InteractionConstraints {
+                max_output_chars: None, // CLI has no limit
                 supports_streaming: true,
                 prefer_compact: false,
-            })
+            },
+        )
     }
 }
 

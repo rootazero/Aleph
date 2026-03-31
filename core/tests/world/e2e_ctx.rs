@@ -50,9 +50,18 @@ impl BatchLoadResult {
 impl std::fmt::Debug for E2eContext {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("E2eContext")
-            .field("policy_engine", &self.policy_engine.as_ref().map(|_| "PolicyEngine"))
-            .field("enhanced_context", &self.enhanced_context.as_ref().map(|_| "EnhancedContext"))
-            .field("derived_event", &self.derived_event.as_ref().map(|_| "DerivedEvent"))
+            .field(
+                "policy_engine",
+                &self.policy_engine.as_ref().map(|_| "PolicyEngine"),
+            )
+            .field(
+                "enhanced_context",
+                &self.enhanced_context.as_ref().map(|_| "EnhancedContext"),
+            )
+            .field(
+                "derived_event",
+                &self.derived_event.as_ref().map(|_| "DerivedEvent"),
+            )
             .field("triggered_actions", &self.triggered_actions.len())
             .field("yaml_path", &self.yaml_path)
             .finish()

@@ -12,8 +12,11 @@ use serde::{Deserialize, Serialize};
 use tracing::info;
 
 use crate::error::Result;
-use crate::tasks::heartbeat::{SharedHeartbeatService, config::{HeartbeatTask, HeartbeatTaskView, ProbeConfig, TriggerCondition}};
 use crate::tasks::heartbeat::service::ops::HeartbeatTaskUpdates;
+use crate::tasks::heartbeat::{
+    config::{HeartbeatTask, HeartbeatTaskView, ProbeConfig, TriggerCondition},
+    SharedHeartbeatService,
+};
 use crate::tasks::shared::clock::SystemClock;
 use crate::tools::AlephTool;
 
@@ -93,7 +96,9 @@ impl From<TriggerConditionInput> for TriggerCondition {
             TriggerConditionInput::Always => TriggerCondition::Always,
             TriggerConditionInput::NonEmpty => TriggerCondition::NonEmpty,
             TriggerConditionInput::Changed => TriggerCondition::Changed,
-            TriggerConditionInput::GreaterThan { threshold } => TriggerCondition::GreaterThan(threshold),
+            TriggerConditionInput::GreaterThan { threshold } => {
+                TriggerCondition::GreaterThan(threshold)
+            }
             TriggerConditionInput::Contains { text } => TriggerCondition::Contains(text),
         }
     }
@@ -159,7 +164,8 @@ impl AlephTool for HeartbeatCreateTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
-        let trigger_condition = args.probe_trigger_condition
+        let trigger_condition = args
+            .probe_trigger_condition
             .map(TriggerCondition::from)
             .unwrap_or(TriggerCondition::Always);
 
@@ -252,7 +258,9 @@ impl AlephTool for HeartbeatUpdateTool {
         service
             .update_task(&args.id, updates, &clock)
             .await
-            .map_err(|e| crate::error::AlephError::tool(format!("Failed to update heartbeat task: {}", e)))?;
+            .map_err(|e| {
+                crate::error::AlephError::tool(format!("Failed to update heartbeat task: {}", e))
+            })?;
 
         info!(task_id = %args.id, "Heartbeat task updated via tool");
 
@@ -306,10 +314,9 @@ impl AlephTool for HeartbeatDeleteTool {
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         let service = self.service.lock().await;
-        service
-            .delete_task(&args.id)
-            .await
-            .map_err(|e| crate::error::AlephError::tool(format!("Failed to delete heartbeat task: {}", e)))?;
+        service.delete_task(&args.id).await.map_err(|e| {
+            crate::error::AlephError::tool(format!("Failed to delete heartbeat task: {}", e))
+        })?;
 
         info!(task_id = %args.id, "Heartbeat task deleted via tool");
 
@@ -366,10 +373,9 @@ impl AlephTool for HeartbeatToggleTool {
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         let service = self.service.lock().await;
         let clock = SystemClock;
-        let enabled = service
-            .toggle_task(&args.id, &clock)
-            .await
-            .map_err(|e| crate::error::AlephError::tool(format!("Failed to toggle heartbeat task: {}", e)))?;
+        let enabled = service.toggle_task(&args.id, &clock).await.map_err(|e| {
+            crate::error::AlephError::tool(format!("Failed to toggle heartbeat task: {}", e))
+        })?;
 
         let state_str = if enabled { "启用" } else { "禁用" };
         Ok(HeartbeatToggleOutput {

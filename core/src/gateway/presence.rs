@@ -147,7 +147,9 @@ mod tests {
 
         assert_eq!(tracker.count(), 1);
 
-        let removed = tracker.remove("conn-1").expect("should return removed entry");
+        let removed = tracker
+            .remove("conn-1")
+            .expect("should return removed entry");
         assert_eq!(removed.device_name, "iPhone");
         assert_eq!(tracker.count(), 0);
 
@@ -158,7 +160,10 @@ mod tests {
     #[test]
     fn test_list_all_presence() {
         let tracker = PresenceTracker::new();
-        tracker.upsert("conn-1".to_string(), make_entry("conn-1", "MacBook", "macos"));
+        tracker.upsert(
+            "conn-1".to_string(),
+            make_entry("conn-1", "MacBook", "macos"),
+        );
         tracker.upsert("conn-2".to_string(), make_entry("conn-2", "iPhone", "ios"));
         tracker.upsert("conn-3".to_string(), make_entry("conn-3", "CLI", "cli"));
 

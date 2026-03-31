@@ -90,7 +90,9 @@ impl CapabilityDeclaration {
             // P1: Always allowed, no permission check
             Self::Command(_) | Self::Agent(_) => Tier::Important,
             // P2: Some are permission-gated (Channel needs Network, Service needs Background)
-            Self::Provider(_) | Self::Channel(_) | Self::Service(_) | Self::McpServer(_) => Tier::Pluggable,
+            Self::Provider(_) | Self::Channel(_) | Self::Service(_) | Self::McpServer(_) => {
+                Tier::Pluggable
+            }
             // P3: All permission-gated + warning logged
             Self::GatewayMethod(_) | Self::HttpRoute(_) | Self::Cli(_) => Tier::GatewayExtension,
         }
@@ -118,10 +120,11 @@ impl CapabilityDeclaration {
     pub fn required_permission(&self) -> Option<PluginPermission> {
         match self {
             // P0 + P1: no permission needed
-            Self::Tool(_) | Self::Hook(_) | Self::Skill(_)
-            | Self::Command(_) | Self::Agent(_) => None,
+            Self::Tool(_) | Self::Hook(_) | Self::Skill(_) | Self::Command(_) | Self::Agent(_) => {
+                None
+            }
             // P2: some need permission
-            Self::Provider(_) => None,  // providers are core to AI assistant
+            Self::Provider(_) => None, // providers are core to AI assistant
             Self::Channel(_) => Some(PluginPermission::Network),
             Self::Service(_) => Some(PluginPermission::Background),
             Self::McpServer(_) => None, // MCP is the standard extension mechanism
@@ -231,10 +234,10 @@ mod tests {
         assert_eq!(tool.tier(), Tier::Core);
 
         let skill = CapabilityDeclaration::Skill(make_skill());
-        assert_eq!(skill.tier(), Tier::Core);  // Skills are P0 Core
+        assert_eq!(skill.tier(), Tier::Core); // Skills are P0 Core
 
         let agent = CapabilityDeclaration::Agent(make_agent());
-        assert_eq!(agent.tier(), Tier::Important);  // Agents are P1 Important
+        assert_eq!(agent.tier(), Tier::Important); // Agents are P1 Important
     }
 
     #[test]

@@ -44,11 +44,7 @@ impl EventDatabase {
     }
 
     fn query_recent(&self, count: usize) -> Vec<&InfoEvent> {
-        self.events
-            .iter()
-            .rev()
-            .take(count)
-            .collect()
+        self.events.iter().rev().take(count).collect()
     }
 
     fn query_by_agent(&self, agent_id: &str, count: usize) -> Vec<&InfoEvent> {

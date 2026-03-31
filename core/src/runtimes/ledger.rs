@@ -59,7 +59,11 @@ pub struct CapabilityEntry {
 
 impl CapabilityEntry {
     /// Convenience constructor for a capability that is immediately ready.
-    pub fn new_ready(name: impl Into<String>, bin_path: impl Into<PathBuf>, source: CapabilitySource) -> Self {
+    pub fn new_ready(
+        name: impl Into<String>,
+        bin_path: impl Into<PathBuf>,
+        source: CapabilitySource,
+    ) -> Self {
         Self {
             name: name.into(),
             bin_path: bin_path.into(),
@@ -109,7 +113,10 @@ impl CapabilityLedger {
                 Ok(content) => match serde_json::from_str::<CapabilityLedger>(&content) {
                     Ok(mut ledger) => {
                         ledger.persist_path = persist_path;
-                        debug!("Loaded capability ledger ({} entries)", ledger.entries.len());
+                        debug!(
+                            "Loaded capability ledger ({} entries)",
+                            ledger.entries.len()
+                        );
                         return ledger;
                     }
                     Err(e) => {
@@ -164,7 +171,9 @@ impl CapabilityLedger {
         let mut paths: Vec<PathBuf> = Vec::new();
 
         // Collect bin directories from Ready entries (sorted by name for deterministic PATH order)
-        let mut ready_entries: Vec<&CapabilityEntry> = self.entries.values()
+        let mut ready_entries: Vec<&CapabilityEntry> = self
+            .entries
+            .values()
             .filter(|e| e.status == CapabilityStatus::Ready)
             .collect();
         ready_entries.sort_by_key(|e| &e.name);
@@ -194,7 +203,8 @@ impl CapabilityLedger {
 
     /// Return all entries that are currently `Ready`.
     pub fn list_ready(&self) -> Vec<&CapabilityEntry> {
-        let mut entries: Vec<&CapabilityEntry> = self.entries
+        let mut entries: Vec<&CapabilityEntry> = self
+            .entries
             .values()
             .filter(|e| e.status == CapabilityStatus::Ready)
             .collect();
@@ -211,8 +221,7 @@ impl CapabilityLedger {
             std::fs::create_dir_all(parent)?;
         }
 
-        let content = serde_json::to_string_pretty(self)
-            .map_err(std::io::Error::other)?;
+        let content = serde_json::to_string_pretty(self).map_err(std::io::Error::other)?;
 
         // Atomic write: write to temp file then rename
         let tmp_path = self.persist_path.with_extension("json.tmp");
@@ -279,8 +288,8 @@ pub fn migrate_from_legacy(runtimes_dir: &Path) -> std::io::Result<CapabilityLed
 /// Build enhanced PATH from the persisted ledger on disk.
 /// Convenience for callers that don't have a ledger instance in memory.
 pub fn build_enhanced_path() -> std::io::Result<String> {
-    let runtimes_dir = crate::runtimes::get_runtimes_dir()
-        .map_err(|e| std::io::Error::other(e.to_string()))?;
+    let runtimes_dir =
+        crate::runtimes::get_runtimes_dir().map_err(|e| std::io::Error::other(e.to_string()))?;
     let ledger_path = runtimes_dir.join("ledger.json");
     let ledger = CapabilityLedger::load_or_create(ledger_path);
     Ok(ledger.build_path())
@@ -342,7 +351,11 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let mut ledger = CapabilityLedger::new(tmp_ledger_path(&dir));
 
-        let entry = CapabilityEntry::new_ready("uv", "/home/user/.aleph/runtimes/uv/bin/uv", CapabilitySource::AlephManaged);
+        let entry = CapabilityEntry::new_ready(
+            "uv",
+            "/home/user/.aleph/runtimes/uv/bin/uv",
+            CapabilitySource::AlephManaged,
+        );
         ledger.update(entry);
 
         assert_eq!(ledger.status("uv"), CapabilityStatus::Ready);

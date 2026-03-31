@@ -23,8 +23,7 @@ use regex::Regex;
 /// let risk = kernel.assess("ls -la");
 /// assert_eq!(risk, alephcore::exec::RiskLevel::Safe);
 /// ```
-#[derive(Debug, Clone)]
-#[derive(Default)]
+#[derive(Debug, Clone, Default)]
 pub struct SecurityKernel {
     /// Custom blocked patterns (in addition to defaults)
     custom_blocked: Vec<Regex>,
@@ -33,7 +32,6 @@ pub struct SecurityKernel {
     /// Custom safe patterns (in addition to defaults)
     custom_safe: Vec<Regex>,
 }
-
 
 impl SecurityKernel {
     /// Create a new security kernel with default patterns.

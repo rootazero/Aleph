@@ -19,7 +19,9 @@ pub enum StorageError {
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
 
-    #[error("Optimistic lock failed: config changed since last load (base: {base}, current: {current})")]
+    #[error(
+        "Optimistic lock failed: config changed since last load (base: {base}, current: {current})"
+    )]
     OptimisticLockFailed { base: String, current: String },
 
     #[error("Config file not found: {0}")]
@@ -106,7 +108,11 @@ impl ExecApprovalsStorage {
     /// # Returns
     ///
     /// New hash after save, or error if lock failed
-    pub fn save(&self, config: &ExecApprovalsFile, base_hash: &str) -> Result<String, StorageError> {
+    pub fn save(
+        &self,
+        config: &ExecApprovalsFile,
+        base_hash: &str,
+    ) -> Result<String, StorageError> {
         // Check optimistic lock
         let current_hash = self.current_hash()?;
         if current_hash != base_hash {
@@ -246,7 +252,10 @@ mod tests {
 
         // Try to save with stale hash
         let result = storage.save(&config, "stale-hash");
-        assert!(matches!(result, Err(StorageError::OptimisticLockFailed { .. })));
+        assert!(matches!(
+            result,
+            Err(StorageError::OptimisticLockFailed { .. })
+        ));
     }
 
     #[test]
@@ -267,7 +276,9 @@ mod tests {
 
         assert!(!storage.exists());
 
-        storage.save_unchecked(&ExecApprovalsFile::default()).unwrap();
+        storage
+            .save_unchecked(&ExecApprovalsFile::default())
+            .unwrap();
         assert!(storage.exists());
     }
 
@@ -275,7 +286,9 @@ mod tests {
     fn test_delete() {
         let (_dir, storage) = temp_storage();
 
-        storage.save_unchecked(&ExecApprovalsFile::default()).unwrap();
+        storage
+            .save_unchecked(&ExecApprovalsFile::default())
+            .unwrap();
         assert!(storage.exists());
 
         storage.delete().unwrap();

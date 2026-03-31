@@ -7,15 +7,15 @@ mod ops;
 #[cfg(test)]
 mod tests;
 
+use crate::sync_primitives::{Arc, Mutex};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use crate::sync_primitives::{Arc, Mutex};
 use tracing::info;
 
 use super::router::SessionKey;
-use aleph_protocol::{IdentityContext, Role, GuestScope};
+use aleph_protocol::{GuestScope, IdentityContext, Role};
 
 /// Session message stored in database
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -139,9 +139,7 @@ impl SessionIdentityMeta {
                     self.source_channel.clone(),
                 )
             }
-            Role::Anonymous => {
-                IdentityContext::anonymous(session_key, self.source_channel.clone())
-            }
+            Role::Anonymous => IdentityContext::anonymous(session_key, self.source_channel.clone()),
         }
     }
 }
@@ -168,7 +166,7 @@ impl Default for SessionManagerConfig {
                 .unwrap_or_else(|_| PathBuf::from("/tmp/aleph_sessions.db")),
             max_messages: 100,
             compaction_keep: 50,
-            auto_reset_hour: Some(4), // 4 AM
+            auto_reset_hour: Some(4),               // 4 AM
             session_expiry_secs: 30 * 24 * 60 * 60, // 30 days
         }
     }

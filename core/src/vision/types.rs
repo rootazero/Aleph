@@ -20,14 +20,10 @@ pub enum ImageInput {
     },
 
     /// Path to an image file on the local filesystem.
-    FilePath {
-        path: PathBuf,
-    },
+    FilePath { path: PathBuf },
 
     /// URL pointing to a remote image.
-    Url {
-        url: String,
-    },
+    Url { url: String },
 }
 
 // ---------------------------------------------------------------------------

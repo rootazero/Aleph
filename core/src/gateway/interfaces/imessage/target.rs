@@ -12,8 +12,7 @@
 use std::fmt;
 
 /// Service type for message delivery
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Service {
     /// Auto-detect (prefer iMessage, fall back to SMS)
     #[default]
@@ -23,7 +22,6 @@ pub enum Service {
     /// Force SMS
     Sms,
 }
-
 
 impl fmt::Display for Service {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -291,10 +289,7 @@ mod tests {
 
     #[test]
     fn test_is_allowed_sender() {
-        let allowlist = vec![
-            "+15551234567".to_string(),
-            "user@example.com".to_string(),
-        ];
+        let allowlist = vec!["+15551234567".to_string(), "user@example.com".to_string()];
 
         assert!(is_allowed_sender("+15551234567", &allowlist));
         assert!(is_allowed_sender("5551234567", &allowlist)); // Normalized match

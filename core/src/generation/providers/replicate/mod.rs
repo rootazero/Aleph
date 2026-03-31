@@ -63,7 +63,9 @@ use types::{CreatePredictionRequest, ErrorResponse, PredictionResponse};
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::generation::{GenerationParams, GenerationProvider, GenerationRequest, GenerationType};
+    use crate::generation::{
+        GenerationParams, GenerationProvider, GenerationRequest, GenerationType,
+    };
 
     // === Builder Tests ===
 

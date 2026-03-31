@@ -71,10 +71,7 @@ mod integration_tests {
                 confidence: 0.9,
             })
         }
-        async fn ocr(
-            &self,
-            _: &ImageInput,
-        ) -> std::result::Result<OcrResult, VisionError> {
+        async fn ocr(&self, _: &ImageInput) -> std::result::Result<OcrResult, VisionError> {
             Ok(OcrResult {
                 full_text: "Extracted text".into(),
                 lines: vec![],

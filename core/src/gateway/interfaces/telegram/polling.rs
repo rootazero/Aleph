@@ -30,7 +30,10 @@ impl PollingState {
 
     /// Reset attempt counter if we were healthy for >5 minutes.
     fn maybe_reset_attempts(&mut self) {
-        if self.healthy_since.is_some_and(|t| t.elapsed() > std::time::Duration::from_secs(300)) {
+        if self
+            .healthy_since
+            .is_some_and(|t| t.elapsed() > std::time::Duration::from_secs(300))
+        {
             self.attempt = 1;
         }
     }
@@ -60,13 +63,22 @@ pub(crate) async fn run_polling_loop(
     // Also drop pending updates to reset the update queue.
     match bot.delete_webhook().drop_pending_updates(true).await {
         Ok(_) => tracing::info!("Telegram webhook cleared + pending updates dropped"),
-        Err(e) => tracing::warn!("Failed to delete Telegram webhook: {} (polling may not work)", e),
+        Err(e) => tracing::warn!(
+            "Failed to delete Telegram webhook: {} (polling may not work)",
+            e
+        ),
     }
 
     // Diagnostic: manually test getUpdates to verify polling works
     match bot.get_updates().limit(1).timeout(5).await {
-        Ok(updates) => tracing::info!("Telegram getUpdates test: {} pending updates", updates.len()),
-        Err(e) => tracing::error!("Telegram getUpdates test FAILED: {} — polling will not work!", e),
+        Ok(updates) => tracing::info!(
+            "Telegram getUpdates test: {} pending updates",
+            updates.len()
+        ),
+        Err(e) => tracing::error!(
+            "Telegram getUpdates test FAILED: {} — polling will not work!",
+            e
+        ),
     }
 
     *status.write().await = ChannelStatus::Connected;
@@ -75,10 +87,12 @@ pub(crate) async fn run_polling_loop(
 
     loop {
         state.attempt += 1;
-        tracing::info!(attempt = state.attempt, "Telegram polling loop iteration starting");
+        tracing::info!(
+            attempt = state.attempt,
+            "Telegram polling loop iteration starting"
+        );
 
-        let mut dispatcher = Dispatcher::builder(bot.clone(), handler.clone())
-            .build();
+        let mut dispatcher = Dispatcher::builder(bot.clone(), handler.clone()).build();
 
         // Watchdog: periodic health check via get_me() API call.
         // Previous approach tracked "last message received" which falsely
@@ -92,9 +106,8 @@ pub(crate) async fn run_polling_loop(
         let watchdog_token = watchdog_cancel.clone();
         let watchdog_bot = bot.clone();
         let _watchdog = tokio::spawn(async move {
-            let mut interval = tokio::time::interval(
-                std::time::Duration::from_secs(HEALTH_CHECK_INTERVAL_SECS),
-            );
+            let mut interval =
+                tokio::time::interval(std::time::Duration::from_secs(HEALTH_CHECK_INTERVAL_SECS));
             let mut consecutive_failures: u32 = 0;
             loop {
                 tokio::select! {
@@ -151,7 +164,12 @@ pub(crate) async fn run_polling_loop(
 
         // Dispatcher stopped unexpectedly or health check failed — auto-restart
         *status.write().await = ChannelStatus::Connecting;
-        tracing::error!(attempt = state.attempt, reason = which, "Telegram polling {} — auto-restarting", which);
+        tracing::error!(
+            attempt = state.attempt,
+            reason = which,
+            "Telegram polling {} — auto-restarting",
+            which
+        );
 
         state.maybe_reset_attempts();
         let delay = state.backoff_secs();
@@ -159,7 +177,10 @@ pub(crate) async fn run_polling_loop(
 
         state.healthy_since = Some(Instant::now());
 
-        tracing::info!(attempt = state.attempt, "Telegram reconnected, queued messages will be delivered");
+        tracing::info!(
+            attempt = state.attempt,
+            "Telegram reconnected, queued messages will be delivered"
+        );
         *status.write().await = ChannelStatus::Connected;
     }
 

@@ -2,8 +2,8 @@
 //!
 //! Provides RPC methods for managing agent execution settings (timeout, iterations).
 
-use crate::config::Config;
 use crate::config::types::ExecutionConfig;
+use crate::config::Config;
 use crate::gateway::event_bus::{ConfigChangedEvent, GatewayEvent, GatewayEventBus};
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 use crate::sync_primitives::Arc;
@@ -11,10 +11,7 @@ use serde_json::Value;
 use tokio::sync::RwLock;
 
 /// Get execution configuration
-pub async fn handle_get(
-    request: JsonRpcRequest,
-    config: Arc<RwLock<Config>>,
-) -> JsonRpcResponse {
+pub async fn handle_get(request: JsonRpcRequest, config: Arc<RwLock<Config>>) -> JsonRpcResponse {
     let cfg = config.read().await;
     match serde_json::to_value(&cfg.execution) {
         Ok(value) => JsonRpcResponse::success(request.id, value),

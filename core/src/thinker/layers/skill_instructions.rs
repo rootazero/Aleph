@@ -9,8 +9,12 @@ use crate::thinker::prompt_sanitizer::{sanitize_for_prompt, SanitizeLevel};
 pub struct SkillInstructionsLayer;
 
 impl PromptLayer for SkillInstructionsLayer {
-    fn name(&self) -> &'static str { "skill_instructions" }
-    fn priority(&self) -> u32 { 1050 }
+    fn name(&self) -> &'static str {
+        "skill_instructions"
+    }
+    fn priority(&self) -> u32 {
+        1050
+    }
     fn supports_mode(&self, mode: PromptMode) -> bool {
         matches!(mode, PromptMode::Full)
     }
@@ -53,9 +57,9 @@ impl PromptLayer for SkillInstructionsLayer {
             .iter()
             .filter(|s| match *s.scope() {
                 PromptScope::System => true,
-                PromptScope::Tool => s.bound_tool().is_some_and(|bound| {
-                    active_tool_names.contains(&bound)
-                }),
+                PromptScope::Tool => s
+                    .bound_tool()
+                    .is_some_and(|bound| active_tool_names.contains(&bound)),
                 PromptScope::Standalone | PromptScope::Disabled => false,
             })
             .collect();

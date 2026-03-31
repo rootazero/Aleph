@@ -179,11 +179,18 @@ impl AcpSession {
     /// Try to restore an existing ACP session via `session/load`.
     ///
     /// Returns Ok(session_id) on success, Err on failure (caller should fall back to session/new).
-    pub async fn load_acp_session(&mut self, session_id: &str, cwd: &str, timeout: Duration) -> Result<String> {
+    pub async fn load_acp_session(
+        &mut self,
+        session_id: &str,
+        cwd: &str,
+        timeout: Duration,
+    ) -> Result<String> {
         let req = AcpRequest::load_session(session_id, cwd);
         match self.transport.request(&req, timeout).await {
             Ok((resp, _)) => {
-                let sid = resp.result.as_ref()
+                let sid = resp
+                    .result
+                    .as_ref()
                     .and_then(|r| r.get("sessionId"))
                     .and_then(|v| v.as_str())
                     .unwrap_or(session_id)
@@ -229,14 +236,17 @@ impl AcpSession {
             let cb = cb.clone();
             let accumulated = std::sync::Mutex::new(String::new());
 
-            let result = self.transport.request_streaming(&req, timeout, |notif| {
-                if let Some(chunk) = notif.streaming_text() {
-                    cb(&chunk);
-                    if let Ok(mut acc) = accumulated.lock() {
-                        acc.push_str(&chunk);
+            let result = self
+                .transport
+                .request_streaming(&req, timeout, |notif| {
+                    if let Some(chunk) = notif.streaming_text() {
+                        cb(&chunk);
+                        if let Ok(mut acc) = accumulated.lock() {
+                            acc.push_str(&chunk);
+                        }
                     }
-                }
-            }).await;
+                })
+                .await;
 
             match result {
                 Ok(resp) => {

@@ -16,9 +16,9 @@
 //! 2. `McpManagerActor::run()` - Main loop processing commands
 //! 3. Shutdown - Stop all servers, broadcast event, exit
 
+use crate::sync_primitives::Arc;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use crate::sync_primitives::Arc;
 use std::time::{Duration, Instant};
 
 use tokio::sync::{broadcast, mpsc};
@@ -104,9 +104,7 @@ impl McpManagerActor {
     /// # Returns
     ///
     /// A tuple of the actor and its handle for public API access
-    pub async fn new(
-        config_path: Option<PathBuf>,
-    ) -> Result<(Self, McpManagerHandle), String> {
+    pub async fn new(config_path: Option<PathBuf>) -> Result<(Self, McpManagerHandle), String> {
         let config_path = config_path.unwrap_or_else(McpPersistentConfig::default_path);
 
         // Load and expand configuration
@@ -460,10 +458,9 @@ impl McpManagerActor {
         // Start based on transport type
         match config.transport {
             McpTransportType::Stdio => {
-                let command = config
-                    .command
-                    .as_ref()
-                    .ok_or_else(|| format!("No command specified for stdio server: {}", config.id))?;
+                let command = config.command.as_ref().ok_or_else(|| {
+                    format!("No command specified for stdio server: {}", config.id)
+                })?;
 
                 let external_config = ExternalServerConfig {
                     name: config.id.clone(),
@@ -492,8 +489,8 @@ impl McpManagerActor {
                     _ => TransportPreference::Auto,
                 };
 
-                let remote_config = McpRemoteServerConfig::new(&config.id, url)
-                    .with_transport(transport);
+                let remote_config =
+                    McpRemoteServerConfig::new(&config.id, url).with_transport(transport);
 
                 let remote_config = if let Some(timeout) = config.timeout_seconds {
                     remote_config.with_timeout(timeout)
@@ -588,14 +585,15 @@ impl McpManagerActor {
                 .unwrap_or(HealthStatus::Stopped);
 
             // Get tool/resource/prompt counts from active clients
-            let (tool_count, resource_count, prompt_count) = if let Some(client) = self.clients.get(id) {
-                let tools = client.list_tools().await.len();
-                let resources = client.list_resources().await.len();
-                let prompts = client.list_prompts().await.len();
-                (tools, resources, prompts)
-            } else {
-                (0, 0, 0)
-            };
+            let (tool_count, resource_count, prompt_count) =
+                if let Some(client) = self.clients.get(id) {
+                    let tools = client.list_tools().await.len();
+                    let resources = client.list_resources().await.len();
+                    let prompts = client.list_prompts().await.len();
+                    (tools, resources, prompts)
+                } else {
+                    (0, 0, 0)
+                };
 
             servers.push(McpServerInfo {
                 id: id.clone(),
@@ -651,7 +649,10 @@ impl McpManagerActor {
         for (server_id, client) in &self.clients {
             // Check health - only aggregate from healthy servers
             if let Some(health) = self.health_states.get(server_id) {
-                if !matches!(health.status, HealthStatus::Healthy | HealthStatus::Degraded { .. }) {
+                if !matches!(
+                    health.status,
+                    HealthStatus::Healthy | HealthStatus::Degraded { .. }
+                ) {
                     continue;
                 }
             }
@@ -670,7 +671,10 @@ impl McpManagerActor {
         for (server_id, client) in &self.clients {
             // Check health - only aggregate from healthy servers
             if let Some(health) = self.health_states.get(server_id) {
-                if !matches!(health.status, HealthStatus::Healthy | HealthStatus::Degraded { .. }) {
+                if !matches!(
+                    health.status,
+                    HealthStatus::Healthy | HealthStatus::Degraded { .. }
+                ) {
                     continue;
                 }
             }
@@ -689,7 +693,10 @@ impl McpManagerActor {
         for (server_id, client) in &self.clients {
             // Check health - only aggregate from healthy servers
             if let Some(health) = self.health_states.get(server_id) {
-                if !matches!(health.status, HealthStatus::Healthy | HealthStatus::Degraded { .. }) {
+                if !matches!(
+                    health.status,
+                    HealthStatus::Healthy | HealthStatus::Degraded { .. }
+                ) {
                     continue;
                 }
             }
@@ -735,9 +742,7 @@ impl McpManagerActor {
         let servers_to_start: Vec<_> = new_config
             .servers
             .values()
-            .filter(|config| {
-                config.auto_start && !self.config.servers.contains_key(&config.id)
-            })
+            .filter(|config| config.auto_start && !self.config.servers.contains_key(&config.id))
             .cloned()
             .collect();
 

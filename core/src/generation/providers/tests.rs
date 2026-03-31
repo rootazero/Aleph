@@ -220,7 +220,11 @@ fn test_create_tts_unknown_voice_succeeds_with_warning() {
     };
 
     let result = create_provider("tts", &config, GenerationType::Speech);
-    assert!(result.is_ok(), "Unknown voice should be accepted with a warning, got: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Unknown voice should be accepted with a warning, got: {:?}",
+        result.err()
+    );
 }
 
 #[test]
@@ -585,4 +589,3 @@ fn test_create_midjourney_provider_with_color() {
     assert_eq!(provider.name(), "midjourney");
     assert_eq!(provider.color(), "#FF0000");
 }
-

@@ -5,8 +5,8 @@
 pub mod config;
 pub mod executor;
 pub mod mode;
-pub mod policy;
 pub mod policies;
+pub mod policy;
 pub mod scripting;
 pub mod yaml_policy;
 
@@ -17,10 +17,10 @@ pub use policy::{
     ActionType, NotificationPriority, Policy, PolicyEngine, ProposedAction, RiskLevel,
 };
 
-use crate::daemon::{DaemonEvent, DaemonEventBus, Result};
 use crate::daemon::worldmodel::{PendingAction, WorldModel};
-use chrono::{Duration, Utc};
+use crate::daemon::{DaemonEvent, DaemonEventBus, Result};
 use crate::sync_primitives::Arc;
+use chrono::{Duration, Utc};
 use tokio::sync::RwLock;
 
 /// Dispatcher - Main orchestrator for proactive actions
@@ -112,7 +112,10 @@ impl Dispatcher {
 
             RiskLevel::Medium => {
                 // Medium risk: Add to pending queue for lazy review
-                log::info!("Queuing medium-risk action for lazy review: {:?}", action.action_type);
+                log::info!(
+                    "Queuing medium-risk action for lazy review: {:?}",
+                    action.action_type
+                );
 
                 // Convert ProposedAction to PendingAction
                 let pending = self.to_pending_action(&action, RiskLevel::Medium);
@@ -123,7 +126,10 @@ impl Dispatcher {
                 let action_clone = action.clone();
                 tokio::spawn(async move {
                     tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
-                    log::info!("Delayed notification for medium-risk action: {:?}", action_clone.action_type);
+                    log::info!(
+                        "Delayed notification for medium-risk action: {:?}",
+                        action_clone.action_type
+                    );
                     // TODO: Check if user is idle, then notify via Gateway IPC
                 });
             }
@@ -140,7 +146,8 @@ impl Dispatcher {
                 self.set_mode(DispatcherMode::Reconciling {
                     pending_high_risk: vec![pending],
                     started_at: Utc::now(),
-                }).await;
+                })
+                .await;
 
                 // Notify user urgently (placeholder for Gateway IPC)
                 self.notify_urgent_action(action).await?;
@@ -190,7 +197,11 @@ impl Dispatcher {
         let old_mode = mode.clone();
         *mode = new_mode.clone();
 
-        log::info!("Dispatcher mode transition: {:?} -> {:?}", old_mode, new_mode);
+        log::info!(
+            "Dispatcher mode transition: {:?} -> {:?}",
+            old_mode,
+            new_mode
+        );
     }
 
     /// Get current dispatcher mode
@@ -225,7 +236,11 @@ mod tests {
         };
 
         let event_bus = Arc::new(DaemonEventBus::new(100));
-        let worldmodel = Arc::new(WorldModel::new(worldmodel_config, event_bus.clone()).await.unwrap());
+        let worldmodel = Arc::new(
+            WorldModel::new(worldmodel_config, event_bus.clone())
+                .await
+                .unwrap(),
+        );
 
         let dispatcher_config = DispatcherConfig::default();
         let dispatcher = Dispatcher::new(dispatcher_config, worldmodel.clone(), event_bus.clone());
@@ -244,10 +259,12 @@ mod tests {
     async fn test_dispatcher_set_mode() {
         let (dispatcher, _, _) = create_test_dispatcher().await;
 
-        dispatcher.set_mode(DispatcherMode::Reconciling {
-            pending_high_risk: vec![],
-            started_at: Utc::now(),
-        }).await;
+        dispatcher
+            .set_mode(DispatcherMode::Reconciling {
+                pending_high_risk: vec![],
+                started_at: Utc::now(),
+            })
+            .await;
 
         let mode = dispatcher.get_mode().await;
         assert!(matches!(mode, DispatcherMode::Reconciling { .. }));

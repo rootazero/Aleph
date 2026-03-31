@@ -9,22 +9,21 @@ use std::sync::Arc;
 use crate::cli::Args;
 use crate::daemon::{expand_path, remove_pid_file};
 
-use alephcore::gateway::GatewayServer;
 use alephcore::gateway::bridge::DesktopBridgeManager;
+use alephcore::gateway::pairing_store::SqlitePairingStore;
 use alephcore::gateway::router::AgentRouter;
+use alephcore::gateway::GatewayServer;
 use alephcore::gateway::{
     can_create_provider_from_env, create_provider_registry_from_env,
-    GatewayConfig as FullGatewayConfig,
-    SessionManager, SessionManagerConfig,
+    GatewayConfig as FullGatewayConfig, SessionManager, SessionManagerConfig,
 };
-use alephcore::gateway::pairing_store::SqlitePairingStore;
-use alephcore::tasks::cron::{CronService, SharedCronService};
-use alephcore::tasks::cron::executor::build_cron_executor_fn;
-use alephcore::tasks::cron::service::timer::run_timer_loop;
-use alephcore::tasks::cron::service::catchup::run_startup_catchup;
-use alephcore::tasks::heartbeat::{HeartbeatService, SharedHeartbeatService};
-use alephcore::tasks::heartbeat::store::HeartbeatStore;
 use alephcore::group_chat::{GroupChatExecutor, GroupChatOrchestrator};
+use alephcore::tasks::cron::executor::build_cron_executor_fn;
+use alephcore::tasks::cron::service::catchup::run_startup_catchup;
+use alephcore::tasks::cron::service::timer::run_timer_loop;
+use alephcore::tasks::cron::{CronService, SharedCronService};
+use alephcore::tasks::heartbeat::store::HeartbeatStore;
+use alephcore::tasks::heartbeat::{HeartbeatService, SharedHeartbeatService};
 use alephcore::ProviderRegistry as _; // trait needed for .default_provider()
 
 mod builder;
@@ -51,9 +50,15 @@ fn validate_bind_address(args: &Args) -> Result<(), Box<dyn std::error::Error>> 
 
 /// Print the startup banner and available method list to stdout.
 fn print_startup_banner(addr: SocketAddr, full_config: &FullGatewayConfig) {
-    println!("PII filtering engine initialized (enabled: {})", full_config.privacy.pii_filtering);
+    println!(
+        "PII filtering engine initialized (enabled: {})",
+        full_config.privacy.pii_filtering
+    );
     println!("╔═══════════════════════════════════════════════╗");
-    println!("║         Aleph Gateway v{}           ║", env!("ALEPH_VERSION"));
+    println!(
+        "║         Aleph Gateway v{}           ║",
+        env!("ALEPH_VERSION")
+    );
     println!("╠═══════════════════════════════════════════════╣");
     println!("║  WebSocket: ws://{}          ║", addr);
     println!("║  Protocol:  JSON-RPC 2.0                      ║");
@@ -65,7 +70,10 @@ fn print_startup_banner(addr: SocketAddr, full_config: &FullGatewayConfig) {
     println!("  - version   : Get server version info");
     println!("  - agent.run : Execute agent request with streaming");
     println!();
-    println!("Agents: {:?}", full_config.agents.keys().collect::<Vec<_>>());
+    println!(
+        "Agents: {:?}",
+        full_config.agents.keys().collect::<Vec<_>>()
+    );
     println!();
 }
 
@@ -78,16 +86,23 @@ fn print_startup_banner(addr: SocketAddr, full_config: &FullGatewayConfig) {
 fn initialize_tracing(args: &Args) {
     let filter = format!("aleph_server={0},alephcore={0}", args.log_level);
     if let Err(e) = aleph_logging::init_component_logging("server", 7, &filter) {
-        eprintln!("Warning: Failed to initialize file logging: {}. Falling back to console only.", e);
+        eprintln!(
+            "Warning: Failed to initialize file logging: {}. Falling back to console only.",
+            e
+        );
         use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
         tracing_subscriber::registry()
-            .with(tracing_subscriber::fmt::layer()
-                .with_target(true)
-                .with_thread_ids(false)
-                .with_file(false)
-                .with_line_number(false))
-            .with(tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(&filter)))
+            .with(
+                tracing_subscriber::fmt::layer()
+                    .with_target(true)
+                    .with_thread_ids(false)
+                    .with_file(false)
+                    .with_line_number(false),
+            )
+            .with(
+                tracing_subscriber::EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(&filter)),
+            )
             .init();
     }
 }
@@ -111,17 +126,15 @@ fn load_gateway_config(args: &Args) -> (FullGatewayConfig, String, u16, usize) {
                 }
             }
         }
-        None => {
-            match FullGatewayConfig::load_default() {
-                Ok(cfg) => cfg,
-                Err(e) => {
-                    if !args.daemon {
-                        eprintln!("Warning: {}, using defaults", e);
-                    }
-                    FullGatewayConfig::default()
+        None => match FullGatewayConfig::load_default() {
+            Ok(cfg) => cfg,
+            Err(e) => {
+                if !args.daemon {
+                    eprintln!("Warning: {}, using defaults", e);
                 }
+                FullGatewayConfig::default()
             }
-        }
+        },
     };
 
     // CLI args override config file settings
@@ -155,7 +168,10 @@ async fn initialize_session_manager(daemon: bool) -> Arc<SessionManager> {
             Arc::new(sm)
         }
         Err(e) => {
-            eprintln!("Warning: Failed to initialize session manager: {}. Using temp storage.", e);
+            eprintln!(
+                "Warning: Failed to initialize session manager: {}. Using temp storage.",
+                e
+            );
             let temp_path = std::env::temp_dir().join("aleph_sessions.db");
             match SessionManager::new(SessionManagerConfig {
                 db_path: temp_path,
@@ -242,8 +258,8 @@ fn build_http_provider(
     config: &alephcore::ProviderConfig,
 ) -> Result<alephcore::providers::http_provider::HttpProvider, Box<dyn std::error::Error>> {
     use alephcore::providers::http_provider::HttpProvider;
-    use alephcore::providers::protocols::ProtocolRegistry;
     use alephcore::providers::presets;
+    use alephcore::providers::protocols::ProtocolRegistry;
 
     let mut cfg = config.clone();
     let name_lower = name.to_lowercase();
@@ -263,12 +279,11 @@ fn build_http_provider(
     if registry.list_protocols().is_empty() {
         registry.register_builtin();
     }
-    let adapter = registry.get(&protocol_name).ok_or_else(|| {
-        format!("Unknown protocol: '{}'", protocol_name)
-    })?;
+    let adapter = registry
+        .get(&protocol_name)
+        .ok_or_else(|| format!("Unknown protocol: '{}'", protocol_name))?;
 
-    HttpProvider::new(name.to_string(), cfg, adapter)
-        .map_err(|e| e.into())
+    HttpProvider::new(name.to_string(), cfg, adapter).map_err(|e| e.into())
 }
 
 /// Start the gateway server
@@ -350,11 +365,18 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
 
     // Auth subsystem construction (early — vault needed for API key resolution)
     let auth_bundle = initialize_auth(
-        args.port, event_bus.clone(),
-        full_config.gateway.auth.mode.clone(), args.daemon,
+        args.port,
+        event_bus.clone(),
+        full_config.gateway.auth.mode.clone(),
+        args.daemon,
     );
     register_auth_handlers(&mut server, &auth_bundle.auth_ctx);
-    register_guest_handlers(&mut server, &auth_bundle.invitation_manager, &auth_bundle.guest_session_manager, &event_bus);
+    register_guest_handlers(
+        &mut server,
+        &auth_bundle.invitation_manager,
+        &auth_bundle.guest_session_manager,
+        &event_bus,
+    );
     server.set_guest_session_manager(auth_bundle.guest_session_manager.clone());
 
     // Load app config early so agent handlers can use configured providers
@@ -428,7 +450,8 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
 
     // Resolve agent definitions from config (initializes workspace directories)
     let mut agent_resolver = alephcore::AgentDefinitionResolver::new();
-    let resolved_agents = agent_resolver.resolve_all(&loaded_app_config.agents, &loaded_app_config.profiles);
+    let resolved_agents =
+        agent_resolver.resolve_all(&loaded_app_config.agents, &loaded_app_config.profiles);
 
     // Find default agent
     let default_agent_id = resolved_agents
@@ -439,7 +462,11 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
 
     if !args.daemon {
         for agent in &resolved_agents {
-            println!("  Agent '{}': workspace={}", agent.id, agent.workspace_path.display());
+            println!(
+                "  Agent '{}': workspace={}",
+                agent.id,
+                agent.workspace_path.display()
+            );
         }
     }
 
@@ -500,7 +527,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // Create agent manager (shared between tool config and RPC handlers)
     let agent_manager = Arc::new(alephcore::AgentManager::new(
         alephcore::Config::default_path(),
-        dirs::home_dir().unwrap_or_default().join(".aleph/workspaces"),
+        dirs::home_dir()
+            .unwrap_or_default()
+            .join(".aleph/workspaces"),
         dirs::home_dir().unwrap_or_default().join(".aleph/agents"),
         dirs::home_dir().unwrap_or_default().join(".aleph/trash"),
     ));
@@ -520,7 +549,10 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 }
                 Err(e) => {
                     if !args.daemon {
-                        eprintln!("Warning: Failed to initialize cron service: {}. Cron disabled.", e);
+                        eprintln!(
+                            "Warning: Failed to initialize cron service: {}. Cron disabled.",
+                            e
+                        );
                     }
                     None
                 }
@@ -569,12 +601,23 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     };
 
     let agent_result = register_agent_handlers(
-        &mut server, session_manager.clone(), event_bus.clone(),
-        router.clone(), &full_config, &*app_config.read().await, app_config.clone(), &memory_db,
-        workspace_manager.clone(), agent_manager.clone(), acp_manager.clone(),
-        cron_service.clone(), heartbeat_service.clone(), args.daemon,
+        &mut server,
+        session_manager.clone(),
+        event_bus.clone(),
+        router.clone(),
+        &full_config,
+        &*app_config.read().await,
+        app_config.clone(),
+        &memory_db,
+        workspace_manager.clone(),
+        agent_manager.clone(),
+        acp_manager.clone(),
+        cron_service.clone(),
+        heartbeat_service.clone(),
+        args.daemon,
         auth_bundle.auth_ctx.shared_token_mgr.clone(),
-    ).await;
+    )
+    .await;
 
     // Wire OpenAI-compatible API dependencies into GatewayServer
     server.execution_adapter = agent_result.execution_adapter.clone();
@@ -589,7 +632,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             if let Ok(http_provider) = build_http_provider(name, config) {
                 let provider = Arc::new(http_provider);
                 for model in &config.models {
-                    provider_map.entry(model.clone()).or_insert_with(|| provider.clone());
+                    provider_map
+                        .entry(model.clone())
+                        .or_insert_with(|| provider.clone());
                 }
             }
         }
@@ -600,10 +645,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
 
     let config_patcher = {
         let config_path = alephcore::Config::default_path();
-        let backup = alephcore::ConfigBackup::new(
-            alephcore::ConfigBackup::default_dir(),
-            10,
-        );
+        let backup = alephcore::ConfigBackup::new(alephcore::ConfigBackup::default_dir(), 10);
         Arc::new(alephcore::ConfigPatcher::new(
             app_config.clone(),
             config_path,
@@ -613,10 +655,26 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     let app_config_for_channels = app_config.clone();
     let app_config_for_reload = app_config.clone();
     let app_config_for_oauth = app_config.clone();
-    register_config_handlers(&mut server, app_config, config_patcher, event_bus.clone(), auth_bundle.device_store.clone(), agent_result.multi_registry.clone(), auth_bundle.auth_ctx.shared_token_mgr.clone(), acp_manager.clone());
+    register_config_handlers(
+        &mut server,
+        app_config,
+        config_patcher,
+        event_bus.clone(),
+        auth_bundle.device_store.clone(),
+        agent_result.multi_registry.clone(),
+        auth_bundle.auth_ctx.shared_token_mgr.clone(),
+        acp_manager.clone(),
+    );
 
     register_session_handlers(&mut server, &session_manager, args.daemon);
-    register_memory_handlers(&mut server, &memory_db, &agent_result.compression_service, &agent_result.embedder, &event_bus, args.daemon);
+    register_memory_handlers(
+        &mut server,
+        &memory_db,
+        &agent_result.compression_service,
+        &agent_result.embedder,
+        &event_bus,
+        args.daemon,
+    );
     register_daemon_handlers(&mut server, start_time, args.daemon);
 
     // OAuth state: restore from vault if chatgpt provider exists
@@ -629,7 +687,13 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         }
         Arc::new(tokio::sync::RwLock::new(restored))
     };
-    register_oauth_handlers(&mut server, &oauth_state, &app_config_for_oauth, &oauth_vault, args.daemon);
+    register_oauth_handlers(
+        &mut server,
+        &oauth_state,
+        &app_config_for_oauth,
+        &oauth_vault,
+        args.daemon,
+    );
 
     if let Some(ref wm) = workspace_manager {
         register_workspace_handlers(&mut server, wm, &memory_db, args.daemon);
@@ -639,16 +703,16 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     register_agents_handlers(&mut server, &agent_manager, &event_bus);
 
     // Team management (team store created inside register_agent_handlers)
-    if let (Some(ref ts), Some(ref cs)) = (&agent_result.team_store, &agent_result.coord_task_store) {
+    if let (Some(ref ts), Some(ref cs)) = (&agent_result.team_store, &agent_result.coord_task_store)
+    {
         register_teams_handlers(&mut server, ts, cs);
     }
 
     // Identity resolver (shared for session-level overrides)
-    let identity_resolver: alephcore::gateway::handlers::identity::SharedIdentityResolver = Arc::new(
-        tokio::sync::RwLock::new(
-            alephcore::thinker::identity::IdentityResolver::with_defaults()
-        )
-    );
+    let identity_resolver: alephcore::gateway::handlers::identity::SharedIdentityResolver =
+        Arc::new(tokio::sync::RwLock::new(
+            alephcore::thinker::identity::IdentityResolver::with_defaults(),
+        ));
     register_identity_handlers(&mut server, &identity_resolver);
 
     // Initialize A2A subsystem (if enabled)
@@ -658,23 +722,26 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         drop(app_cfg);
 
         if a2a_config.enabled {
-            use alephcore::a2a::adapter::server::{TaskStore, StreamHub, AgentLoopBridge};
-            use alephcore::a2a::adapter::server::A2AServerState;
             use alephcore::a2a::adapter::auth::TieredAuthenticator;
-            use alephcore::a2a::service::{CardBuilder, CardRegistry, SmartRouter, NotificationService};
             use alephcore::a2a::adapter::client::A2AClientPool;
-            use alephcore::a2a::sub_agent::A2ASubAgent;
-            use alephcore::a2a::port::{A2ATaskManager, A2AMessageHandler, A2AStreamingHandler};
+            use alephcore::a2a::adapter::server::A2AServerState;
+            use alephcore::a2a::adapter::server::{AgentLoopBridge, StreamHub, TaskStore};
             use alephcore::a2a::port::authenticator::A2AAuthenticator;
+            use alephcore::a2a::port::{A2AMessageHandler, A2AStreamingHandler, A2ATaskManager};
+            use alephcore::a2a::service::{
+                CardBuilder, CardRegistry, NotificationService, SmartRouter,
+            };
+            use alephcore::a2a::sub_agent::A2ASubAgent;
 
             // 1. Create server-side components
             let task_store: Arc<dyn A2ATaskManager> = Arc::new(TaskStore::new());
             let stream_hub: Arc<dyn A2AStreamingHandler> = Arc::new(StreamHub::new());
 
             // 2. Create bridge (needs execution adapter + agent registry)
-            if let (Some(exec_adapter), Some(registry)) =
-                (&agent_result.execution_adapter, &agent_result.agent_registry)
-            {
+            if let (Some(exec_adapter), Some(registry)) = (
+                &agent_result.execution_adapter,
+                &agent_result.agent_registry,
+            ) {
                 let message_handler: Arc<dyn A2AMessageHandler> = Arc::new(AgentLoopBridge::new(
                     registry.clone(),
                     exec_adapter.clone(),
@@ -683,12 +750,10 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 ));
 
                 // 3. Create authenticator
-                let authenticator: Arc<dyn A2AAuthenticator> = Arc::new(
-                    TieredAuthenticator::new(
-                        a2a_config.server.security.local_bypass,
-                        a2a_config.server.security.tokens.clone(),
-                    )
-                );
+                let authenticator: Arc<dyn A2AAuthenticator> = Arc::new(TieredAuthenticator::new(
+                    a2a_config.server.security.local_bypass,
+                    a2a_config.server.security.tokens.clone(),
+                ));
 
                 // 4. Build agent card
                 let card = CardBuilder::build(&a2a_config.server, &format!("{}", addr));
@@ -752,9 +817,10 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
 
     // Spawn cron timer loop (after agent handlers, so AgentRegistry is populated)
     if let Some(ref cron_svc) = cron_service {
-        if let (Some(ref exec_adapter), Some(ref registry)) =
-            (&agent_result.execution_adapter, &agent_result.agent_registry)
-        {
+        if let (Some(ref exec_adapter), Some(ref registry)) = (
+            &agent_result.execution_adapter,
+            &agent_result.agent_registry,
+        ) {
             let cron_state = {
                 let guard = cron_svc.lock().await;
                 guard.state().clone()
@@ -763,7 +829,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             // Use the existing channel_registry_cell from agent_result for deferred injection.
             // ChannelRegistry is initialized after this point; the cell is populated at line ~950.
             let cron_channel_cell: alephcore::tasks::cron::executor::ChannelRegistryCell =
-                agent_result.channel_registry_cell.clone()
+                agent_result
+                    .channel_registry_cell
+                    .clone()
                     .unwrap_or_else(|| Arc::new(tokio::sync::OnceCell::new()));
 
             let executor_fn = build_cron_executor_fn(
@@ -780,7 +848,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                     cron_state.clock.as_ref(),
                     cron_config.max_missed_jobs_per_restart,
                     cron_config.catchup_stagger_ms,
-                ).await {
+                )
+                .await
+                {
                     Ok(report) => {
                         if report.stale_markers_cleared > 0
                             || report.immediate_count > 0
@@ -810,13 +880,15 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
 
     // Spawn heartbeat timer loop (after agent handlers, so AgentRegistry is populated)
     if let Some(ref hb_svc) = heartbeat_service {
-        if let (Some(ref exec_adapter), Some(ref registry), Some(ref tool_reg)) =
-            (&agent_result.execution_adapter, &agent_result.agent_registry, &agent_result.tool_registry)
-        {
-            use alephcore::tasks::heartbeat::probe::DefaultProbeExecutor;
+        if let (Some(ref exec_adapter), Some(ref registry), Some(ref tool_reg)) = (
+            &agent_result.execution_adapter,
+            &agent_result.agent_registry,
+            &agent_result.tool_registry,
+        ) {
+            use alephcore::tasks::heartbeat::dedup::{init_dedup_schema, DedupEngine};
             use alephcore::tasks::heartbeat::executor::DefaultHeartbeatAdapter;
-            use alephcore::tasks::heartbeat::dedup::{DedupEngine, init_dedup_schema};
-            use alephcore::tasks::heartbeat::service::timer::{TickContext, run_heartbeat_loop};
+            use alephcore::tasks::heartbeat::probe::DefaultProbeExecutor;
+            use alephcore::tasks::heartbeat::service::timer::{run_heartbeat_loop, TickContext};
             use alephcore::tasks::shared::delivery::DeliveryEngine;
 
             let hb_state = {
@@ -892,14 +964,12 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
 
         // Create executor with default provider (if available)
         let gc_executor: Option<Arc<GroupChatExecutor>> = if can_create_provider_from_env() {
-            create_provider_registry_from_env()
-                .ok()
-                .map(|reg| {
-                    Arc::new(
-                        GroupChatExecutor::new(reg.default_provider())
-                            .with_coordinator_visible(coordinator_visible),
-                    )
-                })
+            create_provider_registry_from_env().ok().map(|reg| {
+                Arc::new(
+                    GroupChatExecutor::new(reg.default_provider())
+                        .with_coordinator_visible(coordinator_visible),
+                )
+            })
         } else {
             None
         };
@@ -919,11 +989,13 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         let pairing_store_path = alephcore::utils::paths::get_pairing_db_path()
             .unwrap_or_else(|_| PathBuf::from("/tmp/aleph_pairing.db"));
         Arc::new(
-            SqlitePairingStore::new(&pairing_store_path)
-                .unwrap_or_else(|e| {
-                    eprintln!("Warning: Failed to create pairing store: {}. Using in-memory.", e);
-                    SqlitePairingStore::in_memory().expect("Failed to create in-memory pairing store")
-                })
+            SqlitePairingStore::new(&pairing_store_path).unwrap_or_else(|e| {
+                eprintln!(
+                    "Warning: Failed to create pairing store: {}. Using in-memory.",
+                    e
+                );
+                SqlitePairingStore::in_memory().expect("Failed to create in-memory pairing store")
+            }),
         )
     };
 
@@ -932,34 +1004,44 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         use alephcore::gateway::handlers::pairing as pairing_handlers;
 
         let store = channel_pairing_store.clone();
-        server.handlers_mut().register("channel.pairing.list", move |req| {
-            let store = store.clone();
-            async move { pairing_handlers::handle_list(req, store).await }
-        });
+        server
+            .handlers_mut()
+            .register("channel.pairing.list", move |req| {
+                let store = store.clone();
+                async move { pairing_handlers::handle_list(req, store).await }
+            });
 
         let store = channel_pairing_store.clone();
-        server.handlers_mut().register("channel.pairing.approve", move |req| {
-            let store = store.clone();
-            async move { pairing_handlers::handle_approve(req, store).await }
-        });
+        server
+            .handlers_mut()
+            .register("channel.pairing.approve", move |req| {
+                let store = store.clone();
+                async move { pairing_handlers::handle_approve(req, store).await }
+            });
 
         let store = channel_pairing_store.clone();
-        server.handlers_mut().register("channel.pairing.reject", move |req| {
-            let store = store.clone();
-            async move { pairing_handlers::handle_reject(req, store).await }
-        });
+        server
+            .handlers_mut()
+            .register("channel.pairing.reject", move |req| {
+                let store = store.clone();
+                async move { pairing_handlers::handle_reject(req, store).await }
+            });
 
         let store = channel_pairing_store.clone();
-        server.handlers_mut().register("channel.pairing.approved", move |req| {
-            let store = store.clone();
-            async move { pairing_handlers::handle_approved_list(req, store).await }
-        });
+        server
+            .handlers_mut()
+            .register("channel.pairing.approved", move |req| {
+                let store = store.clone();
+                async move { pairing_handlers::handle_approved_list(req, store).await }
+            });
 
         let store = channel_pairing_store.clone();
-        server.handlers_mut().register("channel.pairing.revoke", move |req| {
-            let store = store.clone();
-            async move { pairing_handlers::handle_revoke(req, store).await }
-        });
+        server
+            .handlers_mut()
+            .register("channel.pairing.revoke", move |req| {
+                let store = store.clone();
+                async move { pairing_handlers::handle_revoke(req, store).await }
+            });
 
         if !args.daemon {
             println!("Channel pairing methods:");
@@ -973,19 +1055,31 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     }
 
     let app_config_snapshot = app_config_for_channels.read().await.clone();
-    let channel_registry = initialize_channels(&mut server, &app_config_snapshot, &app_config_for_channels, agent_result.dispatch_registry.clone(), args.daemon, auth_bundle.auth_ctx.shared_token_mgr.clone()).await;
+    let channel_registry = initialize_channels(
+        &mut server,
+        &app_config_snapshot,
+        &app_config_for_channels,
+        agent_result.dispatch_registry.clone(),
+        args.daemon,
+        auth_bundle.auth_ctx.shared_token_mgr.clone(),
+    )
+    .await;
 
     // Inject ChannelRegistry into BuiltinToolRegistry (deferred — channels created after tools)
     if let Some(ref cell) = agent_result.channel_registry_cell {
         let _ = cell.set(channel_registry.clone());
-        tracing::info!("ChannelRegistry injected into BuiltinToolRegistry for channel_pairing tool");
+        tracing::info!(
+            "ChannelRegistry injected into BuiltinToolRegistry for channel_pairing tool"
+        );
     }
 
     initialize_inbound_router(
         channel_registry,
-        agent_result.execution_adapter, agent_result.agent_registry,
+        agent_result.execution_adapter,
+        agent_result.agent_registry,
         channel_pairing_store,
-        shared_orch, gc_executor,
+        shared_orch,
+        gc_executor,
         workspace_manager,
         agent_result.default_provider,
         agent_result.dispatch_registry,
@@ -993,12 +1087,22 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         Some(app_config_for_channels.clone()),
         agent_result.generation_registry,
         args.daemon,
-    ).await;
+    )
+    .await;
 
-    let config_path = args.config.clone()
+    let config_path = args
+        .config
+        .clone()
         .map(|p| expand_path(&p.to_string_lossy()))
         .or_else(|| dirs::home_dir().map(|h| h.join(".aleph/config.toml")));
-    let _config_watcher = setup_config_watcher(&mut server, config_path, &event_bus, args.daemon, Some(app_config_for_reload)).await;
+    let _config_watcher = setup_config_watcher(
+        &mut server,
+        config_path,
+        &event_bus,
+        args.daemon,
+        Some(app_config_for_reload),
+    )
+    .await;
 
     start_webchat_server(args, &final_bind, final_port).await;
 

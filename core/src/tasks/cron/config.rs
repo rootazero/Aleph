@@ -96,10 +96,7 @@ impl CronConfig {
     pub fn expand_db_path(&self) -> String {
         if self.db_path.starts_with("~/") {
             if let Some(home) = dirs::home_dir() {
-                return home
-                    .join(&self.db_path[2..])
-                    .to_string_lossy()
-                    .to_string();
+                return home.join(&self.db_path[2..]).to_string_lossy().to_string();
             }
         }
         self.db_path.clone()
@@ -410,7 +407,10 @@ impl CronJob {
     /// Construct a generic `DeliveryPayload` from this job and its output.
     ///
     /// Used when handing off results to the shared delivery pipeline.
-    pub fn to_delivery_payload(&self, output: String) -> crate::tasks::shared::delivery::DeliveryPayload {
+    pub fn to_delivery_payload(
+        &self,
+        output: String,
+    ) -> crate::tasks::shared::delivery::DeliveryPayload {
         crate::tasks::shared::delivery::DeliveryPayload {
             source_type: "cron".to_string(),
             task_name: self.name.clone(),
@@ -655,14 +655,22 @@ mod tests {
 
     #[test]
     fn run_status_serde_roundtrip() {
-        for status in [RunStatus::Ok, RunStatus::Error, RunStatus::Skipped, RunStatus::Timeout] {
+        for status in [
+            RunStatus::Ok,
+            RunStatus::Error,
+            RunStatus::Skipped,
+            RunStatus::Timeout,
+        ] {
             let json = serde_json::to_string(&status).unwrap();
             let parsed: RunStatus = serde_json::from_str(&json).unwrap();
             assert_eq!(parsed, status);
         }
         // Verify snake_case
         assert_eq!(serde_json::to_string(&RunStatus::Ok).unwrap(), "\"ok\"");
-        assert_eq!(serde_json::to_string(&RunStatus::Timeout).unwrap(), "\"timeout\"");
+        assert_eq!(
+            serde_json::to_string(&RunStatus::Timeout).unwrap(),
+            "\"timeout\""
+        );
     }
 
     #[test]

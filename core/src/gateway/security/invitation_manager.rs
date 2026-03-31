@@ -5,8 +5,8 @@
 //! Manages the creation and activation of guest invitations with a 15-minute expiry.
 //! Invitations are one-time use only and tracked in-memory using DashMap.
 
-use dashmap::DashMap;
 use crate::sync_primitives::Arc;
+use dashmap::DashMap;
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -137,10 +137,7 @@ impl InvitationManager {
     /// - `InvitationError::InvalidToken` if token not found
     /// - `InvitationError::InvitationExpired` if token has expired
     /// - `InvitationError::AlreadyActivated` if token was already activated
-    pub fn activate_invitation(
-        &self,
-        token: &str,
-    ) -> Result<GuestToken, InvitationError> {
+    pub fn activate_invitation(&self, token: &str) -> Result<GuestToken, InvitationError> {
         let now = current_timestamp_ms();
 
         // Find the invitation
@@ -238,7 +235,7 @@ impl Default for InvitationManager {
 fn current_timestamp_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
+        .unwrap_or_default()
         .as_millis() as i64
 }
 

@@ -136,7 +136,9 @@ impl StdioTransport {
                     }
                     Some(Err(e)) => return Err(e),
                     None => {
-                        return Err(AlephError::tool("ACP connection closed while waiting for response"));
+                        return Err(AlephError::tool(
+                            "ACP connection closed while waiting for response",
+                        ));
                     }
                 }
             }
@@ -175,10 +177,13 @@ impl StdioTransport {
                         if resp.id == Some(expected_id) {
                             if let Some(ref err) = resp.error {
                                 return Err(crate::acp::protocol::AcpOperationError::with_remote(
-                                    crate::acp::protocol::AcpErrorCode::ProtocolError { code: err.code },
+                                    crate::acp::protocol::AcpErrorCode::ProtocolError {
+                                        code: err.code,
+                                    },
                                     format!("ACP error {}: {}", err.code, err.message),
                                     err.clone(),
-                                ).into());
+                                )
+                                .into());
                             }
                             return Ok(resp);
                         }
@@ -190,7 +195,8 @@ impl StdioTransport {
                         return Err(crate::acp::protocol::AcpOperationError::new(
                             crate::acp::protocol::AcpErrorCode::SessionDead,
                             "ACP connection closed while waiting for response",
-                        ).into());
+                        )
+                        .into());
                     }
                 }
             }
@@ -202,7 +208,8 @@ impl StdioTransport {
             Err(_elapsed) => Err(crate::acp::protocol::AcpOperationError::new(
                 crate::acp::protocol::AcpErrorCode::Timeout,
                 format!("ACP request timed out after {:?}", timeout),
-            ).into()),
+            )
+            .into()),
         }
     }
 }

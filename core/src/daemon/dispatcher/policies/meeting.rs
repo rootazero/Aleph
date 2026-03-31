@@ -14,15 +14,12 @@ impl Policy for MeetingMutePolicy {
         "Auto-Mute in Meeting"
     }
 
-    fn evaluate(
-        &self,
-        _context: &EnhancedContext,
-        event: &DerivedEvent,
-    ) -> Option<ProposedAction> {
+    fn evaluate(&self, _context: &EnhancedContext, event: &DerivedEvent) -> Option<ProposedAction> {
         if let DerivedEvent::ActivityChanged {
             new_activity: ActivityType::Meeting { .. },
             ..
-        } = event {
+        } = event
+        {
             return Some(ProposedAction {
                 action_type: ActionType::MuteSystemAudio,
                 reason: "User entered a meeting".into(),

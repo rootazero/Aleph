@@ -12,8 +12,10 @@ async fn p6_01_three_by_three_matrix() {
     h.register_link("sl-1").await;
 
     h.register_agent("main", None).await; // default, all allowed
-    h.register_agent("agent-a", Some(vec!["tg-1".into(), "dc-1".into()])).await;
-    h.register_agent("agent-b", Some(vec!["dc-1".into(), "sl-1".into()])).await;
+    h.register_agent("agent-a", Some(vec!["tg-1".into(), "dc-1".into()]))
+        .await;
+    h.register_agent("agent-b", Some(vec!["dc-1".into(), "sl-1".into()]))
+        .await;
     h.bind("tg-1", "main");
     h.bind("dc-1", "main");
     h.bind("sl-1", "main");
@@ -74,8 +76,10 @@ async fn p6_03_independent_agents() {
     h.register_link("link-1").await;
     h.register_link("link-2").await;
     h.register_agent("main", None).await;
-    h.register_agent("agent-a", Some(vec!["link-1".into()])).await;
-    h.register_agent("agent-b", Some(vec!["link-2".into()])).await;
+    h.register_agent("agent-a", Some(vec!["link-1".into()]))
+        .await;
+    h.register_agent("agent-b", Some(vec!["link-2".into()]))
+        .await;
     h.bind("link-1", "main");
     h.bind("link-2", "main");
 
@@ -111,8 +115,10 @@ async fn p6_04_same_link_different_agents() {
     let mut h = LinkAclHarness::new();
     h.register_link("tg-1").await;
     h.register_agent("main", None).await;
-    h.register_agent("open-agent", Some(vec!["tg-1".into()])).await;
-    h.register_agent("closed-agent", Some(vec!["dc-1".into()])).await;
+    h.register_agent("open-agent", Some(vec!["tg-1".into()]))
+        .await;
+    h.register_agent("closed-agent", Some(vec!["dc-1".into()]))
+        .await;
     h.bind("tg-1", "main");
 
     h.send_message("tg-1", "/switch open-agent").await;
@@ -153,7 +159,8 @@ async fn p6_06_mixed_policies() {
     let mut h = LinkAclHarness::new();
     h.register_link("tg-1").await;
     h.register_agent("main", None).await; // allows all
-    h.register_agent("restricted", Some(vec!["dc-1".into()])).await;
+    h.register_agent("restricted", Some(vec!["dc-1".into()]))
+        .await;
     h.bind("tg-1", "main");
 
     // tg-1 to main: OK (no denial)

@@ -15,7 +15,9 @@ use crate::a2a::domain::security::Credentials;
 use crate::a2a::domain::{AgentCard, UpdateEvent};
 use crate::a2a::port::authenticator::A2AAuthContext;
 
-use super::request_processor::{A2ARequestProcessor, A2AServerState, JsonRpcRequest, JsonRpcResponse};
+use super::request_processor::{
+    A2ARequestProcessor, A2AServerState, JsonRpcRequest, JsonRpcResponse,
+};
 
 /// Build the axum router for A2A endpoints.
 ///
@@ -121,7 +123,11 @@ async fn a2a_stream_handler(
 
     // Extract message params
     let message: crate::a2a::domain::A2AMessage = match serde_json::from_value(
-        request.params.get("message").cloned().unwrap_or(serde_json::Value::Null),
+        request
+            .params
+            .get("message")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null),
     ) {
         Ok(m) => m,
         Err(e) => {
@@ -160,37 +166,33 @@ async fn a2a_stream_handler(
 
     // Convert UpdateEvent stream to SSE events
     let request_id = request.id.clone();
-    let sse_stream = update_stream.map(move |event_result| {
-        match event_result {
-            Ok(event) => {
-                let (event_type, data) = match &event {
-                    UpdateEvent::StatusUpdate(_) => (
-                        "status-update",
-                        serde_json::to_string(&JsonRpcResponse::success(
-                            request_id.clone(),
-                            serde_json::to_value(&event).unwrap_or_default(),
-                        ))
-                        .unwrap_or_default(),
-                    ),
-                    UpdateEvent::ArtifactUpdate(_) => (
-                        "artifact-update",
-                        serde_json::to_string(&JsonRpcResponse::success(
-                            request_id.clone(),
-                            serde_json::to_value(&event).unwrap_or_default(),
-                        ))
-                        .unwrap_or_default(),
-                    ),
-                };
-                Ok::<_, Infallible>(Event::default().event(event_type).data(data))
-            }
-            Err(e) => {
-                let json = serde_json::to_string(&JsonRpcResponse::from_a2a_error(
-                    request_id.clone(),
-                    &e,
-                ))
-                .unwrap_or_default();
-                Ok(Event::default().event("error").data(json))
-            }
+    let sse_stream = update_stream.map(move |event_result| match event_result {
+        Ok(event) => {
+            let (event_type, data) = match &event {
+                UpdateEvent::StatusUpdate(_) => (
+                    "status-update",
+                    serde_json::to_string(&JsonRpcResponse::success(
+                        request_id.clone(),
+                        serde_json::to_value(&event).unwrap_or_default(),
+                    ))
+                    .unwrap_or_default(),
+                ),
+                UpdateEvent::ArtifactUpdate(_) => (
+                    "artifact-update",
+                    serde_json::to_string(&JsonRpcResponse::success(
+                        request_id.clone(),
+                        serde_json::to_value(&event).unwrap_or_default(),
+                    ))
+                    .unwrap_or_default(),
+                ),
+            };
+            Ok::<_, Infallible>(Event::default().event(event_type).data(data))
+        }
+        Err(e) => {
+            let json =
+                serde_json::to_string(&JsonRpcResponse::from_a2a_error(request_id.clone(), &e))
+                    .unwrap_or_default();
+            Ok(Event::default().event("error").data(json))
         }
     });
 

@@ -101,9 +101,7 @@ impl EligibilityService {
         if !spec.any_bins.is_empty() {
             let any_found = spec.any_bins.iter().any(|b| which::which(b).is_ok());
             if !any_found {
-                reasons.push(IneligibilityReason::MissingAnyBinary(
-                    spec.any_bins.clone(),
-                ));
+                reasons.push(IneligibilityReason::MissingAnyBinary(spec.any_bins.clone()));
             }
         }
 
@@ -168,7 +166,9 @@ pub fn current_os() -> Os {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::skill::{EligibilitySpec, SkillContent, SkillId, SkillManifest, SkillSource};
+    use crate::domain::skill::{
+        EligibilitySpec, SkillContent, SkillId, SkillManifest, SkillSource,
+    };
 
     /// Helper: create a manifest with a given eligibility spec.
     fn manifest_with_eligibility(spec: EligibilitySpec) -> SkillManifest {
@@ -294,6 +294,10 @@ mod tests {
         };
         let m = manifest_with_eligibility(spec);
         let result = svc.evaluate(&m);
-        assert!(result.is_eligible(), "skill should be eligible on current OS: {:?}", current);
+        assert!(
+            result.is_eligible(),
+            "skill should be eligible on current OS: {:?}",
+            current
+        );
     }
 }

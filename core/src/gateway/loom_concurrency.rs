@@ -3,8 +3,8 @@
 //! Tests abstract concurrency patterns extracted from gateway internals.
 //! Run with: `just test-loom`
 
+use crate::sync_primitives::{Arc, AtomicBool, AtomicU32, AtomicU64, Mutex, Ordering};
 use loom::thread;
-use crate::sync_primitives::{Arc, AtomicBool, AtomicU32, AtomicU64, Ordering, Mutex};
 use std::collections::HashMap;
 
 /// Verify sequence counter allocates unique values under concurrent access.
@@ -154,7 +154,11 @@ fn loom_execution_run_limit() {
         t3.join().unwrap();
 
         let total_accepted = accepted.load(Ordering::SeqCst);
-        assert!(total_accepted <= max_runs as u32,
-            "Accepted {} runs, max was {}", total_accepted, max_runs);
+        assert!(
+            total_accepted <= max_runs as u32,
+            "Accepted {} runs, max was {}",
+            total_accepted,
+            max_runs
+        );
     });
 }

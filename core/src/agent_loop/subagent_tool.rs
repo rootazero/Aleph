@@ -13,7 +13,7 @@ use super::loop_core::{AgentLoop, LoopConfig, NoopCallback};
 use super::prompt_builder::PromptBuilder;
 use super::provider_bridge::AiProviderBridge;
 use super::safety::SafetyGuard;
-use super::tool::{LoopToolRegistry, LoopTool, ToolResult};
+use super::tool::{LoopTool, LoopToolRegistry, ToolResult};
 use crate::providers::AiProvider;
 use crate::sync_primitives::Arc;
 
@@ -147,10 +147,8 @@ impl LoopTool for SubagentTool {
 
         let mut callback = NoopCallback;
         let timeout_duration = std::time::Duration::from_secs(timeout_secs);
-        let run_result = tokio::time::timeout(
-            timeout_duration,
-            agent_loop.run(&task, &mut callback),
-        ).await;
+        let run_result =
+            tokio::time::timeout(timeout_duration, agent_loop.run(&task, &mut callback)).await;
 
         match run_result {
             Err(_elapsed) => {
@@ -211,9 +209,7 @@ mod tests {
             _payload: RequestPayload<'a>,
         ) -> Pin<Box<dyn Future<Output = crate::error::Result<ProviderResponse>> + Send + 'a>>
         {
-            Box::pin(async {
-                Ok(ProviderResponse::text_only("mock response".to_string()))
-            })
+            Box::pin(async { Ok(ProviderResponse::text_only("mock response".to_string())) })
         }
 
         fn name(&self) -> &str {
@@ -228,8 +224,7 @@ mod tests {
     fn make_tool() -> SubagentTool {
         let provider: Arc<dyn AiProvider> = Arc::new(MockAiProvider);
         let factory: ToolRegistryFactory = Arc::new(|| LoopToolRegistry::new());
-        let safety_factory: SafetyGuardFactory =
-            Arc::new(|| SafetyGuard::default_guard());
+        let safety_factory: SafetyGuardFactory = Arc::new(|| SafetyGuard::default_guard());
         SubagentTool::new(provider, factory, safety_factory)
     }
 

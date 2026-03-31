@@ -206,16 +206,18 @@ impl ServiceManager {
         let key = Self::make_key(&registration.plugin_id, &registration.id);
 
         // Get existing service info or create one
-        let mut info = self.services.get(&key).cloned().unwrap_or_else(|| {
-            ServiceInfo {
+        let mut info = self
+            .services
+            .get(&key)
+            .cloned()
+            .unwrap_or_else(|| ServiceInfo {
                 id: registration.id.clone(),
                 plugin_id: registration.plugin_id.clone(),
                 name: registration.name.clone(),
                 state: ServiceState::Stopped,
                 started_at: None,
                 error: None,
-            }
-        });
+            });
 
         // If already stopped, return early
         if info.state == ServiceState::Stopped {

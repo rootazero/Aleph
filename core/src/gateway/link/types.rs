@@ -224,10 +224,7 @@ settings:
             cfg.settings["bot_token"].as_str().unwrap(),
             "${TELEGRAM_BOT_TOKEN}"
         );
-        assert_eq!(
-            cfg.settings["api_key"].as_str().unwrap(),
-            "${MY_API_KEY}"
-        );
+        assert_eq!(cfg.settings["api_key"].as_str().unwrap(), "${MY_API_KEY}");
     }
 
     #[test]
@@ -271,7 +268,10 @@ routing:
 "#
             );
             let cfg: LinkConfig = serde_yaml::from_str(&yaml).unwrap();
-            assert_eq!(cfg.routing.group_policy, expected, "group_policy: {yaml_val}");
+            assert_eq!(
+                cfg.routing.group_policy, expected,
+                "group_policy: {yaml_val}"
+            );
         }
     }
 }

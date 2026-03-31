@@ -34,15 +34,15 @@
 //! }
 //! ```
 
-use super::AtomicAction;
-use super::reflex_layer::KeywordRule;
+use super::classifier::{ActionClass, NaiveBayesClassifier};
 use super::feature_extractor::{FeatureExtractor, FeatureVector};
-use super::classifier::{NaiveBayesClassifier, ActionClass};
+use super::reflex_layer::KeywordRule;
+use super::AtomicAction;
+use crate::sync_primitives::{Arc, RwLock};
 use dashmap::DashMap;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use crate::sync_primitives::{Arc, RwLock};
 use tracing::{debug, info};
 
 /// Minimum number of successful executions before generating a rule
@@ -122,7 +122,10 @@ impl RuleLearner {
 
         // Train the classifier
         if let Some(action_class) = Self::action_to_class(&action) {
-            self.classifier.write().unwrap_or_else(|e| e.into_inner()).train(&features, action_class);
+            self.classifier
+                .write()
+                .unwrap_or_else(|e| e.into_inner())
+                .train(&features, action_class);
         }
 
         self.records
@@ -141,7 +144,10 @@ impl RuleLearner {
                 features: Some(features),
             });
 
-        self.stats.write().unwrap_or_else(|e| e.into_inner()).total_observations += 1;
+        self.stats
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .total_observations += 1;
 
         debug!(
             input = %input,
@@ -177,7 +183,10 @@ impl RuleLearner {
                 features: Some(features),
             });
 
-        self.stats.write().unwrap_or_else(|e| e.into_inner()).total_observations += 1;
+        self.stats
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .total_observations += 1;
 
         debug!(
             input = %input,
@@ -209,7 +218,10 @@ impl RuleLearner {
             }
         }
 
-        self.stats.write().unwrap_or_else(|e| e.into_inner()).rules_generated += rules.len();
+        self.stats
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .rules_generated += rules.len();
 
         rules
     }
@@ -275,7 +287,10 @@ impl RuleLearner {
     /// Returns the predicted action class and confidence score.
     pub fn predict(&self, input: &str) -> Option<(ActionClass, f64)> {
         let features = self.feature_extractor.extract(input);
-        self.classifier.read().unwrap_or_else(|e| e.into_inner()).predict(&features)
+        self.classifier
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .predict(&features)
     }
 
     /// Convert AtomicAction to ActionClass for classifier training

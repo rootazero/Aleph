@@ -35,8 +35,8 @@
 //! let response = handler.handle_request(request).await?;
 //! ```
 
-use std::collections::HashMap;
 use crate::sync_primitives::Arc;
+use std::collections::HashMap;
 use tokio::sync::RwLock;
 
 use super::error::{ExtensionError, ExtensionResult};
@@ -157,9 +157,8 @@ impl PluginHttpHandler {
         request.path_params = params;
 
         // Prepare handler arguments
-        let args = serde_json::to_value(&request).map_err(|e| {
-            ExtensionError::Runtime(format!("Failed to serialize request: {}", e))
-        })?;
+        let args = serde_json::to_value(&request)
+            .map_err(|e| ExtensionError::Runtime(format!("Failed to serialize request: {}", e)))?;
 
         // Call the plugin handler
         let result = {

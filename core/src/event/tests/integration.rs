@@ -11,9 +11,11 @@ mod tests {
     use crate::event::bus::EventBus;
     use crate::event::filter::EventFilter;
     use crate::event::global_bus::GlobalBus;
-    use crate::event::types::{AlephEvent, EventType, InputEvent, StopReason, TokenUsage, ToolCallResult};
-    use crate::sync_primitives::{AtomicUsize, Ordering};
+    use crate::event::types::{
+        AlephEvent, EventType, InputEvent, StopReason, TokenUsage, ToolCallResult,
+    };
     use crate::sync_primitives::Arc;
+    use crate::sync_primitives::{AtomicUsize, Ordering};
 
     // =========================================================================
     // GlobalBus + Multiple EventBus Integration Tests
@@ -81,7 +83,8 @@ mod tests {
         }))
         .await;
 
-        bus2.publish(AlephEvent::LoopStop(StopReason::Completed)).await;
+        bus2.publish(AlephEvent::LoopStop(StopReason::Completed))
+            .await;
 
         bus3.publish(AlephEvent::InputReceived(InputEvent {
             text: "Hello from agent 3".to_string(),
@@ -95,10 +98,26 @@ mod tests {
         tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
         // Verify all events were aggregated
-        assert_eq!(total_events.load(Ordering::SeqCst), 4, "Should have 4 total events");
-        assert_eq!(agent1_events.load(Ordering::SeqCst), 1, "Agent 1 should have 1 event");
-        assert_eq!(agent2_events.load(Ordering::SeqCst), 2, "Agent 2 should have 2 events");
-        assert_eq!(agent3_events.load(Ordering::SeqCst), 1, "Agent 3 should have 1 event");
+        assert_eq!(
+            total_events.load(Ordering::SeqCst),
+            4,
+            "Should have 4 total events"
+        );
+        assert_eq!(
+            agent1_events.load(Ordering::SeqCst),
+            1,
+            "Agent 1 should have 1 event"
+        );
+        assert_eq!(
+            agent2_events.load(Ordering::SeqCst),
+            2,
+            "Agent 2 should have 2 events"
+        );
+        assert_eq!(
+            agent3_events.load(Ordering::SeqCst),
+            1,
+            "Agent 3 should have 1 event"
+        );
     }
 
     #[tokio::test]
@@ -139,9 +158,15 @@ mod tests {
             .with_global_bus(global_bus);
 
         // Publish events
-        bus_a.publish(AlephEvent::LoopStop(StopReason::Completed)).await;
-        bus_a.publish(AlephEvent::LoopStop(StopReason::Completed)).await;
-        bus_b.publish(AlephEvent::LoopStop(StopReason::Completed)).await;
+        bus_a
+            .publish(AlephEvent::LoopStop(StopReason::Completed))
+            .await;
+        bus_a
+            .publish(AlephEvent::LoopStop(StopReason::Completed))
+            .await;
+        bus_b
+            .publish(AlephEvent::LoopStop(StopReason::Completed))
+            .await;
 
         tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
@@ -193,8 +218,10 @@ mod tests {
         }))
         .await;
 
-        bus.publish(AlephEvent::LoopStop(StopReason::Completed)).await;
-        bus.publish(AlephEvent::LoopStop(StopReason::UserAborted)).await;
+        bus.publish(AlephEvent::LoopStop(StopReason::Completed))
+            .await;
+        bus.publish(AlephEvent::LoopStop(StopReason::UserAborted))
+            .await;
 
         tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
@@ -237,15 +264,24 @@ mod tests {
             .with_global_bus(global_bus);
 
         // Publish events
-        bus_match.publish(AlephEvent::LoopStop(StopReason::Completed)).await; // Should match
-        bus_match.publish(AlephEvent::InputReceived(InputEvent { // Wrong event type
-            text: "test".to_string(),
-            session_id: None,
-            context: None,
-            timestamp: 0,
-        })).await;
-        bus_wrong_agent.publish(AlephEvent::LoopStop(StopReason::Completed)).await; // Wrong agent
-        bus_wrong_session.publish(AlephEvent::LoopStop(StopReason::Completed)).await; // Wrong session
+        bus_match
+            .publish(AlephEvent::LoopStop(StopReason::Completed))
+            .await; // Should match
+        bus_match
+            .publish(AlephEvent::InputReceived(InputEvent {
+                // Wrong event type
+                text: "test".to_string(),
+                session_id: None,
+                context: None,
+                timestamp: 0,
+            }))
+            .await;
+        bus_wrong_agent
+            .publish(AlephEvent::LoopStop(StopReason::Completed))
+            .await; // Wrong agent
+        bus_wrong_session
+            .publish(AlephEvent::LoopStop(StopReason::Completed))
+            .await; // Wrong session
 
         tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
@@ -265,8 +301,7 @@ mod tests {
         let child_completed_clone = child_completed.clone();
 
         // Parent subscribes to child's session LoopStop events
-        let filter = EventFilter::new(vec![EventType::LoopStop])
-            .with_session("child-session");
+        let filter = EventFilter::new(vec![EventType::LoopStop]).with_session("child-session");
 
         let _sub = global_bus
             .subscribe_async(filter, move |event| {
@@ -283,7 +318,9 @@ mod tests {
             .with_global_bus(global_bus);
 
         // Child completes its work
-        child_bus.publish(AlephEvent::LoopStop(StopReason::Completed)).await;
+        child_bus
+            .publish(AlephEvent::LoopStop(StopReason::Completed))
+            .await;
 
         tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
@@ -345,11 +382,9 @@ mod tests {
 
         // Spawn a task to receive events
         let receive_task = tokio::spawn(async move {
-            let result = tokio::time::timeout(
-                tokio::time::Duration::from_millis(100),
-                receiver.recv(),
-            )
-            .await;
+            let result =
+                tokio::time::timeout(tokio::time::Duration::from_millis(100), receiver.recv())
+                    .await;
 
             result.is_ok() && result.unwrap().is_ok()
         });
@@ -358,11 +393,15 @@ mod tests {
         tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
 
         // Publish event
-        bus.publish(AlephEvent::LoopStop(StopReason::Completed)).await;
+        bus.publish(AlephEvent::LoopStop(StopReason::Completed))
+            .await;
 
         // Verify receiver got the event
         let received = receive_task.await.unwrap();
-        assert!(received, "Broadcast receiver should have received the event");
+        assert!(
+            received,
+            "Broadcast receiver should have received the event"
+        );
     }
 
     // =========================================================================
@@ -378,7 +417,10 @@ mod tests {
 
         let _sub = global_bus
             .subscribe_async(EventFilter::all(), move |event| {
-                seq_clone.lock().unwrap_or_else(|e| e.into_inner()).push(event.sequence);
+                seq_clone
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .push(event.sequence);
             })
             .await;
 
@@ -389,7 +431,8 @@ mod tests {
 
         // Publish multiple events
         for _ in 0..5 {
-            bus.publish(AlephEvent::LoopStop(StopReason::Completed)).await;
+            bus.publish(AlephEvent::LoopStop(StopReason::Completed))
+                .await;
         }
 
         tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
@@ -399,7 +442,10 @@ mod tests {
 
         // Verify sequences are monotonically increasing
         for window in seqs.windows(2) {
-            assert!(window[1] > window[0], "Sequences should be monotonically increasing");
+            assert!(
+                window[1] > window[0],
+                "Sequences should be monotonically increasing"
+            );
         }
     }
 

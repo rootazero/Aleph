@@ -110,10 +110,7 @@ impl AllowlistValidator {
 
         // 7. Match against allowlist using the normalized (parsed) path
         let path = parsed.path();
-        let matched = self
-            .patterns
-            .iter()
-            .any(|p| p.matches(method, host, path));
+        let matched = self.patterns.iter().any(|p| p.matches(method, host, path));
 
         if matched {
             Ok(())
@@ -149,10 +146,7 @@ fn extract_raw_path(url_str: &str) -> &str {
         .split_once('?')
         .map(|(p, _)| p)
         .unwrap_or(path_and_rest);
-    let path = path
-        .split_once('#')
-        .map(|(p, _)| p)
-        .unwrap_or(path);
+    let path = path.split_once('#').map(|(p, _)| p).unwrap_or(path);
 
     path
 }
@@ -206,7 +200,10 @@ mod tests {
             .check("GET", "https://slack.com@evil.com/api/steal")
             .unwrap_err();
         assert!(
-            matches!(err, AllowlistError::InvalidUrl(_) | AllowlistError::NotAllowed(_)),
+            matches!(
+                err,
+                AllowlistError::InvalidUrl(_) | AllowlistError::NotAllowed(_)
+            ),
             "Expected InvalidUrl or NotAllowed, got: {:?}",
             err
         );

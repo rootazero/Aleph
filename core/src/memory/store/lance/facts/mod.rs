@@ -275,7 +275,10 @@ impl MemoryStore for LanceMemoryBackend {
             format!("path = '{}' AND agent = '{}'", path_safe, ws_safe)
         } else {
             let ns_safe = escape_sql_string(&ns_value);
-            format!("path = '{}' AND namespace = '{}' AND agent = '{}'", path_safe, ns_safe, ws_safe)
+            format!(
+                "path = '{}' AND namespace = '{}' AND agent = '{}'",
+                path_safe, ns_safe, ws_safe
+            )
         };
 
         let facts = scan_facts(&self.facts_table, Some(&filter), Some(1)).await?;
@@ -304,12 +307,8 @@ impl MemoryStore for LanceMemoryBackend {
     // -- Statistics & bulk --------------------------------------------------
 
     async fn count_facts(&self, filter: &SearchFilter) -> Result<usize, AlephError> {
-        let facts = scan_facts(
-            &self.facts_table,
-            filter.to_lance_filter().as_deref(),
-            None,
-        )
-        .await?;
+        let facts =
+            scan_facts(&self.facts_table, filter.to_lance_filter().as_deref(), None).await?;
         Ok(facts.len())
     }
 
@@ -323,7 +322,11 @@ impl MemoryStore for LanceMemoryBackend {
         let ns_value = ns.to_namespace_value();
         let ws_safe = escape_sql_string(workspace);
         let filter = if matches!(ns, NamespaceScope::Owner) {
-            format!("fact_type = '{}' AND agent = '{}'", escape_sql_string(fact_type.as_str()), ws_safe)
+            format!(
+                "fact_type = '{}' AND agent = '{}'",
+                escape_sql_string(fact_type.as_str()),
+                ws_safe
+            )
         } else {
             let ns_safe = escape_sql_string(&ns_value);
             format!(
@@ -347,10 +350,7 @@ impl MemoryStore for LanceMemoryBackend {
             clauses.push("is_valid = true".to_string());
         }
         if let Some(ws) = workspace {
-            clauses.push(format!(
-                "agent = '{}'",
-                escape_sql_string(ws)
-            ));
+            clauses.push(format!("agent = '{}'", escape_sql_string(ws)));
         }
         let filter = if clauses.is_empty() {
             None
@@ -378,11 +378,7 @@ impl MemoryStore for LanceMemoryBackend {
         self.update_fact(&fact).await
     }
 
-    async fn update_fact_content(
-        &self,
-        id: &str,
-        new_content: &str,
-    ) -> Result<(), AlephError> {
+    async fn update_fact_content(&self, id: &str, new_content: &str) -> Result<(), AlephError> {
         let existing = self.get_fact(id).await?;
         let mut fact = existing.ok_or_else(|| AlephError::NotFound(format!("Fact '{}'", id)))?;
 
@@ -430,12 +426,7 @@ impl MemoryStore for LanceMemoryBackend {
         // Collect ALL facts first, then apply mutations.
         // Mutating during offset-based pagination causes facts to be
         // skipped or double-processed because delete+insert changes row ordering.
-        let all_facts = scan_facts(
-            &self.facts_table,
-            Some("is_valid = true"),
-            None,
-        )
-        .await?;
+        let all_facts = scan_facts(&self.facts_table, Some("is_valid = true"), None).await?;
 
         let mut affected = 0usize;
 
@@ -531,7 +522,12 @@ impl LanceMemoryBackend {
     ) -> Result<Vec<ScoredFact>, AlephError> {
         // Run vector search and text search independently.
         let vec_results = self
-            .vector_search(params.embedding, params.dim_hint, params.filter, params.limit)
+            .vector_search(
+                params.embedding,
+                params.dim_hint,
+                params.filter,
+                params.limit,
+            )
             .await
             .unwrap_or_default();
 
@@ -563,7 +559,11 @@ impl LanceMemoryBackend {
             .collect();
 
         // Sort by score descending.
-        results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         results.truncate(params.limit);
 
         Ok(results)

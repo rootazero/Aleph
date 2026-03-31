@@ -2,13 +2,13 @@
 //!
 //! Handles the main "connect" authentication endpoint.
 
-use serde_json::{json, Value};
 use crate::sync_primitives::Arc;
+use serde_json::{json, Value};
 use tracing::{debug, info, warn};
 
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, AUTH_FAILED, INVALID_PARAMS};
-use crate::gateway::security::DeviceRole;
 use crate::gateway::security::store::DeviceUpsertData;
+use crate::gateway::security::DeviceRole;
 
 use super::{AuthContext, ConnectParams, ConnectResult, PairingRequiredParams};
 
@@ -16,10 +16,7 @@ use super::{AuthContext, ConnectParams, ConnectResult, PairingRequiredParams};
 ///
 /// This is the main authentication endpoint. Clients must call this
 /// before any other methods when auth is required.
-pub async fn handle_connect(
-    request: JsonRpcRequest,
-    ctx: Arc<AuthContext>,
-) -> JsonRpcResponse {
+pub async fn handle_connect(request: JsonRpcRequest, ctx: Arc<AuthContext>) -> JsonRpcResponse {
     // Parse parameters
     let params: ConnectParams = match &request.params {
         Some(Value::Object(map)) => match serde_json::from_value(Value::Object(map.clone())) {
@@ -45,10 +42,16 @@ pub async fn handle_connect(
     // Check for guest invitation token FIRST
     // Guest invitations should work regardless of auth_mode setting
     if let Some(invitation_token) = &params.invitation_token {
-        debug!("Processing guest invitation token: {}...", invitation_token.get(..8).unwrap_or("***"));
+        debug!(
+            "Processing guest invitation token: {}...",
+            invitation_token.get(..8).unwrap_or("***")
+        );
         match ctx.invitation_manager.activate_invitation(invitation_token) {
             Ok(guest_token) => {
-                debug!("Guest invitation activated successfully for guest_id: {}", guest_token.guest_id);
+                debug!(
+                    "Guest invitation activated successfully for guest_id: {}",
+                    guest_token.guest_id
+                );
 
                 // Generate a unique session ID
                 let session_id = uuid::Uuid::new_v4().to_string();
@@ -81,7 +84,7 @@ pub async fn handle_connect(
                     }),
                     timestamp: std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
+                        .unwrap_or_default()
                         .as_millis() as u64,
                 };
                 let _ = ctx.event_bus.publish_json(&event);
@@ -149,17 +152,26 @@ pub async fn handle_connect(
                     scopes: &["*".to_string()],
                 }) {
                     warn!(error = %e, "Failed to register device via shared token");
-                    return JsonRpcResponse::error(request.id, -32603, format!("Failed to register device: {}", e));
+                    return JsonRpcResponse::error(
+                        request.id,
+                        -32603,
+                        format!("Failed to register device: {}", e),
+                    );
                 }
 
-                let signed_token = match ctx
-                    .token_manager
-                    .issue_token(&device_id, DeviceRole::Operator, vec!["*".to_string()])
-                {
+                let signed_token = match ctx.token_manager.issue_token(
+                    &device_id,
+                    DeviceRole::Operator,
+                    vec!["*".to_string()],
+                ) {
                     Ok(t) => t,
                     Err(e) => {
                         warn!(error = %e, "Failed to issue token");
-                        return JsonRpcResponse::error(request.id, -32603, format!("Failed to issue token: {}", e));
+                        return JsonRpcResponse::error(
+                            request.id,
+                            -32603,
+                            format!("Failed to issue token: {}", e),
+                        );
                     }
                 };
 
@@ -171,9 +183,13 @@ pub async fn handle_connect(
                         token: format!("{}:{}", signed_token.token, signed_token.signature),
                         device_id,
                         permissions: vec!["*".to_string()],
-                        expires_at: chrono::DateTime::from_timestamp_millis(signed_token.expires_at)
-                            .map(|dt| dt.to_rfc3339())
-                            .unwrap_or_else(|| (chrono::Utc::now() + chrono::Duration::hours(24)).to_rfc3339()),
+                        expires_at: chrono::DateTime::from_timestamp_millis(
+                            signed_token.expires_at
+                        )
+                        .map(|dt| dt.to_rfc3339())
+                        .unwrap_or_else(
+                            || (chrono::Utc::now() + chrono::Duration::hours(24)).to_rfc3339()
+                        ),
                     }),
                 );
             }
@@ -183,7 +199,11 @@ pub async fn handle_connect(
             }
             Err(e) => {
                 warn!(error = %e, "Shared token validation error");
-                return JsonRpcResponse::error(request.id, -32603, format!("Token validation error: {}", e));
+                return JsonRpcResponse::error(
+                    request.id,
+                    -32603,
+                    format!("Token validation error: {}", e),
+                );
             }
         }
     }
@@ -201,23 +221,32 @@ pub async fn handle_connect(
             device_id: &device_id,
             device_name,
             device_type: None,
-            public_key: &[0u8; 32], // Placeholder public key
+            public_key: &[0u8; 32],           // Placeholder public key
             fingerprint: &device_fingerprint, // Use prefix as fingerprint
             role: DeviceRole::Operator.as_str(),
             scopes: &["*".to_string()],
         }) {
             warn!(error = %e, "Failed to register device");
-            return JsonRpcResponse::error(request.id, -32603, format!("Failed to register device: {}", e));
+            return JsonRpcResponse::error(
+                request.id,
+                -32603,
+                format!("Failed to register device: {}", e),
+            );
         }
 
-        let signed_token = match ctx
-            .token_manager
-            .issue_token(&device_id, DeviceRole::Operator, vec!["*".to_string()])
-        {
+        let signed_token = match ctx.token_manager.issue_token(
+            &device_id,
+            DeviceRole::Operator,
+            vec!["*".to_string()],
+        ) {
             Ok(t) => t,
             Err(e) => {
                 warn!(error = %e, "Failed to issue token");
-                return JsonRpcResponse::error(request.id, -32603, format!("Failed to issue token: {}", e));
+                return JsonRpcResponse::error(
+                    request.id,
+                    -32603,
+                    format!("Failed to issue token: {}", e),
+                );
             }
         };
 
@@ -231,13 +260,19 @@ pub async fn handle_connect(
                 permissions: vec!["*".to_string()],
                 expires_at: chrono::DateTime::from_timestamp_millis(signed_token.expires_at)
                     .map(|dt| dt.to_rfc3339())
-                    .unwrap_or_else(|| (chrono::Utc::now() + chrono::Duration::hours(24)).to_rfc3339()),
+                    .unwrap_or_else(
+                        || (chrono::Utc::now() + chrono::Duration::hours(24)).to_rfc3339()
+                    ),
             }),
         );
     }
 
-    debug!("Processing connect request: device_id={:?}, has_token={}, has_invitation_token={}",
-        params.device_id, params.token.is_some(), params.invitation_token.is_some());
+    debug!(
+        "Processing connect request: device_id={:?}, has_token={}, has_invitation_token={}",
+        params.device_id,
+        params.token.is_some(),
+        params.invitation_token.is_some()
+    );
 
     // Case 1: Client has a token - validate it
     if let Some(token_str) = &params.token {
@@ -275,7 +310,9 @@ pub async fn handle_connect(
                                 chrono::Utc::now().timestamp_millis() + validation.remaining_ms
                             )
                             .map(|dt| dt.to_rfc3339())
-                            .unwrap_or_else(|| (chrono::Utc::now() + chrono::Duration::hours(24)).to_rfc3339()),
+                            .unwrap_or_else(
+                                || (chrono::Utc::now() + chrono::Duration::hours(24)).to_rfc3339()
+                            ),
                         }),
                     );
                 }
@@ -302,14 +339,19 @@ pub async fn handle_connect(
                 .map(|d| d.permissions.clone())
                 .unwrap_or_else(|| vec!["*".to_string()]);
 
-            let signed_token = match ctx
-                .token_manager
-                .issue_token(device_id, DeviceRole::Operator, permissions.clone())
-            {
+            let signed_token = match ctx.token_manager.issue_token(
+                device_id,
+                DeviceRole::Operator,
+                permissions.clone(),
+            ) {
                 Ok(t) => t,
                 Err(e) => {
                     warn!(error = %e, "Failed to issue token");
-                    return JsonRpcResponse::error(request.id, -32603, format!("Failed to issue token: {}", e));
+                    return JsonRpcResponse::error(
+                        request.id,
+                        -32603,
+                        format!("Failed to issue token: {}", e),
+                    );
                 }
             };
 
@@ -326,7 +368,9 @@ pub async fn handle_connect(
                     permissions,
                     expires_at: chrono::DateTime::from_timestamp_millis(signed_token.expires_at)
                         .map(|dt| dt.to_rfc3339())
-                        .unwrap_or_else(|| (chrono::Utc::now() + chrono::Duration::hours(24)).to_rfc3339()),
+                        .unwrap_or_else(
+                            || (chrono::Utc::now() + chrono::Duration::hours(24)).to_rfc3339()
+                        ),
                 }),
             );
         }
@@ -348,7 +392,11 @@ pub async fn handle_connect(
         Ok(p) => p,
         Err(e) => {
             warn!(error = %e, "Failed to list pending pairings");
-            return JsonRpcResponse::error(request.id, -32603, format!("Failed to list pending pairings: {}", e));
+            return JsonRpcResponse::error(
+                request.id,
+                -32603,
+                format!("Failed to list pending pairings: {}", e),
+            );
         }
     };
 
@@ -383,14 +431,18 @@ pub async fn handle_connect(
     // In a full Ed25519 implementation, the client would provide a public key
     let pairing_request = match ctx.pairing_manager.request_device_pairing(
         device_name.clone(),
-        None, // device_type parsed as DeviceType
+        None,          // device_type parsed as DeviceType
         vec![0u8; 32], // placeholder public key for legacy API
-        None, // remote_addr
+        None,          // remote_addr
     ) {
         Ok(req) => req,
         Err(e) => {
             warn!(error = %e, "Failed to initiate pairing");
-            return JsonRpcResponse::error(request.id, -32603, format!("Failed to initiate pairing: {}", e));
+            return JsonRpcResponse::error(
+                request.id,
+                -32603,
+                format!("Failed to initiate pairing: {}", e),
+            );
         }
     };
 
@@ -425,8 +477,10 @@ mod tests {
     use super::*;
     use crate::gateway::config::AuthMode;
     use crate::gateway::device_store::DeviceStore;
-    use crate::gateway::security::{PairingManager, SharedTokenManager, TokenManager, SecurityStore};
     use crate::gateway::security::store::DeviceUpsertData;
+    use crate::gateway::security::{
+        PairingManager, SecurityStore, SharedTokenManager, TokenManager,
+    };
 
     #[tokio::test]
     async fn test_connect_no_auth_required() {
@@ -446,7 +500,10 @@ mod tests {
         let invitation_manager = Arc::new(crate::gateway::security::InvitationManager::new());
         let guest_session_manager = Arc::new(crate::gateway::security::GuestSessionManager::new());
         let event_bus = Arc::new(crate::gateway::event_bus::GatewayEventBus::new());
-        let shared_token_mgr = Arc::new(SharedTokenManager::new(store.clone(), "/tmp/aleph_test.vault"));
+        let shared_token_mgr = Arc::new(SharedTokenManager::new(
+            store.clone(),
+            "/tmp/aleph_test.vault",
+        ));
 
         let ctx = Arc::new(AuthContext {
             token_manager: Arc::new(TokenManager::new(store.clone())),
@@ -513,7 +570,10 @@ mod tests {
             })
             .unwrap();
 
-        let shared_token_mgr = Arc::new(SharedTokenManager::new(store.clone(), "/tmp/aleph_test.vault"));
+        let shared_token_mgr = Arc::new(SharedTokenManager::new(
+            store.clone(),
+            "/tmp/aleph_test.vault",
+        ));
         let token = shared_token_mgr.generate_token().unwrap();
 
         let invitation_manager = Arc::new(crate::gateway::security::InvitationManager::new());
@@ -539,7 +599,11 @@ mod tests {
         );
 
         let response = handle_connect(request, ctx).await;
-        assert!(response.is_success(), "Expected success but got: {:?}", response);
+        assert!(
+            response.is_success(),
+            "Expected success but got: {:?}",
+            response
+        );
 
         let result = response.result.unwrap();
         assert!(result.get("token").is_some());

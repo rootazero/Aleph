@@ -90,7 +90,10 @@ async fn p2_post_turn_creates_d0_summaries() {
     );
 
     // 8. Verify d0 facts were created (may be invalidated by condensation)
-    let d0_facts: Vec<_> = all_facts.iter().filter(|f| f.path.contains("/d0/")).collect();
+    let d0_facts: Vec<_> = all_facts
+        .iter()
+        .filter(|f| f.path.contains("/d0/"))
+        .collect();
     assert!(
         !d0_facts.is_empty(),
         "Expected d0 facts in LanceDB, got paths: {:?}",

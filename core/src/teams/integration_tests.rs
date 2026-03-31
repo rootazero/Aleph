@@ -30,7 +30,8 @@ async fn test_explorer_critic_review_cycle() {
     // --- Setup ---
     let artifact_store = Arc::new(SqliteArtifactStore::new_in_memory().await);
     let msg_store: Arc<SqliteMessageStore> = Arc::new(SqliteMessageStore::new_in_memory().await);
-    let event_store: Arc<SqliteEventLogStore> = Arc::new(SqliteEventLogStore::new_in_memory().await);
+    let event_store: Arc<SqliteEventLogStore> =
+        Arc::new(SqliteEventLogStore::new_in_memory().await);
 
     let router = MessageRouter::new(
         msg_store.clone(),
@@ -38,7 +39,10 @@ async fn test_explorer_critic_review_cycle() {
         EscalationRule::default(),
         None,
     );
-    let inbox = Inbox::new(msg_store.clone() as Arc<dyn MessageStore>, event_store.clone());
+    let inbox = Inbox::new(
+        msg_store.clone() as Arc<dyn MessageStore>,
+        event_store.clone(),
+    );
 
     let team_id = "team-review";
     let task_id = "task-explore-1";
@@ -283,10 +287,7 @@ async fn test_explorer_critic_review_cycle() {
     assert_eq!(reviews.len(), 2);
 
     // Verify events were logged (MessageSent + MessageRead events)
-    let events = event_store
-        .get_events(team_id, None, None)
-        .await
-        .unwrap();
+    let events = event_store.get_events(team_id, None, None).await.unwrap();
     assert!(
         events.len() >= 2,
         "Expected at least 2 events, got {}",
@@ -320,7 +321,8 @@ async fn test_explorer_critic_review_cycle() {
 async fn test_escalation_to_collaborative_session() {
     // --- Setup ---
     let msg_store: Arc<SqliteMessageStore> = Arc::new(SqliteMessageStore::new_in_memory().await);
-    let event_store: Arc<SqliteEventLogStore> = Arc::new(SqliteEventLogStore::new_in_memory().await);
+    let event_store: Arc<SqliteEventLogStore> =
+        Arc::new(SqliteEventLogStore::new_in_memory().await);
     let session_store = Arc::new(SqliteSessionStore::new_in_memory().await);
 
     let team_id = "team-escalate";
@@ -393,11 +395,7 @@ async fn test_escalation_to_collaborative_session() {
 
     // --- Step 3: Verify escalation notification to leader ---
     let leader_inbox = msg_store
-        .read_inbox(
-            leader_id,
-            team_id,
-            Some(&MessageType::SystemNotification),
-        )
+        .read_inbox(leader_id, team_id, Some(&MessageType::SystemNotification))
         .await
         .unwrap();
 
@@ -410,11 +408,7 @@ async fn test_escalation_to_collaborative_session() {
     let session = session_store
         .create_session(NewSession {
             team_id: team_id.into(),
-            participants: vec![
-                leader_id.into(),
-                explorer_id.into(),
-                critic_id.into(),
-            ],
+            participants: vec![leader_id.into(), explorer_id.into(), critic_id.into()],
             topic: "Resolve cache strategy disagreement".into(),
             trigger: SessionTrigger::AutoEscalation {
                 thread_id: thread_id.clone(),
@@ -523,10 +517,7 @@ async fn test_escalation_to_collaborative_session() {
     assert!(out.dissent.is_none());
 
     // Verify events include SessionStarted and SessionConcluded
-    let events = event_store
-        .get_events(team_id, None, None)
-        .await
-        .unwrap();
+    let events = event_store.get_events(team_id, None, None).await.unwrap();
 
     let session_events: Vec<_> = events
         .iter()
@@ -546,8 +537,10 @@ async fn test_escalation_to_collaborative_session() {
 async fn test_context_injection_shows_inbox_summary() {
     // --- Setup: create stores and a team ---
     let msg_store: Arc<SqliteMessageStore> = Arc::new(SqliteMessageStore::new_in_memory().await);
-    let event_store: Arc<SqliteEventLogStore> = Arc::new(SqliteEventLogStore::new_in_memory().await);
-    let session_store: Arc<SqliteSessionStore> = Arc::new(SqliteSessionStore::new_in_memory().await);
+    let event_store: Arc<SqliteEventLogStore> =
+        Arc::new(SqliteEventLogStore::new_in_memory().await);
+    let session_store: Arc<SqliteSessionStore> =
+        Arc::new(SqliteSessionStore::new_in_memory().await);
 
     let conn = rusqlite::Connection::open_in_memory().expect("open in-memory db");
     let team_store = Arc::new(SqliteTeamStore::new(conn));
@@ -665,10 +658,7 @@ async fn test_context_injection_shows_inbox_summary() {
         text.contains("[Active Sessions]"),
         "Missing [Active Sessions] in: {text}"
     );
-    assert!(
-        text.contains(&session.id),
-        "Missing session ID in: {text}"
-    );
+    assert!(text.contains(&session.id), "Missing session ID in: {text}");
 
     // --- Verify empty context for unknown agent ---
     let empty_ctx = provider.get_inbox_context("nonexistent-agent").await;
@@ -712,10 +702,7 @@ async fn test_review_score_validation_flow() {
         artifact_id: "art-1".into(),
         scores: vec![make_score("correctness", 8), make_score("completeness", 8)],
         overall_pass: true,
-        challenges: vec![
-            make_challenge("challenge 1"),
-            make_challenge("challenge 2"),
-        ],
+        challenges: vec![make_challenge("challenge 1"), make_challenge("challenge 2")],
         improvement_suggestions: vec![],
         risks_if_accepted: vec![],
     };
@@ -743,7 +730,9 @@ async fn test_review_score_validation_flow() {
     let result = review_low_score.validate(&config);
     assert!(result.is_err());
     let errors = result.unwrap_err();
-    assert!(errors.iter().any(|e| e.contains("correctness") && e.contains("5/10")));
+    assert!(errors
+        .iter()
+        .any(|e| e.contains("correctness") && e.contains("5/10")));
 
     // --- Case 3: Valid passing review (3 challenges, all scores >= 7) ---
     let review_valid_pass = ReviewScore {
@@ -791,7 +780,8 @@ async fn test_review_score_validation_flow() {
 async fn test_team_disband_cleanup() {
     // --- Setup ---
     let msg_store: Arc<SqliteMessageStore> = Arc::new(SqliteMessageStore::new_in_memory().await);
-    let event_store: Arc<SqliteEventLogStore> = Arc::new(SqliteEventLogStore::new_in_memory().await);
+    let event_store: Arc<SqliteEventLogStore> =
+        Arc::new(SqliteEventLogStore::new_in_memory().await);
     let session_store = Arc::new(SqliteSessionStore::new_in_memory().await);
 
     let team_id = "team-disband";
@@ -888,16 +878,10 @@ async fn test_team_disband_cleanup() {
         .unwrap();
     assert_eq!(inbox_b.len(), 1, "agent-b should have 1 unread message");
 
-    let active_sessions = session_store
-        .list_active_sessions(team_id)
-        .await
-        .unwrap();
+    let active_sessions = session_store.list_active_sessions(team_id).await.unwrap();
     assert_eq!(active_sessions.len(), 1);
 
-    let events_before = event_store
-        .get_events(team_id, None, None)
-        .await
-        .unwrap();
+    let events_before = event_store.get_events(team_id, None, None).await.unwrap();
     assert_eq!(events_before.len(), 2);
 
     // --- Cleanup: Expire messages ---
@@ -935,14 +919,8 @@ async fn test_team_disband_cleanup() {
     );
 
     // --- Verify: No active sessions ---
-    let active_after = session_store
-        .list_active_sessions(team_id)
-        .await
-        .unwrap();
-    assert!(
-        active_after.is_empty(),
-        "No active sessions should remain"
-    );
+    let active_after = session_store.list_active_sessions(team_id).await.unwrap();
+    assert!(active_after.is_empty(), "No active sessions should remain");
 
     // Verify the session is now cancelled
     let fetched_session = session_store
@@ -953,12 +931,6 @@ async fn test_team_disband_cleanup() {
     assert_eq!(fetched_session.status, SessionStatus::Cancelled);
 
     // --- Verify: Events pruned ---
-    let events_after = event_store
-        .get_events(team_id, None, None)
-        .await
-        .unwrap();
-    assert!(
-        events_after.is_empty(),
-        "All events should be pruned"
-    );
+    let events_after = event_store.get_events(team_id, None, None).await.unwrap();
+    assert!(events_after.is_empty(), "All events should be pruned");
 }

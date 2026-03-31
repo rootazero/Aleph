@@ -12,26 +12,26 @@
 //! Phase 8: Added config file loading from ~/.aleph/config.toml
 
 // Submodules
-mod structs;
-mod load;
-mod save;
-mod validate;
-mod migration;
-mod methods;
-pub mod backup;
-pub mod patcher;
-pub mod schema;
-pub mod types;
-pub mod ui_hints;
-pub mod defaults_override;
-pub mod presets_override;
-pub mod prompts_override;
 pub mod agent_manager;
 pub mod agent_resolver;
+pub mod backup;
+pub mod defaults_override;
 pub mod guides;
+mod load;
+mod methods;
+mod migration;
+pub mod patcher;
+pub mod presets_override;
+pub mod prompts_override;
+mod save;
+pub mod schema;
+mod structs;
+pub mod types;
+pub mod ui_hints;
+mod validate;
 
 // Re-export main types
-pub use structs::{Config, FullConfig, ChannelInstanceConfig, PluginMarketplaceEntry};
+pub use structs::{ChannelInstanceConfig, Config, FullConfig, PluginMarketplaceEntry};
 
 // Re-export patcher types
 pub use patcher::ConfigPatcher;

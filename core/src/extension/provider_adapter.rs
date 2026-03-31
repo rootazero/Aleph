@@ -138,10 +138,14 @@ impl PluginProviderAdapter {
     /// let response = adapter.chat(request).await?;
     /// println!("Response: {}", response.content);
     /// ```
-    pub async fn chat(&self, request: ProviderChatRequest) -> ExtensionResult<ProviderChatResponse> {
+    pub async fn chat(
+        &self,
+        request: ProviderChatRequest,
+    ) -> ExtensionResult<ProviderChatResponse> {
         // Serialize request to JSON
-        let request_json = serde_json::to_value(&request)
-            .map_err(|e| super::ExtensionError::Runtime(format!("Failed to serialize request: {}", e)))?;
+        let request_json = serde_json::to_value(&request).map_err(|e| {
+            super::ExtensionError::Runtime(format!("Failed to serialize request: {}", e))
+        })?;
 
         // Call plugin's chat handler
         let result = {
@@ -150,8 +154,9 @@ impl PluginProviderAdapter {
         };
 
         // Parse response
-        serde_json::from_value(result)
-            .map_err(|e| super::ExtensionError::Runtime(format!("Failed to parse chat response: {}", e)))
+        serde_json::from_value(result).map_err(|e| {
+            super::ExtensionError::Runtime(format!("Failed to parse chat response: {}", e))
+        })
     }
 
     /// Check if a specific model is supported by this provider.

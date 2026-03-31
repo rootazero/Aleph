@@ -3,23 +3,23 @@
 //! Handles device authentication, pairing, and connection management.
 
 mod connect;
-mod pairing;
 mod devices;
+mod pairing;
 
+use crate::sync_primitives::Arc;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use crate::sync_primitives::Arc;
 
+use crate::gateway::config::AuthMode;
 use crate::gateway::device_store::DeviceStore;
 use crate::gateway::protocol::JsonRpcRequest;
-use crate::gateway::config::AuthMode;
-use crate::gateway::security::{PairingManager, SharedTokenManager, TokenManager};
 use crate::gateway::security::SecurityStore;
+use crate::gateway::security::{PairingManager, SharedTokenManager, TokenManager};
 
 // Re-export all public items at their original paths
 pub use connect::handle_connect;
-pub use pairing::{handle_pairing_approve, handle_pairing_reject, handle_pairing_list};
 pub use devices::{handle_devices_list, handle_devices_revoke};
+pub use pairing::{handle_pairing_approve, handle_pairing_list, handle_pairing_reject};
 
 /// Parameters for the "hello" method (server -> client notification)
 #[derive(Debug, Clone, Serialize)]
@@ -121,7 +121,10 @@ pub(crate) mod tests {
         let invitation_manager = Arc::new(crate::gateway::security::InvitationManager::new());
         let guest_session_manager = Arc::new(crate::gateway::security::GuestSessionManager::new());
         let event_bus = Arc::new(crate::gateway::event_bus::GatewayEventBus::new());
-        let shared_token_mgr = Arc::new(SharedTokenManager::new(store.clone(), "/tmp/aleph_test.vault"));
+        let shared_token_mgr = Arc::new(SharedTokenManager::new(
+            store.clone(),
+            "/tmp/aleph_test.vault",
+        ));
 
         Arc::new(AuthContext {
             token_manager: Arc::new(TokenManager::new(store.clone())),

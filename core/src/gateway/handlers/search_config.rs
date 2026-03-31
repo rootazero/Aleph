@@ -6,9 +6,9 @@ use crate::config::Config;
 use crate::gateway::event_bus::{ConfigChangedEvent, GatewayEvent, GatewayEventBus};
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 use crate::gateway::security::SharedTokenManager;
+use crate::sync_primitives::Arc;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
 use tracing::{error, warn};
 
@@ -95,7 +95,11 @@ pub async fn handle_get(
         };
         match serde_json::to_value(dto) {
             Ok(v) => JsonRpcResponse::success(request.id, v),
-            Err(e) => JsonRpcResponse::error(request.id, INTERNAL_ERROR, format!("Failed to serialize config: {}", e)),
+            Err(e) => JsonRpcResponse::error(
+                request.id,
+                INTERNAL_ERROR,
+                format!("Failed to serialize config: {}", e),
+            ),
         }
     } else {
         // Return default values — no provider active by default
@@ -113,7 +117,11 @@ pub async fn handle_get(
         };
         match serde_json::to_value(dto) {
             Ok(v) => JsonRpcResponse::success(request.id, v),
-            Err(e) => JsonRpcResponse::error(request.id, INTERNAL_ERROR, format!("Failed to serialize config: {}", e)),
+            Err(e) => JsonRpcResponse::error(
+                request.id,
+                INTERNAL_ERROR,
+                format!("Failed to serialize config: {}", e),
+            ),
         }
     }
 }
@@ -128,11 +136,7 @@ pub async fn handle_update(
     let params = match request.params {
         Some(p) => p,
         None => {
-            return JsonRpcResponse::error(
-                request.id,
-                INVALID_PARAMS,
-                "Missing params".to_string(),
-            )
+            return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Missing params".to_string())
         }
     };
 
@@ -315,13 +319,25 @@ pub async fn handle_test(
             };
             match TavilyProvider::new(api_key.clone()) {
                 Ok(provider) => {
-                    let opts = SearchOptions { max_results: 1, ..Default::default() };
+                    let opts = SearchOptions {
+                        max_results: 1,
+                        ..Default::default()
+                    };
                     match provider.search("test", &opts).await {
-                        Ok(_) => SearchTestResult { success: true, message: "Connection successful".to_string() },
-                        Err(e) => SearchTestResult { success: false, message: format!("Search failed: {}", e) },
+                        Ok(_) => SearchTestResult {
+                            success: true,
+                            message: "Connection successful".to_string(),
+                        },
+                        Err(e) => SearchTestResult {
+                            success: false,
+                            message: format!("Search failed: {}", e),
+                        },
                     }
                 }
-                Err(e) => SearchTestResult { success: false, message: format!("Failed to create provider: {}", e) },
+                Err(e) => SearchTestResult {
+                    success: false,
+                    message: format!("Failed to create provider: {}", e),
+                },
             }
         }
         "brave" => {
@@ -333,26 +349,52 @@ pub async fn handle_test(
             };
             match BraveProvider::new(api_key.clone()) {
                 Ok(provider) => {
-                    let opts = SearchOptions { max_results: 1, ..Default::default() };
+                    let opts = SearchOptions {
+                        max_results: 1,
+                        ..Default::default()
+                    };
                     match provider.search("test", &opts).await {
-                        Ok(_) => SearchTestResult { success: true, message: "Connection successful".to_string() },
-                        Err(e) => SearchTestResult { success: false, message: format!("Search failed: {}", e) },
+                        Ok(_) => SearchTestResult {
+                            success: true,
+                            message: "Connection successful".to_string(),
+                        },
+                        Err(e) => SearchTestResult {
+                            success: false,
+                            message: format!("Search failed: {}", e),
+                        },
                     }
                 }
-                Err(e) => SearchTestResult { success: false, message: format!("Failed to create provider: {}", e) },
+                Err(e) => SearchTestResult {
+                    success: false,
+                    message: format!("Failed to create provider: {}", e),
+                },
             }
         }
         "searxng" => {
-            let base_url = params.base_url.unwrap_or_else(|| "http://localhost:8888".to_string());
+            let base_url = params
+                .base_url
+                .unwrap_or_else(|| "http://localhost:8888".to_string());
             match SearxngProvider::new(base_url) {
                 Ok(provider) => {
-                    let opts = SearchOptions { max_results: 1, ..Default::default() };
+                    let opts = SearchOptions {
+                        max_results: 1,
+                        ..Default::default()
+                    };
                     match provider.search("test", &opts).await {
-                        Ok(_) => SearchTestResult { success: true, message: "Connection successful".to_string() },
-                        Err(e) => SearchTestResult { success: false, message: format!("Search failed: {}", e) },
+                        Ok(_) => SearchTestResult {
+                            success: true,
+                            message: "Connection successful".to_string(),
+                        },
+                        Err(e) => SearchTestResult {
+                            success: false,
+                            message: format!("Search failed: {}", e),
+                        },
                     }
                 }
-                Err(e) => SearchTestResult { success: false, message: format!("Failed to create provider: {}", e) },
+                Err(e) => SearchTestResult {
+                    success: false,
+                    message: format!("Failed to create provider: {}", e),
+                },
             }
         }
         "google" => {
@@ -370,13 +412,25 @@ pub async fn handle_test(
             };
             match GoogleProvider::new(api_key.clone(), engine_id.clone()) {
                 Ok(provider) => {
-                    let opts = SearchOptions { max_results: 1, ..Default::default() };
+                    let opts = SearchOptions {
+                        max_results: 1,
+                        ..Default::default()
+                    };
                     match provider.search("test", &opts).await {
-                        Ok(_) => SearchTestResult { success: true, message: "Connection successful".to_string() },
-                        Err(e) => SearchTestResult { success: false, message: format!("Search failed: {}", e) },
+                        Ok(_) => SearchTestResult {
+                            success: true,
+                            message: "Connection successful".to_string(),
+                        },
+                        Err(e) => SearchTestResult {
+                            success: false,
+                            message: format!("Search failed: {}", e),
+                        },
                     }
                 }
-                Err(e) => SearchTestResult { success: false, message: format!("Failed to create provider: {}", e) },
+                Err(e) => SearchTestResult {
+                    success: false,
+                    message: format!("Failed to create provider: {}", e),
+                },
             }
         }
         "bing" => {
@@ -388,13 +442,25 @@ pub async fn handle_test(
             };
             match BingProvider::new(api_key.clone()) {
                 Ok(provider) => {
-                    let opts = SearchOptions { max_results: 1, ..Default::default() };
+                    let opts = SearchOptions {
+                        max_results: 1,
+                        ..Default::default()
+                    };
                     match provider.search("test", &opts).await {
-                        Ok(_) => SearchTestResult { success: true, message: "Connection successful".to_string() },
-                        Err(e) => SearchTestResult { success: false, message: format!("Search failed: {}", e) },
+                        Ok(_) => SearchTestResult {
+                            success: true,
+                            message: "Connection successful".to_string(),
+                        },
+                        Err(e) => SearchTestResult {
+                            success: false,
+                            message: format!("Search failed: {}", e),
+                        },
                     }
                 }
-                Err(e) => SearchTestResult { success: false, message: format!("Failed to create provider: {}", e) },
+                Err(e) => SearchTestResult {
+                    success: false,
+                    message: format!("Failed to create provider: {}", e),
+                },
             }
         }
         "exa" => {
@@ -406,21 +472,31 @@ pub async fn handle_test(
             };
             match ExaProvider::new(api_key.clone()) {
                 Ok(provider) => {
-                    let opts = SearchOptions { max_results: 1, ..Default::default() };
+                    let opts = SearchOptions {
+                        max_results: 1,
+                        ..Default::default()
+                    };
                     match provider.search("test", &opts).await {
-                        Ok(_) => SearchTestResult { success: true, message: "Connection successful".to_string() },
-                        Err(e) => SearchTestResult { success: false, message: format!("Search failed: {}", e) },
+                        Ok(_) => SearchTestResult {
+                            success: true,
+                            message: "Connection successful".to_string(),
+                        },
+                        Err(e) => SearchTestResult {
+                            success: false,
+                            message: format!("Search failed: {}", e),
+                        },
                     }
                 }
-                Err(e) => SearchTestResult { success: false, message: format!("Failed to create provider: {}", e) },
+                Err(e) => SearchTestResult {
+                    success: false,
+                    message: format!("Failed to create provider: {}", e),
+                },
             }
         }
-        _ => {
-            SearchTestResult {
-                success: false,
-                message: format!("Unknown provider type: {}", provider_type),
-            }
-        }
+        _ => SearchTestResult {
+            success: false,
+            message: format!("Unknown provider type: {}", provider_type),
+        },
     };
 
     // Persist verified=true on success
@@ -438,7 +514,11 @@ pub async fn handle_test(
 
     match serde_json::to_value(test_result) {
         Ok(v) => JsonRpcResponse::success(request.id, v),
-        Err(e) => JsonRpcResponse::error(request.id, INTERNAL_ERROR, format!("Failed to serialize result: {}", e)),
+        Err(e) => JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!("Failed to serialize result: {}", e),
+        ),
     }
 }
 

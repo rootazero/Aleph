@@ -8,9 +8,9 @@
 //! - agent_config.get_code_exec: Get code execution configuration
 //! - agent_config.update_code_exec: Update code execution configuration
 
+use crate::sync_primitives::Arc;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, info};
 
@@ -54,7 +54,7 @@ impl From<&CoworkConfigToml> for AgentConfigResponse {
             file_ops: config.file_ops.clone(),
             code_exec: config.code_exec.clone(),
             web_browsing: true, // TODO: Add to CoworkConfigToml
-            max_iterations: 10,  // TODO: Add to CoworkConfigToml
+            max_iterations: 10, // TODO: Add to CoworkConfigToml
             auto_execute_threshold: config.auto_execute_threshold,
             max_tasks_per_graph: config.max_tasks_per_graph,
             task_timeout_seconds: config.task_timeout_seconds,
@@ -93,10 +93,7 @@ pub struct UpdateAgentConfigParams {
 // =============================================================================
 
 /// Handle agent_config.get request
-pub async fn handle_get(
-    request: JsonRpcRequest,
-    config: Arc<RwLock<Config>>,
-) -> JsonRpcResponse {
+pub async fn handle_get(request: JsonRpcRequest, config: Arc<RwLock<Config>>) -> JsonRpcResponse {
     debug!("Handling agent_config.get request");
 
     let cfg = config.read().await;

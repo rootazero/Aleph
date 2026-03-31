@@ -121,8 +121,7 @@ pub async fn handle(
             .await
             .map_err(|e| ApiError::BadGateway(format!("Provider stream error: {e}")))?;
 
-        let sse_stream =
-            sse::provider_deltas_to_responses_sse(delta_stream, req.model);
+        let sse_stream = sse::provider_deltas_to_responses_sse(delta_stream, req.model);
 
         let body = Body::from_stream(sse_stream.map(Ok::<_, std::convert::Infallible>));
         Ok(Response::builder()

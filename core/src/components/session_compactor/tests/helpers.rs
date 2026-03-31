@@ -1,8 +1,7 @@
 //! Shared test helpers for session compactor tests
 
 use crate::components::types::{
-    AiResponsePart, ExecutionSession, SessionPart, ToolCallPart, ToolCallStatus,
-    UserInputPart,
+    AiResponsePart, ExecutionSession, SessionPart, ToolCallPart, ToolCallStatus, UserInputPart,
 };
 use serde_json::json;
 

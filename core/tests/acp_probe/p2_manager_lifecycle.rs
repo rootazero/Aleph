@@ -140,7 +140,10 @@ async fn p2_08_prompt_routes_to_correct_mode() {
         },
     );
     let manager = AcpHarnessManager::from_entries(entries);
-    let result = manager.prompt("test-codex", "hello", "/tmp", None, true, None).await.unwrap();
+    let result = manager
+        .prompt("test-codex", "hello", "/tmp", None, true, None)
+        .await
+        .unwrap();
     assert!(
         result.contains("codex response:"),
         "Expected 'codex response:' in output, got: {}",

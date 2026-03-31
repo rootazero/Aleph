@@ -11,9 +11,7 @@ use chrono::{DateTime, Duration, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
 use tokio::sync::Mutex;
 
-use super::types::{
-    MessageType, NewMessage, Recipient, RecipientRole, TeamMessage,
-};
+use super::types::{MessageType, NewMessage, Recipient, RecipientRole, TeamMessage};
 use crate::error::AlephError;
 
 // ---------------------------------------------------------------------------
@@ -284,9 +282,7 @@ impl SqliteMessageStore {
     /// Fetch recipients and attachments for a raw message and produce a full TeamMessage.
     fn materialise(conn: &Connection, raw: RawMessage) -> Result<TeamMessage, AlephError> {
         let mut recip_stmt = conn
-            .prepare_cached(
-                "SELECT agent_id, role FROM message_recipients WHERE message_id = ?1",
-            )
+            .prepare_cached("SELECT agent_id, role FROM message_recipients WHERE message_id = ?1")
             .map_err(db_err)?;
         let recipients = recip_stmt
             .query_map(params![raw.id], |r| {
@@ -302,9 +298,7 @@ impl SqliteMessageStore {
             .map_err(db_err)?;
 
         let mut attach_stmt = conn
-            .prepare_cached(
-                "SELECT artifact_id FROM message_attachments WHERE message_id = ?1",
-            )
+            .prepare_cached("SELECT artifact_id FROM message_attachments WHERE message_id = ?1")
             .map_err(db_err)?;
         let attachments = attach_stmt
             .query_map(params![raw.id], |r| r.get::<_, String>(0))
@@ -652,11 +646,7 @@ mod tests {
 
         // First message starts a new thread
         let msg1 = store
-            .send_message(make_msg(
-                "team-1",
-                "agent-a",
-                vec![to_recipient("agent-b")],
-            ))
+            .send_message(make_msg("team-1", "agent-a", vec![to_recipient("agent-b")]))
             .await
             .unwrap();
 
@@ -716,11 +706,7 @@ mod tests {
         let store = SqliteMessageStore::new_in_memory().await;
 
         let msg = store
-            .send_message(make_msg(
-                "team-1",
-                "agent-a",
-                vec![to_recipient("agent-b")],
-            ))
+            .send_message(make_msg("team-1", "agent-a", vec![to_recipient("agent-b")]))
             .await
             .unwrap();
 
@@ -742,11 +728,7 @@ mod tests {
 
         // Send two messages: one TO, one CC
         store
-            .send_message(make_msg(
-                "team-1",
-                "agent-a",
-                vec![to_recipient("agent-b")],
-            ))
+            .send_message(make_msg("team-1", "agent-a", vec![to_recipient("agent-b")]))
             .await
             .unwrap();
 
@@ -774,20 +756,12 @@ mod tests {
         let store = SqliteMessageStore::new_in_memory().await;
 
         store
-            .send_message(make_msg(
-                "team-1",
-                "agent-a",
-                vec![to_recipient("agent-b")],
-            ))
+            .send_message(make_msg("team-1", "agent-a", vec![to_recipient("agent-b")]))
             .await
             .unwrap();
 
         store
-            .send_message(make_msg(
-                "team-1",
-                "agent-c",
-                vec![to_recipient("agent-b")],
-            ))
+            .send_message(make_msg("team-1", "agent-c", vec![to_recipient("agent-b")]))
             .await
             .unwrap();
 
@@ -805,11 +779,7 @@ mod tests {
         let store = SqliteMessageStore::new_in_memory().await;
 
         store
-            .send_message(make_msg(
-                "team-1",
-                "agent-a",
-                vec![to_recipient("agent-b")],
-            ))
+            .send_message(make_msg("team-1", "agent-a", vec![to_recipient("agent-b")]))
             .await
             .unwrap();
 

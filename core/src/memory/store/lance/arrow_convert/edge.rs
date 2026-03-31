@@ -31,18 +31,18 @@ pub fn graph_edges_to_record_batch(edges: &[GraphEdge]) -> Result<RecordBatch, A
     let batch = RecordBatch::try_new(
         schema,
         vec![
-            Arc::new(id_arr),            // 0  id
-            Arc::new(from_id_arr),       // 1  from_id
-            Arc::new(to_id_arr),         // 2  to_id
-            Arc::new(relation_arr),      // 3  relation
-            Arc::new(weight_arr),        // 4  weight
-            Arc::new(confidence_arr),    // 5  confidence
-            Arc::new(context_key_arr),   // 6  context_key
-            Arc::new(decay_score_arr),   // 7  decay_score
-            Arc::new(created_at_arr),    // 8  created_at
-            Arc::new(updated_at_arr),    // 9  updated_at
-            Arc::new(last_seen_at_arr),  // 10 last_seen_at
-            Arc::new(workspace_arr),     // 11 workspace
+            Arc::new(id_arr),           // 0  id
+            Arc::new(from_id_arr),      // 1  from_id
+            Arc::new(to_id_arr),        // 2  to_id
+            Arc::new(relation_arr),     // 3  relation
+            Arc::new(weight_arr),       // 4  weight
+            Arc::new(confidence_arr),   // 5  confidence
+            Arc::new(context_key_arr),  // 6  context_key
+            Arc::new(decay_score_arr),  // 7  decay_score
+            Arc::new(created_at_arr),   // 8  created_at
+            Arc::new(updated_at_arr),   // 9  updated_at
+            Arc::new(last_seen_at_arr), // 10 last_seen_at
+            Arc::new(workspace_arr),    // 11 workspace
         ],
     )
     .map_err(conv_err)?;

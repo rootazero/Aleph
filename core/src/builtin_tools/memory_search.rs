@@ -2,10 +2,10 @@
 //!
 //! Implements AlephTool trait for AI agent integration.
 
+use crate::sync_primitives::Arc;
 use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, info};
 
@@ -124,7 +124,8 @@ fn cluster_facts_by_path(facts: &[FactResult], threshold: usize) -> Vec<PathClus
         }
     }
 
-    groups.into_iter()
+    groups
+        .into_iter()
         .filter(|(_, (count, _))| *count >= threshold)
         .map(|(path, (count, top_score))| PathCluster {
             path: path.to_string(),
@@ -157,7 +158,8 @@ impl MemorySearchTool {
     pub const NAME: &'static str = "memory_search";
 
     /// Tool description for AI prompt
-    pub const DESCRIPTION: &'static str = "Search personal memory for relevant facts and conversation history. \
+    pub const DESCRIPTION: &'static str =
+        "Search personal memory for relevant facts and conversation history. \
         Returns both compressed facts and raw transcripts with redundancy elimination. \
         By default searches the active workspace. Use 'workspaces' to search specific workspaces, \
         or 'cross_workspace: true' to search all workspaces. \
@@ -203,10 +205,7 @@ impl MemorySearchTool {
         let comptroller_config = ComptrollerConfig::default();
         let comptroller = Arc::new(ContextComptroller::new(comptroller_config));
 
-        let indexer = Arc::new(TranscriptIndexer::new(
-            database.clone(),
-            embedder.clone(),
-        ));
+        let indexer = Arc::new(TranscriptIndexer::new(database.clone(), embedder.clone()));
 
         Self {
             database,
@@ -286,8 +285,8 @@ impl MemorySearchTool {
 
         // Step 1: Session-local search (when scope is "current_session" or "both")
         let session_facts: Vec<FactResult> = if scope == "current_session" || scope == "both" {
-            use crate::memory::store::types::SearchFilter;
             use crate::memory::context::MemoryScope;
+            use crate::memory::store::types::SearchFilter;
             use crate::memory::store::MemoryStore;
 
             let session_key = self.default_session_key.read().await.clone();
@@ -338,96 +337,111 @@ impl MemorySearchTool {
         };
 
         // Step 2: Long-term memory retrieval (when scope is "all" or "both")
-        let (long_term_facts, long_term_transcripts, cross_workspace_results, recall_triggered, tokens_saved) =
-            if scope == "all" || scope == "both" {
-                // Determine if Smart Recall should be used:
-                // Only for single-workspace queries where user didn't explicitly request cross-workspace
-                let smart_recall_cfg = self.smart_recall_config.read().await;
-                let use_smart_recall = matches!(&workspace_filter, AgentEnvFilter::Single(_))
-                    && args.cross_workspace.is_none()
-                    && args.workspaces.is_none()
-                    && smart_recall_cfg.as_ref().is_some_and(|c| c.enabled);
+        let (
+            long_term_facts,
+            long_term_transcripts,
+            cross_workspace_results,
+            recall_triggered,
+            tokens_saved,
+        ) = if scope == "all" || scope == "both" {
+            // Determine if Smart Recall should be used:
+            // Only for single-workspace queries where user didn't explicitly request cross-workspace
+            let smart_recall_cfg = self.smart_recall_config.read().await;
+            let use_smart_recall = matches!(&workspace_filter, AgentEnvFilter::Single(_))
+                && args.cross_workspace.is_none()
+                && args.workspaces.is_none()
+                && smart_recall_cfg.as_ref().is_some_and(|c| c.enabled);
 
-                let (retrieval_result, cross_ws, triggered) = if use_smart_recall {
-                    let primary_ws = match &workspace_filter {
-                        AgentEnvFilter::Single(ws) => ws.as_str(),
-                        _ => unreachable!(),
-                    };
-                    let config = smart_recall_cfg.as_ref().ok_or_else(|| {
-                        ToolError::Execution("Smart recall config disappeared".into())
-                    })?;
-                    debug!(workspace = %workspace_label, "Performing Smart Recall retrieval");
-                    let smart_result = self
-                        .fact_retrieval
-                        .retrieve_with_smart_recall(&args.query, primary_ws, config)
-                        .await
-                        .map_err(|e| ToolError::Execution(format!("Smart recall failed: {}", e)))?;
-
-                    if smart_result.recall_triggered {
-                        info!(
-                            cross_count = smart_result.cross_workspace.len(),
-                            reason = ?smart_result.trigger_reason,
-                            "Smart Recall Phase 2 returned cross-workspace results"
-                        );
-                    }
-                    (smart_result.primary, smart_result.cross_workspace, smart_result.recall_triggered)
-                } else {
-                    debug!(workspace = %workspace_label, "Performing fact-first retrieval with workspace filter");
-                    let result = self
-                        .fact_retrieval
-                        .retrieve_with_filter(&args.query, workspace_filter)
-                        .await
-                        .map_err(|e| ToolError::Execution(format!("Fact retrieval failed: {}", e)))?;
-                    (result, Vec::new(), false)
+            let (retrieval_result, cross_ws, triggered) = if use_smart_recall {
+                let primary_ws = match &workspace_filter {
+                    AgentEnvFilter::Single(ws) => ws.as_str(),
+                    _ => unreachable!(),
                 };
-                drop(smart_recall_cfg);
+                let config = smart_recall_cfg.as_ref().ok_or_else(|| {
+                    ToolError::Execution("Smart recall config disappeared".into())
+                })?;
+                debug!(workspace = %workspace_label, "Performing Smart Recall retrieval");
+                let smart_result = self
+                    .fact_retrieval
+                    .retrieve_with_smart_recall(&args.query, primary_ws, config)
+                    .await
+                    .map_err(|e| ToolError::Execution(format!("Smart recall failed: {}", e)))?;
 
-                debug!(
-                    facts_count = retrieval_result.facts.len(),
-                    transcripts_count = retrieval_result.raw_memories.len(),
-                    "Long-term retrieval completed"
-                );
-
-                // Post-retrieval arbitration
-                debug!("Performing post-retrieval arbitration");
-                let budget = TokenBudget::new(100000); // Large budget for MVP
-                let arbitrated = self.comptroller.arbitrate(retrieval_result, budget);
-
-                info!(
-                    facts = arbitrated.facts.len(),
-                    transcripts = arbitrated.raw_memories.len(),
-                    tokens_saved = arbitrated.tokens_saved,
-                    "Arbitration completed"
-                );
-
-                let facts: Vec<FactResult> = arbitrated
-                    .facts
-                    .into_iter()
-                    .map(|f| FactResult {
-                        content: f.content,
-                        fact_type: format!("{:?}", f.fact_type),
-                        confidence: f.confidence,
-                        similarity_score: f.similarity_score.unwrap_or(0.0),
-                        path: f.path.clone(),
-                    })
-                    .collect();
-
-                let transcripts: Vec<TranscriptResult> = arbitrated
-                    .raw_memories
-                    .into_iter()
-                    .map(|t| TranscriptResult {
-                        user_input: t.user_input,
-                        ai_output: t.ai_output,
-                        context: t.context.window_title.clone(),
-                        similarity_score: t.similarity_score.unwrap_or(0.0),
-                    })
-                    .collect();
-
-                (facts, transcripts, cross_ws, triggered, arbitrated.tokens_saved)
+                if smart_result.recall_triggered {
+                    info!(
+                        cross_count = smart_result.cross_workspace.len(),
+                        reason = ?smart_result.trigger_reason,
+                        "Smart Recall Phase 2 returned cross-workspace results"
+                    );
+                }
+                (
+                    smart_result.primary,
+                    smart_result.cross_workspace,
+                    smart_result.recall_triggered,
+                )
             } else {
-                // scope == "current_session" — skip long-term retrieval entirely
-                (Vec::new(), Vec::new(), Vec::new(), false, 0)
+                debug!(workspace = %workspace_label, "Performing fact-first retrieval with workspace filter");
+                let result = self
+                    .fact_retrieval
+                    .retrieve_with_filter(&args.query, workspace_filter)
+                    .await
+                    .map_err(|e| ToolError::Execution(format!("Fact retrieval failed: {}", e)))?;
+                (result, Vec::new(), false)
             };
+            drop(smart_recall_cfg);
+
+            debug!(
+                facts_count = retrieval_result.facts.len(),
+                transcripts_count = retrieval_result.raw_memories.len(),
+                "Long-term retrieval completed"
+            );
+
+            // Post-retrieval arbitration
+            debug!("Performing post-retrieval arbitration");
+            let budget = TokenBudget::new(100000); // Large budget for MVP
+            let arbitrated = self.comptroller.arbitrate(retrieval_result, budget);
+
+            info!(
+                facts = arbitrated.facts.len(),
+                transcripts = arbitrated.raw_memories.len(),
+                tokens_saved = arbitrated.tokens_saved,
+                "Arbitration completed"
+            );
+
+            let facts: Vec<FactResult> = arbitrated
+                .facts
+                .into_iter()
+                .map(|f| FactResult {
+                    content: f.content,
+                    fact_type: format!("{:?}", f.fact_type),
+                    confidence: f.confidence,
+                    similarity_score: f.similarity_score.unwrap_or(0.0),
+                    path: f.path.clone(),
+                })
+                .collect();
+
+            let transcripts: Vec<TranscriptResult> = arbitrated
+                .raw_memories
+                .into_iter()
+                .map(|t| TranscriptResult {
+                    user_input: t.user_input,
+                    ai_output: t.ai_output,
+                    context: t.context.window_title.clone(),
+                    similarity_score: t.similarity_score.unwrap_or(0.0),
+                })
+                .collect();
+
+            (
+                facts,
+                transcripts,
+                cross_ws,
+                triggered,
+                arbitrated.tokens_saved,
+            )
+        } else {
+            // scope == "current_session" — skip long-term retrieval entirely
+            (Vec::new(), Vec::new(), Vec::new(), false, 0)
+        };
 
         // Merge session facts with long-term facts
         let mut facts = session_facts;
@@ -443,7 +457,9 @@ impl MemorySearchTool {
                 &cluster.path,
                 &crate::memory::NamespaceScope::Owner,
                 &workspace_label,
-            ).await {
+            )
+            .await
+            {
                 if l1.fact_source == crate::memory::FactSource::Summary {
                     cluster.l1_overview = Some(l1.content);
                 }
@@ -495,7 +511,8 @@ impl Clone for MemorySearchTool {
 #[async_trait]
 impl AlephTool for MemorySearchTool {
     const NAME: &'static str = "memory_search";
-    const DESCRIPTION: &'static str = "Search personal memory for relevant facts and conversation history. \
+    const DESCRIPTION: &'static str =
+        "Search personal memory for relevant facts and conversation history. \
         Returns both compressed facts and raw transcripts with redundancy elimination. \
         By default searches the active workspace. Use 'workspaces' to search specific workspaces, \
         or 'cross_workspace: true' to search all workspaces. \
@@ -511,7 +528,8 @@ impl AlephTool for MemorySearchTool {
             "memory_search(query='What are my coding preferences?', max_results=10)".to_string(),
             "memory_search(query='Previous discussions about Rust')".to_string(),
             "memory_search(query='My travel plans', max_results=5)".to_string(),
-            "memory_search(query='What did we discuss earlier?', scope='current_session')".to_string(),
+            "memory_search(query='What did we discuss earlier?', scope='current_session')"
+                .to_string(),
             "memory_search(query='Rust async patterns', scope='both')".to_string(),
         ])
     }

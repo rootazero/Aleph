@@ -135,9 +135,9 @@ fn test_browser_args_deserialization() {
 
 // ── Approval policy tests ──────────────────────────────────────────
 
+use crate::approval::{ActionRequest, ApprovalDecision, ApprovalPolicy};
 use crate::sync_primitives::Arc;
 use async_trait::async_trait;
-use crate::approval::{ActionRequest, ApprovalDecision, ApprovalPolicy};
 
 /// A mock policy that returns a fixed decision for all checks.
 struct MockPolicy {
@@ -166,11 +166,7 @@ async fn test_approval_deny_blocks_navigate() {
     args.tab_id = Some("tab1".to_string());
     let output = AlephTool::call(&tool, args).await.unwrap();
     assert!(!output.success);
-    assert!(output
-        .message
-        .as_deref()
-        .unwrap()
-        .contains("Action denied"));
+    assert!(output.message.as_deref().unwrap().contains("Action denied"));
 }
 
 #[tokio::test]
@@ -209,11 +205,7 @@ async fn test_no_approval_policy_allows_all() {
     let output = AlephTool::call(&tool, args).await.unwrap();
     // Should fail on "not running", NOT on approval denial
     assert!(!output.success);
-    assert!(output
-        .message
-        .as_deref()
-        .unwrap()
-        .contains("not running"));
+    assert!(output.message.as_deref().unwrap().contains("not running"));
 }
 
 #[tokio::test]
@@ -229,11 +221,7 @@ async fn test_approval_allow_proceeds_to_execution() {
     let output = AlephTool::call(&tool, args).await.unwrap();
     // Approval gate passed; should fail on "not running" (no browser started)
     assert!(!output.success);
-    assert!(output
-        .message
-        .as_deref()
-        .unwrap()
-        .contains("not running"));
+    assert!(output.message.as_deref().unwrap().contains("not running"));
 }
 
 #[tokio::test]
@@ -250,11 +238,7 @@ async fn test_approval_deny_blocks_click() {
     args.tab_id = Some("tab1".to_string());
     let output = AlephTool::call(&tool, args).await.unwrap();
     assert!(!output.success);
-    assert!(output
-        .message
-        .as_deref()
-        .unwrap()
-        .contains("Action denied"));
+    assert!(output.message.as_deref().unwrap().contains("Action denied"));
 }
 
 #[tokio::test]
@@ -272,11 +256,7 @@ async fn test_approval_deny_blocks_type() {
     args.tab_id = Some("tab1".to_string());
     let output = AlephTool::call(&tool, args).await.unwrap();
     assert!(!output.success);
-    assert!(output
-        .message
-        .as_deref()
-        .unwrap()
-        .contains("Action denied"));
+    assert!(output.message.as_deref().unwrap().contains("Action denied"));
 }
 
 #[tokio::test]
@@ -294,11 +274,7 @@ async fn test_approval_deny_blocks_fill() {
     args.tab_id = Some("tab1".to_string());
     let output = AlephTool::call(&tool, args).await.unwrap();
     assert!(!output.success);
-    assert!(output
-        .message
-        .as_deref()
-        .unwrap()
-        .contains("Action denied"));
+    assert!(output.message.as_deref().unwrap().contains("Action denied"));
 }
 
 #[tokio::test]
@@ -314,11 +290,7 @@ async fn test_approval_deny_blocks_open_tab() {
     args.url = Some("https://evil.com".to_string());
     let output = AlephTool::call(&tool, args).await.unwrap();
     assert!(!output.success);
-    assert!(output
-        .message
-        .as_deref()
-        .unwrap()
-        .contains("Action denied"));
+    assert!(output.message.as_deref().unwrap().contains("Action denied"));
 }
 
 #[tokio::test]
@@ -333,11 +305,7 @@ async fn test_approval_allow_proceeds_open_tab() {
     let output = AlephTool::call(&tool, args).await.unwrap();
     // Approval gate passed; should fail on "not running" (no browser started)
     assert!(!output.success);
-    assert!(output
-        .message
-        .as_deref()
-        .unwrap()
-        .contains("not running"));
+    assert!(output.message.as_deref().unwrap().contains("not running"));
 }
 
 #[tokio::test]
@@ -356,30 +324,18 @@ async fn test_read_only_actions_not_blocked() {
     let output = AlephTool::call(&tool, args).await.unwrap();
     // Should fail on "not running", NOT on approval
     assert!(!output.success);
-    assert!(output
-        .message
-        .as_deref()
-        .unwrap()
-        .contains("not running"));
+    assert!(output.message.as_deref().unwrap().contains("not running"));
 
     // Snapshot — read-only, no approval check
     let mut args = make_args(BrowserAction::Snapshot);
     args.tab_id = Some("tab1".to_string());
     let output = AlephTool::call(&tool, args).await.unwrap();
     assert!(!output.success);
-    assert!(output
-        .message
-        .as_deref()
-        .unwrap()
-        .contains("not running"));
+    assert!(output.message.as_deref().unwrap().contains("not running"));
 
     // ListTabs — read-only, no approval check
     let args = make_args(BrowserAction::ListTabs);
     let output = AlephTool::call(&tool, args).await.unwrap();
     assert!(!output.success);
-    assert!(output
-        .message
-        .as_deref()
-        .unwrap()
-        .contains("not running"));
+    assert!(output.message.as_deref().unwrap().contains("not running"));
 }

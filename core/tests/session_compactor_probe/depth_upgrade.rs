@@ -47,7 +47,7 @@ async fn p3_d0_condensed_to_d1() {
         fresh_tail_count: 2, // Keep very few messages fresh — more compressible
         context_threshold: 0.75,
         leaf_chunk_tokens: 50, // Very small chunks — more d0 facts per run
-        d1_min_fanout: 3,     // Low threshold for d0→d1 condensation
+        d1_min_fanout: 3,      // Low threshold for d0→d1 condensation
         d2_min_fanout: 3,
         max_summary_depth: 2,
         token_estimate_ratio: 3.5,
@@ -63,10 +63,8 @@ async fn p3_d0_condensed_to_d1() {
     // Each run adds more messages to the agent, generating new d0 summaries.
     // Once d0 count >= d1_min_fanout (3), condensation should trigger.
     for batch in 0..5 {
-        let batch_messages =
-            CompactorProbeHarness::make_messages(10, &format!("batch-{}", batch));
-        let agent =
-            make_agent_with_messages(&agent_temp, &batch_messages, &session_key).await;
+        let batch_messages = CompactorProbeHarness::make_messages(10, &format!("batch-{}", batch));
+        let agent = make_agent_with_messages(&agent_temp, &batch_messages, &session_key).await;
 
         let _result = h
             .compactor

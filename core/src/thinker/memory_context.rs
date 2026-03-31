@@ -79,11 +79,7 @@ mod tests {
     #[test]
     fn test_mixed_context_format() {
         let fact = ScoredFact {
-            fact: MemoryFact::new(
-                "Rust is great".to_string(),
-                FactType::Preference,
-                vec![],
-            ),
+            fact: MemoryFact::new("Rust is great".to_string(), FactType::Preference, vec![]),
             score: 0.9,
         };
         let ctx = MemoryContext {

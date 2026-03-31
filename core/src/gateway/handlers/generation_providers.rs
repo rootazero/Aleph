@@ -2,17 +2,17 @@
 //!
 //! Provides RPC methods for managing generation providers (image, video, audio, speech).
 
-use std::collections::HashMap;
-use crate::config::types::generation::GenerationProviderConfig;
-use crate::config::types::generation::presets::get_merged_generation_preset;
-use crate::config::Config;
-use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 use super::super::event_bus::GatewayEventBus;
-use crate::generation::GenerationType;
-use crate::generation::providers::{OpenAiTtsProvider, ElevenLabsProvider};
+use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
+use crate::config::types::generation::presets::get_merged_generation_preset;
+use crate::config::types::generation::GenerationProviderConfig;
+use crate::config::Config;
 use crate::gateway::security::SharedTokenManager;
-use serde::{Deserialize, Serialize};
+use crate::generation::providers::{ElevenLabsProvider, OpenAiTtsProvider};
+use crate::generation::GenerationType;
 use crate::sync_primitives::Arc;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use tokio::sync::RwLock;
 use tracing::{error, warn};
 
@@ -38,7 +38,8 @@ pub struct TestConnectionResult {
 use super::normalize_optional_string;
 
 fn save_config(cfg: &Config) -> Result<(), String> {
-    cfg.save_incremental(&["generation"]).map_err(|e| e.to_string())
+    cfg.save_incremental(&["generation"])
+        .map_err(|e| e.to_string())
 }
 
 /// Vault key prefix for generation provider API keys
@@ -57,11 +58,8 @@ fn build_generation_provider_for_persistence(
     generation_overrides: &crate::config::presets_override::GenerationPresetsOverride,
 ) -> GenerationProviderConfig {
     // Restore preset defaults for empty base_url / model (merged with user overrides)
-    let preset = get_merged_generation_preset(
-        provider_name,
-        &config.provider_type,
-        generation_overrides,
-    );
+    let preset =
+        get_merged_generation_preset(provider_name, &config.provider_type, generation_overrides);
 
     let base_url = match normalize_optional_string(config.base_url) {
         Some(url) => Some(url),
@@ -69,7 +67,9 @@ fn build_generation_provider_for_persistence(
     };
 
     let models = {
-        let non_empty: Vec<String> = config.models.iter()
+        let non_empty: Vec<String> = config
+            .models
+            .iter()
             .map(|m| m.trim().to_string())
             .filter(|m| !m.is_empty())
             .collect();
@@ -203,11 +203,14 @@ pub async fn handle_list(
 
             let mut cfg_clone = provider_config;
             cfg_clone.api_key = resolve_api_key(&name, &vault);
-            (GenerationProviderEntry {
-                name,
-                config: cfg_clone,
-                is_default_for,
-            }, gen_type)
+            (
+                GenerationProviderEntry {
+                    name,
+                    config: cfg_clone,
+                    is_default_for,
+                },
+                gen_type,
+            )
         })
         .collect();
 
@@ -258,7 +261,9 @@ pub async fn handle_get(
     let cfg = config.read().await;
 
     // Find provider across all typed maps and legacy
-    let found = cfg.generation.merged_providers()
+    let found = cfg
+        .generation
+        .merged_providers()
         .into_iter()
         .find(|(name, _, _)| name == &params.name);
 
@@ -333,14 +338,17 @@ pub async fn handle_create(
     };
 
     // Determine generation type from explicit param or capabilities
-    let gen_type_str = params.generation_type
+    let gen_type_str = params
+        .generation_type
         .as_deref()
-        .or_else(|| params.config.capabilities.first().map(|g| match g {
-            GenerationType::Image => "image",
-            GenerationType::Video => "video",
-            GenerationType::Speech => "speech",
-            GenerationType::Audio => "audio",
-        }))
+        .or_else(|| {
+            params.config.capabilities.first().map(|g| match g {
+                GenerationType::Image => "image",
+                GenerationType::Video => "video",
+                GenerationType::Speech => "speech",
+                GenerationType::Audio => "audio",
+            })
+        })
         .unwrap_or("image");
     let gen_type = parse_generation_type(gen_type_str);
 
@@ -367,7 +375,11 @@ pub async fn handle_create(
 
         // Validate provider config
         if let Err(e) = provider_config.validate(&params.name) {
-            return JsonRpcResponse::error(request.id, INVALID_PARAMS, format!("Validation failed: {}", e));
+            return JsonRpcResponse::error(
+                request.id,
+                INVALID_PARAMS,
+                format!("Validation failed: {}", e),
+            );
         }
 
         // Store API key in vault
@@ -451,7 +463,11 @@ pub async fn handle_update(
 
         // Validate provider config
         if let Err(e) = provider_config.validate(&params.name) {
-            return JsonRpcResponse::error(request.id, INVALID_PARAMS, format!("Validation failed: {}", e));
+            return JsonRpcResponse::error(
+                request.id,
+                INVALID_PARAMS,
+                format!("Validation failed: {}", e),
+            );
         }
 
         // Store new API key in vault if provided
@@ -552,8 +568,7 @@ pub async fn handle_delete(
         }
 
         // Remove provider from the correct typed map
-        get_typed_provider_map_mut(&mut cfg.generation, &gen_type_str)
-            .remove(&params.name);
+        get_typed_provider_map_mut(&mut cfg.generation, &gen_type_str).remove(&params.name);
 
         // Delete API key from vault
         if let Err(e) = vault.delete_secret(&vault_key(&params.name)) {
@@ -612,18 +627,17 @@ pub async fn handle_set_default(
             }
         };
 
-        let provider_config = match get_typed_provider_map(&cfg.generation, &gen_type_str)
-            .get(&params.name)
-        {
-            Some(c) => c,
-            None => {
-                return JsonRpcResponse::error(
-                    request.id,
-                    INTERNAL_ERROR,
-                    format!("Provider '{}' disappeared unexpectedly", params.name),
-                );
-            }
-        };
+        let provider_config =
+            match get_typed_provider_map(&cfg.generation, &gen_type_str).get(&params.name) {
+                Some(c) => c,
+                None => {
+                    return JsonRpcResponse::error(
+                        request.id,
+                        INTERNAL_ERROR,
+                        format!("Provider '{}' disappeared unexpectedly", params.name),
+                    );
+                }
+            };
 
         if !provider_config.verified {
             return JsonRpcResponse::error(
@@ -714,7 +728,9 @@ pub async fn handle_test_connection(
     // If no inline api_key, resolve from vault
     let api_key = match normalize_optional_string(params.api_key) {
         Some(k) => Some(k),
-        None => provider_name.as_ref().and_then(|name| resolve_api_key(name, &vault)),
+        None => provider_name
+            .as_ref()
+            .and_then(|name| resolve_api_key(name, &vault)),
     };
 
     // TODO: Implement actual connection testing
@@ -734,7 +750,9 @@ pub async fn handle_test_connection(
         if let Some(ref name) = provider_name {
             let mut cfg = config.write().await;
             if let Some(type_str) = find_provider_type(&cfg.generation, name) {
-                if let Some(p) = get_typed_provider_map_mut(&mut cfg.generation, &type_str).get_mut(name) {
+                if let Some(p) =
+                    get_typed_provider_map_mut(&mut cfg.generation, &type_str).get_mut(name)
+                {
                     p.verified = true;
                     if let Err(e) = save_config(&cfg) {
                         tracing::error!(error = %e, "Failed to save config after generation test");
@@ -745,13 +763,20 @@ pub async fn handle_test_connection(
 
         TestConnectionResult {
             success: true,
-            message: format!("Connection test passed for {} provider", params.provider_type),
+            message: format!(
+                "Connection test passed for {} provider",
+                params.provider_type
+            ),
         }
     };
 
     match serde_json::to_value(result) {
         Ok(v) => JsonRpcResponse::success(request.id, v),
-        Err(e) => JsonRpcResponse::error(request.id, INTERNAL_ERROR, format!("Failed to serialize result: {}", e)),
+        Err(e) => JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!("Failed to serialize result: {}", e),
+        ),
     }
 }
 
@@ -801,7 +826,10 @@ pub async fn handle_voices(
     if let (Some(ref base), Some(ref key)) = (&base_url, &api_key) {
         // Normalize: strip trailing slash and /v1 so we always get {base}/v1/audio/voices
         let base = base.trim_end_matches('/');
-        let base = base.strip_suffix("/v1").unwrap_or(base).trim_end_matches('/');
+        let base = base
+            .strip_suffix("/v1")
+            .unwrap_or(base)
+            .trim_end_matches('/');
         let voices_url = format!("{}/v1/audio/voices", base);
         if let Ok(voices) = fetch_voices_from_api(&voices_url, key).await {
             if !voices.is_empty() {
@@ -820,7 +848,10 @@ pub async fn handle_voices(
 }
 
 /// Try to fetch voices from a provider's API endpoint.
-async fn fetch_voices_from_api(url: &str, api_key: &str) -> Result<Vec<crate::generation::VoiceInfo>, ()> {
+async fn fetch_voices_from_api(
+    url: &str,
+    api_key: &str,
+) -> Result<Vec<crate::generation::VoiceInfo>, ()> {
     let client = reqwest::Client::new();
     let resp = client
         .get(url)
@@ -844,7 +875,10 @@ async fn fetch_voices_from_api(url: &str, api_key: &str) -> Result<Vec<crate::ge
             .filter_map(|v| {
                 let id = v.get("voice_id").or(v.get("id"))?.as_str()?;
                 let name = v.get("name").and_then(|n| n.as_str()).unwrap_or(id);
-                let gender = v.get("gender").and_then(|g| g.as_str()).unwrap_or("neutral");
+                let gender = v
+                    .get("gender")
+                    .and_then(|g| g.as_str())
+                    .unwrap_or("neutral");
                 let desc = v.get("description").and_then(|d| d.as_str()).unwrap_or("");
                 Some(crate::generation::VoiceInfo {
                     id: id.to_string(),
@@ -879,7 +913,9 @@ fn detect_voices_by_model(
     // Check if any model is a MiniMax/Hailuo model
     let has_minimax = models.iter().any(|m| {
         let lower = m.to_lowercase();
-        lower.contains("speech-2") || lower.contains("speech-01") || lower.contains("speech-02")
+        lower.contains("speech-2")
+            || lower.contains("speech-01")
+            || lower.contains("speech-02")
             || lower.contains("minimax")
     });
 
@@ -907,26 +943,121 @@ fn detect_voices_by_model(
 fn minimax_voice_list() -> Vec<crate::generation::VoiceInfo> {
     use crate::generation::VoiceInfo;
     vec![
-        VoiceInfo { id: "male-qn-qingse".into(), name: "青涩青年".into(), gender: "male".into(), description: "清新、年轻的男声".into() },
-        VoiceInfo { id: "male-qn-jingying".into(), name: "精英青年".into(), gender: "male".into(), description: "自信、专业的男声".into() },
-        VoiceInfo { id: "male-qn-badao".into(), name: "霸道青年".into(), gender: "male".into(), description: "有力、阳刚的男声".into() },
-        VoiceInfo { id: "male-qn-daxuesheng".into(), name: "大学生青年".into(), gender: "male".into(), description: "活泼、阳光的男声".into() },
-        VoiceInfo { id: "female-shaonv".into(), name: "少女".into(), gender: "female".into(), description: "清新、甜美的女声".into() },
-        VoiceInfo { id: "female-yujie".into(), name: "御姐".into(), gender: "female".into(), description: "成熟、知性的女声".into() },
-        VoiceInfo { id: "female-chengshu".into(), name: "成熟女性".into(), gender: "female".into(), description: "温和、优雅的女声".into() },
-        VoiceInfo { id: "female-tianmei".into(), name: "甜美女性".into(), gender: "female".into(), description: "温柔、可爱的女声".into() },
-        VoiceInfo { id: "presenter_male".into(), name: "男性主持人".into(), gender: "male".into(), description: "标准、清晰的男性播报声".into() },
-        VoiceInfo { id: "presenter_female".into(), name: "女性主持人".into(), gender: "female".into(), description: "标准、清晰的女性播报声".into() },
-        VoiceInfo { id: "audiobook_male_1".into(), name: "有声书男声1".into(), gender: "male".into(), description: "沉稳、厚重的男声".into() },
-        VoiceInfo { id: "audiobook_male_2".into(), name: "有声书男声2".into(), gender: "male".into(), description: "温暖、磁性的男声".into() },
-        VoiceInfo { id: "audiobook_female_1".into(), name: "有声书女声1".into(), gender: "female".into(), description: "温暖、亲和的女声".into() },
-        VoiceInfo { id: "audiobook_female_2".into(), name: "有声书女声2".into(), gender: "female".into(), description: "柔和、舒缓的女声".into() },
-        VoiceInfo { id: "Podcast_girl".into(), name: "播客女生".into(), gender: "female".into(), description: "活泼、自然的播客女声".into() },
+        VoiceInfo {
+            id: "male-qn-qingse".into(),
+            name: "青涩青年".into(),
+            gender: "male".into(),
+            description: "清新、年轻的男声".into(),
+        },
+        VoiceInfo {
+            id: "male-qn-jingying".into(),
+            name: "精英青年".into(),
+            gender: "male".into(),
+            description: "自信、专业的男声".into(),
+        },
+        VoiceInfo {
+            id: "male-qn-badao".into(),
+            name: "霸道青年".into(),
+            gender: "male".into(),
+            description: "有力、阳刚的男声".into(),
+        },
+        VoiceInfo {
+            id: "male-qn-daxuesheng".into(),
+            name: "大学生青年".into(),
+            gender: "male".into(),
+            description: "活泼、阳光的男声".into(),
+        },
+        VoiceInfo {
+            id: "female-shaonv".into(),
+            name: "少女".into(),
+            gender: "female".into(),
+            description: "清新、甜美的女声".into(),
+        },
+        VoiceInfo {
+            id: "female-yujie".into(),
+            name: "御姐".into(),
+            gender: "female".into(),
+            description: "成熟、知性的女声".into(),
+        },
+        VoiceInfo {
+            id: "female-chengshu".into(),
+            name: "成熟女性".into(),
+            gender: "female".into(),
+            description: "温和、优雅的女声".into(),
+        },
+        VoiceInfo {
+            id: "female-tianmei".into(),
+            name: "甜美女性".into(),
+            gender: "female".into(),
+            description: "温柔、可爱的女声".into(),
+        },
+        VoiceInfo {
+            id: "presenter_male".into(),
+            name: "男性主持人".into(),
+            gender: "male".into(),
+            description: "标准、清晰的男性播报声".into(),
+        },
+        VoiceInfo {
+            id: "presenter_female".into(),
+            name: "女性主持人".into(),
+            gender: "female".into(),
+            description: "标准、清晰的女性播报声".into(),
+        },
+        VoiceInfo {
+            id: "audiobook_male_1".into(),
+            name: "有声书男声1".into(),
+            gender: "male".into(),
+            description: "沉稳、厚重的男声".into(),
+        },
+        VoiceInfo {
+            id: "audiobook_male_2".into(),
+            name: "有声书男声2".into(),
+            gender: "male".into(),
+            description: "温暖、磁性的男声".into(),
+        },
+        VoiceInfo {
+            id: "audiobook_female_1".into(),
+            name: "有声书女声1".into(),
+            gender: "female".into(),
+            description: "温暖、亲和的女声".into(),
+        },
+        VoiceInfo {
+            id: "audiobook_female_2".into(),
+            name: "有声书女声2".into(),
+            gender: "female".into(),
+            description: "柔和、舒缓的女声".into(),
+        },
+        VoiceInfo {
+            id: "Podcast_girl".into(),
+            name: "播客女生".into(),
+            gender: "female".into(),
+            description: "活泼、自然的播客女声".into(),
+        },
         // OpenAI-compatible voices also work through proxies
-        VoiceInfo { id: "alloy".into(), name: "Alloy".into(), gender: "neutral".into(), description: "中性、平衡 (OpenAI)".into() },
-        VoiceInfo { id: "echo".into(), name: "Echo".into(), gender: "male".into(), description: "温暖、对话感 (OpenAI)".into() },
-        VoiceInfo { id: "nova".into(), name: "Nova".into(), gender: "female".into(), description: "友好、活泼 (OpenAI)".into() },
-        VoiceInfo { id: "shimmer".into(), name: "Shimmer".into(), gender: "female".into(), description: "清晰、专业 (OpenAI)".into() },
+        VoiceInfo {
+            id: "alloy".into(),
+            name: "Alloy".into(),
+            gender: "neutral".into(),
+            description: "中性、平衡 (OpenAI)".into(),
+        },
+        VoiceInfo {
+            id: "echo".into(),
+            name: "Echo".into(),
+            gender: "male".into(),
+            description: "温暖、对话感 (OpenAI)".into(),
+        },
+        VoiceInfo {
+            id: "nova".into(),
+            name: "Nova".into(),
+            gender: "female".into(),
+            description: "友好、活泼 (OpenAI)".into(),
+        },
+        VoiceInfo {
+            id: "shimmer".into(),
+            name: "Shimmer".into(),
+            gender: "female".into(),
+            description: "清晰、专业 (OpenAI)".into(),
+        },
     ]
 }
 
@@ -934,17 +1065,72 @@ fn minimax_voice_list() -> Vec<crate::generation::VoiceInfo> {
 fn gpt4o_tts_voice_list() -> Vec<crate::generation::VoiceInfo> {
     use crate::generation::VoiceInfo;
     vec![
-        VoiceInfo { id: "coral".into(), name: "Coral".into(), gender: "female".into(), description: "Warm, conversational".into() },
-        VoiceInfo { id: "sage".into(), name: "Sage".into(), gender: "female".into(), description: "Calm, thoughtful".into() },
-        VoiceInfo { id: "ash".into(), name: "Ash".into(), gender: "male".into(), description: "Confident, direct".into() },
-        VoiceInfo { id: "ballad".into(), name: "Ballad".into(), gender: "male".into(), description: "Warm, engaging".into() },
-        VoiceInfo { id: "verse".into(), name: "Verse".into(), gender: "male".into(), description: "Versatile, dynamic".into() },
-        VoiceInfo { id: "alloy".into(), name: "Alloy".into(), gender: "neutral".into(), description: "Neutral, balanced".into() },
-        VoiceInfo { id: "echo".into(), name: "Echo".into(), gender: "male".into(), description: "Warm, conversational".into() },
-        VoiceInfo { id: "fable".into(), name: "Fable".into(), gender: "neutral".into(), description: "Expressive, animated".into() },
-        VoiceInfo { id: "onyx".into(), name: "Onyx".into(), gender: "male".into(), description: "Deep, authoritative".into() },
-        VoiceInfo { id: "nova".into(), name: "Nova".into(), gender: "female".into(), description: "Warm, friendly".into() },
-        VoiceInfo { id: "shimmer".into(), name: "Shimmer".into(), gender: "female".into(), description: "Clear, bright".into() },
+        VoiceInfo {
+            id: "coral".into(),
+            name: "Coral".into(),
+            gender: "female".into(),
+            description: "Warm, conversational".into(),
+        },
+        VoiceInfo {
+            id: "sage".into(),
+            name: "Sage".into(),
+            gender: "female".into(),
+            description: "Calm, thoughtful".into(),
+        },
+        VoiceInfo {
+            id: "ash".into(),
+            name: "Ash".into(),
+            gender: "male".into(),
+            description: "Confident, direct".into(),
+        },
+        VoiceInfo {
+            id: "ballad".into(),
+            name: "Ballad".into(),
+            gender: "male".into(),
+            description: "Warm, engaging".into(),
+        },
+        VoiceInfo {
+            id: "verse".into(),
+            name: "Verse".into(),
+            gender: "male".into(),
+            description: "Versatile, dynamic".into(),
+        },
+        VoiceInfo {
+            id: "alloy".into(),
+            name: "Alloy".into(),
+            gender: "neutral".into(),
+            description: "Neutral, balanced".into(),
+        },
+        VoiceInfo {
+            id: "echo".into(),
+            name: "Echo".into(),
+            gender: "male".into(),
+            description: "Warm, conversational".into(),
+        },
+        VoiceInfo {
+            id: "fable".into(),
+            name: "Fable".into(),
+            gender: "neutral".into(),
+            description: "Expressive, animated".into(),
+        },
+        VoiceInfo {
+            id: "onyx".into(),
+            name: "Onyx".into(),
+            gender: "male".into(),
+            description: "Deep, authoritative".into(),
+        },
+        VoiceInfo {
+            id: "nova".into(),
+            name: "Nova".into(),
+            gender: "female".into(),
+            description: "Warm, friendly".into(),
+        },
+        VoiceInfo {
+            id: "shimmer".into(),
+            name: "Shimmer".into(),
+            gender: "female".into(),
+            description: "Clear, bright".into(),
+        },
     ]
 }
 

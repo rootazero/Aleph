@@ -16,13 +16,13 @@
 
 use super::{
     ExtensionAgent, ExtensionCommand, ExtensionConfig, ExtensionError, ExtensionManager,
-    ExtensionResult, ExtensionSkill, HookEvent, LoadSummary, McpServerConfig,
-    PluginInfo, PluginRecord,
+    ExtensionResult, ExtensionSkill, HookEvent, LoadSummary, McpServerConfig, PluginInfo,
+    PluginRecord,
 };
 use crate::extension::hooks::{HookContext, HookResult};
+use crate::sync_primitives::Arc;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use crate::sync_primitives::Arc;
 use tokio::runtime::{Handle, Runtime};
 use tokio::sync::RwLock;
 
@@ -82,9 +82,8 @@ impl SyncExtensionManager {
 
     /// Load all extensions (skills, commands, agents, plugins)
     pub fn load_all(&self) -> ExtensionResult<LoadSummary> {
-        self.runtime.block_on(async {
-            self.inner.read().await.load_all().await
-        })
+        self.runtime
+            .block_on(async { self.inner.read().await.load_all().await })
     }
 
     // =========================================================================
@@ -93,23 +92,20 @@ impl SyncExtensionManager {
 
     /// Get all skills
     pub fn get_all_skills(&self) -> Vec<ExtensionSkill> {
-        self.runtime.block_on(async {
-            self.inner.read().await.get_all_skills().await
-        })
+        self.runtime
+            .block_on(async { self.inner.read().await.get_all_skills().await })
     }
 
     /// Get auto-invocable skills (for LLM prompt injection)
     pub fn get_auto_invocable_skills(&self) -> Vec<ExtensionSkill> {
-        self.runtime.block_on(async {
-            self.inner.read().await.get_auto_invocable_skills().await
-        })
+        self.runtime
+            .block_on(async { self.inner.read().await.get_auto_invocable_skills().await })
     }
 
     /// Get a specific skill by qualified name
     pub fn get_skill(&self, qualified_name: &str) -> Option<ExtensionSkill> {
-        self.runtime.block_on(async {
-            self.inner.read().await.get_skill(qualified_name).await
-        })
+        self.runtime
+            .block_on(async { self.inner.read().await.get_skill(qualified_name).await })
     }
 
     /// Execute a skill with arguments
@@ -129,16 +125,14 @@ impl SyncExtensionManager {
 
     /// Get all commands
     pub fn get_all_commands(&self) -> Vec<ExtensionCommand> {
-        self.runtime.block_on(async {
-            self.inner.read().await.get_all_commands().await
-        })
+        self.runtime
+            .block_on(async { self.inner.read().await.get_all_commands().await })
     }
 
     /// Get a specific command by name
     pub fn get_command(&self, name: &str) -> Option<ExtensionCommand> {
-        self.runtime.block_on(async {
-            self.inner.read().await.get_command(name).await
-        })
+        self.runtime
+            .block_on(async { self.inner.read().await.get_command(name).await })
     }
 
     /// Execute a command with arguments
@@ -158,30 +152,26 @@ impl SyncExtensionManager {
 
     /// Get all agents
     pub fn get_all_agents(&self) -> Vec<ExtensionAgent> {
-        self.runtime.block_on(async {
-            self.inner.read().await.get_all_agents().await
-        })
+        self.runtime
+            .block_on(async { self.inner.read().await.get_all_agents().await })
     }
 
     /// Get a specific agent by name
     pub fn get_agent(&self, name: &str) -> Option<ExtensionAgent> {
-        self.runtime.block_on(async {
-            self.inner.read().await.get_agent(name).await
-        })
+        self.runtime
+            .block_on(async { self.inner.read().await.get_agent(name).await })
     }
 
     /// Get all primary agents
     pub fn get_primary_agents(&self) -> Vec<ExtensionAgent> {
-        self.runtime.block_on(async {
-            self.inner.read().await.get_primary_agents().await
-        })
+        self.runtime
+            .block_on(async { self.inner.read().await.get_primary_agents().await })
     }
 
     /// Get all sub-agents
     pub fn get_sub_agents(&self) -> Vec<ExtensionAgent> {
-        self.runtime.block_on(async {
-            self.inner.read().await.get_sub_agents().await
-        })
+        self.runtime
+            .block_on(async { self.inner.read().await.get_sub_agents().await })
     }
 
     // =========================================================================
@@ -190,16 +180,14 @@ impl SyncExtensionManager {
 
     /// Get all plugin info
     pub fn get_plugin_info(&self) -> Vec<PluginInfo> {
-        self.runtime.block_on(async {
-            self.inner.read().await.get_plugin_info().await
-        })
+        self.runtime
+            .block_on(async { self.inner.read().await.get_plugin_info().await })
     }
 
     /// Get a specific plugin record by name
     pub fn get_plugin_record(&self, name: &str) -> Option<PluginRecord> {
-        self.runtime.block_on(async {
-            self.inner.read().await.get_plugin_record(name).await
-        })
+        self.runtime
+            .block_on(async { self.inner.read().await.get_plugin_record(name).await })
     }
 
     // =========================================================================
@@ -207,17 +195,19 @@ impl SyncExtensionManager {
     // =========================================================================
 
     /// Execute hooks for an event
-    pub fn execute_hooks(&self, event: HookEvent, context: &HookContext) -> ExtensionResult<HookResult> {
-        self.runtime.block_on(async {
-            self.inner.read().await.execute_hooks(event, context).await
-        })
+    pub fn execute_hooks(
+        &self,
+        event: HookEvent,
+        context: &HookContext,
+    ) -> ExtensionResult<HookResult> {
+        self.runtime
+            .block_on(async { self.inner.read().await.execute_hooks(event, context).await })
     }
 
     /// Get the number of registered hooks
     pub fn hook_count(&self) -> usize {
-        self.runtime.block_on(async {
-            self.inner.read().await.hook_count().await
-        })
+        self.runtime
+            .block_on(async { self.inner.read().await.hook_count().await })
     }
 
     // =========================================================================
@@ -226,9 +216,8 @@ impl SyncExtensionManager {
 
     /// Get all MCP server configurations
     pub fn get_mcp_servers(&self) -> HashMap<String, McpServerConfig> {
-        self.runtime.block_on(async {
-            self.inner.read().await.get_mcp_servers().await
-        })
+        self.runtime
+            .block_on(async { self.inner.read().await.get_mcp_servers().await })
     }
 
     // =========================================================================
@@ -283,9 +272,8 @@ impl SyncExtensionManager {
 
     /// Get the Aleph home directory
     pub fn aleph_home(&self) -> ExtensionResult<PathBuf> {
-        self.runtime.block_on(async {
-            self.inner.read().await.aleph_home()
-        })
+        self.runtime
+            .block_on(async { self.inner.read().await.aleph_home() })
     }
 }
 

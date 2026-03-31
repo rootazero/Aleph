@@ -23,12 +23,8 @@ _Session: _
 "#;
 
 /// Get the scratchpad template, checking override first
-pub fn get_template(
-    overrides: &crate::config::prompts_override::PromptsOverride,
-) -> &str {
-    overrides
-        .scratchpad_template()
-        .unwrap_or(DEFAULT_TEMPLATE)
+pub fn get_template(overrides: &crate::config::prompts_override::PromptsOverride) -> &str {
+    overrides.scratchpad_template().unwrap_or(DEFAULT_TEMPLATE)
 }
 
 /// Generate a scratchpad with populated metadata

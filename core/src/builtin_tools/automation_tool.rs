@@ -109,9 +109,7 @@ Examples:
                         return Ok(AutomationOutput {
                             success: false,
                             data: None,
-                            message: Some(
-                                "run_script requires 'script' parameter.".to_string(),
-                            ),
+                            message: Some("run_script requires 'script' parameter.".to_string()),
                         });
                     }
                 };
@@ -176,9 +174,7 @@ Examples:
                         return Ok(AutomationOutput {
                             success: false,
                             data: None,
-                            message: Some(
-                                "run_shortcut requires 'name' parameter.".to_string(),
-                            ),
+                            message: Some("run_shortcut requires 'name' parameter.".to_string()),
                         });
                     }
                 };

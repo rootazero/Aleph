@@ -38,7 +38,6 @@ impl ContextStats {
             WarningLevel::Normal
         }
     }
-
 }
 
 /// Breakdown of token usage by category
@@ -61,8 +60,7 @@ pub enum WarningLevel {
 }
 
 /// Compression focus options
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum CompressionFocus {
     #[default]
     Balanced,

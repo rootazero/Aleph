@@ -32,19 +32,19 @@ pub mod permissions;
 pub use config::{DiscordConfig, IntentsConfig};
 
 use crate::gateway::channel::{
-    Attachment, Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId,
-    ChannelInfo, ChannelResult, ChannelState, ChannelStatus, ConversationId, InboundMessage,
-    MessageId, OutboundMessage, SendResult, UserId,
+    Attachment, Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
+    ChannelResult, ChannelState, ChannelStatus, ConversationId, InboundMessage, MessageId,
+    OutboundMessage, SendResult, UserId,
 };
+use crate::sync_primitives::Arc;
 use async_trait::async_trait;
 use chrono::{TimeZone, Utc};
-use crate::sync_primitives::Arc;
 use tokio::sync::{mpsc, oneshot, RwLock};
 
 use serenity::{
     all::{
-        ChannelId as SerenityChannelId, Context, CreateAttachment, CreateMessage,
-        EditMessage, EventHandler, GatewayIntents, Message, MessageId as SerenityMessageId, Ready,
+        ChannelId as SerenityChannelId, Context, CreateAttachment, CreateMessage, EditMessage,
+        EventHandler, GatewayIntents, Message, MessageId as SerenityMessageId, Ready,
     },
     Client,
 };
@@ -108,9 +108,10 @@ impl DiscordChannel {
         &self,
         conversation_id: &ConversationId,
     ) -> ChannelResult<SerenityChannelId> {
-        let http = self.http.as_ref().ok_or_else(|| {
-            ChannelError::NotConnected("HTTP client not initialized".to_string())
-        })?;
+        let http = self
+            .http
+            .as_ref()
+            .ok_or_else(|| ChannelError::NotConnected("HTTP client not initialized".to_string()))?;
 
         if conversation_id.as_str().starts_with("dm:") {
             let user_id: u64 = conversation_id
@@ -158,7 +159,11 @@ impl EventHandler for Handler {
         tracing::info!(
             "Discord bot connected: {}#{} ({})",
             ready.user.name,
-            ready.user.discriminator.map(|d| d.to_string()).unwrap_or_default(),
+            ready
+                .user
+                .discriminator
+                .map(|d| d.to_string())
+                .unwrap_or_default(),
             ready.user.id
         );
 
@@ -215,7 +220,9 @@ impl EventHandler for Handler {
 
         // Extract text (remove mention/prefix if present)
         let text = if has_prefix {
-            msg.content[self.config.command_prefix.len()..].trim().to_string()
+            msg.content[self.config.command_prefix.len()..]
+                .trim()
+                .to_string()
         } else if mentioned {
             // Remove the mention from the text
             let mention_pattern = format!("<@{}>", bot_user_id.unwrap_or(0));
@@ -310,11 +317,11 @@ impl Channel for DiscordChannel {
 
     async fn start(&mut self) -> ChannelResult<()> {
         // Validate configuration
-        self.config
-            .validate()
-            .map_err(ChannelError::ConfigError)?;
+        self.config.validate().map_err(ChannelError::ConfigError)?;
 
-        self.channel_state.set_status(ChannelStatus::Connecting).await;
+        self.channel_state
+            .set_status(ChannelStatus::Connecting)
+            .await;
         tracing::info!("Starting Discord channel...");
 
         // Build gateway intents
@@ -344,7 +351,9 @@ impl Channel for DiscordChannel {
         let mut client = Client::builder(&self.config.bot_token, intents)
             .event_handler(handler)
             .await
-            .map_err(|e| ChannelError::ConfigError(format!("Failed to create Discord client: {}", e)))?;
+            .map_err(|e| {
+                ChannelError::ConfigError(format!("Failed to create Discord client: {}", e))
+            })?;
 
         // Store HTTP client for sending messages
         self.http = Some(client.http.clone());
@@ -390,7 +399,9 @@ impl Channel for DiscordChannel {
             let _ = shutdown_tx.send(());
         }
 
-        self.channel_state.set_status(ChannelStatus::Disconnected).await;
+        self.channel_state
+            .set_status(ChannelStatus::Disconnected)
+            .await;
 
         self.http = None;
 
@@ -405,32 +416,30 @@ impl Channel for DiscordChannel {
 
         // Parse channel ID from conversation_id
         // Handle both "dm:user_id" and direct channel IDs
-        let channel_id = if message.conversation_id.as_str().starts_with("dm:") {
-            // For DMs, we need to create a DM channel first
-            let user_id: u64 = message
-                .conversation_id
-                .as_str()
-                .strip_prefix("dm:")
-                .unwrap()
-                .parse()
-                .map_err(|e| ChannelError::SendFailed(format!("Invalid user ID: {}", e)))?;
-
-            let user = serenity::all::UserId::new(user_id);
-            let dm_channel = user
-                .create_dm_channel(http)
-                .await
-                .map_err(|e| ChannelError::SendFailed(format!("Failed to create DM channel: {}", e)))?;
-
-            dm_channel.id
-        } else {
-            SerenityChannelId::new(
-                message
+        let channel_id =
+            if message.conversation_id.as_str().starts_with("dm:") {
+                // For DMs, we need to create a DM channel first
+                let user_id: u64 = message
                     .conversation_id
                     .as_str()
+                    .strip_prefix("dm:")
+                    .unwrap()
                     .parse()
-                    .map_err(|e| ChannelError::SendFailed(format!("Invalid channel ID: {}", e)))?,
-            )
-        };
+                    .map_err(|e| ChannelError::SendFailed(format!("Invalid user ID: {}", e)))?;
+
+                let user = serenity::all::UserId::new(user_id);
+                let dm_channel = user.create_dm_channel(http).await.map_err(|e| {
+                    ChannelError::SendFailed(format!("Failed to create DM channel: {}", e))
+                })?;
+
+                dm_channel.id
+            } else {
+                SerenityChannelId::new(
+                    message.conversation_id.as_str().parse().map_err(|e| {
+                        ChannelError::SendFailed(format!("Invalid channel ID: {}", e))
+                    })?,
+                )
+            };
 
         // Build message
         let mut builder = CreateMessage::new().content(&message.text);
@@ -500,10 +509,16 @@ impl Channel for DiscordChannel {
         Ok(())
     }
 
-    async fn edit(&self, conversation_id: &ConversationId, message_id: &MessageId, new_text: &str) -> ChannelResult<()> {
-        let http = self.http.as_ref().ok_or_else(|| {
-            ChannelError::NotConnected("HTTP client not initialized".to_string())
-        })?;
+    async fn edit(
+        &self,
+        conversation_id: &ConversationId,
+        message_id: &MessageId,
+        new_text: &str,
+    ) -> ChannelResult<()> {
+        let http = self
+            .http
+            .as_ref()
+            .ok_or_else(|| ChannelError::NotConnected("HTTP client not initialized".to_string()))?;
 
         let channel_id = self.resolve_channel_id(conversation_id).await?;
         let msg_id = Self::parse_message_id(message_id)?;
@@ -517,10 +532,15 @@ impl Channel for DiscordChannel {
         Ok(())
     }
 
-    async fn delete(&self, conversation_id: &ConversationId, message_id: &MessageId) -> ChannelResult<()> {
-        let http = self.http.as_ref().ok_or_else(|| {
-            ChannelError::NotConnected("HTTP client not initialized".to_string())
-        })?;
+    async fn delete(
+        &self,
+        conversation_id: &ConversationId,
+        message_id: &MessageId,
+    ) -> ChannelResult<()> {
+        let http = self
+            .http
+            .as_ref()
+            .ok_or_else(|| ChannelError::NotConnected("HTTP client not initialized".to_string()))?;
 
         let channel_id = self.resolve_channel_id(conversation_id).await?;
         let msg_id = Self::parse_message_id(message_id)?;
@@ -533,19 +553,24 @@ impl Channel for DiscordChannel {
         Ok(())
     }
 
-    async fn react(&self, conversation_id: &ConversationId, message_id: &MessageId, reaction: &str) -> ChannelResult<()> {
-        let http = self.http.as_ref().ok_or_else(|| {
-            ChannelError::NotConnected("HTTP client not initialized".to_string())
-        })?;
+    async fn react(
+        &self,
+        conversation_id: &ConversationId,
+        message_id: &MessageId,
+        reaction: &str,
+    ) -> ChannelResult<()> {
+        let http = self
+            .http
+            .as_ref()
+            .ok_or_else(|| ChannelError::NotConnected("HTTP client not initialized".to_string()))?;
 
         let channel_id = self.resolve_channel_id(conversation_id).await?;
         let msg_id = Self::parse_message_id(message_id)?;
 
         // Parse emoji — custom format <:name:id> or <a:name:id>, otherwise Unicode
         let reaction_type = if reaction.starts_with('<') {
-            serenity::all::ReactionType::try_from(reaction).map_err(|e| {
-                ChannelError::Internal(format!("Invalid emoji format: {}", e))
-            })?
+            serenity::all::ReactionType::try_from(reaction)
+                .map_err(|e| ChannelError::Internal(format!("Invalid emoji format: {}", e)))?
         } else {
             serenity::all::ReactionType::Unicode(reaction.to_string())
         };
@@ -571,9 +596,7 @@ impl ChannelFactory for DiscordChannelFactory {
         let config: DiscordConfig = serde_json::from_value(config)
             .map_err(|e| ChannelError::ConfigError(format!("Invalid Discord config: {}", e)))?;
 
-        config
-            .validate()
-            .map_err(ChannelError::ConfigError)?;
+        config.validate().map_err(ChannelError::ConfigError)?;
 
         Ok(Box::new(DiscordChannel::new("discord", config)))
     }

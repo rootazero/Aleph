@@ -18,18 +18,17 @@
 
 use crate::sync_primitives::Arc;
 
-use crate::builtin_tools::{
-    BashExecTool, CodeExecTool, DesktopTool, EscalateTaskTool,
-    FileOpsTool, ImageGenerateTool, PdfGenerateTool, ReadConfigGuideTool, SelfManageTool,
-    SearchTool, VaultStoreTool, WebFetchTool,
-};
 use crate::builtin_tools::browser_tools::{
-    BrowserOpenTool, BrowserClickTool, BrowserTypeTool, BrowserScreenshotTool,
-    BrowserSnapshotTool, BrowserNavigateTool, BrowserTabsTool, BrowserSelectTool,
-    BrowserEvaluateTool, BrowserFillFormTool, BrowserPressKeyTool, BrowserWaitForTool,
-    BrowserConsoleTool, BrowserProfileTool,
+    BrowserClickTool, BrowserConsoleTool, BrowserEvaluateTool, BrowserFillFormTool,
+    BrowserNavigateTool, BrowserOpenTool, BrowserPressKeyTool, BrowserProfileTool,
+    BrowserScreenshotTool, BrowserSelectTool, BrowserSnapshotTool, BrowserTabsTool,
+    BrowserTypeTool, BrowserWaitForTool,
 };
 use crate::builtin_tools::skill_reader::ListSkillsTool as SkillListTool;
+use crate::builtin_tools::{
+    BashExecTool, CodeExecTool, DesktopTool, EscalateTaskTool, FileOpsTool, ImageGenerateTool,
+    PdfGenerateTool, ReadConfigGuideTool, SearchTool, SelfManageTool, VaultStoreTool, WebFetchTool,
+};
 use crate::tools::AlephToolDyn;
 
 use super::BuiltinToolConfig;
@@ -475,11 +474,9 @@ pub fn create_tool_boxed(
         "read_config_guide" => Some(Box::new(ReadConfigGuideTool::default())),
         "self_manage" => Some(Box::new(SelfManageTool::default())),
         "desktop" => Some(Box::new(DesktopTool::new())),
-        "vault_store" => {
-            config.and_then(|c| c.shared_token_manager.as_ref()).map(|mgr| {
-                Box::new(VaultStoreTool::new(Arc::clone(mgr))) as Box<dyn AlephToolDyn>
-            })
-        }
+        "vault_store" => config
+            .and_then(|c| c.shared_token_manager.as_ref())
+            .map(|mgr| Box::new(VaultStoreTool::new(Arc::clone(mgr))) as Box<dyn AlephToolDyn>),
         // Sessions tools require gateway_context and caller_agent_id at runtime,
         // so they cannot be created via create_tool_boxed. They are created
         // dynamically in BuiltinToolRegistry::execute_tool().
@@ -491,32 +488,42 @@ pub fn create_tool_boxed(
         // Cron management tool requires SharedCronService at runtime
         "cron_manage" => None,
         // Heartbeat management tools require SharedHeartbeatService at runtime
-        "heartbeat_list" | "heartbeat_create" | "heartbeat_update"
-        | "heartbeat_delete" | "heartbeat_toggle" => None,
+        "heartbeat_list" | "heartbeat_create" | "heartbeat_update" | "heartbeat_delete"
+        | "heartbeat_toggle" => None,
         // Heartbeat report tool — always available (no dependencies)
-        "heartbeat_report" => Some(Box::new(crate::builtin_tools::heartbeat_manage::HeartbeatReportTool)),
+        "heartbeat_report" => Some(Box::new(
+            crate::builtin_tools::heartbeat_manage::HeartbeatReportTool,
+        )),
         // Agent management tools require agent_registry + workspace_manager + session_context,
         // created dynamically in BuiltinToolRegistry::with_config().
         "agent_create" | "agent_list" | "agent_delete" => None,
         "escalate_task" => Some(Box::new(EscalateTaskTool)),
         // Media tools — require MediaPipeline
-        "media_understand" => {
-            config.and_then(|c| c.media_pipeline.as_ref()).map(|pipeline| {
-                Box::new(crate::builtin_tools::media_tools::MediaUnderstandTool::new(Arc::clone(pipeline))) as Box<dyn AlephToolDyn>
-            })
-        }
-        "audio_transcribe" => {
-            config.and_then(|c| c.media_pipeline.as_ref()).map(|pipeline| {
-                Box::new(crate::builtin_tools::media_tools::AudioTranscribeTool::new(Arc::clone(pipeline))) as Box<dyn AlephToolDyn>
-            })
-        }
-        "document_extract" => {
-            config.and_then(|c| c.media_pipeline.as_ref()).map(|pipeline| {
-                Box::new(crate::builtin_tools::media_tools::DocumentExtractTool::new(Arc::clone(pipeline))) as Box<dyn AlephToolDyn>
-            })
-        }
+        "media_understand" => config
+            .and_then(|c| c.media_pipeline.as_ref())
+            .map(|pipeline| {
+                Box::new(crate::builtin_tools::media_tools::MediaUnderstandTool::new(
+                    Arc::clone(pipeline),
+                )) as Box<dyn AlephToolDyn>
+            }),
+        "audio_transcribe" => config
+            .and_then(|c| c.media_pipeline.as_ref())
+            .map(|pipeline| {
+                Box::new(crate::builtin_tools::media_tools::AudioTranscribeTool::new(
+                    Arc::clone(pipeline),
+                )) as Box<dyn AlephToolDyn>
+            }),
+        "document_extract" => config
+            .and_then(|c| c.media_pipeline.as_ref())
+            .map(|pipeline| {
+                Box::new(crate::builtin_tools::media_tools::DocumentExtractTool::new(
+                    Arc::clone(pipeline),
+                )) as Box<dyn AlephToolDyn>
+            }),
         "clawhub" => Some(Box::new(crate::builtin_tools::clawhub::ClawHubTool::new())),
-        "media_send" => Some(Box::new(crate::builtin_tools::media_send::MediaSendTool::new())),
+        "media_send" => Some(Box::new(
+            crate::builtin_tools::media_send::MediaSendTool::new(),
+        )),
         // Team management tools require TeamStore at runtime,
         // created dynamically in BuiltinToolRegistry::with_config().
         "team_create" | "team_delegate" | "team_status" | "team_disband" | "team_digest"
@@ -565,13 +572,19 @@ pub fn create_tool_boxed(
         }
         // Skill management tools — always available
         "skill_status" => Some(Box::new(
-            crate::builtin_tools::skill_status::SkillStatusTool::new(crate::skill::SkillSystem::new())
+            crate::builtin_tools::skill_status::SkillStatusTool::new(
+                crate::skill::SkillSystem::new(),
+            ),
         )),
         "skill_install" => Some(Box::new(
-            crate::builtin_tools::skill_install::SkillInstallTool::new(crate::skill::SkillSystem::new())
+            crate::builtin_tools::skill_install::SkillInstallTool::new(
+                crate::skill::SkillSystem::new(),
+            ),
         )),
         "skill_manage" => Some(Box::new(
-            crate::builtin_tools::skill_manage::SkillManageTool::new(crate::skill::SkillSystem::new())
+            crate::builtin_tools::skill_manage::SkillManageTool::new(
+                crate::skill::SkillSystem::new(),
+            ),
         )),
         _ => None,
     }
@@ -696,7 +709,10 @@ mod tests {
         // Verify all definitions have non-empty names and descriptions
         for def in BUILTIN_TOOL_DEFINITIONS {
             assert!(!def.name.is_empty(), "Tool name cannot be empty");
-            assert!(!def.description.is_empty(), "Tool description cannot be empty");
+            assert!(
+                !def.description.is_empty(),
+                "Tool description cannot be empty"
+            );
         }
     }
 }

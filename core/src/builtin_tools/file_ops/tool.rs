@@ -5,9 +5,6 @@ use std::path::Path;
 use async_trait::async_trait;
 use tracing::info;
 
-use crate::error::Result;
-use crate::builtin_tools::error::ToolError;
-use crate::tools::AlephTool;
 use super::batch::{execute_batch_move, execute_organize};
 use super::ops::{
     execute_copy, execute_delete, execute_list, execute_mkdir, execute_move, execute_read,
@@ -16,6 +13,9 @@ use super::ops::{
 use super::path_utils::{check_and_resolve_path, get_denied_paths};
 use super::search::execute_search;
 use super::types::{FileOperation, FileOpsArgs, FileOpsOutput};
+use crate::builtin_tools::error::ToolError;
+use crate::error::Result;
+use crate::tools::AlephTool;
 
 /// File operations tool
 pub struct FileOpsTool {
@@ -56,7 +56,10 @@ IMPORTANT: For organizing multiple files, use 'organize' or 'batch_move' instead
     /// Create a new FileOpsTool with default settings
     pub fn new() -> Self {
         let denied_paths = get_denied_paths();
-        info!(denied_paths_count = denied_paths.len(), "FileOpsTool: initialized with denied_paths");
+        info!(
+            denied_paths_count = denied_paths.len(),
+            "FileOpsTool: initialized with denied_paths"
+        );
 
         Self {
             max_read_size: 100 * 1024 * 1024, // 100MB
@@ -132,23 +135,50 @@ IMPORTANT: For organizing multiple files, use 'organize' or 'batch_move' instead
                 let content = args.content.ok_or_else(|| {
                     ToolError::InvalidArgs("Content required for write operation".to_string())
                 })?;
-                execute_write(path, &content, args.create_parents, &self.denied_paths, output_dir_ref).await
+                execute_write(
+                    path,
+                    &content,
+                    args.create_parents,
+                    &self.denied_paths,
+                    output_dir_ref,
+                )
+                .await
             }
             FileOperation::Move => {
                 let dest = args.destination.ok_or_else(|| {
                     ToolError::InvalidArgs("Destination required for move operation".to_string())
                 })?;
-                execute_move(path, Path::new(&dest), args.create_parents, &self.denied_paths, output_dir_ref).await
+                execute_move(
+                    path,
+                    Path::new(&dest),
+                    args.create_parents,
+                    &self.denied_paths,
+                    output_dir_ref,
+                )
+                .await
             }
             FileOperation::Copy => {
                 let dest = args.destination.ok_or_else(|| {
                     ToolError::InvalidArgs("Destination required for copy operation".to_string())
                 })?;
-                execute_copy(path, Path::new(&dest), args.create_parents, &self.denied_paths, output_dir_ref).await
+                execute_copy(
+                    path,
+                    Path::new(&dest),
+                    args.create_parents,
+                    &self.denied_paths,
+                    output_dir_ref,
+                )
+                .await
             }
             FileOperation::Delete => execute_delete(path, &self.denied_paths, output_dir_ref).await,
             FileOperation::Mkdir => {
-                execute_mkdir(path, args.create_parents, &self.denied_paths, output_dir_ref).await
+                execute_mkdir(
+                    path,
+                    args.create_parents,
+                    &self.denied_paths,
+                    output_dir_ref,
+                )
+                .await
             }
             FileOperation::Search => {
                 let pattern = args.pattern.ok_or_else(|| {
@@ -178,7 +208,13 @@ IMPORTANT: For organizing multiple files, use 'organize' or 'batch_move' instead
                 .await
             }
             FileOperation::Organize => {
-                execute_organize(path, args.create_parents, &self.denied_paths, output_dir_ref).await
+                execute_organize(
+                    path,
+                    args.create_parents,
+                    &self.denied_paths,
+                    output_dir_ref,
+                )
+                .await
             }
         };
 
@@ -236,4 +272,3 @@ impl AlephTool for FileOpsTool {
         self.call_impl(args).await.map_err(Into::into)
     }
 }
-

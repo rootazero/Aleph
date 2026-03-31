@@ -57,7 +57,10 @@ pub struct ProviderConfigJson {
     pub protocol: Option<String>,
     #[serde(default)]
     pub enabled: bool,
-    #[serde(deserialize_with = "crate::config::types::serde_helpers::deserialize_models", alias = "model")]
+    #[serde(
+        deserialize_with = "crate::config::types::serde_helpers::deserialize_models",
+        alias = "model"
+    )]
     pub models: Vec<String>,
     #[serde(default)]
     pub api_key: Option<String>,

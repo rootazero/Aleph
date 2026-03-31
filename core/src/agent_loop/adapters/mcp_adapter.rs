@@ -3,9 +3,9 @@
 //! Wraps an MCP tool behind an abstract transport trait so that the
 //! adapter can be tested without a real MCP server connection.
 
+use crate::sync_primitives::Arc;
 use async_trait::async_trait;
 use serde_json::Value;
-use crate::sync_primitives::Arc;
 
 use super::super::tool::{LoopTool, ToolResult};
 use crate::security::content_sanitizer::{wrap_external_content, ContentSource};
@@ -123,12 +123,7 @@ mod tests {
 
     #[async_trait]
     impl McpTransportTrait for FakeTransport {
-        async fn call_tool(
-            &self,
-            server: &str,
-            tool: &str,
-            args: Value,
-        ) -> anyhow::Result<Value> {
+        async fn call_tool(&self, server: &str, tool: &str, args: Value) -> anyhow::Result<Value> {
             if self.should_fail {
                 anyhow::bail!("transport error: server={server} tool={tool}");
             }
@@ -187,9 +182,18 @@ mod tests {
                 // Output is now wrapped with content boundary markers for prompt injection defense.
                 // The wrapped string contains the serialized JSON with boundary tags.
                 let text = output.as_str().expect("output should be a wrapped string");
-                assert!(text.contains("EXTERNAL_UNTRUSTED_CONTENT"), "should have boundary marker");
-                assert!(text.contains("search-server"), "should contain server name in content");
-                assert!(text.contains("mcp_search"), "should contain tool name in content");
+                assert!(
+                    text.contains("EXTERNAL_UNTRUSTED_CONTENT"),
+                    "should have boundary marker"
+                );
+                assert!(
+                    text.contains("search-server"),
+                    "should contain server name in content"
+                );
+                assert!(
+                    text.contains("mcp_search"),
+                    "should contain tool name in content"
+                );
                 assert!(text.contains("hello"), "should contain args in content");
             }
             ToolResult::Error { error, .. } => panic!("expected success, got: {error}"),
@@ -211,7 +215,9 @@ mod tests {
                 assert!(error.contains("search-server"));
                 assert!(retryable);
             }
-            ToolResult::Success { .. } | ToolResult::SuccessAndStopLoop { .. } => panic!("expected error"),
+            ToolResult::Success { .. } | ToolResult::SuccessAndStopLoop { .. } => {
+                panic!("expected error")
+            }
         }
     }
 }

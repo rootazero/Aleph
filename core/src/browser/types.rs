@@ -130,20 +130,13 @@ pub struct ElementRect {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ActionTarget {
     /// Target an element by its ARIA snapshot ref ID.
-    Ref {
-        ref_id: String,
-    },
+    Ref { ref_id: String },
 
     /// Target an element by a CSS selector.
-    Selector {
-        css: String,
-    },
+    Selector { css: String },
 
     /// Target a specific viewport coordinate.
-    Coordinates {
-        x: f64,
-        y: f64,
-    },
+    Coordinates { x: f64, y: f64 },
 }
 
 /// Direction for scrolling.
@@ -228,10 +221,26 @@ pub fn interactive_roles() -> &'static HashSet<&'static str> {
     static ROLES: OnceLock<HashSet<&str>> = OnceLock::new();
     ROLES.get_or_init(|| {
         [
-            "button", "checkbox", "combobox", "link", "listbox", "menuitem",
-            "menuitemcheckbox", "menuitemradio", "option", "radio", "searchbox",
-            "slider", "spinbutton", "switch", "tab", "textbox", "treeitem",
-        ].into_iter().collect()
+            "button",
+            "checkbox",
+            "combobox",
+            "link",
+            "listbox",
+            "menuitem",
+            "menuitemcheckbox",
+            "menuitemradio",
+            "option",
+            "radio",
+            "searchbox",
+            "slider",
+            "spinbutton",
+            "switch",
+            "tab",
+            "textbox",
+            "treeitem",
+        ]
+        .into_iter()
+        .collect()
     })
 }
 
@@ -240,9 +249,19 @@ pub fn content_roles() -> &'static HashSet<&'static str> {
     static ROLES: OnceLock<HashSet<&str>> = OnceLock::new();
     ROLES.get_or_init(|| {
         [
-            "article", "cell", "columnheader", "gridcell", "heading", "listitem",
-            "main", "navigation", "region", "rowheader",
-        ].into_iter().collect()
+            "article",
+            "cell",
+            "columnheader",
+            "gridcell",
+            "heading",
+            "listitem",
+            "main",
+            "navigation",
+            "region",
+            "rowheader",
+        ]
+        .into_iter()
+        .collect()
     })
 }
 
@@ -251,9 +270,27 @@ pub fn structural_roles() -> &'static HashSet<&'static str> {
     static ROLES: OnceLock<HashSet<&str>> = OnceLock::new();
     ROLES.get_or_init(|| {
         [
-            "application", "directory", "document", "generic", "grid", "group",
-            "ignored", "list", "menu", "menubar", "none", "presentation", "row",
-            "rowgroup", "table", "tablist", "toolbar", "tree", "treegrid",
-        ].into_iter().collect()
+            "application",
+            "directory",
+            "document",
+            "generic",
+            "grid",
+            "group",
+            "ignored",
+            "list",
+            "menu",
+            "menubar",
+            "none",
+            "presentation",
+            "row",
+            "rowgroup",
+            "table",
+            "tablist",
+            "toolbar",
+            "tree",
+            "treegrid",
+        ]
+        .into_iter()
+        .collect()
     })
 }

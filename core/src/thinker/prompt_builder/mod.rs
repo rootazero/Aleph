@@ -9,17 +9,17 @@ mod sections;
 #[cfg(test)]
 mod tests;
 
+use crate::agent_loop::ToolInfo;
 use crate::config::ProfileConfig;
 use crate::dispatcher::tool_index::HydrationResult;
-use crate::agent_loop::ToolInfo;
 
+use super::identity_files::IdentityFiles;
 use super::inbound_context::InboundContext;
-use super::prompt_budget::{TokenBudget, PromptResult};
+use super::prompt_budget::{PromptResult, TokenBudget};
 use super::prompt_layer::{AssemblyPath, LayerInput};
 use super::prompt_mode::PromptMode;
 use super::prompt_pipeline::PromptPipeline;
 use super::soul::SoulManifest;
-use super::identity_files::IdentityFiles;
 
 /// System prompt part with optional cache flag
 ///
@@ -142,8 +142,7 @@ impl PromptBuilder {
         soul: &SoulManifest,
         profile: Option<&ProfileConfig>,
     ) -> String {
-        let input = LayerInput::soul(&self.config, tools, soul)
-            .with_profile(profile);
+        let input = LayerInput::soul(&self.config, tools, soul).with_profile(profile);
         self.pipeline.execute(AssemblyPath::Soul, &input)
     }
 
@@ -193,7 +192,8 @@ impl PromptBuilder {
         let input = LayerInput::soul(&self.config, tools, soul)
             .with_profile(profile)
             .with_mode(mode);
-        self.pipeline.execute_with_mode(AssemblyPath::Soul, &input, mode)
+        self.pipeline
+            .execute_with_mode(AssemblyPath::Soul, &input, mode)
     }
 
     /// Build system prompt with mode and budget control.
@@ -212,7 +212,8 @@ impl PromptBuilder {
         let input = LayerInput::soul(&self.config, tools, soul)
             .with_profile(profile)
             .with_mode(mode);
-        self.pipeline.assemble(AssemblyPath::Soul, &input, mode, budget)
+        self.pipeline
+            .assemble(AssemblyPath::Soul, &input, mode, budget)
     }
 
     /// Build system prompt with full context (soul + profile + workspace + inbound).
@@ -242,7 +243,10 @@ impl PromptBuilder {
     /// from the ContextAggregator. The pipeline layers handle all sections
     /// (runtime context, environment, security, protocol tokens, etc.)
     /// in priority order.
-    pub fn build_system_prompt_with_context(&self, ctx: &super::context::ResolvedContext) -> String {
+    pub fn build_system_prompt_with_context(
+        &self,
+        ctx: &super::context::ResolvedContext,
+    ) -> String {
         let input = LayerInput::context(&self.config, ctx);
         self.pipeline.execute(AssemblyPath::Context, &input)
     }

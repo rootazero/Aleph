@@ -49,9 +49,17 @@ fn test_build_request_screenshot() {
 #[test]
 fn test_build_request_screenshot_with_region() {
     let mut args = make_args("screenshot");
-    args.region = Some(ScreenRegion { x: 10.0, y: 20.0, width: 100.0, height: 200.0 });
+    args.region = Some(ScreenRegion {
+        x: 10.0,
+        y: 20.0,
+        width: 100.0,
+        height: 200.0,
+    });
     let req = request::build_request(&args).unwrap();
-    assert!(matches!(req, DesktopRequest::Screenshot { region: Some(_) }));
+    assert!(matches!(
+        req,
+        DesktopRequest::Screenshot { region: Some(_) }
+    ));
 }
 
 #[test]
@@ -68,7 +76,14 @@ fn test_build_request_click() {
     args.y = Some(200.0);
     args.button = Some(MouseButton::Right);
     let req = request::build_request(&args).unwrap();
-    assert!(matches!(req, DesktopRequest::Click { ref_id: None, button: MouseButton::Right, .. }));
+    assert!(matches!(
+        req,
+        DesktopRequest::Click {
+            ref_id: None,
+            button: MouseButton::Right,
+            ..
+        }
+    ));
 }
 
 #[test]
@@ -117,7 +132,10 @@ fn test_build_request_unknown_action() {
 fn test_build_request_unknown_action_message() {
     let args = make_args("fly");
     let err = request::build_request(&args).unwrap_err();
-    assert!(err.contains("fly"), "error should mention the unknown action");
+    assert!(
+        err.contains("fly"),
+        "error should mention the unknown action"
+    );
 }
 
 #[test]
@@ -125,7 +143,13 @@ fn test_build_request_snapshot() {
     let mut args = make_args("snapshot");
     args.max_depth = Some(3);
     let req = request::build_request(&args).unwrap();
-    assert!(matches!(req, DesktopRequest::Snapshot { max_depth: Some(3), .. }));
+    assert!(matches!(
+        req,
+        DesktopRequest::Snapshot {
+            max_depth: Some(3),
+            ..
+        }
+    ));
 }
 
 #[test]
@@ -133,7 +157,13 @@ fn test_build_request_click_with_ref() {
     let mut args = make_args("click");
     args.ref_id = Some("e3".into());
     let req = request::build_request(&args).unwrap();
-    assert!(matches!(req, DesktopRequest::Click { ref_id: Some(_), .. }));
+    assert!(matches!(
+        req,
+        DesktopRequest::Click {
+            ref_id: Some(_),
+            ..
+        }
+    ));
 }
 
 #[test]
@@ -194,9 +224,9 @@ fn test_build_request_paste() {
 
 // ── Approval policy tests ──────────────────────────────────────────
 
+use crate::approval::{ActionRequest, ApprovalDecision, ApprovalPolicy};
 use crate::sync_primitives::Arc;
 use async_trait::async_trait;
-use crate::approval::{ActionRequest, ApprovalDecision, ApprovalPolicy};
 
 /// A mock policy that returns a fixed decision for all checks.
 struct MockPolicy {
@@ -225,11 +255,7 @@ async fn test_desktop_approval_deny_blocks_click() {
     args.y = Some(200.0);
     let output = AlephTool::call(&tool, args).await.unwrap();
     assert!(!output.success);
-    assert!(output
-        .message
-        .as_deref()
-        .unwrap()
-        .contains("Action denied"));
+    assert!(output.message.as_deref().unwrap().contains("Action denied"));
 }
 
 #[tokio::test]
@@ -245,11 +271,7 @@ async fn test_desktop_approval_deny_blocks_type_text() {
     args.text = Some("secret password".to_string());
     let output = AlephTool::call(&tool, args).await.unwrap();
     assert!(!output.success);
-    assert!(output
-        .message
-        .as_deref()
-        .unwrap()
-        .contains("Action denied"));
+    assert!(output.message.as_deref().unwrap().contains("Action denied"));
 }
 
 #[tokio::test]
@@ -265,11 +287,7 @@ async fn test_desktop_approval_deny_blocks_key_combo() {
     args.keys = Some(vec!["cmd".into(), "q".into()]);
     let output = AlephTool::call(&tool, args).await.unwrap();
     assert!(!output.success);
-    assert!(output
-        .message
-        .as_deref()
-        .unwrap()
-        .contains("Action denied"));
+    assert!(output.message.as_deref().unwrap().contains("Action denied"));
 }
 
 #[tokio::test]
@@ -285,11 +303,7 @@ async fn test_desktop_approval_deny_blocks_launch_app() {
     args.bundle_id = Some("com.evil.malware".to_string());
     let output = AlephTool::call(&tool, args).await.unwrap();
     assert!(!output.success);
-    assert!(output
-        .message
-        .as_deref()
-        .unwrap()
-        .contains("Action denied"));
+    assert!(output.message.as_deref().unwrap().contains("Action denied"));
 }
 
 #[tokio::test]

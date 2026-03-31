@@ -50,8 +50,8 @@ impl CompactorProbeHarness {
                 .expect("Failed to create LanceDB backend"),
         );
 
-        let compactor = SessionCompactor::new(lance.clone(), config)
-            .with_provider(mock_llm.clone());
+        let compactor =
+            SessionCompactor::new(lance.clone(), config).with_provider(mock_llm.clone());
 
         Self {
             compactor,
@@ -90,8 +90,8 @@ impl CompactorProbeHarness {
             promote_confidence_threshold: 0.8,
         };
 
-        let compactor = SessionCompactor::new(lance.clone(), config)
-            .with_provider(mock_llm.clone());
+        let compactor =
+            SessionCompactor::new(lance.clone(), config).with_provider(mock_llm.clone());
 
         Self {
             compactor,
@@ -113,7 +113,12 @@ impl CompactorProbeHarness {
         for i in 0..count {
             pairs.push((
                 "user".to_string(),
-                format!("Turn {}: Tell me about {} — question part {}", i + 1, topic, i + 1),
+                format!(
+                    "Turn {}: Tell me about {} — question part {}",
+                    i + 1,
+                    topic,
+                    i + 1
+                ),
             ));
             pairs.push((
                 "assistant".to_string(),
@@ -215,10 +220,7 @@ impl CompactorProbeHarness {
             .with_scope(MemoryScope::SessionLocal)
             .with_path_prefix(&path_prefix);
 
-        self.database
-            .count_facts(&filter)
-            .await
-            .unwrap_or(0)
+        self.database.count_facts(&filter).await.unwrap_or(0)
     }
 
     /// Insert a pre-built MemoryFact directly into the database.

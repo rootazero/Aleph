@@ -3,8 +3,8 @@
 //! Handles server-initiated sampling/createMessage requests,
 //! allowing MCP servers to call the host's LLM.
 
-use std::pin::Pin;
 use crate::sync_primitives::Arc;
+use std::pin::Pin;
 
 use futures::Stream;
 use serde_json::Value;
@@ -22,7 +22,10 @@ use crate::mcp::jsonrpc::mcp::{
 ///
 /// Takes a SamplingRequest and returns a Future that resolves to a SamplingResponse.
 pub type SamplingCallback = Box<
-    dyn Fn(SamplingRequest) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<SamplingResponse>> + Send>>
+    dyn Fn(
+            SamplingRequest,
+        )
+            -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<SamplingResponse>> + Send>>
         + Send
         + Sync,
 >;
@@ -109,9 +112,8 @@ impl SamplingHandler {
         requesting_server: &str,
     ) -> Result<SamplingResponse> {
         // Parse the request
-        let mut request: SamplingRequest = serde_json::from_value(params).map_err(|e| {
-            AlephError::IoError(format!("Failed to parse sampling request: {}", e))
-        })?;
+        let mut request: SamplingRequest = serde_json::from_value(params)
+            .map_err(|e| AlephError::IoError(format!("Failed to parse sampling request: {}", e)))?;
 
         tracing::debug!(
             request_id = %request_id,
@@ -171,7 +173,7 @@ impl SamplingHandler {
         SamplingResponse {
             role: PromptRole::Assistant,
             content: SamplingContent::Text {
-                text: format!("Error: {}", error.into())
+                text: format!("Error: {}", error.into()),
             },
             model: None,
             stop_reason: Some(StopReason::EndTurn),
@@ -247,9 +249,9 @@ mod tests {
     #[tokio::test]
     async fn test_has_callback_true() {
         let handler = SamplingHandler::new();
-        handler.set_callback(|_req| async {
-            Ok(SamplingHandler::text_response("test"))
-        }).await;
+        handler
+            .set_callback(|_req| async { Ok(SamplingHandler::text_response("test")) })
+            .await;
         assert!(handler.has_callback().await);
     }
 
@@ -277,11 +279,15 @@ mod tests {
         let messages = vec![
             SamplingMessage {
                 role: PromptRole::User,
-                content: SamplingContent::Text { text: "Hello".to_string() },
+                content: SamplingContent::Text {
+                    text: "Hello".to_string(),
+                },
             },
             SamplingMessage {
                 role: PromptRole::Assistant,
-                content: SamplingContent::Text { text: "Hi there!".to_string() },
+                content: SamplingContent::Text {
+                    text: "Hi there!".to_string(),
+                },
             },
         ];
 
@@ -313,11 +319,15 @@ mod tests {
             messages: vec![
                 SamplingMessage {
                     role: PromptRole::System,
-                    content: SamplingContent::Text { text: "System message".to_string() },
+                    content: SamplingContent::Text {
+                        text: "System message".to_string(),
+                    },
                 },
                 SamplingMessage {
                     role: PromptRole::User,
-                    content: SamplingContent::Text { text: "Hello".to_string() },
+                    content: SamplingContent::Text {
+                        text: "Hello".to_string(),
+                    },
                 },
             ],
             model_preferences: None,
@@ -333,12 +343,12 @@ mod tests {
     #[test]
     fn test_extract_system_prompt_none() {
         let request = SamplingRequest {
-            messages: vec![
-                SamplingMessage {
-                    role: PromptRole::User,
-                    content: SamplingContent::Text { text: "Hello".to_string() },
+            messages: vec![SamplingMessage {
+                role: PromptRole::User,
+                content: SamplingContent::Text {
+                    text: "Hello".to_string(),
                 },
-            ],
+            }],
             model_preferences: None,
             system_prompt: None,
             include_context: None,

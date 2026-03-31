@@ -6,14 +6,14 @@
 //! - Bulk synchronization of tools
 //! - Retrieving all valid tool facts
 
+use super::inference::SemanticPurposeInferrer;
 use crate::error::AlephError;
 use crate::mcp::manager::{McpManagerEvent, McpManagerHandle};
 use crate::memory::context::{
     FactSource, FactSpecificity, FactType, MemoryCategory, MemoryFact, MemoryLayer, TemporalScope,
 };
 use crate::memory::store::{MemoryBackend, MemoryStore};
-use crate::skill::{SkillSystemEvent, SkillSystem};
-use super::inference::SemanticPurposeInferrer;
+use crate::skill::{SkillSystem, SkillSystemEvent};
 use crate::sync_primitives::Arc;
 use tokio::sync::broadcast;
 
@@ -88,7 +88,10 @@ impl ToolIndexCoordinator {
     }
 
     /// Create a new coordinator with LLM support for L2 optimization
-    pub fn with_llm(db: MemoryBackend, llm_provider: Arc<dyn crate::providers::AiProvider>) -> Self {
+    pub fn with_llm(
+        db: MemoryBackend,
+        llm_provider: Arc<dyn crate::providers::AiProvider>,
+    ) -> Self {
         Self {
             db,
             inferrer: Arc::new(SemanticPurposeInferrer::with_llm(llm_provider)),
@@ -130,7 +133,9 @@ impl ToolIndexCoordinator {
         embedding: Option<Vec<f32>>,
     ) -> Result<String, AlephError> {
         // Infer semantic purpose using ranked strategy (L0 -> L1)
-        let inferred = self.inferrer.infer(name, description, category, structured_meta);
+        let inferred = self
+            .inferrer
+            .infer(name, description, category, structured_meta);
 
         // Log optimization level for observability
         tracing::info!(
@@ -215,12 +220,15 @@ impl ToolIndexCoordinator {
 
             // Spawn background task for L2 optimization
             tokio::spawn(async move {
-                match inferrer.enhance_with_llm(
-                    &tool_id,
-                    &tool_name,
-                    tool_desc.as_deref(),
-                    tool_cat.as_deref(),
-                ).await {
+                match inferrer
+                    .enhance_with_llm(
+                        &tool_id,
+                        &tool_name,
+                        tool_desc.as_deref(),
+                        tool_cat.as_deref(),
+                    )
+                    .await
+                {
                     Ok(l2_result) => {
                         tracing::info!(
                             tool_name = %tool_name,
@@ -230,7 +238,10 @@ impl ToolIndexCoordinator {
                         );
 
                         // Update fact with L2-enhanced content
-                        if let Err(e) = db.update_fact_content(&tool_id, &l2_result.description).await {
+                        if let Err(e) = db
+                            .update_fact_content(&tool_id, &l2_result.description)
+                            .await
+                        {
                             tracing::warn!(
                                 tool_name = %tool_name,
                                 error = %e,
@@ -257,7 +268,9 @@ impl ToolIndexCoordinator {
     /// Uses soft delete so the fact can be recovered if needed.
     pub async fn remove_tool(&self, name: &str) -> Result<(), AlephError> {
         let fact_id = Self::tool_fact_id(name);
-        self.db.invalidate_fact(&fact_id, "Tool removed from registry").await
+        self.db
+            .invalidate_fact(&fact_id, "Tool removed from registry")
+            .await
     }
 
     /// Sync multiple tools in bulk
@@ -267,13 +280,15 @@ impl ToolIndexCoordinator {
         let mut fact_ids = Vec::with_capacity(tools.len());
 
         for tool in tools {
-            let fact_id = self.sync_tool(
-                &tool.name,
-                tool.description.as_deref(),
-                tool.category.as_deref(),
-                tool.structured_meta.as_deref(),
-                tool.embedding,
-            ).await?;
+            let fact_id = self
+                .sync_tool(
+                    &tool.name,
+                    tool.description.as_deref(),
+                    tool.category.as_deref(),
+                    tool.structured_meta.as_deref(),
+                    tool.embedding,
+                )
+                .await?;
             fact_ids.push(fact_id);
         }
 
@@ -288,7 +303,9 @@ impl ToolIndexCoordinator {
         use crate::memory::NamespaceScope;
         // Use a large limit to get all tools (typical systems have <100 tools)
         // Tool facts are system-level, so use Owner namespace
-        self.db.get_facts_by_type(FactType::Tool, &NamespaceScope::Owner, "default", 1000).await
+        self.db
+            .get_facts_by_type(FactType::Tool, &NamespaceScope::Owner, "default", 1000)
+            .await
     }
 
     /// Get a specific tool fact by name
@@ -340,7 +357,11 @@ impl ToolIndexCoordinator {
                 match receiver.recv().await {
                     Ok(event) => {
                         match &event {
-                            McpManagerEvent::ServerStarted { server_id, tool_count, .. } => {
+                            McpManagerEvent::ServerStarted {
+                                server_id,
+                                tool_count,
+                                ..
+                            } => {
                                 tracing::info!(
                                     server_id = %server_id,
                                     tool_count = %tool_count,
@@ -355,7 +376,10 @@ impl ToolIndexCoordinator {
                                     );
                                 }
                             }
-                            McpManagerEvent::ToolsChanged { server_id, tool_count } => {
+                            McpManagerEvent::ToolsChanged {
+                                server_id,
+                                tool_count,
+                            } => {
                                 tracing::info!(
                                     server_id = %server_id,
                                     tool_count = %tool_count,
@@ -370,7 +394,9 @@ impl ToolIndexCoordinator {
                                     );
                                 }
                             }
-                            McpManagerEvent::ServerCrashed { server_id, error, .. } => {
+                            McpManagerEvent::ServerCrashed {
+                                server_id, error, ..
+                            } => {
                                 tracing::warn!(
                                     server_id = %server_id,
                                     error = %error,
@@ -462,7 +488,10 @@ impl ToolIndexCoordinator {
                                     );
                                 }
                             }
-                            SkillSystemEvent::SkillLoaded { skill_id, skill_name } => {
+                            SkillSystemEvent::SkillLoaded {
+                                skill_id,
+                                skill_name,
+                            } => {
                                 tracing::info!(
                                     skill_id = %skill_id,
                                     skill_name = %skill_name,
@@ -519,8 +548,14 @@ mod tests {
 
     #[test]
     fn test_tool_fact_id() {
-        assert_eq!(ToolIndexCoordinator::tool_fact_id("read_file"), "tool:read_file");
-        assert_eq!(ToolIndexCoordinator::tool_fact_id("search_code"), "tool:search_code");
+        assert_eq!(
+            ToolIndexCoordinator::tool_fact_id("read_file"),
+            "tool:read_file"
+        );
+        assert_eq!(
+            ToolIndexCoordinator::tool_fact_id("search_code"),
+            "tool:search_code"
+        );
     }
 
     #[test]

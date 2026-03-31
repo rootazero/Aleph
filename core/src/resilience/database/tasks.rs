@@ -2,9 +2,9 @@
 //!
 //! Provides database operations for task management with recovery support.
 
+use super::StateDatabase;
 use crate::error::AlephError;
 use crate::resilience::{AgentTask, Lane, RiskLevel, TaskStatus};
-use super::StateDatabase;
 use rusqlite::params;
 use rusqlite::OptionalExtension;
 

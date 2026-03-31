@@ -77,13 +77,19 @@ impl Persona {
     /// system_prompt exceeds the maximum length.
     pub fn validate(&self) -> Result<(), GroupChatError> {
         if self.id.is_empty() {
-            return Err(GroupChatError::InvalidPersona("persona id must not be empty".into()));
+            return Err(GroupChatError::InvalidPersona(
+                "persona id must not be empty".into(),
+            ));
         }
         if self.name.is_empty() {
-            return Err(GroupChatError::InvalidPersona("persona name must not be empty".into()));
+            return Err(GroupChatError::InvalidPersona(
+                "persona name must not be empty".into(),
+            ));
         }
         if self.system_prompt.is_empty() {
-            return Err(GroupChatError::InvalidPersona("persona system_prompt must not be empty".into()));
+            return Err(GroupChatError::InvalidPersona(
+                "persona system_prompt must not be empty".into(),
+            ));
         }
         if self.system_prompt.chars().count() > MAX_SYSTEM_PROMPT_LEN {
             return Err(GroupChatError::InvalidPersona(format!(
@@ -405,9 +411,18 @@ mod tests {
         assert_eq!(format!("{}", GroupChatStatus::Active), "active");
 
         // Test FromStr roundtrip
-        assert_eq!("active".parse::<GroupChatStatus>().unwrap(), GroupChatStatus::Active);
-        assert_eq!("paused".parse::<GroupChatStatus>().unwrap(), GroupChatStatus::Paused);
-        assert_eq!("ended".parse::<GroupChatStatus>().unwrap(), GroupChatStatus::Ended);
+        assert_eq!(
+            "active".parse::<GroupChatStatus>().unwrap(),
+            GroupChatStatus::Active
+        );
+        assert_eq!(
+            "paused".parse::<GroupChatStatus>().unwrap(),
+            GroupChatStatus::Paused
+        );
+        assert_eq!(
+            "ended".parse::<GroupChatStatus>().unwrap(),
+            GroupChatStatus::Ended
+        );
 
         // Test invalid input
         assert!("unknown".parse::<GroupChatStatus>().is_err());
@@ -460,7 +475,9 @@ mod tests {
             session_id: "session-001".to_string(),
             message: "What about error handling?".to_string(),
         };
-        assert!(matches!(cont, GroupChatRequest::Continue { session_id, .. } if session_id == "session-001"));
+        assert!(
+            matches!(cont, GroupChatRequest::Continue { session_id, .. } if session_id == "session-001")
+        );
     }
 
     #[test]

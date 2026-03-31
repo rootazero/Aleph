@@ -2,9 +2,9 @@
 
 use super::error::InitError;
 use crate::config::Config;
+use crate::sync_primitives::Arc;
 use crate::utils::paths::get_config_dir;
 use std::path::PathBuf;
-use crate::sync_primitives::Arc;
 use tracing::{info, warn};
 
 /// Initialization phase identifier
@@ -117,7 +117,10 @@ impl InitializationCoordinator {
 
                     return InitializationResult {
                         success: false,
-                        completed_phases: completed_phases.iter().map(|p| p.name().to_string()).collect(),
+                        completed_phases: completed_phases
+                            .iter()
+                            .map(|p| p.name().to_string())
+                            .collect(),
                         error_phase: Some(e.phase),
                         error_message: Some(e.message),
                     };
@@ -128,7 +131,10 @@ impl InitializationCoordinator {
         info!("Initialization completed successfully");
         InitializationResult {
             success: true,
-            completed_phases: completed_phases.iter().map(|p| p.name().to_string()).collect(),
+            completed_phases: completed_phases
+                .iter()
+                .map(|p| p.name().to_string())
+                .collect(),
             error_phase: None,
             error_message: None,
         }
@@ -272,12 +278,16 @@ impl InitializationCoordinator {
 
         info!("Initializing runtime ledger (zero-install)...");
 
-        let runtimes_dir = crate::utils::paths::get_runtimes_dir()
-            .map_err(|e| InitError::new("runtimes", format!("Failed to get runtimes dir: {}", e)))?;
+        let runtimes_dir = crate::utils::paths::get_runtimes_dir().map_err(|e| {
+            InitError::new("runtimes", format!("Failed to get runtimes dir: {}", e))
+        })?;
 
         // Create directory if needed
-        tokio::fs::create_dir_all(&runtimes_dir).await
-            .map_err(|e| InitError::new("runtimes", format!("Failed to create runtimes dir: {}", e)))?;
+        tokio::fs::create_dir_all(&runtimes_dir)
+            .await
+            .map_err(|e| {
+                InitError::new("runtimes", format!("Failed to create runtimes dir: {}", e))
+            })?;
 
         // Migrate from legacy manifest.json or create fresh ledger
         // Run in spawn_blocking since migrate_from_legacy does sync file I/O
@@ -285,7 +295,9 @@ impl InitializationCoordinator {
         tokio::task::spawn_blocking(move || migrate_from_legacy(&dir))
             .await
             .map_err(|e| InitError::new("runtimes", format!("Runtime init task panicked: {}", e)))?
-            .map_err(|e| InitError::new("runtimes", format!("Failed to initialize ledger: {}", e)))?;
+            .map_err(|e| {
+                InitError::new("runtimes", format!("Failed to initialize ledger: {}", e))
+            })?;
 
         info!("Runtime ledger initialized (no downloads, runtimes provisioned on-demand)");
         Ok(())
@@ -331,10 +343,7 @@ impl InitializationCoordinator {
         }
 
         let skill_count = system.list_skills().await.len();
-        info!(
-            skill_count = skill_count,
-            "Skills directory initialized"
-        );
+        info!(skill_count = skill_count, "Skills directory initialized");
         Ok(())
     }
 }

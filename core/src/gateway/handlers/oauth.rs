@@ -19,8 +19,8 @@ use crate::providers::codex::auth::CodexAuth;
 use crate::providers::presets::get_preset;
 use crate::sync_primitives::Arc;
 
-use super::parse_params;
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
+use super::parse_params;
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -196,7 +196,8 @@ async fn try_refresh(
         Ok(()) => {
             let new_cache = OAuthTokenCache::from_auth(&auth);
             *oauth_state.write().await = Some(new_cache.clone());
-            update_config_api_key(config, vault, provider_name, Some(&new_cache.access_token)).await;
+            update_config_api_key(config, vault, provider_name, Some(&new_cache.access_token))
+                .await;
             info!("OAuth token refreshed successfully");
             true
         }

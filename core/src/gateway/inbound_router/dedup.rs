@@ -110,7 +110,9 @@ mod tests {
         // Insert an entry with a past timestamp
         let old_key = "telegram:old".to_string();
         tracker.seen.insert(old_key.clone());
-        tracker.entries.push((old_key, Instant::now() - Duration::from_secs(600)));
+        tracker
+            .entries
+            .push((old_key, Instant::now() - Duration::from_secs(600)));
 
         // Insert a fresh entry
         assert!(tracker.check_and_record("telegram:new"));

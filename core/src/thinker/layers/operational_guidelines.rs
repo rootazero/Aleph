@@ -7,8 +7,12 @@ use crate::thinker::prompt_mode::PromptMode;
 pub struct OperationalGuidelinesLayer;
 
 impl PromptLayer for OperationalGuidelinesLayer {
-    fn name(&self) -> &'static str { "operational_guidelines" }
-    fn priority(&self) -> u32 { 800 }
+    fn name(&self) -> &'static str {
+        "operational_guidelines"
+    }
+    fn priority(&self) -> u32 {
+        800
+    }
     fn supports_mode(&self, mode: PromptMode) -> bool {
         matches!(mode, PromptMode::Full)
     }
@@ -23,8 +27,7 @@ impl PromptLayer for OperationalGuidelinesLayer {
 
         let paradigm = ctx.environment_contract.paradigm;
         match paradigm {
-            InteractionParadigm::Background
-            | InteractionParadigm::CLI => {}
+            InteractionParadigm::Background | InteractionParadigm::CLI => {}
             _ => return, // Skip for Messaging, WebRich, Embedded
         }
 
@@ -37,9 +40,8 @@ impl PromptLayer for OperationalGuidelinesLayer {
         output.push_str("- Check disk space: `df -h`\n");
         output.push_str("- Check memory usage: `vm_stat` / `free -h`\n");
         output.push_str("- Check running Aleph processes: `ps aux | grep aleph`\n");
-        output.push_str(
-            "- Check configuration validity: read config files and validate structure\n",
-        );
+        output
+            .push_str("- Check configuration validity: read config files and validate structure\n");
         output.push_str("- Check Desktop Bridge status: query UDS socket availability\n");
         output.push_str("- Check LanceDB health: verify database file accessibility\n\n");
 

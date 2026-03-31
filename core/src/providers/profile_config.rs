@@ -130,9 +130,7 @@ impl ProfileConfig {
     /// - `Err(ProfileConfigError::EnvVarNotFound)` - If env var not found
     pub fn resolve_api_key(&self) -> ProfileConfigResult<String> {
         if let Some(var_name) = self.api_key.strip_prefix("env:") {
-            env::var(var_name).map_err(|_| {
-                ProfileConfigError::EnvVarNotFound(var_name.to_string())
-            })
+            env::var(var_name).map_err(|_| ProfileConfigError::EnvVarNotFound(var_name.to_string()))
         } else {
             Ok(self.api_key.clone())
         }

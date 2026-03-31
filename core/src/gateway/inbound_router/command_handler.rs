@@ -49,18 +49,14 @@ pub(super) fn serialize_intent_result(result: &IntentResult) -> Option<String> {
             tool_id,
             args,
             source,
-        } => {
-            serde_json::to_string(&serde_json::json!({
-                "type": "direct_tool",
-                "tool_id": tool_id,
-                "args": args,
-                "source": source.as_str(),
-            }))
-            .ok()
-        }
-        IntentResult::Execute { .. }
-        | IntentResult::Converse { .. }
-        | IntentResult::Abort => None,
+        } => serde_json::to_string(&serde_json::json!({
+            "type": "direct_tool",
+            "tool_id": tool_id,
+            "args": args,
+            "source": source.as_str(),
+        }))
+        .ok(),
+        IntentResult::Execute { .. } | IntentResult::Converse { .. } | IntentResult::Abort => None,
     }
 }
 
@@ -87,10 +83,8 @@ impl InboundMessageRouter {
     ) -> Result<(), RoutingError> {
         use crate::gateway::inbound_context::{InboundContext, ReplyRoute};
 
-        let reply_route = ReplyRoute::new(
-            msg.channel_id.clone(),
-            msg.conversation_id.clone(),
-        ).with_inbound_message_id(msg.id.clone());
+        let reply_route = ReplyRoute::new(msg.channel_id.clone(), msg.conversation_id.clone())
+            .with_inbound_message_id(msg.id.clone());
 
         // Use ephemeral session — no persistence, no context pollution
         let session_key = SessionKey::ephemeral(agent_id);
@@ -103,9 +97,13 @@ impl InboundMessageRouter {
 
         // Execute with btw metadata marker
         let metadata = serde_json::json!({"btw": true}).to_string();
-        self.execute_for_context_with_metadata(&ctx, metadata).await?;
+        self.execute_for_context_with_metadata(&ctx, metadata)
+            .await?;
 
-        info!("[Router] /btw handled as ephemeral session for agent '{}'", agent_id);
+        info!(
+            "[Router] /btw handled as ephemeral session for agent '{}'",
+            agent_id
+        );
         Ok(())
     }
 
@@ -149,7 +147,9 @@ impl InboundMessageRouter {
         let locale = self.resolve_locale().await;
         let topic_suffix = topic.map(|t| format!(" ({})", t)).unwrap_or_default();
         let reply_text = crate::gateway::i18n::t(
-            crate::gateway::i18n::Msg::NewSessionStarted { topic_suffix: &topic_suffix },
+            crate::gateway::i18n::Msg::NewSessionStarted {
+                topic_suffix: &topic_suffix,
+            },
             locale,
         );
         let reply = OutboundMessage::text(msg.conversation_id.as_str(), &reply_text);
@@ -162,10 +162,7 @@ impl InboundMessageRouter {
     }
 
     /// Generate a topic summary for the current session using LLM
-    pub(super) async fn generate_session_topic(
-        &self,
-        session_key: &SessionKey,
-    ) -> Option<String> {
+    pub(super) async fn generate_session_topic(&self, session_key: &SessionKey) -> Option<String> {
         let sm = self.session_manager.as_ref()?;
         let llm = self.llm_provider.as_ref()?;
 
@@ -176,7 +173,8 @@ impl InboundMessageRouter {
         }
 
         // Build conversation excerpt for LLM
-        let conversation: String = history.iter()
+        let conversation: String = history
+            .iter()
             .map(|m| {
                 let content = truncate_for_topic(&m.content, 100);
                 format!("{}: {}", m.role, content)
@@ -186,7 +184,9 @@ impl InboundMessageRouter {
 
         let locale = self.resolve_locale().await;
         let prompt = crate::gateway::i18n::t(
-            crate::gateway::i18n::Msg::TopicGenerationPrompt { conversation: &conversation },
+            crate::gateway::i18n::Msg::TopicGenerationPrompt {
+                conversation: &conversation,
+            },
             locale,
         );
 
@@ -194,7 +194,11 @@ impl InboundMessageRouter {
         match llm.process(RequestPayload::new(&__msgs)).await {
             Ok(resp) => {
                 let topic = resp.text_content().trim().to_string();
-                if topic.is_empty() { None } else { Some(topic) }
+                if topic.is_empty() {
+                    None
+                } else {
+                    Some(topic)
+                }
             }
             Err(e) => {
                 warn!("[Router] Failed to generate session topic: {}", e);
@@ -204,7 +208,10 @@ impl InboundMessageRouter {
     }
 
     /// Convert a ParsedCommand to IntentResult
-    pub(super) fn parsed_command_to_intent_result(&self, cmd: crate::command::ParsedCommand) -> IntentResult {
+    pub(super) fn parsed_command_to_intent_result(
+        &self,
+        cmd: crate::command::ParsedCommand,
+    ) -> IntentResult {
         use crate::command::CommandContext;
 
         let args = cmd.arguments.clone();

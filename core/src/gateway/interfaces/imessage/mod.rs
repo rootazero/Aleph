@@ -19,27 +19,28 @@
 //! poll_interval_ms = 1000
 //! ```
 
+pub mod config;
 mod db;
 mod sender;
 mod target;
-pub mod config;
 
+pub use config::{
+    DmPolicy as IMessageDmPolicy, GroupPolicy as IMessageGroupPolicy, IMessageConfig,
+};
 pub use db::MessagesDb;
 pub use sender::MessageSender;
-pub use target::{IMessageTarget, Service, parse_target, normalize_phone};
-pub use config::{IMessageConfig, DmPolicy as IMessageDmPolicy, GroupPolicy as IMessageGroupPolicy};
+pub use target::{normalize_phone, parse_target, IMessageTarget, Service};
 
-use crate::sync_primitives::{AtomicBool, Ordering};
 use crate::sync_primitives::Arc;
-use std::time::Duration;
+use crate::sync_primitives::{AtomicBool, Ordering};
 use async_trait::async_trait;
+use std::time::Duration;
 use tokio::sync::Mutex;
 use tracing::{debug, error, info, warn};
 
 use crate::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
-    ChannelResult, ChannelState, ChannelStatus, MessageId,
-    OutboundMessage, SendResult,
+    ChannelResult, ChannelState, ChannelStatus, MessageId, OutboundMessage, SendResult,
 };
 
 /// iMessage channel implementation
@@ -72,7 +73,7 @@ impl IMessageChannel {
                 typing_indicator: false, // Would need more complex integration
                 read_receipts: false,
                 rich_text: false,
-                max_message_length: 20000, // Approximate limit
+                max_message_length: 20000,              // Approximate limit
                 max_attachment_size: 100 * 1024 * 1024, // 100 MB
                 stream_protocol: Default::default(),
             },
@@ -171,12 +172,16 @@ impl Channel for IMessageChannel {
         }
 
         info!("Starting iMessage channel");
-        self.channel_state.set_status(ChannelStatus::Connecting).await;
+        self.channel_state
+            .set_status(ChannelStatus::Connecting)
+            .await;
 
         // Start polling
         self.start_polling().await?;
 
-        self.channel_state.set_status(ChannelStatus::Connected).await;
+        self.channel_state
+            .set_status(ChannelStatus::Connected)
+            .await;
         info!("iMessage channel started");
         Ok(())
     }
@@ -200,7 +205,9 @@ impl Channel for IMessageChannel {
             *db_lock = None;
         }
 
-        self.channel_state.set_status(ChannelStatus::Disconnected).await;
+        self.channel_state
+            .set_status(ChannelStatus::Disconnected)
+            .await;
         info!("iMessage channel stopped");
         Ok(())
     }
@@ -229,7 +236,6 @@ impl Channel for IMessageChannel {
             timestamp: chrono::Utc::now(),
         })
     }
-
 }
 
 /// Factory for creating iMessage channels
@@ -255,12 +261,13 @@ impl ChannelFactory for IMessageChannelFactory {
     }
 
     async fn create(&self, config: serde_json::Value) -> ChannelResult<Box<dyn Channel>> {
-        let config: IMessageConfig = serde_json::from_value(config).map_err(|e| {
-            ChannelError::ConfigError(format!("Invalid iMessage config: {}", e))
-        })?;
+        let config: IMessageConfig = serde_json::from_value(config)
+            .map_err(|e| ChannelError::ConfigError(format!("Invalid iMessage config: {}", e)))?;
 
         if !config.enabled {
-            return Err(ChannelError::ConfigError("iMessage channel is disabled".to_string()));
+            return Err(ChannelError::ConfigError(
+                "iMessage channel is disabled".to_string(),
+            ));
         }
 
         Ok(Box::new(IMessageChannel::new(config)))

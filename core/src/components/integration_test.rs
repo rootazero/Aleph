@@ -733,9 +733,7 @@ mod tests {
         let has_tool_request = result2
             .iter()
             .any(|e| matches!(e, AlephEvent::ToolCallRequested(_)));
-        let has_loop_stop = result2
-            .iter()
-            .any(|e| matches!(e, AlephEvent::LoopStop(_)));
+        let has_loop_stop = result2.iter().any(|e| matches!(e, AlephEvent::LoopStop(_)));
 
         assert!(
             has_tool_request || has_loop_stop,

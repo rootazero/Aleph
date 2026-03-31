@@ -5,8 +5,8 @@
 
 use crate::error::AlephError;
 use crate::memory::context::MemoryFact;
-use crate::memory::store::{MemoryBackend, MemoryStore};
 use crate::memory::decay::{DecayConfig, MemoryStrength, TieredDecayConfig};
+use crate::memory::store::{MemoryBackend, MemoryStore};
 use tokio::sync::mpsc;
 
 /// Result of lazy decay evaluation
@@ -44,10 +44,7 @@ impl LazyDecayEngine {
         let db_clone = db.clone();
         tokio::spawn(async move {
             while let Some(task) = rx.recv().await {
-                if let Err(e) = db_clone
-                    .soft_delete_fact(&task.fact_id, "decay")
-                    .await
-                {
+                if let Err(e) = db_clone.soft_delete_fact(&task.fact_id, "decay").await {
                     tracing::warn!(
                         fact_id = %task.fact_id,
                         error = %e,

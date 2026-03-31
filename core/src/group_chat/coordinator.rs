@@ -42,7 +42,10 @@ pub fn build_coordinator_prompt(
     prompt.push_str("Available personas:\n");
     for p in personas {
         let truncated = truncate_str(&p.system_prompt, SYSTEM_PROMPT_TRUNCATE_LEN);
-        prompt.push_str(&format!("- id=\"{}\" name=\"{}\" prompt=\"{}\"\n", p.id, p.name, truncated));
+        prompt.push_str(&format!(
+            "- id=\"{}\" name=\"{}\" prompt=\"{}\"\n",
+            p.id, p.name, truncated
+        ));
     }
     prompt.push('\n');
 
@@ -234,7 +237,10 @@ mod tests {
         // Contains persona names and IDs
         assert!(prompt.contains("Architect"), "should contain persona name");
         assert!(prompt.contains("arch"), "should contain persona id");
-        assert!(prompt.contains("Product Manager"), "should contain second persona name");
+        assert!(
+            prompt.contains("Product Manager"),
+            "should contain second persona name"
+        );
         assert!(prompt.contains("pm"), "should contain second persona id");
 
         // Contains user message
@@ -293,7 +299,10 @@ mod tests {
         assert!(result.is_err());
         match result.unwrap_err() {
             GroupChatError::CoordinatorPlanParseError(msg) => {
-                assert!(msg.contains("not json at all"), "error should contain raw input");
+                assert!(
+                    msg.contains("not json at all"),
+                    "error should contain raw input"
+                );
             }
             other => panic!("expected CoordinatorPlanParseError, got: {other:?}"),
         }

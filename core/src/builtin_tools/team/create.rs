@@ -152,16 +152,13 @@ impl TeamCreateTool {
     async fn resolve_member(&self, spec: &MemberSpec) -> Result<String> {
         // Determine the effective AgentRole: prefer typed agent_role, fall back
         // to parsing the free-form role string.
-        let effective_role = spec
-            .agent_role
-            .clone()
-            .or_else(|| {
-                if spec.role.is_empty() {
-                    None
-                } else {
-                    Some(AgentRole::from_stored(&spec.role))
-                }
-            });
+        let effective_role = spec.agent_role.clone().or_else(|| {
+            if spec.role.is_empty() {
+                None
+            } else {
+                Some(AgentRole::from_stored(&spec.role))
+            }
+        });
 
         if let Some(ref agent_id) = spec.agent_id {
             // Verify the existing agent is present in the runtime registry
@@ -204,7 +201,9 @@ impl TeamCreateTool {
         let section = format!("\n\n---\n\n## Team Role\n\n{}", template);
 
         let result = if soul_path.exists() {
-            let existing = tokio::fs::read_to_string(&soul_path).await.unwrap_or_default();
+            let existing = tokio::fs::read_to_string(&soul_path)
+                .await
+                .unwrap_or_default();
             // Avoid double-injection
             if existing.contains("## Team Role") {
                 return;
@@ -271,12 +270,14 @@ impl TeamCreateTool {
             ))
         })?;
 
-        tokio::fs::create_dir_all(&workspace_path).await.map_err(|e| {
-            AlephError::other(format!(
-                "Failed to create workspace for '{}': {}",
-                spec.id, e
-            ))
-        })?;
+        tokio::fs::create_dir_all(&workspace_path)
+            .await
+            .map_err(|e| {
+                AlephError::other(format!(
+                    "Failed to create workspace for '{}': {}",
+                    spec.id, e
+                ))
+            })?;
 
         // Determine the effective role: prefer the function parameter, fall back
         // to spec.role if present.
@@ -363,10 +364,12 @@ impl AlephTool for TeamCreateTool {
 
     fn examples(&self) -> Option<Vec<String>> {
         Some(vec![
-            "team_create(name='Research Team', members=[{agent_id: 'researcher', role: 'lead'}])".to_string(),
+            "team_create(name='Research Team', members=[{agent_id: 'researcher', role: 'lead'}])"
+                .to_string(),
             "team_create(name='Dev Squad', description='Backend development team', members=[\
                 {agent_id: 'coder', role: 'developer'}, \
-                {create: {id: 'reviewer', name: 'Code Reviewer'}, role: 'reviewer'}])".to_string(),
+                {create: {id: 'reviewer', name: 'Code Reviewer'}, role: 'reviewer'}])"
+                .to_string(),
         ])
     }
 

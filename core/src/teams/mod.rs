@@ -16,6 +16,4 @@ pub mod types;
 pub mod integration_tests;
 
 pub use store::{SqliteTeamStore, TeamStore};
-pub use types::{
-    NewTeam, NewTeamMember, Team, TeamId, TeamMember, TeamStatus, TeamSummary,
-};
+pub use types::{NewTeam, NewTeamMember, Team, TeamId, TeamMember, TeamStatus, TeamSummary};

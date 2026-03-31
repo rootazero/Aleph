@@ -3,14 +3,14 @@
 //! All `handle_*_db` functions operate against the SQLite-backed SessionManager
 //! for production use.
 
-use serde_json::{json, Value};
 use crate::sync_primitives::Arc;
+use serde_json::{json, Value};
 
-use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INVALID_PARAMS, INTERNAL_ERROR};
+use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 use crate::gateway::router::SessionKey;
 use crate::gateway::session_manager::{SessionManager, StoredMessage};
 
-use super::store::{SessionInfo, HistoryMessage};
+use super::store::{HistoryMessage, SessionInfo};
 
 /// Handle sessions.list RPC request with database backend
 pub async fn handle_list_db(
@@ -32,12 +32,19 @@ pub async fn handle_list_db(
                 .filter(|m| m.session_type != "task" && m.session_type != "ephemeral")
                 .map(|m| {
                     // Extract topic and status from metadata JSON
-                    let (topic, status) = m.metadata_json
+                    let (topic, status) = m
+                        .metadata_json
                         .as_deref()
                         .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
                         .map(|v| {
-                            let topic = v.get("topic").and_then(|t| t.as_str()).map(|s| s.to_string());
-                            let status = v.get("status").and_then(|t| t.as_str()).map(|s| s.to_string());
+                            let topic = v
+                                .get("topic")
+                                .and_then(|t| t.as_str())
+                                .map(|s| s.to_string());
+                            let status = v
+                                .get("status")
+                                .and_then(|t| t.as_str())
+                                .map(|s| s.to_string());
                             (topic, status)
                         })
                         .unwrap_or((None, None));
@@ -103,7 +110,11 @@ pub async fn handle_history_db(
     let session_key = match SessionKey::from_key_string(session_key_str) {
         Some(k) => k,
         None => {
-            return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Invalid session_key format");
+            return JsonRpcResponse::error(
+                request.id,
+                INVALID_PARAMS,
+                "Invalid session_key format",
+            );
         }
     };
 
@@ -117,9 +128,9 @@ pub async fn handle_history_db(
                     timestamp: chrono::DateTime::from_timestamp(m.timestamp, 0)
                         .map(|dt| dt.to_rfc3339())
                         .unwrap_or_default(),
-                    metadata: m.metadata.map(|s| {
-                        serde_json::from_str(&s).unwrap_or(Value::Null)
-                    }),
+                    metadata: m
+                        .metadata
+                        .map(|s| serde_json::from_str(&s).unwrap_or(Value::Null)),
                 })
                 .collect();
             let count = history.len();
@@ -469,11 +480,9 @@ pub async fn handle_compact_db(
                 }),
             )
         }
-        Err(e) => JsonRpcResponse::error(
-            request.id,
-            INTERNAL_ERROR,
-            format!("Compact failed: {}", e),
-        ),
+        Err(e) => {
+            JsonRpcResponse::error(request.id, INTERNAL_ERROR, format!("Compact failed: {}", e))
+        }
     }
 }
 
@@ -509,7 +518,11 @@ pub async fn handle_set_topic_db(
 
     // Validate topic length (P7: boundary validation)
     let topic = if topic.len() > 100 {
-        &topic[..topic.char_indices().nth(100).map(|(i, _)| i).unwrap_or(topic.len())]
+        &topic[..topic
+            .char_indices()
+            .nth(100)
+            .map(|(i, _)| i)
+            .unwrap_or(topic.len())]
     } else {
         topic
     };

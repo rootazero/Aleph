@@ -6,38 +6,38 @@ use alephcore::memory::query_expander::expand;
 #[test]
 fn p2_01_rrf_both_sources_overlap_ranks_highest() {
     // Documents "a" and "b" appear in both sources; "c" and "d" in only one.
-    let vec_results = vec![
-        ("a".into(), 0.9),
-        ("b".into(), 0.8),
-        ("c".into(), 0.7),
-    ];
-    let text_results = vec![
-        ("b".into(), 0.9),
-        ("a".into(), 0.7),
-        ("d".into(), 0.5),
-    ];
+    let vec_results = vec![("a".into(), 0.9), ("b".into(), 0.8), ("c".into(), 0.7)];
+    let text_results = vec![("b".into(), 0.9), ("a".into(), 0.7), ("d".into(), 0.5)];
 
     let fused = rrf_fuse(&vec_results, &text_results, 60, 0.0);
 
     // Documents in both lists accumulate RRF from two sources → rank top-2
     let top2_ids: Vec<&str> = fused.iter().take(2).map(|f| f.id.as_str()).collect();
-    assert!(top2_ids.contains(&"a"), "overlap doc 'a' should be in top-2");
-    assert!(top2_ids.contains(&"b"), "overlap doc 'b' should be in top-2");
+    assert!(
+        top2_ids.contains(&"a"),
+        "overlap doc 'a' should be in top-2"
+    );
+    assert!(
+        top2_ids.contains(&"b"),
+        "overlap doc 'b' should be in top-2"
+    );
 
     // Single-source docs should rank lower
     let bottom_ids: Vec<&str> = fused.iter().skip(2).map(|f| f.id.as_str()).collect();
-    assert!(bottom_ids.contains(&"c"), "'c' (vec-only) should rank below overlaps");
-    assert!(bottom_ids.contains(&"d"), "'d' (text-only) should rank below overlaps");
+    assert!(
+        bottom_ids.contains(&"c"),
+        "'c' (vec-only) should rank below overlaps"
+    );
+    assert!(
+        bottom_ids.contains(&"d"),
+        "'d' (text-only) should rank below overlaps"
+    );
 }
 
 #[test]
 fn p2_02_rrf_single_source_degrades_gracefully() {
     // Empty text results → only vector results should be present, scores in [0,1]
-    let vec_results = vec![
-        ("x".into(), 0.9),
-        ("y".into(), 0.5),
-        ("z".into(), 0.3),
-    ];
+    let vec_results = vec![("x".into(), 0.9), ("y".into(), 0.5), ("z".into(), 0.3)];
     let text_results: Vec<(String, f32)> = vec![];
 
     let fused = rrf_fuse(&vec_results, &text_results, 60, 0.2);
@@ -115,16 +115,8 @@ fn p2_04_weighted_fusion_exact_formula() {
 #[test]
 fn p2_05_rrf_normalization_max_is_one() {
     // With any non-trivial input, the top fused score should always be 1.0
-    let vec_results = vec![
-        ("a".into(), 0.95),
-        ("b".into(), 0.80),
-        ("c".into(), 0.60),
-    ];
-    let text_results = vec![
-        ("c".into(), 0.90),
-        ("d".into(), 0.70),
-        ("a".into(), 0.50),
-    ];
+    let vec_results = vec![("a".into(), 0.95), ("b".into(), 0.80), ("c".into(), 0.60)];
+    let text_results = vec![("c".into(), 0.90), ("d".into(), 0.70), ("a".into(), 0.50)];
 
     let fused = rrf_fuse(&vec_results, &text_results, 60, 0.1);
 
@@ -161,7 +153,10 @@ fn p2_06_query_expansion_chinese_injects_synonyms() {
     assert_eq!(result.original, "用户喜欢什么编程语言");
 
     // bm25_query should be expanded with synonyms for "喜欢"
-    assert_ne!(result.original, result.bm25_query, "bm25 should differ from original");
+    assert_ne!(
+        result.original, result.bm25_query,
+        "bm25 should differ from original"
+    );
     assert!(
         result.bm25_query.contains("偏好"),
         "bm25_query '{}' should contain synonym '偏好'",

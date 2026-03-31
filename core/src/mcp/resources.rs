@@ -7,8 +7,8 @@
 //! for reading. They can be text files, images, database records, or any
 //! other content type.
 
-use std::collections::HashMap;
 use crate::sync_primitives::Arc;
+use std::collections::HashMap;
 
 use crate::error::Result;
 use crate::mcp::client::McpClient;

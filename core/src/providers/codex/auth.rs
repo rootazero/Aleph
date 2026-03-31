@@ -170,10 +170,12 @@ impl CodexAuth {
         // Bind the fixed callback port (OpenAI only accepts localhost:1455)
         let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{}", CALLBACK_PORT))
             .await
-            .map_err(|e| AlephError::network(format!(
-                "Failed to bind localhost:{} — is another login in progress? Error: {}",
-                CALLBACK_PORT, e
-            )))?;
+            .map_err(|e| {
+                AlephError::network(format!(
+                    "Failed to bind localhost:{} — is another login in progress? Error: {}",
+                    CALLBACK_PORT, e
+                ))
+            })?;
         let port = CALLBACK_PORT;
 
         let state = generate_state();
@@ -339,9 +341,10 @@ impl CodexAuth {
             ));
         }
 
-        let token_resp: TokenResponse = response.json().await.map_err(|e| {
-            AlephError::provider(format!("Failed to parse token response: {}", e))
-        })?;
+        let token_resp: TokenResponse = response
+            .json()
+            .await
+            .map_err(|e| AlephError::provider(format!("Failed to parse token response: {}", e)))?;
 
         let expires_in = token_resp.expires_in.unwrap_or(3600);
         let expires_at = SystemTime::now() + Duration::from_secs(expires_in);
@@ -363,10 +366,7 @@ impl CodexAuth {
     /// Refresh the access token using the refresh_token grant
     pub async fn refresh(&mut self) -> Result<()> {
         let refresh_token = self.refresh_token.as_ref().ok_or_else(|| {
-            AlephError::authentication(
-                "chatgpt",
-                "No refresh token available. Please re-login.",
-            )
+            AlephError::authentication("chatgpt", "No refresh token available. Please re-login.")
         })?;
 
         let client = Client::new();

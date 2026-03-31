@@ -23,9 +23,9 @@ use crate::gateway::router::SessionKey;
 use crate::memory::context::{MemoryFact, MemoryScope};
 use crate::memory::store::types::SearchFilter;
 use crate::memory::store::{MemoryBackend, MemoryStore};
-use crate::providers::AiProvider;
 use crate::providers::adapter::RequestPayload;
 use crate::providers::message::UnifiedMessage;
+use crate::providers::AiProvider;
 use crate::sync_primitives::Arc;
 
 pub mod context_window;
@@ -174,7 +174,9 @@ impl SessionCompactor {
         _current_input: &str,
         token_budget: u64,
     ) -> Vec<UnifiedMessage> {
-        self.metrics.prepare_history_calls.fetch_add(1, Ordering::Relaxed);
+        self.metrics
+            .prepare_history_calls
+            .fetch_add(1, Ordering::Relaxed);
         tracing::info!(target: "session_compactor", "prepare");
 
         if !self.config.enabled {
@@ -189,7 +191,10 @@ impl SessionCompactor {
         // Short session: skip LanceDB query when there's nothing to compress
         let raw_messages = agent.get_history(session_key, None).await;
         if raw_messages.len() <= self.config.fresh_tail_count {
-            return raw_messages.iter().map(session_message_to_unified).collect();
+            return raw_messages
+                .iter()
+                .map(session_message_to_unified)
+                .collect();
         }
 
         let session_id = session_key.to_key_string();
@@ -359,10 +364,7 @@ impl SessionCompactor {
         // Generate d0 summaries for each chunk
         for chunk in &chunks {
             let summary_text = self.generate_summary(chunk, 0, None).await;
-            let source_tokens: usize = chunk
-                .iter()
-                .map(|(_, c)| estimate_tokens(c, ratio))
-                .sum();
+            let source_tokens: usize = chunk.iter().map(|(_, c)| estimate_tokens(c, ratio)).sum();
 
             let fact = summary_to_fact(
                 &session_id,
@@ -383,7 +385,9 @@ impl SessionCompactor {
                 );
             } else {
                 d0_created += 1;
-                self.metrics.d0_summaries_created.fetch_add(1, Ordering::Relaxed);
+                self.metrics
+                    .d0_summaries_created
+                    .fetch_add(1, Ordering::Relaxed);
             }
 
             next_seq += 1;
@@ -405,7 +409,9 @@ impl SessionCompactor {
                 .try_condense(&session_id, &agent_id, 0, 1, self.config.d1_min_fanout)
                 .await?;
             if d1_created > 0 {
-                self.metrics.d1_condensations.fetch_add(d1_created as u64, Ordering::Relaxed);
+                self.metrics
+                    .d1_condensations
+                    .fetch_add(d1_created as u64, Ordering::Relaxed);
             }
         }
 
@@ -418,7 +424,9 @@ impl SessionCompactor {
                     .try_condense(&session_id, &agent_id, 1, 2, self.config.d2_min_fanout)
                     .await?;
                 if d2_created > 0 {
-                    self.metrics.d2_condensations.fetch_add(d2_created as u64, Ordering::Relaxed);
+                    self.metrics
+                        .d2_condensations
+                        .fetch_add(d2_created as u64, Ordering::Relaxed);
                 }
             }
         }
@@ -465,7 +473,9 @@ impl SessionCompactor {
                 FallbackLevel::Normal,
             );
             match self.call_llm(provider.as_ref(), &prompt).await {
-                Ok(text) if !text.is_empty() && estimate_tokens(&text, ratio) < source_token_count => {
+                Ok(text)
+                    if !text.is_empty() && estimate_tokens(&text, ratio) < source_token_count =>
+                {
                     return text;
                 }
                 Ok(_) => {
@@ -492,7 +502,9 @@ impl SessionCompactor {
                 FallbackLevel::Aggressive,
             );
             match self.call_llm(provider.as_ref(), &prompt).await {
-                Ok(text) if !text.is_empty() && estimate_tokens(&text, ratio) < source_token_count => {
+                Ok(text)
+                    if !text.is_empty() && estimate_tokens(&text, ratio) < source_token_count =>
+                {
                     return text;
                 }
                 Ok(_) => {
@@ -524,7 +536,11 @@ impl SessionCompactor {
     }
 
     /// Call the LLM provider with a summarization prompt.
-    async fn call_llm(&self, provider: &dyn AiProvider, prompt: &str) -> crate::error::Result<String> {
+    async fn call_llm(
+        &self,
+        provider: &dyn AiProvider,
+        prompt: &str,
+    ) -> crate::error::Result<String> {
         let msgs = [UnifiedMessage::user(prompt)];
         let system = "You are a precise summarizer. Output only the summary, no preamble or meta-commentary.";
         let payload = RequestPayload::new(&msgs).with_system(Some(system));
@@ -720,10 +736,7 @@ mod tests {
     #[test]
     fn extract_depth_complex_session_id() {
         // Session IDs can contain colons (e.g., "agent:main:main")
-        assert_eq!(
-            extract_depth("aleph://session/agent:main:main/d1/5"),
-            1
-        );
+        assert_eq!(extract_depth("aleph://session/agent:main:main/d1/5"), 1);
     }
 
     #[test]

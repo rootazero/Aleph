@@ -335,7 +335,6 @@ impl SubAgentRun {
         self.cleanup_policy = policy;
         self
     }
-
 }
 
 #[cfg(test)]
@@ -399,12 +398,7 @@ mod tests {
             subagent_id: "test-agent".to_string(),
         };
 
-        let run = SubAgentRun::new(
-            session_key.clone(),
-            parent_key.clone(),
-            "Test task",
-            "mcp",
-        );
+        let run = SubAgentRun::new(session_key.clone(), parent_key.clone(), "Test task", "mcp");
 
         // Verify default values
         assert!(!run.run_id.is_empty());
@@ -526,5 +520,4 @@ mod tests {
         let deserialized: RunStatus = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized, RunStatus::Idle);
     }
-
 }

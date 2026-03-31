@@ -20,12 +20,12 @@ pub mod platforms;
 mod tests;
 
 pub use cli::{DaemonCli, DaemonCommand};
-pub use error::{DaemonError, Result};
-pub use event_bus::DaemonEventBus;
 pub use dispatcher::{
     ActionExecutor, ActionType, Dispatcher, DispatcherConfig, DispatcherMode, NotificationPriority,
     Policy, PolicyEngine, ProposedAction, RiskLevel,
 };
+pub use error::{DaemonError, Result};
+pub use event_bus::DaemonEventBus;
 pub use events::{
     DaemonEvent, DerivedEvent, FsEventType, PressureLevel, PressureType, ProcessEventType,
     RawEvent, SystemEvent, SystemStateType, TimeTrigger,
@@ -34,9 +34,8 @@ pub use events::{
 pub use ipc::IpcServer;
 pub use ipc::{JsonRpcRequest, JsonRpcResponse};
 pub use resource_governor::{GovernorDecision, ResourceGovernor, ResourceLimits};
-pub use service_manager::{ServiceManager, create_service_manager};
+pub use service_manager::{create_service_manager, ServiceManager};
 pub use types::{DaemonConfig, DaemonStatus, ServiceStatus};
 pub use worldmodel::{
     ActivityType, CoreState, EnhancedContext, InferenceCache, PendingAction, WorldModelConfig,
 };
-

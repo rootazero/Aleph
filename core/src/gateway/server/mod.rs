@@ -5,28 +5,25 @@
 
 mod handler;
 
+use super::control_plane::create_control_plane_router;
+use super::openai_api::{openai_routes, OpenAiApiState};
+use crate::sync_primitives::Arc;
+use axum::{routing::get, Router};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
-use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
-use tracing::{info, warn, debug};
-use axum::{
-    Router,
-    routing::get,
-};
-use super::control_plane::create_control_plane_router;
-use super::openai_api::{openai_routes, OpenAiApiState};
+use tracing::{debug, info, warn};
 
-use super::event_bus::{GatewayEventBus, TopicEvent};
-use super::handlers::HandlerRegistry;
-use super::handlers::events::SubscriptionManager;
-use super::presence::PresenceTracker;
-use super::state_version::StateVersionTracker;
-use super::rate_limiter::{RateLimiter, RateLimitConfig};
-use super::lane::{LaneManager, LaneConfig};
-use super::event_scope::EventScopeGuard;
 use super::config::AuthMode;
+use super::event_bus::{GatewayEventBus, TopicEvent};
+use super::event_scope::EventScopeGuard;
+use super::handlers::events::SubscriptionManager;
+use super::handlers::HandlerRegistry;
+use super::lane::{LaneConfig, LaneManager};
+use super::presence::PresenceTracker;
+use super::rate_limiter::{RateLimitConfig, RateLimiter};
+use super::state_version::StateVersionTracker;
 use crate::providers::protocols::ProtocolLoader;
 use crate::security::headers::SecurityHeadersLayer;
 use notify::RecommendedWatcher;
@@ -171,7 +168,8 @@ pub struct GatewayServer {
     /// Agent registry for OpenAI-compatible agent completions
     pub openai_agent_registry: Option<Arc<crate::gateway::agent_instance::AgentRegistry>>,
     /// Model → HttpProvider map for passthrough completions
-    pub openai_provider_map: Arc<HashMap<String, Arc<crate::providers::http_provider::HttpProvider>>>,
+    pub openai_provider_map:
+        Arc<HashMap<String, Arc<crate::providers::http_provider::HttpProvider>>>,
     /// Provider configs for /v1/models listing
     pub openai_provider_configs: Vec<(String, crate::config::ProviderConfig)>,
     /// Embedding provider for /v1/embeddings
@@ -271,8 +269,7 @@ impl GatewayServer {
     /// Note: This consumes the Arc and returns a new one.
     /// Should only be called during setup, before `run()`.
     pub fn handlers_mut(&mut self) -> &mut HandlerRegistry {
-        Arc::get_mut(&mut self.handlers)
-            .expect("Cannot modify handlers after server is running")
+        Arc::get_mut(&mut self.handlers).expect("Cannot modify handlers after server is running")
     }
 
     /// Get a reference to the event bus for publishing events
@@ -281,7 +278,10 @@ impl GatewayServer {
     }
 
     /// Set the guest session manager
-    pub fn set_guest_session_manager(&mut self, manager: Arc<crate::gateway::security::GuestSessionManager>) {
+    pub fn set_guest_session_manager(
+        &mut self,
+        manager: Arc<crate::gateway::security::GuestSessionManager>,
+    ) {
         self.guest_session_manager = Some(manager);
     }
 
@@ -385,12 +385,15 @@ impl GatewayServer {
             let mut interval = tokio::time::interval(Duration::from_secs(10));
             loop {
                 interval.tick().await;
-                let _ = eb.publish_json(&TopicEvent::new("system.tick", serde_json::json!({
-                    "ts": chrono::Utc::now().timestamp_millis(),
-                    "state_version": sv.snapshot(),
-                    "connections": pr.count(),
-                    "uptime_ms": st.elapsed().as_millis() as u64,
-                })));
+                let _ = eb.publish_json(&TopicEvent::new(
+                    "system.tick",
+                    serde_json::json!({
+                        "ts": chrono::Utc::now().timestamp_millis(),
+                        "state_version": sv.snapshot(),
+                        "connections": pr.count(),
+                        "uptime_ms": st.elapsed().as_millis() as u64,
+                    }),
+                ));
             }
         });
     }
@@ -413,9 +416,12 @@ impl GatewayServer {
     pub async fn run(&self) -> Result<(), GatewayError> {
         self.spawn_background_tasks();
         let router = self.build_router();
-        let listener = tokio::net::TcpListener::bind(&self.addr).await.map_err(|e| {
-            GatewayError::BindFailed { addr: self.addr, source: e }
-        })?;
+        let listener = tokio::net::TcpListener::bind(&self.addr)
+            .await
+            .map_err(|e| GatewayError::BindFailed {
+                addr: self.addr,
+                source: e,
+            })?;
         info!("Aleph listening on http://{}", self.addr);
         axum::serve(
             listener,
@@ -433,9 +439,12 @@ impl GatewayServer {
     ) -> Result<(), GatewayError> {
         self.spawn_background_tasks();
         let router = self.build_router();
-        let listener = tokio::net::TcpListener::bind(&self.addr).await.map_err(|e| {
-            GatewayError::BindFailed { addr: self.addr, source: e }
-        })?;
+        let listener = tokio::net::TcpListener::bind(&self.addr)
+            .await
+            .map_err(|e| GatewayError::BindFailed {
+                addr: self.addr,
+                source: e,
+            })?;
         info!("Aleph listening on http://{}", self.addr);
         info!("  WebSocket: ws://{}/ws", self.addr);
         info!("  Panel UI:  http://{}/", self.addr);
@@ -443,7 +452,9 @@ impl GatewayServer {
             listener,
             router.into_make_service_with_connect_info::<SocketAddr>(),
         )
-        .with_graceful_shutdown(async { let _ = shutdown.await; })
+        .with_graceful_shutdown(async {
+            let _ = shutdown.await;
+        })
         .await
         .map_err(|e| GatewayError::ConnectionError(e.to_string()))?;
         Ok(())
@@ -468,17 +479,15 @@ pub enum GatewayError {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::protocol::{JsonRpcResponse, PARSE_ERROR};
+    use super::*;
 
     #[tokio::test]
     async fn test_process_valid_request() {
         let handlers = HandlerRegistry::new();
-        let response = handler::process_request(
-            r#"{"jsonrpc":"2.0","method":"health","id":1}"#,
-            &handlers,
-        )
-        .await;
+        let response =
+            handler::process_request(r#"{"jsonrpc":"2.0","method":"health","id":1}"#, &handlers)
+                .await;
 
         let parsed: JsonRpcResponse = serde_json::from_str(&response).unwrap();
         assert!(parsed.is_success());
@@ -497,11 +506,9 @@ mod tests {
     #[tokio::test]
     async fn test_process_method_not_found() {
         let handlers = HandlerRegistry::empty();
-        let response = handler::process_request(
-            r#"{"jsonrpc":"2.0","method":"unknown","id":1}"#,
-            &handlers,
-        )
-        .await;
+        let response =
+            handler::process_request(r#"{"jsonrpc":"2.0","method":"unknown","id":1}"#, &handlers)
+                .await;
 
         let parsed: JsonRpcResponse = serde_json::from_str(&response).unwrap();
         assert!(parsed.is_error());

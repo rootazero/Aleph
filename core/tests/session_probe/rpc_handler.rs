@@ -53,13 +53,21 @@ async fn p4_01_valid_request_returns_both_keys() {
     };
 
     let response = handle_new_session_db(request, manager).await;
-    assert!(response.error.is_none(), "expected success, got error: {:?}", response.error);
+    assert!(
+        response.error.is_none(),
+        "expected success, got error: {:?}",
+        response.error
+    );
 
     let result = response.result.expect("result should be present");
     assert_eq!(result["old_session_key"].as_str().unwrap(), session_key);
     // New key should have :s1 suffix (epoch 0 → 1)
     let new_key = result["new_session_key"].as_str().unwrap();
-    assert!(new_key.contains(":s1"), "new key should contain :s1, got: {}", new_key);
+    assert!(
+        new_key.contains(":s1"),
+        "new key should contain :s1, got: {}",
+        new_key
+    );
     assert_eq!(result["topic"].as_str().unwrap(), "testing topic");
 }
 
@@ -100,7 +108,10 @@ async fn p4_03_invalid_session_key_format_returns_error() {
 
     let response = handle_new_session_db(request, manager).await;
     assert!(response.result.is_none());
-    assert!(response.error.is_some(), "should return error for invalid key format");
+    assert!(
+        response.error.is_some(),
+        "should return error for invalid key format"
+    );
 }
 
 #[tokio::test]
@@ -118,10 +129,17 @@ async fn p4_04_topic_is_optional() {
     };
 
     let response = handle_new_session_db(request, manager).await;
-    assert!(response.error.is_none(), "expected success, got error: {:?}", response.error);
+    assert!(
+        response.error.is_none(),
+        "expected success, got error: {:?}",
+        response.error
+    );
 
     let result = response.result.expect("result should be present");
-    assert!(result["topic"].is_null(), "topic should be null when omitted");
+    assert!(
+        result["topic"].is_null(),
+        "topic should be null when omitted"
+    );
 }
 
 #[tokio::test]
@@ -142,7 +160,11 @@ async fn p4_05_new_key_has_incremented_epoch() {
         .as_str()
         .unwrap()
         .to_string();
-    assert!(new_key_1.ends_with(":s1"), "first new key should end with :s1, got: {}", new_key_1);
+    assert!(
+        new_key_1.ends_with(":s1"),
+        "first new key should end with :s1, got: {}",
+        new_key_1
+    );
 
     // Second call: epoch 1 → 2
     let req2 = JsonRpcRequest {
@@ -152,12 +174,20 @@ async fn p4_05_new_key_has_incremented_epoch() {
         id: Some(json!(6)),
     };
     let resp2 = handle_new_session_db(req2, manager.clone()).await;
-    assert!(resp2.error.is_none(), "expected success, got error: {:?}", resp2.error);
+    assert!(
+        resp2.error.is_none(),
+        "expected success, got error: {:?}",
+        resp2.error
+    );
     let new_key_2 = resp2.result.as_ref().unwrap()["new_session_key"]
         .as_str()
         .unwrap()
         .to_string();
-    assert!(new_key_2.ends_with(":s2"), "second new key should end with :s2, got: {}", new_key_2);
+    assert!(
+        new_key_2.ends_with(":s2"),
+        "second new key should end with :s2, got: {}",
+        new_key_2
+    );
 }
 
 #[tokio::test]

@@ -15,7 +15,9 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use crate::config::types::agents_def::{AgentDefinition, AgentDefaults, AgentsConfig, SubagentPolicy};
+use crate::config::types::agents_def::{
+    AgentDefaults, AgentDefinition, AgentsConfig, SubagentPolicy,
+};
 use crate::config::types::profile::ProfileConfig;
 use crate::gateway::workspace_loader::WorkspaceFileLoader;
 use crate::thinker::soul::SoulManifest;
@@ -186,11 +188,7 @@ impl AgentDefinitionResolver {
     }
 
     /// Resolve the agent state directory path.
-    pub fn resolve_agent_dir(
-        &self,
-        agent: &AgentDefinition,
-        defaults: &AgentDefaults,
-    ) -> PathBuf {
+    pub fn resolve_agent_dir(&self, agent: &AgentDefinition, defaults: &AgentDefaults) -> PathBuf {
         let root = defaults
             .agents_root
             .as_ref()
@@ -211,10 +209,7 @@ impl AgentDefinitionResolver {
         let agent_dir = self.resolve_agent_dir(agent, defaults);
 
         // 2. Initialize agent identity directory (SOUL.md, AGENTS.md, etc.)
-        let agent_name = agent
-            .name
-            .as_deref()
-            .unwrap_or(&agent.id);
+        let agent_name = agent.name.as_deref().unwrap_or(&agent.id);
         if let Err(e) = initialize_agent_dir(&agent_dir) {
             tracing::warn!(
                 agent_id = %agent.id,
@@ -305,15 +300,10 @@ impl AgentDefinitionResolver {
         let max_chars = defaults
             .bootstrap_max_chars
             .unwrap_or(DEFAULT_BOOTSTRAP_MAX_CHARS);
-        let memory_md = self
-            .workspace_loader
-            .load_memory_md(&agent_dir, max_chars);
+        let memory_md = self.workspace_loader.load_memory_md(&agent_dir, max_chars);
 
         // 7. Build ResolvedAgent
-        let name = agent
-            .name
-            .clone()
-            .unwrap_or_else(|| agent.id.clone());
+        let name = agent.name.clone().unwrap_or_else(|| agent.id.clone());
 
         let subagent_policy = agent.subagents.clone();
         let allowed_links = agent.allowed_links.clone();
@@ -613,7 +603,9 @@ fn resolve_user_path(path: &Path) -> PathBuf {
     let path_str = path.to_string_lossy();
     if path_str.starts_with('~') {
         if let Some(home) = dirs::home_dir() {
-            let rest = path_str.strip_prefix("~/").or_else(|| path_str.strip_prefix('~'));
+            let rest = path_str
+                .strip_prefix("~/")
+                .or_else(|| path_str.strip_prefix('~'));
             if let Some(rest) = rest {
                 return home.join(rest);
             }
@@ -866,7 +858,11 @@ mod tests {
         let agent = &resolved[0];
 
         // sessions/ should have been copied to agent_dir
-        assert!(agent.agent_dir.join("sessions").join("test-session.json").exists());
+        assert!(agent
+            .agent_dir
+            .join("sessions")
+            .join("test-session.json")
+            .exists());
         // old sessions/ should be removed
         assert!(!agent.workspace_path.join("sessions").exists());
     }

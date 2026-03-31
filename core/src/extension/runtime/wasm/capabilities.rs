@@ -96,8 +96,7 @@ impl EndpointPattern {
     /// Check whether a request (method, host, path) matches this pattern.
     pub fn matches(&self, method: &str, host: &str, path: &str) -> bool {
         // Method check: empty means allow all
-        if !self.methods.is_empty()
-            && !self.methods.iter().any(|m| m.eq_ignore_ascii_case(method))
+        if !self.methods.is_empty() && !self.methods.iter().any(|m| m.eq_ignore_ascii_case(method))
         {
             return false;
         }
@@ -126,10 +125,19 @@ pub struct CredentialBinding {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum CredentialInject {
     Bearer,
-    Basic { username: String },
-    Header { name: String, prefix: Option<String> },
-    Query { param_name: String },
-    UrlPath { placeholder: String },
+    Basic {
+        username: String,
+    },
+    Header {
+        name: String,
+        prefix: Option<String>,
+    },
+    Query {
+        param_name: String,
+    },
+    UrlPath {
+        placeholder: String,
+    },
 }
 
 /// Rate limit for outbound HTTP requests.
@@ -296,10 +304,7 @@ mod tests {
     #[test]
     fn test_secrets_capability_pattern_matching() {
         let secrets = SecretsCapability {
-            allowed_patterns: vec![
-                "slack_*".to_string(),
-                "github_token".to_string(),
-            ],
+            allowed_patterns: vec!["slack_*".to_string(), "github_token".to_string()],
         };
 
         // Glob match

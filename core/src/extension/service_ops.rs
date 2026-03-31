@@ -12,7 +12,9 @@ impl ExtensionManager {
         plugin_id: &str,
         service_id: &str,
     ) -> ExtensionResult<ServiceInfo> {
-        let registration = self.find_service_registration(plugin_id, service_id).await?;
+        let registration = self
+            .find_service_registration(plugin_id, service_id)
+            .await?;
         let mut service_manager = self.service_manager.write().await;
         let mut loader = self.plugin_loader.write().await;
         service_manager.start_service(&registration, &mut loader)
@@ -24,7 +26,9 @@ impl ExtensionManager {
         plugin_id: &str,
         service_id: &str,
     ) -> ExtensionResult<ServiceInfo> {
-        let registration = self.find_service_registration(plugin_id, service_id).await?;
+        let registration = self
+            .find_service_registration(plugin_id, service_id)
+            .await?;
         let mut service_manager = self.service_manager.write().await;
         let mut loader = self.plugin_loader.write().await;
         service_manager.stop_service(&registration, &mut loader)
@@ -60,7 +64,9 @@ impl ExtensionManager {
     }
 
     /// Get the service manager (read access).
-    pub async fn get_service_manager(&self) -> tokio::sync::RwLockReadGuard<'_, super::ServiceManager> {
+    pub async fn get_service_manager(
+        &self,
+    ) -> tokio::sync::RwLockReadGuard<'_, super::ServiceManager> {
         self.service_manager.read().await
     }
 
@@ -77,8 +83,6 @@ impl ExtensionManager {
             .into_iter()
             .find(|s| s.plugin_id == plugin_id && s.id == service_id)
             .cloned()
-            .ok_or_else(|| {
-                ExtensionError::ServiceNotFound(format!("{}:{}", plugin_id, service_id))
-            })
+            .ok_or_else(|| ExtensionError::ServiceNotFound(format!("{}:{}", plugin_id, service_id)))
     }
 }

@@ -273,7 +273,7 @@ pub fn split_frontmatter(content: &str) -> Result<(&str, &str), SkillParseError>
 
     let yaml_str = &rest[..closing_pos];
     let after_closing = &rest[closing_pos + 3..]; // skip past `---`
-    // Skip optional newline after closing ---
+                                                  // Skip optional newline after closing ---
     let body = after_closing.strip_prefix('\n').unwrap_or(after_closing);
 
     Ok((yaml_str, body))
@@ -364,7 +364,9 @@ description: Has no body content
 
         let manifest = parse_skill_content(content, SkillSource::Workspace).unwrap();
         assert_eq!(manifest.name(), "Empty Body Skill");
-        assert!(manifest.content().as_str().is_empty() || manifest.content().as_str().trim().is_empty());
+        assert!(
+            manifest.content().as_str().is_empty() || manifest.content().as_str().trim().is_empty()
+        );
     }
 
     #[test]

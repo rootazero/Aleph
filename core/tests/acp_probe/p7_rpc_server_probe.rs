@@ -86,8 +86,7 @@ enabled = true
 [acp]
 enabled = true
 "#;
-        std::fs::write(&app_config_path, app_content)
-            .expect("Failed to write app config.toml");
+        std::fs::write(&app_config_path, app_content).expect("Failed to write app config.toml");
     }
 
     async fn start() -> Self {
@@ -262,11 +261,7 @@ async fn p7_01_list_returns_presets() {
     let server = get_server().await;
     let result = server.rpc_ok("acp.list", json!({})).await;
     let list = result.as_array().unwrap();
-    assert!(
-        list.len() >= 3,
-        "expected >= 3 presets, got {}",
-        list.len()
-    );
+    assert!(list.len() >= 3, "expected >= 3 presets, got {}", list.len());
     for entry in list {
         assert!(entry.get("id").is_some());
         assert!(entry.get("display_name").is_some());
@@ -321,9 +316,7 @@ async fn p7_04_create_update_delete_cycle() {
     assert_eq!(created["id"].as_str(), Some(test_id));
 
     // Get — verify exists
-    let got = server
-        .rpc_ok("acp.get", json!({"id": test_id}))
-        .await;
+    let got = server.rpc_ok("acp.get", json!({"id": test_id})).await;
     assert_eq!(got["display_name"].as_str(), Some("Probe Test CLI"));
 
     // Update
@@ -345,14 +338,10 @@ async fn p7_04_create_update_delete_cycle() {
     assert_eq!(updated["display_name"].as_str(), Some("Updated CLI"));
 
     // Delete
-    server
-        .rpc_ok("acp.delete", json!({"id": test_id}))
-        .await;
+    server.rpc_ok("acp.delete", json!({"id": test_id})).await;
 
     // Verify gone
-    let err = server
-        .rpc_err("acp.get", json!({"id": test_id}))
-        .await;
+    let err = server.rpc_err("acp.get", json!({"id": test_id})).await;
     assert!(err["message"].as_str().unwrap().contains("not found"));
 }
 
@@ -376,9 +365,7 @@ async fn p7_05_create_invalid_id() {
 #[serial]
 async fn p7_06_delete_preset_rejected() {
     let server = get_server().await;
-    let err = server
-        .rpc_err("acp.delete", json!({"id": "gemini"}))
-        .await;
+    let err = server.rpc_err("acp.delete", json!({"id": "gemini"})).await;
     let msg = err["message"].as_str().unwrap();
     assert!(
         msg.contains("preset") || msg.contains("Cannot delete"),
@@ -394,10 +381,7 @@ async fn p7_07_presets_returns_defaults() {
     let result = server.rpc_ok("acp.presets", json!({})).await;
     let presets = result.as_array().unwrap();
     assert_eq!(presets.len(), 3);
-    let ids: Vec<&str> = presets
-        .iter()
-        .map(|p| p["id"].as_str().unwrap())
-        .collect();
+    let ids: Vec<&str> = presets.iter().map(|p| p["id"].as_str().unwrap()).collect();
     assert!(ids.contains(&"claude-code"));
     assert!(ids.contains(&"codex"));
     assert!(ids.contains(&"gemini"));
@@ -410,10 +394,7 @@ async fn p7_08_set_enabled_toggle() {
 
     // Disable codex
     server
-        .rpc_ok(
-            "acp.set_enabled",
-            json!({"id": "codex", "enabled": false}),
-        )
+        .rpc_ok("acp.set_enabled", json!({"id": "codex", "enabled": false}))
         .await;
 
     // Verify disabled in list
@@ -428,10 +409,7 @@ async fn p7_08_set_enabled_toggle() {
 
     // Re-enable
     server
-        .rpc_ok(
-            "acp.set_enabled",
-            json!({"id": "codex", "enabled": true}),
-        )
+        .rpc_ok("acp.set_enabled", json!({"id": "codex", "enabled": true}))
         .await;
 
     let list2 = server.rpc_ok("acp.list", json!({})).await;
@@ -485,7 +463,5 @@ async fn p7_10_config_persistence() {
     assert_eq!(got["display_name"].as_str(), Some("Persist Test"));
 
     // Cleanup
-    server
-        .rpc_ok("acp.delete", json!({"id": test_id}))
-        .await;
+    server.rpc_ok("acp.delete", json!({"id": test_id})).await;
 }

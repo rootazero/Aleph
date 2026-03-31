@@ -31,7 +31,10 @@ pub struct AiProviderBridge {
 impl AiProviderBridge {
     /// Create a new bridge wrapping an existing AiProvider.
     pub fn new(provider: Arc<dyn AiProvider>) -> Self {
-        Self { provider, model: None }
+        Self {
+            provider,
+            model: None,
+        }
     }
 
     /// Set a per-request model override (takes precedence over provider config).

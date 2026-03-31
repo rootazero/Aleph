@@ -172,9 +172,7 @@ impl NoiseFilter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::context::{
-        FactSource, FactType, MemoryFact,
-    };
+    use crate::memory::context::{FactSource, FactType, MemoryFact};
 
     /// Helper to create a default filter for testing.
     fn test_filter() -> NoiseFilter {
@@ -183,18 +181,11 @@ mod tests {
 
     /// Helper to create a ScoredFact with the given content.
     fn scored_fact(content: &str) -> ScoredFact {
-        let mut fact = MemoryFact::new(
-            content.to_string(),
-            FactType::Other,
-            vec![],
-        );
+        let mut fact = MemoryFact::new(content.to_string(), FactType::Other, vec![]);
         fact.confidence = 0.9;
         fact.fact_source = FactSource::Extracted;
 
-        ScoredFact {
-            fact,
-            score: 0.85,
-        }
+        ScoredFact { fact, score: 0.85 }
     }
 
     #[test]
@@ -212,7 +203,7 @@ mod tests {
         assert!(!filter.should_store("ok"));
         assert!(!filter.should_store("yes"));
         assert!(!filter.should_store("   short   ")); // "short" is 5 chars after trim
-        // Exactly at the boundary
+                                                      // Exactly at the boundary
         assert!(filter.should_store("0123456789")); // 10 chars = passes
         assert!(!filter.should_store("012345678")); // 9 chars = rejected
     }
@@ -256,11 +247,11 @@ mod tests {
 
         let results = vec![
             scored_fact("The user prefers dark mode."),
-            scored_fact("hi"),                                     // too short
-            scored_fact("I can't help with that."),                // denial
+            scored_fact("hi"),                      // too short
+            scored_fact("I can't help with that."), // denial
             scored_fact("Rust is the primary language."),
-            scored_fact("<system>Internal prompt</system>"),       // boilerplate
-            scored_fact("😀😀😀😀😀😀😀😀😀😀"),                   // pure emoji
+            scored_fact("<system>Internal prompt</system>"), // boilerplate
+            scored_fact("😀😀😀😀😀😀😀😀😀😀"),             // pure emoji
         ];
 
         let filtered = filter.filter_results(results);
@@ -284,10 +275,7 @@ mod tests {
         assert!(filter.should_store("😀😀😀😀😀😀😀😀😀😀"));
 
         // filter_results also passes everything through
-        let results = vec![
-            scored_fact("hi"),
-            scored_fact("I can't help with that."),
-        ];
+        let results = vec![scored_fact("hi"), scored_fact("I can't help with that.")];
         let filtered = filter.filter_results(results);
         assert_eq!(filtered.len(), 2);
     }
@@ -304,7 +292,7 @@ mod tests {
 
         // Shorter threshold
         assert!(filter.should_store("hello")); // 5 chars = passes with min 5
-        assert!(!filter.should_store("hey"));  // 3 chars = rejected
+        assert!(!filter.should_store("hey")); // 3 chars = rejected
 
         // Custom denial pattern
         assert!(!filter.should_store("No way I can do that."));
@@ -331,6 +319,8 @@ mod tests {
         assert_eq!(config.denial_patterns.len(), 5);
         assert_eq!(config.boilerplate_patterns.len(), 4);
         assert!(config.denial_patterns.contains(&"as an ai".to_string()));
-        assert!(config.boilerplate_patterns.contains(&"<system>".to_string()));
+        assert!(config
+            .boilerplate_patterns
+            .contains(&"<system>".to_string()));
     }
 }

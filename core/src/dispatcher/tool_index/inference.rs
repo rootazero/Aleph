@@ -5,10 +5,10 @@
 //! - L1: Rule-based template using name, category, description (fallback)
 //! - L2: Async LLM enhancement (eventual consistency, background optimization)
 
-use crate::sync_primitives::Arc;
-use crate::providers::AiProvider;
 use crate::providers::adapter::RequestPayload;
 use crate::providers::message::UnifiedMessage;
+use crate::providers::AiProvider;
+use crate::sync_primitives::Arc;
 
 /// Result of semantic purpose inference
 #[derive(Debug, Clone)]
@@ -30,9 +30,7 @@ pub struct SemanticPurposeInferrer {
 impl SemanticPurposeInferrer {
     /// Create a new inferrer without LLM support (L0/L1 only)
     pub fn new() -> Self {
-        Self {
-            llm_provider: None,
-        }
+        Self { llm_provider: None }
     }
 
     /// Create a new inferrer with LLM support for L2 optimization
@@ -56,7 +54,7 @@ impl SemanticPurposeInferrer {
     pub fn should_trigger_l2(&self, inferred: &InferredPurpose) -> bool {
         self.llm_provider.is_some()
             && inferred.level != 0  // Not L0 (already high quality)
-            && inferred.confidence < 0.7  // Low confidence from L1
+            && inferred.confidence < 0.7 // Low confidence from L1
     }
 
     /// Infer semantic purpose using ranked strategy
@@ -199,7 +197,8 @@ impl SemanticPurposeInferrer {
         })?;
 
         // Build LLM prompt for semantic enhancement
-        let (system_prompt, user_prompt) = self.build_l2_prompts(tool_id, name, description, category);
+        let (system_prompt, user_prompt) =
+            self.build_l2_prompts(tool_id, name, description, category);
 
         // Call LLM using process method
         let __msgs = [UnifiedMessage::user(&user_prompt)];
@@ -238,7 +237,7 @@ impl SemanticPurposeInferrer {
         let system_prompt = String::from(
             "You are a technical writer specializing in tool documentation. \
              Generate concise, actionable descriptions that explain WHEN to use a tool \
-             and WHAT problems it solves. Keep responses under 100 words."
+             and WHAT problems it solves. Keep responses under 100 words.",
         );
 
         let mut user_prompt = String::from("Generate a semantic description for this tool:\n\n");
@@ -255,7 +254,7 @@ impl SemanticPurposeInferrer {
 
         user_prompt.push_str(
             "\nProvide a single-sentence description in this format:\n\
-             \"Use this tool when you need to [specific use case].\""
+             \"Use this tool when you need to [specific use case].\"",
         );
 
         (system_prompt, user_prompt)

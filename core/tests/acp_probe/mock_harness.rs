@@ -101,10 +101,7 @@ impl AcpHarness for MockAcpHarness {
 
     async fn execute_oneshot(&self, prompt: &str, _cwd: &str) -> Result<String> {
         self.call_count.fetch_add(1, Ordering::SeqCst);
-        *self
-            .last_prompt
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()) = Some(prompt.to_string());
+        *self.last_prompt.lock().unwrap_or_else(|e| e.into_inner()) = Some(prompt.to_string());
 
         if self.failing.load(Ordering::SeqCst) {
             return Err(AlephError::tool("Mock harness failing"));
@@ -122,7 +119,6 @@ impl AcpHarness for MockAcpHarness {
 
 /// Resolve path to a mock script in the test fixtures directory.
 pub fn mock_script_path(name: &str) -> String {
-    let manifest =
-        std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
+    let manifest = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
     format!("{}/tests/acp_probe/mock_scripts/{}", manifest, name)
 }

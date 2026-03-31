@@ -85,16 +85,48 @@ pub struct PermissionAudit {
 /// <https://discord.com/developers/docs/topics/permissions#permissions-bitwise-permission-flags>
 pub const ALEPH_PERMISSIONS: &[(u64, &str, RequirementLevel)] = &[
     // Required -- core messaging
-    (0x0000_0000_0000_0800, "Send Messages", RequirementLevel::Required),
-    (0x0000_0000_0000_0400, "View Channel", RequirementLevel::Required),
-    (0x0000_0000_0004_0000, "Read Message History", RequirementLevel::Required),
+    (
+        0x0000_0000_0000_0800,
+        "Send Messages",
+        RequirementLevel::Required,
+    ),
+    (
+        0x0000_0000_0000_0400,
+        "View Channel",
+        RequirementLevel::Required,
+    ),
+    (
+        0x0000_0000_0004_0000,
+        "Read Message History",
+        RequirementLevel::Required,
+    ),
     // Recommended -- richer interaction
-    (0x0000_0000_0000_4000, "Embed Links", RequirementLevel::Recommended),
-    (0x0000_0000_0000_8000, "Attach Files", RequirementLevel::Recommended),
-    (0x0000_0000_0000_0040, "Add Reactions", RequirementLevel::Recommended),
+    (
+        0x0000_0000_0000_4000,
+        "Embed Links",
+        RequirementLevel::Recommended,
+    ),
+    (
+        0x0000_0000_0000_8000,
+        "Attach Files",
+        RequirementLevel::Recommended,
+    ),
+    (
+        0x0000_0000_0000_0040,
+        "Add Reactions",
+        RequirementLevel::Recommended,
+    ),
     // Optional -- admin-level
-    (0x0000_0000_0000_2000, "Manage Messages", RequirementLevel::Optional),
-    (0x0000_0000_8000_0000, "Use Slash Commands", RequirementLevel::Optional),
+    (
+        0x0000_0000_0000_2000,
+        "Manage Messages",
+        RequirementLevel::Optional,
+    ),
+    (
+        0x0000_0000_8000_0000,
+        "Use Slash Commands",
+        RequirementLevel::Optional,
+    ),
 ];
 
 // ---------------------------------------------------------------------------
@@ -106,11 +138,7 @@ pub const ALEPH_PERMISSIONS: &[(u64, &str, RequirementLevel)] = &[
 /// `bot_permissions` is the raw Discord permission bitfield for the bot in
 /// the target guild. The function checks every flag in [`ALEPH_PERMISSIONS`]
 /// and returns a full [`PermissionAudit`].
-pub fn audit_permissions(
-    guild_id: u64,
-    guild_name: &str,
-    bot_permissions: u64,
-) -> PermissionAudit {
+pub fn audit_permissions(guild_id: u64, guild_name: &str, bot_permissions: u64) -> PermissionAudit {
     let mut checks = Vec::with_capacity(ALEPH_PERMISSIONS.len());
     let mut missing_required = Vec::new();
     let mut missing_recommended = Vec::new();
@@ -160,10 +188,7 @@ pub fn audit_permissions(
 
     // Summary
     let summary = match overall_status {
-        HealthStatus::Healthy => format!(
-            "All permissions OK for guild \"{}\".",
-            guild_name,
-        ),
+        HealthStatus::Healthy => format!("All permissions OK for guild \"{}\".", guild_name,),
         HealthStatus::Degraded => format!(
             "Guild \"{}\" is missing recommended permissions: {}.",
             guild_name,
@@ -211,7 +236,9 @@ mod tests {
 
     /// Helper: bitfield with ALL Aleph permissions granted.
     fn all_permissions() -> u64 {
-        ALEPH_PERMISSIONS.iter().fold(0u64, |acc, &(flag, _, _)| acc | flag)
+        ALEPH_PERMISSIONS
+            .iter()
+            .fold(0u64, |acc, &(flag, _, _)| acc | flag)
     }
 
     #[test]
@@ -226,7 +253,12 @@ mod tests {
         // Every check should be Green with has == true
         for check in &audit.permissions {
             assert!(check.has, "expected {} to be present", check.name);
-            assert_eq!(check.status, TrafficLight::Green, "{} should be green", check.name);
+            assert_eq!(
+                check.status,
+                TrafficLight::Green,
+                "{} should be green",
+                check.name
+            );
         }
 
         assert!(audit.summary.contains("All permissions OK"));
@@ -258,7 +290,10 @@ mod tests {
 
         // Should have a fix suggestion for the missing permission
         assert!(
-            audit.fix_suggestions.iter().any(|s| s.contains("Send Messages")),
+            audit
+                .fix_suggestions
+                .iter()
+                .any(|s| s.contains("Send Messages")),
             "fix_suggestions should mention Send Messages",
         );
     }
@@ -294,7 +329,11 @@ mod tests {
             .expect("Manage Messages check missing");
 
         assert!(!manage.has);
-        assert_eq!(manage.status, TrafficLight::Green, "optional missing should still be green");
+        assert_eq!(
+            manage.status,
+            TrafficLight::Green,
+            "optional missing should still be green"
+        );
 
         // Summary should mention recommended
         assert!(audit.summary.contains("recommended"));
@@ -307,11 +346,7 @@ mod tests {
         assert_eq!(audit.overall_status, HealthStatus::Critical);
 
         // All required should be Red
-        let required_checks: Vec<_> = audit
-            .permissions
-            .iter()
-            .filter(|c| c.required)
-            .collect();
+        let required_checks: Vec<_> = audit.permissions.iter().filter(|c| c.required).collect();
 
         assert!(!required_checks.is_empty());
         for check in &required_checks {
@@ -352,7 +387,13 @@ mod tests {
         assert_eq!(back.permissions.len(), ALEPH_PERMISSIONS.len());
 
         // Verify serde rename_all = "lowercase" works
-        assert!(json.contains("\"healthy\""), "HealthStatus should serialize as lowercase");
-        assert!(json.contains("\"green\""), "TrafficLight should serialize as lowercase");
+        assert!(
+            json.contains("\"healthy\""),
+            "HealthStatus should serialize as lowercase"
+        );
+        assert!(
+            json.contains("\"green\""),
+            "TrafficLight should serialize as lowercase"
+        );
     }
 }

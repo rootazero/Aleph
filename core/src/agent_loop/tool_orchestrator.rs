@@ -86,10 +86,16 @@ async fn execute_one(
     if let Err(e) = safety.check(&safety_call) {
         let msg = match &e {
             SafetyError::Blocked { tool, pattern } => {
-                format!("[BLOCKED] Tool '{}' blocked by safety pattern '{}'", tool, pattern)
+                format!(
+                    "[BLOCKED] Tool '{}' blocked by safety pattern '{}'",
+                    tool, pattern
+                )
             }
             SafetyError::NeedsConfirmation { tool } => {
-                format!("[NEEDS_CONFIRMATION] Tool '{}' requires user confirmation", tool)
+                format!(
+                    "[NEEDS_CONFIRMATION] Tool '{}' requires user confirmation",
+                    tool
+                )
             }
             SafetyError::PolicyDenied { tool } => {
                 format!("[DENIED] Tool '{}' denied by policy", tool)
@@ -262,7 +268,6 @@ pub async fn execute_tool_batch(
     results.into_iter().map(|(_, outcome)| outcome).collect()
 }
 
-
 /// Convert a ToolOutcome back to a ToolResult for the callback.
 fn outcome_to_tool_result(outcome: &ToolOutcome) -> ToolResult {
     if outcome.is_error {
@@ -295,8 +300,8 @@ mod tests {
     use std::sync::Arc;
     use std::time::{Duration, Instant};
 
-    use crate::agent_loop::NoopCallback;
     use crate::agent_loop::tool::{LoopTool, LoopToolRegistry};
+    use crate::agent_loop::NoopCallback;
     use crate::extension::PermissionAction;
 
     /// A permissive safety guard for tests — allows everything.
@@ -328,10 +333,7 @@ mod tests {
             json!({ "type": "object", "properties": {} })
         }
         async fn execute(&self, input: Value) -> ToolResult {
-            let ms = input
-                .get("ms")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(100);
+            let ms = input.get("ms").and_then(|v| v.as_u64()).unwrap_or(100);
             let prev = self.active.fetch_add(1, Ordering::SeqCst);
             let current = prev + 1;
             // Update peak.

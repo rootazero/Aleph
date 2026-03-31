@@ -127,11 +127,7 @@ impl SharedArena {
     /// Add an artifact to the specified agent's slot, marking it as Working.
     ///
     /// Only allowed when arena is Active.
-    pub fn put_artifact(
-        &mut self,
-        agent_id: &AgentId,
-        artifact: Artifact,
-    ) -> Result<(), String> {
+    pub fn put_artifact(&mut self, agent_id: &AgentId, artifact: Artifact) -> Result<(), String> {
         if self.status != ArenaStatus::Active {
             return Err(format!(
                 "Cannot put artifact: arena is {:?}, not Active",

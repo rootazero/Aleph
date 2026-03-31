@@ -349,7 +349,10 @@ async fn manager_has_harness_returns_false_for_unknown() {
 #[tokio::test]
 async fn manager_display_names_correct() {
     let mgr = AcpHarnessManager::new();
-    assert_eq!(mgr.display_name("claude-code").await, Some("Claude Code".to_string()));
+    assert_eq!(
+        mgr.display_name("claude-code").await,
+        Some("Claude Code".to_string())
+    );
     assert_eq!(mgr.display_name("codex").await, Some("Codex".to_string()));
     assert_eq!(mgr.display_name("gemini").await, Some("Gemini".to_string()));
     assert_eq!(mgr.display_name("unknown").await, None);
@@ -359,8 +362,14 @@ async fn manager_display_names_correct() {
 async fn manager_harness_modes_correct() {
     use super::harness::HarnessMode;
     let mgr = AcpHarnessManager::new();
-    assert_eq!(mgr.harness_mode("gemini").await, Some(HarnessMode::NativeAcp));
-    assert_eq!(mgr.harness_mode("claude-code").await, Some(HarnessMode::Oneshot));
+    assert_eq!(
+        mgr.harness_mode("gemini").await,
+        Some(HarnessMode::NativeAcp)
+    );
+    assert_eq!(
+        mgr.harness_mode("claude-code").await,
+        Some(HarnessMode::Oneshot)
+    );
     assert_eq!(mgr.harness_mode("codex").await, Some(HarnessMode::Oneshot));
     assert_eq!(mgr.harness_mode("unknown").await, None);
 }
@@ -371,7 +380,10 @@ async fn manager_harness_modes_correct() {
 
 #[tokio::test]
 async fn manager_disable_single_harness() {
-    let mut entries: std::collections::HashMap<String, crate::config::types::acp::AcpHarnessEntry> = crate::config::types::acp::AcpHarnessEntry::all_presets().into_iter().collect();
+    let mut entries: std::collections::HashMap<String, crate::config::types::acp::AcpHarnessEntry> =
+        crate::config::types::acp::AcpHarnessEntry::all_presets()
+            .into_iter()
+            .collect();
     entries.get_mut("codex").unwrap().enabled = false;
     let mgr = AcpHarnessManager::from_entries(entries);
     assert!(!mgr.has_harness("codex").await);
@@ -382,7 +394,10 @@ async fn manager_disable_single_harness() {
 
 #[tokio::test]
 async fn manager_disable_all_harnesses() {
-    let mut entries: std::collections::HashMap<String, crate::config::types::acp::AcpHarnessEntry> = crate::config::types::acp::AcpHarnessEntry::all_presets().into_iter().collect();
+    let mut entries: std::collections::HashMap<String, crate::config::types::acp::AcpHarnessEntry> =
+        crate::config::types::acp::AcpHarnessEntry::all_presets()
+            .into_iter()
+            .collect();
     entries.get_mut("claude-code").unwrap().enabled = false;
     entries.get_mut("codex").unwrap().enabled = false;
     entries.get_mut("gemini").unwrap().enabled = false;
@@ -392,7 +407,10 @@ async fn manager_disable_all_harnesses() {
 
 #[tokio::test]
 async fn manager_explicit_enable_is_noop() {
-    let entries: std::collections::HashMap<String, crate::config::types::acp::AcpHarnessEntry> = crate::config::types::acp::AcpHarnessEntry::all_presets().into_iter().collect();
+    let entries: std::collections::HashMap<String, crate::config::types::acp::AcpHarnessEntry> =
+        crate::config::types::acp::AcpHarnessEntry::all_presets()
+            .into_iter()
+            .collect();
     let mgr = AcpHarnessManager::from_entries(entries);
     assert!(mgr.has_harness("claude-code").await);
     assert_eq!(mgr.harness_ids().await.len(), 3);
@@ -400,7 +418,10 @@ async fn manager_explicit_enable_is_noop() {
 
 #[tokio::test]
 async fn manager_custom_executable_path() {
-    let mut entries: std::collections::HashMap<String, crate::config::types::acp::AcpHarnessEntry> = crate::config::types::acp::AcpHarnessEntry::all_presets().into_iter().collect();
+    let mut entries: std::collections::HashMap<String, crate::config::types::acp::AcpHarnessEntry> =
+        crate::config::types::acp::AcpHarnessEntry::all_presets()
+            .into_iter()
+            .collect();
     entries.get_mut("gemini").unwrap().executable = Some("/opt/bin/gemini-custom".to_string());
     let mgr = AcpHarnessManager::from_entries(entries);
     assert!(mgr.has_harness("gemini").await);

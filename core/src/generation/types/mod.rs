@@ -12,7 +12,6 @@
 /// - `GenerationData`: The actual generated content (bytes, URL, or file path)
 /// - `GenerationMetadata`: Additional information about the generation
 /// - `GenerationProgress`: Progress tracking for long-running generations
-
 mod generation_type;
 mod output;
 mod params;

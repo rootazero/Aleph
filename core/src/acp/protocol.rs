@@ -205,12 +205,14 @@ impl AcpResponse {
         if session_update != "tool_call" && session_update != "tool_call_update" {
             return None;
         }
-        let name = update.get("name")
+        let name = update
+            .get("name")
             .or_else(|| update.get("toolName"))
             .and_then(|v| v.as_str())
             .unwrap_or("unknown")
             .to_string();
-        let status = update.get("status")
+        let status = update
+            .get("status")
             .and_then(|v| v.as_str())
             .unwrap_or(session_update)
             .to_string();
@@ -294,11 +296,19 @@ impl From<AcpOperationError> for crate::error::AlephError {
 
 impl AcpOperationError {
     pub fn new(code: AcpErrorCode, message: impl Into<String>) -> Self {
-        Self { code, message: message.into(), remote_error: None }
+        Self {
+            code,
+            message: message.into(),
+            remote_error: None,
+        }
     }
 
     pub fn with_remote(code: AcpErrorCode, message: impl Into<String>, remote: AcpError) -> Self {
-        Self { code, message: message.into(), remote_error: Some(remote) }
+        Self {
+            code,
+            message: message.into(),
+            remote_error: Some(remote),
+        }
     }
 }
 
@@ -538,7 +548,9 @@ mod tests {
     fn test_streaming_thought_extraction() {
         let notif = AcpResponse {
             jsonrpc: "2.0".to_string(),
-            id: None, result: None, error: None,
+            id: None,
+            result: None,
+            error: None,
             method: Some("session/update".to_string()),
             params: Some(serde_json::json!({
                 "sessionId": "s1",
@@ -555,7 +567,9 @@ mod tests {
     fn test_tool_call_info_extraction() {
         let notif = AcpResponse {
             jsonrpc: "2.0".to_string(),
-            id: None, result: None, error: None,
+            id: None,
+            result: None,
+            error: None,
             method: Some("session/update".to_string()),
             params: Some(serde_json::json!({
                 "sessionId": "s1",

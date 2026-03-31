@@ -12,9 +12,9 @@
 //! [`scan_link_configs`], [`scan_bridge_definitions`], and [`expand_env_vars`]
 //! are public, stateless functions usable independently of `LinkManager`.
 
+use crate::sync_primitives::Arc;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use crate::sync_primitives::Arc;
 
 use tokio::sync::{Mutex, RwLock};
 use tracing::{error, info, warn};
@@ -268,7 +268,10 @@ impl LinkManager {
             .write()
             .await
             .insert(id.clone(), definition);
-        self.builtin_factories.write().await.insert(id.clone(), factory);
+        self.builtin_factories
+            .write()
+            .await
+            .insert(id.clone(), factory);
         info!(bridge_id = %id, "Registered builtin bridge");
     }
 
@@ -385,12 +388,8 @@ impl LinkManager {
         let expanded_settings = expand_env_vars(&link.settings);
 
         match &bridge.runtime {
-            BridgeRuntime::Builtin => {
-                self.start_builtin_link(link, expanded_settings).await
-            }
-            BridgeRuntime::Process { .. } => {
-                self.start_process_link(link, &bridge.runtime).await
-            }
+            BridgeRuntime::Builtin => self.start_builtin_link(link, expanded_settings).await,
+            BridgeRuntime::Process { .. } => self.start_process_link(link, &bridge.runtime).await,
         }
     }
 
@@ -435,9 +434,8 @@ impl LinkManager {
         link: &LinkConfig,
         runtime: &BridgeRuntime,
     ) -> Result<(), LinkManagerError> {
-        let process_config = ManagedProcessConfig::from_runtime(runtime).ok_or_else(|| {
-            LinkManagerError::InvalidRuntime("Expected process runtime".into())
-        })?;
+        let process_config = ManagedProcessConfig::from_runtime(runtime)
+            .ok_or_else(|| LinkManagerError::InvalidRuntime("Expected process runtime".into()))?;
 
         // Spawn the bridge process and get its transport + handshake response.
         let result = self
@@ -447,11 +445,7 @@ impl LinkManager {
             .map_err(|e| LinkManagerError::BridgeSpawnFailed(e.to_string()))?;
 
         // Build and start the BridgedChannel.
-        let mut bridged = BridgedChannel::new(
-            link.id.as_str(),
-            &link.name,
-            link.bridge.as_str(),
-        );
+        let mut bridged = BridgedChannel::new(link.id.as_str(), &link.name, link.bridge.as_str());
         bridged.set_transport(result.transport);
 
         bridged

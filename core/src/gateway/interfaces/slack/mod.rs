@@ -32,11 +32,11 @@ pub use message_ops::SlackMessageOps;
 
 use crate::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
-    ChannelResult, ChannelState, ChannelStatus, ConversationId, MessageId,
-    OutboundMessage, SendResult,
+    ChannelResult, ChannelState, ChannelStatus, ConversationId, MessageId, OutboundMessage,
+    SendResult,
 };
-use async_trait::async_trait;
 use crate::sync_primitives::Arc;
+use async_trait::async_trait;
 use tokio::sync::{watch, RwLock};
 
 /// Slack channel implementation using Socket Mode + REST API.
@@ -95,7 +95,6 @@ impl SlackChannel {
             stream_protocol: Default::default(),
         }
     }
-
 }
 
 #[async_trait]
@@ -110,11 +109,11 @@ impl Channel for SlackChannel {
 
     async fn start(&mut self) -> ChannelResult<()> {
         // Validate configuration
-        self.config
-            .validate()
-            .map_err(ChannelError::ConfigError)?;
+        self.config.validate().map_err(ChannelError::ConfigError)?;
 
-        self.channel_state.set_status(ChannelStatus::Connecting).await;
+        self.channel_state
+            .set_status(ChannelStatus::Connecting)
+            .await;
         tracing::info!("Starting Slack channel...");
 
         // Validate bot token via auth.test
@@ -159,7 +158,9 @@ impl Channel for SlackChannel {
             *status.write().await = ChannelStatus::Disconnected;
         });
 
-        self.channel_state.set_status(ChannelStatus::Connected).await;
+        self.channel_state
+            .set_status(ChannelStatus::Connected)
+            .await;
         Ok(())
     }
 
@@ -170,7 +171,9 @@ impl Channel for SlackChannel {
             let _ = shutdown_tx.send(true);
         }
 
-        self.channel_state.set_status(ChannelStatus::Disconnected).await;
+        self.channel_state
+            .set_status(ChannelStatus::Disconnected)
+            .await;
         Ok(())
     }
 
@@ -192,7 +195,6 @@ impl Channel for SlackChannel {
             thread_ts.as_deref(),
         )
         .await
-
     }
 
     async fn send_typing(&self, conversation_id: &ConversationId) -> ChannelResult<()> {
@@ -203,31 +205,42 @@ impl Channel for SlackChannel {
         Ok(())
     }
 
-    async fn edit(&self, conversation_id: &ConversationId, message_id: &MessageId, new_text: &str) -> ChannelResult<()> {
+    async fn edit(
+        &self,
+        conversation_id: &ConversationId,
+        message_id: &MessageId,
+        new_text: &str,
+    ) -> ChannelResult<()> {
         // Slack chat.update requires channel + ts + text
         let _ = (conversation_id, message_id, new_text);
         Err(ChannelError::UnsupportedFeature(
             "Slack message editing not yet implemented".to_string(),
         ))
-
     }
 
-    async fn delete(&self, _conversation_id: &ConversationId, message_id: &MessageId) -> ChannelResult<()> {
+    async fn delete(
+        &self,
+        _conversation_id: &ConversationId,
+        message_id: &MessageId,
+    ) -> ChannelResult<()> {
         // Note: Deleting requires both message ts and channel ID
         let _ = message_id;
         Err(ChannelError::UnsupportedFeature(
             "Message deletion requires channel context (conversation_id + ts)".to_string(),
         ))
-
     }
 
-    async fn react(&self, _conversation_id: &ConversationId, message_id: &MessageId, reaction: &str) -> ChannelResult<()> {
+    async fn react(
+        &self,
+        _conversation_id: &ConversationId,
+        message_id: &MessageId,
+        reaction: &str,
+    ) -> ChannelResult<()> {
         // Note: Reacting requires channel ID + timestamp
         let _ = (message_id, reaction);
         Err(ChannelError::UnsupportedFeature(
             "Reactions require channel context (conversation_id + ts)".to_string(),
         ))
-
     }
 }
 
@@ -244,9 +257,7 @@ impl ChannelFactory for SlackChannelFactory {
         let config: SlackConfig = serde_json::from_value(config)
             .map_err(|e| ChannelError::ConfigError(format!("Invalid Slack config: {}", e)))?;
 
-        config
-            .validate()
-            .map_err(ChannelError::ConfigError)?;
+        config.validate().map_err(ChannelError::ConfigError)?;
 
         Ok(Box::new(SlackChannel::new("slack", config)))
     }

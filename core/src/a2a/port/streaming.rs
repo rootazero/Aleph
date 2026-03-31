@@ -31,11 +31,8 @@ pub trait A2AStreamingHandler: Send + Sync {
     ) -> A2AResult<Pin<Box<dyn Stream<Item = A2AResult<UpdateEvent>> + Send>>>;
 
     /// Broadcast a status update to all subscribers of a task
-    async fn broadcast_status(
-        &self,
-        task_id: &str,
-        update: TaskStatusUpdateEvent,
-    ) -> A2AResult<()>;
+    async fn broadcast_status(&self, task_id: &str, update: TaskStatusUpdateEvent)
+        -> A2AResult<()>;
 
     /// Broadcast an artifact update to all subscribers of a task
     async fn broadcast_artifact(

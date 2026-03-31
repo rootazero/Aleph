@@ -10,14 +10,14 @@ use async_trait::async_trait;
 use chrono::Utc;
 use tempfile::TempDir;
 
-use alephcore::gateway::{
-    AgentInstance, AgentRegistry, AgentRouter, ChannelId, ChannelRegistry, ConversationId, ExecutionAdapter, InboundContext, InboundMessage, InboundMessageRouter,
-    MessageId, ReplyRoute, RoutingConfig, RunRequest, RunStatus,
-    SqlitePairingStore, UserId,
-};
-use alephcore::gateway::router::SessionKey;
+use alephcore::gateway::event_emitter::{EventEmitError, EventEmitter, StreamEvent};
 use alephcore::gateway::execution_engine::{ExecutionError, RunState};
-use alephcore::gateway::event_emitter::{EventEmitter, EventEmitError, StreamEvent};
+use alephcore::gateway::router::SessionKey;
+use alephcore::gateway::{
+    AgentInstance, AgentRegistry, AgentRouter, ChannelId, ChannelRegistry, ConversationId,
+    ExecutionAdapter, InboundContext, InboundMessage, InboundMessageRouter, MessageId, ReplyRoute,
+    RoutingConfig, RunRequest, RunStatus, SqlitePairingStore, UserId,
+};
 
 /// Gateway test context
 #[derive(Default)]
@@ -72,16 +72,40 @@ pub struct GatewayContext {
 impl std::fmt::Debug for GatewayContext {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("GatewayContext")
-            .field("router", &self.router.as_ref().map(|_| "InboundMessageRouter"))
+            .field(
+                "router",
+                &self.router.as_ref().map(|_| "InboundMessageRouter"),
+            )
             .field("config", &self.config)
-            .field("channel_registry", &self.channel_registry.as_ref().map(|_| "ChannelRegistry"))
-            .field("pairing_store", &self.pairing_store.as_ref().map(|_| "SqlitePairingStore"))
-            .field("agent_registry", &self.agent_registry.as_ref().map(|_| "AgentRegistry"))
-            .field("agent_router", &self.agent_router.as_ref().map(|_| "AgentRouter"))
-            .field("execution_adapter", &self.execution_adapter.as_ref().map(|_| "dyn ExecutionAdapter"))
+            .field(
+                "channel_registry",
+                &self.channel_registry.as_ref().map(|_| "ChannelRegistry"),
+            )
+            .field(
+                "pairing_store",
+                &self.pairing_store.as_ref().map(|_| "SqlitePairingStore"),
+            )
+            .field(
+                "agent_registry",
+                &self.agent_registry.as_ref().map(|_| "AgentRegistry"),
+            )
+            .field(
+                "agent_router",
+                &self.agent_router.as_ref().map(|_| "AgentRouter"),
+            )
+            .field(
+                "execution_adapter",
+                &self
+                    .execution_adapter
+                    .as_ref()
+                    .map(|_| "dyn ExecutionAdapter"),
+            )
             .field("tracking_adapter", &self.tracking_adapter)
             .field("test_message", &self.test_message)
-            .field("test_context", &self.test_context.as_ref().map(|_| "InboundContext"))
+            .field(
+                "test_context",
+                &self.test_context.as_ref().map(|_| "InboundContext"),
+            )
             .field("session_key", &self.session_key)
             .field("is_allowed", &self.is_allowed)
             .field("mention_detected", &self.mention_detected)
@@ -180,12 +204,10 @@ impl GatewayContext {
     /// Create test context from current message
     pub fn create_test_context(&mut self) {
         if let Some(msg) = &self.test_message {
-            let reply_route = ReplyRoute::new(
-                msg.channel_id.clone(),
-                msg.conversation_id.clone(),
-            );
+            let reply_route = ReplyRoute::new(msg.channel_id.clone(), msg.conversation_id.clone());
             let session_key = SessionKey::main("main");
-            self.test_context = Some(InboundContext::new(msg.clone(), reply_route, session_key).authorize());
+            self.test_context =
+                Some(InboundContext::new(msg.clone(), reply_route, session_key).authorize());
         }
     }
 
@@ -200,7 +222,11 @@ pub fn make_test_message(is_group: bool) -> InboundMessage {
     InboundMessage {
         id: MessageId::new("msg-1"),
         channel_id: ChannelId::new("imessage"),
-        conversation_id: ConversationId::new(if is_group { "chat_id:42" } else { "+15551234567" }),
+        conversation_id: ConversationId::new(if is_group {
+            "chat_id:42"
+        } else {
+            "+15551234567"
+        }),
         sender_id: UserId::new("+15551234567"),
         sender_name: None,
         text: "Hello".to_string(),
@@ -226,7 +252,10 @@ pub struct TrackingExecutionAdapter {
 impl std::fmt::Debug for TrackingExecutionAdapter {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TrackingExecutionAdapter")
-            .field("execute_called", &self.execute_called.load(Ordering::SeqCst))
+            .field(
+                "execute_called",
+                &self.execute_called.load(Ordering::SeqCst),
+            )
             .field("execute_count", &self.execute_count.load(Ordering::SeqCst))
             .field("should_fail", &self.should_fail)
             .finish()

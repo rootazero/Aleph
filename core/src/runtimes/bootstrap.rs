@@ -82,7 +82,9 @@ pub fn bootstrap(capability: &str) -> Result<BootstrapResult, AlephError> {
         .arg("-c")
         .arg(script)
         .output()
-        .map_err(|e| AlephError::runtime(capability, format!("Failed to execute bootstrap: {}", e)))?;
+        .map_err(|e| {
+            AlephError::runtime(capability, format!("Failed to execute bootstrap: {}", e))
+        })?;
 
     if output.status.success() {
         for expected in spec.expected_paths {
@@ -92,7 +94,9 @@ pub fn bootstrap(capability: &str) -> Result<BootstrapResult, AlephError> {
                 return Ok(BootstrapResult::Success { bin_path: expanded });
             }
         }
-        let expected = spec.expected_paths.first()
+        let expected = spec
+            .expected_paths
+            .first()
             .map(|p| expand_tilde(p))
             .unwrap_or_else(|| PathBuf::from(format!("<unknown path for {}>", capability)));
         Ok(BootstrapResult::PathNotFound { expected })

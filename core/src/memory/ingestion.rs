@@ -6,11 +6,11 @@ use crate::config::MemoryConfig;
 use crate::error::AlephError;
 use crate::memory::context::{ContextAnchor, MemoryEntry};
 use crate::memory::dreaming::{ensure_dream_daemon, record_activity};
-use crate::memory::EmbeddingProvider;
-use crate::memory::store::{MemoryBackend, SessionStore};
 use crate::memory::noise_filter::NoiseFilter;
-use crate::utils::pii::scrub_pii;
+use crate::memory::store::{MemoryBackend, SessionStore};
+use crate::memory::EmbeddingProvider;
 use crate::sync_primitives::Arc;
+use crate::utils::pii::scrub_pii;
 use tracing::{debug, info};
 use uuid::Uuid;
 
@@ -213,9 +213,7 @@ mod tests {
 
         // Retrieve and verify PII was scrubbed
         let embedding = vec![0.0; 1024]; // Dummy query embedding
-        let filter = crate::memory::store::types::MemoryFilter::for_window(
-            &context.window_title,
-        );
+        let filter = crate::memory::store::types::MemoryFilter::for_window(&context.window_title);
         let memories = db.search_memories(&embedding, &filter, 10).await.unwrap();
 
         assert_eq!(memories.len(), 1);
@@ -266,9 +264,7 @@ mod tests {
 
         // Retrieve memory and verify embedding exists
         let query_embedding = vec![0.0; 1024];
-        let filter = crate::memory::store::types::MemoryFilter::for_window(
-            &context.window_title,
-        );
+        let filter = crate::memory::store::types::MemoryFilter::for_window(&context.window_title);
         let memories = db
             .search_memories(&query_embedding, &filter, 10)
             .await
@@ -277,10 +273,7 @@ mod tests {
         assert_eq!(memories.len(), 1);
         assert_eq!(memories[0].id, memory_id);
         assert!(memories[0].embedding.is_some());
-        assert_eq!(
-            memories[0].embedding.as_ref().unwrap().len(),
-            1024
-        );
+        assert_eq!(memories[0].embedding.as_ref().unwrap().len(), 1024);
     }
 
     #[tokio::test]

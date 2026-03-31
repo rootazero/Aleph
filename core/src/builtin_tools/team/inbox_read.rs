@@ -96,9 +96,7 @@ impl AlephTool for InboxReadTool {
         let messages = match args.mode.as_str() {
             "thread" => {
                 let thread_id = args.thread_id.as_deref().ok_or_else(|| {
-                    AlephError::tool(
-                        "inbox_read: thread_id is required when mode='thread'",
-                    )
+                    AlephError::tool("inbox_read: thread_id is required when mode='thread'")
                 })?;
                 self.inbox.read_thread(thread_id).await?
             }

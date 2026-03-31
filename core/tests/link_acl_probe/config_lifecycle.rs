@@ -13,7 +13,8 @@ async fn p5_01_runtime_restrict() {
     h.send_message("tg-1", "before restriction").await;
     h.assert_no_denial();
 
-    h.update_allowed_links("main", Some(vec!["dc-1".into()])).await;
+    h.update_allowed_links("main", Some(vec!["dc-1".into()]))
+        .await;
     h.send_message("tg-1", "after restriction").await;
     h.assert_denied();
 }
@@ -45,7 +46,8 @@ async fn p5_03_runtime_change_list() {
     h.send_message("tg-1", "initially allowed").await;
     h.assert_no_denial();
 
-    h.update_allowed_links("main", Some(vec!["dc-1".into()])).await;
+    h.update_allowed_links("main", Some(vec!["dc-1".into()]))
+        .await;
     h.send_message("tg-1", "now denied").await;
     h.assert_denied();
 }
@@ -89,7 +91,8 @@ async fn p5_05_delete_recreate_agent() {
 
     // Recreate target with different ACL (deny tg-1)
     h.agent_registry.remove("target").await;
-    h.register_agent("target", Some(vec!["dc-only".into()])).await;
+    h.register_agent("target", Some(vec!["dc-only".into()]))
+        .await;
 
     // Now switch should be denied
     h.send_message("tg-1", "/switch target").await;

@@ -2,12 +2,14 @@
 
 use crate::error::Result;
 use crate::providers::adapter::ProtocolAdapter;
-use crate::providers::protocols::{AnthropicProtocol, GeminiProtocol, OpenAiProtocol, OpenAiResponsesProtocol};
 use crate::providers::protocols::openai_responses::ResponsesVariant;
+use crate::providers::protocols::{
+    AnthropicProtocol, GeminiProtocol, OpenAiProtocol, OpenAiResponsesProtocol,
+};
+use crate::sync_primitives::{Arc, RwLock};
 use once_cell::sync::Lazy;
 use reqwest::Client;
 use std::collections::HashMap;
-use crate::sync_primitives::{Arc, RwLock};
 
 /// Global protocol registry instance (built-in protocols registered at init time)
 pub static PROTOCOL_REGISTRY: Lazy<ProtocolRegistry> = Lazy::new(|| {
@@ -65,48 +67,83 @@ impl ProtocolRegistry {
         );
 
         // Codex variant — same wire format as Responses API, different endpoint + fields
-        let codex_factory: ProtocolFactory =
-            |client| Arc::new(OpenAiResponsesProtocol::new(client, ResponsesVariant::codex())) as Arc<dyn ProtocolAdapter>;
+        let codex_factory: ProtocolFactory = |client| {
+            Arc::new(OpenAiResponsesProtocol::new(
+                client,
+                ResponsesVariant::codex(),
+            )) as Arc<dyn ProtocolAdapter>
+        };
         builtin.insert("codex".to_string(), codex_factory);
         // Backward compatibility: "chatgpt" maps to the same Codex protocol
         builtin.insert("chatgpt".to_string(), codex_factory);
 
         builtin.insert(
             "openai-responses".to_string(),
-            (|client| Arc::new(OpenAiResponsesProtocol::new(client, ResponsesVariant::default())) as Arc<dyn ProtocolAdapter>)
-                as ProtocolFactory,
+            (|client| {
+                Arc::new(OpenAiResponsesProtocol::new(
+                    client,
+                    ResponsesVariant::default(),
+                )) as Arc<dyn ProtocolAdapter>
+            }) as ProtocolFactory,
         );
     }
 
     /// Register a dynamic protocol
     pub fn register(&self, name: String, protocol: Arc<dyn ProtocolAdapter>) -> Result<()> {
-        self.dynamic.write().unwrap_or_else(|e| e.into_inner()).insert(name, protocol);
+        self.dynamic
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(name, protocol);
         Ok(())
     }
 
     /// Unregister a dynamic protocol
     pub fn unregister(&self, name: &str) {
-        self.dynamic.write().unwrap_or_else(|e| e.into_inner()).remove(name);
+        self.dynamic
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(name);
     }
 
     /// Get a protocol by name
     pub fn get(&self, name: &str) -> Option<Arc<dyn ProtocolAdapter>> {
         // 1. Check dynamic protocols first
-        if let Some(protocol) = self.dynamic.read().unwrap_or_else(|e| e.into_inner()).get(name) {
+        if let Some(protocol) = self
+            .dynamic
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(name)
+        {
             return Some(protocol.clone());
         }
 
         // 2. Fall back to built-in protocols
-        self.builtin.read().unwrap_or_else(|e| e.into_inner()).get(name).map(|factory| {
-            let client = Client::new();
-            factory(client)
-        })
+        self.builtin
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(name)
+            .map(|factory| {
+                let client = Client::new();
+                factory(client)
+            })
     }
 
     /// List all available protocol names
     pub fn list_protocols(&self) -> Vec<String> {
-        let mut protocols: Vec<String> = self.builtin.read().unwrap_or_else(|e| e.into_inner()).keys().cloned().collect();
-        protocols.extend(self.dynamic.read().unwrap_or_else(|e| e.into_inner()).keys().cloned());
+        let mut protocols: Vec<String> = self
+            .builtin
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .keys()
+            .cloned()
+            .collect();
+        protocols.extend(
+            self.dynamic
+                .read()
+                .unwrap_or_else(|e| e.into_inner())
+                .keys()
+                .cloned(),
+        );
         protocols.sort();
         protocols
     }
@@ -137,9 +174,15 @@ mod tests {
     fn test_codex_protocol_registered() {
         let registry = ProtocolRegistry::new();
         registry.register_builtin();
-        assert!(registry.get("codex").is_some(), "codex protocol should be registered");
+        assert!(
+            registry.get("codex").is_some(),
+            "codex protocol should be registered"
+        );
         // Backward compatibility
-        assert!(registry.get("chatgpt").is_some(), "chatgpt alias should still work");
+        assert!(
+            registry.get("chatgpt").is_some(),
+            "chatgpt alias should still work"
+        );
     }
 
     #[test]

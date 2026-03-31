@@ -206,7 +206,10 @@ impl StdioTransport {
                                 serde_json::from_value(value).map_err(|e| {
                                     std::io::Error::new(
                                         std::io::ErrorKind::InvalidData,
-                                        format!("Failed to parse response: {} (raw: {})", e, trimmed),
+                                        format!(
+                                            "Failed to parse response: {} (raw: {})",
+                                            e, trimmed
+                                        ),
                                     )
                                 })?;
                             return Ok(response);
@@ -220,7 +223,10 @@ impl StdioTransport {
                         );
                     } else {
                         // No "id" field — this is a server notification, skip it
-                        let method = value.get("method").and_then(|m| m.as_str()).unwrap_or("unknown");
+                        let method = value
+                            .get("method")
+                            .and_then(|m| m.as_str())
+                            .unwrap_or("unknown");
                         tracing::debug!(
                             server = %self.server_name,
                             notification_method = method,
@@ -260,7 +266,8 @@ impl StdioTransport {
                 // Mark transport as poisoned: the cancelled BufReader may have
                 // consumed bytes into its internal buffer that are now lost,
                 // making future reads unreliable.
-                self.poisoned.store(true, std::sync::atomic::Ordering::Release);
+                self.poisoned
+                    .store(true, std::sync::atomic::Ordering::Release);
                 tracing::warn!(
                     server = %self.server_name,
                     method = %method,

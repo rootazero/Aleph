@@ -2,7 +2,9 @@ use std::sync::Arc;
 
 use crate::a2a::domain::security::{Credentials, SecurityScheme, TrustLevel};
 use crate::a2a::domain::A2AError;
-use crate::a2a::port::authenticator::{A2AAction, A2AAuthContext, A2AAuthPrincipal, A2AAuthenticator};
+use crate::a2a::port::authenticator::{
+    A2AAction, A2AAuthContext, A2AAuthPrincipal, A2AAuthenticator,
+};
 use crate::a2a::port::A2AResult;
 
 use super::token_store::TokenStore;
@@ -92,11 +94,7 @@ impl A2AAuthenticator for TieredAuthenticator {
         Err(A2AError::Unauthorized)
     }
 
-    async fn authorize(
-        &self,
-        principal: &A2AAuthPrincipal,
-        action: &A2AAction,
-    ) -> A2AResult<bool> {
+    async fn authorize(&self, principal: &A2AAuthPrincipal, action: &A2AAction) -> A2AResult<bool> {
         // Wildcard grants all actions
         if principal.permissions.iter().any(|p| p == "*") {
             return Ok(true);
@@ -218,8 +216,14 @@ mod tests {
             permissions: vec!["*".to_string()],
         };
         let auth = TieredAuthenticator::new(true, vec![]);
-        assert!(auth.authorize(&principal, &A2AAction::SendMessage).await.unwrap());
-        assert!(auth.authorize(&principal, &A2AAction::CancelTask).await.unwrap());
+        assert!(auth
+            .authorize(&principal, &A2AAction::SendMessage)
+            .await
+            .unwrap());
+        assert!(auth
+            .authorize(&principal, &A2AAction::CancelTask)
+            .await
+            .unwrap());
     }
 
     #[tokio::test]
@@ -230,7 +234,10 @@ mod tests {
             permissions: vec![],
         };
         let auth = TieredAuthenticator::new(true, vec![]);
-        assert!(!auth.authorize(&principal, &A2AAction::SendMessage).await.unwrap());
+        assert!(!auth
+            .authorize(&principal, &A2AAction::SendMessage)
+            .await
+            .unwrap());
     }
 
     #[tokio::test]
@@ -241,11 +248,23 @@ mod tests {
             permissions: vec!["read".to_string()],
         };
         let auth = TieredAuthenticator::new(true, vec![]);
-        assert!(auth.authorize(&principal, &A2AAction::GetTask).await.unwrap());
-        assert!(auth.authorize(&principal, &A2AAction::ListTasks).await.unwrap());
+        assert!(auth
+            .authorize(&principal, &A2AAction::GetTask)
+            .await
+            .unwrap());
+        assert!(auth
+            .authorize(&principal, &A2AAction::ListTasks)
+            .await
+            .unwrap());
         // read permission should NOT allow write actions
-        assert!(!auth.authorize(&principal, &A2AAction::SendMessage).await.unwrap());
-        assert!(!auth.authorize(&principal, &A2AAction::CancelTask).await.unwrap());
+        assert!(!auth
+            .authorize(&principal, &A2AAction::SendMessage)
+            .await
+            .unwrap());
+        assert!(!auth
+            .authorize(&principal, &A2AAction::CancelTask)
+            .await
+            .unwrap());
     }
 
     #[tokio::test]
@@ -256,10 +275,19 @@ mod tests {
             permissions: vec!["write".to_string()],
         };
         let auth = TieredAuthenticator::new(true, vec![]);
-        assert!(auth.authorize(&principal, &A2AAction::SendMessage).await.unwrap());
-        assert!(auth.authorize(&principal, &A2AAction::CancelTask).await.unwrap());
+        assert!(auth
+            .authorize(&principal, &A2AAction::SendMessage)
+            .await
+            .unwrap());
+        assert!(auth
+            .authorize(&principal, &A2AAction::CancelTask)
+            .await
+            .unwrap());
         // write should NOT allow read
-        assert!(!auth.authorize(&principal, &A2AAction::GetTask).await.unwrap());
+        assert!(!auth
+            .authorize(&principal, &A2AAction::GetTask)
+            .await
+            .unwrap());
     }
 
     #[tokio::test]
@@ -270,7 +298,10 @@ mod tests {
             permissions: vec!["admin".to_string()],
         };
         let auth = TieredAuthenticator::new(true, vec![]);
-        assert!(auth.authorize(&principal, &A2AAction::ManagePushConfig).await.unwrap());
+        assert!(auth
+            .authorize(&principal, &A2AAction::ManagePushConfig)
+            .await
+            .unwrap());
     }
 
     #[tokio::test]

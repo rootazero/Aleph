@@ -246,7 +246,7 @@ mod tests {
                 assert!(text.contains("Documentation"));
                 assert!(text.contains("config.json"));
                 assert!(text.contains("No description")); // Default for None
-                // Check tools section
+                                                          // Check tools section
                 assert!(text.contains("### Tools:"));
                 assert!(text.contains("full-server:read"));
                 assert!(text.contains("Read a file"));

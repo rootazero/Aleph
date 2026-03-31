@@ -19,12 +19,12 @@
 //! let resp: PingResponse = client.call("ping", None).await?;
 //! ```
 
+use crate::sync_primitives::Arc;
+use crate::sync_primitives::{AtomicU64, Ordering};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use crate::sync_primitives::{AtomicU64, Ordering};
-use crate::sync_primitives::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, WriteHalf};
 use tokio::net::UnixStream;
 use tokio::sync::{mpsc, oneshot, Mutex};
@@ -112,11 +112,7 @@ impl BridgeRpcClient {
     /// Attempts to connect up to `max_retries` times, waiting
     /// `retry_delay_ms` milliseconds between attempts. On success the
     /// socket is split and a background read loop is spawned.
-    pub async fn connect(
-        &self,
-        max_retries: u32,
-        retry_delay_ms: u64,
-    ) -> Result<(), BridgeError> {
+    pub async fn connect(&self, max_retries: u32, retry_delay_ms: u64) -> Result<(), BridgeError> {
         let mut last_error = String::new();
 
         for attempt in 0..=max_retries {
@@ -195,10 +191,7 @@ impl BridgeRpcClient {
                             if let Some(id) = resp.id {
                                 // This is a response to a request
                                 let result = if let Some(err) = resp.error {
-                                    Err(format!(
-                                        "RPC error {}: {}",
-                                        err.code, err.message
-                                    ))
+                                    Err(format!("RPC error {}: {}", err.code, err.message))
                                 } else {
                                     Ok(resp.result.unwrap_or(Value::Null))
                                 };
@@ -627,10 +620,7 @@ mod tests {
     #[tokio::test]
     async fn test_connect_with_retries_to_nonexistent_socket() {
         let (event_tx, _event_rx) = mpsc::channel(16);
-        let client = BridgeRpcClient::new(
-            "/tmp/nonexistent-whatsapp-retry-test.sock",
-            event_tx,
-        );
+        let client = BridgeRpcClient::new("/tmp/nonexistent-whatsapp-retry-test.sock", event_tx);
 
         // Use 2 retries with minimal delay to keep the test fast
         let result = client.connect(2, 10).await;
@@ -651,10 +641,7 @@ mod tests {
     #[tokio::test]
     async fn test_client_not_connected_after_failed_connect() {
         let (event_tx, _event_rx) = mpsc::channel(16);
-        let client = BridgeRpcClient::new(
-            "/tmp/nonexistent-whatsapp-state-test.sock",
-            event_tx,
-        );
+        let client = BridgeRpcClient::new("/tmp/nonexistent-whatsapp-state-test.sock", event_tx);
 
         let _ = client.connect(0, 0).await;
         assert!(!client.is_connected());

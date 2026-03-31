@@ -152,12 +152,10 @@ impl AlephTool for TaskUpdateTool {
                         if all_done && !tasks.is_empty() {
                             let _ = self
                                 .event_bus
-                                .publish(AgentEvent::Important(
-                                    ImportantEvent::AllTasksCompleted {
-                                        team_id: team_id.clone(),
-                                        timestamp: now_secs(),
-                                    },
-                                ))
+                                .publish(AgentEvent::Important(ImportantEvent::AllTasksCompleted {
+                                    team_id: team_id.clone(),
+                                    timestamp: now_secs(),
+                                }))
                                 .await;
                         }
                     }

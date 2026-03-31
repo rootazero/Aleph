@@ -9,8 +9,8 @@ use crate::runtimes::ledger::{
     CapabilityEntry, CapabilityLedger, CapabilitySource, CapabilityStatus,
 };
 use crate::runtimes::probe;
-use std::path::PathBuf;
 use crate::sync_primitives::Arc;
+use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::RwLock;
 use tracing::{info, warn};
@@ -34,7 +34,10 @@ pub async fn ensure_capability(
                     return Ok(path.to_path_buf());
                 }
                 // Path gone — mark stale, fall through to re-probe
-                warn!("Capability {} path no longer exists, marking stale", capability);
+                warn!(
+                    "Capability {} path no longer exists, marking stale",
+                    capability
+                );
                 guard.update_status(capability, CapabilityStatus::Stale);
             }
         }
@@ -53,9 +56,10 @@ pub async fn ensure_capability(
         let bin_path = match probe_result.bin_path.clone() {
             Some(path) => path,
             None => {
-                return Err(AlephError::other(
-                    format!("Capability {} found but no binary path reported", capability),
-                ));
+                return Err(AlephError::other(format!(
+                    "Capability {} found but no binary path reported",
+                    capability
+                )));
             }
         };
         if let Some(ref warning) = probe_result.version_warning {
@@ -110,9 +114,7 @@ pub async fn ensure_capability(
     let cap_owned = capability.to_string();
     let bootstrap_result = tokio::task::spawn_blocking(move || bootstrap::bootstrap(&cap_owned))
         .await
-        .map_err(|e| {
-            AlephError::runtime(capability, format!("Bootstrap task panicked: {}", e))
-        })?
+        .map_err(|e| AlephError::runtime(capability, format!("Bootstrap task panicked: {}", e)))?
         .map_err(|e| AlephError::runtime(capability, format!("Bootstrap failed: {}", e)))?;
 
     let now = SystemTime::now()

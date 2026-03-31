@@ -12,21 +12,23 @@
 //! - `dns` — Async DNS resolution with address pinning
 //! - `fetch` — Full safe_fetch with redirect chain validation
 
-pub mod policy;
-pub(crate) mod ip;
-pub(crate) mod hostname;
 pub(crate) mod dns;
 pub mod fetch;
+pub(crate) mod hostname;
+pub(crate) mod ip;
+pub mod policy;
 
 // Re-export public API for backward compatibility
-pub use policy::SsrfPolicy;
 pub use fetch::{safe_fetch, SafeFetchRequest, SafeFetchResponse};
+pub use policy::SsrfPolicy;
 
 use std::net::IpAddr;
 
 use url::Url;
 
-use self::hostname::{is_allowlisted, is_blocked_hostname, is_blocklisted, is_legacy_ip_literal, has_url_credentials};
+use self::hostname::{
+    has_url_credentials, is_allowlisted, is_blocked_hostname, is_blocklisted, is_legacy_ip_literal,
+};
 use self::ip::is_ip_blocked_by_policy;
 
 /// Errors returned by SSRF validation.
@@ -252,8 +254,10 @@ mod tests {
     #[test]
     fn blocks_metadata_hostname() {
         let policy = default_policy();
-        let result =
-            validate_url("http://metadata.google.internal/computeMetadata/v1/", &policy);
+        let result = validate_url(
+            "http://metadata.google.internal/computeMetadata/v1/",
+            &policy,
+        );
         assert!(matches!(result, Err(SsrfError::BlockedAddress(_))));
 
         let result2 = validate_url("http://metadata.internal/", &policy);

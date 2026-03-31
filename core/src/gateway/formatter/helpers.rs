@@ -29,7 +29,12 @@ pub(super) fn replace_paired_marker(text: &str, marker: &str, open: &str, close:
 /// Like `replace_paired_marker` but advances a cursor so the output is never
 /// re-scanned. This avoids infinite loops when the replacement contains the
 /// marker (e.g. `*` -> `**`).
-pub(super) fn replace_paired_marker_positional(text: &str, marker: &str, open: &str, close: &str) -> String {
+pub(super) fn replace_paired_marker_positional(
+    text: &str,
+    marker: &str,
+    open: &str,
+    close: &str,
+) -> String {
     let mlen = marker.len();
     let mut result = text.to_string();
     let mut cursor = 0;
@@ -208,13 +213,8 @@ pub(super) fn replace_pre_code_blocks(html: &str) -> String {
                     if lang.is_empty() {
                         result = format!("{}```\n{}```{}", &result[..pre_start], code, after);
                     } else {
-                        result = format!(
-                            "{}```{}\n{}```{}",
-                            &result[..pre_start],
-                            lang,
-                            code,
-                            after
-                        );
+                        result =
+                            format!("{}```{}\n{}```{}", &result[..pre_start], lang, code, after);
                     }
                     continue;
                 }
@@ -230,9 +230,7 @@ pub(super) fn replace_pre_code_blocks(html: &str) -> String {
 fn extract_language_from_attrs(attrs: &str) -> String {
     if let Some(class_start) = attrs.find("language-") {
         let after = &attrs[class_start + 9..];
-        let end = after
-            .find(['"', '\'', ' ', '>'])
-            .unwrap_or(after.len());
+        let end = after.find(['"', '\'', ' ', '>']).unwrap_or(after.len());
         after[..end].to_string()
     } else {
         String::new()
@@ -256,13 +254,7 @@ pub(super) fn replace_html_links(html: &str) -> String {
                     if let Some(rel_a_close) = result[text_start..].find("</a>") {
                         let link_text = &result[text_start..text_start + rel_a_close];
                         let after = &result[text_start + rel_a_close + 4..];
-                        result = format!(
-                            "{}[{}]({}){}",
-                            &result[..a_start],
-                            link_text,
-                            url,
-                            after
-                        );
+                        result = format!("{}[{}]({}){}", &result[..a_start], link_text, url, after);
                         continue;
                     }
                 }
@@ -332,7 +324,10 @@ pub(super) fn parse_markdown_blocks(text: &str) -> Vec<BlockElement<'_>> {
             rest = &code_body[close + 3..];
         } else {
             // Unclosed fence — treat remainder as code block.
-            blocks.push(BlockElement::CodeBlock { lang, code: code_body });
+            blocks.push(BlockElement::CodeBlock {
+                lang,
+                code: code_body,
+            });
             rest = "";
             break;
         }
@@ -371,7 +366,10 @@ fn parse_line_blocks<'a>(text: &'a str, out: &mut Vec<BlockElement<'a>>) {
 
         // Heading: # text
         if let Some((level, heading_text)) = parse_heading(trimmed) {
-            out.push(BlockElement::Heading { level, text: heading_text });
+            out.push(BlockElement::Heading {
+                level,
+                text: heading_text,
+            });
             i += 1;
             continue;
         }

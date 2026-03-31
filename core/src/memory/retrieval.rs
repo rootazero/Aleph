@@ -7,9 +7,9 @@ use crate::error::AlephError;
 use crate::memory::context::{ContextAnchor, MemoryEntry};
 use crate::memory::dreaming::record_activity;
 use crate::memory::graph::GraphStore;
-use crate::memory::EmbeddingProvider;
 use crate::memory::store::types::MemoryFilter;
 use crate::memory::store::{MemoryBackend, SessionStore};
+use crate::memory::EmbeddingProvider;
 use crate::sync_primitives::Arc;
 use tracing::{debug, info, warn};
 
@@ -46,10 +46,7 @@ impl MemoryRetrieval {
             return None;
         }
 
-        let context_key = format!(
-            "window:{}",
-            context.window_title
-        );
+        let context_key = format!("window:{}", context.window_title);
 
         for hint in hints {
             if let Ok(resolved) = graph_store.resolve_entity(&hint, Some(&context_key)).await {

@@ -53,8 +53,14 @@ fn p1_02_reflection_skips_placeholders_and_empty_lines() {
     // Only "Real invariant item" should survive
     assert_eq!(out.invariants.len(), 1);
     assert_eq!(out.invariants[0], "Real invariant item");
-    assert!(out.derived.is_empty(), "placeholder derived should be filtered");
-    assert!(out.lessons.is_empty(), "placeholder lessons should be filtered");
+    assert!(
+        out.derived.is_empty(),
+        "placeholder derived should be filtered"
+    );
+    assert!(
+        out.lessons.is_empty(),
+        "placeholder lessons should be filtered"
+    );
 }
 
 #[test]
@@ -81,7 +87,10 @@ fn p1_04_lesson_fallback_unstructured_text() {
     assert_eq!(out.lessons.len(), 1);
     let lesson = &out.lessons[0];
     assert_eq!(lesson.symptom, "always test with real database");
-    assert!(lesson.cause.is_empty(), "cause should be empty for unstructured text");
+    assert!(
+        lesson.cause.is_empty(),
+        "cause should be empty for unstructured text"
+    );
     assert!(
         lesson.resolution.is_empty(),
         "resolution should be empty for unstructured text"
@@ -106,8 +115,14 @@ fn p1_05_mapper_invariant_to_core_tier() {
     assert_eq!(fact.layer, MemoryLayer::L1Overview);
 
     // Also verify classify_invariant directly
-    assert_eq!(classify_invariant("User prefers dark mode"), FactType::Preference);
-    assert_eq!(classify_invariant("likes vim keybindings"), FactType::Preference);
+    assert_eq!(
+        classify_invariant("User prefers dark mode"),
+        FactType::Preference
+    );
+    assert_eq!(
+        classify_invariant("likes vim keybindings"),
+        FactType::Preference
+    );
     assert_eq!(classify_invariant("用户偏好中文"), FactType::Preference);
     assert_eq!(classify_invariant("用户喜欢 Rust"), FactType::Preference);
     assert_eq!(

@@ -51,7 +51,10 @@ impl ActionExecutor {
                 log::debug!("  (Real: shortcuts run 'Clear Focus')");
             }
 
-            ActionType::NotifyUser { ref message, priority } => {
+            ActionType::NotifyUser {
+                ref message,
+                priority,
+            } => {
                 log::info!("Executed: Send notification [{:?}]: {}", priority, message);
                 log::debug!("  (Real: Gateway IPC notification)");
             }
@@ -65,7 +68,6 @@ impl ActionExecutor {
         Ok(())
     }
 }
-
 
 #[cfg(test)]
 mod tests {

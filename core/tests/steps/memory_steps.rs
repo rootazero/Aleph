@@ -2,15 +2,15 @@
 
 use crate::world::{AlephWorld, MemoryContext};
 use alephcore::memory::store::types::SearchFilter;
-use alephcore::memory::store::{MemoryBackend, MemoryStore, SessionStore, StoreStats};
 use alephcore::memory::store::LanceMemoryBackend;
+use alephcore::memory::store::{MemoryBackend, MemoryStore, SessionStore, StoreStats};
 use alephcore::memory::{FactType, MemoryEntry, NamespaceScope};
 
 /// Default embedding dimension for tests (matches SiliconFlow bge-m3 default)
 const EMBEDDING_DIM: usize = 1024;
-use alephcore::MemoryStats;
 use alephcore::memory::store::types::ScoredFact;
 use alephcore::memory::MemoryFact;
+use alephcore::MemoryStats;
 use cucumber::{gherkin::Step, given, then, when};
 use std::sync::Arc;
 use tempfile::tempdir;
@@ -22,8 +22,8 @@ use uuid::Uuid;
 
 /// Stop words to filter from FTS queries (replicating old SQLite FTS5 logic).
 const FTS_STOP_WORDS: &[&str] = &[
-    "the", "is", "a", "an", "are", "in", "on", "at", "to", "for", "of", "by", "with", "and",
-    "or", "but", "not", "it", "its", "was", "were", "has", "had", "been", "do", "does", "did",
+    "the", "is", "a", "an", "are", "in", "on", "at", "to", "for", "of", "by", "with", "and", "or",
+    "but", "not", "it", "its", "was", "were", "has", "had", "been", "do", "does", "did",
 ];
 
 /// Prepare an FTS-style query string from user input.
@@ -123,11 +123,12 @@ async fn given_facts_incremental_embeddings(w: &mut AlephWorld, count: i32) {
     }
 
     // Insert all facts
-    let db = ctx.memory_backend.as_ref().expect("Database not initialized");
+    let db = ctx
+        .memory_backend
+        .as_ref()
+        .expect("Database not initialized");
     for fact in &ctx.facts {
-        db.insert_fact(fact)
-            .await
-            .expect("Failed to insert fact");
+        db.insert_fact(fact).await.expect("Failed to insert fact");
     }
 }
 
@@ -150,11 +151,12 @@ async fn given_facts_sequential(w: &mut AlephWorld, count: i32) {
     }
 
     // Insert all facts
-    let db = ctx.memory_backend.as_ref().expect("Database not initialized");
+    let db = ctx
+        .memory_backend
+        .as_ref()
+        .expect("Database not initialized");
     for fact in &ctx.facts {
-        db.insert_fact(fact)
-            .await
-            .expect("Failed to insert fact");
+        db.insert_fact(fact).await.expect("Failed to insert fact");
     }
 }
 
@@ -172,17 +174,19 @@ async fn given_these_facts_exist(w: &mut AlephWorld, step: &Step) {
             let mut embedding = vec![0.0f32; EMBEDDING_DIM];
             embedding[0] = embedding_first;
 
-            let fact = MemoryContext::create_fact(id, content, FactType::Preference, embedding, true);
+            let fact =
+                MemoryContext::create_fact(id, content, FactType::Preference, embedding, true);
             ctx.facts.push(fact);
         }
     }
 
     // Insert all facts
-    let db = ctx.memory_backend.as_ref().expect("Database not initialized");
+    let db = ctx
+        .memory_backend
+        .as_ref()
+        .expect("Database not initialized");
     for fact in &ctx.facts {
-        db.insert_fact(fact)
-            .await
-            .expect("Failed to insert fact");
+        db.insert_fact(fact).await.expect("Failed to insert fact");
     }
 }
 
@@ -206,31 +210,36 @@ async fn given_invalid_fact(w: &mut AlephWorld, id: String, content: String) {
 #[when("I insert the fact into the database")]
 async fn when_insert_fact(w: &mut AlephWorld) {
     let ctx = w.memory.as_mut().expect("Memory context not initialized");
-    let db = ctx.memory_backend.as_ref().expect("Database not initialized");
+    let db = ctx
+        .memory_backend
+        .as_ref()
+        .expect("Database not initialized");
 
     if let Some(fact) = ctx.facts.last() {
-        db.insert_fact(fact)
-            .await
-            .expect("Failed to insert fact");
+        db.insert_fact(fact).await.expect("Failed to insert fact");
     }
 }
 
 #[when("I insert all facts into the database")]
 async fn when_insert_all_facts(w: &mut AlephWorld) {
     let ctx = w.memory.as_mut().expect("Memory context not initialized");
-    let db = ctx.memory_backend.as_ref().expect("Database not initialized");
+    let db = ctx
+        .memory_backend
+        .as_ref()
+        .expect("Database not initialized");
 
     for fact in &ctx.facts {
-        db.insert_fact(fact)
-            .await
-            .expect("Failed to insert fact");
+        db.insert_fact(fact).await.expect("Failed to insert fact");
     }
 }
 
 #[when(expr = "I search with a zero embedding and limit {int}")]
 async fn when_search_zero_embedding(w: &mut AlephWorld, limit: i32) {
     let ctx = w.memory.as_mut().expect("Memory context not initialized");
-    let db = ctx.memory_backend.as_ref().expect("Database not initialized");
+    let db = ctx
+        .memory_backend
+        .as_ref()
+        .expect("Database not initialized");
 
     let query = vec![0.0f32; EMBEDDING_DIM];
     let filter = SearchFilter::valid_only(Some(NamespaceScope::Owner));
@@ -264,7 +273,10 @@ async fn when_prepare_fts_query_with_quotes(w: &mut AlephWorld) {
 #[when("I hybrid search with the same embedding and empty text")]
 async fn when_hybrid_search_same_embedding(w: &mut AlephWorld) {
     let ctx = w.memory.as_mut().expect("Memory context not initialized");
-    let db = ctx.memory_backend.as_ref().expect("Database not initialized");
+    let db = ctx
+        .memory_backend
+        .as_ref()
+        .expect("Database not initialized");
 
     // Get the embedding from the last inserted fact
     let embedding = ctx
@@ -285,7 +297,10 @@ async fn when_hybrid_search_same_embedding(w: &mut AlephWorld) {
 #[when(expr = "I hybrid search for {string} with embedding value {float}")]
 async fn when_hybrid_search_text(w: &mut AlephWorld, text: String, value: f32) {
     let ctx = w.memory.as_mut().expect("Memory context not initialized");
-    let db = ctx.memory_backend.as_ref().expect("Database not initialized");
+    let db = ctx
+        .memory_backend
+        .as_ref()
+        .expect("Database not initialized");
 
     let embedding = vec![value; EMBEDDING_DIM];
     let filter = SearchFilter::default();
@@ -308,7 +323,10 @@ async fn when_hybrid_search_text(w: &mut AlephWorld, text: String, value: f32) {
 #[when(expr = "I hybrid search with opposite embedding and min_score {float}")]
 async fn when_hybrid_search_opposite_min_score(w: &mut AlephWorld, min_score: f32) {
     let ctx = w.memory.as_mut().expect("Memory context not initialized");
-    let db = ctx.memory_backend.as_ref().expect("Database not initialized");
+    let db = ctx
+        .memory_backend
+        .as_ref()
+        .expect("Database not initialized");
 
     // Opposite embedding
     let embedding = vec![-0.5f32; EMBEDDING_DIM];
@@ -333,7 +351,10 @@ async fn when_hybrid_search_opposite_min_score(w: &mut AlephWorld, min_score: f3
 #[when(expr = "I hybrid search with empty text and limit {int}")]
 async fn when_hybrid_search_limit(w: &mut AlephWorld, limit: i32) {
     let ctx = w.memory.as_mut().expect("Memory context not initialized");
-    let db = ctx.memory_backend.as_ref().expect("Database not initialized");
+    let db = ctx
+        .memory_backend
+        .as_ref()
+        .expect("Database not initialized");
 
     let embedding = vec![0.0f32; EMBEDDING_DIM];
     let filter = SearchFilter::default();
@@ -348,7 +369,10 @@ async fn when_hybrid_search_limit(w: &mut AlephWorld, limit: i32) {
 #[when("I hybrid search with the shared embedding")]
 async fn when_hybrid_search_shared_embedding(w: &mut AlephWorld) {
     let ctx = w.memory.as_mut().expect("Memory context not initialized");
-    let db = ctx.memory_backend.as_ref().expect("Database not initialized");
+    let db = ctx
+        .memory_backend
+        .as_ref()
+        .expect("Database not initialized");
 
     // Use the common embedding (0.5) and filter to valid facts only
     let embedding = vec![0.5f32; EMBEDDING_DIM];
@@ -364,7 +388,10 @@ async fn when_hybrid_search_shared_embedding(w: &mut AlephWorld) {
 #[then("I should be able to search and find the fact")]
 async fn then_can_search_fact(w: &mut AlephWorld) {
     let ctx = w.memory.as_ref().expect("Memory context not initialized");
-    let db = ctx.memory_backend.as_ref().expect("Database not initialized");
+    let db = ctx
+        .memory_backend
+        .as_ref()
+        .expect("Database not initialized");
 
     // Get the embedding from the last inserted fact
     let embedding = ctx
@@ -507,7 +534,9 @@ async fn then_result_has_id(w: &mut AlephWorld, expected_id: String) {
 #[given("a test vector database")]
 async fn given_test_vector_db(w: &mut AlephWorld) {
     let temp_dir = tempdir().expect("Failed to create temp dir");
-    let db_path = temp_dir.path().join(format!("test_integration_{}.db", Uuid::new_v4()));
+    let db_path = temp_dir
+        .path()
+        .join(format!("test_integration_{}.db", Uuid::new_v4()));
     let ctx = w.memory.get_or_insert_with(MemoryContext::default);
     ctx.setup_integration(temp_dir, db_path).await;
 }
@@ -630,7 +659,10 @@ async fn when_switch_context(w: &mut AlephWorld, app: String, _doc: String) {
 #[when("I get database stats")]
 async fn when_get_db_stats(w: &mut AlephWorld) {
     let ctx = w.memory.as_mut().expect("Memory context not initialized");
-    let db = ctx.memory_backend.as_ref().expect("Database not initialized");
+    let db = ctx
+        .memory_backend
+        .as_ref()
+        .expect("Database not initialized");
 
     let store_stats: StoreStats = db.get_stats().await.expect("Failed to get stats");
     ctx.db_stats = Some(MemoryStats {
@@ -748,7 +780,9 @@ async fn when_concurrent_mixed(w: &mut AlephWorld, count: i32) {
             let retrieval_clone = retrieval.clone();
             let context_clone = context.clone();
             join_set.spawn(async move {
-                let _ = retrieval_clone.retrieve_memories(&context_clone, "mixed").await;
+                let _ = retrieval_clone
+                    .retrieve_memories(&context_clone, "mixed")
+                    .await;
                 "retrieve"
             });
         }
@@ -773,7 +807,10 @@ async fn when_concurrent_mixed(w: &mut AlephWorld, count: i32) {
 #[when(expr = "I directly insert {int} memories with known IDs")]
 async fn when_direct_insert_with_ids(w: &mut AlephWorld, count: i32) {
     let ctx = w.memory.as_mut().expect("Memory context not initialized");
-    let db = ctx.memory_backend.as_ref().expect("Database not initialized");
+    let db = ctx
+        .memory_backend
+        .as_ref()
+        .expect("Database not initialized");
     let context = ctx.context_anchor.clone().expect("Context not set");
 
     for i in 0..count {
@@ -795,7 +832,10 @@ async fn when_concurrent_delete(w: &mut AlephWorld, count: i32) {
     use tokio::task::JoinSet;
 
     let ctx = w.memory.as_mut().expect("Memory context not initialized");
-    let db = ctx.memory_backend.clone().expect("Database not initialized");
+    let db = ctx
+        .memory_backend
+        .clone()
+        .expect("Database not initialized");
 
     let mut join_set = JoinSet::new();
 
@@ -816,7 +856,10 @@ async fn when_concurrent_stats(w: &mut AlephWorld, count: i32) {
     use tokio::task::JoinSet;
 
     let ctx = w.memory.as_mut().expect("Memory context not initialized");
-    let db = ctx.memory_backend.clone().expect("Database not initialized");
+    let db = ctx
+        .memory_backend
+        .clone()
+        .expect("Database not initialized");
 
     let mut join_set = JoinSet::new();
 

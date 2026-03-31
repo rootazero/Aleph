@@ -239,8 +239,14 @@ mod tests {
         registry.reload(&new_configs);
 
         assert_eq!(registry.len(), 1);
-        assert!(registry.get("architect").is_none(), "old preset should be gone");
-        assert!(registry.get("designer").is_some(), "new preset should exist");
+        assert!(
+            registry.get("architect").is_none(),
+            "old preset should be gone"
+        );
+        assert!(
+            registry.get("designer").is_some(),
+            "new preset should exist"
+        );
     }
 
     #[test]

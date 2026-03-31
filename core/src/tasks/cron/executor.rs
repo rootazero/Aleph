@@ -6,10 +6,6 @@ use std::collections::HashMap;
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
-use crate::tasks::cron::config::{
-    DeliveryStatus, ErrorReason, ExecutionResult, JobSnapshot, RunStatus, SessionTarget,
-};
-use crate::tasks::cron::service::timer::JobExecutorFn;
 use crate::gateway::agent_instance::AgentRegistry;
 use crate::gateway::channel::OutboundMessage;
 use crate::gateway::channel_registry::ChannelRegistry;
@@ -19,6 +15,10 @@ use crate::gateway::execution_adapter::ExecutionAdapter;
 use crate::gateway::execution_engine::{ExecutionError, RunRequest};
 use crate::gateway::router::SessionKey;
 use crate::sync_primitives::Arc;
+use crate::tasks::cron::config::{
+    DeliveryStatus, ErrorReason, ExecutionResult, JobSnapshot, RunStatus, SessionTarget,
+};
+use crate::tasks::cron::service::timer::JobExecutorFn;
 
 /// Deferred channel registry reference — set after channels are initialized.
 pub type ChannelRegistryCell = Arc<tokio::sync::OnceCell<Arc<ChannelRegistry>>>;
@@ -89,9 +89,7 @@ async fn execute_cron_job(
         metadata.insert("conversation_id".to_string(), conv_id.clone());
     }
 
-    let timeout_secs = snapshot
-        .timeout_ms
-        .map(|ms| (ms / 1000).max(1) as u64);
+    let timeout_secs = snapshot.timeout_ms.map(|ms| (ms / 1000).max(1) as u64);
 
     let request = RunRequest {
         run_id: Uuid::new_v4().to_string(),
@@ -260,7 +258,10 @@ async fn deliver_to_channel(
     let registry = match cell.get() {
         Some(r) => r,
         None => {
-            warn!(job_id, "cron delivery skipped: ChannelRegistry not yet initialized");
+            warn!(
+                job_id,
+                "cron delivery skipped: ChannelRegistry not yet initialized"
+            );
             return DeliveryStatus::NotDelivered;
         }
     };
@@ -270,7 +271,10 @@ async fn deliver_to_channel(
 
     match registry.send(&ch_id, message).await {
         Ok(_) => {
-            info!(job_id, channel_id, conversation_id, "cron job result delivered");
+            info!(
+                job_id,
+                channel_id, conversation_id, "cron job result delivered"
+            );
             DeliveryStatus::Delivered
         }
         Err(e) => {

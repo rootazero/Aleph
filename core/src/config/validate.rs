@@ -291,11 +291,7 @@ impl Config {
                 ));
             }
 
-            if NaiveTime::parse_from_str(
-                &self.memory.dreaming.window_start_local,
-                "%H:%M",
-            )
-            .is_err()
+            if NaiveTime::parse_from_str(&self.memory.dreaming.window_start_local, "%H:%M").is_err()
             {
                 error!(
                     window_start = %self.memory.dreaming.window_start_local,
@@ -307,9 +303,7 @@ impl Config {
                 )));
             }
 
-            if NaiveTime::parse_from_str(&self.memory.dreaming.window_end_local, "%H:%M")
-                .is_err()
-            {
+            if NaiveTime::parse_from_str(&self.memory.dreaming.window_end_local, "%H:%M").is_err() {
                 error!(
                     window_end = %self.memory.dreaming.window_end_local,
                     "Invalid dreaming window_end_local"
@@ -387,7 +381,14 @@ impl Config {
             )));
         }
 
-        let allowed_types = ["preference", "plan", "learning", "project", "personal", "other"];
+        let allowed_types = [
+            "preference",
+            "plan",
+            "learning",
+            "project",
+            "personal",
+            "other",
+        ];
         for entry in &self.memory.memory_decay.protected_types {
             let lower = entry.to_lowercase();
             if !allowed_types.contains(&lower.as_str()) {

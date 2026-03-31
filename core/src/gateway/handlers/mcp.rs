@@ -519,7 +519,10 @@ mod tests {
         let params: AddParams = serde_json::from_value(json).unwrap();
         assert_eq!(params.config.id, "node-server");
         assert_eq!(params.config.command, Some("npx".to_string()));
-        assert_eq!(params.config.args, vec!["@modelcontextprotocol/server-filesystem"]);
+        assert_eq!(
+            params.config.args,
+            vec!["@modelcontextprotocol/server-filesystem"]
+        );
         assert_eq!(params.config.requires_runtime, Some("node".to_string()));
     }
 
@@ -571,7 +574,10 @@ mod tests {
         });
         let params: AddParams = serde_json::from_value(json).unwrap();
         assert_eq!(params.config.id, "remote-server");
-        assert_eq!(params.config.url, Some("https://api.example.com/mcp".to_string()));
+        assert_eq!(
+            params.config.url,
+            Some("https://api.example.com/mcp".to_string())
+        );
     }
 
     #[test]
@@ -589,7 +595,10 @@ mod tests {
         });
         let params: AddParams = serde_json::from_value(json).unwrap();
         assert_eq!(params.config.env.len(), 2);
-        assert_eq!(params.config.env.get("API_KEY"), Some(&"secret".to_string()));
+        assert_eq!(
+            params.config.env.get("API_KEY"),
+            Some(&"secret".to_string())
+        );
     }
 
     // ========================================================================

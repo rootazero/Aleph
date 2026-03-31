@@ -65,12 +65,24 @@ impl Default for SkillsContext {
 impl std::fmt::Debug for SkillsContext {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SkillsContext")
-            .field("registry", &self.registry.as_ref().map(|_| "HandlerRegistry"))
-            .field("rpc_response", &self.rpc_response.as_ref().map(|r| r.is_success()))
+            .field(
+                "registry",
+                &self.registry.as_ref().map(|_| "HandlerRegistry"),
+            )
+            .field(
+                "rpc_response",
+                &self.rpc_response.as_ref().map(|r| r.is_success()),
+            )
             .field("loaded_tools_count", &self.loaded_tools.len())
             .field("load_errors_count", &self.load_errors.len())
-            .field("tool_server", &self.tool_server.as_ref().map(|_| "AlephToolServer"))
-            .field("generator", &self.generator.as_ref().map(|_| "MarkdownSkillGenerator"))
+            .field(
+                "tool_server",
+                &self.tool_server.as_ref().map(|_| "AlephToolServer"),
+            )
+            .field(
+                "generator",
+                &self.generator.as_ref().map(|_| "MarkdownSkillGenerator"),
+            )
             .field("generated_skill_path", &self.generated_skill_path)
             // .field("suggestion", ...) // removed — SolidificationSuggestion deleted
             .field("watcher_config", &self.watcher_config)

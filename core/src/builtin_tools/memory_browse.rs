@@ -2,17 +2,17 @@
 //!
 //! Provides ls/read/glob operations on the aleph:// VFS.
 
+use crate::sync_primitives::Arc;
 use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
 
 use super::error::ToolError;
 use crate::error::Result;
+use crate::gateway::agent_env::AgentEnvFilter;
 use crate::memory::namespace::NamespaceScope;
 use crate::memory::store::{MemoryBackend, MemoryStore, PathEntry as StorePathEntry};
-use crate::gateway::agent_env::AgentEnvFilter;
 use crate::memory::{FactSource, MemoryFact, MemoryLayer, SearchFilter, DEFAULT_AGENT};
 use crate::tools::AlephTool;
 
@@ -136,9 +136,10 @@ impl MemoryBrowseTool {
 
         // Validate path
         if !args.path.starts_with("aleph://") {
-            return Err(ToolError::Execution(
-                format!("Invalid path: must start with aleph://, got: {}", args.path)
-            ));
+            return Err(ToolError::Execution(format!(
+                "Invalid path: must start with aleph://, got: {}",
+                args.path
+            )));
         }
 
         let action_name = match args.action {
@@ -162,8 +163,13 @@ impl MemoryBrowseTool {
         Ok(output)
     }
 
-    async fn handle_ls(&self, path: &str, workspace: &str) -> std::result::Result<MemoryBrowseOutput, ToolError> {
-        let children: Vec<StorePathEntry> = self.database
+    async fn handle_ls(
+        &self,
+        path: &str,
+        workspace: &str,
+    ) -> std::result::Result<MemoryBrowseOutput, ToolError> {
+        let children: Vec<StorePathEntry> = self
+            .database
             .list_by_path(path, &NamespaceScope::Owner, workspace)
             .await
             .map_err(|e| ToolError::Execution(format!("Failed to list path: {}", e)))?;
@@ -180,7 +186,11 @@ impl MemoryBrowseTool {
                 .unwrap_or_default();
 
             entries.push(BrowseLsEntry {
-                name: child.path.strip_prefix(path).unwrap_or(&child.path).to_string(),
+                name: child
+                    .path
+                    .strip_prefix(path)
+                    .unwrap_or(&child.path)
+                    .to_string(),
                 path: child.path.clone(),
                 is_directory: !child.is_leaf,
                 fact_count: child.child_count,
@@ -202,7 +212,11 @@ impl MemoryBrowseTool {
         })
     }
 
-    async fn handle_read(&self, path: &str, workspace: &str) -> std::result::Result<MemoryBrowseOutput, ToolError> {
+    async fn handle_read(
+        &self,
+        path: &str,
+        workspace: &str,
+    ) -> std::result::Result<MemoryBrowseOutput, ToolError> {
         if let Some(summary_fact) = self.summary_fact_for_path(path, workspace).await? {
             return Ok(MemoryBrowseOutput {
                 action: "read".to_string(),
@@ -222,7 +236,8 @@ impl MemoryBrowseTool {
         }
 
         // Otherwise return all L2 detail facts under this prefix.
-        let facts = self.database
+        let facts = self
+            .database
             .get_facts_by_path_prefix(path, &self.detail_filter(workspace), 500)
             .await
             .map_err(|e| ToolError::Execution(format!("Failed to read path: {}", e)))?;
@@ -239,7 +254,8 @@ impl MemoryBrowseTool {
             });
         }
 
-        let combined_content = facts.iter()
+        let combined_content = facts
+            .iter()
             .map(|f| format!("- [{}] {}", f.fact_type, f.content))
             .collect::<Vec<_>>()
             .join("\n");
@@ -275,13 +291,20 @@ impl MemoryBrowseTool {
         })
     }
 
-    async fn handle_glob(&self, path: &str, pattern: &str, workspace: &str) -> std::result::Result<MemoryBrowseOutput, ToolError> {
-        let path_facts = self.database
+    async fn handle_glob(
+        &self,
+        path: &str,
+        pattern: &str,
+        workspace: &str,
+    ) -> std::result::Result<MemoryBrowseOutput, ToolError> {
+        let path_facts = self
+            .database
             .get_facts_by_path_prefix(path, &self.detail_filter(workspace), 1000)
             .await
             .map_err(|e| ToolError::Execution(format!("Failed to glob: {}", e)))?;
 
-        let matches: Vec<GlobMatch> = path_facts.into_iter()
+        let matches: Vec<GlobMatch> = path_facts
+            .into_iter()
             .filter(|f| {
                 let relative = f.path.strip_prefix(path).unwrap_or(&f.path);
                 if pattern == "*" {
@@ -407,7 +430,9 @@ mod tests {
 
     async fn create_test_db() -> (MemoryBackend, tempfile::TempDir) {
         let temp_dir = tempfile::tempdir().unwrap();
-        let backend = LanceMemoryBackend::open_or_create(temp_dir.path()).await.unwrap();
+        let backend = LanceMemoryBackend::open_or_create(temp_dir.path())
+            .await
+            .unwrap();
         (Arc::new(backend), temp_dir)
     }
 
@@ -463,10 +488,11 @@ mod tests {
             .with_path("aleph://user/preferences/coding/".to_string())
             .with_layer(MemoryLayer::L2Detail);
 
-        let summary_fact = MemoryFact::new("Coding overview\n- Rust".into(), FactType::Other, vec![])
-            .with_path("aleph://user/preferences/coding/".to_string())
-            .with_fact_source(FactSource::Summary)
-            .with_layer(MemoryLayer::L1Overview);
+        let summary_fact =
+            MemoryFact::new("Coding overview\n- Rust".into(), FactType::Other, vec![])
+                .with_path("aleph://user/preferences/coding/".to_string())
+                .with_fact_source(FactSource::Summary)
+                .with_layer(MemoryLayer::L1Overview);
 
         db.insert_fact(&detail_fact).await.unwrap();
         db.insert_fact(&summary_fact).await.unwrap();

@@ -36,12 +36,12 @@
 //! // L3: Falls through to LLM reasoning
 //! ```
 
+use crate::sync_primitives::{Arc, RwLock};
 use dashmap::DashMap;
 use regex::Regex;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use crate::sync_primitives::{Arc, RwLock};
 use tracing::{debug, info};
 
 use super::AtomicAction;
@@ -79,20 +79,29 @@ impl ReflexLayer {
     pub fn try_reflex(&self, input: &str) -> Option<AtomicAction> {
         // L1: Exact match
         if let Some(action) = self.exact_cache.get(input) {
-            self.stats.write().unwrap_or_else(|e| e.into_inner()).l1_hits += 1;
+            self.stats
+                .write()
+                .unwrap_or_else(|e| e.into_inner())
+                .l1_hits += 1;
             debug!(input = %input, "L1 cache hit");
             return Some(action.clone());
         }
 
         // L2: Keyword routing
         if let Some(action) = self.route_by_keywords(input) {
-            self.stats.write().unwrap_or_else(|e| e.into_inner()).l2_hits += 1;
+            self.stats
+                .write()
+                .unwrap_or_else(|e| e.into_inner())
+                .l2_hits += 1;
             debug!(input = %input, action = ?action, "L2 keyword routing hit");
             return Some(action);
         }
 
         // Need L3 reasoning
-        self.stats.write().unwrap_or_else(|e| e.into_inner()).l3_fallbacks += 1;
+        self.stats
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .l3_fallbacks += 1;
         debug!(input = %input, "Falling back to L3 reasoning");
         None
     }
@@ -125,7 +134,11 @@ impl ReflexLayer {
     }
 
     /// Build atomic action from action type and parameters
-    fn build_action(&self, action_type: &ActionType, params: HashMap<String, Value>) -> Option<AtomicAction> {
+    fn build_action(
+        &self,
+        action_type: &ActionType,
+        params: HashMap<String, Value>,
+    ) -> Option<AtomicAction> {
         match action_type {
             ActionType::Read => {
                 let path = params.get("path")?.as_str()?.to_string();
@@ -150,12 +163,17 @@ impl ReflexLayer {
             }
             ActionType::Search => {
                 let pattern_str = params.get("pattern")?.as_str()?.to_string();
-                let pattern = super::SearchPattern::Regex { pattern: pattern_str };
-                let scope = params.get("scope")
+                let pattern = super::SearchPattern::Regex {
+                    pattern: pattern_str,
+                };
+                let scope = params
+                    .get("scope")
                     .and_then(|v| v.as_str())
                     .map(|s| match s {
                         "workspace" => super::SearchScope::Workspace,
-                        _ => super::SearchScope::File { path: PathBuf::from(s) },
+                        _ => super::SearchScope::File {
+                            path: PathBuf::from(s),
+                        },
                     })
                     .unwrap_or(super::SearchScope::Workspace);
 
@@ -168,12 +186,17 @@ impl ReflexLayer {
             ActionType::Replace => {
                 let pattern_str = params.get("pattern")?.as_str()?.to_string();
                 let replacement = params.get("replacement")?.as_str()?.to_string();
-                let pattern = super::SearchPattern::Regex { pattern: pattern_str };
-                let scope = params.get("scope")
+                let pattern = super::SearchPattern::Regex {
+                    pattern: pattern_str,
+                };
+                let scope = params
+                    .get("scope")
                     .and_then(|v| v.as_str())
                     .map(|s| match s {
                         "workspace" => super::SearchScope::Workspace,
-                        _ => super::SearchScope::File { path: PathBuf::from(s) },
+                        _ => super::SearchScope::File {
+                            path: PathBuf::from(s),
+                        },
                     })
                     .unwrap_or(super::SearchScope::Workspace);
 
@@ -188,7 +211,8 @@ impl ReflexLayer {
             ActionType::Move => {
                 let from = params.get("from")?.as_str()?.to_string();
                 let to = params.get("to")?.as_str()?.to_string();
-                let update_imports = params.get("update_imports")
+                let update_imports = params
+                    .get("update_imports")
                     .and_then(|v| v.as_bool())
                     .unwrap_or(true);
 
@@ -220,8 +244,10 @@ impl ReflexLayer {
     fn load_default_rules(&mut self) {
         // Rule 1: Read files
         self.add_rule(KeywordRule {
-            pattern: Regex::new(r"(?i)^(read|cat|show|display)\s+(.+\.(rs|toml|md|txt|json|yaml|yml))$")
-                .unwrap(),
+            pattern: Regex::new(
+                r"(?i)^(read|cat|show|display)\s+(.+\.(rs|toml|md|txt|json|yaml|yml))$",
+            )
+            .unwrap(),
             priority: 80,
             action_type: ActionType::Read,
             extractor: Box::new(FilePathExtractor),
@@ -275,7 +301,10 @@ impl ReflexLayer {
             extractor: Box::new(MoveFileExtractor),
         });
 
-        info!(rule_count = self.keyword_rules.len(), "Loaded default reflex rules");
+        info!(
+            rule_count = self.keyword_rules.len(),
+            "Loaded default reflex rules"
+        );
     }
 
     /// Get statistics
@@ -402,9 +431,14 @@ struct SearchPatternExtractor;
 impl ParamExtractor for SearchPatternExtractor {
     fn extract(&self, input: &str) -> Option<HashMap<String, Value>> {
         // Extract pattern from commands like "search for TODO" or "find pattern in file.rs"
-        let re = Regex::new(r"(?i)(?:search|find|grep)\s+(?:for\s+)?(.+?)(?:\s+in\s+(.+))?$").ok()?;
+        let re =
+            Regex::new(r"(?i)(?:search|find|grep)\s+(?:for\s+)?(.+?)(?:\s+in\s+(.+))?$").ok()?;
         let caps = re.captures(input)?;
-        let pattern = caps.get(1)?.as_str().trim().trim_matches(|c| c == '\'' || c == '"');
+        let pattern = caps
+            .get(1)?
+            .as_str()
+            .trim()
+            .trim_matches(|c| c == '\'' || c == '"');
         let scope = caps.get(2).map(|m| m.as_str().trim());
 
         let mut params = HashMap::new();
@@ -426,13 +460,24 @@ impl ParamExtractor for ReplacePatternExtractor {
         // Extract pattern and replacement from commands like "replace foo with bar" or "replace 'old' with 'new' in file.rs"
         let re = Regex::new(r"(?i)replace\s+(.+?)\s+with\s+(.+?)(?:\s+in\s+(.+))?$").ok()?;
         let caps = re.captures(input)?;
-        let pattern = caps.get(1)?.as_str().trim().trim_matches(|c| c == '\'' || c == '"');
-        let replacement = caps.get(2)?.as_str().trim().trim_matches(|c| c == '\'' || c == '"');
+        let pattern = caps
+            .get(1)?
+            .as_str()
+            .trim()
+            .trim_matches(|c| c == '\'' || c == '"');
+        let replacement = caps
+            .get(2)?
+            .as_str()
+            .trim()
+            .trim_matches(|c| c == '\'' || c == '"');
         let scope = caps.get(3).map(|m| m.as_str().trim());
 
         let mut params = HashMap::new();
         params.insert("pattern".to_string(), Value::String(pattern.to_string()));
-        params.insert("replacement".to_string(), Value::String(replacement.to_string()));
+        params.insert(
+            "replacement".to_string(),
+            Value::String(replacement.to_string()),
+        );
         if let Some(scope_str) = scope {
             params.insert("scope".to_string(), Value::String(scope_str.to_string()));
         } else {
@@ -658,10 +703,13 @@ mod tests {
         let reflex = ReflexLayer::with_default_rules();
 
         // L1 hit
-        reflex.learn_from_success("test", AtomicAction::Bash {
-            command: "test".to_string(),
-            cwd: None,
-        });
+        reflex.learn_from_success(
+            "test",
+            AtomicAction::Bash {
+                command: "test".to_string(),
+                cwd: None,
+            },
+        );
         reflex.try_reflex("test");
 
         // L2 hit
@@ -683,10 +731,13 @@ mod tests {
         let reflex = ReflexLayer::new();
 
         // Add to cache
-        reflex.learn_from_success("test", AtomicAction::Bash {
-            command: "test".to_string(),
-            cwd: None,
-        });
+        reflex.learn_from_success(
+            "test",
+            AtomicAction::Bash {
+                command: "test".to_string(),
+                cwd: None,
+            },
+        );
         assert_eq!(reflex.cache_size(), 1);
 
         // Clear cache
@@ -758,7 +809,13 @@ mod tests {
         let result = reflex.try_reflex("replace foo with bar");
         assert!(result.is_some());
 
-        if let Some(AtomicAction::Replace { search, replacement, scope, .. }) = result {
+        if let Some(AtomicAction::Replace {
+            search,
+            replacement,
+            scope,
+            ..
+        }) = result
+        {
             assert!(matches!(*search, SearchPattern::Regex { .. }));
             assert_eq!(replacement, "bar");
             assert!(matches!(scope, SearchScope::Workspace));
@@ -770,7 +827,10 @@ mod tests {
         let result = reflex.try_reflex("replace 'old' with 'new' in config.toml");
         assert!(result.is_some());
 
-        if let Some(AtomicAction::Replace { replacement, scope, .. }) = result {
+        if let Some(AtomicAction::Replace {
+            replacement, scope, ..
+        }) = result
+        {
             assert_eq!(replacement, "new");
             assert!(matches!(scope, SearchScope::File { .. }));
         } else {
@@ -786,7 +846,13 @@ mod tests {
         let result = reflex.try_reflex("move old.rs to new.rs");
         assert!(result.is_some());
 
-        if let Some(AtomicAction::Move { source, destination, update_imports, .. }) = result {
+        if let Some(AtomicAction::Move {
+            source,
+            destination,
+            update_imports,
+            ..
+        }) = result
+        {
             assert_eq!(source.to_str().unwrap(), "old.rs");
             assert_eq!(destination.to_str().unwrap(), "new.rs");
             assert!(update_imports);
@@ -798,7 +864,12 @@ mod tests {
         let result = reflex.try_reflex("mv src/old.rs src/new.rs");
         assert!(result.is_some());
 
-        if let Some(AtomicAction::Move { source, destination, .. }) = result {
+        if let Some(AtomicAction::Move {
+            source,
+            destination,
+            ..
+        }) = result
+        {
             assert_eq!(source.to_str().unwrap(), "src/old.rs");
             assert_eq!(destination.to_str().unwrap(), "src/new.rs");
         } else {
@@ -809,7 +880,12 @@ mod tests {
         let result = reflex.try_reflex("rename file.txt document.txt");
         assert!(result.is_some());
 
-        if let Some(AtomicAction::Move { source, destination, .. }) = result {
+        if let Some(AtomicAction::Move {
+            source,
+            destination,
+            ..
+        }) = result
+        {
             assert_eq!(source.to_str().unwrap(), "file.txt");
             assert_eq!(destination.to_str().unwrap(), "document.txt");
         } else {

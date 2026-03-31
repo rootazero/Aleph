@@ -23,15 +23,15 @@ pub mod manager;
 pub mod masker;
 pub mod parser;
 pub mod risk;
-pub mod sanitize;
 pub mod sandbox;
+pub mod sanitize;
 pub mod socket;
 pub mod storage;
 
 pub use allowlist::match_allowlist;
 pub use analysis::CommandAnalysis;
 pub use bridge::ApprovalBridge;
-pub use config::{ExecAsk, ExecApprovalsFile, ExecSecurity, ResolvedExecConfig};
+pub use config::{ExecApprovalsFile, ExecAsk, ExecSecurity, ResolvedExecConfig};
 pub use decision::{decide_exec_approval, ApprovalDecision, ApprovalRequest, ExecContext};
 pub use forwarder::{ExecApprovalForwarder, ForwardMode, ForwardTarget};
 #[cfg(unix)]

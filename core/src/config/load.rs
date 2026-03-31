@@ -70,8 +70,7 @@ impl Config {
         // and those functions need to read from the OnceLock.
         if let Ok(config_dir) = crate::utils::paths::get_config_dir() {
             let defaults_path = config_dir.join("defaults.toml");
-            let defaults =
-                crate::config::defaults_override::load_defaults_override(&defaults_path);
+            let defaults = crate::config::defaults_override::load_defaults_override(&defaults_path);
             crate::config::defaults_override::init_defaults_override(defaults);
         }
 

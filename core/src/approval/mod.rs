@@ -74,8 +74,7 @@ mod tests {
     ) -> ConfigApprovalPolicy {
         use std::collections::HashMap;
 
-        let defaults_map: HashMap<ActionType, DefaultDecision> =
-            defaults.into_iter().collect();
+        let defaults_map: HashMap<ActionType, DefaultDecision> = defaults.into_iter().collect();
 
         let allowlist_rules: Vec<PolicyRule> = allowlist
             .into_iter()
@@ -223,10 +222,7 @@ mod tests {
         ));
 
         // Malicious URL blocklist
-        let req = make_request(
-            ActionType::BrowserNavigate,
-            "https://malicious.com/payload",
-        );
+        let req = make_request(ActionType::BrowserNavigate, "https://malicious.com/payload");
         assert!(matches!(
             policy.check(&req).await,
             ApprovalDecision::Deny { .. }
@@ -345,7 +341,8 @@ mod tests {
 
     #[test]
     fn test_invalid_default_value_rejected_by_serde() {
-        let json = r#"{"version":1,"defaults":{"shell_exec":"Deny"},"allowlist":[],"blocklist":[]}"#;
+        let json =
+            r#"{"version":1,"defaults":{"shell_exec":"Deny"},"allowlist":[],"blocklist":[]}"#;
         let result: Result<PolicyConfig, _> = serde_json::from_str(json);
         assert!(result.is_err(), "Serde should reject capitalized 'Deny'");
     }

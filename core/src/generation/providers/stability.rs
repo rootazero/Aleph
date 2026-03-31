@@ -529,7 +529,8 @@ mod tests {
             "sk-test-key",
             Some("https://custom.stability.ai".to_string()),
             None,
-        ).unwrap();
+        )
+        .unwrap();
 
         assert_eq!(provider.endpoint, "https://custom.stability.ai");
     }
@@ -540,7 +541,8 @@ mod tests {
             "sk-test-key",
             None,
             Some("stable-diffusion-v1-6".to_string()),
-        ).unwrap();
+        )
+        .unwrap();
 
         assert_eq!(provider.model, "stable-diffusion-v1-6");
     }
@@ -557,7 +559,8 @@ mod tests {
             "sk-test-key",
             Some("https://api.example.com".to_string()),
             Some("custom-model".to_string()),
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!(
             custom_provider.text_to_image_url(),
             "https://api.example.com/v1/generation/custom-model/text-to-image"
@@ -615,7 +618,8 @@ mod tests {
             "sk-test-key",
             None,
             Some("stable-diffusion-v1-6".to_string()),
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!(
             custom_provider.default_model(),
             Some("stable-diffusion-v1-6")

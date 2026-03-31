@@ -7,8 +7,12 @@ use crate::thinker::prompt_sanitizer::{sanitize_for_prompt, SanitizeLevel};
 pub struct SoulLayer;
 
 impl PromptLayer for SoulLayer {
-    fn name(&self) -> &'static str { "soul" }
-    fn priority(&self) -> u32 { 50 }
+    fn name(&self) -> &'static str {
+        "soul"
+    }
+    fn priority(&self) -> u32 {
+        50
+    }
     fn paths(&self) -> &'static [AssemblyPath] {
         &[AssemblyPath::Soul]
     }
@@ -119,10 +123,10 @@ impl PromptLayer for SoulLayer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::thinker::identity_files::{IdentityFile, IdentityFiles};
     use crate::thinker::prompt_builder::PromptConfig;
     use crate::thinker::prompt_mode::PromptMode;
     use crate::thinker::soul::{SoulManifest, SoulVoice, Verbosity};
-    use crate::thinker::identity_files::{IdentityFile, IdentityFiles};
     use std::path::PathBuf;
 
     #[test]
@@ -201,16 +205,21 @@ mod tests {
             directives: vec!["Always help.".to_string()],
             ..Default::default()
         };
-        let input = LayerInput::soul(&config, &[], &soul)
-            .with_mode(PromptMode::Minimal);
+        let input = LayerInput::soul(&config, &[], &soul).with_mode(PromptMode::Minimal);
         let mut out = String::new();
         layer.inject(&mut out, &input);
 
         // Should contain identity
         assert!(out.contains("I am Aleph"), "Should contain identity");
         // Should NOT contain communication style or directives
-        assert!(!out.contains("Communication Style"), "Should not contain style in Minimal");
-        assert!(!out.contains("Always help"), "Should not contain directives in Minimal");
+        assert!(
+            !out.contains("Communication Style"),
+            "Should not contain style in Minimal"
+        );
+        assert!(
+            !out.contains("Always help"),
+            "Should not contain directives in Minimal"
+        );
     }
 
     #[test]
@@ -236,17 +245,25 @@ mod tests {
                 original_size: 37,
             }],
         };
-        let input = LayerInput::soul(&config, &tools, &soul)
-            .with_workspace(&workspace);
+        let input = LayerInput::soul(&config, &tools, &soul).with_workspace(&workspace);
         let mut out = String::new();
         layer.inject(&mut out, &input);
 
         // Workspace SOUL.md should be used
         assert!(out.contains("# Soul"), "Should have Soul header");
-        assert!(out.contains("custom soul from workspace"), "Should contain workspace SOUL.md content");
+        assert!(
+            out.contains("custom soul from workspace"),
+            "Should contain workspace SOUL.md content"
+        );
         // SoulManifest should NOT be used
-        assert!(!out.contains("# Identity"), "Should not contain manifest Identity header");
-        assert!(!out.contains("I am Aleph"), "Should not contain manifest identity");
+        assert!(
+            !out.contains("# Identity"),
+            "Should not contain manifest Identity header"
+        );
+        assert!(
+            !out.contains("I am Aleph"),
+            "Should not contain manifest identity"
+        );
     }
 
     #[test]
@@ -268,14 +285,22 @@ mod tests {
             workspace_dir: PathBuf::from("/tmp/test"),
             files: vec![],
         };
-        let input = LayerInput::soul(&config, &tools, &soul)
-            .with_workspace(&workspace);
+        let input = LayerInput::soul(&config, &tools, &soul).with_workspace(&workspace);
         let mut out = String::new();
         layer.inject(&mut out, &input);
 
         // SoulManifest fallback should be used
-        assert!(out.contains("# Identity"), "Should contain manifest Identity header");
-        assert!(out.contains("I am Aleph"), "Should contain manifest identity");
-        assert!(!out.contains("# Soul"), "Should not contain workspace Soul header");
+        assert!(
+            out.contains("# Identity"),
+            "Should contain manifest Identity header"
+        );
+        assert!(
+            out.contains("I am Aleph"),
+            "Should contain manifest identity"
+        );
+        assert!(
+            !out.contains("# Soul"),
+            "Should not contain workspace Soul header"
+        );
     }
 }

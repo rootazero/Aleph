@@ -34,16 +34,18 @@ mod integration_tests;
 #[cfg(all(test, feature = "DISABLED"))]
 mod performance_benchmarks;
 
-pub use atomic_action::{AtomicAction, SearchPattern, SearchScope, FileFilter};
+pub use atomic_action::{AtomicAction, FileFilter, SearchPattern, SearchScope};
 pub(crate) use atomic_action::{LineRange, WriteMode};
 pub use atomic_engine::{ExecutionResult, RoutingLayer};
 pub use atomic_executor::AtomicExecutor;
 pub(crate) use classifier::NaiveBayesClassifier;
-pub use conflict_detector::{ConflictDetector, Conflict, ConflictType, ConflictReport, ConflictResolver, ResolutionStrategy};
-pub use feature_extractor::{Intent, Entity};
+pub use conflict_detector::{
+    Conflict, ConflictDetector, ConflictReport, ConflictResolver, ConflictType, ResolutionStrategy,
+};
+pub use feature_extractor::{Entity, Intent};
 pub use patch::Patch;
 pub(crate) use patch::PatchApplier;
 pub use performance_optimizer::CacheStats;
 pub use persistence::Persistence;
 pub use reflex_layer::ActionType;
-pub(crate) use reflex_layer::{ReflexLayer, ParamExtractor};
+pub(crate) use reflex_layer::{ParamExtractor, ReflexLayer};

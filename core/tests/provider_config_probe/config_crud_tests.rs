@@ -18,10 +18,9 @@ fn add_provider_to_config() {
     let mut config = Config::default();
     assert!(config.providers.is_empty());
 
-    config.providers.insert(
-        "openai".to_string(),
-        ProviderConfig::test_config("gpt-4o"),
-    );
+    config
+        .providers
+        .insert("openai".to_string(), ProviderConfig::test_config("gpt-4o"));
 
     assert_eq!(config.providers.len(), 1);
     assert!(config.providers.contains_key("openai"));
@@ -32,18 +31,16 @@ fn add_provider_to_config() {
 fn add_multiple_providers() {
     let mut config = Config::default();
 
-    config.providers.insert(
-        "openai".to_string(),
-        ProviderConfig::test_config("gpt-4o"),
-    );
+    config
+        .providers
+        .insert("openai".to_string(), ProviderConfig::test_config("gpt-4o"));
     config.providers.insert(
         "anthropic".to_string(),
         ProviderConfig::test_config("claude-3-5-sonnet"),
     );
-    config.providers.insert(
-        "ollama".to_string(),
-        ProviderConfig::test_config("llama3"),
-    );
+    config
+        .providers
+        .insert("ollama".to_string(), ProviderConfig::test_config("llama3"));
 
     assert_eq!(config.providers.len(), 3);
 }
@@ -67,10 +64,9 @@ fn provider_with_multiple_models() {
 #[test]
 fn remove_provider() {
     let mut config = Config::default();
-    config.providers.insert(
-        "openai".to_string(),
-        ProviderConfig::test_config("gpt-4o"),
-    );
+    config
+        .providers
+        .insert("openai".to_string(), ProviderConfig::test_config("gpt-4o"));
     config.providers.insert(
         "anthropic".to_string(),
         ProviderConfig::test_config("claude-3-5-sonnet"),
@@ -101,10 +97,9 @@ fn default_provider_resolution_from_general() {
     let mut config = Config::default();
     config.general.default_provider = Some("anthropic".to_string());
 
-    config.providers.insert(
-        "openai".to_string(),
-        ProviderConfig::test_config("gpt-4o"),
-    );
+    config
+        .providers
+        .insert("openai".to_string(), ProviderConfig::test_config("gpt-4o"));
     config.providers.insert(
         "anthropic".to_string(),
         ProviderConfig::test_config("claude-3-5-sonnet"),
@@ -114,7 +109,10 @@ fn default_provider_resolution_from_general() {
     let default_name = config.general.default_provider.as_ref().unwrap();
     let default_provider = config.providers.get(default_name.as_str());
     assert!(default_provider.is_some());
-    assert_eq!(default_provider.unwrap().default_model(), "claude-3-5-sonnet");
+    assert_eq!(
+        default_provider.unwrap().default_model(),
+        "claude-3-5-sonnet"
+    );
 }
 
 #[test]
@@ -145,10 +143,9 @@ fn replace_provider_config() {
     );
 
     // Replace with new config
-    config.providers.insert(
-        "openai".to_string(),
-        ProviderConfig::test_config("gpt-4o"),
-    );
+    config
+        .providers
+        .insert("openai".to_string(), ProviderConfig::test_config("gpt-4o"));
 
     assert_eq!(config.providers.len(), 1);
     assert_eq!(config.providers["openai"].default_model(), "gpt-4o");
@@ -157,10 +154,9 @@ fn replace_provider_config() {
 #[test]
 fn update_provider_models_in_place() {
     let mut config = Config::default();
-    config.providers.insert(
-        "openai".to_string(),
-        ProviderConfig::test_config("gpt-4o"),
-    );
+    config
+        .providers
+        .insert("openai".to_string(), ProviderConfig::test_config("gpt-4o"));
 
     // Modify models in place
     if let Some(provider) = config.providers.get_mut("openai") {
@@ -202,8 +198,14 @@ fn config_toml_roundtrip_with_providers() {
     assert_eq!(parsed.providers.len(), 2);
     assert!(parsed.providers.contains_key("openai"));
     assert!(parsed.providers.contains_key("anthropic"));
-    assert_eq!(parsed.providers["openai"].models, vec!["gpt-4o", "gpt-4o-mini"]);
-    assert_eq!(parsed.providers["anthropic"].default_model(), "claude-3-5-sonnet");
+    assert_eq!(
+        parsed.providers["openai"].models,
+        vec!["gpt-4o", "gpt-4o-mini"]
+    );
+    assert_eq!(
+        parsed.providers["anthropic"].default_model(),
+        "claude-3-5-sonnet"
+    );
     assert_eq!(parsed.general.default_provider, Some("openai".to_string()));
 }
 

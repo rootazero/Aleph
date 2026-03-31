@@ -291,8 +291,8 @@ impl McpServerConnection {
             ))
         })?;
 
-        let resources_result: mcp_types::ResourcesListResult =
-            serde_json::from_value(result).map_err(|e| {
+        let resources_result: mcp_types::ResourcesListResult = serde_json::from_value(result)
+            .map_err(|e| {
                 AlephError::IoError(format!(
                     "Failed to parse resources list from '{}': {}",
                     self.name, e
@@ -499,9 +499,7 @@ impl McpServerConnection {
     /// Read a resource by URI
     pub async fn read_resource(&self, uri: &str) -> Result<crate::mcp::resources::ResourceContent> {
         // Strip server namespace prefix if present
-        let resource_uri = uri
-            .strip_prefix(&format!("{}:", self.name))
-            .unwrap_or(uri);
+        let resource_uri = uri.strip_prefix(&format!("{}:", self.name)).unwrap_or(uri);
 
         let params = mcp_types::ResourceReadParams {
             uri: resource_uri.to_string(),
@@ -543,7 +541,9 @@ impl McpServerConnection {
                 mcp_types::ResourceContentItem::Text { text, .. } => {
                     Ok(crate::mcp::resources::ResourceContent::Text(text))
                 }
-                mcp_types::ResourceContentItem::Blob { blob, mime_type, .. } => {
+                mcp_types::ResourceContentItem::Blob {
+                    blob, mime_type, ..
+                } => {
                     // Decode base64
                     use base64::Engine;
                     let data = base64::engine::general_purpose::STANDARD
@@ -553,7 +553,8 @@ impl McpServerConnection {
                         })?;
                     Ok(crate::mcp::resources::ResourceContent::Binary {
                         data,
-                        mime_type: mime_type.unwrap_or_else(|| "application/octet-stream".to_string()),
+                        mime_type: mime_type
+                            .unwrap_or_else(|| "application/octet-stream".to_string()),
                     })
                 }
             }

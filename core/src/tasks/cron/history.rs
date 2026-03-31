@@ -130,10 +130,7 @@ pub fn get_cron_runs(
 }
 
 /// Get execution history for all jobs, most recent first.
-pub fn get_all_cron_runs(
-    conn: &Connection,
-    limit: usize,
-) -> Result<Vec<CronRunRecord>, String> {
+pub fn get_all_cron_runs(conn: &Connection, limit: usize) -> Result<Vec<CronRunRecord>, String> {
     let mut stmt = conn
         .prepare(
             "SELECT id, job_id, trigger_source, status, started_at, ended_at,
@@ -236,12 +233,7 @@ mod tests {
     fn query_returns_most_recent_first() {
         let conn = setup_db();
         for i in 0..5 {
-            let record = make_record(
-                &format!("run-{i}"),
-                "job-a",
-                "ok",
-                1_000_000 + i * 10_000,
-            );
+            let record = make_record(&format!("run-{i}"), "job-a", "ok", 1_000_000 + i * 10_000);
             insert_cron_run(&conn, &record).unwrap();
         }
 
@@ -326,10 +318,7 @@ mod tests {
         assert_eq!(runs.len(), 1);
         assert_eq!(runs[0].error, Some("timeout exceeded".to_string()));
         assert_eq!(runs[0].error_reason, Some("transient".to_string()));
-        assert_eq!(
-            runs[0].delivery_status,
-            Some("not_delivered".to_string())
-        );
+        assert_eq!(runs[0].delivery_status, Some("not_delivered".to_string()));
         assert_eq!(runs[0].output_summary, None);
     }
 

@@ -10,8 +10,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
-use crate::tasks::cron::{CronJob, CronJobView, ScheduleKind, SharedCronService};
 use crate::error::Result;
+use crate::tasks::cron::{CronJob, CronJobView, ScheduleKind, SharedCronService};
 use crate::tools::AlephTool;
 
 // =============================================================================
@@ -245,7 +245,9 @@ impl AlephTool for CronManageTool {
                         let at_human = chrono::DateTime::from_timestamp_millis(*at_ms)
                             .map(|dt| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
                             .unwrap_or_else(|| format!("{}ms", at_ms));
-                        let now_human = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC").to_string();
+                        let now_human = chrono::Utc::now()
+                            .format("%Y-%m-%d %H:%M:%S UTC")
+                            .to_string();
                         return Err(crate::error::AlephError::tool(format!(
                             "Cannot schedule a one-shot task in the past. \
                              The provided at_ms={} resolves to {}, but current time is {} (now_ms={}). \

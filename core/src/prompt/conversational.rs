@@ -95,8 +95,7 @@ mod tests {
 
     #[test]
     fn test_conversational_prompt_custom_persona() {
-        let prompt =
-            ConversationalPrompt::new().with_persona("You are a friendly coding tutor.");
+        let prompt = ConversationalPrompt::new().with_persona("You are a friendly coding tutor.");
         let text = prompt.generate();
 
         assert!(text.contains("coding tutor"));

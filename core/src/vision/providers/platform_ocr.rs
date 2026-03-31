@@ -93,9 +93,10 @@ impl VisionProvider for PlatformOcrProvider {
 
         let request = DesktopRequest::Ocr { image_base64 };
 
-        let result = self.client.send(request).await.map_err(|e| {
-            VisionError::ProviderError(format!("Desktop Bridge OCR failed: {e}"))
-        })?;
+        let result =
+            self.client.send(request).await.map_err(|e| {
+                VisionError::ProviderError(format!("Desktop Bridge OCR failed: {e}"))
+            })?;
 
         // Parse the bridge response into OcrResult.
         //
@@ -210,7 +211,9 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, VisionError::ProviderError(_)));
-        assert!(err.to_string().contains("does not support image understanding"));
+        assert!(err
+            .to_string()
+            .contains("does not support image understanding"));
     }
 
     #[test]

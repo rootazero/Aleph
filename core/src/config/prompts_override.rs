@@ -104,9 +104,7 @@ impl PromptsOverride {
 
     /// Get the scratchpad template override, if set.
     pub fn scratchpad_template(&self) -> Option<&str> {
-        self.scratchpad
-            .as_ref()
-            .and_then(|s| s.template.as_deref())
+        self.scratchpad.as_ref().and_then(|s| s.template.as_deref())
     }
 
     /// Get the memory compression prompt override, if set.
@@ -125,9 +123,7 @@ impl PromptsOverride {
 
     /// Get the agent system prefix override, if set.
     pub fn agent_system_prefix(&self) -> Option<&str> {
-        self.agent
-            .as_ref()
-            .and_then(|a| a.system_prefix.as_deref())
+        self.agent.as_ref().and_then(|a| a.system_prefix.as_deref())
     }
 
     /// Get the agent observation prompt override, if set.
@@ -297,8 +293,7 @@ compression_prompt = "Compress this memory"
 
     #[test]
     fn test_load_nonexistent_prompts_file() {
-        let result =
-            load_prompts_override(Path::new("/tmp/does-not-exist-aleph-prompts.toml"));
+        let result = load_prompts_override(Path::new("/tmp/does-not-exist-aleph-prompts.toml"));
         assert!(result.planner.is_none());
         assert!(result.bootstrap.is_none());
         assert!(result.scratchpad.is_none());

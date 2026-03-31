@@ -68,7 +68,10 @@ mod tests {
         let c = embed("the weather is sunny today", DEFAULT_DIM);
         let sim_ab = cosine_similarity(&a, &b);
         let sim_ac = cosine_similarity(&a, &c);
-        assert!(sim_ab > sim_ac, "similar texts should score higher: {sim_ab} vs {sim_ac}");
+        assert!(
+            sim_ab > sim_ac,
+            "similar texts should score higher: {sim_ab} vs {sim_ac}"
+        );
     }
 
     #[test]

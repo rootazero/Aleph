@@ -96,7 +96,6 @@ impl WorkspaceFileLoader {
             Some(content[..byte_offset].to_string())
         }
     }
-
 }
 
 impl Default for WorkspaceFileLoader {

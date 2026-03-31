@@ -9,6 +9,7 @@ use crate::gateway::channel::{
 };
 use crate::gateway::formatter::{MarkupFormat, MessageFormatter};
 
+use super::super::config::XmppConfig;
 use super::stanza::{
     build_auth_stanza, build_bind_stanza, build_message_stanza, build_muc_join_stanza,
     build_pong_stanza, build_presence_stanza, build_session_stanza, build_stream_close,
@@ -17,7 +18,6 @@ use super::stanza::{
 };
 use super::types::parse_jid;
 use super::XMPP_MSG_LIMIT;
-use super::super::config::XmppConfig;
 
 const INITIAL_BACKOFF: Duration = Duration::from_secs(1);
 const MAX_BACKOFF: Duration = Duration::from_secs(60);
@@ -130,9 +130,10 @@ impl XmppMessageOps {
 
         for chunk in &chunks {
             let stanza = build_message_stanza(to, chunk, msg_type);
-            write_tx.send(stanza).await.map_err(|e| {
-                ChannelError::SendFailed(format!("XMPP write channel closed: {e}"))
-            })?;
+            write_tx
+                .send(stanza)
+                .await
+                .map_err(|e| ChannelError::SendFailed(format!("XMPP write channel closed: {e}")))?;
         }
 
         Ok(SendResult {

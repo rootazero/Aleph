@@ -32,7 +32,8 @@ pub fn memories_to_record_batch(memories: &[MemoryEntry]) -> Result<RecordBatch,
             .collect::<Vec<_>>(),
     );
     let session_key_arr = StringArray::from_iter_values(memories.iter().map(|_| "default"));
-    let namespace_arr = StringArray::from_iter_values(memories.iter().map(|m| m.namespace.as_str()));
+    let namespace_arr =
+        StringArray::from_iter_values(memories.iter().map(|m| m.namespace.as_str()));
     let workspace_arr = StringArray::from_iter_values(memories.iter().map(|m| m.agent.as_str()));
 
     // Vector columns (multi-dimension coexistence, same pattern as facts)
@@ -62,18 +63,18 @@ pub fn memories_to_record_batch(memories: &[MemoryEntry]) -> Result<RecordBatch,
     let batch = RecordBatch::try_new(
         schema,
         vec![
-            Arc::new(id_arr),           // 0 id
-            Arc::new(window_arr),       // 1 window_title
-            Arc::new(user_input_arr),   // 2 user_input
-            Arc::new(ai_output_arr),    // 3 ai_output
-            Arc::new(timestamp_arr),    // 4 timestamp
-            Arc::new(session_id_arr),   // 5 session_id
-            Arc::new(session_key_arr),  // 6 session_key
-            Arc::new(namespace_arr),    // 7 namespace
-            Arc::new(workspace_arr),    // 8 workspace
-            Arc::new(vec_768),          // 9  vec_768
-            Arc::new(vec_1024),         // 10 vec_1024
-            Arc::new(vec_1536),         // 11 vec_1536
+            Arc::new(id_arr),          // 0 id
+            Arc::new(window_arr),      // 1 window_title
+            Arc::new(user_input_arr),  // 2 user_input
+            Arc::new(ai_output_arr),   // 3 ai_output
+            Arc::new(timestamp_arr),   // 4 timestamp
+            Arc::new(session_id_arr),  // 5 session_id
+            Arc::new(session_key_arr), // 6 session_key
+            Arc::new(namespace_arr),   // 7 namespace
+            Arc::new(workspace_arr),   // 8 workspace
+            Arc::new(vec_768),         // 9  vec_768
+            Arc::new(vec_1024),        // 10 vec_1024
+            Arc::new(vec_1536),        // 11 vec_1536
         ],
     )
     .map_err(conv_err)?;

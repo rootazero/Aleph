@@ -120,10 +120,7 @@ impl PluginLoader {
             PluginKind::Wasm => self.load_wasm_plugin(manifest, registry),
             PluginKind::Mcp => self.load_mcp_plugin(manifest),
             PluginKind::Static => {
-                info!(
-                    "Plugin {} is static, skipping runtime loading",
-                    manifest.id
-                );
+                info!("Plugin {} is static, skipping runtime loading", manifest.id);
                 Ok(())
             }
         }
@@ -316,9 +313,8 @@ impl PluginLoader {
 
                 if output.success {
                     let result = output.result.unwrap_or(serde_json::Value::Null);
-                    Ok(serde_json::from_value(result).unwrap_or_else(|_| {
-                        DirectCommandResult::success("Command executed")
-                    }))
+                    Ok(serde_json::from_value(result)
+                        .unwrap_or_else(|_| DirectCommandResult::success("Command executed")))
                 } else {
                     Ok(DirectCommandResult::error(
                         output

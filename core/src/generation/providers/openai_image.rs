@@ -482,7 +482,10 @@ mod tests {
         let provider = OpenAiImageProvider::new("sk-test-key", None, None, None).unwrap();
 
         assert_eq!(provider.api_key, "sk-test-key");
-        assert_eq!(provider.endpoint, format!("{}/v1/images/generations", DEFAULT_ENDPOINT));
+        assert_eq!(
+            provider.endpoint,
+            format!("{}/v1/images/generations", DEFAULT_ENDPOINT)
+        );
         assert_eq!(provider.model, DEFAULT_MODEL);
     }
 
@@ -493,14 +496,20 @@ mod tests {
             Some("https://custom.openai.com".to_string()),
             None,
             None,
-        ).unwrap();
+        )
+        .unwrap();
 
-        assert_eq!(provider.endpoint, "https://custom.openai.com/v1/images/generations");
+        assert_eq!(
+            provider.endpoint,
+            "https://custom.openai.com/v1/images/generations"
+        );
     }
 
     #[test]
     fn test_new_with_custom_model() {
-        let provider = OpenAiImageProvider::new("sk-test-key", None, Some("dall-e-2".to_string()), None).unwrap();
+        let provider =
+            OpenAiImageProvider::new("sk-test-key", None, Some("dall-e-2".to_string()), None)
+                .unwrap();
 
         assert_eq!(provider.model, "dall-e-2");
     }
@@ -518,7 +527,8 @@ mod tests {
             Some("https://api.example.com".to_string()),
             None,
             None,
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!(
             custom_provider.generations_url(),
             "https://api.example.com/v1/images/generations"
@@ -533,8 +543,12 @@ mod tests {
             Some("https://ai.t8star.cn/v1".to_string()),
             None,
             None,
-        ).unwrap();
-        assert_eq!(provider.endpoint, "https://ai.t8star.cn/v1/images/generations");
+        )
+        .unwrap();
+        assert_eq!(
+            provider.endpoint,
+            "https://ai.t8star.cn/v1/images/generations"
+        );
         assert_eq!(
             provider.generations_url(),
             "https://ai.t8star.cn/v1/images/generations"
@@ -548,8 +562,12 @@ mod tests {
             Some("https://api.example.com/".to_string()),
             None,
             None,
-        ).unwrap();
-        assert_eq!(provider.endpoint, "https://api.example.com/v1/images/generations");
+        )
+        .unwrap();
+        assert_eq!(
+            provider.endpoint,
+            "https://api.example.com/v1/images/generations"
+        );
         assert_eq!(
             provider.generations_url(),
             "https://api.example.com/v1/images/generations"
@@ -563,8 +581,12 @@ mod tests {
             Some("https://api.example.com/v1/".to_string()),
             None,
             None,
-        ).unwrap();
-        assert_eq!(provider.endpoint, "https://api.example.com/v1/images/generations");
+        )
+        .unwrap();
+        assert_eq!(
+            provider.endpoint,
+            "https://api.example.com/v1/images/generations"
+        );
         assert_eq!(
             provider.generations_url(),
             "https://api.example.com/v1/images/generations"
@@ -610,7 +632,8 @@ mod tests {
         assert_eq!(provider.default_model(), Some("dall-e-3"));
 
         let custom_provider =
-            OpenAiImageProvider::new("sk-test-key", None, Some("dall-e-2".to_string()), None).unwrap();
+            OpenAiImageProvider::new("sk-test-key", None, Some("dall-e-2".to_string()), None)
+                .unwrap();
         assert_eq!(custom_provider.default_model(), Some("dall-e-2"));
     }
 

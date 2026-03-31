@@ -11,11 +11,11 @@ mod tests;
 
 pub use types::{RecorderError, SessionRecord};
 
+use crate::sync_primitives::{Arc, Mutex};
 use rusqlite::{params, Connection};
 use std::path::Path;
-use crate::sync_primitives::{Arc, Mutex};
 
-use super::{SessionPart};
+use super::SessionPart;
 
 // ============================================================================
 // SessionRecorder Component

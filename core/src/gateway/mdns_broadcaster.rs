@@ -17,7 +17,7 @@
 //! ```
 
 use mdns_sd::{ServiceDaemon, ServiceInfo};
-use tracing::{info, error, warn};
+use tracing::{error, info, warn};
 
 /// mDNS service broadcaster for Gateway discovery
 ///
@@ -51,8 +51,8 @@ impl MdnsBroadcaster {
     /// # }
     /// ```
     pub fn new(port: u16, instance_name: &str) -> Result<Self, String> {
-        let daemon = ServiceDaemon::new()
-            .map_err(|e| format!("Failed to create mDNS daemon: {}", e))?;
+        let daemon =
+            ServiceDaemon::new().map_err(|e| format!("Failed to create mDNS daemon: {}", e))?;
 
         let service_type = "_aleph._tcp.local.";
         let hostname = format!("{}.local.", instance_name);
@@ -64,9 +64,11 @@ impl MdnsBroadcaster {
             (), // No IP address - let mDNS-SD discover local IPs
             port,
             None, // No TXT records for now
-        ).map_err(|e| format!("Failed to create service info: {}", e))?;
+        )
+        .map_err(|e| format!("Failed to create service info: {}", e))?;
 
-        daemon.register(service_info)
+        daemon
+            .register(service_info)
             .map_err(|e| format!("Failed to register service: {}", e))?;
 
         info!(

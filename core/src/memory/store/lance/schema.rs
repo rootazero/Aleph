@@ -16,10 +16,7 @@ use arrow_schema::{DataType, Field, Schema};
 fn vector_field(name: &str, dim: i32) -> Field {
     Field::new(
         name,
-        DataType::FixedSizeList(
-            Arc::new(Field::new("item", DataType::Float32, true)),
-            dim,
-        ),
+        DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Float32, true)), dim),
         true, // nullable
     )
 }
@@ -188,18 +185,18 @@ mod tests {
                 name,
                 field.data_type(),
             );
-            assert!(field.is_nullable(), "vector column '{}' should be nullable", name);
+            assert!(
+                field.is_nullable(),
+                "vector column '{}' should be nullable",
+                name
+            );
         }
     }
 
     #[test]
     fn facts_schema_vector_dimensions() {
         let schema = facts_schema();
-        let expected: &[(&str, i32)] = &[
-            ("vec_768", 768),
-            ("vec_1024", 1024),
-            ("vec_1536", 1536),
-        ];
+        let expected: &[(&str, i32)] = &[("vec_768", 768), ("vec_1024", 1024), ("vec_1536", 1536)];
         for (name, dim) in expected {
             let field = schema.field_with_name(name).unwrap();
             match field.data_type() {
@@ -218,7 +215,9 @@ mod tests {
     #[test]
     fn graph_nodes_aliases_is_list() {
         let schema = graph_nodes_schema();
-        let field = schema.field_with_name("aliases").expect("aliases column must exist");
+        let field = schema
+            .field_with_name("aliases")
+            .expect("aliases column must exist");
         assert!(
             matches!(field.data_type(), DataType::List(_)),
             "aliases should be List type, got {:?}",
@@ -242,11 +241,7 @@ mod tests {
     #[test]
     fn memories_schema_has_vector_columns() {
         let schema = memories_schema();
-        let expected: &[(&str, i32)] = &[
-            ("vec_768", 768),
-            ("vec_1024", 1024),
-            ("vec_1536", 1536),
-        ];
+        let expected: &[(&str, i32)] = &[("vec_768", 768), ("vec_1024", 1024), ("vec_1536", 1536)];
         for (name, dim) in expected {
             let field = schema.field_with_name(name).unwrap_or_else(|_| {
                 panic!("memories schema must contain column '{}'", name);
@@ -255,7 +250,11 @@ mod tests {
                 DataType::FixedSizeList(_, d) => assert_eq!(d, dim),
                 other => panic!("expected FixedSizeList for '{}', got {:?}", name, other),
             }
-            assert!(field.is_nullable(), "vector column '{}' should be nullable", name);
+            assert!(
+                field.is_nullable(),
+                "vector column '{}' should be nullable",
+                name
+            );
         }
     }
 
@@ -263,11 +262,30 @@ mod tests {
     fn facts_schema_non_nullable_fields() {
         let schema = facts_schema();
         let required = [
-            "id", "content", "fact_type", "fact_source", "specificity",
-            "temporal_scope", "layer", "category", "path", "parent_path", "namespace",
-            "content_hash", "agent", "confidence", "decay_score", "is_valid",
-            "embedding_model", "created_at", "updated_at", "version",
-            "tier", "scope", "strength", "access_count",
+            "id",
+            "content",
+            "fact_type",
+            "fact_source",
+            "specificity",
+            "temporal_scope",
+            "layer",
+            "category",
+            "path",
+            "parent_path",
+            "namespace",
+            "content_hash",
+            "agent",
+            "confidence",
+            "decay_score",
+            "is_valid",
+            "embedding_model",
+            "created_at",
+            "updated_at",
+            "version",
+            "tier",
+            "scope",
+            "strength",
+            "access_count",
         ];
         for name in &required {
             let field = schema.field_with_name(name).unwrap_or_else(|_| {
@@ -285,19 +303,21 @@ mod tests {
     fn facts_schema_nullable_fields() {
         let schema = facts_schema();
         let optional = [
-            "tags", "source_memory_ids", "invalidation_reason",
-            "decay_invalidated_at", "persona_id", "last_accessed_at",
-            "vec_768", "vec_1024", "vec_1536",
+            "tags",
+            "source_memory_ids",
+            "invalidation_reason",
+            "decay_invalidated_at",
+            "persona_id",
+            "last_accessed_at",
+            "vec_768",
+            "vec_1024",
+            "vec_1536",
         ];
         for name in &optional {
             let field = schema.field_with_name(name).unwrap_or_else(|_| {
                 panic!("facts schema must contain column '{}'", name);
             });
-            assert!(
-                field.is_nullable(),
-                "column '{}' should be nullable",
-                name,
-            );
+            assert!(field.is_nullable(), "column '{}' should be nullable", name,);
         }
     }
 
@@ -330,12 +350,26 @@ mod tests {
     #[test]
     fn poe_experiences_schema_required_fields() {
         let schema = poe_experiences_schema();
-        let required = ["id", "task_id", "objective", "pattern_id", "satisfaction", "distance_score", "attempts", "duration_ms", "created_at"];
+        let required = [
+            "id",
+            "task_id",
+            "objective",
+            "pattern_id",
+            "satisfaction",
+            "distance_score",
+            "attempts",
+            "duration_ms",
+            "created_at",
+        ];
         for name in &required {
             let field = schema.field_with_name(name).unwrap_or_else(|_| {
                 panic!("poe_experiences schema must contain column '{}'", name);
             });
-            assert!(!field.is_nullable(), "column '{}' should NOT be nullable", name);
+            assert!(
+                !field.is_nullable(),
+                "column '{}' should NOT be nullable",
+                name
+            );
         }
     }
 }

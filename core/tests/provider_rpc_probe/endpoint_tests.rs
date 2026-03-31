@@ -29,7 +29,9 @@ async fn providers_list_returns_providers_array() {
     server.clean_providers().await;
     let result = server.rpc_ok("providers.list", json!({})).await;
 
-    let providers = result["providers"].as_array().expect("providers should be an array");
+    let providers = result["providers"]
+        .as_array()
+        .expect("providers should be an array");
     // providers should be an array (already checked by .as_array() above)
 
     // Each provider should have a "models" field that is an array
@@ -59,11 +61,16 @@ async fn providers_list_returns_providers_array() {
         .await;
 
     let result2 = server.rpc_ok("providers.list", json!({})).await;
-    let providers2 = result2["providers"].as_array().expect("providers should be an array");
+    let providers2 = result2["providers"]
+        .as_array()
+        .expect("providers should be an array");
     assert!(
         providers2.iter().any(|p| p["name"] == "probe-list-check"),
         "Expected 'probe-list-check' in list after create, got: {:?}",
-        providers2.iter().map(|p| p["name"].as_str()).collect::<Vec<_>>()
+        providers2
+            .iter()
+            .map(|p| p["name"].as_str())
+            .collect::<Vec<_>>()
     );
 
     // Cleanup
@@ -104,7 +111,9 @@ async fn providers_create_and_get() {
     assert_eq!(provider["name"], "probe-test-create");
     assert_eq!(provider["enabled"], true);
 
-    let models = provider["models"].as_array().expect("models should be array");
+    let models = provider["models"]
+        .as_array()
+        .expect("models should be array");
     assert_eq!(models.len(), 3);
     assert!(models.contains(&json!("model-a")));
     assert!(models.contains(&json!("model-b")));

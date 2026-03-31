@@ -580,9 +580,18 @@ mod tests {
 
     #[test]
     fn test_task_status_from_str() {
-        assert_eq!(TaskStatus::from_str_or_default("RUNNING"), TaskStatus::Running);
-        assert_eq!(TaskStatus::from_str_or_default("interrupted"), TaskStatus::Interrupted);
-        assert_eq!(TaskStatus::from_str_or_default("unknown"), TaskStatus::Pending);
+        assert_eq!(
+            TaskStatus::from_str_or_default("RUNNING"),
+            TaskStatus::Running
+        );
+        assert_eq!(
+            TaskStatus::from_str_or_default("interrupted"),
+            TaskStatus::Interrupted
+        );
+        assert_eq!(
+            TaskStatus::from_str_or_default("unknown"),
+            TaskStatus::Pending
+        );
     }
 
     #[test]

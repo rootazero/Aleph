@@ -1,56 +1,54 @@
 //! Shared types for component implementations.
 
 // Submodules
-mod status;
-mod session;
 mod context;
-pub mod parts;
 mod part_id;
+pub mod parts;
+mod session;
+mod status;
 
 #[cfg(test)]
 mod tests;
 
 // Re-export status types
-pub use status::{SessionStatus, ReminderType, SystemReminderPart};
+pub use status::{ReminderType, SessionStatus, SystemReminderPart};
 
 // Re-export session types
-pub use session::{
-    ExecutionSession, ToolCallRecord, Complexity, Decision, ComponentContext,
-};
+pub use session::{Complexity, ComponentContext, Decision, ExecutionSession, ToolCallRecord};
 
 // Re-export context types
 pub use context::{
-    Knowledge, Entity, UserIntent, Goal, GoalStatus, DecisionRecord,
-    ExecutionPhase, ContextVerbosity, ExecutionContext,
+    ContextVerbosity, DecisionRecord, Entity, ExecutionContext, ExecutionPhase, Goal, GoalStatus,
+    Knowledge, UserIntent,
 };
 
 // Re-export all part types
 pub use parts::{
-    // Core part type enum
-    SessionPart,
-    // Individual part types
-    UserInputPart,
     AiResponsePart,
-    ToolCallPart,
-    ToolCallStatus,
-    ReasoningPart,
-    PlanPart,
-    PlanStep,
-    StepStatus,
-    SubAgentPart,
-    SummaryPart,
     CompactionMarker,
-    StepStartPart,
-    StepFinishPart,
-    StepFinishReason,
-    StepTokenUsage,
-    SnapshotPart,
-    FileSnapshot,
-    PatchPart,
     FileChange,
     FileChangeType,
+    FileSnapshot,
+    PatchPart,
+    PlanPart,
+    PlanStep,
+    ReasoningPart,
+    // Core part type enum
+    SessionPart,
+    SnapshotPart,
+    StepFinishPart,
+    StepFinishReason,
+    StepStartPart,
+    StepStatus,
+    StepTokenUsage,
     StreamingTextPart,
+    SubAgentPart,
+    SummaryPart,
+    ToolCallPart,
+    ToolCallStatus,
+    // Individual part types
+    UserInputPart,
 };
 
 // Re-export part ID trait and update types
-pub use part_id::{PartId, PartEventType, PartUpdateData};
+pub use part_id::{PartEventType, PartId, PartUpdateData};

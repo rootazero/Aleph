@@ -6,10 +6,19 @@ use crate::thinker::prompt_mode::PromptMode;
 pub struct HeartbeatLayer;
 
 impl PromptLayer for HeartbeatLayer {
-    fn name(&self) -> &'static str { "heartbeat" }
-    fn priority(&self) -> u32 { 710 }
+    fn name(&self) -> &'static str {
+        "heartbeat"
+    }
+    fn priority(&self) -> u32 {
+        710
+    }
     fn paths(&self) -> &'static [AssemblyPath] {
-        &[AssemblyPath::Basic, AssemblyPath::Soul, AssemblyPath::Context, AssemblyPath::Cached]
+        &[
+            AssemblyPath::Basic,
+            AssemblyPath::Soul,
+            AssemblyPath::Context,
+            AssemblyPath::Cached,
+        ]
     }
     fn supports_mode(&self, mode: PromptMode) -> bool {
         matches!(mode, PromptMode::Full)

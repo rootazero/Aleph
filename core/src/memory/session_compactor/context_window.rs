@@ -36,10 +36,7 @@ pub fn partition_fresh_tail(messages: &[UnifiedMessage], fresh_tail_count: usize
 }
 
 /// Same as [`partition_fresh_tail`] but for `(role, content)` string pairs.
-pub fn partition_fresh_tail_pairs(
-    messages: &[(String, String)],
-    fresh_tail_count: usize,
-) -> usize {
+pub fn partition_fresh_tail_pairs(messages: &[(String, String)], fresh_tail_count: usize) -> usize {
     if messages.len() <= fresh_tail_count {
         0
     } else {
@@ -53,9 +50,7 @@ pub fn partition_fresh_tail_pairs(
 /// An unconsumed tool result means the LLM has not yet seen the result, so it
 /// must not be compacted away.
 pub fn is_tool_result_consumed(messages: &[UnifiedMessage], idx: usize) -> bool {
-    messages[(idx + 1)..]
-        .iter()
-        .any(|m| m.is_assistant())
+    messages[(idx + 1)..].iter().any(|m| m.is_assistant())
 }
 
 // === Tests ===
@@ -103,8 +98,7 @@ mod tests {
             UnifiedMessage::user("hello world"),
             UnifiedMessage::assistant("goodbye world"),
         ];
-        let expected = estimate_tokens("hello world", 4.0)
-            + estimate_tokens("goodbye world", 4.0);
+        let expected = estimate_tokens("hello world", 4.0) + estimate_tokens("goodbye world", 4.0);
         assert_eq!(estimate_total_tokens(&messages, 4.0), expected);
     }
 
@@ -224,9 +218,8 @@ mod tests {
 
     #[test]
     fn test_tool_result_consumed_empty_tail() {
-        let messages: Vec<UnifiedMessage> = vec![
-            UnifiedMessage::tool_result("c1", "t", "o", false),
-        ];
+        let messages: Vec<UnifiedMessage> =
+            vec![UnifiedMessage::tool_result("c1", "t", "o", false)];
         assert!(!is_tool_result_consumed(&messages, 0));
     }
 }

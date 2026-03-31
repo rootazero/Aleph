@@ -3,9 +3,9 @@
 //! Manages external MCP server connections only.
 //! Native tools (fs, git, shell, etc.) are now handled via AgentTool infrastructure.
 
+use crate::sync_primitives::Arc;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use crate::sync_primitives::Arc;
 use std::time::Duration;
 
 use futures::future::join_all;
@@ -14,7 +14,9 @@ use tokio::sync::RwLock;
 use crate::error::{AlephError, Result};
 use crate::mcp::external::{check_runtime, McpServerConnection, RuntimeKind};
 use crate::mcp::sampling::SamplingHandler;
-use crate::mcp::transport::{HttpTransport, HttpTransportConfig, McpTransport, SseTransport, SseTransportConfig};
+use crate::mcp::transport::{
+    HttpTransport, HttpTransportConfig, McpTransport, SseTransport, SseTransportConfig,
+};
 use crate::mcp::types::{McpRemoteServerConfig, McpTool, McpToolResult, TransportPreference};
 
 /// MCP server startup report
@@ -100,7 +102,9 @@ impl McpClient {
     pub async fn set_sampling_callback<F, Fut>(&self, callback: F)
     where
         F: Fn(crate::mcp::jsonrpc::mcp::SamplingRequest) -> Fut + Send + Sync + 'static,
-        Fut: std::future::Future<Output = Result<crate::mcp::jsonrpc::mcp::SamplingResponse>> + Send + 'static,
+        Fut: std::future::Future<Output = Result<crate::mcp::jsonrpc::mcp::SamplingResponse>>
+            + Send
+            + 'static,
     {
         self.sampling_handler.set_callback(callback).await;
     }
@@ -488,7 +492,10 @@ impl McpClient {
                                 "Processing sampling/createMessage request"
                             );
 
-                            match handler.handle_request(rid.clone(), params_value, &server).await {
+                            match handler
+                                .handle_request(rid.clone(), params_value, &server)
+                                .await
+                            {
                                 Ok(response) => {
                                     tracing::debug!(
                                         server = %server,
@@ -548,7 +555,10 @@ impl McpClient {
         {
             let mut map = self.tool_location_map.write().await;
             for tool in &tools {
-                map.insert(tool.name.clone(), ToolLocation::External(config.name.clone()));
+                map.insert(
+                    tool.name.clone(),
+                    ToolLocation::External(config.name.clone()),
+                );
             }
         }
 
@@ -595,7 +605,10 @@ impl McpClient {
         // Clone Arc refs under lock, then release lock before awaiting network I/O
         let connections: Vec<(String, Arc<McpServerConnection>)> = {
             let servers = self.external_servers.read().await;
-            servers.iter().map(|(k, v)| (k.clone(), Arc::clone(v))).collect()
+            servers
+                .iter()
+                .map(|(k, v)| (k.clone(), Arc::clone(v)))
+                .collect()
         };
 
         let mut health = HashMap::new();

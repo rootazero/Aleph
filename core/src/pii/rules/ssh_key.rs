@@ -14,10 +14,8 @@ fn ssh_key_regex() -> &'static Regex {
     SSH_KEY_RE.get_or_init(|| {
         // Match the full PEM block from BEGIN to END, including key body.
         // (?s) enables dot-matches-newline so .* spans across lines.
-        Regex::new(
-            r"(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----",
-        )
-        .unwrap()
+        Regex::new(r"(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----")
+            .unwrap()
     })
 }
 
@@ -81,8 +79,7 @@ mod tests {
 
     #[test]
     fn test_detect_ec_private_key() {
-        let text =
-            "-----BEGIN EC PRIVATE KEY-----\nbase64data\n-----END EC PRIVATE KEY-----";
+        let text = "-----BEGIN EC PRIVATE KEY-----\nbase64data\n-----END EC PRIVATE KEY-----";
         let matches = rule().detect(text);
         assert_eq!(matches.len(), 1);
         assert!(matches[0].matched_text.contains("base64data"));
@@ -98,8 +95,7 @@ mod tests {
 
     #[test]
     fn test_detect_generic_private_key() {
-        let text =
-            "-----BEGIN PRIVATE KEY-----\nMIIEvAIBADANBg...\n-----END PRIVATE KEY-----";
+        let text = "-----BEGIN PRIVATE KEY-----\nMIIEvAIBADANBg...\n-----END PRIVATE KEY-----";
         let matches = rule().detect(text);
         assert_eq!(matches.len(), 1);
         assert!(matches[0].matched_text.contains("MIIEvAIBADANBg"));
@@ -124,8 +120,7 @@ mod tests {
 
     #[test]
     fn test_no_match_certificate() {
-        let matches =
-            rule().detect("-----BEGIN CERTIFICATE-----\ndata\n-----END CERTIFICATE-----");
+        let matches = rule().detect("-----BEGIN CERTIFICATE-----\ndata\n-----END CERTIFICATE-----");
         assert_eq!(matches.len(), 0);
     }
 }

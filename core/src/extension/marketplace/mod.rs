@@ -37,7 +37,10 @@ impl MarketplaceManager {
     ///
     /// * `marketplaces` — user-configured marketplace map (from config file)
     /// * `cache_dir` — where cloned repos are stored; `None` uses [`marketplace_cache_dir()`]
-    pub fn new(marketplaces: HashMap<String, MarketplaceConfig>, cache_dir: Option<PathBuf>) -> Self {
+    pub fn new(
+        marketplaces: HashMap<String, MarketplaceConfig>,
+        cache_dir: Option<PathBuf>,
+    ) -> Self {
         Self {
             marketplaces,
             cache_dir: cache_dir.unwrap_or_else(marketplace_cache_dir),
@@ -82,7 +85,9 @@ impl MarketplaceManager {
     /// Return all registered marketplaces, always including the built-in one.
     pub fn all_marketplaces(&self) -> HashMap<String, MarketplaceConfig> {
         let mut result = self.marketplaces.clone();
-        result.entry(BUILTIN_MARKETPLACE_NAME.to_string()).or_insert_with(builtin_config);
+        result
+            .entry(BUILTIN_MARKETPLACE_NAME.to_string())
+            .or_insert_with(builtin_config);
         result
     }
 
@@ -223,12 +228,14 @@ impl MarketplaceManager {
                 installer::install_plugin_from_cache(&result.plugin_path, &install_dir, plugin_name)
             }
             _ => {
-                let names: Vec<_> = results.iter()
+                let names: Vec<_> = results
+                    .iter()
                     .map(|r| format!("{}@{}", plugin_name, r.marketplace_name))
                     .collect();
                 Err(format!(
                     "Plugin '{}' found in multiple marketplaces: {}. Specify with @marketplace.",
-                    plugin_name, names.join(", ")
+                    plugin_name,
+                    names.join(", ")
                 ))
             }
         }
@@ -307,7 +314,10 @@ mod tests {
             all.contains_key(BUILTIN_MARKETPLACE_NAME),
             "built-in should always be present"
         );
-        assert_eq!(all[BUILTIN_MARKETPLACE_NAME].source, BUILTIN_MARKETPLACE_SOURCE);
+        assert_eq!(
+            all[BUILTIN_MARKETPLACE_NAME].source,
+            BUILTIN_MARKETPLACE_SOURCE
+        );
     }
 
     #[test]

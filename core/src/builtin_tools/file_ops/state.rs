@@ -2,9 +2,9 @@
 //!
 //! Manages working directory and written files tracking across sessions.
 
+use crate::sync_primitives::Mutex;
 use once_cell::sync::Lazy;
 use std::path::PathBuf;
-use crate::sync_primitives::Mutex;
 use std::time::SystemTime;
 use tracing::{info, warn};
 use walkdir::WalkDir;
@@ -36,13 +36,17 @@ pub struct WrittenFile {
 /// Set the working directory for the current session
 /// Relative paths will be resolved to this directory
 pub fn set_working_dir(dir: Option<PathBuf>) {
-    let mut wd = CURRENT_WORKING_DIR.lock().unwrap_or_else(|e| e.into_inner());
+    let mut wd = CURRENT_WORKING_DIR
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     *wd = dir;
 }
 
 /// Get the working directory for the current session
 pub fn get_working_dir() -> Option<PathBuf> {
-    let wd = CURRENT_WORKING_DIR.lock().unwrap_or_else(|e| e.into_inner());
+    let wd = CURRENT_WORKING_DIR
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     wd.clone()
 }
 
@@ -74,7 +78,10 @@ pub fn record_written_file(path: PathBuf, size: u64, operation: &str) {
 pub fn take_written_files() -> Vec<WrittenFile> {
     let mut files = WRITTEN_FILES.lock().unwrap_or_else(|e| e.into_inner());
     let result = std::mem::take(&mut *files);
-    info!(file_count = result.len(), "Taking written files from global registry");
+    info!(
+        file_count = result.len(),
+        "Taking written files from global registry"
+    );
     result
 }
 
@@ -123,10 +130,8 @@ pub fn scan_new_files_in_working_dir() -> Vec<WrittenFile> {
     );
 
     // Get already tracked files to avoid duplicates
-    let tracked_paths: std::collections::HashSet<PathBuf> = get_written_files()
-        .iter()
-        .map(|f| f.path.clone())
-        .collect();
+    let tracked_paths: std::collections::HashSet<PathBuf> =
+        get_written_files().iter().map(|f| f.path.clone()).collect();
 
     let mut new_files = Vec::new();
 

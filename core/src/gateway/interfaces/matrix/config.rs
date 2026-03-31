@@ -53,9 +53,7 @@ impl MatrixConfig {
             return Err("homeserver_url is required".to_string());
         }
         if !self.homeserver_url.starts_with("http") {
-            return Err(
-                "homeserver_url must start with 'http://' or 'https://'".to_string(),
-            );
+            return Err("homeserver_url must start with 'http://' or 'https://'".to_string());
         }
         if self.access_token.is_empty() {
             return Err("access_token is required".to_string());
@@ -116,10 +114,7 @@ mod tests {
             access_token: String::new(),
             ..Default::default()
         };
-        assert_eq!(
-            config.validate().unwrap_err(),
-            "access_token is required"
-        );
+        assert_eq!(config.validate().unwrap_err(), "access_token is required");
     }
 
     #[test]

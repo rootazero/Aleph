@@ -302,13 +302,10 @@ pub async fn take_aria_snapshot(page: &Page) -> Result<AriaSnapshot, BrowserErro
         .await
         .map_err(|e| BrowserError::EvalError(e.to_string()))?;
 
-    let value: serde_json::Value = result
-        .into_value()
-        .unwrap_or(serde_json::Value::Null);
+    let value: serde_json::Value = result.into_value().unwrap_or(serde_json::Value::Null);
 
-    serde_json::from_value(value).map_err(|e| {
-        BrowserError::EvalError(format!("Failed to deserialize ARIA snapshot: {e}"))
-    })
+    serde_json::from_value(value)
+        .map_err(|e| BrowserError::EvalError(format!("Failed to deserialize ARIA snapshot: {e}")))
 }
 
 /// Resolve a `ref_id` (e.g. `"button[0]"`) to the center point of its
@@ -328,9 +325,8 @@ pub fn resolve_ref_to_point(snapshot: &AriaSnapshot, ref_id: &str) -> Option<(f6
         None
     }
 
-    find_in_elements(&snapshot.elements, ref_id).map(|rect| {
-        (rect.x + rect.width / 2.0, rect.y + rect.height / 2.0)
-    })
+    find_in_elements(&snapshot.elements, ref_id)
+        .map(|rect| (rect.x + rect.width / 2.0, rect.y + rect.height / 2.0))
 }
 
 #[cfg(test)]

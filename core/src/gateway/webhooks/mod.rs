@@ -49,9 +49,7 @@ pub mod hmac;
 pub mod template;
 
 // Re-exports
-pub use config::{
-    ConfigValidationError, SignatureFormat, WebhookEndpointConfig, WebhooksConfig,
-};
+pub use config::{ConfigValidationError, SignatureFormat, WebhookEndpointConfig, WebhooksConfig};
 pub use handler::{
     create_router, WebhookAccepted, WebhookError, WebhookHandlerState, WebhookProcessor,
     WebhookRejected, WebhookRequest,

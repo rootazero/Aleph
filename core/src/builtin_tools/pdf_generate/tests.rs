@@ -1,7 +1,7 @@
 //! Tests for the PDF generation tool
 
-use super::*;
 use super::args::*;
+use super::*;
 use std::fs;
 
 #[test]
@@ -161,7 +161,10 @@ fn test_wrap_text_cjk() {
     let chinese = "这是一段测试中文文本，用于验证换行功能";
     let wrapped = native_engine::wrap_text(chinese, 30.0, 12.0);
     // With ~30mm at 12pt, about 10 units, CJK chars are 2 units each -> ~5 chars/line
-    assert!(wrapped.len() > 1, "Chinese text should wrap to multiple lines");
+    assert!(
+        wrapped.len() > 1,
+        "Chinese text should wrap to multiple lines"
+    );
 }
 
 #[test]
@@ -283,7 +286,11 @@ fn main() {
     };
 
     let result = tool.call(args).await;
-    assert!(result.is_ok(), "Browser engine should produce PDF: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Browser engine should produce PDF: {:?}",
+        result.err()
+    );
 
     let output = result.unwrap();
     assert!(output.success);
@@ -291,7 +298,10 @@ fn main() {
 
     // Verify PDF file exists and has substantial content
     let metadata = std::fs::metadata(&output_path).unwrap();
-    assert!(metadata.len() > 5000, "Browser-rendered PDF should be substantial");
+    assert!(
+        metadata.len() > 5000,
+        "Browser-rendered PDF should be substantial"
+    );
 
     // Cleanup
     let _ = std::fs::remove_file(&output_path);
@@ -317,7 +327,11 @@ async fn test_auto_engine_fallback() {
     };
 
     let result = tool.call(args).await;
-    assert!(result.is_ok(), "Auto engine should always succeed: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Auto engine should always succeed: {:?}",
+        result.err()
+    );
 
     let output = result.unwrap();
     assert!(output.success);
@@ -330,31 +344,46 @@ async fn test_auto_engine_fallback() {
 #[test]
 fn test_detect_markdown_headings() {
     let content = "# Title\n\nSome text\n\n## Section\n\nMore text";
-    assert!(matches!(ContentFormat::detect(content), ContentFormat::Markdown));
+    assert!(matches!(
+        ContentFormat::detect(content),
+        ContentFormat::Markdown
+    ));
 }
 
 #[test]
 fn test_detect_markdown_mixed() {
     let content = "# Report\n\n**Bold text** and *italic*.\n\n- item 1\n- item 2\n";
-    assert!(matches!(ContentFormat::detect(content), ContentFormat::Markdown));
+    assert!(matches!(
+        ContentFormat::detect(content),
+        ContentFormat::Markdown
+    ));
 }
 
 #[test]
 fn test_detect_plain_text() {
     let content = "Hello, this is just plain text.\nNothing special here.";
-    assert!(matches!(ContentFormat::detect(content), ContentFormat::Text));
+    assert!(matches!(
+        ContentFormat::detect(content),
+        ContentFormat::Text
+    ));
 }
 
 #[test]
 fn test_detect_markdown_code_blocks() {
     let content = "Here is some code:\n\n```rust\nfn main() {}\n```\n\nEnd.";
-    assert!(matches!(ContentFormat::detect(content), ContentFormat::Markdown));
+    assert!(matches!(
+        ContentFormat::detect(content),
+        ContentFormat::Markdown
+    ));
 }
 
 #[test]
 fn test_detect_markdown_links() {
     let content = "Check out [this link](https://example.com) for details.\n\nAlso **bold**.";
-    assert!(matches!(ContentFormat::detect(content), ContentFormat::Markdown));
+    assert!(matches!(
+        ContentFormat::detect(content),
+        ContentFormat::Markdown
+    ));
 }
 
 // ── Schema verification ─────────────────────────────────────────────────
@@ -363,8 +392,17 @@ fn test_detect_markdown_links() {
 fn test_args_schema_includes_render_engine() {
     let schema = schemars::schema_for!(PdfGenerateArgs);
     let json = serde_json::to_string_pretty(&schema).unwrap();
-    assert!(json.contains("render_engine"), "Schema should include render_engine field");
+    assert!(
+        json.contains("render_engine"),
+        "Schema should include render_engine field"
+    );
     assert!(json.contains("auto"), "Schema should include auto option");
-    assert!(json.contains("browser"), "Schema should include browser option");
-    assert!(json.contains("native"), "Schema should include native option");
+    assert!(
+        json.contains("browser"),
+        "Schema should include browser option"
+    );
+    assert!(
+        json.contains("native"),
+        "Schema should include native option"
+    );
 }

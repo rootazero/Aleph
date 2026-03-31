@@ -242,7 +242,11 @@ mod tests {
     fn test_profile_state_is_running() {
         assert!(!ProfileState::Idle.is_running());
         assert!(!ProfileState::Starting.is_running());
-        assert!((ProfileState::Running { pid: 42, port: 18800 }).is_running());
+        assert!((ProfileState::Running {
+            pid: 42,
+            port: 18800
+        })
+        .is_running());
         assert!(!ProfileState::Stopping.is_running());
     }
 
@@ -317,10 +321,22 @@ args = ["./mcp-server.js"]
         }
 
         // Verify lowercase serialization
-        assert_eq!(serde_json::to_string(&BrowserType::Chromium).unwrap(), "\"chromium\"");
-        assert_eq!(serde_json::to_string(&BrowserType::Chrome).unwrap(), "\"chrome\"");
-        assert_eq!(serde_json::to_string(&BrowserType::Brave).unwrap(), "\"brave\"");
-        assert_eq!(serde_json::to_string(&BrowserType::Edge).unwrap(), "\"edge\"");
+        assert_eq!(
+            serde_json::to_string(&BrowserType::Chromium).unwrap(),
+            "\"chromium\""
+        );
+        assert_eq!(
+            serde_json::to_string(&BrowserType::Chrome).unwrap(),
+            "\"chrome\""
+        );
+        assert_eq!(
+            serde_json::to_string(&BrowserType::Brave).unwrap(),
+            "\"brave\""
+        );
+        assert_eq!(
+            serde_json::to_string(&BrowserType::Edge).unwrap(),
+            "\"edge\""
+        );
     }
 
     #[test]
@@ -353,8 +369,14 @@ args = ["./mcp-server.js"]
             let deserialized: BrowserDriver = serde_json::from_str(&json).unwrap();
             assert_eq!(d, deserialized);
         }
-        assert_eq!(serde_json::to_string(&BrowserDriver::Managed).unwrap(), "\"managed\"");
-        assert_eq!(serde_json::to_string(&BrowserDriver::ExistingSession).unwrap(), "\"existing_session\"");
+        assert_eq!(
+            serde_json::to_string(&BrowserDriver::Managed).unwrap(),
+            "\"managed\""
+        );
+        assert_eq!(
+            serde_json::to_string(&BrowserDriver::ExistingSession).unwrap(),
+            "\"existing_session\""
+        );
     }
 
     #[test]
@@ -367,7 +389,9 @@ args = ["./mcp-server.js"]
     fn test_chrome_mcp_config_defaults() {
         let config = ChromeMcpConfig::default();
         assert_eq!(config.command, "npx");
-        assert!(config.args.contains(&"chrome-devtools-mcp@latest".to_string()));
+        assert!(config
+            .args
+            .contains(&"chrome-devtools-mcp@latest".to_string()));
         assert!(config.args.contains(&"--autoConnect".to_string()));
     }
 

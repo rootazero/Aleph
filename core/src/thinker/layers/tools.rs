@@ -9,8 +9,12 @@ use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, PromptLayer};
 pub struct ToolsLayer;
 
 impl PromptLayer for ToolsLayer {
-    fn name(&self) -> &'static str { "tools" }
-    fn priority(&self) -> u32 { 500 }
+    fn name(&self) -> &'static str {
+        "tools"
+    }
+    fn priority(&self) -> u32 {
+        500
+    }
     fn paths(&self) -> &'static [AssemblyPath] {
         &[
             AssemblyPath::Basic,
@@ -55,7 +59,9 @@ impl PromptLayer for ToolsLayer {
 
             if let Some(ref index) = input.config.tool_index {
                 output.push_str("### Additional Tools (use `get_tool_schema` to get parameters)\n");
-                output.push_str("The following tools are available but not shown with full parameters.\n");
+                output.push_str(
+                    "The following tools are available but not shown with full parameters.\n",
+                );
                 output.push_str(
                     "Call `get_tool_schema(tool_name)` to get the complete parameter schema before using.\n\n",
                 );
@@ -74,8 +80,12 @@ impl PromptLayer for ToolsLayer {
 pub struct HydratedToolsLayer;
 
 impl PromptLayer for HydratedToolsLayer {
-    fn name(&self) -> &'static str { "hydrated_tools" }
-    fn priority(&self) -> u32 { 501 }
+    fn name(&self) -> &'static str {
+        "hydrated_tools"
+    }
+    fn priority(&self) -> u32 {
+        501
+    }
     fn paths(&self) -> &'static [AssemblyPath] {
         &[AssemblyPath::Hydration]
     }
@@ -166,7 +176,9 @@ mod tests {
     fn test_tools_with_index() {
         let layer = ToolsLayer;
         let config = PromptConfig {
-            tool_index: Some("- web_search: Search the web\n- screenshot: Take screenshot".to_string()),
+            tool_index: Some(
+                "- web_search: Search the web\n- screenshot: Take screenshot".to_string(),
+            ),
             ..Default::default()
         };
         let tools = vec![];
@@ -220,6 +232,9 @@ mod tests {
         layer.inject(&mut out, &input);
 
         // Output should be empty when native tools enabled
-        assert!(out.is_empty(), "ToolsLayer should skip when native_tools_enabled=true");
+        assert!(
+            out.is_empty(),
+            "ToolsLayer should skip when native_tools_enabled=true"
+        );
     }
 }

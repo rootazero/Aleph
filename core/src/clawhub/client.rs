@@ -105,7 +105,11 @@ impl ClawHubClient {
             )
             .await?;
 
-        Ok(resp.results.into_iter().map(SkillSearchResult::from).collect())
+        Ok(resp
+            .results
+            .into_iter()
+            .map(SkillSearchResult::from)
+            .collect())
     }
 
     /// Browse skills with sorting and pagination.
@@ -208,8 +212,11 @@ impl ClawHubClient {
 
         // Sanitize slug for filename: "owner/skill" → "owner-skill"
         let safe_slug = slug.replace('/', "-");
-        let temp_path =
-            std::env::temp_dir().join(format!("clawhub-{}-{}.zip", safe_slug, uuid::Uuid::new_v4()));
+        let temp_path = std::env::temp_dir().join(format!(
+            "clawhub-{}-{}.zip",
+            safe_slug,
+            uuid::Uuid::new_v4()
+        ));
 
         std::fs::write(&temp_path, &bytes)
             .map_err(|e| AlephError::config(format!("Failed to write temp ZIP: {}", e)))?;
@@ -259,10 +266,7 @@ impl ClawHubClient {
                 )
             }
             _ => {
-                let body = resp
-                    .text()
-                    .await
-                    .unwrap_or_default();
+                let body = resp.text().await.unwrap_or_default();
                 let detail = if body.is_empty() {
                     String::new()
                 } else {

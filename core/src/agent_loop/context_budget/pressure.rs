@@ -1,8 +1,8 @@
 //! PressureSensor — token estimation with API usage anchoring.
 
-use crate::providers::message::UnifiedMessage;
 use super::ContextPressure;
 use crate::agent_loop::tool::ToolDefinition;
+use crate::providers::message::UnifiedMessage;
 
 // =============================================================================
 // Content-aware ratio detection
@@ -30,13 +30,50 @@ fn is_cjk(c: char) -> bool {
 /// and returns true if more than 40% of lines look like code.
 fn looks_like_code(text: &str) -> bool {
     let code_indicators = [
-        "fn ", "let ", "mut ", "pub ", "impl ", "struct ", "enum ", "trait ",  // Rust
-        "def ", "class ", "import ", "from ", "return ", "if ", "else:", "for ", // Python
-        "function ", "const ", "var ", "=>", "===", "!==",                       // JS/TS
-        "int ", "void ", "return;", "#include", "using namespace",               // C/C++
-        "func ", "package ", "interface ", "go ",                                // Go
-        "{", "}", "//", "/*", "*/",                                              // Common
-        "->", "::", "&&", "||", "!=", "==", "<=", ">=",                         // Operators
+        "fn ",
+        "let ",
+        "mut ",
+        "pub ",
+        "impl ",
+        "struct ",
+        "enum ",
+        "trait ", // Rust
+        "def ",
+        "class ",
+        "import ",
+        "from ",
+        "return ",
+        "if ",
+        "else:",
+        "for ", // Python
+        "function ",
+        "const ",
+        "var ",
+        "=>",
+        "===",
+        "!==", // JS/TS
+        "int ",
+        "void ",
+        "return;",
+        "#include",
+        "using namespace", // C/C++
+        "func ",
+        "package ",
+        "interface ",
+        "go ", // Go
+        "{",
+        "}",
+        "//",
+        "/*",
+        "*/", // Common
+        "->",
+        "::",
+        "&&",
+        "||",
+        "!=",
+        "==",
+        "<=",
+        ">=", // Operators
     ];
 
     let lines: Vec<&str> = text.lines().take(20).collect();
@@ -44,13 +81,18 @@ fn looks_like_code(text: &str) -> bool {
         return false;
     }
 
-    let indicator_count = lines.iter().filter(|line| {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            return false;
-        }
-        code_indicators.iter().any(|indicator| trimmed.contains(indicator))
-    }).count();
+    let indicator_count = lines
+        .iter()
+        .filter(|line| {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                return false;
+            }
+            code_indicators
+                .iter()
+                .any(|indicator| trimmed.contains(indicator))
+        })
+        .count();
 
     let ratio = indicator_count as f64 / lines.len() as f64;
     ratio > 0.40
@@ -237,7 +279,10 @@ mod tests {
         // ~40% CJK should trigger CJK ratio
         let mixed = "Hello world 这是中文 this is mixed 混合内容测试文本比较多";
         let ratio = detect_content_ratio(mixed);
-        assert!(ratio < 3.5, "mixed with >30% CJK should use lower ratio, got {ratio}");
+        assert!(
+            ratio < 3.5,
+            "mixed with >30% CJK should use lower ratio, got {ratio}"
+        );
     }
 
     #[test]
@@ -259,8 +304,16 @@ mod tests {
             UnifiedMessage::user("new msg after anchor"),
         ];
         let pressure = sensor.measure(&msgs, "system prompt", &[], 10_000);
-        assert!(pressure.used_tokens > 5000, "should include anchor, got {}", pressure.used_tokens);
-        assert!(pressure.used_tokens < 6000, "delta should be small, got {}", pressure.used_tokens);
+        assert!(
+            pressure.used_tokens > 5000,
+            "should include anchor, got {}",
+            pressure.used_tokens
+        );
+        assert!(
+            pressure.used_tokens < 6000,
+            "delta should be small, got {}",
+            pressure.used_tokens
+        );
     }
 
     #[test]

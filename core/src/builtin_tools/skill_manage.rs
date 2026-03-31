@@ -59,7 +59,8 @@ impl AlephTool for SkillManageTool {
         if args.enabled.is_none() && args.scope.is_none() {
             return Ok(SkillManageOutput {
                 success: false,
-                message: "No changes requested. Provide 'enabled' or 'scope' to update.".to_string(),
+                message: "No changes requested. Provide 'enabled' or 'scope' to update."
+                    .to_string(),
             });
         }
 

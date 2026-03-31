@@ -20,8 +20,8 @@ use crate::generation::{
 
 use super::provider::OpenAiCompatProvider;
 use super::types::{
-    AsyncTaskPollResponse, AsyncTaskSubmitResponse, ImageGenerationResponse,
-    DEFAULT_TIMEOUT_SECS, MAX_POLL_ATTEMPTS, POLL_INTERVAL_SECS,
+    AsyncTaskPollResponse, AsyncTaskSubmitResponse, ImageGenerationResponse, DEFAULT_TIMEOUT_SECS,
+    MAX_POLL_ATTEMPTS, POLL_INTERVAL_SECS,
 };
 
 impl GenerationProvider for OpenAiCompatProvider {
@@ -92,22 +92,30 @@ impl GenerationProvider for OpenAiCompatProvider {
             // Auto-detect response mode:
             // - Async task: response contains "task_id" → poll for completion
             // - Sync response: response contains "data" → parse directly
-            let parsed: serde_json::Value = serde_json::from_str(&response_text)
-                .map_err(|e| {
-                    error!(error = %e, body = %response_text, "Failed to parse response JSON");
-                    GenerationError::serialization(format!("Failed to parse response: {}", e))
-                })?;
+            let parsed: serde_json::Value = serde_json::from_str(&response_text).map_err(|e| {
+                error!(error = %e, body = %response_text, "Failed to parse response JSON");
+                GenerationError::serialization(format!("Failed to parse response: {}", e))
+            })?;
 
             let data = if parsed.get("task_id").is_some() {
                 // === Async polling mode ===
-                let submit: AsyncTaskSubmitResponse = serde_json::from_value(parsed)
-                    .map_err(|e| GenerationError::serialization(format!("Failed to parse task submit response: {}", e)))?;
+                let submit: AsyncTaskSubmitResponse =
+                    serde_json::from_value(parsed).map_err(|e| {
+                        GenerationError::serialization(format!(
+                            "Failed to parse task submit response: {}",
+                            e
+                        ))
+                    })?;
 
                 info!(provider = %self.name, task_id = %submit.task_id, "Async task submitted, starting poll");
 
                 // Validate task_id to prevent URL injection from untrusted API responses
                 let task_id = &submit.task_id;
-                if task_id.contains("..") || task_id.contains('?') || task_id.contains('#') || task_id.starts_with('/') {
+                if task_id.contains("..")
+                    || task_id.contains('?')
+                    || task_id.contains('#')
+                    || task_id.starts_with('/')
+                {
                     return Err(GenerationError::serialization(format!(
                         "Invalid task_id format: {}",
                         task_id
@@ -186,9 +194,10 @@ impl OpenAiCompatProvider {
         &self,
         api_response: &ImageGenerationResponse,
     ) -> GenerationResult<GenerationData> {
-        let first = api_response.data.first().ok_or_else(|| {
-            GenerationError::provider("No data in response", None, &self.name)
-        })?;
+        let first = api_response
+            .data
+            .first()
+            .ok_or_else(|| GenerationError::provider("No data in response", None, &self.name))?;
 
         if let Some(url) = &first.url {
             Ok(GenerationData::url(url.clone()))
@@ -251,17 +260,17 @@ impl OpenAiCompatProvider {
                         "Async task completed"
                     );
 
-                    let output_url = task
-                        .data
-                        .as_ref()
-                        .and_then(|d| d.output_url())
-                        .ok_or_else(|| {
-                            GenerationError::provider(
-                                "Task completed but no output URL in response",
-                                None,
-                                &self.name,
-                            )
-                        })?;
+                    let output_url =
+                        task.data
+                            .as_ref()
+                            .and_then(|d| d.output_url())
+                            .ok_or_else(|| {
+                                GenerationError::provider(
+                                    "Task completed but no output URL in response",
+                                    None,
+                                    &self.name,
+                                )
+                            })?;
 
                     return Ok(GenerationData::url(output_url.to_string()));
                 }

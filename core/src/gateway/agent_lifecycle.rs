@@ -16,10 +16,7 @@ pub enum AgentLifecycleEvent {
         model: String,
     },
     /// Agent execution started
-    Started {
-        agent_id: String,
-        run_id: String,
-    },
+    Started { agent_id: String, run_id: String },
     /// Agent execution completed
     Completed {
         agent_id: String,
@@ -27,9 +24,7 @@ pub enum AgentLifecycleEvent {
         success: bool,
     },
     /// Agent was unregistered (e.g., during config reload)
-    Unregistered {
-        agent_id: String,
-    },
+    Unregistered { agent_id: String },
     /// Agent was deleted and its workspace archived
     Deleted {
         agent_id: String,

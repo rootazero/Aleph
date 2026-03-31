@@ -1,7 +1,6 @@
 /// OpenAI request building
 ///
 /// Functions for constructing chat completion requests.
-
 use crate::config::ProviderConfig;
 use crate::core::MediaAttachment;
 use crate::dispatcher::DEFAULT_MAX_TOKENS;
@@ -10,9 +9,7 @@ use crate::providers::shared::{
     should_use_prepend_mode,
 };
 
-use super::types::{
-    ChatCompletionRequest, ContentBlock, ImageUrl, Message, MessageContent,
-};
+use super::types::{ChatCompletionRequest, ContentBlock, ImageUrl, Message, MessageContent};
 
 /// Build text content for image/multimodal requests.
 /// Handles prepend mode for system prompts and provides default description for images.
@@ -92,10 +89,7 @@ pub fn build_request_with_mode(
 ///
 /// For OpenAI o1/o3 models, this sets the reasoning_effort field.
 /// Call this after building the base request if thinking is enabled.
-pub fn apply_thinking_config(
-    request: &mut ChatCompletionRequest,
-    reasoning_effort: Option<&str>,
-) {
+pub fn apply_thinking_config(request: &mut ChatCompletionRequest, reasoning_effort: Option<&str>) {
     request.reasoning_effort = reasoning_effort.map(|s| s.to_string());
 }
 

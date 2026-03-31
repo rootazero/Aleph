@@ -105,10 +105,7 @@ mod tests {
         let card = CardBuilder::build(&config, "0.0.0.0:3000");
 
         assert_eq!(card.name, "My Custom Agent");
-        assert_eq!(
-            card.description.as_deref(),
-            Some("A specialized helper")
-        );
+        assert_eq!(card.description.as_deref(), Some("A specialized helper"));
         assert_eq!(card.version, "2.0.0");
     }
 
@@ -152,10 +149,7 @@ mod tests {
         assert_eq!(card.skills.len(), 2);
         assert_eq!(card.skills[0].id, "code-review");
         assert_eq!(card.skills[0].name, "Code Review");
-        assert_eq!(
-            card.skills[0].description.as_deref(),
-            Some("Reviews code")
-        );
+        assert_eq!(card.skills[0].description.as_deref(), Some("Reviews code"));
         assert_eq!(card.skills[1].id, "summarize");
         assert!(card.skills[1].description.is_none());
     }

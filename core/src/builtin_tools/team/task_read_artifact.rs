@@ -99,9 +99,7 @@ impl AlephTool for TaskReadArtifactTool {
                 .store
                 .get_artifacts_for_task(&args.task_id)
                 .await
-                .map_err(|e| {
-                    AlephError::other(format!("Failed to read artifacts: {e}"))
-                })?;
+                .map_err(|e| AlephError::other(format!("Failed to read artifacts: {e}")))?;
 
             Ok(TaskReadArtifactOutput { artifacts })
         }

@@ -10,8 +10,8 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Mutex;
 
+use alephcore::providers::{adapter, AiProvider, ProviderResponse};
 use alephcore::Result;
-use alephcore::providers::{AiProvider, ProviderResponse, adapter};
 
 /// Default summary text returned when no queued responses remain.
 const DEFAULT_SUMMARY: &str = "Key decisions: implemented feature X. Files modified: src/main.rs. \
@@ -105,7 +105,10 @@ impl AiProvider for MockLlmProvider {
         let response = if should_fail {
             None
         } else {
-            let mut q = self.response_queue.lock().unwrap_or_else(|e| e.into_inner());
+            let mut q = self
+                .response_queue
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             if q.is_empty() {
                 Some(self.default_response.clone())
             } else {
@@ -160,11 +163,17 @@ mod tests {
         let msgs_b = [UnifiedMessage::user("b")];
         let msgs_c = [UnifiedMessage::user("c")];
         assert_eq!(
-            p.process(make_payload(&msgs_a)).await.unwrap().text_content(),
+            p.process(make_payload(&msgs_a))
+                .await
+                .unwrap()
+                .text_content(),
             "first summary"
         );
         assert_eq!(
-            p.process(make_payload(&msgs_b)).await.unwrap().text_content(),
+            p.process(make_payload(&msgs_b))
+                .await
+                .unwrap()
+                .text_content(),
             "second summary"
         );
         assert!(p

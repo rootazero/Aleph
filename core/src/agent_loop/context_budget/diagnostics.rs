@@ -1,9 +1,9 @@
 //! ContextDiagnostics — token breakdown and observability.
 
-use std::collections::HashMap;
-use crate::providers::message::UnifiedMessage;
-use super::pressure::estimate_tokens_smart;
 use super::pipeline::PipelineResult;
+use super::pressure::estimate_tokens_smart;
+use crate::providers::message::UnifiedMessage;
+use std::collections::HashMap;
 
 // =============================================================================
 // DiagnosticsSnapshot
@@ -138,8 +138,10 @@ impl ContextDiagnostics {
             }
         }
 
-        let total_tokens =
-            user_tokens + assistant_tokens + system_tokens + tool_result_tokens.values().sum::<usize>();
+        let total_tokens = user_tokens
+            + assistant_tokens
+            + system_tokens
+            + tool_result_tokens.values().sum::<usize>();
 
         DiagnosticsSnapshot {
             user_tokens,
@@ -220,7 +222,11 @@ mod tests {
             UnifiedMessage::assistant("ok again"),
         ];
         let snapshot = ContextDiagnostics::analyze(&msgs);
-        let read_count = snapshot.tool_result_counts.get("Read").copied().unwrap_or(0);
+        let read_count = snapshot
+            .tool_result_counts
+            .get("Read")
+            .copied()
+            .unwrap_or(0);
         assert_eq!(read_count, 2);
     }
 
@@ -233,7 +239,10 @@ mod tests {
         ];
         let snapshot = ContextDiagnostics::analyze(&msgs);
         let summary = snapshot.format_summary(10_000);
-        assert!(summary.contains("Bash"), "summary should mention tool names");
+        assert!(
+            summary.contains("Bash"),
+            "summary should mention tool names"
+        );
     }
 
     #[test]
@@ -243,7 +252,10 @@ mod tests {
             UnifiedMessage::user("regular user message"),
         ];
         let snapshot = ContextDiagnostics::analyze(&msgs);
-        assert!(snapshot.system_tokens > 0, "system tokens should be counted");
+        assert!(
+            snapshot.system_tokens > 0,
+            "system tokens should be counted"
+        );
         assert!(snapshot.user_tokens > 0, "user tokens should be counted");
     }
 
@@ -264,9 +276,13 @@ mod tests {
 
     #[test]
     fn diagnostics_records_pipeline_runs() {
-        use super::super::{ContextPressure, pipeline::PipelineResult};
+        use super::super::{pipeline::PipelineResult, ContextPressure};
         let mut diag = ContextDiagnostics::new();
-        let pressure = ContextPressure { used_tokens: 100, budget_tokens: 1000, ratio: 0.1 };
+        let pressure = ContextPressure {
+            used_tokens: 100,
+            budget_tokens: 1000,
+            ratio: 0.1,
+        };
         let result = PipelineResult {
             pressure_before: pressure.clone(),
             pressure_after: pressure,

@@ -57,11 +57,13 @@ impl InteractionParadigm {
     /// Returns the default capabilities for this paradigm
     pub fn default_capabilities(&self) -> HashSet<Capability> {
         match self {
-            Self::CLI => {
-                [Capability::RichText, Capability::CodeHighlight, Capability::Streaming]
-                    .into_iter()
-                    .collect()
-            }
+            Self::CLI => [
+                Capability::RichText,
+                Capability::CodeHighlight,
+                Capability::Streaming,
+            ]
+            .into_iter()
+            .collect(),
             Self::WebRich => [
                 Capability::RichText,
                 Capability::CodeHighlight,
@@ -73,9 +75,9 @@ impl InteractionParadigm {
             ]
             .into_iter()
             .collect(),
-            Self::Messaging => {
-                [Capability::RichText, Capability::ImageInline].into_iter().collect()
-            }
+            Self::Messaging => [Capability::RichText, Capability::ImageInline]
+                .into_iter()
+                .collect(),
             Self::Background => [Capability::SilentReply].into_iter().collect(),
             Self::Embedded => HashSet::new(),
         }
@@ -115,9 +117,10 @@ impl Capability {
     pub fn prompt_hint(&self) -> (&'static str, &'static str) {
         match self {
             Self::RichText => ("rich_text", "You can use markdown formatting for emphasis"),
-            Self::InlineButtons => {
-                ("inline_buttons", "You can provide interactive button options")
-            }
+            Self::InlineButtons => (
+                "inline_buttons",
+                "You can provide interactive button options",
+            ),
             Self::MultiGroupUI => (
                 "multi_group_ui",
                 "You can organize content into tabs or collapsible sections",
@@ -125,12 +128,19 @@ impl Capability {
             Self::Streaming => ("streaming", "Responses will stream in real-time"),
             Self::ImageInline => ("image_inline", "Images can be displayed inline"),
             Self::MermaidCharts => ("mermaid_charts", "You can render Mermaid diagrams"),
-            Self::CodeHighlight => ("code_highlight", "Code blocks will have syntax highlighting"),
+            Self::CodeHighlight => (
+                "code_highlight",
+                "Code blocks will have syntax highlighting",
+            ),
             Self::FileUpload => ("file_upload", "Files can be uploaded and attached"),
-            Self::Canvas => ("canvas", "Interactive canvas is available for drawing and editing"),
-            Self::SilentReply => {
-                ("silent_reply", "Responses will be processed silently in background")
-            }
+            Self::Canvas => (
+                "canvas",
+                "Interactive canvas is available for drawing and editing",
+            ),
+            Self::SilentReply => (
+                "silent_reply",
+                "Responses will be processed silently in background",
+            ),
             Self::NativeIdentity => (
                 "native_identity",
                 "Channel natively shows agent identity — no prefix needed",
@@ -303,9 +313,13 @@ mod tests {
 
     #[test]
     fn test_paradigm_description() {
-        assert!(InteractionParadigm::CLI.description().contains("Command-line"));
+        assert!(InteractionParadigm::CLI
+            .description()
+            .contains("Command-line"));
         assert!(InteractionParadigm::WebRich.description().contains("Web"));
-        assert!(InteractionParadigm::Background.description().contains("Background"));
+        assert!(InteractionParadigm::Background
+            .description()
+            .contains("Background"));
     }
 
     #[test]
@@ -332,8 +346,9 @@ mod tests {
 
     #[test]
     fn test_with_capabilities_override() {
-        let custom_caps: HashSet<Capability> =
-            [Capability::RichText, Capability::FileUpload].into_iter().collect();
+        let custom_caps: HashSet<Capability> = [Capability::RichText, Capability::FileUpload]
+            .into_iter()
+            .collect();
 
         let manifest =
             InteractionManifest::new(InteractionParadigm::CLI).with_capabilities(custom_caps);
@@ -364,8 +379,7 @@ mod tests {
         let manifest = InteractionManifest::new(InteractionParadigm::WebRich);
 
         let json = serde_json::to_string(&manifest).expect("serialize");
-        let deserialized: InteractionManifest =
-            serde_json::from_str(&json).expect("deserialize");
+        let deserialized: InteractionManifest = serde_json::from_str(&json).expect("deserialize");
 
         assert_eq!(deserialized.paradigm, InteractionParadigm::WebRich);
         assert!(deserialized.has_capability(&Capability::Canvas));

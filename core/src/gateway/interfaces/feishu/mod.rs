@@ -1,30 +1,29 @@
-pub mod config;
-pub(crate) mod types;
-pub(crate) mod events;
-pub(crate) mod auth;
 pub(crate) mod api;
-pub(crate) mod streaming;
+pub(crate) mod auth;
+pub mod config;
 mod dedup;
+pub(crate) mod events;
+pub(crate) mod streaming;
+pub(crate) mod types;
 mod user_cache;
 mod websocket;
 
-use std::sync::Arc;
-use tokio::sync::watch;
 use async_trait::async_trait;
 use chrono::Utc;
+use std::sync::Arc;
+use tokio::sync::watch;
 
 use crate::gateway::channel::{
-    Channel, ChannelCapabilities, ChannelError, ChannelInfo, ChannelId,
-    ChannelProvider, ChannelResult, ChannelState, ChannelStatus,
-    MessageId, OutboundMessage, SendResult,
+    Channel, ChannelCapabilities, ChannelError, ChannelId, ChannelInfo, ChannelProvider,
+    ChannelResult, ChannelState, ChannelStatus, MessageId, OutboundMessage, SendResult,
 };
 use crate::thinker::interaction::{
     InteractionConstraints, InteractionManifest, InteractionParadigm,
 };
 
-pub use config::FeishuConfig;
 use api::{FeishuApi, FeishuSendError};
 use auth::TokenManager;
+pub use config::FeishuConfig;
 use user_cache::UserProfileCache;
 use websocket::WsLoopContext;
 
@@ -34,10 +33,12 @@ fn should_use_card(text: &str, render_mode: &str) -> bool {
         "card" => true,
         "raw" => false,
         // "auto": use card for rich/long content
-        _ => text.len() > 200
-            || text.contains("```")
-            || text.contains("|---|")
-            || text.contains("|:--"),
+        _ => {
+            text.len() > 200
+                || text.contains("```")
+                || text.contains("|---|")
+                || text.contains("|:--")
+        }
     }
 }
 
@@ -112,7 +113,9 @@ impl Channel for FeishuChannel {
     }
 
     async fn start(&mut self) -> ChannelResult<()> {
-        self.channel_state.set_status(ChannelStatus::Connecting).await;
+        self.channel_state
+            .set_status(ChannelStatus::Connecting)
+            .await;
 
         let http = reqwest::Client::new();
         let base_url = self.config.base_url();
@@ -123,18 +126,23 @@ impl Channel for FeishuChannel {
             &base_url,
             http.clone(),
         ));
-        auth.refresh_token().await
+        auth.refresh_token()
+            .await
             .map_err(|e| ChannelError::AuthFailed(format!("Token acquisition failed: {e}")))?;
 
         let api = Arc::new(FeishuApi::new(auth.clone(), &base_url, http.clone()));
 
-        let bot_info = api.get_bot_info().await
+        let bot_info = api
+            .get_bot_info()
+            .await
             .map_err(|e| ChannelError::AuthFailed(format!("Bot info failed: {e}")))?;
         tracing::info!("Feishu bot connected: {:?}", bot_info.app_name);
 
         let bot_open_id = api.bot_open_id().await.unwrap_or_default();
 
-        let ws_url = api.get_ws_endpoint().await
+        let ws_url = api
+            .get_ws_endpoint()
+            .await
             .map_err(|e| ChannelError::Internal(format!("WS endpoint failed: {e}")))?;
 
         let user_cache = Arc::new(UserProfileCache::new());
@@ -160,7 +168,9 @@ impl Channel for FeishuChannel {
 
         self.api = Some(api);
         self.user_cache = Some(user_cache);
-        self.channel_state.set_status(ChannelStatus::Connected).await;
+        self.channel_state
+            .set_status(ChannelStatus::Connected)
+            .await;
 
         Ok(())
     }
@@ -171,40 +181,59 @@ impl Channel for FeishuChannel {
         }
         self.api = None;
         self.user_cache = None;
-        self.channel_state.set_status(ChannelStatus::Disconnected).await;
+        self.channel_state
+            .set_status(ChannelStatus::Disconnected)
+            .await;
         Ok(())
     }
 
     async fn send(&self, message: OutboundMessage) -> ChannelResult<SendResult> {
-        let api = self.api.as_ref()
+        let api = self
+            .api
+            .as_ref()
             .ok_or_else(|| ChannelError::NotConnected("API not initialized".to_string()))?;
 
         let chat_id = message.conversation_id.as_str();
         let reply_to = message.reply_to.as_ref().map(|id| id.as_str());
 
-        let has_image = message.attachments.iter().any(|a| a.mime_type.starts_with("image/"));
+        let has_image = message
+            .attachments
+            .iter()
+            .any(|a| a.mime_type.starts_with("image/"));
 
         let msg_id = if has_image {
-            if let Some(attachment) = message.attachments.iter().find(|a| a.mime_type.starts_with("image/")) {
-                let image_data = attachment.data.clone()
-                    .ok_or_else(|| ChannelError::SendFailed("Image attachment has no data".to_string()))?;
+            if let Some(attachment) = message
+                .attachments
+                .iter()
+                .find(|a| a.mime_type.starts_with("image/"))
+            {
+                let image_data = attachment.data.clone().ok_or_else(|| {
+                    ChannelError::SendFailed("Image attachment has no data".to_string())
+                })?;
                 let filename = attachment.filename.as_deref().unwrap_or("image.png");
-                let image_key = api.upload_image(image_data, filename).await
+                let image_key = api
+                    .upload_image(image_data, filename)
+                    .await
                     .map_err(ChannelError::SendFailed)?;
-                api.send_image(chat_id, &image_key, reply_to).await
+                api.send_image(chat_id, &image_key, reply_to)
+                    .await
                     .map_err(map_send_error)?
             } else {
-                return Err(ChannelError::SendFailed("Image attachment not found".to_string()));
+                return Err(ChannelError::SendFailed(
+                    "Image attachment not found".to_string(),
+                ));
             }
         } else {
             if message.text.is_empty() {
                 return Err(ChannelError::SendFailed("Empty message".to_string()));
             }
             if should_use_card(&message.text, &self.config.render_mode) {
-                api.send_card(chat_id, &message.text, reply_to).await
+                api.send_card(chat_id, &message.text, reply_to)
+                    .await
                     .map_err(map_send_error)?
             } else {
-                api.send_text(chat_id, &message.text, reply_to).await
+                api.send_text(chat_id, &message.text, reply_to)
+                    .await
                     .map_err(map_send_error)?
             }
         };
@@ -222,13 +251,12 @@ impl Channel for FeishuChannel {
 
 impl ChannelProvider for FeishuChannel {
     fn interaction_manifest(&self) -> InteractionManifest {
-        InteractionManifest::new(InteractionParadigm::Messaging)
-            .with_constraints(
-                InteractionConstraints::new()
-                    .max_output_chars(4096)
-                    .supports_streaming(self.config.streaming)
-                    .prefer_compact(false),
-            )
+        InteractionManifest::new(InteractionParadigm::Messaging).with_constraints(
+            InteractionConstraints::new()
+                .max_output_chars(4096)
+                .supports_streaming(self.config.streaming)
+                .prefer_compact(false),
+        )
     }
 }
 
@@ -243,7 +271,10 @@ mod tests {
 
     #[test]
     fn test_should_use_card_auto_code_block() {
-        assert!(should_use_card("Here is code:\n```rust\nfn main() {}\n```", "auto"));
+        assert!(should_use_card(
+            "Here is code:\n```rust\nfn main() {}\n```",
+            "auto"
+        ));
     }
 
     #[test]

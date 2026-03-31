@@ -1,15 +1,15 @@
 //! Action handlers for the browser tool (private implementation).
 
-use crate::browser::{
-    ActionTarget, BrowserConfig, BrowserRuntime, ScreenshotOpts,
-};
-use crate::error::Result;
 use super::types::{BrowserArgs, BrowserOutput};
+use crate::browser::{ActionTarget, BrowserConfig, BrowserRuntime, ScreenshotOpts};
+use crate::error::Result;
 
 /// Extract an [`ActionTarget`] from the tool arguments.
 ///
 /// Priority: `ref_id` > `selector`. Returns an error string if neither is set.
-pub(super) fn resolve_action_target(args: &BrowserArgs) -> std::result::Result<ActionTarget, String> {
+pub(super) fn resolve_action_target(
+    args: &BrowserArgs,
+) -> std::result::Result<ActionTarget, String> {
     if let Some(ref ref_id) = args.ref_id {
         Ok(ActionTarget::Ref {
             ref_id: ref_id.clone(),
@@ -135,7 +135,9 @@ impl super::BrowserTool {
 
         let rt = guard.as_ref().unwrap();
         let tabs = rt.list_tabs().await;
-        Ok(BrowserOutput::ok_data(serde_json::to_value(&tabs).unwrap_or_default()))
+        Ok(BrowserOutput::ok_data(
+            serde_json::to_value(&tabs).unwrap_or_default(),
+        ))
     }
 
     // ── Navigation ──────────────────────────────────────────────────────
@@ -243,8 +245,8 @@ impl super::BrowserTool {
             Ok(id) => id,
             Err(out) => return Ok(out),
         };
-        let target = resolve_action_target(args)
-            .unwrap_or(ActionTarget::Coordinates { x: 0.0, y: 0.0 });
+        let target =
+            resolve_action_target(args).unwrap_or(ActionTarget::Coordinates { x: 0.0, y: 0.0 });
         let direction = match args.direction.clone() {
             Some(d) => d,
             None => {

@@ -10,8 +10,12 @@ use crate::thinker::prompt_mode::PromptMode;
 pub struct ProfileLayer;
 
 impl PromptLayer for ProfileLayer {
-    fn name(&self) -> &'static str { "profile" }
-    fn priority(&self) -> u32 { 75 }
+    fn name(&self) -> &'static str {
+        "profile"
+    }
+    fn priority(&self) -> u32 {
+        75
+    }
     fn supports_mode(&self, mode: PromptMode) -> bool {
         !matches!(mode, PromptMode::Minimal)
     }
@@ -48,9 +52,9 @@ impl PromptLayer for ProfileLayer {
 mod tests {
     use super::*;
     use crate::config::ProfileConfig;
+    use crate::thinker::identity_files::{IdentityFile, IdentityFiles};
     use crate::thinker::prompt_builder::PromptConfig;
     use crate::thinker::soul::SoulManifest;
-    use crate::thinker::identity_files::{IdentityFile, IdentityFiles};
     use std::path::PathBuf;
 
     #[test]
@@ -63,8 +67,7 @@ mod tests {
             system_prompt: Some("You are a senior Rust engineer.".to_string()),
             ..Default::default()
         };
-        let input = LayerInput::soul(&config, &tools, &soul)
-            .with_profile(Some(&profile));
+        let input = LayerInput::soul(&config, &tools, &soul).with_profile(Some(&profile));
         let mut out = String::new();
         layer.inject(&mut out, &input);
 
@@ -82,8 +85,7 @@ mod tests {
             system_prompt: None,
             ..Default::default()
         };
-        let input = LayerInput::soul(&config, &tools, &soul)
-            .with_profile(Some(&profile));
+        let input = LayerInput::soul(&config, &tools, &soul).with_profile(Some(&profile));
         let mut out = String::new();
         layer.inject(&mut out, &input);
 
@@ -113,8 +115,7 @@ mod tests {
             system_prompt: Some("".to_string()),
             ..Default::default()
         };
-        let input = LayerInput::soul(&config, &tools, &soul)
-            .with_profile(Some(&profile));
+        let input = LayerInput::soul(&config, &tools, &soul).with_profile(Some(&profile));
         let mut out = String::new();
         layer.inject(&mut out, &input);
 

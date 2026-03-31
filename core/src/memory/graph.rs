@@ -5,8 +5,8 @@
 
 use crate::error::AlephError;
 use crate::memory::context::{FactType, MemoryEntry};
-use crate::memory::store::{self, MemoryBackend};
 use crate::memory::store::GraphStore as StoreGraphStore;
+use crate::memory::store::{self, MemoryBackend};
 use chrono::Utc;
 use once_cell::sync::Lazy;
 use regex::Regex;
@@ -18,21 +18,16 @@ use uuid::Uuid;
 static RE_QUOTED: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r#"[\"\u{201C}《]([^\"\u{201D}》]{2,60})[\"\u{201D}》]"#).expect("valid regex")
 });
-static RE_PROJECT: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?i)project\s+([A-Za-z0-9_-]{2,40})").expect("valid regex")
-});
-static RE_HAN_PROJECT: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"项目[:：]?([\p{Han}A-Za-z0-9_-]{2,40})").expect("valid regex")
-});
-static RE_PROPER: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"\b([A-Z][a-z0-9]+(?:\s+[A-Z][a-z0-9]+)*)\b").expect("valid regex")
-});
-static RE_TAG: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"[@#]([A-Za-z0-9_\-\p{Han}]{2,40})").expect("valid regex")
-});
-static RE_EXPLICIT_ENTITY: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?i)entity\s*[:：]\s*([^\s,;]+)").expect("valid regex")
-});
+static RE_PROJECT: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?i)project\s+([A-Za-z0-9_-]{2,40})").expect("valid regex"));
+static RE_HAN_PROJECT: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"项目[:：]?([\p{Han}A-Za-z0-9_-]{2,40})").expect("valid regex"));
+static RE_PROPER: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"\b([A-Z][a-z0-9]+(?:\s+[A-Z][a-z0-9]+)*)\b").expect("valid regex"));
+static RE_TAG: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"[@#]([A-Za-z0-9_\-\p{Han}]{2,40})").expect("valid regex"));
+static RE_EXPLICIT_ENTITY: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?i)entity\s*[:：]\s*([^\s,;]+)").expect("valid regex"));
 
 /// Graph node representation (local type, bridges to store::GraphNode).
 #[derive(Debug, Clone)]
@@ -101,7 +96,8 @@ impl Default for GraphDecayConfig {
 
 impl From<store::GraphNode> for GraphNode {
     fn from(n: store::GraphNode) -> Self {
-        let metadata = serde_json::from_str(&n.metadata_json).unwrap_or(Value::Object(Default::default()));
+        let metadata =
+            serde_json::from_str(&n.metadata_json).unwrap_or(Value::Object(Default::default()));
         Self {
             id: n.id,
             name: n.name,
@@ -276,33 +272,30 @@ impl GraphStore {
             .map_err(|e| AlephError::config(format!("Failed to serialize metadata: {}", e)))?;
 
         // Try to find existing node by resolving entity
-        let existing = StoreGraphStore::resolve_entity(
-            self.database.as_ref(),
-            name,
-            None,
-            "default",
-        ).await?;
+        let existing =
+            StoreGraphStore::resolve_entity(self.database.as_ref(), name, None, "default").await?;
 
         let node_id = if let Some(resolved) = existing.first() {
             // Update existing node
-            let mut existing_node = StoreGraphStore::get_node(
-                self.database.as_ref(),
-                &resolved.node_id,
-                "default",
-            ).await?.unwrap_or_else(|| store::GraphNode {
-                id: resolved.node_id.clone(),
-                name: name.to_string(),
-                kind: kind.to_string(),
-                aliases: aliases.to_vec(),
-                metadata_json: metadata_json.clone(),
-                decay_score: 1.0,
-                created_at: now,
-                updated_at: now,
-            agent: "default".to_string(),
-            });
+            let mut existing_node =
+                StoreGraphStore::get_node(self.database.as_ref(), &resolved.node_id, "default")
+                    .await?
+                    .unwrap_or_else(|| store::GraphNode {
+                        id: resolved.node_id.clone(),
+                        name: name.to_string(),
+                        kind: kind.to_string(),
+                        aliases: aliases.to_vec(),
+                        metadata_json: metadata_json.clone(),
+                        decay_score: 1.0,
+                        created_at: now,
+                        updated_at: now,
+                        agent: "default".to_string(),
+                    });
 
             // Merge aliases
-            let mut alias_set: HashSet<String> = existing_node.aliases.iter()
+            let mut alias_set: HashSet<String> = existing_node
+                .aliases
+                .iter()
                 .map(|a| Self::normalize_name(a))
                 .collect();
             for alias in aliases {
@@ -330,7 +323,7 @@ impl GraphStore {
                 decay_score: 1.0,
                 created_at: now,
                 updated_at: now,
-            agent: "default".to_string(),
+                agent: "default".to_string(),
             };
 
             StoreGraphStore::upsert_node(self.database.as_ref(), &store_node, "default").await?;
@@ -408,16 +401,18 @@ impl GraphStore {
             name_or_alias,
             context_key,
             "default",
-        ).await?;
+        )
+        .await?;
 
-        Ok(resolved.into_iter().map(|r| {
-            ResolvedEntity {
+        Ok(resolved
+            .into_iter()
+            .map(|r| ResolvedEntity {
                 node_id: r.node_id,
                 score: r.context_score,
                 reasons: vec![],
                 ambiguous: r.ambiguous,
-            }
-        }).collect())
+            })
+            .collect())
     }
 
     /// Get memory IDs linked to an entity.
@@ -442,7 +437,8 @@ impl GraphStore {
             min_score: config.min_score,
         };
 
-        let stats = StoreGraphStore::apply_decay(self.database.as_ref(), &policy, "default").await?;
+        let stats =
+            StoreGraphStore::apply_decay(self.database.as_ref(), &policy, "default").await?;
 
         Ok(GraphDecayReport {
             pruned_nodes: stats.nodes_pruned as u64,
@@ -487,7 +483,8 @@ impl GraphStore {
 
         // Create co-occurrence edges
         let context_key = fact
-            .source_memory_ids.first()
+            .source_memory_ids
+            .first()
             .and_then(|id| context_map.get(id))
             .cloned()
             .unwrap_or_default();

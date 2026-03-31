@@ -57,9 +57,13 @@ impl AlephTool for BrowserTypeTool {
         let target = if let Some(ref sel) = args.selector {
             ActionTarget::Selector { css: sel.clone() }
         } else if let Some(ref rid) = args.ref_id {
-            ActionTarget::Ref { ref_id: rid.clone() }
+            ActionTarget::Ref {
+                ref_id: rid.clone(),
+            }
         } else {
-            ActionTarget::Ref { ref_id: "focused".into() }
+            ActionTarget::Ref {
+                ref_id: "focused".into(),
+            }
         };
 
         match super::make_backend_and_tab(&self.manager, &args.profile).await {
@@ -68,7 +72,8 @@ impl AlephTool for BrowserTypeTool {
                     success: true,
                     message: Some(format!(
                         "Typed {} chars in profile '{}'",
-                        args.text.chars().count(), args.profile
+                        args.text.chars().count(),
+                        args.profile
                     )),
                 }),
                 Err(e) => Ok(BrowserTypeOutput {

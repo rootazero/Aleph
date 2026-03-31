@@ -2,8 +2,8 @@
 //!
 //! Implements layered context delivery strategy based on event priority.
 
-use std::collections::VecDeque;
 use crate::sync_primitives::Arc;
+use std::collections::VecDeque;
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
@@ -63,11 +63,7 @@ impl ContextWindow {
     }
 
     fn get_recent(&self, count: usize) -> Vec<&SwarmContextEntry> {
-        self.entries
-            .iter()
-            .rev()
-            .take(count)
-            .collect()
+        self.entries.iter().rev().take(count).collect()
     }
 
     fn clear(&mut self) {
@@ -80,9 +76,7 @@ impl ContextInjector {
     pub fn new(bus: Arc<AgentMessageBus>) -> Self {
         Self {
             bus,
-            context_window: Arc::new(RwLock::new(ContextWindow::new(
-                DEFAULT_CONTEXT_WINDOW_SIZE,
-            ))),
+            context_window: Arc::new(RwLock::new(ContextWindow::new(DEFAULT_CONTEXT_WINDOW_SIZE))),
             task_store: None,
             inbox_provider: None,
         }
@@ -225,10 +219,7 @@ impl ContextInjector {
         _agent_id: &str,
     ) -> Result<String> {
         // Format critical event for immediate attention
-        let feedback = format!(
-            "[CRITICAL INTERRUPT] {}",
-            self.format_critical_event(event)
-        );
+        let feedback = format!("[CRITICAL INTERRUPT] {}", self.format_critical_event(event));
 
         info!("Critical event: {}", feedback);
 
@@ -317,13 +308,21 @@ impl ContextInjector {
                     goal, arena_id, completed_steps, total_steps, agents_str, artifacts_str
                 )
             }
-            ImportantEvent::TaskCompleted { task_id, agent_id, .. } => {
+            ImportantEvent::TaskCompleted {
+                task_id, agent_id, ..
+            } => {
                 format!("Task '{}' completed by agent '{}'", task_id, agent_id)
             }
-            ImportantEvent::TaskUnblocked { task_id, unblocked_by, .. } => {
+            ImportantEvent::TaskUnblocked {
+                task_id,
+                unblocked_by,
+                ..
+            } => {
                 format!("Task '{}' unblocked by '{}'", task_id, unblocked_by)
             }
-            ImportantEvent::TaskFailed { task_id, reason, .. } => {
+            ImportantEvent::TaskFailed {
+                task_id, reason, ..
+            } => {
                 format!("Task '{}' failed: {}", task_id, reason)
             }
             ImportantEvent::AllTasksCompleted { team_id, .. } => {
@@ -342,7 +341,9 @@ impl ContextInjector {
             } => {
                 format!("Bug root cause found at {}: {}", location, description)
             }
-            CriticalEvent::TaskCancelled { task_id, reason, .. } => {
+            CriticalEvent::TaskCancelled {
+                task_id, reason, ..
+            } => {
                 format!("Task {} cancelled: {}", task_id, reason)
             }
             CriticalEvent::GlobalFailure { error, .. } => {

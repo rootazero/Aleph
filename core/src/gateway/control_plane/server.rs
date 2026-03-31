@@ -3,11 +3,11 @@
 //! Provides HTTP routes for serving ControlPlane static assets.
 
 use axum::{
-    Router,
-    routing::get,
-    response::{Html, IntoResponse, Response},
-    http::{StatusCode, header},
     extract::Path as AxumPath,
+    http::{header, StatusCode},
+    response::{Html, IntoResponse, Response},
+    routing::get,
+    Router,
 };
 
 use super::assets::ControlPlaneAssets;
@@ -24,7 +24,8 @@ pub fn create_control_plane_router() -> Router {
 /// This is a client-side-only form: it saves the token to localStorage
 /// and redirects to `/` where the WASM panel validates via WebSocket.
 async fn serve_login() -> Html<&'static str> {
-    Html(r#"<!DOCTYPE html>
+    Html(
+        r#"<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -63,7 +64,8 @@ document.getElementById('lf').addEventListener('submit',function(e){
 </script>
 </div>
 </body>
-</html>"#)
+</html>"#,
+    )
 }
 
 /// Serve the index.html file
@@ -89,8 +91,7 @@ async fn serve_static_or_index(AxumPath(path): AxumPath<String>) -> Response {
     // Try to serve as static asset first
     match ControlPlaneAssets::get(&path) {
         Some(content) => {
-            let mime = mime_guess::from_path(&path)
-                .first_or_octet_stream();
+            let mime = mime_guess::from_path(&path).first_or_octet_stream();
 
             (
                 StatusCode::OK,
@@ -99,7 +100,8 @@ async fn serve_static_or_index(AxumPath(path): AxumPath<String>) -> Response {
                     (header::CACHE_CONTROL, "no-store, must-revalidate"),
                 ],
                 content.data,
-            ).into_response()
+            )
+                .into_response()
         }
         None => {
             // For SPA routing, return index.html for non-file paths

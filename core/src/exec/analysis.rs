@@ -121,11 +121,7 @@ impl CommandResolution {
     /// Create a resolution for an executable not found in PATH
     pub fn not_found(raw: impl Into<String>) -> Self {
         let raw = raw.into();
-        let name = raw
-            .rsplit('/')
-            .next()
-            .unwrap_or(&raw)
-            .to_string();
+        let name = raw.rsplit('/').next().unwrap_or(&raw).to_string();
 
         Self {
             raw_executable: raw,
@@ -181,8 +177,9 @@ mod tests {
     fn test_executables() {
         let seg1 = CommandSegment::new("ls", vec!["ls".into()])
             .with_resolution(CommandResolution::found("ls", PathBuf::from("/bin/ls")));
-        let seg2 = CommandSegment::new("grep", vec!["grep".into()])
-            .with_resolution(CommandResolution::found("grep", PathBuf::from("/usr/bin/grep")));
+        let seg2 = CommandSegment::new("grep", vec!["grep".into()]).with_resolution(
+            CommandResolution::found("grep", PathBuf::from("/usr/bin/grep")),
+        );
 
         let analysis = CommandAnalysis::success(vec![seg1, seg2], vec![]);
         let executables = analysis.executables();

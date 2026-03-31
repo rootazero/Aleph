@@ -57,10 +57,7 @@ pub struct BehavioralAnchor {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum AnchorSource {
     /// Generated from immediate failure response
-    ReactiveReflection {
-        task_id: String,
-        error_type: String,
-    },
+    ReactiveReflection { task_id: String, error_type: String },
 
     /// Generated from proactive optimization during idle time
     ProactiveReflection {

@@ -2,8 +2,8 @@
 //!
 //! Returns the health status of the Gateway server.
 
-use serde_json::json;
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse};
+use serde_json::json;
 
 /// Handle health check requests
 ///

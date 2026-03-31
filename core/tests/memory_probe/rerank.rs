@@ -1,17 +1,22 @@
 //! P3: Cross-Encoder Rerank — 6 scenarios
 
-use alephcore::memory::rerank::{blend_scores, build_provider, RerankConfig, RerankProviderType, RerankResult};
+use alephcore::memory::rerank::{
+    blend_scores, build_provider, RerankConfig, RerankProviderType, RerankResult,
+};
 
 /// Exact weighted formula: doc_a = 0.6*0.3 + 0.4*0.9 = 0.54, doc_b = 0.6*0.8 + 0.4*0.4 = 0.64
 #[test]
 fn p3_01_blend_scores_applies_weight_formula() {
-    let originals = vec![
-        ("doc_a".to_string(), 0.9),
-        ("doc_b".to_string(), 0.4),
-    ];
+    let originals = vec![("doc_a".to_string(), 0.9), ("doc_b".to_string(), 0.4)];
     let reranked = vec![
-        RerankResult { index: 0, relevance_score: 0.3 },
-        RerankResult { index: 1, relevance_score: 0.8 },
+        RerankResult {
+            index: 0,
+            relevance_score: 0.3,
+        },
+        RerankResult {
+            index: 1,
+            relevance_score: 0.8,
+        },
     ];
 
     let result = blend_scores(&originals, &reranked, 0.6);
@@ -20,22 +25,28 @@ fn p3_01_blend_scores_applies_weight_formula() {
     // doc_b: 0.6*0.8 + 0.4*0.4 = 0.48 + 0.16 = 0.64
     assert_eq!(result.len(), 2);
     assert_eq!(result[0].0, "doc_b");
-    assert!((result[0].1 - 0.64).abs() < 1e-6, "doc_b score: {}", result[0].1);
+    assert!(
+        (result[0].1 - 0.64).abs() < 1e-6,
+        "doc_b score: {}",
+        result[0].1
+    );
     assert_eq!(result[1].0, "doc_a");
-    assert!((result[1].1 - 0.54).abs() < 1e-6, "doc_a score: {}", result[1].1);
+    assert!(
+        (result[1].1 - 0.54).abs() < 1e-6,
+        "doc_a score: {}",
+        result[1].1
+    );
 }
 
 /// Document missing from reranked results gets rerank_score = 0.0
 #[test]
 fn p3_02_blend_scores_missing_rerank_uses_zero() {
-    let originals = vec![
-        ("doc_a".to_string(), 0.8),
-        ("doc_b".to_string(), 0.6),
-    ];
+    let originals = vec![("doc_a".to_string(), 0.8), ("doc_b".to_string(), 0.6)];
     // Only doc_a has a rerank result; doc_b is missing
-    let reranked = vec![
-        RerankResult { index: 0, relevance_score: 0.9 },
-    ];
+    let reranked = vec![RerankResult {
+        index: 0,
+        relevance_score: 0.9,
+    }];
 
     let result = blend_scores(&originals, &reranked, 0.6);
 
@@ -43,9 +54,17 @@ fn p3_02_blend_scores_missing_rerank_uses_zero() {
     // doc_b: 0.6*0.0 + 0.4*0.6 = 0.00 + 0.24 = 0.24
     assert_eq!(result.len(), 2);
     assert_eq!(result[0].0, "doc_a");
-    assert!((result[0].1 - 0.86).abs() < 1e-6, "doc_a score: {}", result[0].1);
+    assert!(
+        (result[0].1 - 0.86).abs() < 1e-6,
+        "doc_a score: {}",
+        result[0].1
+    );
     assert_eq!(result[1].0, "doc_b");
-    assert!((result[1].1 - 0.24).abs() < 1e-6, "doc_b score: {}", result[1].1);
+    assert!(
+        (result[1].1 - 0.24).abs() < 1e-6,
+        "doc_b score: {}",
+        result[1].1
+    );
 }
 
 /// weight=0 → pure original scores preserved
@@ -58,9 +77,18 @@ fn p3_03_blend_scores_preserves_order_when_weight_zero() {
     ];
     // Rerank would invert the order, but weight=0 ignores it
     let reranked = vec![
-        RerankResult { index: 0, relevance_score: 1.0 },
-        RerankResult { index: 1, relevance_score: 0.1 },
-        RerankResult { index: 2, relevance_score: 0.5 },
+        RerankResult {
+            index: 0,
+            relevance_score: 1.0,
+        },
+        RerankResult {
+            index: 1,
+            relevance_score: 0.1,
+        },
+        RerankResult {
+            index: 2,
+            relevance_score: 0.5,
+        },
     ];
 
     let result = blend_scores(&originals, &reranked, 0.0);
@@ -76,13 +104,16 @@ fn p3_03_blend_scores_preserves_order_when_weight_zero() {
 /// weight=1.0 → pure rerank scores, original scores ignored
 #[test]
 fn p3_04_blend_scores_full_rerank_weight_ignores_original() {
-    let originals = vec![
-        ("a".to_string(), 0.99),
-        ("b".to_string(), 0.01),
-    ];
+    let originals = vec![("a".to_string(), 0.99), ("b".to_string(), 0.01)];
     let reranked = vec![
-        RerankResult { index: 0, relevance_score: 0.1 },
-        RerankResult { index: 1, relevance_score: 0.95 },
+        RerankResult {
+            index: 0,
+            relevance_score: 0.1,
+        },
+        RerankResult {
+            index: 1,
+            relevance_score: 0.95,
+        },
     ];
 
     let result = blend_scores(&originals, &reranked, 1.0);

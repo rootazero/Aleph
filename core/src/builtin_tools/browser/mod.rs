@@ -13,8 +13,8 @@ mod tests;
 
 pub use types::{BrowserAction, BrowserArgs, BrowserOutput};
 
-use async_trait::async_trait;
 use crate::sync_primitives::Arc;
+use async_trait::async_trait;
 use tokio::sync::Mutex;
 
 use crate::approval::{ActionRequest, ActionType, ApprovalDecision, ApprovalPolicy};
@@ -56,11 +56,7 @@ impl BrowserTool {
     /// Returns `None` if the action is allowed (or no policy is configured),
     /// or `Some(BrowserOutput)` if the action is denied or requires user
     /// confirmation.
-    async fn check_approval(
-        &self,
-        action_type: ActionType,
-        target: &str,
-    ) -> Option<BrowserOutput> {
+    async fn check_approval(&self, action_type: ActionType, target: &str) -> Option<BrowserOutput> {
         let policy = self.approval_policy.as_ref()?;
 
         let request = ActionRequest {
@@ -219,10 +215,7 @@ Examples:
             }
             BrowserAction::Type => {
                 if let Some(out) = self
-                    .check_approval(
-                        ActionType::BrowserType,
-                        args.text.as_deref().unwrap_or(""),
-                    )
+                    .check_approval(ActionType::BrowserType, args.text.as_deref().unwrap_or(""))
                     .await
                 {
                     return Ok(out);
@@ -231,10 +224,7 @@ Examples:
             }
             BrowserAction::Fill => {
                 if let Some(out) = self
-                    .check_approval(
-                        ActionType::BrowserFill,
-                        args.text.as_deref().unwrap_or(""),
-                    )
+                    .check_approval(ActionType::BrowserFill, args.text.as_deref().unwrap_or(""))
                     .await
                 {
                     return Ok(out);

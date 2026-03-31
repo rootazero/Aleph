@@ -338,7 +338,10 @@ mod tests {
         let fc = part.function_call.as_ref().unwrap();
         assert_eq!(fc.name, "search");
         assert_eq!(fc.args["query"], "Rust language");
-        assert_eq!(candidates[0].finish_reason.as_deref(), Some("FUNCTION_CALL"));
+        assert_eq!(
+            candidates[0].finish_reason.as_deref(),
+            Some("FUNCTION_CALL")
+        );
     }
 
     #[test]
@@ -438,7 +441,10 @@ mod tests {
         }"#;
         let response: GenerateContentResponse = serde_json::from_str(json).unwrap();
         let candidates = response.candidates.unwrap();
-        let fc = candidates[0].content.parts[0].function_call.as_ref().unwrap();
+        let fc = candidates[0].content.parts[0]
+            .function_call
+            .as_ref()
+            .unwrap();
         assert_eq!(fc.id.as_deref(), Some("abc123"));
     }
 }

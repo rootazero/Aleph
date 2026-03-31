@@ -110,7 +110,11 @@ impl GraphStore for LanceMemoryBackend {
         let existing = self.get_node(&node.id, workspace).await?;
         if existing.is_some() {
             self.nodes_table
-                .delete(&format!("id = '{}' AND agent = '{}'", escape_sql_string(&node.id), escape_sql_string(workspace)))
+                .delete(&format!(
+                    "id = '{}' AND agent = '{}'",
+                    escape_sql_string(&node.id),
+                    escape_sql_string(workspace)
+                ))
                 .await
                 .map_err(super::lance_err)?;
         }
@@ -120,14 +124,22 @@ impl GraphStore for LanceMemoryBackend {
     }
 
     async fn get_node(&self, id: &str, workspace: &str) -> Result<Option<GraphNode>, AlephError> {
-        let filter = format!("id = '{}' AND agent = '{}'", escape_sql_string(id), escape_sql_string(workspace));
+        let filter = format!(
+            "id = '{}' AND agent = '{}'",
+            escape_sql_string(id),
+            escape_sql_string(workspace)
+        );
         let nodes = scan_nodes(&self.nodes_table, Some(&filter), Some(1)).await?;
         Ok(nodes.into_iter().next())
     }
 
     async fn upsert_edge(&self, edge: &GraphEdge, workspace: &str) -> Result<(), AlephError> {
         // Delete existing edge with same ID in this workspace, then insert.
-        let filter = format!("id = '{}' AND agent = '{}'", escape_sql_string(&edge.id), escape_sql_string(workspace));
+        let filter = format!(
+            "id = '{}' AND agent = '{}'",
+            escape_sql_string(&edge.id),
+            escape_sql_string(workspace)
+        );
         let existing = scan_edges(&self.edges_table, Some(&filter), Some(1)).await?;
         if !existing.is_empty() {
             self.edges_table
@@ -147,7 +159,11 @@ impl GraphStore for LanceMemoryBackend {
         workspace: &str,
     ) -> Result<Vec<ResolvedEntity>, AlephError> {
         // Try exact match on the name column (FTS index may not exist in tests).
-        let filter = format!("name = '{}' AND agent = '{}'", escape_sql_string(query), escape_sql_string(workspace));
+        let filter = format!(
+            "name = '{}' AND agent = '{}'",
+            escape_sql_string(query),
+            escape_sql_string(workspace)
+        );
         let candidates = scan_nodes(&self.nodes_table, Some(&filter), None).await?;
 
         if candidates.is_empty() {
@@ -161,7 +177,9 @@ impl GraphStore for LanceMemoryBackend {
             // If context_key is provided and there are multiple candidates,
             // count edges in that context to compute a relevance score.
             let context_score = if let Some(ctx) = context_key {
-                let count = self.count_edges_in_context(&node.id, ctx, workspace).await?;
+                let count = self
+                    .count_edges_in_context(&node.id, ctx, workspace)
+                    .await?;
                 count as f32
             } else {
                 0.0
@@ -195,9 +213,16 @@ impl GraphStore for LanceMemoryBackend {
     ) -> Result<Vec<GraphEdge>, AlephError> {
         let nid_safe = escape_sql_string(node_id);
         let ws_safe = escape_sql_string(workspace);
-        let base_filter = format!("(from_id = '{}' OR to_id = '{}') AND agent = '{}'", nid_safe, nid_safe, ws_safe);
+        let base_filter = format!(
+            "(from_id = '{}' OR to_id = '{}') AND agent = '{}'",
+            nid_safe, nid_safe, ws_safe
+        );
         let filter = if let Some(ctx) = context_key {
-            format!("({}) AND context_key = '{}'", base_filter, escape_sql_string(ctx))
+            format!(
+                "({}) AND context_key = '{}'",
+                base_filter,
+                escape_sql_string(ctx)
+            )
         } else {
             base_filter
         };
@@ -222,7 +247,11 @@ impl GraphStore for LanceMemoryBackend {
         Ok(edges.len())
     }
 
-    async fn apply_decay(&self, policy: &GraphDecayPolicy, workspace: &str) -> Result<DecayStats, AlephError> {
+    async fn apply_decay(
+        &self,
+        policy: &GraphDecayPolicy,
+        workspace: &str,
+    ) -> Result<DecayStats, AlephError> {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -238,9 +267,9 @@ impl GraphStore for LanceMemoryBackend {
         let mut nodes_to_update: Vec<GraphNode> = Vec::new();
 
         for node in all_nodes {
-            let days_since_update =
-                (now - node.updated_at).max(0) as f64 / seconds_per_day;
-            let new_score = node.decay_score - (days_since_update as f32 * policy.node_decay_per_day);
+            let days_since_update = (now - node.updated_at).max(0) as f64 / seconds_per_day;
+            let new_score =
+                node.decay_score - (days_since_update as f32 * policy.node_decay_per_day);
 
             if new_score < policy.min_score {
                 nodes_to_prune.push(node.id.clone());
@@ -257,7 +286,11 @@ impl GraphStore for LanceMemoryBackend {
         let ws_safe = escape_sql_string(workspace);
         for id in &nodes_to_prune {
             self.nodes_table
-                .delete(&format!("id = '{}' AND agent = '{}'", escape_sql_string(id), ws_safe))
+                .delete(&format!(
+                    "id = '{}' AND agent = '{}'",
+                    escape_sql_string(id),
+                    ws_safe
+                ))
                 .await
                 .map_err(super::lance_err)?;
         }
@@ -265,7 +298,11 @@ impl GraphStore for LanceMemoryBackend {
         // Update decayed nodes (delete + re-insert, scoped to workspace)
         for node in &nodes_to_update {
             self.nodes_table
-                .delete(&format!("id = '{}' AND agent = '{}'", escape_sql_string(&node.id), ws_safe))
+                .delete(&format!(
+                    "id = '{}' AND agent = '{}'",
+                    escape_sql_string(&node.id),
+                    ws_safe
+                ))
                 .await
                 .map_err(super::lance_err)?;
             let batch = graph_nodes_to_record_batch(std::slice::from_ref(node))?;
@@ -278,9 +315,9 @@ impl GraphStore for LanceMemoryBackend {
         let mut edges_to_update: Vec<GraphEdge> = Vec::new();
 
         for edge in all_edges {
-            let days_since_update =
-                (now - edge.updated_at).max(0) as f64 / seconds_per_day;
-            let new_score = edge.decay_score - (days_since_update as f32 * policy.edge_decay_per_day);
+            let days_since_update = (now - edge.updated_at).max(0) as f64 / seconds_per_day;
+            let new_score =
+                edge.decay_score - (days_since_update as f32 * policy.edge_decay_per_day);
 
             if new_score < policy.min_score {
                 edges_to_prune.push(edge.id.clone());
@@ -296,7 +333,11 @@ impl GraphStore for LanceMemoryBackend {
         // Delete pruned edges (scoped to workspace)
         for id in &edges_to_prune {
             self.edges_table
-                .delete(&format!("id = '{}' AND agent = '{}'", escape_sql_string(id), ws_safe))
+                .delete(&format!(
+                    "id = '{}' AND agent = '{}'",
+                    escape_sql_string(id),
+                    ws_safe
+                ))
                 .await
                 .map_err(super::lance_err)?;
         }
@@ -304,7 +345,11 @@ impl GraphStore for LanceMemoryBackend {
         // Update decayed edges (delete + re-insert, scoped to workspace)
         for edge in &edges_to_update {
             self.edges_table
-                .delete(&format!("id = '{}' AND agent = '{}'", escape_sql_string(&edge.id), ws_safe))
+                .delete(&format!(
+                    "id = '{}' AND agent = '{}'",
+                    escape_sql_string(&edge.id),
+                    ws_safe
+                ))
                 .await
                 .map_err(super::lance_err)?;
             let batch = graph_edges_to_record_batch(std::slice::from_ref(edge))?;
@@ -397,7 +442,11 @@ mod tests {
         updated_node.aliases = vec!["rust-lang".to_string()];
         backend.upsert_node(&updated_node, "default").await.unwrap();
 
-        let retrieved = backend.get_node("gn-001", "default").await.unwrap().unwrap();
+        let retrieved = backend
+            .get_node("gn-001", "default")
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(retrieved.name, "Rust Lang");
         assert_eq!(retrieved.aliases, vec!["rust-lang".to_string()]);
     }
@@ -523,13 +572,29 @@ mod tests {
         let stats = backend.apply_decay(&policy, "default").await.unwrap();
 
         // Old node and edge should have been pruned
-        assert!(stats.nodes_pruned >= 1, "expected at least 1 node pruned, got {}", stats.nodes_pruned);
-        assert!(stats.edges_pruned >= 1, "expected at least 1 edge pruned, got {}", stats.edges_pruned);
+        assert!(
+            stats.nodes_pruned >= 1,
+            "expected at least 1 node pruned, got {}",
+            stats.nodes_pruned
+        );
+        assert!(
+            stats.edges_pruned >= 1,
+            "expected at least 1 edge pruned, got {}",
+            stats.edges_pruned
+        );
 
         // Old node should be gone
-        assert!(backend.get_node("gn-old", "default").await.unwrap().is_none());
+        assert!(backend
+            .get_node("gn-old", "default")
+            .await
+            .unwrap()
+            .is_none());
 
         // Recent node should still exist
-        assert!(backend.get_node("gn-recent", "default").await.unwrap().is_some());
+        assert!(backend
+            .get_node("gn-recent", "default")
+            .await
+            .unwrap()
+            .is_some());
     }
 }

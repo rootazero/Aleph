@@ -11,9 +11,7 @@ use crate::gateway::formatter::{MarkupFormat, MessageFormatter};
 use chrono::Utc;
 use teloxide::{
     prelude::*,
-    types::{
-        ChatId, InlineKeyboardButton, InlineKeyboardMarkup, InputFile, ParseMode, ThreadId,
-    },
+    types::{ChatId, InlineKeyboardButton, InlineKeyboardMarkup, InputFile, ParseMode, ThreadId},
 };
 
 use super::chunking::split_html_safe;
@@ -88,10 +86,7 @@ pub(crate) fn classify_error(err: &teloxide::RequestError) -> ErrorClass {
 /// Returns the `ChatId` and an optional raw thread id (i32).
 pub(crate) fn parse_conversation_id(conv_id: &str) -> (ChatId, Option<i32>) {
     if let Some((chat, topic)) = conv_id.split_once(":topic:") {
-        (
-            ChatId(chat.parse().unwrap_or(0)),
-            topic.parse().ok(),
-        )
+        (ChatId(chat.parse().unwrap_or(0)), topic.parse().ok())
     } else {
         (ChatId(conv_id.parse().unwrap_or(0)), None)
     }
@@ -126,8 +121,7 @@ pub(crate) async fn send_message(
 
     // Send typing indicator if enabled
     if config.send_typing {
-        let mut action_req =
-            bot.send_chat_action(chat_id, teloxide::types::ChatAction::Typing);
+        let mut action_req = bot.send_chat_action(chat_id, teloxide::types::ChatAction::Typing);
         if let Some(tid) = thread_id {
             if tid != 1 {
                 action_req =
@@ -162,39 +156,38 @@ pub(crate) async fn send_message(
     let chunks = split_html_safe(&html_text, 4000);
 
     // Helper to build a SendMessage request with optional thread routing
-    let build_request =
-        |parse_mode: Option<ParseMode>,
-         text: &str,
-         reply_to: Option<&str>,
-         keyboard: Option<&InlineKeyboard>| {
-            let mut req = bot.send_message(chat_id, text);
-            if let Some(mode) = parse_mode {
-                req = req.parse_mode(mode);
+    let build_request = |parse_mode: Option<ParseMode>,
+                         text: &str,
+                         reply_to: Option<&str>,
+                         keyboard: Option<&InlineKeyboard>| {
+        let mut req = bot.send_message(chat_id, text);
+        if let Some(mode) = parse_mode {
+            req = req.parse_mode(mode);
+        }
+        if let Some(reply_to) = reply_to {
+            if let Ok(msg_id) = reply_to.parse::<i32>() {
+                req = req.reply_parameters(teloxide::types::ReplyParameters::new(
+                    teloxide::types::MessageId(msg_id),
+                ));
             }
-            if let Some(reply_to) = reply_to {
-                if let Ok(msg_id) = reply_to.parse::<i32>() {
-                    req = req.reply_parameters(teloxide::types::ReplyParameters::new(
-                        teloxide::types::MessageId(msg_id),
-                    ));
-                }
+        }
+        // Forum topic: route reply into the correct thread
+        if let Some(tid) = thread_id {
+            if tid != 1 {
+                // General topic — do NOT set message_thread_id
+                req = req.message_thread_id(ThreadId(teloxide::types::MessageId(tid)));
             }
-            // Forum topic: route reply into the correct thread
-            if let Some(tid) = thread_id {
-                if tid != 1 {
-                    // General topic — do NOT set message_thread_id
-                    req = req.message_thread_id(ThreadId(teloxide::types::MessageId(tid)));
-                }
-            }
-            if let Some(keyboard) = keyboard {
-                let markup = InlineKeyboardMarkup::new(keyboard.rows.iter().map(|row| {
-                    row.iter()
-                        .map(|btn| InlineKeyboardButton::callback(&btn.text, &btn.callback_data))
-                        .collect::<Vec<_>>()
-                }));
-                req = req.reply_markup(markup);
-            }
-            req
-        };
+        }
+        if let Some(keyboard) = keyboard {
+            let markup = InlineKeyboardMarkup::new(keyboard.rows.iter().map(|row| {
+                row.iter()
+                    .map(|btn| InlineKeyboardButton::callback(&btn.text, &btn.callback_data))
+                    .collect::<Vec<_>>()
+            }));
+            req = req.reply_markup(markup);
+        }
+        req
+    };
 
     // Send each chunk with retry logic. Only the first chunk carries
     // reply_to and inline_keyboard; subsequent chunks are plain continuations.
@@ -218,7 +211,8 @@ pub(crate) async fn send_message(
 
         let mut attempts = 0u32;
         let sent = loop {
-            let result = build_request(Some(ParseMode::Html), chunk, reply_to_ref, keyboard_ref).await;
+            let result =
+                build_request(Some(ParseMode::Html), chunk, reply_to_ref, keyboard_ref).await;
             match result {
                 Ok(msg) => break msg,
                 Err(e) => {
@@ -233,10 +227,7 @@ pub(crate) async fn send_message(
                             break build_request(None, chunk, reply_to_ref, keyboard_ref)
                                 .await
                                 .map_err(|e| {
-                                    ChannelError::SendFailed(format!(
-                                        "Telegram send error: {}",
-                                        e
-                                    ))
+                                    ChannelError::SendFailed(format!("Telegram send error: {}", e))
                                 })?;
                         }
                         ErrorClass::RateLimited(secs) => {
@@ -261,7 +252,10 @@ pub(crate) async fn send_message(
                             let backoff_ms = 500 * attempts as u64;
                             tracing::warn!(
                                 "Telegram pre-connect error, retrying in {}ms (attempt {}/{}): {}",
-                                backoff_ms, attempts, max_retries, e
+                                backoff_ms,
+                                attempts,
+                                max_retries,
+                                e
                             );
                             tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
                         }
@@ -274,7 +268,10 @@ pub(crate) async fn send_message(
                             let backoff_ms = 1000 * attempts as u64;
                             tracing::warn!(
                                 "Telegram post-connect error, retrying in {}ms (attempt {}/{}): {}",
-                                backoff_ms, attempts, post_connect_max, e
+                                backoff_ms,
+                                attempts,
+                                post_connect_max,
+                                e
                             );
                             tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
                         }
@@ -388,9 +385,10 @@ pub(crate) async fn send_attachment(
     } else if let Some(path) = &attachment.path {
         InputFile::file(path)
     } else if let Some(url) = &attachment.url {
-        InputFile::url(url.parse().map_err(|e| {
-            ChannelError::SendFailed(format!("Invalid attachment URL: {}", e))
-        })?)
+        InputFile::url(
+            url.parse()
+                .map_err(|e| ChannelError::SendFailed(format!("Invalid attachment URL: {}", e)))?,
+        )
     } else {
         return Err(ChannelError::SendFailed(
             "Attachment has no data, path, or URL".to_string(),
@@ -445,9 +443,12 @@ pub(crate) async fn edit_message(
 ) -> ChannelResult<()> {
     let (chat, _thread_id) = parse_conversation_id(conversation_id);
 
-    let msg_id = teloxide::types::MessageId(message_id.as_str().parse().map_err(|_| {
-        ChannelError::SendFailed("Invalid message ID".into())
-    })?);
+    let msg_id = teloxide::types::MessageId(
+        message_id
+            .as_str()
+            .parse()
+            .map_err(|_| ChannelError::SendFailed("Invalid message ID".into()))?,
+    );
 
     if let Some(text) = new_text {
         // Convert Markdown to Telegram HTML for consistent rendering
@@ -488,9 +489,7 @@ pub(crate) async fn edit_message(
                 .iter()
                 .map(|row| {
                     row.iter()
-                        .map(|btn| {
-                            InlineKeyboardButton::callback(&btn.text, &btn.callback_data)
-                        })
+                        .map(|btn| InlineKeyboardButton::callback(&btn.text, &btn.callback_data))
                         .collect::<Vec<_>>()
                 })
                 .collect::<Vec<_>>(),

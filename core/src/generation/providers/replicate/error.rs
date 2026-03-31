@@ -32,11 +32,9 @@ pub fn parse_error_response(status: u16, body: &str) -> GenerationError {
         404 => GenerationError::model_not_found("Model or prediction not found", "replicate"),
         422 => GenerationError::invalid_parameters(body.to_string(), None),
         429 => GenerationError::rate_limit("Rate limit exceeded", None),
-        500..=599 => GenerationError::provider(
-            format!("Server error: {}", body),
-            Some(status),
-            "replicate",
-        ),
+        500..=599 => {
+            GenerationError::provider(format!("Server error: {}", body), Some(status), "replicate")
+        }
         _ => GenerationError::provider(
             format!("Unexpected error: {}", body),
             Some(status),

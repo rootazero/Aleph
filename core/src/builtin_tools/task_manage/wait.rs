@@ -150,8 +150,7 @@ impl AlephTool for TaskWaitTool {
         }
 
         let timeout = args.timeout_seconds.unwrap_or(300);
-        let deadline =
-            tokio::time::Instant::now() + std::time::Duration::from_secs(timeout);
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(timeout);
 
         // Subscribe to Important events (where task events live)
         let mut receiver = self.event_bus.subscribe(EventTier::Important).await?;

@@ -2,14 +2,14 @@
 //!
 //! Defines the Policy trait, action types, risk levels, and the PolicyEngine.
 
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::path::PathBuf;
-use crate::sync_primitives::Arc;
+use crate::daemon::error::Result;
 use crate::daemon::events::DerivedEvent;
 use crate::daemon::worldmodel::state::EnhancedContext;
 use crate::daemon::worldmodel::WorldModel;
-use crate::daemon::error::Result;
+use crate::sync_primitives::Arc;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::path::PathBuf;
 
 /// Policy trait - evaluates context and events to propose actions
 pub trait Policy: Send + Sync {
@@ -17,11 +17,7 @@ pub trait Policy: Send + Sync {
     fn name(&self) -> &str;
 
     /// Evaluate context and event to potentially propose an action
-    fn evaluate(
-        &self,
-        context: &EnhancedContext,
-        event: &DerivedEvent,
-    ) -> Option<ProposedAction>;
+    fn evaluate(&self, context: &EnhancedContext, event: &DerivedEvent) -> Option<ProposedAction>;
 }
 
 /// A proposed action from policy evaluation
@@ -75,7 +71,8 @@ impl PolicyEngine {
     /// Create MVP version with 5 initial policies
     pub fn new_mvp() -> Self {
         use crate::daemon::dispatcher::policies::{
-            HighCpuAlertPolicy, IdleCleanupPolicy, LowBatteryPolicy, FocusModePolicy, MeetingMutePolicy,
+            FocusModePolicy, HighCpuAlertPolicy, IdleCleanupPolicy, LowBatteryPolicy,
+            MeetingMutePolicy,
         };
 
         Self {
@@ -90,12 +87,10 @@ impl PolicyEngine {
     }
 
     /// Create PolicyEngine with YAML policies
-    pub fn new_with_yaml(
-        yaml_path: Option<PathBuf>,
-        worldmodel: Arc<WorldModel>,
-    ) -> Result<Self> {
+    pub fn new_with_yaml(yaml_path: Option<PathBuf>, worldmodel: Arc<WorldModel>) -> Result<Self> {
         use crate::daemon::dispatcher::policies::{
-            HighCpuAlertPolicy, IdleCleanupPolicy, LowBatteryPolicy, FocusModePolicy, MeetingMutePolicy,
+            FocusModePolicy, HighCpuAlertPolicy, IdleCleanupPolicy, LowBatteryPolicy,
+            MeetingMutePolicy,
         };
         use crate::daemon::dispatcher::yaml_policy::load_yaml_policies;
 
@@ -163,8 +158,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_policy_engine_with_yaml() {
-        use crate::daemon::worldmodel::WorldModelConfig;
         use crate::daemon::event_bus::DaemonEventBus;
+        use crate::daemon::worldmodel::WorldModelConfig;
         use std::io::Write;
         use tempfile::NamedTempFile;
 
@@ -184,10 +179,8 @@ mod tests {
         let config = WorldModelConfig::default();
         let worldmodel = Arc::new(WorldModel::new(config, event_bus).await.unwrap());
 
-        let engine = PolicyEngine::new_with_yaml(
-            Some(temp_file.path().to_path_buf()),
-            worldmodel,
-        ).unwrap();
+        let engine =
+            PolicyEngine::new_with_yaml(Some(temp_file.path().to_path_buf()), worldmodel).unwrap();
 
         // Should have 5 hardcoded + 1 YAML = 6 total
         assert_eq!(engine.policies.len(), 6);

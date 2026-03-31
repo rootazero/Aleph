@@ -96,7 +96,9 @@ impl AlephToolServer {
     /// ```
     pub fn tool(self, tool: impl AlephToolDyn + 'static) -> Self {
         // Safe: we own self exclusively at construction time — no contention possible.
-        let mut tools = self.tools.try_write()
+        let mut tools = self
+            .tools
+            .try_write()
             .expect("BUG: RwLock contention during builder construction");
         let name = tool.name().to_string();
         tools.insert(name, Arc::new(tool));
@@ -113,7 +115,9 @@ impl AlephToolServer {
     /// ```
     pub fn tool_boxed(self, tool: Box<dyn AlephToolDyn>) -> Self {
         // Safe: we own self exclusively at construction time — no contention possible.
-        let mut tools = self.tools.try_write()
+        let mut tools = self
+            .tools
+            .try_write()
             .expect("BUG: RwLock contention during builder construction");
         let name = tool.name().to_string();
         tools.insert(name, Arc::from(tool));

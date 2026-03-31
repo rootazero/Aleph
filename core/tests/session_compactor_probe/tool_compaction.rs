@@ -22,7 +22,13 @@ fn make_large_tool_conversation(count: usize) -> Vec<UnifiedMessage> {
 
         // Large file-read output — each line is ~60 chars, 200 lines ≈ 12 000 chars ≈ 3 400 tokens
         let file_content: String = (0..200)
-            .map(|l| format!("fn component_{}_line_{}_impl() {{ /* body */ }}\n", i + 1, l))
+            .map(|l| {
+                format!(
+                    "fn component_{}_line_{}_impl() {{ /* body */ }}\n",
+                    i + 1,
+                    l
+                )
+            })
             .collect();
         messages.push(UnifiedMessage::tool_result(
             format!("call_{}", i + 1),
@@ -136,7 +142,10 @@ fn p1_fresh_tail_preserved() {
 
     // Verify pre-condition: conversation is large.
     let initial_tokens = estimate_total_tokens(&messages, 3.5);
-    assert!(initial_tokens > 5_000, "pre-condition: need large conversation; got {initial_tokens}");
+    assert!(
+        initial_tokens > 5_000,
+        "pre-condition: need large conversation; got {initial_tokens}"
+    );
 
     // Protect the last 3 messages (the fresh tail).
     let fresh_tail_count = 3;

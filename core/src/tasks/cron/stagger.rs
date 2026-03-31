@@ -73,7 +73,10 @@ mod tests {
     fn stagger_different_ids_likely_differ() {
         let a = compute_stagger_offset("job-one", 1_000_000);
         let b = compute_stagger_offset("job-two", 1_000_000);
-        assert_ne!(a, b, "different IDs should (very likely) produce different offsets");
+        assert_ne!(
+            a, b,
+            "different IDs should (very likely) produce different offsets"
+        );
     }
 
     #[test]
@@ -116,6 +119,9 @@ mod tests {
     #[test]
     fn staggered_next_zero_stagger_passthrough() {
         let result = compute_staggered_next("any-job", 5_000_000, 0, 1_000_000);
-        assert_eq!(result, 5_000_000, "zero stagger should return cron_next unchanged");
+        assert_eq!(
+            result, 5_000_000,
+            "zero stagger should return cron_next unchanged"
+        );
     }
 }

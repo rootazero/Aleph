@@ -152,7 +152,10 @@ pub struct TextConfig {
 #[serde(tag = "type")]
 pub enum TextFormat {
     #[serde(rename = "json_schema")]
-    JsonSchema { name: String, schema: serde_json::Value },
+    JsonSchema {
+        name: String,
+        schema: serde_json::Value,
+    },
     #[serde(rename = "json_object")]
     JsonObject,
 }

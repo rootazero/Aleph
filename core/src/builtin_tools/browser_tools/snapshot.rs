@@ -10,7 +10,9 @@ use crate::error::Result;
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
 
-fn default_true() -> bool { true }
+fn default_true() -> bool {
+    true
+}
 
 /// Arguments for the browser_snapshot tool.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]

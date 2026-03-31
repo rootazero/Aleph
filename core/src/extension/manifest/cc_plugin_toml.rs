@@ -9,12 +9,14 @@ use std::path::Path;
 use serde::Deserialize;
 
 use crate::extension::error::{ExtensionError, ExtensionResult};
-use crate::extension::manifest::{sanitize_plugin_id, validate_plugin_id};
 use crate::extension::manifest::toml_types::{
-    CapabilitiesSection, ChannelSection, PermissionsSection, ProviderSection, ServiceSection,
-    convert_permissions,
+    convert_permissions, CapabilitiesSection, ChannelSection, PermissionsSection, ProviderSection,
+    ServiceSection,
 };
-use crate::extension::manifest::types::{AlephExtensions, AlephRuntime, AuthorInfo, PluginManifest};
+use crate::extension::manifest::types::{
+    AlephExtensions, AlephRuntime, AuthorInfo, PluginManifest,
+};
+use crate::extension::manifest::{sanitize_plugin_id, validate_plugin_id};
 use crate::extension::types::PluginKind;
 
 /// Filename for CC-format TOML manifest
@@ -58,7 +60,6 @@ pub struct CcPluginToml {
     pub author: Option<CcPluginAuthorToml>,
 
     // Flat component paths (CC-native)
-
     /// Path to skills directory
     pub skills: Option<String>,
 
@@ -75,7 +76,6 @@ pub struct CcPluginToml {
     /// Aleph-specific extensions (optional, ignored by Claude Code)
     pub aleph: Option<AlephExtensionsToml>,
 }
-
 
 /// Author section in CC plugin.toml
 #[derive(Debug, Deserialize)]
@@ -135,7 +135,6 @@ pub struct AlephExtensionsToml {
     pub services: Vec<ServiceSection>,
 }
 
-
 // =============================================================================
 // Runtime → PluginKind mapping
 // =============================================================================
@@ -185,9 +184,9 @@ pub fn parse_cc_plugin_toml_content(
     })?;
 
     // `name` is required
-    let raw_name = toml.name.ok_or_else(|| {
-        ExtensionError::missing_field(&manifest_path, "name")
-    })?;
+    let raw_name = toml
+        .name
+        .ok_or_else(|| ExtensionError::missing_field(&manifest_path, "name"))?;
     if raw_name.is_empty() {
         return Err(ExtensionError::missing_field(&manifest_path, "name"));
     }
@@ -201,9 +200,7 @@ pub fn parse_cc_plugin_toml_content(
     let (kind, entry, aleph_extensions) = if let Some(aleph) = toml.aleph {
         let runtime_str = aleph.runtime.as_deref().unwrap_or("static");
         let kind = runtime_to_kind(runtime_str);
-        let entry = aleph
-            .entry
-            .unwrap_or_else(|| default_entry_for_kind(kind));
+        let entry = aleph.entry.unwrap_or_else(|| default_entry_for_kind(kind));
         let permissions = convert_permissions(&aleph.permissions);
 
         let aleph_ext = AlephExtensions {
@@ -329,24 +326,32 @@ impl ManifestAdapter for ClaudeCodeTomlAdapter {
         // Read component paths from the raw TOML to get skills/agents/hooks/mcp paths
         let toml_path = plugin_dir.join(CC_PLUGIN_TOML);
         let content = std::fs::read_to_string(&toml_path)?;
-        let raw: CcPluginToml = toml::from_str(&content)
-            .map_err(|e| anyhow::anyhow!("TOML re-parse error: {}", e))?;
+        let raw: CcPluginToml =
+            toml::from_str(&content).map_err(|e| anyhow::anyhow!("TOML re-parse error: {}", e))?;
 
         // Parse skills
         let skills_rel = raw.skills.as_deref().unwrap_or("skills");
-        capabilities.extend(parsers::parse_skills_dir(plugin_dir, skills_rel, &plugin_id)?);
+        capabilities.extend(parsers::parse_skills_dir(
+            plugin_dir, skills_rel, &plugin_id,
+        )?);
 
         // Parse agents
         let agents_rel = raw.agents.as_deref().unwrap_or("agents");
-        capabilities.extend(parsers::parse_agents_dir(plugin_dir, agents_rel, &plugin_id)?);
+        capabilities.extend(parsers::parse_agents_dir(
+            plugin_dir, agents_rel, &plugin_id,
+        )?);
 
         // Parse hooks
         let hooks_rel = raw.hooks.as_deref().unwrap_or("hooks/hooks.json");
-        capabilities.extend(parsers::parse_hooks_file(plugin_dir, hooks_rel, &plugin_id)?);
+        capabilities.extend(parsers::parse_hooks_file(
+            plugin_dir, hooks_rel, &plugin_id,
+        )?);
 
         // Parse MCP servers
         let mcp_rel = raw.mcp_servers.as_deref().unwrap_or(".mcp.json");
-        capabilities.extend(parsers::parse_mcp_config_file(plugin_dir, mcp_rel, &plugin_id)?);
+        capabilities.extend(parsers::parse_mcp_config_file(
+            plugin_dir, mcp_rel, &plugin_id,
+        )?);
 
         // Parse v2 prompt configuration from manifest (if present)
         if let Some(ref prompt) = manifest.prompt_v2 {
@@ -360,7 +365,9 @@ impl ManifestAdapter for ClaudeCodeTomlAdapter {
         if let Some(ref tools) = manifest.tools_v2 {
             match parsers::parse_v2_tool_prompts(plugin_dir, tools, &plugin_id) {
                 Ok(caps) => capabilities.extend(caps),
-                Err(e) => tracing::debug!("Failed to parse v2 tool prompts for {}: {}", plugin_id, e),
+                Err(e) => {
+                    tracing::debug!("Failed to parse v2 tool prompts for {}: {}", plugin_id, e)
+                }
             }
         }
 
@@ -444,8 +451,12 @@ env = true
         assert_eq!(ext.entry, Some("dist/plugin.wasm".to_string()));
 
         // permissions were set, so they should be in the manifest
-        assert!(manifest.permissions.contains(&crate::extension::manifest::types::PluginPermission::Network));
-        assert!(manifest.permissions.contains(&crate::extension::manifest::types::PluginPermission::Env));
+        assert!(manifest
+            .permissions
+            .contains(&crate::extension::manifest::types::PluginPermission::Network));
+        assert!(manifest
+            .permissions
+            .contains(&crate::extension::manifest::types::PluginPermission::Env));
     }
 
     #[test]
@@ -490,7 +501,11 @@ description = "No name here"
         let result = parse_cc_plugin_toml_content(content, &test_dir());
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
-        assert!(err.contains("name") || err.contains("missing"), "Expected missing name error, got: {}", err);
+        assert!(
+            err.contains("name") || err.contains("missing"),
+            "Expected missing name error, got: {}",
+            err
+        );
     }
 
     #[test]

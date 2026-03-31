@@ -22,8 +22,8 @@ use async_trait::async_trait;
 use crate::config::types::memory::GraphDecayPolicy;
 use crate::error::AlephError;
 use crate::memory::context::{CompressionSession, FactStats, FactType, MemoryEntry, MemoryFact};
-use crate::memory::namespace::NamespaceScope;
 use crate::memory::dreaming::{DailyInsight, DreamStatus};
+use crate::memory::namespace::NamespaceScope;
 
 use types::{MemoryFilter, ScoredFact, SearchFilter};
 
@@ -341,7 +341,11 @@ pub trait GraphStore: Send + Sync {
 
     /// Apply temporal decay to all nodes and edges, pruning those below
     /// the minimum score threshold.
-    async fn apply_decay(&self, policy: &GraphDecayPolicy, workspace: &str) -> Result<DecayStats, AlephError>;
+    async fn apply_decay(
+        &self,
+        policy: &GraphDecayPolicy,
+        workspace: &str,
+    ) -> Result<DecayStats, AlephError>;
 }
 
 // ---------------------------------------------------------------------------
@@ -398,19 +402,13 @@ pub trait SessionStore: Send + Sync {
     /// Delete memory entries older than the given cutoff timestamp.
     ///
     /// Returns the number of deleted entries. Used by cleanup services.
-    async fn delete_older_than(
-        &self,
-        cutoff_timestamp: i64,
-    ) -> Result<u64, AlephError>;
+    async fn delete_older_than(&self, cutoff_timestamp: i64) -> Result<u64, AlephError>;
 
     /// Clear memories with an optional window title filter.
     ///
     /// When the filter is `None`, clears all memories.
     /// Returns the number of deleted entries.
-    async fn clear_memories(
-        &self,
-        window_filter: Option<&str>,
-    ) -> Result<u64, AlephError>;
+    async fn clear_memories(&self, window_filter: Option<&str>) -> Result<u64, AlephError>;
 
     /// Get uncompressed memories since a timestamp, up to a limit.
     ///
@@ -539,10 +537,7 @@ pub trait MemoryEventStore: Send + Sync {
     async fn get_latest_seq(&self, fact_id: &str) -> Result<u64, AlephError>;
 
     /// Count total events, optionally filtered by event type tag.
-    async fn count_events(
-        &self,
-        event_type_filter: Option<&str>,
-    ) -> Result<usize, AlephError>;
+    async fn count_events(&self, event_type_filter: Option<&str>) -> Result<usize, AlephError>;
 }
 
 // ---------------------------------------------------------------------------

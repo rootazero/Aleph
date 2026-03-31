@@ -1,8 +1,8 @@
 //! Activity stats handler — returns active agent runs + coordination tasks.
 
+use crate::sync_primitives::Arc;
 use serde::Serialize;
 use serde_json::json;
-use crate::sync_primitives::Arc;
 
 use crate::agents::swarm::tasks::{CoordTaskFilter, CoordTaskStatus, CoordTaskStore};
 use crate::gateway::execution_adapter::ExecutionAdapter;

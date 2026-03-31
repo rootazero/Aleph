@@ -1,16 +1,15 @@
 //! Step definitions for daemon features
 
 use crate::world::{AlephWorld, DaemonContext};
-use alephcore::daemon::{
-    worldmodel::PendingAction, ActionType, ActivityType, DaemonCli, DaemonCommand, DaemonConfig,
-    DaemonEvent, DaemonEventBus, DaemonStatus, DispatcherMode, GovernorDecision, IpcServer, ProcessEventType, RawEvent, ResourceGovernor, ResourceLimits, RiskLevel,
-    ServiceManager, ServiceStatus,
-};
-use alephcore::{
-    ProactiveDispatcher, ProactiveDispatcherConfig, WorldModel, WorldModelConfig,
-};
 #[cfg(target_os = "macos")]
 use alephcore::daemon::platforms::launchd::LaunchdService;
+use alephcore::daemon::{
+    worldmodel::PendingAction, ActionType, ActivityType, DaemonCli, DaemonCommand, DaemonConfig,
+    DaemonEvent, DaemonEventBus, DaemonStatus, DispatcherMode, GovernorDecision, IpcServer,
+    ProcessEventType, RawEvent, ResourceGovernor, ResourceLimits, RiskLevel, ServiceManager,
+    ServiceStatus,
+};
+use alephcore::{ProactiveDispatcher, ProactiveDispatcherConfig, WorldModel, WorldModelConfig};
 use chrono::Utc;
 use clap::Parser;
 use cucumber::{given, then, when};
@@ -152,10 +151,7 @@ async fn when_query_service_status(w: &mut AlephWorld) {
 #[then("the query should succeed")]
 async fn then_query_success(w: &mut AlephWorld) {
     let ctx = w.daemon.as_ref().expect("Daemon context not initialized");
-    let result = ctx
-        .cli_parse_result
-        .as_ref()
-        .expect("No query attempted");
+    let result = ctx.cli_parse_result.as_ref().expect("No query attempted");
     assert!(result.is_ok(), "Service status query failed: {:?}", result);
 }
 
@@ -278,7 +274,10 @@ async fn when_create_launchd_service(_w: &mut AlephWorld) {
 #[then(expr = "the plist path should contain {string}")]
 async fn then_plist_path_contains(w: &mut AlephWorld, expected: String) {
     let ctx = w.daemon.as_ref().expect("Daemon context not initialized");
-    let service = ctx.launchd_service.as_ref().expect("LaunchdService not created");
+    let service = ctx
+        .launchd_service
+        .as_ref()
+        .expect("LaunchdService not created");
     assert!(service.plist_path().to_string_lossy().contains(&expected));
 }
 
@@ -298,9 +297,16 @@ async fn given_default_daemon_config(w: &mut AlephWorld) {
 #[when("I generate the plist")]
 async fn when_generate_plist(w: &mut AlephWorld) {
     let ctx = w.daemon.as_mut().expect("Daemon context not initialized");
-    let service = ctx.launchd_service.as_ref().expect("LaunchdService not created");
+    let service = ctx
+        .launchd_service
+        .as_ref()
+        .expect("LaunchdService not created");
     let config = ctx.daemon_config.as_ref().expect("DaemonConfig not set");
-    ctx.plist_content = Some(service.generate_plist(config).expect("Failed to generate plist"));
+    ctx.plist_content = Some(
+        service
+            .generate_plist(config)
+            .expect("Failed to generate plist"),
+    );
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -314,7 +320,11 @@ async fn when_generate_plist(_w: &mut AlephWorld) {
 async fn then_plist_contains(w: &mut AlephWorld, expected: String) {
     let ctx = w.daemon.as_ref().expect("Daemon context not initialized");
     let plist = ctx.plist_content.as_ref().expect("Plist not generated");
-    assert!(plist.contains(&expected), "Plist does not contain '{}'", expected);
+    assert!(
+        plist.contains(&expected),
+        "Plist does not contain '{}'",
+        expected
+    );
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -335,7 +345,10 @@ async fn given_daemon_event_bus(w: &mut AlephWorld, capacity: i32) {
 #[given("a WorldModel with test configuration")]
 async fn given_worldmodel_test_config(w: &mut AlephWorld) {
     let ctx = w.daemon.as_mut().expect("Daemon context not initialized");
-    let event_bus = ctx.arc_event_bus.clone().expect("Event bus not initialized");
+    let event_bus = ctx
+        .arc_event_bus
+        .clone()
+        .expect("Event bus not initialized");
 
     let dir = tempdir().unwrap();
     let state_path = dir.path().join("worldmodel_state.json");
@@ -357,17 +370,23 @@ async fn given_worldmodel_test_config(w: &mut AlephWorld) {
 async fn given_dispatcher_default_config(w: &mut AlephWorld) {
     let ctx = w.daemon.as_mut().expect("Daemon context not initialized");
     let worldmodel = ctx.worldmodel.clone().expect("WorldModel not initialized");
-    let event_bus = ctx.arc_event_bus.clone().expect("Event bus not initialized");
+    let event_bus = ctx
+        .arc_event_bus
+        .clone()
+        .expect("Event bus not initialized");
 
     let config = ProactiveDispatcherConfig::default();
     let dispatcher = ProactiveDispatcher::new(config, worldmodel, event_bus);
-    ctx.dispatcher = Some(dispatcher);  // Already Arc<Dispatcher>
+    ctx.dispatcher = Some(dispatcher); // Already Arc<Dispatcher>
 }
 
 #[given("I subscribe to the event bus")]
 async fn given_subscribe_to_event_bus(w: &mut AlephWorld) {
     let ctx = w.daemon.as_mut().expect("Daemon context not initialized");
-    let event_bus = ctx.arc_event_bus.as_ref().expect("Event bus not initialized");
+    let event_bus = ctx
+        .arc_event_bus
+        .as_ref()
+        .expect("Event bus not initialized");
     ctx.receivers.push(event_bus.subscribe());
 }
 
@@ -379,10 +398,10 @@ async fn when_spawn_worldmodel_loop(w: &mut AlephWorld, timeout_secs: i32) {
     // TODO: WorldModel.run() was removed (event processing removed in agent loop migration)
     // Now WorldModel is a passive state holder, no run loop needed
     let handle = tokio::spawn(async move {
-        let _ = tokio::time::timeout(
-            Duration::from_secs(timeout_secs as u64),
-            async { let _ = &worldmodel; tokio::time::sleep(Duration::from_secs(timeout_secs as u64)).await; },
-        )
+        let _ = tokio::time::timeout(Duration::from_secs(timeout_secs as u64), async {
+            let _ = &worldmodel;
+            tokio::time::sleep(Duration::from_secs(timeout_secs as u64)).await;
+        })
         .await;
     });
     ctx.worldmodel_handle = Some(handle);
@@ -391,14 +410,15 @@ async fn when_spawn_worldmodel_loop(w: &mut AlephWorld, timeout_secs: i32) {
 #[when(expr = "I spawn Dispatcher loop with {int} second timeout")]
 async fn when_spawn_dispatcher_loop(w: &mut AlephWorld, timeout_secs: i32) {
     let ctx = w.daemon.as_mut().expect("Daemon context not initialized");
-    let dispatcher = ctx.dispatcher.as_ref().expect("Dispatcher not initialized").clone();
+    let dispatcher = ctx
+        .dispatcher
+        .as_ref()
+        .expect("Dispatcher not initialized")
+        .clone();
 
     let handle = tokio::spawn(async move {
-        let _ = tokio::time::timeout(
-            Duration::from_secs(timeout_secs as u64),
-            dispatcher.run(),
-        )
-        .await;
+        let _ =
+            tokio::time::timeout(Duration::from_secs(timeout_secs as u64), dispatcher.run()).await;
     });
     ctx.dispatcher_handle = Some(handle);
 }
@@ -424,7 +444,10 @@ async fn when_wait_milliseconds_cleanup(w: &mut AlephWorld, ms: i32) {
 #[when(expr = "I send a process started event for {string} with pid {int}")]
 async fn when_send_process_started_event(w: &mut AlephWorld, name: String, pid: i32) {
     let ctx = w.daemon.as_ref().expect("Daemon context not initialized");
-    let event_bus = ctx.arc_event_bus.as_ref().expect("Event bus not initialized");
+    let event_bus = ctx
+        .arc_event_bus
+        .as_ref()
+        .expect("Event bus not initialized");
 
     let event = DaemonEvent::Raw(RawEvent::ProcessEvent {
         timestamp: Utc::now(),
@@ -463,13 +486,14 @@ async fn then_should_receive_event(w: &mut AlephWorld, timeout_secs: i32) {
     let ctx = w.daemon.as_mut().expect("Daemon context not initialized");
     let receiver = ctx.receivers.first_mut().expect("No subscribers");
 
-    let result = tokio::time::timeout(
-        Duration::from_secs(timeout_secs as u64),
-        receiver.recv(),
-    )
-    .await;
+    let result =
+        tokio::time::timeout(Duration::from_secs(timeout_secs as u64), receiver.recv()).await;
 
-    assert!(result.is_ok(), "Should receive event within {} second(s)", timeout_secs);
+    assert!(
+        result.is_ok(),
+        "Should receive event within {} second(s)",
+        timeout_secs
+    );
     ctx.received_event = result.ok().and_then(|r| r.ok());
 }
 
@@ -553,7 +577,10 @@ async fn when_create_worldmodel_with_state_file(w: &mut AlephWorld) {
     }
 
     let event_bus = ctx.arc_event_bus.clone().unwrap();
-    let state_path = ctx.persistence_state_path.clone().expect("State path not set");
+    let state_path = ctx
+        .persistence_state_path
+        .clone()
+        .expect("State path not set");
 
     let config = WorldModelConfig {
         state_path: Some(state_path),
@@ -618,7 +645,10 @@ async fn when_create_new_worldmodel_same_state(w: &mut AlephWorld) {
     let event_bus = Arc::new(DaemonEventBus::new(100));
     ctx.arc_event_bus = Some(event_bus.clone());
 
-    let state_path = ctx.persistence_state_path.clone().expect("State path not set");
+    let state_path = ctx
+        .persistence_state_path
+        .clone()
+        .expect("State path not set");
 
     let config = WorldModelConfig {
         state_path: Some(state_path),

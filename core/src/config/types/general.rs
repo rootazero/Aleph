@@ -131,4 +131,3 @@ mod tests {
         assert!(config.browser.profiles.is_empty());
     }
 }
-

@@ -61,7 +61,11 @@ impl MessageSender {
             return Ok(());
         }
 
-        debug!("Sending text to {}: {}...", to, text.get(..50).unwrap_or(text));
+        debug!(
+            "Sending text to {}: {}...",
+            to,
+            text.get(..50).unwrap_or(text)
+        );
 
         // Escape the text for AppleScript
         let escaped_text = escape_applescript_string(text);
@@ -143,7 +147,11 @@ impl MessageSender {
             return Err(SendError::InvalidTarget("Empty chat ID".to_string()));
         }
 
-        debug!("Sending to chat {}: {}...", chat_id, text.get(..50).unwrap_or(text));
+        debug!(
+            "Sending to chat {}: {}...",
+            chat_id,
+            text.get(..50).unwrap_or(text)
+        );
 
         let escaped_text = escape_applescript_string(text);
         let escaped_chat_id = escape_applescript_string(chat_id);

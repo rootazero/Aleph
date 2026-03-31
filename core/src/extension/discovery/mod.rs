@@ -84,8 +84,7 @@ impl DiscoveryConfig {
         project_dir: Option<&std::path::Path>,
         agent_id: Option<&str>,
     ) {
-        let scope_dirs =
-            crate::extension::scope::scope_dirs_by_priority(project_dir, agent_id);
+        let scope_dirs = crate::extension::scope::scope_dirs_by_priority(project_dir, agent_id);
         // Prepend so scope dirs take priority over any existing extra_paths.
         let mut new_extra = scope_dirs.into_iter().map(|(_, p)| p).collect::<Vec<_>>();
         new_extra.append(&mut self.extra_paths);
@@ -253,9 +252,7 @@ mod tests {
         let config_path = tempdir().unwrap();
 
         // Create plugin in project extensions
-        let project_ext = projects_base
-            .path()
-            .join("my-project/extensions/my-plugin");
+        let project_ext = projects_base.path().join("my-project/extensions/my-plugin");
         fs::create_dir_all(&project_ext).unwrap();
         fs::write(project_ext.join("SKILL.md"), "# Project").unwrap();
 
@@ -338,10 +335,7 @@ mod tests {
             .with_home_dir("/path/to/home");
 
         assert_eq!(config.project_id, Some("my-project".into()));
-        assert_eq!(
-            config.bundled_dir,
-            Some(PathBuf::from("/path/to/bundled"))
-        );
+        assert_eq!(config.bundled_dir, Some(PathBuf::from("/path/to/bundled")));
         assert_eq!(config.home_dir, Some(PathBuf::from("/path/to/home")));
     }
 

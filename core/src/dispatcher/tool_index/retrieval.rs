@@ -5,10 +5,10 @@
 //! - Medium (>= 0.6): Summary only
 //! - Low (>= 0.4): Excluded or minimal
 
+use super::config::ToolRetrievalConfig;
 use crate::error::AlephError;
 use crate::memory::context::{FactType, MemoryFact};
 use crate::memory::store::{MemoryBackend, MemoryStore};
-use super::config::ToolRetrievalConfig;
 
 /// Hydration level for a retrieved tool
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -109,27 +109,30 @@ impl ToolRetrieval {
     ///
     /// Returns tools above the hard threshold, classified by hydration level.
     /// Results are sorted by score descending.
-    pub async fn retrieve(
-        &self,
-        query_embedding: &[f32],
-    ) -> Result<Vec<HydratedTool>, AlephError> {
+    pub async fn retrieve(&self, query_embedding: &[f32]) -> Result<Vec<HydratedTool>, AlephError> {
         // Search for facts using vector similarity
         // We fetch more than max_tools to allow for filtering by type
         let candidate_limit = self.config.max_tools * 3;
-        let filter = crate::memory::store::types::SearchFilter::valid_only(
-            Some(crate::memory::NamespaceScope::Owner),
-        );
-        let scored = self.db.vector_search(
-            query_embedding,
-            query_embedding.len() as u32,
-            &filter,
-            candidate_limit,
-        ).await?;
-        let facts: Vec<MemoryFact> = scored.into_iter().map(|sf| {
-            let mut fact = sf.fact;
-            fact.similarity_score = Some(sf.score);
-            fact
-        }).collect();
+        let filter = crate::memory::store::types::SearchFilter::valid_only(Some(
+            crate::memory::NamespaceScope::Owner,
+        ));
+        let scored = self
+            .db
+            .vector_search(
+                query_embedding,
+                query_embedding.len() as u32,
+                &filter,
+                candidate_limit,
+            )
+            .await?;
+        let facts: Vec<MemoryFact> = scored
+            .into_iter()
+            .map(|sf| {
+                let mut fact = sf.fact;
+                fact.similarity_score = Some(sf.score);
+                fact
+            })
+            .collect();
 
         // Filter to only tool facts and apply hard threshold
         let mut tools: Vec<HydratedTool> = facts
@@ -140,7 +143,11 @@ impl ToolRetrieval {
             .collect();
 
         // Sort by score descending (highest confidence first)
-        tools.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        tools.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         // Limit to max_tools
         tools.truncate(self.config.max_tools);
@@ -157,23 +164,29 @@ impl ToolRetrieval {
         query_text: &str,
     ) -> Result<Vec<HydratedTool>, AlephError> {
         // Use hybrid search from StateDatabase
-        let filter = crate::memory::store::types::SearchFilter::valid_only(
-            Some(crate::memory::NamespaceScope::Owner),
-        );
-        let scored = self.db.hybrid_search(&crate::memory::store::HybridSearchParams {
-            embedding: query_embedding,
-            dim_hint: query_embedding.len() as u32,
-            query_text,
-            vector_weight: 0.7,
-            text_weight: 0.3,
-            filter: &filter,
-            limit: self.config.max_tools * 3,
-        }).await?;
-        let facts: Vec<MemoryFact> = scored.into_iter().map(|sf| {
-            let mut fact = sf.fact;
-            fact.similarity_score = Some(sf.score);
-            fact
-        }).collect();
+        let filter = crate::memory::store::types::SearchFilter::valid_only(Some(
+            crate::memory::NamespaceScope::Owner,
+        ));
+        let scored = self
+            .db
+            .hybrid_search(&crate::memory::store::HybridSearchParams {
+                embedding: query_embedding,
+                dim_hint: query_embedding.len() as u32,
+                query_text,
+                vector_weight: 0.7,
+                text_weight: 0.3,
+                filter: &filter,
+                limit: self.config.max_tools * 3,
+            })
+            .await?;
+        let facts: Vec<MemoryFact> = scored
+            .into_iter()
+            .map(|sf| {
+                let mut fact = sf.fact;
+                fact.similarity_score = Some(sf.score);
+                fact
+            })
+            .collect();
 
         let mut tools: Vec<HydratedTool> = facts
             .into_iter()
@@ -181,17 +194,32 @@ impl ToolRetrieval {
             .map(|f| HydratedTool::from_fact(f, &self.config))
             .collect();
 
-        tools.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        tools.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         tools.truncate(self.config.max_tools);
 
         Ok(tools)
     }
 
     /// Get tools at each hydration level
-    pub fn partition_by_hydration(tools: &[HydratedTool]) -> (Vec<&HydratedTool>, Vec<&HydratedTool>, Vec<&HydratedTool>) {
-        let full: Vec<_> = tools.iter().filter(|t| t.hydration_level == HydrationLevel::Full).collect();
-        let summary: Vec<_> = tools.iter().filter(|t| t.hydration_level == HydrationLevel::Summary).collect();
-        let minimal: Vec<_> = tools.iter().filter(|t| t.hydration_level == HydrationLevel::Minimal).collect();
+    pub fn partition_by_hydration(
+        tools: &[HydratedTool],
+    ) -> (Vec<&HydratedTool>, Vec<&HydratedTool>, Vec<&HydratedTool>) {
+        let full: Vec<_> = tools
+            .iter()
+            .filter(|t| t.hydration_level == HydrationLevel::Full)
+            .collect();
+        let summary: Vec<_> = tools
+            .iter()
+            .filter(|t| t.hydration_level == HydrationLevel::Summary)
+            .collect();
+        let minimal: Vec<_> = tools
+            .iter()
+            .filter(|t| t.hydration_level == HydrationLevel::Minimal)
+            .collect();
         (full, summary, minimal)
     }
 
@@ -231,22 +259,40 @@ mod tests {
         let config = ToolRetrievalConfig::default();
 
         // At high threshold (0.7)
-        assert_eq!(HydratedTool::calculate_hydration_level(0.7, &config), HydrationLevel::Full);
+        assert_eq!(
+            HydratedTool::calculate_hydration_level(0.7, &config),
+            HydrationLevel::Full
+        );
 
         // Just below high threshold
-        assert_eq!(HydratedTool::calculate_hydration_level(0.69, &config), HydrationLevel::Summary);
+        assert_eq!(
+            HydratedTool::calculate_hydration_level(0.69, &config),
+            HydrationLevel::Summary
+        );
 
         // At soft threshold (0.6)
-        assert_eq!(HydratedTool::calculate_hydration_level(0.6, &config), HydrationLevel::Summary);
+        assert_eq!(
+            HydratedTool::calculate_hydration_level(0.6, &config),
+            HydrationLevel::Summary
+        );
 
         // Just below soft threshold
-        assert_eq!(HydratedTool::calculate_hydration_level(0.59, &config), HydrationLevel::Minimal);
+        assert_eq!(
+            HydratedTool::calculate_hydration_level(0.59, &config),
+            HydrationLevel::Minimal
+        );
     }
 
     #[test]
     fn test_name_from_fact_id() {
-        assert_eq!(HydratedTool::name_from_fact_id("tool:read_file"), "read_file");
-        assert_eq!(HydratedTool::name_from_fact_id("tool:search_code"), "search_code");
+        assert_eq!(
+            HydratedTool::name_from_fact_id("tool:read_file"),
+            "read_file"
+        );
+        assert_eq!(
+            HydratedTool::name_from_fact_id("tool:search_code"),
+            "search_code"
+        );
         assert_eq!(HydratedTool::name_from_fact_id("not_a_tool"), "not_a_tool");
     }
 
@@ -308,7 +354,10 @@ mod tests {
         let tool = HydratedTool::from_fact(fact.clone(), &config);
 
         assert_eq!(tool.name, "execute_shell");
-        assert_eq!(tool.description, "Execute shell commands in a sandboxed environment");
+        assert_eq!(
+            tool.description,
+            "Execute shell commands in a sandboxed environment"
+        );
         assert_eq!(tool.score, 0.72);
         assert_eq!(tool.hydration_level, HydrationLevel::Full);
         assert_eq!(tool.fact.id, "tool:execute_shell");

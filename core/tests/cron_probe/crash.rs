@@ -82,7 +82,9 @@ async fn crash_mid_execution_recovers() {
         // Verify running_at_ms is still set from the crashed run
         {
             let guard = store.lock().await;
-            let job = guard.get_job("crash-test-1").expect("job should exist after reload");
+            let job = guard
+                .get_job("crash-test-1")
+                .expect("job should exist after reload");
             assert!(
                 job.state.running_at_ms.is_some(),
                 "running_at_ms should still be set from the crashed run"
@@ -146,7 +148,11 @@ async fn crash_after_phase1_before_phase2() {
         {
             let conn = rusqlite::Connection::open(&store_path).expect("open DB for verification");
             let data: String = conn
-                .query_row("SELECT data FROM cron_jobs WHERE id = 'phase1-crash'", [], |row| row.get(0))
+                .query_row(
+                    "SELECT data FROM cron_jobs WHERE id = 'phase1-crash'",
+                    [],
+                    |row| row.get(0),
+                )
                 .expect("job should be persisted");
             assert!(
                 data.contains("running_at_ms"),
@@ -215,11 +221,7 @@ async fn crash_preserves_store_integrity() {
 
     // Reload and verify count
     let store = CronStore::load(store_path).expect("reload store");
-    assert_eq!(
-        store.job_count(),
-        5,
-        "reloaded store should have 5 jobs"
-    );
+    assert_eq!(store.job_count(), 5, "reloaded store should have 5 jobs");
 
     // Verify all job IDs are present
     for i in 0..5 {

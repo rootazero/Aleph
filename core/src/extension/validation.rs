@@ -36,9 +36,10 @@ pub fn validate_plugin(plugin_dir: &Path) -> ValidationResult {
 
     // 1. Check directory exists
     if !plugin_dir.exists() {
-        result
-            .errors
-            .push(format!("Directory does not exist: {}", plugin_dir.display()));
+        result.errors.push(format!(
+            "Directory does not exist: {}",
+            plugin_dir.display()
+        ));
         return result;
     }
 

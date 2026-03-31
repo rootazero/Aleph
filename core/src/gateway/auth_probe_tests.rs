@@ -10,19 +10,19 @@
 
 #[cfg(test)]
 mod tests {
+    use crate::gateway::auth_middleware::login_page_html;
     use crate::gateway::config::AuthMode;
-    use crate::gateway::security::{
-        hmac_sign, generate_secret, SharedTokenManager, TokenManager,
-        PairingManager, InvitationManager, GuestSessionManager, SecurityStore,
-    };
-    use crate::gateway::security::store::DeviceUpsertData;
-    use crate::gateway::session::HttpSessionManager;
     use crate::gateway::device_store::DeviceStore;
     use crate::gateway::event_bus::GatewayEventBus;
-    use crate::gateway::handlers::auth::{AuthContext, handle_connect};
+    use crate::gateway::handlers::auth::{handle_connect, AuthContext};
     use crate::gateway::handlers::auth_tools::*;
-    use crate::gateway::auth_middleware::login_page_html;
     use crate::gateway::protocol::JsonRpcRequest;
+    use crate::gateway::security::store::DeviceUpsertData;
+    use crate::gateway::security::{
+        generate_secret, hmac_sign, GuestSessionManager, InvitationManager, PairingManager,
+        SecurityStore, SharedTokenManager, TokenManager,
+    };
+    use crate::gateway::session::HttpSessionManager;
     use crate::sync_primitives::Arc;
     use axum::http::header;
     use serde_json::json;
@@ -32,7 +32,11 @@ mod tests {
     // =========================================================================
 
     /// Build a full AuthContext with in-memory stores.
-    fn make_auth_context() -> (Arc<AuthContext>, Arc<SecurityStore>, Arc<SharedTokenManager>) {
+    fn make_auth_context() -> (
+        Arc<AuthContext>,
+        Arc<SecurityStore>,
+        Arc<SharedTokenManager>,
+    ) {
         let store = Arc::new(SecurityStore::in_memory().unwrap());
         // Seed a device so FK constraints on tokens table pass
         store
@@ -47,7 +51,10 @@ mod tests {
             })
             .unwrap();
 
-        let shared_token_mgr = Arc::new(SharedTokenManager::new(store.clone(), "/tmp/aleph_test.vault"));
+        let shared_token_mgr = Arc::new(SharedTokenManager::new(
+            store.clone(),
+            "/tmp/aleph_test.vault",
+        ));
 
         let ctx = Arc::new(AuthContext {
             token_manager: Arc::new(TokenManager::new(store.clone())),
@@ -207,7 +214,12 @@ mod tests {
 
         let result = resp.result.unwrap();
         let device_token = result.get("token").unwrap().as_str().unwrap().to_string();
-        let device_id = result.get("device_id").unwrap().as_str().unwrap().to_string();
+        let device_id = result
+            .get("device_id")
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_string();
         assert!(!device_token.is_empty());
         assert!(!device_id.is_empty());
         assert!(result.get("permissions").unwrap().as_array().unwrap().len() > 0);
@@ -226,7 +238,10 @@ mod tests {
 
         let result2 = resp2.result.unwrap();
         assert!(result2.get("token").is_some());
-        assert_eq!(result2.get("device_id").unwrap().as_str().unwrap(), device_id);
+        assert_eq!(
+            result2.get("device_id").unwrap().as_str().unwrap(),
+            device_id
+        );
     }
 
     // =========================================================================
@@ -287,7 +302,10 @@ mod tests {
             Some(json!(1)),
         );
         let resp = handle_connect(req, ctx).await;
-        assert!(resp.is_success(), "auth_mode: None must accept any connection");
+        assert!(
+            resp.is_success(),
+            "auth_mode: None must accept any connection"
+        );
     }
 
     // =========================================================================
@@ -342,7 +360,9 @@ mod tests {
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_millis() as i64;
-            store.insert_session(&sid, &hash, now, now + 72 * 3600 * 1000).unwrap();
+            store
+                .insert_session(&sid, &hash, now, now + 72 * 3600 * 1000)
+                .unwrap();
             session_ids.push(sid);
         }
 
@@ -420,17 +440,24 @@ mod tests {
         let mut headers = axum::http::HeaderMap::new();
         headers.insert(
             header::COOKIE,
-            "foo=bar; aleph_session=my-uuid-123; baz=qux".parse().unwrap(),
+            "foo=bar; aleph_session=my-uuid-123; baz=qux"
+                .parse()
+                .unwrap(),
         );
         // We test the extraction logic via the raw function
         let cookie_val = headers
             .get(header::COOKIE)
             .and_then(|v| v.to_str().ok())
             .and_then(|cookies| {
-                cookies.split(';')
+                cookies
+                    .split(';')
                     .filter_map(|c| {
                         let (name, value) = c.trim().split_once('=')?;
-                        if name == "aleph_session" { Some(value.to_string()) } else { None }
+                        if name == "aleph_session" {
+                            Some(value.to_string())
+                        } else {
+                            None
+                        }
                     })
                     .next()
             });
@@ -446,10 +473,15 @@ mod tests {
             .get(header::COOKIE)
             .and_then(|v| v.to_str().ok())
             .and_then(|cookies| {
-                cookies.split(';')
+                cookies
+                    .split(';')
                     .filter_map(|c| {
                         let (name, value) = c.trim().split_once('=')?;
-                        if name == "aleph_session" { Some(value.to_string()) } else { None }
+                        if name == "aleph_session" {
+                            Some(value.to_string())
+                        } else {
+                            None
+                        }
                     })
                     .next()
             });
@@ -461,10 +493,15 @@ mod tests {
             .get(header::COOKIE)
             .and_then(|v| v.to_str().ok())
             .and_then(|cookies| {
-                cookies.split(';')
+                cookies
+                    .split(';')
                     .filter_map(|c| {
                         let (name, value) = c.trim().split_once('=')?;
-                        if name == "aleph_session" { Some(value.to_string()) } else { None }
+                        if name == "aleph_session" {
+                            Some(value.to_string())
+                        } else {
+                            None
+                        }
                     })
                     .next()
             });
@@ -485,11 +522,13 @@ mod tests {
         let secret_b = generate_secret();
         assert_ne!(secret_a, secret_b);
 
-        let mgr_a = SharedTokenManager::with_secret(store.clone(), secret_a, "/tmp/aleph_test.vault");
+        let mgr_a =
+            SharedTokenManager::with_secret(store.clone(), secret_a, "/tmp/aleph_test.vault");
         let token = mgr_a.generate_token().unwrap();
 
         // Same store, different secret — MUST fail
-        let mgr_b = SharedTokenManager::with_secret(store.clone(), secret_b, "/tmp/aleph_test.vault");
+        let mgr_b =
+            SharedTokenManager::with_secret(store.clone(), secret_b, "/tmp/aleph_test.vault");
         assert!(!mgr_b.validate(&token).unwrap());
 
         // Same store, same secret — MUST pass
@@ -515,7 +554,9 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_millis() as i64;
-        store.insert_session("sess-1", "hash-1", now, now + 100_000).unwrap();
+        store
+            .insert_session("sess-1", "hash-1", now, now + 100_000)
+            .unwrap();
         assert!(store.validate_session("sess-1").unwrap());
         store.touch_session("sess-1").unwrap();
         store.delete_session("sess-1").unwrap();
@@ -607,7 +648,10 @@ mod tests {
             Some(json!(3)),
         );
         let resp3 = handle_connect(req, ctx.clone()).await;
-        assert!(resp3.is_success(), "token alone should suffice for reconnect");
+        assert!(
+            resp3.is_success(),
+            "token alone should suffice for reconnect"
+        );
     }
 
     // =========================================================================
@@ -704,9 +748,9 @@ model = "test"
         let mgr = HttpSessionManager::new(store, 72);
 
         // Create 5 sessions
-        let sids: Vec<String> = (0..5).map(|i| {
-            mgr.create_session(&format!("hash-{}", i)).unwrap()
-        }).collect();
+        let sids: Vec<String> = (0..5)
+            .map(|i| mgr.create_session(&format!("hash-{}", i)).unwrap())
+            .collect();
 
         // Revoke sessions 0, 2, 4
         for i in [0, 2, 4] {
@@ -822,7 +866,12 @@ model = "test"
         // Step 6-7: Server issues device token → Panel stores in localStorage
         let result = resp.result.unwrap();
         let device_token = result.get("token").unwrap().as_str().unwrap().to_string();
-        let device_id = result.get("device_id").unwrap().as_str().unwrap().to_string();
+        let device_id = result
+            .get("device_id")
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_string();
 
         // Step 8: Reconnect with device token (simulates page refresh)
         let req = JsonRpcRequest::new(
@@ -892,10 +941,17 @@ model = "test"
         // Generate 50 tokens — all must follow format
         for _ in 0..50 {
             let token = mgr.generate_token().unwrap();
-            assert!(token.starts_with("aleph-"), "token must start with 'aleph-'");
+            assert!(
+                token.starts_with("aleph-"),
+                "token must start with 'aleph-'"
+            );
             // Must be valid UUID after prefix
             let uuid_part = &token[6..];
-            assert!(uuid::Uuid::parse_str(uuid_part).is_ok(), "suffix must be valid UUID: {}", uuid_part);
+            assert!(
+                uuid::Uuid::parse_str(uuid_part).is_ok(),
+                "suffix must be valid UUID: {}",
+                uuid_part
+            );
         }
     }
 
@@ -925,7 +981,10 @@ model = "test"
 
         // Device must be registered in SecurityStore
         let device = store.get_device(device_id).unwrap();
-        assert!(device.is_some(), "device must be registered after shared token auth");
+        assert!(
+            device.is_some(),
+            "device must be registered after shared token auth"
+        );
         assert_eq!(device.unwrap().role, "operator");
     }
 }

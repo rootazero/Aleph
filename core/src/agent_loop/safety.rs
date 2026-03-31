@@ -111,10 +111,7 @@ impl SafetyGuard {
     ///
     /// Merges the two layers (most restrictive wins) and combines with
     /// the default blocked patterns.
-    pub fn from_permissions(
-        global: &ToolPermissionsConfig,
-        agent: &ToolPermissionsConfig,
-    ) -> Self {
+    pub fn from_permissions(global: &ToolPermissionsConfig, agent: &ToolPermissionsConfig) -> Self {
         let merged = ToolPermissionsConfig::merge(global, agent);
         let blocked = default_blocked_patterns();
         Self::new(blocked, merged.overrides, merged.default)

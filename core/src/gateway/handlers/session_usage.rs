@@ -75,8 +75,8 @@ fn estimate_tokens(messages: &[super::session::HistoryMessage]) -> (u64, u64) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::session::HistoryMessage;
+    use super::*;
 
     #[test]
     fn estimate_tokens_basic() {

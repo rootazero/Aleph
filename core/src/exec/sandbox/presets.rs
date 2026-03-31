@@ -1,9 +1,8 @@
-use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 use super::capabilities::{
-    Capabilities, FileSystemCapability, NetworkCapability,
-    ProcessCapability, EnvironmentCapability,
+    Capabilities, EnvironmentCapability, FileSystemCapability, NetworkCapability, ProcessCapability,
 };
 
 /// Registry of preset capability templates
@@ -105,7 +104,9 @@ impl Default for PresetRegistry {
             "data_transformer".to_string(),
             PresetDefinition {
                 name: "data_transformer".to_string(),
-                description: "Data transformation tools with temp workspace and read-only data access".to_string(),
+                description:
+                    "Data transformation tools with temp workspace and read-only data access"
+                        .to_string(),
                 capabilities: Capabilities {
                     filesystem: vec![
                         FileSystemCapability::TempWorkspace,
@@ -138,7 +139,10 @@ mod tests {
         let registry = PresetRegistry::default();
         let preset = registry.get("file_processor").unwrap();
         assert_eq!(preset.name, "file_processor");
-        assert!(matches!(preset.capabilities.network, NetworkCapability::Deny));
+        assert!(matches!(
+            preset.capabilities.network,
+            NetworkCapability::Deny
+        ));
     }
 
     #[test]
@@ -146,7 +150,10 @@ mod tests {
         let registry = PresetRegistry::default();
         let preset = registry.get("web_scraper").unwrap();
         assert_eq!(preset.name, "web_scraper");
-        assert!(matches!(preset.capabilities.network, NetworkCapability::AllowAll));
+        assert!(matches!(
+            preset.capabilities.network,
+            NetworkCapability::AllowAll
+        ));
     }
 
     #[test]
@@ -154,7 +161,10 @@ mod tests {
         let registry = PresetRegistry::default();
         let preset = registry.get("code_analyzer").unwrap();
         assert_eq!(preset.name, "code_analyzer");
-        assert!(matches!(preset.capabilities.network, NetworkCapability::Deny));
+        assert!(matches!(
+            preset.capabilities.network,
+            NetworkCapability::Deny
+        ));
     }
 
     #[test]

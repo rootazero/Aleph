@@ -51,7 +51,11 @@ impl BrowserBackend for ManagedBackend {
         target: ActionTarget,
         text: &str,
     ) -> Result<(), BrowserError> {
-        self.runtime.lock().await.type_text(tab_id, target, text).await
+        self.runtime
+            .lock()
+            .await
+            .type_text(tab_id, target, text)
+            .await
     }
 
     async fn fill(
@@ -73,7 +77,11 @@ impl BrowserBackend for ManagedBackend {
         target: ActionTarget,
         direction: ScrollDirection,
     ) -> Result<(), BrowserError> {
-        self.runtime.lock().await.scroll(tab_id, target, direction).await
+        self.runtime
+            .lock()
+            .await
+            .scroll(tab_id, target, direction)
+            .await
     }
 
     async fn screenshot(
@@ -88,11 +96,7 @@ impl BrowserBackend for ManagedBackend {
         self.runtime.lock().await.snapshot(tab_id).await
     }
 
-    async fn evaluate(
-        &self,
-        tab_id: &str,
-        js: &str,
-    ) -> Result<serde_json::Value, BrowserError> {
+    async fn evaluate(&self, tab_id: &str, js: &str) -> Result<serde_json::Value, BrowserError> {
         self.runtime.lock().await.evaluate(tab_id, js).await
     }
 

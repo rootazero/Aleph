@@ -7,8 +7,8 @@ use crate::gateway::channel::{
     ChannelError, ChannelId, ConversationId, InboundMessage, MessageId, SendResult, UserId,
 };
 use crate::gateway::formatter::{MarkupFormat, MessageFormatter};
-use chrono::Utc;
 use crate::sync_primitives::Arc;
+use chrono::Utc;
 use std::time::Duration;
 use tokio::sync::RwLock;
 
@@ -39,7 +39,9 @@ impl SlackMessageOps {
             .map_err(|e| ChannelError::AuthFailed(format!("auth.test request failed: {e}")))?
             .json()
             .await
-            .map_err(|e| ChannelError::AuthFailed(format!("auth.test response parse failed: {e}")))?;
+            .map_err(|e| {
+                ChannelError::AuthFailed(format!("auth.test response parse failed: {e}"))
+            })?;
 
         if resp["ok"].as_bool() != Some(true) {
             let err = resp["error"].as_str().unwrap_or("unknown error");
@@ -48,10 +50,7 @@ impl SlackMessageOps {
             )));
         }
 
-        let user_id = resp["user_id"]
-            .as_str()
-            .unwrap_or("unknown")
-            .to_string();
+        let user_id = resp["user_id"].as_str().unwrap_or("unknown").to_string();
         Ok(user_id)
     }
 
@@ -82,14 +81,9 @@ impl SlackMessageOps {
             )));
         }
 
-        resp["url"]
-            .as_str()
-            .map(String::from)
-            .ok_or_else(|| {
-                ChannelError::Internal(
-                    "Missing 'url' in connections.open response".to_string(),
-                )
-            })
+        resp["url"].as_str().map(String::from).ok_or_else(|| {
+            ChannelError::Internal("Missing 'url' in connections.open response".to_string())
+        })
     }
 
     /// Send a message via `chat.postMessage`.
@@ -128,9 +122,7 @@ impl SlackMessageOps {
                 .json()
                 .await
                 .map_err(|e| {
-                    ChannelError::SendFailed(format!(
-                        "chat.postMessage response parse failed: {e}"
-                    ))
+                    ChannelError::SendFailed(format!("chat.postMessage response parse failed: {e}"))
                 })?;
 
             if resp["ok"].as_bool() != Some(true) {
@@ -140,10 +132,7 @@ impl SlackMessageOps {
                 )));
             }
 
-            let msg_ts = resp["ts"]
-                .as_str()
-                .unwrap_or("0")
-                .to_string();
+            let msg_ts = resp["ts"].as_str().unwrap_or("0").to_string();
 
             last_result = Some(SendResult {
                 message_id: MessageId::new(msg_ts),
@@ -376,16 +365,11 @@ impl SlackMessageOps {
                         // Extract and process the event
                         let event = &payload["payload"]["event"];
                         let bot_id_guard = bot_user_id.read().await;
-                        let bot_id_str = bot_id_guard
-                            .as_deref()
-                            .unwrap_or("");
+                        let bot_id_str = bot_id_guard.as_deref().unwrap_or("");
 
-                        if let Some(inbound) = Self::convert_event_to_inbound(
-                            event,
-                            &channel_id,
-                            bot_id_str,
-                            &config,
-                        ) {
+                        if let Some(inbound) =
+                            Self::convert_event_to_inbound(event, &channel_id, bot_id_str, &config)
+                        {
                             tracing::debug!(
                                 "Slack message from {}: {}",
                                 inbound.sender_id.as_str(),
@@ -439,10 +423,8 @@ mod tests {
 
         let channel_id = ChannelId::new("slack");
         let config = SlackConfig::default();
-        let msg = SlackMessageOps::convert_event_to_inbound(
-            &event, &channel_id, "B123", &config,
-        )
-        .unwrap();
+        let msg = SlackMessageOps::convert_event_to_inbound(&event, &channel_id, "B123", &config)
+            .unwrap();
 
         assert_eq!(msg.channel_id.as_str(), "slack");
         assert_eq!(msg.conversation_id.as_str(), "C789");
@@ -464,9 +446,7 @@ mod tests {
 
         let channel_id = ChannelId::new("slack");
         let config = SlackConfig::default();
-        let msg = SlackMessageOps::convert_event_to_inbound(
-            &event, &channel_id, "B123", &config,
-        );
+        let msg = SlackMessageOps::convert_event_to_inbound(&event, &channel_id, "B123", &config);
         assert!(msg.is_none());
     }
 
@@ -482,9 +462,7 @@ mod tests {
 
         let channel_id = ChannelId::new("slack");
         let config = SlackConfig::default();
-        let msg = SlackMessageOps::convert_event_to_inbound(
-            &event, &channel_id, "U456", &config,
-        );
+        let msg = SlackMessageOps::convert_event_to_inbound(&event, &channel_id, "U456", &config);
         assert!(msg.is_none());
     }
 
@@ -505,9 +483,7 @@ mod tests {
             allowed_channels: vec!["C111".to_string(), "C222".to_string()],
             ..Default::default()
         };
-        let msg = SlackMessageOps::convert_event_to_inbound(
-            &event, &channel_id, "B123", &config,
-        );
+        let msg = SlackMessageOps::convert_event_to_inbound(&event, &channel_id, "B123", &config);
         assert!(msg.is_none());
 
         // In allowed channels
@@ -515,9 +491,7 @@ mod tests {
             allowed_channels: vec!["C789".to_string()],
             ..Default::default()
         };
-        let msg = SlackMessageOps::convert_event_to_inbound(
-            &event, &channel_id, "B123", &config,
-        );
+        let msg = SlackMessageOps::convert_event_to_inbound(&event, &channel_id, "B123", &config);
         assert!(msg.is_some());
     }
 
@@ -534,9 +508,7 @@ mod tests {
 
         let channel_id = ChannelId::new("slack");
         let config = SlackConfig::default();
-        let msg = SlackMessageOps::convert_event_to_inbound(
-            &event, &channel_id, "B123", &config,
-        );
+        let msg = SlackMessageOps::convert_event_to_inbound(&event, &channel_id, "B123", &config);
         assert!(msg.is_none());
     }
 
@@ -556,10 +528,8 @@ mod tests {
 
         let channel_id = ChannelId::new("slack");
         let config = SlackConfig::default();
-        let msg = SlackMessageOps::convert_event_to_inbound(
-            &event, &channel_id, "B123", &config,
-        )
-        .unwrap();
+        let msg = SlackMessageOps::convert_event_to_inbound(&event, &channel_id, "B123", &config)
+            .unwrap();
 
         assert_eq!(msg.conversation_id.as_str(), "C789");
         assert_eq!(msg.text, "Edited message text");
@@ -575,9 +545,7 @@ mod tests {
 
         let channel_id = ChannelId::new("slack");
         let config = SlackConfig::default();
-        let msg = SlackMessageOps::convert_event_to_inbound(
-            &event, &channel_id, "B123", &config,
-        );
+        let msg = SlackMessageOps::convert_event_to_inbound(&event, &channel_id, "B123", &config);
         assert!(msg.is_none());
     }
 
@@ -593,9 +561,7 @@ mod tests {
 
         let channel_id = ChannelId::new("slack");
         let config = SlackConfig::default();
-        let msg = SlackMessageOps::convert_event_to_inbound(
-            &event, &channel_id, "B123", &config,
-        );
+        let msg = SlackMessageOps::convert_event_to_inbound(&event, &channel_id, "B123", &config);
         assert!(msg.is_none());
     }
 
@@ -616,9 +582,7 @@ mod tests {
             dm_allowed: true,
             ..Default::default()
         };
-        let msg = SlackMessageOps::convert_event_to_inbound(
-            &event, &channel_id, "B123", &config,
-        );
+        let msg = SlackMessageOps::convert_event_to_inbound(&event, &channel_id, "B123", &config);
         assert!(msg.is_some());
         assert!(!msg.unwrap().is_group);
 
@@ -627,9 +591,7 @@ mod tests {
             dm_allowed: false,
             ..Default::default()
         };
-        let msg = SlackMessageOps::convert_event_to_inbound(
-            &event, &channel_id, "B123", &config,
-        );
+        let msg = SlackMessageOps::convert_event_to_inbound(&event, &channel_id, "B123", &config);
         assert!(msg.is_none());
     }
 
@@ -646,10 +608,8 @@ mod tests {
 
         let channel_id = ChannelId::new("slack");
         let config = SlackConfig::default();
-        let msg = SlackMessageOps::convert_event_to_inbound(
-            &event, &channel_id, "B123", &config,
-        )
-        .unwrap();
+        let msg = SlackMessageOps::convert_event_to_inbound(&event, &channel_id, "B123", &config)
+            .unwrap();
 
         assert_eq!(msg.reply_to.as_ref().unwrap().as_str(), "1700000000.000100");
     }
@@ -666,10 +626,8 @@ mod tests {
 
         let channel_id = ChannelId::new("slack");
         let config = SlackConfig::default();
-        let msg = SlackMessageOps::convert_event_to_inbound(
-            &event, &channel_id, "B123", &config,
-        )
-        .unwrap();
+        let msg = SlackMessageOps::convert_event_to_inbound(&event, &channel_id, "B123", &config)
+            .unwrap();
 
         // Slack *bold* normalizes to Markdown **bold**
         assert_eq!(msg.text, "**bold text**");
@@ -687,10 +645,8 @@ mod tests {
 
         let channel_id = ChannelId::new("slack");
         let config = SlackConfig::default();
-        let msg = SlackMessageOps::convert_event_to_inbound(
-            &event, &channel_id, "B123", &config,
-        )
-        .unwrap();
+        let msg = SlackMessageOps::convert_event_to_inbound(&event, &channel_id, "B123", &config)
+            .unwrap();
 
         assert_eq!(msg.timestamp.timestamp(), 1700000000);
     }

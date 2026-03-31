@@ -1,6 +1,6 @@
 use crate::daemon::{DaemonError, Result};
-use sysinfo::{System, RefreshKind, CpuRefreshKind};
 use crate::sync_primitives::Arc;
+use sysinfo::{CpuRefreshKind, RefreshKind, System};
 use tokio::sync::RwLock;
 use tracing::{debug, warn};
 
@@ -46,8 +46,8 @@ pub struct ResourceGovernor {
 impl ResourceGovernor {
     /// Create a new ResourceGovernor with specified limits
     pub fn new(limits: ResourceLimits) -> Self {
-        let refresh_kind = RefreshKind::nothing()
-            .with_cpu(CpuRefreshKind::nothing().with_cpu_usage());
+        let refresh_kind =
+            RefreshKind::nothing().with_cpu(CpuRefreshKind::nothing().with_cpu_usage());
 
         Self {
             limits,

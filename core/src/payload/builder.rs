@@ -146,9 +146,7 @@ mod tests {
 
     #[test]
     fn test_builder_basic() {
-        let anchor = ContextAnchor::new(
-            Some("Document.txt".to_string()),
-        );
+        let anchor = ContextAnchor::new(Some("Document.txt".to_string()));
 
         let payload = PayloadBuilder::new()
             .meta(Intent::GeneralChat, 1234567890, anchor)
@@ -189,8 +187,7 @@ mod tests {
 
         let anchor = ContextAnchor::new(None);
 
-        let memory_anchor =
-            MemoryContextAnchor::now("Window Title".to_string());
+        let memory_anchor = MemoryContextAnchor::now("Window Title".to_string());
 
         let memories = vec![MemoryEntry {
             id: "test-id".to_string(),

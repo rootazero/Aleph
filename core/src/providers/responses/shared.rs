@@ -11,8 +11,7 @@ use crate::dispatcher::ToolDefinition;
 use crate::providers::adapter::{NativeToolCall, ToolChoice};
 use crate::providers::message::{ContentBlock, UnifiedMessage};
 use crate::providers::protocols::openai_common::tools::{
-    ensure_properties_recursive,
-    desanitize_tool_name as desanitize_tool_name_pub,
+    desanitize_tool_name as desanitize_tool_name_pub, ensure_properties_recursive,
     sanitize_tool_name as sanitize_tool_name_pub,
 };
 use crate::providers::responses::types::*;
@@ -89,7 +88,12 @@ pub fn convert_messages(messages: &[UnifiedMessage]) -> Vec<InputItem> {
                     });
                 }
                 for block in content {
-                    if let ContentBlock::ToolCall { id, name, arguments } = block {
+                    if let ContentBlock::ToolCall {
+                        id,
+                        name,
+                        arguments,
+                    } = block
+                    {
                         items.push(InputItem::FunctionCall {
                             call_id: id.clone(),
                             name: sanitize_tool_name_pub(name),
@@ -290,8 +294,12 @@ mod tests {
                 match content {
                     MessageContent::Multimodal { content: parts } => {
                         assert_eq!(parts.len(), 2);
-                        assert!(matches!(&parts[0], InputContentPart::InputText { text } if text == "Look at this"));
-                        assert!(matches!(&parts[1], InputContentPart::InputImage { image_url } if image_url == "data:image/png;base64,abc123"));
+                        assert!(
+                            matches!(&parts[0], InputContentPart::InputText { text } if text == "Look at this")
+                        );
+                        assert!(
+                            matches!(&parts[1], InputContentPart::InputImage { image_url } if image_url == "data:image/png;base64,abc123")
+                        );
                     }
                     _ => panic!("Expected Multimodal content"),
                 }
@@ -547,7 +555,9 @@ mod tests {
     fn test_parse_sse_reasoning_delta() {
         let data = r#"{"type":"response.reasoning_summary_text.delta","delta":"thinking step","item_id":"rs_1","output_index":0}"#;
         let event = parse_sse_data(data);
-        assert!(matches!(event, Some(StreamEvent::ReasoningSummaryTextDelta { delta, .. }) if delta == "thinking step"));
+        assert!(
+            matches!(event, Some(StreamEvent::ReasoningSummaryTextDelta { delta, .. }) if delta == "thinking step")
+        );
     }
 
     // ─── build_tools tests ──────────────────────────────────────────

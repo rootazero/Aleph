@@ -234,7 +234,11 @@ mod tests {
         assert!(!has_tag_overlap(&tags_a, &tags_b));
 
         // Multiple overlaps
-        let tags_a = vec!["Python".to_string(), "macOS".to_string(), "shell".to_string()];
+        let tags_a = vec![
+            "Python".to_string(),
+            "macOS".to_string(),
+            "shell".to_string(),
+        ];
         let tags_b = vec!["Python".to_string(), "macOS".to_string()];
         assert!(has_tag_overlap(&tags_a, &tags_b));
     }

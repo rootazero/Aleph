@@ -21,10 +21,7 @@ pub struct Inbox {
 }
 
 impl Inbox {
-    pub fn new(
-        msg_store: Arc<dyn MessageStore>,
-        event_store: Arc<dyn EventLogStore>,
-    ) -> Self {
+    pub fn new(msg_store: Arc<dyn MessageStore>, event_store: Arc<dyn EventLogStore>) -> Self {
         Self {
             msg_store,
             event_store,
@@ -73,11 +70,7 @@ impl Inbox {
     }
 
     /// Get unread counts as `(to_count, cc_count)` for an agent in a team.
-    pub async fn get_unread_counts(
-        &self,
-        agent_id: &str,
-        team_id: &str,
-    ) -> Result<(u32, u32)> {
+    pub async fn get_unread_counts(&self, agent_id: &str, team_id: &str) -> Result<(u32, u32)> {
         self.msg_store.get_unread_counts(agent_id, team_id).await
     }
 }
@@ -133,10 +126,7 @@ mod tests {
         assert_eq!(msgs2.len(), 1);
 
         // No events logged
-        let events = event_store
-            .get_events("team-1", None, None)
-            .await
-            .unwrap();
+        let events = event_store.get_events("team-1", None, None).await.unwrap();
         assert!(events.is_empty());
     }
 
@@ -157,10 +147,7 @@ mod tests {
         assert!(msgs2.is_empty());
 
         // MessageRead event should be logged
-        let events = event_store
-            .get_events("team-1", None, None)
-            .await
-            .unwrap();
+        let events = event_store.get_events("team-1", None, None).await.unwrap();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].event_type, TeamEventType::MessageRead);
     }

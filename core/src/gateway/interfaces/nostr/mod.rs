@@ -88,19 +88,18 @@ impl NostrChannel {
             images: false,
             audio: false,
             video: false,
-            reactions: true,   // NIP-25: reactions (kind 7)
-            replies: true,     // Via "e" tags
-            editing: false,    // Nostr events are immutable
-            deletion: false,   // NIP-09 exists but relays may ignore
+            reactions: true, // NIP-25: reactions (kind 7)
+            replies: true,   // Via "e" tags
+            editing: false,  // Nostr events are immutable
+            deletion: false, // NIP-09 exists but relays may ignore
             typing_indicator: false,
             read_receipts: false,
-            rich_text: false,  // Plain text only
+            rich_text: false, // Plain text only
             max_message_length: 65535,
             max_attachment_size: 0,
             stream_protocol: Default::default(),
         }
     }
-
 }
 
 #[async_trait]
@@ -117,7 +116,9 @@ impl Channel for NostrChannel {
         // Validate configuration
         self.config.validate().map_err(ChannelError::ConfigError)?;
 
-        self.channel_state.set_status(ChannelStatus::Connecting).await;
+        self.channel_state
+            .set_status(ChannelStatus::Connecting)
+            .await;
         tracing::info!("Starting Nostr channel...");
 
         // Derive public key
@@ -128,7 +129,9 @@ impl Channel for NostrChannel {
         tracing::info!(
             "Nostr identity: {}...{}",
             own_pubkey.get(..8).unwrap_or(&own_pubkey),
-            own_pubkey.get(own_pubkey.len().saturating_sub(8)..).unwrap_or("")
+            own_pubkey
+                .get(own_pubkey.len().saturating_sub(8)..)
+                .unwrap_or("")
         );
 
         // Create shutdown channel
@@ -161,7 +164,9 @@ impl Channel for NostrChannel {
             *status.write().await = ChannelStatus::Disconnected;
         });
 
-        self.channel_state.set_status(ChannelStatus::Connected).await;
+        self.channel_state
+            .set_status(ChannelStatus::Connected)
+            .await;
         Ok(())
     }
 
@@ -173,7 +178,9 @@ impl Channel for NostrChannel {
         }
 
         self.write_tx = None;
-        self.channel_state.set_status(ChannelStatus::Disconnected).await;
+        self.channel_state
+            .set_status(ChannelStatus::Disconnected)
+            .await;
         Ok(())
     }
 
@@ -214,10 +221,14 @@ impl Channel for NostrChannel {
             message_id: MessageId::new(event_id),
             timestamp: chrono::Utc::now(),
         })
-
     }
 
-    async fn react(&self, _conversation_id: &ConversationId, message_id: &MessageId, reaction: &str) -> ChannelResult<()> {
+    async fn react(
+        &self,
+        _conversation_id: &ConversationId,
+        message_id: &MessageId,
+        reaction: &str,
+    ) -> ChannelResult<()> {
         let write_tx = self
             .write_tx
             .as_ref()
@@ -244,7 +255,6 @@ impl Channel for NostrChannel {
             .map_err(|e| ChannelError::SendFailed(format!("write channel closed: {e}")))?;
 
         Ok(())
-
     }
 }
 
@@ -272,8 +282,7 @@ mod tests {
     use super::*;
 
     // A valid 32-byte hex private key for testing (NOT a real key)
-    const TEST_PRIVKEY: &str =
-        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    const TEST_PRIVKEY: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
     #[test]
     fn test_channel_capabilities() {

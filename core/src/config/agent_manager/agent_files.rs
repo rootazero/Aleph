@@ -15,17 +15,15 @@ impl AgentManager {
         }
 
         let mut files = Vec::new();
-        let entries = fs::read_dir(&agent_dir).map_err(|e| {
-            AlephError::IoError(format!("Failed to read agent dir: {}", e))
-        })?;
+        let entries = fs::read_dir(&agent_dir)
+            .map_err(|e| AlephError::IoError(format!("Failed to read agent dir: {}", e)))?;
 
         for entry in entries {
-            let entry = entry.map_err(|e| {
-                AlephError::IoError(format!("Failed to read dir entry: {}", e))
-            })?;
-            let metadata = entry.metadata().map_err(|e| {
-                AlephError::IoError(format!("Failed to read metadata: {}", e))
-            })?;
+            let entry = entry
+                .map_err(|e| AlephError::IoError(format!("Failed to read dir entry: {}", e)))?;
+            let metadata = entry
+                .metadata()
+                .map_err(|e| AlephError::IoError(format!("Failed to read metadata: {}", e)))?;
 
             if !metadata.is_file() {
                 continue;
@@ -56,11 +54,7 @@ impl AgentManager {
         self.validate_filename(filename)?;
         let path = self.agents_root.join(agent_id).join(filename);
         fs::read_to_string(&path).map_err(|e| {
-            AlephError::IoError(format!(
-                "Failed to read file '{}': {}",
-                path.display(),
-                e
-            ))
+            AlephError::IoError(format!("Failed to read file '{}': {}", path.display(), e))
         })
     }
 
@@ -68,16 +62,11 @@ impl AgentManager {
     pub fn write_file(&self, agent_id: &str, filename: &str, content: &str) -> Result<()> {
         self.validate_filename(filename)?;
         let agent_dir = self.agents_root.join(agent_id);
-        fs::create_dir_all(&agent_dir).map_err(|e| {
-            AlephError::IoError(format!("Failed to create agent dir: {}", e))
-        })?;
+        fs::create_dir_all(&agent_dir)
+            .map_err(|e| AlephError::IoError(format!("Failed to create agent dir: {}", e)))?;
         let path = agent_dir.join(filename);
         fs::write(&path, content).map_err(|e| {
-            AlephError::IoError(format!(
-                "Failed to write file '{}': {}",
-                path.display(),
-                e
-            ))
+            AlephError::IoError(format!("Failed to write file '{}': {}", path.display(), e))
         })
     }
 
@@ -87,11 +76,7 @@ impl AgentManager {
         let path = self.agents_root.join(agent_id).join(filename);
         if path.exists() {
             fs::remove_file(&path).map_err(|e| {
-                AlephError::IoError(format!(
-                    "Failed to delete file '{}': {}",
-                    path.display(),
-                    e
-                ))
+                AlephError::IoError(format!("Failed to delete file '{}': {}", path.display(), e))
             })?;
         }
         Ok(())

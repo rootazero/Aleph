@@ -132,7 +132,6 @@ impl NaiveBayesClassifier {
     /// * `features` - Extracted features from user input
     /// * `action_class` - The action class that was executed
     pub fn train(&mut self, features: &FeatureVector, action_class: ActionClass) {
-
         // Update total samples
         self.total_samples += 1;
 
@@ -208,7 +207,11 @@ impl NaiveBayesClassifier {
     }
 
     /// Calculate log likelihood: log P(Features|Action)
-    fn calculate_log_likelihood(&self, features: &FeatureVector, action_class: &ActionClass) -> f64 {
+    fn calculate_log_likelihood(
+        &self,
+        features: &FeatureVector,
+        action_class: &ActionClass,
+    ) -> f64 {
         let likelihoods = match self.likelihoods.get(action_class) {
             Some(l) => l,
             None => return f64::NEG_INFINITY,

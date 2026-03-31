@@ -3,7 +3,9 @@
 use chrono::Utc;
 
 use super::types::XmppMessage;
-use super::xml_helpers::{extract_attribute, extract_tag_content, xml_escape, xml_unescape, base64_encode};
+use super::xml_helpers::{
+    base64_encode, extract_attribute, extract_tag_content, xml_escape, xml_unescape,
+};
 
 // ==================== Stanza Building ====================
 
@@ -116,9 +118,7 @@ pub fn parse_message_stanza(stanza: &str) -> Option<XmppMessage> {
         return None;
     }
 
-    let from = extract_attribute(stanza, "from")
-        .unwrap_or("")
-        .to_string();
+    let from = extract_attribute(stanza, "from").unwrap_or("").to_string();
     let msg_type = extract_attribute(stanza, "type")
         .unwrap_or("chat")
         .to_string();
@@ -153,14 +153,14 @@ pub fn is_stream_features(stanza: &str) -> bool {
 ///
 /// Returns the IQ `id` and `from` if it's a ping.
 pub fn extract_ping(stanza: &str) -> Option<(String, String)> {
-    if !stanza.contains("urn:xmpp:ping") || !stanza.contains("type='get'") && !stanza.contains("type=\"get\"") {
+    if !stanza.contains("urn:xmpp:ping")
+        || !stanza.contains("type='get'") && !stanza.contains("type=\"get\"")
+    {
         return None;
     }
 
     let id = extract_attribute(stanza, "id")?.to_string();
-    let from = extract_attribute(stanza, "from")
-        .unwrap_or("")
-        .to_string();
+    let from = extract_attribute(stanza, "from").unwrap_or("").to_string();
 
     Some((id, from))
 }

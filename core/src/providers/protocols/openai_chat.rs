@@ -5,15 +5,12 @@
 
 use crate::config::ProviderConfig;
 use crate::error::{AlephError, Result};
-use crate::providers::adapter::{
-    ProtocolAdapter, RequestPayload, StopReason, TokenUsage,
-};
+use crate::providers::adapter::{ProtocolAdapter, RequestPayload, StopReason, TokenUsage};
 use crate::providers::delta::{IndexIdTracker, ProviderDelta};
-use crate::providers::openai::{
-    ContentBlock as OaiContentBlock, ImageUrl, Message, MessageContent,
-    OpenAiFunction, OpenAiTool,
-};
 use crate::providers::message::UnifiedMessage;
+use crate::providers::openai::{
+    ContentBlock as OaiContentBlock, ImageUrl, Message, MessageContent, OpenAiFunction, OpenAiTool,
+};
 use async_trait::async_trait;
 use futures::stream::BoxStream;
 use futures::StreamExt as _;
@@ -32,7 +29,9 @@ use tracing::{debug, warn};
 use super::openai_common::tools::sanitize_tool_name as sanitize_tool_name_pub;
 
 /// Replace characters not in `[a-zA-Z0-9_-]` with underscores (internal alias).
-fn sanitize_tool_name(name: &str) -> String { sanitize_tool_name_pub(name) }
+fn sanitize_tool_name(name: &str) -> String {
+    sanitize_tool_name_pub(name)
+}
 
 /// OpenAI protocol adapter
 pub struct OpenAiProtocol {
@@ -87,9 +86,7 @@ impl OpenAiProtocol {
             match msg {
                 UnifiedMessage::User { content } => {
                     use crate::providers::message::ContentBlock as UCB;
-                    let has_images = content
-                        .iter()
-                        .any(|b| matches!(b, UCB::Image { .. }));
+                    let has_images = content.iter().any(|b| matches!(b, UCB::Image { .. }));
 
                     if has_images {
                         // Use OpenAI's multimodal content array format
@@ -99,18 +96,19 @@ impl OpenAiProtocol {
                                 UCB::Text { text } => {
                                     Some(OaiContentBlock::Text { text: text.clone() })
                                 }
-                                UCB::Image { data, mime_type } => {
-                                    Some(OaiContentBlock::ImageUrl {
-                                        image_url: ImageUrl {
-                                            url: format!("data:{};base64,{}", mime_type, data),
-                                            detail: Some("auto".to_string()),
-                                        },
-                                    })
-                                }
+                                UCB::Image { data, mime_type } => Some(OaiContentBlock::ImageUrl {
+                                    image_url: ImageUrl {
+                                        url: format!("data:{};base64,{}", mime_type, data),
+                                        detail: Some("auto".to_string()),
+                                    },
+                                }),
                                 _ => None,
                             })
                             .collect();
-                        let image_count = blocks.iter().filter(|b| matches!(b, OaiContentBlock::ImageUrl { .. })).count();
+                        let image_count = blocks
+                            .iter()
+                            .filter(|b| matches!(b, OaiContentBlock::ImageUrl { .. }))
+                            .count();
                         tracing::info!(
                             target: "multimodal",
                             probe = "P6_provider",
@@ -156,7 +154,9 @@ impl OpenAiProtocol {
                                 name,
                                 arguments,
                             } => {
-                                use crate::providers::openai::{OpenAiFunctionCall, OpenAiToolCall};
+                                use crate::providers::openai::{
+                                    OpenAiFunctionCall, OpenAiToolCall,
+                                };
                                 Some(OpenAiToolCall {
                                     id: id.clone(),
                                     call_type: Some("function".to_string()),
@@ -177,7 +177,9 @@ impl OpenAiProtocol {
                         result.push(Message::text("assistant", msg_content.unwrap_or_default()));
                     } else {
                         // Convert to serializable tool call format
-                        use crate::providers::openai::types::{OpenAiToolCallOut, OpenAiFunctionCallOut};
+                        use crate::providers::openai::types::{
+                            OpenAiFunctionCallOut, OpenAiToolCallOut,
+                        };
                         let tc_out: Vec<OpenAiToolCallOut> = tool_calls
                             .into_iter()
                             .map(|tc| OpenAiToolCallOut {
@@ -226,7 +228,6 @@ impl OpenAiProtocol {
             ThinkLevel::High | ThinkLevel::XHigh => Some("high".to_string()),
         }
     }
-
 }
 
 #[async_trait]
@@ -298,9 +299,8 @@ impl ProtocolAdapter for OpenAiProtocol {
                     }
                 })
                 .collect();
-            body["tools"] = serde_json::to_value(&tools).map_err(|e| {
-                AlephError::provider(format!("Failed to serialize tools: {}", e))
-            })?;
+            body["tools"] = serde_json::to_value(&tools)
+                .map_err(|e| AlephError::provider(format!("Failed to serialize tools: {}", e)))?;
         }
 
         // Add tool_choice if specified
@@ -309,7 +309,9 @@ impl ProtocolAdapter for OpenAiProtocol {
             body["tool_choice"] = match choice {
                 ToolChoice::Auto => json!("auto"),
                 ToolChoice::Required => json!("required"),
-                ToolChoice::Specific(name) => json!({"type": "function", "function": {"name": name}}),
+                ToolChoice::Specific(name) => {
+                    json!({"type": "function", "function": {"name": name}})
+                }
                 ToolChoice::None => json!("none"),
             };
         }
@@ -411,9 +413,11 @@ impl ProtocolAdapter for OpenAiProtocol {
                                 &mut state.pending,
                             );
                             // If a Done was queued, stop after draining pending
-                            if state.pending.iter().any(|d| {
-                                matches!(d, Ok(ProviderDelta::Done(_)))
-                            }) {
+                            if state
+                                .pending
+                                .iter()
+                                .any(|d| matches!(d, Ok(ProviderDelta::Done(_))))
+                            {
                                 state.done = true;
                             }
                         }
@@ -474,7 +478,6 @@ impl ProtocolAdapter for OpenAiProtocol {
     fn name(&self) -> &'static str {
         "openai"
     }
-
 }
 
 // =============================================================================
@@ -579,9 +582,7 @@ fn parse_chat_sse_event(
     }
 
     // ── Finish reason — emit ToolCallEnd for all tracked tools, then Done ──
-    let finish_reason = choice
-        .get("finish_reason")
-        .and_then(|r| r.as_str());
+    let finish_reason = choice.get("finish_reason").and_then(|r| r.as_str());
 
     if let Some(reason) = finish_reason {
         let stop_reason = match reason {
@@ -611,9 +612,7 @@ mod tests {
     use super::*;
     use crate::config::ProviderConfig;
     use crate::providers::message::UnifiedMessage;
-    use crate::providers::openai::{
-        ChatCompletionResponse, OpenAiFunctionCall, OpenAiToolCall,
-    };
+    use crate::providers::openai::{ChatCompletionResponse, OpenAiFunctionCall, OpenAiToolCall};
 
     #[test]
     fn test_build_endpoint_default() {
@@ -762,8 +761,7 @@ mod tests {
             }
         });
 
-        let response: ChatCompletionResponse =
-            serde_json::from_value(response_json).unwrap();
+        let response: ChatCompletionResponse = serde_json::from_value(response_json).unwrap();
 
         assert_eq!(response.choices.len(), 1);
         let choice = &response.choices[0];
@@ -802,8 +800,7 @@ mod tests {
             }]
         });
 
-        let response: ChatCompletionResponse =
-            serde_json::from_value(response_json).unwrap();
+        let response: ChatCompletionResponse = serde_json::from_value(response_json).unwrap();
 
         let choice = &response.choices[0];
         assert_eq!(
@@ -826,8 +823,7 @@ mod tests {
             },
         };
 
-        let parsed: serde_json::Value =
-            serde_json::from_str(&tc.function.arguments).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&tc.function.arguments).unwrap();
         assert_eq!(parsed["query"], "rust async");
         assert_eq!(parsed["limit"], 10);
     }
@@ -836,8 +832,8 @@ mod tests {
     fn test_parse_malformed_function_arguments() {
         // Test fallback for malformed arguments
         let bad_args = "not valid json {{{";
-        let result: serde_json::Value = serde_json::from_str(bad_args)
-            .unwrap_or(serde_json::Value::Object(Default::default()));
+        let result: serde_json::Value =
+            serde_json::from_str(bad_args).unwrap_or(serde_json::Value::Object(Default::default()));
         assert!(result.is_object());
         assert!(result.as_object().unwrap().is_empty());
     }
@@ -872,7 +868,10 @@ mod tests {
         assert!(body["tools"].is_array());
         assert_eq!(body["tools"][0]["type"], "function");
         assert_eq!(body["tools"][0]["function"]["name"], "search");
-        assert_eq!(body["tools"][0]["function"]["description"], "Search the web");
+        assert_eq!(
+            body["tools"][0]["function"]["description"],
+            "Search the web"
+        );
         assert!(body["tools"][0]["function"]["parameters"]["properties"]["query"].is_object());
     }
 
@@ -1123,7 +1122,9 @@ mod tests {
         // Should emit ToolCallStart
         assert_eq!(pending.len(), 1);
         let delta = pending.pop_front().unwrap().unwrap();
-        assert!(matches!(delta, ProviderDelta::ToolCallStart { id, name } if id == "call_abc" && name == "search"));
+        assert!(
+            matches!(delta, ProviderDelta::ToolCallStart { id, name } if id == "call_abc" && name == "search")
+        );
 
         // Tracker should have the index mapped
         assert_eq!(tracker.get(0), Some("call_abc"));
@@ -1142,7 +1143,9 @@ mod tests {
 
         assert_eq!(pending.len(), 1);
         let delta = pending.pop_front().unwrap().unwrap();
-        assert!(matches!(delta, ProviderDelta::ToolCallArgDelta { id, delta } if id == "call_abc" && delta == r#"{"q":"#));
+        assert!(
+            matches!(delta, ProviderDelta::ToolCallArgDelta { id, delta } if id == "call_abc" && delta == r#"{"q":"#)
+        );
     }
 
     #[test]
@@ -1155,8 +1158,13 @@ mod tests {
         // Should emit Usage then Done(EndTurn)
         let events: Vec<ProviderDelta> = pending.drain(..).map(|r| r.unwrap()).collect();
         assert_eq!(events.len(), 2);
-        assert!(matches!(&events[0], ProviderDelta::Usage(u) if u.input_tokens == 10 && u.output_tokens == 5));
-        assert!(matches!(&events[1], ProviderDelta::Done(StopReason::EndTurn)));
+        assert!(
+            matches!(&events[0], ProviderDelta::Usage(u) if u.input_tokens == 10 && u.output_tokens == 5)
+        );
+        assert!(matches!(
+            &events[1],
+            ProviderDelta::Done(StopReason::EndTurn)
+        ));
     }
 
     #[test]
@@ -1174,7 +1182,10 @@ mod tests {
         let events: Vec<ProviderDelta> = pending.drain(..).map(|r| r.unwrap()).collect();
         assert_eq!(events.len(), 2);
         assert!(matches!(&events[0], ProviderDelta::ToolCallEnd { id } if id == "call_1"));
-        assert!(matches!(&events[1], ProviderDelta::Done(StopReason::ToolUse)));
+        assert!(matches!(
+            &events[1],
+            ProviderDelta::Done(StopReason::ToolUse)
+        ));
     }
 
     #[test]
@@ -1186,6 +1197,9 @@ mod tests {
 
         let events: Vec<ProviderDelta> = pending.drain(..).map(|r| r.unwrap()).collect();
         assert_eq!(events.len(), 1);
-        assert!(matches!(&events[0], ProviderDelta::Done(StopReason::MaxTokens)));
+        assert!(matches!(
+            &events[0],
+            ProviderDelta::Done(StopReason::MaxTokens)
+        ));
     }
 }

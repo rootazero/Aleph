@@ -3,8 +3,8 @@
 //! Tracks wait times for queued runs and calculates priority boosts to prevent
 //! low-priority tasks from being starved indefinitely.
 
-use std::collections::HashMap;
 use crate::sync_primitives::Arc;
+use std::collections::HashMap;
 use tokio::sync::RwLock;
 
 use crate::agents::sub_agents::Lane;
@@ -57,7 +57,8 @@ impl WaitTimeTracker {
 
             if wait_ms > threshold_ms {
                 // Calculate boost: +boost_per_30s per 30 seconds over threshold
-                let boost = (((wait_ms - threshold_ms) / 30_000).min(127) as i8).saturating_mul(boost_per_30s);
+                let boost = (((wait_ms - threshold_ms) / 30_000).min(127) as i8)
+                    .saturating_mul(boost_per_30s);
                 boost.min(10)
             } else {
                 0
@@ -179,7 +180,9 @@ mod tests {
         let tracker = WaitTimeTracker::new();
 
         // Run not tracked
-        let boost = tracker.calculate_boost("unknown-run", 100_000, 30_000, 1).await;
+        let boost = tracker
+            .calculate_boost("unknown-run", 100_000, 30_000, 1)
+            .await;
         assert_eq!(boost, 0);
     }
 

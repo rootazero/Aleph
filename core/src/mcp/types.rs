@@ -118,8 +118,10 @@ impl McpRemoteServerConfig {
 
     /// Add an authorization header
     pub fn with_bearer_token(mut self, token: impl Into<String>) -> Self {
-        self.headers
-            .insert("Authorization".to_string(), format!("Bearer {}", token.into()));
+        self.headers.insert(
+            "Authorization".to_string(),
+            format!("Bearer {}", token.into()),
+        );
         self
     }
 
@@ -325,10 +327,7 @@ mod tests {
             config.headers.get("Authorization"),
             Some(&"Bearer secret-token".to_string())
         );
-        assert_eq!(
-            config.headers.get("X-Custom"),
-            Some(&"value".to_string())
-        );
+        assert_eq!(config.headers.get("X-Custom"), Some(&"value".to_string()));
         assert!(matches!(config.transport, TransportPreference::Sse));
         assert_eq!(config.timeout_seconds, Some(60));
     }

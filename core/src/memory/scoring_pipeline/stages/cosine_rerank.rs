@@ -48,7 +48,11 @@ impl ScoringStage for CosineRerankStage {
             // facts without embedding keep their original score
         }
 
-        candidates.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        candidates.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         candidates
     }
 }
@@ -97,7 +101,10 @@ mod tests {
     #[test]
     fn no_query_embedding_passthrough() {
         let stage = CosineRerankStage;
-        let candidates = vec![scored("a", 0.8, Some(vec![1.0, 0.0])), scored("b", 0.5, Some(vec![0.0, 1.0]))];
+        let candidates = vec![
+            scored("a", 0.8, Some(vec![1.0, 0.0])),
+            scored("b", 0.5, Some(vec![0.0, 1.0])),
+        ];
         let ctx = ScoringContext {
             query: "test".to_string(),
             query_embedding: None,

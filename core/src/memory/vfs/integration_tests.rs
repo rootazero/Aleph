@@ -4,16 +4,18 @@
 mod tests {
     use crate::sync_primitives::Arc;
 
-    use crate::memory::{MemoryFact, FactSource};
     use crate::memory::context::FactType;
     use crate::memory::namespace::NamespaceScope;
-    use crate::memory::store::{MemoryBackend, MemoryStore};
     use crate::memory::store::lance::LanceMemoryBackend;
-    use crate::memory::vfs::{compute_directory_hash, bootstrap_agent_context};
+    use crate::memory::store::{MemoryBackend, MemoryStore};
+    use crate::memory::vfs::{bootstrap_agent_context, compute_directory_hash};
+    use crate::memory::{FactSource, MemoryFact};
 
     async fn create_test_db() -> (MemoryBackend, tempfile::TempDir) {
         let temp_dir = tempfile::tempdir().unwrap();
-        let backend = LanceMemoryBackend::open_or_create(temp_dir.path()).await.unwrap();
+        let backend = LanceMemoryBackend::open_or_create(temp_dir.path())
+            .await
+            .unwrap();
         (Arc::new(backend), temp_dir)
     }
 
@@ -23,7 +25,11 @@ mod tests {
 
         // 1. Insert facts with auto-assigned paths
         let fact1 = MemoryFact::new("User prefers Rust".into(), FactType::Preference, vec![]);
-        let fact2 = MemoryFact::new("User prefers dark theme".into(), FactType::Preference, vec![]);
+        let fact2 = MemoryFact::new(
+            "User prefers dark theme".into(),
+            FactType::Preference,
+            vec![],
+        );
         let fact3 = MemoryFact::new("Learning WebAssembly".into(), FactType::Learning, vec![]);
 
         assert_eq!(fact1.path, "aleph://user/preferences/");
@@ -34,13 +40,17 @@ mod tests {
         db.insert_fact(&fact3).await.unwrap();
 
         // 2. List children of user/
-        let user_children = db.list_by_path("aleph://user/", &NamespaceScope::Owner, "main").await.unwrap();
+        let user_children = db
+            .list_by_path("aleph://user/", &NamespaceScope::Owner, "main")
+            .await
+            .unwrap();
         assert!(!user_children.is_empty());
 
         // 3. Simulate L1 Overview storage
         // Get all facts and filter by path prefix
         let all_facts = db.get_all_facts(false, None).await.unwrap();
-        let prefs_facts: Vec<_> = all_facts.into_iter()
+        let prefs_facts: Vec<_> = all_facts
+            .into_iter()
             .filter(|f| f.path.starts_with("aleph://user/preferences/"))
             .collect();
         let hash = compute_directory_hash(&prefs_facts);
@@ -53,7 +63,10 @@ mod tests {
         db.insert_fact(&l1).await.unwrap();
 
         // 4. Verify L1 retrieval via get_by_path
-        let overview = db.get_by_path("aleph://user/preferences/", &NamespaceScope::Owner, "main").await.unwrap();
+        let overview = db
+            .get_by_path("aleph://user/preferences/", &NamespaceScope::Owner, "main")
+            .await
+            .unwrap();
         assert!(overview.is_some());
         // Note: get_by_path returns the first matching fact at the exact path;
         // it may return any fact at that path, not necessarily the Summary.

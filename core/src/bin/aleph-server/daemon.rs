@@ -104,7 +104,8 @@ pub fn acquire_instance_lock() -> Result<std::fs::File, Box<dyn std::error::Erro
                     "Lock file exists with stale PID {}. \
                      This should not happen — the OS should have released the lock. \
                      Try removing {} manually.",
-                    pid, lock_path.display()
+                    pid,
+                    lock_path.display()
                 )
             }
         } else {
@@ -201,7 +202,10 @@ pub fn handle_status(pid_file: &str, json: bool) -> Result<(), Box<dyn std::erro
 
 /// Daemonize the current process (Unix only)
 #[cfg(unix)]
-pub fn daemonize(pid_file: &str, log_file: Option<&PathBuf>) -> Result<(), Box<dyn std::error::Error>> {
+pub fn daemonize(
+    pid_file: &str,
+    log_file: Option<&PathBuf>,
+) -> Result<(), Box<dyn std::error::Error>> {
     use std::fs::OpenOptions;
 
     // Check if already running
@@ -277,6 +281,9 @@ pub fn daemonize(pid_file: &str, log_file: Option<&PathBuf>) -> Result<(), Box<d
 }
 
 #[cfg(not(unix))]
-pub fn daemonize(_pid_file: &str, _log_file: Option<&PathBuf>) -> Result<(), Box<dyn std::error::Error>> {
+pub fn daemonize(
+    _pid_file: &str,
+    _log_file: Option<&PathBuf>,
+) -> Result<(), Box<dyn std::error::Error>> {
     Err("Daemon mode is only supported on Unix systems".into())
 }

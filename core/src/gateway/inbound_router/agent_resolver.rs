@@ -43,10 +43,18 @@ impl InboundMessageRouter {
             };
 
             // Extract guild_id and team_id from raw metadata (set by channel implementations)
-            let (guild_id, team_id) = msg.raw.as_ref()
+            let (guild_id, team_id) = msg
+                .raw
+                .as_ref()
                 .map(|raw| {
-                    let guild = raw.get("guild_id").and_then(|v| v.as_str()).map(|s| s.to_string());
-                    let team = raw.get("team_id").and_then(|v| v.as_str()).map(|s| s.to_string());
+                    let guild = raw
+                        .get("guild_id")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+                    let team = raw
+                        .get("team_id")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
                     (guild, team)
                 })
                 .unwrap_or((None, None));
@@ -79,13 +87,20 @@ impl InboundMessageRouter {
         let channel = msg.channel_id.as_str();
         if let Some(ref manager) = self.workspace_manager {
             if let Ok(Some(agent_id)) = manager.get_active_agent(channel) {
-                debug!("Channel '{}' bound to agent '{}' via workspace", channel, agent_id);
+                debug!(
+                    "Channel '{}' bound to agent '{}' via workspace",
+                    channel, agent_id
+                );
                 return Some((agent_id, None));
             }
         }
 
         // Tier 3: Default agent
-        debug!("Channel '{}' using default agent '{}'", msg.channel_id.as_str(), self.default_agent_id);
+        debug!(
+            "Channel '{}' using default agent '{}'",
+            msg.channel_id.as_str(),
+            self.default_agent_id
+        );
         Some((self.default_agent_id.clone(), None))
     }
 
@@ -96,11 +111,8 @@ impl InboundMessageRouter {
         agent_id: &str,
         resolved_route: Option<&crate::routing::resolve::ResolvedRoute>,
     ) -> InboundContext {
-        let reply_route = ReplyRoute::new(
-            msg.channel_id.clone(),
-            msg.conversation_id.clone(),
-        )
-        .with_inbound_message_id(msg.id.clone());
+        let reply_route = ReplyRoute::new(msg.channel_id.clone(), msg.conversation_id.clone())
+            .with_inbound_message_id(msg.id.clone());
 
         let base_key = if let Some(route) = resolved_route {
             // Use the new routing system's session key, converted to legacy format
@@ -133,7 +145,11 @@ impl InboundMessageRouter {
     }
 
     /// Resolve SessionKey for a message with pre-resolved agent ID
-    pub(super) fn resolve_session_key_with_agent(&self, msg: &InboundMessage, agent_id: &str) -> SessionKey {
+    pub(super) fn resolve_session_key_with_agent(
+        &self,
+        msg: &InboundMessage,
+        agent_id: &str,
+    ) -> SessionKey {
         let channel = msg.channel_id.as_str();
 
         if msg.is_group {
@@ -146,10 +162,9 @@ impl InboundMessageRouter {
             // DM -> based on dm_scope
             match self.config.dm_scope {
                 DmScope::Main => SessionKey::main(agent_id),
-                DmScope::PerPeer => SessionKey::peer(
-                    agent_id,
-                    format!("dm:{}", msg.sender_id.as_str()),
-                ),
+                DmScope::PerPeer => {
+                    SessionKey::peer(agent_id, format!("dm:{}", msg.sender_id.as_str()))
+                }
                 DmScope::PerChannelPeer => SessionKey::peer(
                     agent_id,
                     format!("{}:dm:{}", channel, msg.sender_id.as_str()),

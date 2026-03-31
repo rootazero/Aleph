@@ -168,10 +168,7 @@ pub async fn safe_fetch(
     let (mut current_url, pinned_addr) = validate_url_full(url, policy).await?;
 
     // Build client with redirect disabled and DNS pinning
-    let host = current_url
-        .host_str()
-        .ok_or(SsrfError::NoHost)?
-        .to_string();
+    let host = current_url.host_str().ok_or(SsrfError::NoHost)?.to_string();
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .resolve(&host, pinned_addr)
@@ -245,10 +242,7 @@ pub async fn safe_fetch(
         }
 
         // Build new client with pinned address for the redirect target
-        let next_host = next_url
-            .host_str()
-            .ok_or(SsrfError::NoHost)?
-            .to_string();
+        let next_host = next_url.host_str().ok_or(SsrfError::NoHost)?.to_string();
         let redirect_client = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .resolve(&next_host, next_pinned)
@@ -256,8 +250,7 @@ pub async fn safe_fetch(
             .build()
             .map_err(|e| SsrfError::FetchFailed(e.to_string()))?;
 
-        let mut req_builder =
-            redirect_client.request(current_method.clone(), next_url.as_str());
+        let mut req_builder = redirect_client.request(current_method.clone(), next_url.as_str());
         req_builder = req_builder.headers(current_headers.clone());
         // Body is not forwarded on redirects (POST→GET drops body)
 
@@ -421,10 +414,7 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert("authorization", HeaderValue::from_static("Bearer token"));
         headers.insert("cookie", HeaderValue::from_static("session=abc"));
-        headers.insert(
-            "proxy-authorization",
-            HeaderValue::from_static("Basic xyz"),
-        );
+        headers.insert("proxy-authorization", HeaderValue::from_static("Basic xyz"));
         headers.insert("content-type", HeaderValue::from_static("text/html"));
 
         strip_auth_headers(&mut headers);

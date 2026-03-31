@@ -269,8 +269,8 @@ mod tests {
     use super::*;
     use crate::error::AlephError;
     use crate::resilient::ResilienceConfig;
-    use crate::sync_primitives::{AtomicU32, Ordering};
     use crate::sync_primitives::Arc;
+    use crate::sync_primitives::{AtomicU32, Ordering};
 
     struct CountingTask {
         id: String,
@@ -285,8 +285,9 @@ mod tests {
         fn execute<'a>(
             &'a self,
             _ctx: &'a TaskContext,
-        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = crate::error::Result<Self::Output>> + Send + 'a>>
-        {
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = crate::error::Result<Self::Output>> + Send + 'a>,
+        > {
             let attempts = self.attempts.clone();
             let fail_until = self.fail_until;
             Box::pin(async move {
@@ -305,8 +306,9 @@ mod tests {
         fn fallback<'a>(
             &'a self,
             _ctx: &'a TaskContext,
-        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = crate::error::Result<Self::Output>> + Send + 'a>>
-        {
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = crate::error::Result<Self::Output>> + Send + 'a>,
+        > {
             Box::pin(async { Ok("Fallback result".to_string()) })
         }
 

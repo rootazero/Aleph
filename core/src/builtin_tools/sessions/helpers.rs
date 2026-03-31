@@ -119,8 +119,7 @@ pub fn parse_session_key(display: &str) -> Result<SessionKey, String> {
         return Err("Empty session key string".to_string());
     }
 
-    SessionKey::parse(trimmed)
-        .ok_or_else(|| format!("Invalid session key format: '{}'", trimmed))
+    SessionKey::parse(trimmed).ok_or_else(|| format!("Invalid session key format: '{}'", trimmed))
 }
 
 /// Extract the channel name from a session key.
@@ -230,7 +229,10 @@ mod tests {
     #[test]
     fn test_resolve_display_key_group() {
         let key = SessionKey::group("main", "discord", PeerKind::Channel, "channel123");
-        assert_eq!(resolve_display_key(&key), "agent:main:discord:channel:channel123");
+        assert_eq!(
+            resolve_display_key(&key),
+            "agent:main:discord:channel:channel123"
+        );
     }
 
     #[test]
@@ -428,7 +430,8 @@ mod tests {
         ];
 
         for display in test_cases {
-            let parsed = parse_session_key(display).unwrap_or_else(|_| panic!("Failed to parse: {display}"));
+            let parsed =
+                parse_session_key(display).unwrap_or_else(|_| panic!("Failed to parse: {display}"));
             let reparsed = resolve_display_key(&parsed);
             assert_eq!(reparsed, display, "Roundtrip failed for: {}", display);
         }

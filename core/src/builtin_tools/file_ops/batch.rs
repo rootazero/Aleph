@@ -5,9 +5,9 @@ use std::fs;
 use std::path::Path;
 use tracing::{debug, info};
 
-use crate::builtin_tools::error::ToolError;
 use super::path_utils::check_and_resolve_path;
 use super::types::{FileInfo, FileOpsOutput};
+use crate::builtin_tools::error::ToolError;
 
 /// Execute a batch move operation
 ///
@@ -28,9 +28,8 @@ pub async fn execute_batch_move(
         // writing into denied directories (e.g., ~/.ssh with create_parents=true).
         let checked_dest = check_and_resolve_path(dest, denied_paths, output_dir_override)?;
         // Create destination if needed
-        fs::create_dir_all(&checked_dest).map_err(|e| {
-            ToolError::Execution(format!("Failed to create destination: {}", e))
-        })?;
+        fs::create_dir_all(&checked_dest)
+            .map_err(|e| ToolError::Execution(format!("Failed to create destination: {}", e)))?;
         checked_dest
     } else {
         return Err(ToolError::InvalidArgs(format!(
@@ -145,8 +144,7 @@ pub async fn execute_organize(
         (
             "Images",
             vec![
-                "jpg", "jpeg", "png", "gif", "webp", "svg", "bmp", "ico", "tiff", "heic",
-                "heif",
+                "jpg", "jpeg", "png", "gif", "webp", "svg", "bmp", "ico", "tiff", "heic", "heif",
             ],
         ),
         (
@@ -175,9 +173,9 @@ pub async fn execute_organize(
         (
             "Code",
             vec![
-                "rs", "py", "js", "ts", "jsx", "tsx", "java", "c", "cpp", "h", "hpp", "go",
-                "rb", "php", "swift", "kt", "scala", "html", "css", "scss", "json", "xml",
-                "yaml", "yml", "toml", "sh", "bash", "sql",
+                "rs", "py", "js", "ts", "jsx", "tsx", "java", "c", "cpp", "h", "hpp", "go", "rb",
+                "php", "swift", "kt", "scala", "html", "css", "scss", "json", "xml", "yaml", "yml",
+                "toml", "sh", "bash", "sql",
             ],
         ),
         (

@@ -3,9 +3,9 @@
 
 use alephcore::agent_loop::ToolInfo;
 // TODO: removed — types deleted: Observation, StructuredThinking, ThinkingParser
+use alephcore::thinker::identity::IdentityResolver;
 use alephcore::thinker::prompt_builder::SystemPromptPart;
 use alephcore::thinker::soul::SoulManifest;
-use alephcore::thinker::identity::IdentityResolver;
 use alephcore::thinker::{
     InteractionManifest, PromptBuilder, PromptConfig, ResolvedContext, SecurityContext,
 };
@@ -71,8 +71,14 @@ impl std::fmt::Debug for ThinkerContext {
             .field("config", &"<PromptConfig>")
             .field("builder", &self.builder.as_ref().map(|_| "<PromptBuilder>"))
             .field("tools_count", &self.tools.len())
-            .field("system_prompt_len", &self.system_prompt.as_ref().map(|s| s.len()))
-            .field("cached_parts_count", &self.cached_parts.as_ref().map(|v| v.len()))
+            .field(
+                "system_prompt_len",
+                &self.system_prompt.as_ref().map(|s| s.len()),
+            )
+            .field(
+                "cached_parts_count",
+                &self.cached_parts.as_ref().map(|v| v.len()),
+            )
             .field("has_interaction", &self.interaction.is_some())
             .field("has_security", &self.security.is_some())
             .field("has_resolved", &self.resolved.is_some())
@@ -176,9 +182,9 @@ impl ThinkerContext {
 
     /// Get combined cached parts as a single string
     pub fn get_combined_cached(&self) -> Option<String> {
-        self.cached_parts.as_ref().map(|parts| {
-            parts.iter().map(|p| p.content.as_str()).collect::<String>()
-        })
+        self.cached_parts
+            .as_ref()
+            .map(|parts| parts.iter().map(|p| p.content.as_str()).collect::<String>())
     }
 
     // TODO: removed — Message type deleted:
@@ -201,7 +207,8 @@ impl ThinkerContext {
     pub fn build_system_prompt_with_soul(&mut self) {
         if let Some(builder) = &self.builder {
             let soul = self.soul.clone().unwrap_or_default();
-            self.system_prompt = Some(builder.build_system_prompt_with_soul(&self.tools, &soul, None));
+            self.system_prompt =
+                Some(builder.build_system_prompt_with_soul(&self.tools, &soul, None));
         }
     }
 

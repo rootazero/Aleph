@@ -2,8 +2,8 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use super::store::AuthProfileStore;
 use super::normalize_provider_id;
+use super::store::AuthProfileStore;
 
 /// Resolve the profile order for a provider.
 ///

@@ -17,16 +17,35 @@ pub async fn handle_pairing_list() -> Result<(), Box<dyn std::error::Error>> {
         println!("No pending pairing requests");
     } else {
         println!("Pending pairing requests:");
-        println!("{:<10} {:<8} {:<30} {:<10}", "TYPE", "CODE", "NAME/CHANNEL", "EXPIRES IN");
+        println!(
+            "{:<10} {:<8} {:<30} {:<10}",
+            "TYPE", "CODE", "NAME/CHANNEL", "EXPIRES IN"
+        );
         println!("{}", "-".repeat(60));
         for req in pending {
             let remaining = req.remaining_secs();
             match &req {
-                PairingRequest::Device { code, device_name, .. } => {
-                    println!("{:<10} {:<8} {:<30} {}s", "device", code, device_name, remaining);
+                PairingRequest::Device {
+                    code, device_name, ..
+                } => {
+                    println!(
+                        "{:<10} {:<8} {:<30} {}s",
+                        "device", code, device_name, remaining
+                    );
                 }
-                PairingRequest::Channel { code, channel, sender_id, .. } => {
-                    println!("{:<10} {:<8} {:<30} {}s", "channel", code, format!("{}:{}", channel, sender_id), remaining);
+                PairingRequest::Channel {
+                    code,
+                    channel,
+                    sender_id,
+                    ..
+                } => {
+                    println!(
+                        "{:<10} {:<8} {:<30} {}s",
+                        "channel",
+                        code,
+                        format!("{}:{}", channel, sender_id),
+                        remaining
+                    );
                 }
             }
         }
@@ -36,8 +55,10 @@ pub async fn handle_pairing_list() -> Result<(), Box<dyn std::error::Error>> {
 
 /// Handle pairing approve command
 pub async fn handle_pairing_approve(code: &str) -> Result<(), Box<dyn std::error::Error>> {
-    use alephcore::gateway::security::{DeviceRole, DeviceType, PairingManager, PairingRequest, SecurityStore, TokenManager};
-    use alephcore::gateway::device_store::{DeviceStore, ApprovedDevice};
+    use alephcore::gateway::device_store::{ApprovedDevice, DeviceStore};
+    use alephcore::gateway::security::{
+        DeviceRole, DeviceType, PairingManager, PairingRequest, SecurityStore, TokenManager,
+    };
     use std::sync::Arc;
 
     // Get device store and security store paths
@@ -60,10 +81,17 @@ pub async fn handle_pairing_approve(code: &str) -> Result<(), Box<dyn std::error
 
     // Extract info based on pairing type
     let (device_name, device_type): (String, Option<String>) = match &pairing_request {
-        PairingRequest::Device { device_name, device_type, .. } => {
-            (device_name.clone(), device_type.map(|t: DeviceType| t.as_str().to_string()))
-        }
-        PairingRequest::Channel { channel, sender_id, .. } => {
+        PairingRequest::Device {
+            device_name,
+            device_type,
+            ..
+        } => (
+            device_name.clone(),
+            device_type.map(|t: DeviceType| t.as_str().to_string()),
+        ),
+        PairingRequest::Channel {
+            channel, sender_id, ..
+        } => {
             // Channel pairing - approve the sender
             security_store.approve_sender(channel, sender_id)?;
             println!("Channel sender approved successfully!");
@@ -77,11 +105,7 @@ pub async fn handle_pairing_approve(code: &str) -> Result<(), Box<dyn std::error
     let device_store = DeviceStore::open(&store_path)?;
 
     let device_id = uuid::Uuid::new_v4().to_string();
-    let device = ApprovedDevice::new(
-        device_id.clone(),
-        device_name.clone(),
-        device_type,
-    );
+    let device = ApprovedDevice::new(device_id.clone(), device_name.clone(), device_type);
 
     device_store.approve_device(&device)?;
 

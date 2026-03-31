@@ -5,8 +5,8 @@
 //! - Parsing callback data from button clicks
 //! - Tracking sent approval messages
 
-use std::collections::HashMap;
 use crate::sync_primitives::Arc;
+use std::collections::HashMap;
 use tokio::sync::RwLock;
 
 use crate::gateway::channel::{ConversationId, InlineButton, InlineKeyboard, MessageId};

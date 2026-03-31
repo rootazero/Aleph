@@ -27,7 +27,6 @@ pub static PRESETS: Lazy<HashMap<&'static str, GenerationPreset>> = Lazy::new(||
             provider_type: "openai",
             default_model: "dall-e-3",
             base_url: Some("https://api.openai.com"),
-
         },
     );
     m.insert(
@@ -36,7 +35,6 @@ pub static PRESETS: Lazy<HashMap<&'static str, GenerationPreset>> = Lazy::new(||
             provider_type: "stability",
             default_model: "stable-diffusion-xl-1024-v1-0",
             base_url: Some("https://api.stability.ai"),
-
         },
     );
     m.insert(
@@ -45,7 +43,6 @@ pub static PRESETS: Lazy<HashMap<&'static str, GenerationPreset>> = Lazy::new(||
             provider_type: "google",
             default_model: "imagen-3.0-generate-002",
             base_url: None,
-
         },
     );
     m.insert(
@@ -54,7 +51,6 @@ pub static PRESETS: Lazy<HashMap<&'static str, GenerationPreset>> = Lazy::new(||
             provider_type: "replicate",
             default_model: "black-forest-labs/flux-schnell",
             base_url: Some("https://api.replicate.com"),
-
         },
     );
 
@@ -65,7 +61,6 @@ pub static PRESETS: Lazy<HashMap<&'static str, GenerationPreset>> = Lazy::new(||
             provider_type: "google_veo",
             default_model: "veo-2.0-generate-001",
             base_url: None,
-
         },
     );
     m.insert(
@@ -74,7 +69,6 @@ pub static PRESETS: Lazy<HashMap<&'static str, GenerationPreset>> = Lazy::new(||
             provider_type: "runway",
             default_model: "gen-3",
             base_url: Some("https://api.runwayml.com/v1"),
-
         },
     );
     m.insert(
@@ -83,7 +77,6 @@ pub static PRESETS: Lazy<HashMap<&'static str, GenerationPreset>> = Lazy::new(||
             provider_type: "pika",
             default_model: "pika-1.0",
             base_url: Some("https://api.pika.art/v1"),
-
         },
     );
 
@@ -94,7 +87,6 @@ pub static PRESETS: Lazy<HashMap<&'static str, GenerationPreset>> = Lazy::new(||
             provider_type: "openai_tts",
             default_model: "tts-1-hd",
             base_url: Some("https://api.openai.com"),
-
         },
     );
     m.insert(
@@ -103,7 +95,6 @@ pub static PRESETS: Lazy<HashMap<&'static str, GenerationPreset>> = Lazy::new(||
             provider_type: "elevenlabs",
             default_model: "eleven_multilingual_v2",
             base_url: Some("https://api.elevenlabs.io"),
-
         },
     );
 
@@ -149,15 +140,15 @@ pub fn get_merged_generation_preset(
             if !p.enabled {
                 return None;
             }
-            Some(crate::config::presets_override::merge_generation_preset(b, p))
+            Some(crate::config::presets_override::merge_generation_preset(
+                b, p,
+            ))
         }
-        (Some(b), None) => {
-            Some(crate::config::presets_override::OwnedGenerationPreset {
-                provider_type: b.provider_type.to_string(),
-                default_model: b.default_model.to_string(),
-                base_url: b.base_url.map(|u| u.to_string()),
-            })
-        }
+        (Some(b), None) => Some(crate::config::presets_override::OwnedGenerationPreset {
+            provider_type: b.provider_type.to_string(),
+            default_model: b.default_model.to_string(),
+            base_url: b.base_url.map(|u| u.to_string()),
+        }),
         (None, Some(p)) => {
             if !p.enabled {
                 return None;
@@ -263,16 +254,22 @@ mod tests {
             },
         );
 
-        let preset = get_merged_generation_preset("my-video-gen", "custom-video", &overrides).unwrap();
+        let preset =
+            get_merged_generation_preset("my-video-gen", "custom-video", &overrides).unwrap();
         assert_eq!(preset.provider_type, "custom-video");
         assert_eq!(preset.default_model, "video-v1");
-        assert_eq!(preset.base_url.as_deref(), Some("https://video-gen.example.com"));
+        assert_eq!(
+            preset.base_url.as_deref(),
+            Some("https://video-gen.example.com")
+        );
     }
 
     #[test]
     fn test_get_merged_generation_preset_not_found() {
         let overrides = crate::config::presets_override::GenerationPresetsOverride::default();
-        assert!(get_merged_generation_preset("nonexistent", "nonexistent-type", &overrides).is_none());
+        assert!(
+            get_merged_generation_preset("nonexistent", "nonexistent-type", &overrides).is_none()
+        );
     }
 
     #[test]

@@ -7,8 +7,8 @@ use crate::executor::{
     create_tool_boxed, get_builtin_tool_names, BuiltinToolConfig as UnifiedBuiltinToolConfig,
 };
 use crate::generation::GenerationProviderRegistry;
-use crate::tools::{AlephToolServer, AlephToolServerHandle};
 use crate::sync_primitives::{Arc, RwLock};
+use crate::tools::{AlephToolServer, AlephToolServerHandle};
 use tracing::{info, warn};
 
 /// Built-in tool names

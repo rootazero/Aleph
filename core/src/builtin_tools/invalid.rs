@@ -149,7 +149,9 @@ mod tests {
         let result = AlephTool::call(&tool, args).await.unwrap();
 
         assert!(!result.success);
-        assert!(result.suggestion.contains("No tools are currently available"));
+        assert!(result
+            .suggestion
+            .contains("No tools are currently available"));
     }
 
     #[tokio::test]

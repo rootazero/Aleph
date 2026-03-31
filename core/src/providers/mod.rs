@@ -55,58 +55,61 @@ use std::future::Future;
 use std::pin::Pin;
 
 // Sub-modules
+pub mod adapter;
+pub mod anthropic;
 pub mod auth_profile_registry;
 pub mod auth_profiles;
 pub mod codex;
-pub mod responses;
+pub mod delta;
 pub mod failover;
 pub mod gemini;
-pub mod mock;
-pub mod ollama;
-pub mod openai;
-pub mod anthropic;
-pub mod profile_config;
-pub mod profile_manager;
-pub mod registry;
-pub mod retry;
-pub mod shared;
-pub mod adapter;
-pub mod message;
-pub mod http_provider;
-pub mod presets;
-pub mod protocols;
-pub mod delta;
 pub mod health;
+pub mod http_provider;
+pub mod message;
+pub mod mock;
 pub mod model_discovery;
 pub mod oauth_refresh;
+pub mod ollama;
+pub mod openai;
+pub mod presets;
+pub mod profile_config;
+pub mod profile_manager;
+pub mod protocols;
+pub mod registry;
+pub mod responses;
+pub mod retry;
+pub mod shared;
 
 // Re-exports
+pub use adapter::{
+    NativeToolCall, ProtocolAdapter, ProviderResponse, RequestPayload, StopReason, TokenUsage,
+};
 pub use auth_profile_registry::{AuthProfileProviderRegistry, AuthProfileRegistryConfig};
 pub use auth_profiles::{
-    ApiKeyCredential, AuthProfileCredential, AuthProfileFailureReason,
-    AuthProfileStore, CooldownConfig, OAuthCredential, ProfileUsageStats,
-    TokenCredential, calculate_billing_cooldown_ms, calculate_cooldown_ms,
-    clear_profile_cooldown, mark_profile_failure, mark_profile_good,
-    mark_profile_used, normalize_provider_id, resolve_profile_order,
+    calculate_billing_cooldown_ms, calculate_cooldown_ms, clear_profile_cooldown,
+    mark_profile_failure, mark_profile_good, mark_profile_used, normalize_provider_id,
+    resolve_profile_order, ApiKeyCredential, AuthProfileCredential, AuthProfileFailureReason,
+    AuthProfileStore, CooldownConfig, OAuthCredential, ProfileUsageStats, TokenCredential,
+};
+pub use delta::{
+    response_to_delta_stream, DeltaCollector, DeltaSink, IndexIdTracker, NoopSink, ProviderDelta,
 };
 pub use failover::{FailoverConfig, FailoverProvider, ProviderEntry};
+pub use health::{ModelInfo, ProviderError, ProviderHealth, ResolvedModel};
+pub use http_provider::HttpProvider;
 pub use mock::{MockError, MockProvider};
 pub use ollama::OllamaProvider;
+pub use presets::{get_preset, resolve_provider_from_model, ProviderPreset, PRESETS};
 pub use profile_config::{
-    ProfileConfig, ProfileConfigError, ProfileConfigResult, ProfilesConfig, ProfileTier,
+    ProfileConfig, ProfileConfigError, ProfileConfigResult, ProfileTier, ProfilesConfig,
 };
 pub use profile_manager::{
     AgentState, AuthProfileManager, EffectiveProfile, ProfileInfo, ProfileManagerError,
     ProfileManagerResult, ProfileOverride, ProfileUsage, RuntimeStatus,
 };
+pub use protocols::OpenAiProtocol;
 pub use registry::ProviderRegistry;
 pub use retry::retry_with_backoff;
-pub use adapter::{ProtocolAdapter, RequestPayload, ProviderResponse, NativeToolCall, StopReason, TokenUsage};
-pub use delta::{ProviderDelta, DeltaCollector, DeltaSink, NoopSink, IndexIdTracker, response_to_delta_stream};
-pub use health::{ProviderHealth, ProviderError, ResolvedModel, ModelInfo};
-pub use http_provider::HttpProvider;
-pub use presets::{get_preset, resolve_provider_from_model, ProviderPreset, PRESETS};
-pub use protocols::OpenAiProtocol;
 
 use crate::config::ProviderConfig;
 use crate::error::AlephError;
@@ -149,7 +152,13 @@ pub fn create_provider(name: &str, mut config: ProviderConfig) -> Result<Arc<dyn
     // 1. Apply preset configuration if available
     if let Some(preset) = presets::get_preset(&name_lower) {
         // Set base_url if not provided
-        if config.base_url.is_none() || config.base_url.as_ref().map(|s| s.is_empty()).unwrap_or(false) {
+        if config.base_url.is_none()
+            || config
+                .base_url
+                .as_ref()
+                .map(|s| s.is_empty())
+                .unwrap_or(false)
+        {
             config.base_url = Some(preset.base_url.to_string());
         }
         // Set protocol if not provided
@@ -176,15 +185,13 @@ pub fn create_provider(name: &str, mut config: ProviderConfig) -> Result<Arc<dyn
     }
 
     // 4. Get protocol adapter from registry
-    let adapter = registry
-        .get(&protocol_name)
-        .ok_or_else(|| {
-            AlephError::invalid_config(format!(
-                "Unknown protocol: '{}'. Available: {:?}",
-                protocol_name,
-                registry.list_protocols()
-            ))
-        })?;
+    let adapter = registry.get(&protocol_name).ok_or_else(|| {
+        AlephError::invalid_config(format!(
+            "Unknown protocol: '{}'. Available: {:?}",
+            protocol_name,
+            registry.list_protocols()
+        ))
+    })?;
 
     // 5. Use HttpProvider with dynamic protocol
     let provider = HttpProvider::new(name.to_string(), config, adapter)?;
@@ -297,10 +304,7 @@ mod tests {
         let provider: Arc<dyn AiProvider> = Arc::new(TestProvider);
         let msgs = [UnifiedMessage::user("input")];
         let response = provider
-            .process(
-                adapter::RequestPayload::new(&msgs)
-                    .with_system(Some("system prompt")),
-            )
+            .process(adapter::RequestPayload::new(&msgs).with_system(Some("system prompt")))
             .await
             .unwrap();
         assert_eq!(response.text_content(), "Echo: input");
@@ -386,7 +390,11 @@ mod tests {
         config.base_url = Some("https://openrouter.ai/api".to_string());
 
         let provider = create_provider("openrouter", config);
-        assert!(provider.is_ok(), "Should create openai-responses provider: {:?}", provider.err());
+        assert!(
+            provider.is_ok(),
+            "Should create openai-responses provider: {:?}",
+            provider.err()
+        );
         assert_eq!(provider.unwrap().name(), "openrouter");
     }
 

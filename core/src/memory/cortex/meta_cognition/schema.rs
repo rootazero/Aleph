@@ -97,6 +97,9 @@ mod tests {
             )
             .expect("Failed to query indexes");
 
-        assert_eq!(index_count, 3, "Should have 3 explicitly created indexes on behavioral_anchors table");
+        assert_eq!(
+            index_count, 3,
+            "Should have 3 explicitly created indexes on behavioral_anchors table"
+        );
     }
 }

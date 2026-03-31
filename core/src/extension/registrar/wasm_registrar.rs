@@ -3,12 +3,12 @@
 //! Provides a host function that WASM plugins call to register capabilities.
 //! The function runs synchronously within the Extism host function context.
 
-use anyhow::Result;
-use std::sync::{PoisonError, RwLock, RwLockWriteGuard};
 use crate::extension::capability::CapabilityDeclaration;
 use crate::extension::manifest::PluginPermission;
 use crate::extension::registrar::api::CapabilityApi;
 use crate::extension::registry::PluginRegistry;
+use anyhow::Result;
+use std::sync::{PoisonError, RwLock, RwLockWriteGuard};
 
 /// Host function for WASM plugins to register capabilities.
 ///
@@ -22,7 +22,9 @@ pub fn host_fn_register(
     input: &[u8],
 ) -> Result<()> {
     let declarations: Vec<CapabilityDeclaration> = serde_json::from_slice(input)?;
-    let mut reg = registry.write().unwrap_or_else(|e: PoisonError<RwLockWriteGuard<'_, PluginRegistry>>| e.into_inner());
+    let mut reg = registry
+        .write()
+        .unwrap_or_else(|e: PoisonError<RwLockWriteGuard<'_, PluginRegistry>>| e.into_inner());
     let mut api = CapabilityApi::new(&mut reg, plugin_id.to_string(), permissions.to_vec());
     for decl in declarations {
         api.register_capability(decl)?;
@@ -57,15 +59,13 @@ mod tests {
             reg.register_plugin(record);
         }
 
-        let caps = vec![
-            CapabilityDeclaration::Tool(ToolRegistration {
-                name: "wasm-tool".into(),
-                description: "From WASM".into(),
-                parameters: serde_json::json!({}),
-                handler: "handle".into(),
-                plugin_id: "wasm-plugin".into(),
-            }),
-        ];
+        let caps = vec![CapabilityDeclaration::Tool(ToolRegistration {
+            name: "wasm-tool".into(),
+            description: "From WASM".into(),
+            parameters: serde_json::json!({}),
+            handler: "handle".into(),
+            plugin_id: "wasm-plugin".into(),
+        })];
 
         let input = serde_json::to_vec(&caps).unwrap();
         host_fn_register("wasm-plugin", &registry, &[], &input).unwrap();
@@ -123,15 +123,13 @@ mod tests {
         }
 
         // Service requires Background permission — should fail without it
-        let caps = vec![
-            CapabilityDeclaration::Service(ServiceRegistration {
-                id: "bg-service".into(),
-                name: "BG Service".into(),
-                start_handler: "start".into(),
-                stop_handler: "stop".into(),
-                plugin_id: "wasm-noperm".into(),
-            }),
-        ];
+        let caps = vec![CapabilityDeclaration::Service(ServiceRegistration {
+            id: "bg-service".into(),
+            name: "BG Service".into(),
+            start_handler: "start".into(),
+            stop_handler: "stop".into(),
+            plugin_id: "wasm-noperm".into(),
+        })];
 
         let input = serde_json::to_vec(&caps).unwrap();
         let result = host_fn_register("wasm-noperm", &registry, &[], &input);

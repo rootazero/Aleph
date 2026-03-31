@@ -8,7 +8,7 @@ use tracing::debug;
 use crate::agents::swarm::tasks::{CoordTaskFilter, CoordTaskStatus, CoordTaskStore};
 use crate::error::{AlephError, Result};
 use crate::sync_primitives::Arc;
-use crate::teams::{TeamStore, TeamStatus as TeamStatusEnum};
+use crate::teams::{TeamStatus as TeamStatusEnum, TeamStore};
 use crate::tools::AlephTool;
 
 // =============================================================================
@@ -87,15 +87,16 @@ impl AlephTool for TeamStatusTool {
             .store
             .get_team(&args.team_id)
             .await?
-            .ok_or_else(|| {
-                AlephError::other(format!("Team '{}' not found", args.team_id))
-            })?;
+            .ok_or_else(|| AlephError::other(format!("Team '{}' not found", args.team_id)))?;
 
         let members_raw = self.store.get_members(&args.team_id).await?;
-        let tasks_raw = self.coord_store.list_tasks(CoordTaskFilter {
-            team_id: Some(args.team_id.clone()),
-            ..Default::default()
-        }).await?;
+        let tasks_raw = self
+            .coord_store
+            .list_tasks(CoordTaskFilter {
+                team_id: Some(args.team_id.clone()),
+                ..Default::default()
+            })
+            .await?;
 
         debug!(
             team_id = %args.team_id,

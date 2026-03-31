@@ -51,7 +51,9 @@ fn resolve_target(args: &BrowserClickArgs) -> std::result::Result<ActionTarget, 
     if let Some(ref sel) = args.selector {
         Ok(ActionTarget::Selector { css: sel.clone() })
     } else if let Some(ref rid) = args.ref_id {
-        Ok(ActionTarget::Ref { ref_id: rid.clone() })
+        Ok(ActionTarget::Ref {
+            ref_id: rid.clone(),
+        })
     } else if let (Some(x), Some(y)) = (args.x, args.y) {
         Ok(ActionTarget::Coordinates { x, y })
     } else {

@@ -58,10 +58,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 "args": args,
             });
             let mode_json = serde_json::to_string(&mode).ok()?;
-            info!(
-                "[Engine] Inline slash command resolved: /{}",
-                cmd_name
-            );
+            info!("[Engine] Inline slash command resolved: /{}", cmd_name);
             Some(mode_json)
         } else {
             None
@@ -90,8 +87,9 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             }
         }
 
-        let mode: serde_json::Value = serde_json::from_str(mode_json)
-            .map_err(|e| ExecutionError::Failed(format!("Invalid slash command metadata: {}", e)))?;
+        let mode: serde_json::Value = serde_json::from_str(mode_json).map_err(|e| {
+            ExecutionError::Failed(format!("Invalid slash command metadata: {}", e))
+        })?;
 
         let mode_type = mode["type"].as_str().unwrap_or("");
 
@@ -103,7 +101,8 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
 
         match mode_type {
             "direct_tool" => {
-                self.execute_direct_tool(run_id, &mode, request, emitter).await
+                self.execute_direct_tool(run_id, &mode, request, emitter)
+                    .await
             }
 
             "skill" => {
@@ -114,9 +113,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 })
             }
 
-            "mcp" => {
-                self.execute_mcp_tool(run_id, &mode, request, emitter).await
-            }
+            "mcp" => self.execute_mcp_tool(run_id, &mode, request, emitter).await,
 
             "custom" => {
                 // Custom commands need LLM with a custom system prompt — fall through
@@ -125,12 +122,10 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 })
             }
 
-            _ => {
-                Err(ExecutionError::Failed(format!(
-                    "Unknown slash command type: {}",
-                    mode_type
-                )))
-            }
+            _ => Err(ExecutionError::Failed(format!(
+                "Unknown slash command type: {}",
+                mode_type
+            ))),
         }
     }
 
@@ -166,7 +161,9 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             Ok(result) => {
                 // Extract _media from tool output and push to pending_media buffer
                 if let Some(media_val) = result.get("_media") {
-                    if let Ok(items) = serde_json::from_value::<Vec<crate::gateway::media::MediaItem>>(media_val.clone()) {
+                    if let Ok(items) = serde_json::from_value::<Vec<crate::gateway::media::MediaItem>>(
+                        media_val.clone(),
+                    ) {
                         if !items.is_empty() {
                             info!(
                                 run_id = %run_id,
@@ -174,8 +171,12 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                                 count = items.len(),
                                 "Fast-path: extracted _media from tool output"
                             );
-                            let mut pending = request.pending_media.lock().unwrap_or_else(|e| e.into_inner());
-                            let remaining = crate::gateway::media::MAX_MEDIA_PER_RUN.saturating_sub(pending.len());
+                            let mut pending = request
+                                .pending_media
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner());
+                            let remaining = crate::gateway::media::MAX_MEDIA_PER_RUN
+                                .saturating_sub(pending.len());
                             pending.extend(items.into_iter().take(remaining));
                         }
                     }
@@ -199,12 +200,10 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
 
                 Ok(response)
             }
-            Err(e) => {
-                Err(ExecutionError::Failed(format!(
-                    "Tool '{}' execution failed: {}",
-                    tool_id, e
-                )))
-            }
+            Err(e) => Err(ExecutionError::Failed(format!(
+                "Tool '{}' execution failed: {}",
+                tool_id, e
+            ))),
         }
     }
 
@@ -240,7 +239,11 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             })
             .await;
 
-        match self.tool_registry.execute_tool(&mcp_tool_id, arguments).await {
+        match self
+            .tool_registry
+            .execute_tool(&mcp_tool_id, arguments)
+            .await
+        {
             Ok(result) => {
                 let response = if let Some(s) = result.as_str() {
                     s.to_string()
@@ -294,8 +297,7 @@ fn build_tool_arguments(tool_id: &str, args_str: &str, raw_input: &str) -> serde
         }),
         "browser_type" => {
             // /browser_type <selector> <text>
-            let (sel, txt) = args_str.split_once(' ')
-                .unwrap_or((args_str, ""));
+            let (sel, txt) = args_str.split_once(' ').unwrap_or((args_str, ""));
             serde_json::json!({
                 "selector": sel,
                 "text": txt,
@@ -317,8 +319,7 @@ fn build_tool_arguments(tool_id: &str, args_str: &str, raw_input: &str) -> serde
             "action": if args_str.is_empty() { "refresh" } else { args_str },
         }),
         // Tools with no required args
-        "browser_screenshot" | "browser_snapshot"
-        | "browser_profile" => {
+        "browser_screenshot" | "browser_snapshot" | "browser_profile" => {
             if args_str.is_empty() {
                 serde_json::json!({})
             } else {

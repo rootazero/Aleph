@@ -74,19 +74,13 @@ fn platform_paths_impl() -> Vec<PathBuf> {
         // Google Chrome
         PathBuf::from("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
         // Microsoft Edge
-        PathBuf::from(
-            "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
-        ),
+        PathBuf::from("/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"),
         // Brave
-        PathBuf::from(
-            "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
-        ),
+        PathBuf::from("/Applications/Brave Browser.app/Contents/MacOS/Brave Browser"),
         // Chromium
         PathBuf::from("/Applications/Chromium.app/Contents/MacOS/Chromium"),
         // Chrome Canary
-        PathBuf::from(
-            "/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary",
-        ),
+        PathBuf::from("/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary"),
     ]
 }
 
@@ -107,9 +101,19 @@ fn platform_paths_impl() -> Vec<PathBuf> {
 
     for base in &base_dirs {
         // Google Chrome
-        paths.push(base.join("Google").join("Chrome").join("Application").join("chrome.exe"));
+        paths.push(
+            base.join("Google")
+                .join("Chrome")
+                .join("Application")
+                .join("chrome.exe"),
+        );
         // Microsoft Edge
-        paths.push(base.join("Microsoft").join("Edge").join("Application").join("msedge.exe"));
+        paths.push(
+            base.join("Microsoft")
+                .join("Edge")
+                .join("Application")
+                .join("msedge.exe"),
+        );
         // Brave
         paths.push(
             base.join("BraveSoftware")
@@ -145,7 +149,11 @@ mod tests {
     fn test_find_chromium_returns_existing_path() {
         match find_chromium() {
             Ok(path) => {
-                assert!(path.exists(), "Returned path should exist: {}", path.display());
+                assert!(
+                    path.exists(),
+                    "Returned path should exist: {}",
+                    path.display()
+                );
             }
             Err(BrowserError::ChromiumNotFound) => {
                 // Acceptable in CI / environments without a browser installed
@@ -177,7 +185,11 @@ mod tests {
         );
         // Every entry should be an absolute path
         for p in &paths {
-            assert!(p.is_absolute(), "Expected absolute path, got: {}", p.display());
+            assert!(
+                p.is_absolute(),
+                "Expected absolute path, got: {}",
+                p.display()
+            );
         }
     }
 }

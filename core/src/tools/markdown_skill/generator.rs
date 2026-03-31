@@ -45,8 +45,8 @@ pub struct SolidificationSuggestion {
 }
 
 use super::spec::{
-    AlephExtensions, AlephSkillSpec, ConfirmationMode, EvolutionMeta,
-    InputHint, NetworkMode, RequiresSpec, SandboxMode, SecuritySpec, SkillMetadata,
+    AlephExtensions, AlephSkillSpec, ConfirmationMode, EvolutionMeta, InputHint, NetworkMode,
+    RequiresSpec, SandboxMode, SecuritySpec, SkillMetadata,
 };
 
 /// Configuration for Markdown Skill generation
@@ -106,9 +106,10 @@ impl MarkdownSkillGenerator {
     pub fn generate(&self, suggestion: &SolidificationSuggestion) -> Result<PathBuf> {
         let skill_name = to_skill_name(&suggestion.suggested_name);
         if skill_name.is_empty() {
-            return Err(crate::error::AlephError::IoError(
-                format!("Cannot derive a valid skill name from '{}'", suggestion.suggested_name)
-            ));
+            return Err(crate::error::AlephError::IoError(format!(
+                "Cannot derive a valid skill name from '{}'",
+                suggestion.suggested_name
+            )));
         }
         let skill_dir = self.config.output_dir.join(&skill_name);
 
@@ -234,7 +235,10 @@ impl MarkdownSkillGenerator {
         // Frontmatter
         result.push_str("---\n");
         result.push_str(&format!("name: {}\n", spec.name));
-        result.push_str(&format!("description: \"{}\"\n", escape_yaml_string(&spec.description)));
+        result.push_str(&format!(
+            "description: \"{}\"\n",
+            escape_yaml_string(&spec.description)
+        ));
 
         // Metadata
         result.push_str("metadata:\n");
@@ -254,21 +258,24 @@ impl MarkdownSkillGenerator {
 
             // Security
             result.push_str("    security:\n");
-            result.push_str(&format!("      sandbox: {}\n",
+            result.push_str(&format!(
+                "      sandbox: {}\n",
                 match aleph_meta.security.sandbox {
                     SandboxMode::Host => "host",
                     SandboxMode::Docker => "docker",
                     SandboxMode::VirtualFs => "virtualfs",
                 }
             ));
-            result.push_str(&format!("      confirmation: {}\n",
+            result.push_str(&format!(
+                "      confirmation: {}\n",
                 match aleph_meta.security.confirmation {
                     ConfirmationMode::Always => "always",
                     ConfirmationMode::Write => "write",
                     ConfirmationMode::Never => "never",
                 }
             ));
-            result.push_str(&format!("      network: {}\n",
+            result.push_str(&format!(
+                "      network: {}\n",
                 match aleph_meta.security.network {
                     NetworkMode::Internet => "internet",
                     NetworkMode::Local => "local",
@@ -285,7 +292,10 @@ impl MarkdownSkillGenerator {
                         result.push_str(&format!("        type: {}\n", hint_type));
                     }
                     if let Some(desc) = &hint.description {
-                        result.push_str(&format!("        description: \"{}\"\n", escape_yaml_string(desc)));
+                        result.push_str(&format!(
+                            "        description: \"{}\"\n",
+                            escape_yaml_string(desc)
+                        ));
                     }
                     if hint.optional {
                         result.push_str("        optional: true\n");
@@ -296,10 +306,19 @@ impl MarkdownSkillGenerator {
             // Evolution metadata
             if let Some(evolution) = &aleph_meta.evolution {
                 result.push_str("    evolution:\n");
-                result.push_str(&format!("      source: \"{}\"\n", escape_yaml_string(&evolution.source)));
-                result.push_str(&format!("      confidence_score: {}\n", evolution.confidence_score));
+                result.push_str(&format!(
+                    "      source: \"{}\"\n",
+                    escape_yaml_string(&evolution.source)
+                ));
+                result.push_str(&format!(
+                    "      confidence_score: {}\n",
+                    evolution.confidence_score
+                ));
                 if let Some(trace_id) = &evolution.created_from_trace {
-                    result.push_str(&format!("      created_from_trace: \"{}\"\n", escape_yaml_string(trace_id)));
+                    result.push_str(&format!(
+                        "      created_from_trace: \"{}\"\n",
+                        escape_yaml_string(trace_id)
+                    ));
                 }
             }
         }
@@ -324,8 +343,7 @@ impl MarkdownSkillGenerator {
             // is valid — any non-ASCII byte (e.g. multi-byte UTF-8) will simply fail
             // `is_ascii_alphanumeric()` and count as a word boundary, which is correct.
             for (i, _) in instructions.match_indices(cmd) {
-                let before_ok = i == 0
-                    || !instructions.as_bytes()[i - 1].is_ascii_alphanumeric();
+                let before_ok = i == 0 || !instructions.as_bytes()[i - 1].is_ascii_alphanumeric();
                 let after_pos = i + cmd.len();
                 let after_ok = after_pos >= instructions.len()
                     || !instructions.as_bytes()[after_pos].is_ascii_alphanumeric();
@@ -342,7 +360,10 @@ impl MarkdownSkillGenerator {
     }
 
     /// Extract input hints from instructions
-    fn extract_input_hints(&self, instructions: &str) -> std::collections::BTreeMap<String, InputHint> {
+    fn extract_input_hints(
+        &self,
+        instructions: &str,
+    ) -> std::collections::BTreeMap<String, InputHint> {
         use std::collections::BTreeMap;
 
         let mut hints = BTreeMap::new();
@@ -355,7 +376,8 @@ impl MarkdownSkillGenerator {
             if let Some(flag_start) = line.find("--") {
                 // `flag_start + 2` is safe: "--" is 2 ASCII bytes
                 let rest = &line[flag_start + 2..];
-                let end = rest.find(|c: char| !c.is_ascii_alphanumeric() && c != '-' && c != '_')
+                let end = rest
+                    .find(|c: char| !c.is_ascii_alphanumeric() && c != '-' && c != '_')
                     .unwrap_or(rest.len());
                 if end > 0 {
                     // `end` from `find` on ASCII-only predicate is a valid char boundary

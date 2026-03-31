@@ -3,13 +3,13 @@
 //! Handles aleph.jsonc configuration with multi-level merging.
 //! Now also supports aleph.toml as the preferred format.
 
-mod types;
 pub mod loader;
 pub mod migrate;
+mod types;
 
-pub use types::*;
 pub use loader::{find_config_file, load_config_file, load_extension_config};
 pub use migrate::{migrate_to_toml, needs_migration, MigrationResult};
+pub use types::*;
 
 use crate::discovery::{DiscoveryManager, ALEPH_CONFIG_FILE, ALEPH_CONFIG_FILE_ALT};
 use crate::extension::ExtensionError;
@@ -47,16 +47,11 @@ impl ConfigManager {
         let alt_files = discovery.find_config_files(ALEPH_CONFIG_FILE_ALT)?;
 
         // Merge all configs in priority order
-        let mut all_files: Vec<_> = config_files
-            .into_iter()
-            .chain(alt_files)
-            .collect();
+        let mut all_files: Vec<_> = config_files.into_iter().chain(alt_files).collect();
 
         // Deduplicate (prefer .jsonc over .json for same directory)
         all_files.sort();
-        all_files.dedup_by(|a, b| {
-            a.parent() == b.parent() && a.extension() != b.extension()
-        });
+        all_files.dedup_by(|a, b| a.parent() == b.parent() && a.extension() != b.extension());
 
         debug!("Found {} config files to merge", all_files.len());
 
@@ -233,7 +228,7 @@ fn parse_jsonc(content: &str, path: &Path) -> Result<AlephConfig, ExtensionError
         } else if ch == '/' && !in_string {
             if chars.peek() == Some(&'*') {
                 chars.next(); // consume *
-                // Skip until */
+                              // Skip until */
                 loop {
                     match chars.next() {
                         Some('*') if chars.peek() == Some(&'/') => {

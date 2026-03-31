@@ -20,7 +20,7 @@ use crate::vision::VisionPipeline;
 
 use tracing::{debug, warn};
 
-use super::cache::{MediaCache, CachedMedia};
+use super::cache::{CachedMedia, MediaCache};
 use super::transcription::TranscriptionService;
 
 /// Unified media processor that converts channel attachments into LLM-ready
@@ -104,10 +104,7 @@ impl MediaProcessor {
             self.process_audio(attachment, session_id, run_id).await
         } else {
             // Unsupported media type — emit metadata placeholder
-            let name = attachment
-                .filename
-                .as_deref()
-                .unwrap_or(&attachment.id);
+            let name = attachment.filename.as_deref().unwrap_or(&attachment.id);
             tracing::info!(
                 target: "multimodal",
                 probe = "P4_process",
@@ -208,7 +205,8 @@ impl MediaProcessor {
                 action = "vision_fallback",
                 "Attachment processed"
             );
-            self.describe_image_fallback(&b64, &cached, attachment).await
+            self.describe_image_fallback(&b64, &cached, attachment)
+                .await
         }
     }
 
@@ -270,7 +268,10 @@ impl MediaProcessor {
                 "Attachment processed"
             );
             return ContentBlock::Text {
-                text: format!("[Audio: {} — transcription unavailable (no provider)]", name),
+                text: format!(
+                    "[Audio: {} — transcription unavailable (no provider)]",
+                    name
+                ),
             };
         };
 
@@ -320,10 +321,7 @@ impl MediaProcessor {
                     "Attachment processed"
                 );
                 ContentBlock::Text {
-                    text: format!(
-                        "[Voice message transcript]:\n\"{}\"",
-                        result.text
-                    ),
+                    text: format!("[Voice message transcript]:\n\"{}\"", result.text),
                 }
             }
             Err(e) => {
@@ -352,10 +350,7 @@ impl MediaProcessor {
 
 /// Build a generic fallback text block for a failed attachment.
 fn fallback_text(attachment: &Attachment, error: &str) -> ContentBlock {
-    let name = attachment
-        .filename
-        .as_deref()
-        .unwrap_or(&attachment.id);
+    let name = attachment.filename.as_deref().unwrap_or(&attachment.id);
     ContentBlock::Text {
         text: format!("[Attachment: {} — error: {}]", name, error),
     }
@@ -385,12 +380,27 @@ mod tests {
 
     #[test]
     fn test_image_format_from_mime() {
-        assert!(matches!(image_format_from_mime("image/png"), ImageFormat::Png));
-        assert!(matches!(image_format_from_mime("image/jpeg"), ImageFormat::Jpeg));
-        assert!(matches!(image_format_from_mime("image/jpg"), ImageFormat::Jpeg));
-        assert!(matches!(image_format_from_mime("image/webp"), ImageFormat::WebP));
+        assert!(matches!(
+            image_format_from_mime("image/png"),
+            ImageFormat::Png
+        ));
+        assert!(matches!(
+            image_format_from_mime("image/jpeg"),
+            ImageFormat::Jpeg
+        ));
+        assert!(matches!(
+            image_format_from_mime("image/jpg"),
+            ImageFormat::Jpeg
+        ));
+        assert!(matches!(
+            image_format_from_mime("image/webp"),
+            ImageFormat::WebP
+        ));
         // Unknown falls back to JPEG
-        assert!(matches!(image_format_from_mime("image/bmp"), ImageFormat::Jpeg));
+        assert!(matches!(
+            image_format_from_mime("image/bmp"),
+            ImageFormat::Jpeg
+        ));
     }
 
     #[test]
@@ -445,7 +455,9 @@ mod tests {
             path: None,
             data: None,
         };
-        let blocks = processor.process(&[att], true, "test-session", "test-run").await;
+        let blocks = processor
+            .process(&[att], true, "test-session", "test-run")
+            .await;
         assert_eq!(blocks.len(), 1);
         if let ContentBlock::Text { text } = &blocks[0] {
             assert!(text.contains("report.pdf"));
@@ -468,7 +480,9 @@ mod tests {
             data: Some(vec![0x89, 0x50, 0x4E, 0x47]), // PNG magic bytes
         };
         let session_id = "test-image-vision";
-        let blocks = processor.process(&[att], true, session_id, "test-run").await;
+        let blocks = processor
+            .process(&[att], true, session_id, "test-run")
+            .await;
         assert_eq!(blocks.len(), 1);
         match &blocks[0] {
             ContentBlock::Image { mime_type, data } => {
@@ -494,7 +508,9 @@ mod tests {
             data: Some(vec![0xFF, 0xD8, 0xFF]),
         };
         let session_id = "test-no-vision";
-        let blocks = processor.process(&[att], false, session_id, "test-run").await;
+        let blocks = processor
+            .process(&[att], false, session_id, "test-run")
+            .await;
         assert_eq!(blocks.len(), 1);
         if let ContentBlock::Text { text } = &blocks[0] {
             assert!(text.contains("description unavailable"));
@@ -516,7 +532,9 @@ mod tests {
             path: None,
             data: Some(vec![0xFF, 0xFB]),
         };
-        let blocks = processor.process(&[att], true, "test-audio", "test-run").await;
+        let blocks = processor
+            .process(&[att], true, "test-audio", "test-run")
+            .await;
         assert_eq!(blocks.len(), 1);
         if let ContentBlock::Text { text } = &blocks[0] {
             assert!(text.contains("transcription unavailable"));
@@ -559,7 +577,9 @@ mod tests {
             },
         ];
         let session_id = "test-multi";
-        let blocks = processor.process(&attachments, true, session_id, "test-run").await;
+        let blocks = processor
+            .process(&attachments, true, session_id, "test-run")
+            .await;
         // All three should produce blocks (no aborts)
         assert_eq!(blocks.len(), 3);
         processor.cleanup(session_id);

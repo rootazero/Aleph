@@ -104,9 +104,7 @@ Examples:
                         return Ok(SystemOutput {
                             success: false,
                             data: None,
-                            message: Some(
-                                "launch_app requires 'app_name' parameter.".to_string(),
-                            ),
+                            message: Some("launch_app requires 'app_name' parameter.".to_string()),
                         });
                     }
                 };
@@ -131,9 +129,7 @@ Examples:
                         return Ok(SystemOutput {
                             success: false,
                             data: None,
-                            message: Some(
-                                "quit_app requires 'app_name' parameter.".to_string(),
-                            ),
+                            message: Some("quit_app requires 'app_name' parameter.".to_string()),
                         });
                     }
                 };
@@ -223,9 +219,7 @@ Examples:
                         return Ok(SystemOutput {
                             success: false,
                             data: None,
-                            message: Some(
-                                "clipboard_write requires 'body' parameter.".to_string(),
-                            ),
+                            message: Some("clipboard_write requires 'body' parameter.".to_string()),
                         });
                     }
                 };

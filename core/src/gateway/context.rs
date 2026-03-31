@@ -6,9 +6,9 @@
 
 use crate::sync_primitives::Arc;
 
-use super::inter_agent_policy::AgentToAgentPolicy;
 use super::agent_instance::AgentRegistry;
 use super::execution_adapter::ExecutionAdapter;
+use super::inter_agent_policy::AgentToAgentPolicy;
 use super::session_manager::SessionManager;
 
 /// Gateway context containing references to core components.
@@ -111,7 +111,7 @@ mod tests {
     use super::*;
     use crate::gateway::agent_instance::AgentInstance;
     use crate::gateway::event_emitter::EventEmitter;
-    use crate::gateway::execution_engine::{ExecutionError, RunRequest, RunStatus, RunState};
+    use crate::gateway::execution_engine::{ExecutionError, RunRequest, RunState, RunStatus};
     use crate::gateway::session_manager::SessionManagerConfig;
     use async_trait::async_trait;
     use tempfile::tempdir;
@@ -202,8 +202,14 @@ mod tests {
         let cloned = context.clone();
 
         // Both should point to the same underlying resources
-        assert!(Arc::ptr_eq(context.session_manager(), cloned.session_manager()));
-        assert!(Arc::ptr_eq(context.agent_registry(), cloned.agent_registry()));
+        assert!(Arc::ptr_eq(
+            context.session_manager(),
+            cloned.session_manager()
+        ));
+        assert!(Arc::ptr_eq(
+            context.agent_registry(),
+            cloned.agent_registry()
+        ));
         assert!(Arc::ptr_eq(context.a2a_policy(), cloned.a2a_policy()));
     }
 

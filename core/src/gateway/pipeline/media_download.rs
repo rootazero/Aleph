@@ -95,10 +95,7 @@ impl MediaDownloader {
 
         // Case 2: inline data
         if let Some(ref data) = attachment.data {
-            let filename = attachment
-                .filename
-                .as_deref()
-                .unwrap_or("attachment.bin");
+            let filename = attachment.filename.as_deref().unwrap_or("attachment.bin");
             let dir = self
                 .workspace_root
                 .join("media")
@@ -153,10 +150,7 @@ impl MediaDownloader {
             ));
         }
 
-        let filename = attachment
-            .filename
-            .as_deref()
-            .unwrap_or("download.bin");
+        let filename = attachment.filename.as_deref().unwrap_or("download.bin");
         let dir = self
             .workspace_root
             .join("media")
@@ -296,9 +290,7 @@ mod tests {
 
     #[test]
     fn test_extract_urls_multiple() {
-        let urls = extract_urls(
-            "Visit https://example.com and http://other.org/path for details",
-        );
+        let urls = extract_urls("Visit https://example.com and http://other.org/path for details");
         assert_eq!(
             urls,
             vec![

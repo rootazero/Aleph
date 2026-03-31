@@ -185,9 +185,20 @@ pub struct Config {
 
 /// Known platform names for type auto-inference from channel config keys.
 const KNOWN_CHANNEL_TYPES: &[&str] = &[
-    "telegram", "discord", "whatsapp", "slack", "imessage",
-    "email", "matrix", "signal", "mattermost", "irc",
-    "webhook", "xmpp", "nostr", "feishu",
+    "telegram",
+    "discord",
+    "whatsapp",
+    "slack",
+    "imessage",
+    "email",
+    "matrix",
+    "signal",
+    "mattermost",
+    "irc",
+    "webhook",
+    "xmpp",
+    "nostr",
+    "feishu",
 ];
 
 /// A resolved channel instance from the channels config HashMap.

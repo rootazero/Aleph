@@ -123,9 +123,7 @@ mod tests {
             all.iter().filter(|s| s.is_model_visible()).collect();
         assert_eq!(visible_only.len(), 1);
 
-        let xml = build_skills_prompt_xml(
-            &visible_only.into_iter().copied().collect::<Vec<_>>(),
-        );
+        let xml = build_skills_prompt_xml(&visible_only.into_iter().copied().collect::<Vec<_>>());
         assert!(xml.contains("<name>Visible</name>"));
         assert!(!xml.contains("Hidden"));
         assert!(!xml.contains("Model Hidden"));

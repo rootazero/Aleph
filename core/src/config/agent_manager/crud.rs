@@ -117,7 +117,8 @@ impl AgentManager {
             }
 
             // Try to extract agent name from SOUL.md first line (# Agent Name)
-            let agent_name = self.read_agent_name_from_workspace(&path)
+            let agent_name = self
+                .read_agent_name_from_workspace(&path)
                 .unwrap_or_else(|| dir_name.clone());
 
             let def = AgentDefinition {
@@ -128,16 +129,10 @@ impl AgentManager {
 
             match self.append_agent_to_config(&def) {
                 Ok(()) => {
-                    info!(
-                        "Reconciled orphan workspace '{}' into config",
-                        dir_name
-                    );
+                    info!("Reconciled orphan workspace '{}' into config", dir_name);
                 }
                 Err(e) => {
-                    warn!(
-                        "Failed to reconcile orphan workspace '{}': {}",
-                        dir_name, e
-                    );
+                    warn!("Failed to reconcile orphan workspace '{}': {}", dir_name, e);
                 }
             }
         }
@@ -374,9 +369,7 @@ impl AgentManager {
 
         // Reject if only agent
         if config.list.len() <= 1 {
-            return Err(AlephError::invalid_config(
-                "Cannot delete the only agent",
-            ));
+            return Err(AlephError::invalid_config("Cannot delete the only agent"));
         }
 
         // Reject if default agent
@@ -416,14 +409,10 @@ impl AgentManager {
             let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
             let trash_name = format!("{}_{}", id, timestamp);
             let trash_dir = self.trash_root.join(trash_name);
-            fs::create_dir_all(&self.trash_root).map_err(|e| {
-                AlephError::IoError(format!("Failed to create trash dir: {}", e))
-            })?;
+            fs::create_dir_all(&self.trash_root)
+                .map_err(|e| AlephError::IoError(format!("Failed to create trash dir: {}", e)))?;
             fs::rename(&ws_dir, &trash_dir).map_err(|e| {
-                AlephError::IoError(format!(
-                    "Failed to move workspace to trash: {}",
-                    e
-                ))
+                AlephError::IoError(format!("Failed to move workspace to trash: {}", e))
             })?;
             info!("Moved workspace to trash: {}", trash_dir.display());
         }
@@ -434,14 +423,10 @@ impl AgentManager {
             let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
             let trash_name = format!("{}_agent_{}", id, timestamp);
             let trash_dir = self.trash_root.join(trash_name);
-            fs::create_dir_all(&self.trash_root).map_err(|e| {
-                AlephError::IoError(format!("Failed to create trash dir: {}", e))
-            })?;
+            fs::create_dir_all(&self.trash_root)
+                .map_err(|e| AlephError::IoError(format!("Failed to create trash dir: {}", e)))?;
             fs::rename(&agent_state_dir, &trash_dir).map_err(|e| {
-                AlephError::IoError(format!(
-                    "Failed to move agent state dir to trash: {}",
-                    e
-                ))
+                AlephError::IoError(format!("Failed to move agent state dir to trash: {}", e))
             })?;
             info!("Moved agent state to trash: {}", trash_dir.display());
         }
@@ -469,10 +454,7 @@ impl AgentManager {
 
         for i in 0..list.len() {
             if let Some(table) = list.get_mut(i) {
-                let agent_id = table
-                    .get("id")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
+                let agent_id = table.get("id").and_then(|v| v.as_str()).unwrap_or("");
                 table["default"] = toml_edit::value(agent_id == id);
             }
         }

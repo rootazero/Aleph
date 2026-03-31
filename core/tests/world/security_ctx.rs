@@ -42,9 +42,15 @@ impl std::fmt::Debug for SecurityContext {
         f.debug_struct("SecurityContext")
             .field("temp_dir", &self.temp_dir.as_ref().map(|_| "TempDir"))
             .field("loaded_tools", &self.loaded_tools.len())
-            .field("tool_server", &self.tool_server.as_ref().map(|_| "AlephToolServer"))
+            .field(
+                "tool_server",
+                &self.tool_server.as_ref().map(|_| "AlephToolServer"),
+            )
             .field("execution_result", &self.execution_result)
-            .field("tool_server_result", &self.tool_server_result.as_ref().map(|_| "Value"))
+            .field(
+                "tool_server_result",
+                &self.tool_server_result.as_ref().map(|_| "Value"),
+            )
             .field("skill_dir", &self.skill_dir)
             .field("sandbox_count_before", &self.sandbox_count_before)
             .field("sandbox_count_after", &self.sandbox_count_after)

@@ -215,7 +215,9 @@ impl ConversationManager {
 
     /// Get the window title of the active session's origin context.
     pub fn origin_window(&self) -> Option<&str> {
-        self.active_session.as_ref().and_then(|s| s.context.window_title.as_deref())
+        self.active_session
+            .as_ref()
+            .and_then(|s| s.context.window_title.as_deref())
     }
 
     /// Check and handle session timeout.

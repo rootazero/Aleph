@@ -6,8 +6,8 @@
 //! MCP prompts are similar to prompt libraries - servers can expose templates
 //! that clients can list, parameterize, and use in conversations.
 
-use std::collections::HashMap;
 use crate::sync_primitives::Arc;
+use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

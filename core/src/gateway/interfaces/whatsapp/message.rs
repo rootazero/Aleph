@@ -233,8 +233,7 @@ mod tests {
 
     #[test]
     fn test_outbound_to_send_request_with_reply() {
-        let msg =
-            OutboundMessage::text("group@g.us", "Got it").with_reply_to("original-msg-id");
+        let msg = OutboundMessage::text("group@g.us", "Got it").with_reply_to("original-msg-id");
         let req = outbound_to_send_request(&msg);
 
         assert_eq!(req.to, "group@g.us");

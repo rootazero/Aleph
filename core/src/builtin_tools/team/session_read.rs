@@ -8,9 +8,7 @@ use tracing::debug;
 use crate::error::{AlephError, Result};
 use crate::sync_primitives::Arc;
 use crate::teams::sessions::store::SessionStore;
-use crate::teams::sessions::types::{
-    CollaborativeSession, SessionOutcome,
-};
+use crate::teams::sessions::types::{CollaborativeSession, SessionOutcome};
 use crate::tools::AlephTool;
 
 // =============================================================================
@@ -103,9 +101,7 @@ impl AlephTool for SessionReadTool {
     type Output = SessionReadOutput;
 
     fn examples(&self) -> Option<Vec<String>> {
-        Some(vec![
-            "session_read(session_id='sess-1')".to_string(),
-        ])
+        Some(vec!["session_read(session_id='sess-1')".to_string()])
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
@@ -116,9 +112,7 @@ impl AlephTool for SessionReadTool {
             .get_session(&args.session_id)
             .await
             .map_err(|e| AlephError::other(format!("Failed to read session: {e}")))?
-            .ok_or_else(|| {
-                AlephError::other(format!("Session not found: {}", args.session_id))
-            })?;
+            .ok_or_else(|| AlephError::other(format!("Session not found: {}", args.session_id)))?;
 
         Ok(SessionReadOutput::from(session))
     }

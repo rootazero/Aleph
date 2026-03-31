@@ -309,7 +309,8 @@ mod tests {
         });
 
         // Append text that exceeds max_chars
-        let result = coalescer.append("This is a fairly long text that should exceed the maximum character limit");
+        let result = coalescer
+            .append("This is a fairly long text that should exceed the maximum character limit");
         assert!(result.is_some());
         assert!(coalescer.is_empty());
     }
@@ -468,7 +469,9 @@ mod tests {
         let (mut coalescer, mut rx) = AsyncBlockCoalescer::new(config);
 
         // This should trigger immediate emit due to max_chars
-        coalescer.append("This is a long text that exceeds max").await;
+        coalescer
+            .append("This is a long text that exceeds max")
+            .await;
 
         let received = rx.try_recv();
         assert!(received.is_ok());

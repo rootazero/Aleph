@@ -25,8 +25,11 @@ fn create_test_log_file(dir: &Path, filename: &str, days_old: u64) -> PathBuf {
     writeln!(file, "Test log content").expect("Failed to write log file");
 
     let modified_time = SystemTime::now() - Duration::from_secs(days_old * 24 * 60 * 60);
-    filetime::set_file_mtime(&log_file, filetime::FileTime::from_system_time(modified_time))
-        .expect("Failed to set file time");
+    filetime::set_file_mtime(
+        &log_file,
+        filetime::FileTime::from_system_time(modified_time),
+    )
+    .expect("Failed to set file time");
 
     log_file
 }
@@ -131,8 +134,11 @@ async fn given_old_non_log_file(w: &mut AlephWorld, filename: String, days: i32)
     writeln!(file, "This is a non-log file").expect("Failed to write file");
 
     let modified_time = SystemTime::now() - Duration::from_secs(days as u64 * 24 * 60 * 60);
-    filetime::set_file_mtime(&file_path, filetime::FileTime::from_system_time(modified_time))
-        .expect("Failed to set file time");
+    filetime::set_file_mtime(
+        &file_path,
+        filetime::FileTime::from_system_time(modified_time),
+    )
+    .expect("Failed to set file time");
 
     ctx.non_log_files.push(file_path);
 }
@@ -231,7 +237,11 @@ async fn then_log_level_is(w: &mut AlephWorld, expected: String) {
         set_log_level(expected_level);
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
-    assert_eq!(get_log_level(), expected_level, "Log level mismatch after retries");
+    assert_eq!(
+        get_log_level(),
+        expected_level,
+        "Log level mismatch after retries"
+    );
 }
 
 #[then(expr = "the log level should still be {string}")]
@@ -273,7 +283,11 @@ async fn then_threads_complete(w: &mut AlephWorld) {
     let ctx = w.logging.as_ref().expect("Logging context not initialized");
     assert_eq!(ctx.thread_results.len(), 5, "Should have 5 thread results");
     for result in &ctx.thread_results {
-        assert!(result.is_ok(), "Thread should complete successfully: {:?}", result);
+        assert!(
+            result.is_ok(),
+            "Thread should complete successfully: {:?}",
+            result
+        );
     }
 }
 
@@ -282,10 +296,13 @@ async fn then_valid_log_levels(w: &mut AlephWorld) {
     let ctx = w.logging.as_ref().expect("Logging context not initialized");
     for level_str in ctx.thread_results.iter().flatten() {
         assert!(
-            level_str.contains("Debug") || level_str.contains("Info") ||
-            level_str.contains("Warn") || level_str.contains("Error") ||
-            level_str.contains("Trace"),
-            "Should be a valid log level: {}", level_str
+            level_str.contains("Debug")
+                || level_str.contains("Info")
+                || level_str.contains("Warn")
+                || level_str.contains("Error")
+                || level_str.contains("Trace"),
+            "Should be a valid log level: {}",
+            level_str
         );
     }
 }
@@ -303,26 +320,36 @@ async fn when_get_log_directory(w: &mut AlephWorld) {
 #[then(expr = "the path should contain {string}")]
 async fn then_path_contains(w: &mut AlephWorld, expected: String) {
     let ctx = w.logging.as_ref().expect("Logging context not initialized");
-    let path = ctx.log_directory_result.as_ref().expect("Log directory not retrieved");
+    let path = ctx
+        .log_directory_result
+        .as_ref()
+        .expect("Log directory not retrieved");
     let path_str = path.to_string_lossy();
     assert!(
         path_str.contains(&expected),
         "Path '{}' should contain '{}'",
-        path_str, expected
+        path_str,
+        expected
     );
 }
 
 #[then("the path should be absolute")]
 async fn then_path_absolute(w: &mut AlephWorld) {
     let ctx = w.logging.as_ref().expect("Logging context not initialized");
-    let path = ctx.log_directory_result.as_ref().expect("Log directory not retrieved");
+    let path = ctx
+        .log_directory_result
+        .as_ref()
+        .expect("Log directory not retrieved");
     assert!(path.is_absolute(), "Path should be absolute: {:?}", path);
 }
 
 #[then("the directory or parent should exist")]
 async fn then_dir_or_parent_exists(w: &mut AlephWorld) {
     let ctx = w.logging.as_ref().expect("Logging context not initialized");
-    let path = ctx.log_directory_result.as_ref().expect("Log directory not retrieved");
+    let path = ctx
+        .log_directory_result
+        .as_ref()
+        .expect("Log directory not retrieved");
     assert!(
         path.exists() || path.parent().unwrap().exists(),
         "Directory or parent should exist: {:?}",
@@ -342,9 +369,18 @@ async fn when_create_pii_layer(w: &mut AlephWorld) {
 #[then("all components should function correctly")]
 async fn then_components_work(w: &mut AlephWorld) {
     let ctx = w.logging.as_ref().expect("Logging context not initialized");
-    assert!(ctx.log_directory_result.is_some(), "Log directory should be set");
+    assert!(
+        ctx.log_directory_result.is_some(),
+        "Log directory should be set"
+    );
     assert!(ctx.pii_layer_active, "PII layer should be active");
-    assert!(ctx.cleanup_result.as_ref().map(|r| r.is_ok()).unwrap_or(false), "Cleanup should succeed");
+    assert!(
+        ctx.cleanup_result
+            .as_ref()
+            .map(|r| r.is_ok())
+            .unwrap_or(false),
+        "Cleanup should succeed"
+    );
 }
 
 #[given(expr = "a nonexistent log directory {string}")]

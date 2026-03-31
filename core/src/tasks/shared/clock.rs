@@ -79,8 +79,8 @@ pub mod testing {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::testing::FakeClock;
+    use super::*;
 
     #[test]
     fn system_clock_returns_reasonable_time() {

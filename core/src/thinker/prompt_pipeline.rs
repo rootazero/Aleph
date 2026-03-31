@@ -3,11 +3,11 @@
 //! The pipeline holds an ordered list of [`PromptLayer`] implementations
 //! and executes them in priority order for a given [`AssemblyPath`].
 
-use std::path::PathBuf;
 use super::layers::*;
+use super::prompt_budget::{enforce_budget, PromptResult, TokenBudget};
 use super::prompt_layer::{AssemblyPath, LayerInput, LayerStability, PromptLayer};
-use super::prompt_budget::{TokenBudget, PromptResult, enforce_budget};
 use super::prompt_mode::PromptMode;
+use std::path::PathBuf;
 
 /// Composable prompt assembly engine.
 ///
@@ -82,7 +82,11 @@ impl PromptPipeline {
         // 2. Check total size
         let total: usize = sections.iter().map(|(_, _, c)| c.len()).sum();
         if total <= budget.max_total_chars {
-            let prompt = sections.iter().map(|(_, _, c)| c.as_str()).collect::<Vec<_>>().join("");
+            let prompt = sections
+                .iter()
+                .map(|(_, _, c)| c.as_str())
+                .collect::<Vec<_>>()
+                .join("");
             return PromptResult {
                 prompt,
                 truncation_stats: vec![],
@@ -91,7 +95,8 @@ impl PromptPipeline {
         }
 
         // 3. Enforce budget — protected priorities
-        let refs: Vec<(u32, &str, &str)> = sections.iter()
+        let refs: Vec<(u32, &str, &str)> = sections
+            .iter()
             .map(|(p, n, c)| (*p, *n, c.as_str()))
             .collect();
         let protected = &[50u32, 75, 100, 500, 501, 1200];
@@ -273,16 +278,32 @@ mod tests {
     }
 
     impl PromptLayer for StubLayer {
-        fn name(&self) -> &'static str { self.name }
-        fn priority(&self) -> u32 { self.priority }
-        fn paths(&self) -> &'static [AssemblyPath] { self.paths }
+        fn name(&self) -> &'static str {
+            self.name
+        }
+        fn priority(&self) -> u32 {
+            self.priority
+        }
+        fn paths(&self) -> &'static [AssemblyPath] {
+            self.paths
+        }
         fn inject(&self, output: &mut String, _input: &LayerInput) {
             output.push_str(self.text);
         }
     }
 
-    fn stub(name: &'static str, prio: u32, paths: &'static [AssemblyPath], text: &'static str) -> Box<dyn PromptLayer> {
-        Box::new(StubLayer { name, priority: prio, paths, text })
+    fn stub(
+        name: &'static str,
+        prio: u32,
+        paths: &'static [AssemblyPath],
+        text: &'static str,
+    ) -> Box<dyn PromptLayer> {
+        Box::new(StubLayer {
+            name,
+            priority: prio,
+            paths,
+            text,
+        })
     }
 
     // --- tests -------------------------------------------------------------
@@ -307,8 +328,13 @@ mod tests {
     fn path_filtering() {
         let pipeline = PromptPipeline::new(vec![
             stub("basic_only", 10, &[AssemblyPath::Basic], "BASIC"),
-            stub("soul_only",  20, &[AssemblyPath::Soul],  "SOUL"),
-            stub("both",       30, &[AssemblyPath::Basic, AssemblyPath::Soul], "BOTH"),
+            stub("soul_only", 20, &[AssemblyPath::Soul], "SOUL"),
+            stub(
+                "both",
+                30,
+                &[AssemblyPath::Basic, AssemblyPath::Soul],
+                "BOTH",
+            ),
         ]);
 
         let config = PromptConfig::default();
@@ -357,9 +383,8 @@ mod tests {
 
     #[test]
     fn no_matching_path_returns_empty() {
-        let pipeline = PromptPipeline::new(vec![
-            stub("soul_only", 10, &[AssemblyPath::Soul], "SOUL"),
-        ]);
+        let pipeline =
+            PromptPipeline::new(vec![stub("soul_only", 10, &[AssemblyPath::Soul], "SOUL")]);
 
         let config = PromptConfig::default();
         let tools: Vec<crate::agent_loop::ToolInfo> = vec![];
@@ -426,7 +451,13 @@ mod mode_tests {
     #[test]
     fn minimal_mode_only_core_layers() {
         let pipeline = PromptPipeline::default_layers();
-        let included_in_minimal = ["soul", "tools", "hydrated_tools", "response_format", "language"];
+        let included_in_minimal = [
+            "soul",
+            "tools",
+            "hydrated_tools",
+            "response_format",
+            "language",
+        ];
         for layer in &pipeline.layers {
             if included_in_minimal.contains(&layer.name()) {
                 assert!(
@@ -456,9 +487,19 @@ mod mode_tests {
         let minimal = pipeline.execute_with_mode(AssemblyPath::Basic, &input, PromptMode::Minimal);
 
         // Full should be longest
-        assert!(full.len() > compact.len(), "Full ({}) should be longer than Compact ({})", full.len(), compact.len());
+        assert!(
+            full.len() > compact.len(),
+            "Full ({}) should be longer than Compact ({})",
+            full.len(),
+            compact.len()
+        );
         // Compact should be longer than Minimal
-        assert!(compact.len() > minimal.len(), "Compact ({}) should be longer than Minimal ({})", compact.len(), minimal.len());
+        assert!(
+            compact.len() > minimal.len(),
+            "Compact ({}) should be longer than Minimal ({})",
+            compact.len(),
+            minimal.len()
+        );
         // Minimal should still have some content (response format, language)
         assert!(!minimal.is_empty(), "Minimal should not be empty");
     }
@@ -467,24 +508,27 @@ mod mode_tests {
 #[cfg(test)]
 mod budget_tests {
     use super::*;
-    use crate::thinker::prompt_builder::PromptConfig;
     use crate::thinker::prompt_budget::TokenBudget;
+    use crate::thinker::prompt_builder::PromptConfig;
     use crate::thinker::prompt_mode::PromptMode;
 
     #[test]
     fn assemble_with_budget_trims_when_over() {
-        
-
         let pipeline = PromptPipeline::default_layers();
         let config = PromptConfig::default();
         let tools = vec![];
         let input = LayerInput::basic(&config, &tools);
 
         // First, get the full prompt size so we know what budget to set
-        let full_result = pipeline.assemble(AssemblyPath::Basic, &input, PromptMode::Full, &TokenBudget {
-            max_total_chars: 500_000,
-            ..Default::default()
-        });
+        let full_result = pipeline.assemble(
+            AssemblyPath::Basic,
+            &input,
+            PromptMode::Full,
+            &TokenBudget {
+                max_total_chars: 500_000,
+                ..Default::default()
+            },
+        );
         let full_len = full_result.prompt.len();
 
         // Budget smaller than full output, but large enough to keep protected layers
@@ -495,9 +539,17 @@ mod budget_tests {
 
         let result = pipeline.assemble(AssemblyPath::Basic, &input, PromptMode::Full, &budget);
         // Some sections should have been removed
-        assert!(!result.truncation_stats.is_empty(), "Should have truncation stats");
+        assert!(
+            !result.truncation_stats.is_empty(),
+            "Should have truncation stats"
+        );
         // Prompt should be smaller than full
-        assert!(result.prompt.len() < full_len, "Trimmed prompt ({}) should be smaller than full ({})", result.prompt.len(), full_len);
+        assert!(
+            result.prompt.len() < full_len,
+            "Trimmed prompt ({}) should be smaller than full ({})",
+            result.prompt.len(),
+            full_len
+        );
     }
 
     #[test]
@@ -514,7 +566,10 @@ mod budget_tests {
         };
 
         let result = pipeline.assemble(AssemblyPath::Basic, &input, PromptMode::Full, &budget);
-        assert!(result.truncation_stats.is_empty(), "Should have no truncation stats");
+        assert!(
+            result.truncation_stats.is_empty(),
+            "Should have no truncation stats"
+        );
         assert_eq!(result.mode, PromptMode::Full);
     }
 
@@ -530,14 +585,32 @@ mod budget_tests {
         let input_minimal = LayerInput::basic(&config, &tools).with_mode(PromptMode::Minimal);
 
         let full = pipeline.assemble(AssemblyPath::Basic, &input_full, PromptMode::Full, &budget);
-        let compact = pipeline.assemble(AssemblyPath::Basic, &input_compact, PromptMode::Compact, &budget);
-        let minimal = pipeline.assemble(AssemblyPath::Basic, &input_minimal, PromptMode::Minimal, &budget);
+        let compact = pipeline.assemble(
+            AssemblyPath::Basic,
+            &input_compact,
+            PromptMode::Compact,
+            &budget,
+        );
+        let minimal = pipeline.assemble(
+            AssemblyPath::Basic,
+            &input_minimal,
+            PromptMode::Minimal,
+            &budget,
+        );
 
         // Full > Compact > Minimal
-        assert!(full.prompt.len() > compact.prompt.len(),
-            "Full ({}) > Compact ({})", full.prompt.len(), compact.prompt.len());
-        assert!(compact.prompt.len() > minimal.prompt.len(),
-            "Compact ({}) > Minimal ({})", compact.prompt.len(), minimal.prompt.len());
+        assert!(
+            full.prompt.len() > compact.prompt.len(),
+            "Full ({}) > Compact ({})",
+            full.prompt.len(),
+            compact.prompt.len()
+        );
+        assert!(
+            compact.prompt.len() > minimal.prompt.len(),
+            "Compact ({}) > Minimal ({})",
+            compact.prompt.len(),
+            minimal.prompt.len()
+        );
 
         // All should have no truncation (default budget is 80K)
         assert!(full.truncation_stats.is_empty());
@@ -577,8 +650,14 @@ mod stability_tests {
             }
         }
         // Ensure we actually found both stable and dynamic layers
-        let stable_count = layers.iter().filter(|(_, _, s)| *s == LayerStability::Stable).count();
-        let dynamic_count = layers.iter().filter(|(_, _, s)| *s == LayerStability::Dynamic).count();
+        let stable_count = layers
+            .iter()
+            .filter(|(_, _, s)| *s == LayerStability::Stable)
+            .count();
+        let dynamic_count = layers
+            .iter()
+            .filter(|(_, _, s)| *s == LayerStability::Dynamic)
+            .count();
         assert!(stable_count > 0, "Should have stable layers");
         assert!(dynamic_count > 0, "Should have dynamic layers");
     }

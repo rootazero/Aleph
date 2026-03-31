@@ -147,7 +147,7 @@ mod tests {
         // Run at 10:00 finishes 10:07, next is 10:30 not 10:37
         let anchor = 0;
         let every = 30 * 60 * 1000; // 30 min
-        // "now" is 10:07 (job just finished)
+                                    // "now" is 10:07 (job just finished)
         let now = 10 * 60 * 1000 + 7 * 60 * 1000; // 17 min
         let next = compute_next_every(now, every, anchor, None).unwrap();
         assert_eq!(next, 30 * 60 * 1000); // 30 min mark, not 17+30=47
@@ -277,9 +277,11 @@ mod tests {
 #[cfg(test)]
 mod regression_tests {
     use super::*;
-    use crate::tasks::shared::clock::testing::FakeClock;
     use crate::tasks::cron::config::{CronJob, ScheduleKind};
-    use crate::tasks::cron::service::ops::{recompute_next_run_maintenance, recompute_next_run_full};
+    use crate::tasks::cron::service::ops::{
+        recompute_next_run_full, recompute_next_run_maintenance,
+    };
+    use crate::tasks::shared::clock::testing::FakeClock;
 
     fn make_test_job() -> CronJob {
         let mut job = CronJob::new(
@@ -393,9 +395,6 @@ mod regression_tests {
         let anchor = 0_i64;
         let result = compute_next_every(now, every, anchor, None);
         assert!(result.is_some(), "large timestamp should not overflow");
-        assert!(
-            result.unwrap() >= now,
-            "result should be at or after now"
-        );
+        assert!(result.unwrap() >= now, "result should be at or after now");
     }
 }

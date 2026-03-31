@@ -11,7 +11,9 @@ use serde_json::json;
 use tokio::sync::RwLock;
 use tracing::{debug, info};
 
-use super::traits::{SubAgent, SubAgentCapability, SubAgentRequest, SubAgentResult, ToolCallRecord};
+use super::traits::{
+    SubAgent, SubAgentCapability, SubAgentRequest, SubAgentResult, ToolCallRecord,
+};
 use crate::dispatcher::{ToolRegistry, ToolSource, UnifiedTool};
 use crate::error::Result;
 
@@ -73,7 +75,11 @@ impl McpSubAgent {
     }
 
     /// Find tools matching a query
-    fn find_matching_tools<'a>(&self, prompt: &str, tools: &'a [UnifiedTool]) -> Vec<&'a UnifiedTool> {
+    fn find_matching_tools<'a>(
+        &self,
+        prompt: &str,
+        tools: &'a [UnifiedTool],
+    ) -> Vec<&'a UnifiedTool> {
         let prompt_lower = prompt.to_lowercase();
         let keywords: Vec<&str> = prompt_lower.split_whitespace().collect();
 
@@ -84,9 +90,9 @@ impl McpSubAgent {
                 let desc_lower = tool.description.to_lowercase();
 
                 // Check for keyword matches
-                keywords.iter().any(|kw| {
-                    kw.len() > 2 && (name_lower.contains(kw) || desc_lower.contains(kw))
-                })
+                keywords
+                    .iter()
+                    .any(|kw| kw.len() > 2 && (name_lower.contains(kw) || desc_lower.contains(kw)))
             })
             .collect()
     }
@@ -267,7 +273,9 @@ mod tests {
 
         assert_eq!(agent.id(), "mcp_agent");
         assert_eq!(agent.name(), "MCP Agent");
-        assert!(agent.capabilities().contains(&SubAgentCapability::McpToolExecution));
+        assert!(agent
+            .capabilities()
+            .contains(&SubAgentCapability::McpToolExecution));
     }
 
     #[tokio::test]

@@ -120,7 +120,12 @@ impl AlephTool for ScratchpadTool {
         );
 
         // Validate project_id to prevent path traversal
-        if args.project_id.contains("..") || args.project_id.contains('/') || args.project_id.contains('\\') || args.project_id.contains('\0') || args.project_id.starts_with('.') {
+        if args.project_id.contains("..")
+            || args.project_id.contains('/')
+            || args.project_id.contains('\\')
+            || args.project_id.contains('\0')
+            || args.project_id.starts_with('.')
+        {
             return Err(crate::error::AlephError::tool(
                 "Invalid project_id: must not contain path separators, '..', null bytes, or start with '.'".to_string(),
             ));
@@ -239,9 +244,15 @@ mod tests {
     fn test_action_display() {
         assert_eq!(format!("{}", ScratchpadAction::Initialize), "initialize");
         assert_eq!(format!("{}", ScratchpadAction::Read), "read");
-        assert_eq!(format!("{}", ScratchpadAction::SetObjective), "set_objective");
+        assert_eq!(
+            format!("{}", ScratchpadAction::SetObjective),
+            "set_objective"
+        );
         assert_eq!(format!("{}", ScratchpadAction::SetPlan), "set_plan");
-        assert_eq!(format!("{}", ScratchpadAction::CompleteItem), "complete_item");
+        assert_eq!(
+            format!("{}", ScratchpadAction::CompleteItem),
+            "complete_item"
+        );
         assert_eq!(format!("{}", ScratchpadAction::AppendNote), "append_note");
         assert_eq!(format!("{}", ScratchpadAction::Clear), "clear");
     }

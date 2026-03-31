@@ -18,13 +18,13 @@
 
 use crate::config::AiRetrievalPolicy;
 use crate::error::{AlephError, Result};
+use crate::memory::context::MemoryEntry;
 use crate::providers::adapter::RequestPayload;
 use crate::providers::message::UnifiedMessage;
-use crate::memory::context::MemoryEntry;
 use crate::providers::AiProvider;
+use crate::sync_primitives::Arc;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
-use crate::sync_primitives::Arc;
 use std::time::Duration;
 use tracing::{debug, info, warn};
 
@@ -396,9 +396,20 @@ mod tests {
         fn process(
             &self,
             _payload: crate::providers::adapter::RequestPayload<'_>,
-        ) -> Pin<Box<dyn Future<Output = crate::error::Result<crate::providers::adapter::ProviderResponse>> + Send + '_>> {
+        ) -> Pin<
+            Box<
+                dyn Future<
+                        Output = crate::error::Result<crate::providers::adapter::ProviderResponse>,
+                    > + Send
+                    + '_,
+            >,
+        > {
             let response = self.response.clone();
-            Box::pin(async move { Ok(crate::providers::adapter::ProviderResponse::text_only(response)) })
+            Box::pin(async move {
+                Ok(crate::providers::adapter::ProviderResponse::text_only(
+                    response,
+                ))
+            })
         }
     }
 

@@ -7,8 +7,12 @@ use crate::thinker::prompt_sanitizer::{sanitize_for_prompt, SanitizeLevel};
 pub struct CustomInstructionsLayer;
 
 impl PromptLayer for CustomInstructionsLayer {
-    fn name(&self) -> &'static str { "custom_instructions" }
-    fn priority(&self) -> u32 { 1500 }
+    fn name(&self) -> &'static str {
+        "custom_instructions"
+    }
+    fn priority(&self) -> u32 {
+        1500
+    }
     fn supports_mode(&self, mode: PromptMode) -> bool {
         !matches!(mode, PromptMode::Minimal)
     }

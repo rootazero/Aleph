@@ -1,9 +1,9 @@
-use crate::exec::approval::types::EscalationReason;
 use crate::exec::approval::storage::ApprovalAuditStorage;
-use tracing::warn;
+use crate::exec::approval::types::EscalationReason;
 use crate::exec::sandbox::capabilities::{Capabilities, FileSystemCapability, NetworkCapability};
 use rusqlite::Result as SqliteResult;
 use std::collections::HashMap;
+use tracing::warn;
 
 /// Aggregate risk information for a tool
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,10 +39,7 @@ impl AuditQuery {
     }
 
     /// Calculate risk score based on capabilities
-    pub fn calculate_risk_score(
-        capabilities: &Capabilities,
-        escalation_count: u32,
-    ) -> u32 {
+    pub fn calculate_risk_score(capabilities: &Capabilities, escalation_count: u32) -> u32 {
         let mut score: u32 = 10; // Base score
 
         // Check filesystem capabilities
@@ -71,10 +68,7 @@ impl AuditQuery {
     }
 
     /// Get tool risk summary
-    pub async fn get_tool_risk_summary(
-        &self,
-        tool_name: &str,
-    ) -> SqliteResult<ToolRiskSummary> {
+    pub async fn get_tool_risk_summary(&self, tool_name: &str) -> SqliteResult<ToolRiskSummary> {
         // Get execution and escalation counts
         let execution_count = self.storage.get_execution_count(tool_name).await?;
         let escalation_count = self.storage.get_escalation_count(tool_name).await?;
@@ -116,7 +110,8 @@ impl AuditQuery {
             // Get escalation details if triggered
             let (escalation_reason, user_decision) = if escalation_triggered {
                 if let Some((reason_str, _path, decision)) =
-                    self.storage.get_escalation_details(&execution_id).await? {
+                    self.storage.get_escalation_details(&execution_id).await?
+                {
                     let reason = parse_escalation_reason(&reason_str);
                     (Some(reason), decision)
                 } else {
@@ -174,7 +169,10 @@ fn parse_escalation_reason(reason: &str) -> EscalationReason {
         "undeclared_binding" => EscalationReason::UndeclaredBinding,
         "first_execution" => EscalationReason::FirstExecution,
         other => {
-            warn!("Unknown escalation reason in audit DB: {:?}, defaulting to FirstExecution", other);
+            warn!(
+                "Unknown escalation reason in audit DB: {:?}, defaulting to FirstExecution",
+                other
+            );
             EscalationReason::FirstExecution
         }
     }
@@ -191,14 +189,18 @@ fn parse_capabilities_from_strings(capability_strings: &[String]) -> Capabilitie
             // Skip "filesystem."
             match fs_type {
                 "read_write" => {
-                    capabilities.filesystem.push(FileSystemCapability::ReadWrite {
-                        path: PathBuf::from("/tmp"), // Placeholder path
-                    });
+                    capabilities
+                        .filesystem
+                        .push(FileSystemCapability::ReadWrite {
+                            path: PathBuf::from("/tmp"), // Placeholder path
+                        });
                 }
                 "read_only" => {
-                    capabilities.filesystem.push(FileSystemCapability::ReadOnly {
-                        path: PathBuf::from("/tmp"), // Placeholder path
-                    });
+                    capabilities
+                        .filesystem
+                        .push(FileSystemCapability::ReadOnly {
+                            path: PathBuf::from("/tmp"), // Placeholder path
+                        });
                 }
                 _ => {}
             }
@@ -227,9 +229,7 @@ fn parse_capabilities_from_strings(capability_strings: &[String]) -> Capabilitie
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::exec::sandbox::capabilities::{
-        EnvironmentCapability, ProcessCapability,
-    };
+    use crate::exec::sandbox::capabilities::{EnvironmentCapability, ProcessCapability};
     use std::path::PathBuf;
 
     #[test]
@@ -289,9 +289,7 @@ mod tests {
     fn test_risk_score_network_domains() {
         let caps = Capabilities {
             filesystem: vec![FileSystemCapability::TempWorkspace],
-            network: NetworkCapability::AllowDomains(vec![
-                "example.com".to_string(),
-            ]),
+            network: NetworkCapability::AllowDomains(vec!["example.com".to_string()]),
             process: ProcessCapability {
                 no_fork: true,
                 max_execution_time: 300,
@@ -412,8 +410,12 @@ mod tests {
 
         // Check capabilities are present
         assert!(!summary.capabilities.is_empty());
-        assert!(summary.capabilities.contains(&"filesystem.read_write".to_string()));
-        assert!(summary.capabilities.contains(&"network.allow_all".to_string()));
+        assert!(summary
+            .capabilities
+            .contains(&"filesystem.read_write".to_string()));
+        assert!(summary
+            .capabilities
+            .contains(&"network.allow_all".to_string()));
         assert!(summary.capabilities.contains(&"process.exec".to_string()));
     }
 
@@ -472,4 +474,3 @@ mod tests {
         );
     }
 }
-

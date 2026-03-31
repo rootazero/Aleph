@@ -4,9 +4,9 @@
 //! with JSON serialization for complex fields and proper error handling.
 
 use super::types::{AnchorScope, AnchorSource, BehavioralAnchor};
+use crate::sync_primitives::Arc;
 use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection, Result};
-use crate::sync_primitives::Arc;
 
 /// Storage manager for behavioral anchors
 ///
@@ -130,23 +130,57 @@ impl AnchorStore {
             let scope_json: String = row.get(9)?;
             let conflicts_with_json: String = row.get(11)?;
 
-            let trigger_tags: Vec<String> = serde_json::from_str(&trigger_tags_json)
-                .map_err(|e| rusqlite::Error::FromSqlConversionFailure(2, rusqlite::types::Type::Text, Box::new(e)))?;
-            let source: AnchorSource = serde_json::from_str(&source_json)
-                .map_err(|e| rusqlite::Error::FromSqlConversionFailure(8, rusqlite::types::Type::Text, Box::new(e)))?;
-            let scope: AnchorScope = serde_json::from_str(&scope_json)
-                .map_err(|e| rusqlite::Error::FromSqlConversionFailure(9, rusqlite::types::Type::Text, Box::new(e)))?;
-            let conflicts_with: Vec<String> = serde_json::from_str(&conflicts_with_json)
-                .map_err(|e| rusqlite::Error::FromSqlConversionFailure(11, rusqlite::types::Type::Text, Box::new(e)))?;
+            let trigger_tags: Vec<String> =
+                serde_json::from_str(&trigger_tags_json).map_err(|e| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        2,
+                        rusqlite::types::Type::Text,
+                        Box::new(e),
+                    )
+                })?;
+            let source: AnchorSource = serde_json::from_str(&source_json).map_err(|e| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    8,
+                    rusqlite::types::Type::Text,
+                    Box::new(e),
+                )
+            })?;
+            let scope: AnchorScope = serde_json::from_str(&scope_json).map_err(|e| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    9,
+                    rusqlite::types::Type::Text,
+                    Box::new(e),
+                )
+            })?;
+            let conflicts_with: Vec<String> =
+                serde_json::from_str(&conflicts_with_json).map_err(|e| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        11,
+                        rusqlite::types::Type::Text,
+                        Box::new(e),
+                    )
+                })?;
 
             let created_at_str: String = row.get(4)?;
             let last_validated_str: String = row.get(5)?;
 
             let created_at = DateTime::parse_from_rfc3339(&created_at_str)
-                .map_err(|e| rusqlite::Error::FromSqlConversionFailure(4, rusqlite::types::Type::Text, Box::new(e)))?
+                .map_err(|e| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        4,
+                        rusqlite::types::Type::Text,
+                        Box::new(e),
+                    )
+                })?
                 .with_timezone(&Utc);
             let last_validated = DateTime::parse_from_rfc3339(&last_validated_str)
-                .map_err(|e| rusqlite::Error::FromSqlConversionFailure(5, rusqlite::types::Type::Text, Box::new(e)))?
+                .map_err(|e| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        5,
+                        rusqlite::types::Type::Text,
+                        Box::new(e),
+                    )
+                })?
                 .with_timezone(&Utc);
 
             Ok(BehavioralAnchor {
@@ -230,10 +264,8 @@ impl AnchorStore {
     ///
     /// * `Result<()>` - Ok if deletion was successful
     pub fn delete(&mut self, id: &str) -> Result<()> {
-        self.conn.execute(
-            "DELETE FROM behavioral_anchors WHERE id = ?1",
-            params![id],
-        )?;
+        self.conn
+            .execute("DELETE FROM behavioral_anchors WHERE id = ?1", params![id])?;
         Ok(())
     }
 
@@ -259,23 +291,57 @@ impl AnchorStore {
             let scope_json: String = row.get(9)?;
             let conflicts_with_json: String = row.get(11)?;
 
-            let trigger_tags: Vec<String> = serde_json::from_str(&trigger_tags_json)
-                .map_err(|e| rusqlite::Error::FromSqlConversionFailure(2, rusqlite::types::Type::Text, Box::new(e)))?;
-            let source: AnchorSource = serde_json::from_str(&source_json)
-                .map_err(|e| rusqlite::Error::FromSqlConversionFailure(8, rusqlite::types::Type::Text, Box::new(e)))?;
-            let scope: AnchorScope = serde_json::from_str(&scope_json)
-                .map_err(|e| rusqlite::Error::FromSqlConversionFailure(9, rusqlite::types::Type::Text, Box::new(e)))?;
-            let conflicts_with: Vec<String> = serde_json::from_str(&conflicts_with_json)
-                .map_err(|e| rusqlite::Error::FromSqlConversionFailure(11, rusqlite::types::Type::Text, Box::new(e)))?;
+            let trigger_tags: Vec<String> =
+                serde_json::from_str(&trigger_tags_json).map_err(|e| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        2,
+                        rusqlite::types::Type::Text,
+                        Box::new(e),
+                    )
+                })?;
+            let source: AnchorSource = serde_json::from_str(&source_json).map_err(|e| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    8,
+                    rusqlite::types::Type::Text,
+                    Box::new(e),
+                )
+            })?;
+            let scope: AnchorScope = serde_json::from_str(&scope_json).map_err(|e| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    9,
+                    rusqlite::types::Type::Text,
+                    Box::new(e),
+                )
+            })?;
+            let conflicts_with: Vec<String> =
+                serde_json::from_str(&conflicts_with_json).map_err(|e| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        11,
+                        rusqlite::types::Type::Text,
+                        Box::new(e),
+                    )
+                })?;
 
             let created_at_str: String = row.get(4)?;
             let last_validated_str: String = row.get(5)?;
 
             let created_at = DateTime::parse_from_rfc3339(&created_at_str)
-                .map_err(|e| rusqlite::Error::FromSqlConversionFailure(4, rusqlite::types::Type::Text, Box::new(e)))?
+                .map_err(|e| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        4,
+                        rusqlite::types::Type::Text,
+                        Box::new(e),
+                    )
+                })?
                 .with_timezone(&Utc);
             let last_validated = DateTime::parse_from_rfc3339(&last_validated_str)
-                .map_err(|e| rusqlite::Error::FromSqlConversionFailure(5, rusqlite::types::Type::Text, Box::new(e)))?
+                .map_err(|e| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        5,
+                        rusqlite::types::Type::Text,
+                        Box::new(e),
+                    )
+                })?
                 .with_timezone(&Utc);
 
             Ok(BehavioralAnchor {

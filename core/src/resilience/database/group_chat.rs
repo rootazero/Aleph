@@ -3,8 +3,8 @@
 //! Provides database operations for group chat session persistence
 //! and conversation turn tracking.
 
-use crate::error::AlephError;
 use super::StateDatabase;
+use crate::error::AlephError;
 use rusqlite::params;
 
 /// A single conversation turn: (round, sequence, speaker_type, speaker_id, speaker_name, content, timestamp).
@@ -37,9 +37,7 @@ impl StateDatabase {
             "#,
             params![id, topic, source_channel, source_session_key, now, now],
         )
-        .map_err(|e| {
-            AlephError::config(format!("Failed to insert group chat session: {}", e))
-        })?;
+        .map_err(|e| AlephError::config(format!("Failed to insert group chat session: {}", e)))?;
         Ok(())
     }
 
@@ -60,10 +58,7 @@ impl StateDatabase {
             params![status, now, session_id],
         )
         .map_err(|e| {
-            AlephError::config(format!(
-                "Failed to update group chat session status: {}",
-                e
-            ))
+            AlephError::config(format!("Failed to update group chat session status: {}", e))
         })?;
         Ok(())
     }
@@ -100,19 +95,14 @@ impl StateDatabase {
                 now
             ],
         )
-        .map_err(|e| {
-            AlephError::config(format!("Failed to insert group chat turn: {}", e))
-        })?;
+        .map_err(|e| AlephError::config(format!("Failed to insert group chat turn: {}", e)))?;
         Ok(())
     }
 
     /// Get all turns for a group chat session, ordered by round and sequence.
     ///
     /// Returns tuples of (round, sequence, speaker_type, speaker_id, speaker_name, content, timestamp).
-    pub fn get_group_chat_turns(
-        &self,
-        session_id: &str,
-    ) -> Result<Vec<GroupChatTurn>, AlephError> {
+    pub fn get_group_chat_turns(&self, session_id: &str) -> Result<Vec<GroupChatTurn>, AlephError> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn
             .prepare(
@@ -140,9 +130,7 @@ impl StateDatabase {
                     row.get::<_, i64>(6)?,
                 ))
             })
-            .map_err(|e| {
-                AlephError::config(format!("Failed to query group chat turns: {}", e))
-            })?
+            .map_err(|e| AlephError::config(format!("Failed to query group chat turns: {}", e)))?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| {
                 AlephError::config(format!("Failed to collect group chat turns: {}", e))
@@ -154,9 +142,7 @@ impl StateDatabase {
     /// List all active group chat sessions.
     ///
     /// Returns tuples of (id, topic, source_channel, created_at).
-    pub fn list_active_group_chats(
-        &self,
-    ) -> Result<Vec<GroupChatSessionSummary>, AlephError> {
+    pub fn list_active_group_chats(&self) -> Result<Vec<GroupChatSessionSummary>, AlephError> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let mut stmt = conn
             .prepare(
@@ -168,10 +154,7 @@ impl StateDatabase {
                 "#,
             )
             .map_err(|e| {
-                AlephError::config(format!(
-                    "Failed to prepare active group chats query: {}",
-                    e
-                ))
+                AlephError::config(format!("Failed to prepare active group chats query: {}", e))
             })?;
 
         let sessions = stmt
@@ -183,9 +166,7 @@ impl StateDatabase {
                     row.get::<_, i64>(3)?,
                 ))
             })
-            .map_err(|e| {
-                AlephError::config(format!("Failed to query active group chats: {}", e))
-            })?
+            .map_err(|e| AlephError::config(format!("Failed to query active group chats: {}", e)))?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| {
                 AlephError::config(format!("Failed to collect active group chats: {}", e))

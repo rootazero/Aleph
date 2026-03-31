@@ -37,8 +37,7 @@ pub use message_ops::EmailMessageOps;
 
 use crate::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
-    ChannelResult, ChannelState, ChannelStatus, InboundMessage, OutboundMessage,
-    SendResult,
+    ChannelResult, ChannelState, ChannelStatus, InboundMessage, OutboundMessage, SendResult,
 };
 use async_trait::async_trait;
 use tokio::sync::{mpsc, watch};
@@ -82,13 +81,13 @@ impl EmailChannel {
             audio: false,
             video: false,
             reactions: false,
-            replies: true,       // via Re: subject
+            replies: true, // via Re: subject
             editing: false,
             deletion: false,
             typing_indicator: false,
             read_receipts: false,
-            rich_text: true,     // HTML email
-            max_message_length: 1_048_576, // 1MB
+            rich_text: true,                       // HTML email
+            max_message_length: 1_048_576,         // 1MB
             max_attachment_size: 25 * 1024 * 1024, // 25MB
             stream_protocol: Default::default(),
         }
@@ -112,11 +111,11 @@ impl Channel for EmailChannel {
 
     async fn start(&mut self) -> ChannelResult<()> {
         // Validate configuration
-        self.config
-            .validate()
-            .map_err(ChannelError::ConfigError)?;
+        self.config.validate().map_err(ChannelError::ConfigError)?;
 
-        self.channel_state.set_status(ChannelStatus::Connecting).await;
+        self.channel_state
+            .set_status(ChannelStatus::Connecting)
+            .await;
         tracing::info!(
             "Starting Email channel (IMAP: {}:{}, SMTP: {}:{})...",
             self.config.imap_host,
@@ -138,18 +137,14 @@ impl Channel for EmailChannel {
         tokio::spawn(async move {
             *status.write().await = ChannelStatus::Connected;
 
-            EmailMessageOps::run_imap_poll_loop(
-                config,
-                inbound_tx,
-                channel_id,
-                shutdown_rx,
-            )
-            .await;
+            EmailMessageOps::run_imap_poll_loop(config, inbound_tx, channel_id, shutdown_rx).await;
 
             *status.write().await = ChannelStatus::Disconnected;
         });
 
-        self.channel_state.set_status(ChannelStatus::Connected).await;
+        self.channel_state
+            .set_status(ChannelStatus::Connected)
+            .await;
         Ok(())
     }
 
@@ -160,7 +155,9 @@ impl Channel for EmailChannel {
             let _ = shutdown_tx.send(true);
         }
 
-        self.channel_state.set_status(ChannelStatus::Disconnected).await;
+        self.channel_state
+            .set_status(ChannelStatus::Disconnected)
+            .await;
         Ok(())
     }
 
@@ -176,7 +173,6 @@ impl Channel for EmailChannel {
             .unwrap_or_else(|| "Message from Aleph".to_string());
 
         EmailMessageOps::send_email(&self.config, to, &subject, &message.text).await
-
     }
 
     // inbound_receiver() — uses default from Channel trait via state()
@@ -196,9 +192,7 @@ impl ChannelFactory for EmailChannelFactory {
         let config: EmailConfig = serde_json::from_value(config)
             .map_err(|e| ChannelError::ConfigError(format!("Invalid Email config: {}", e)))?;
 
-        config
-            .validate()
-            .map_err(ChannelError::ConfigError)?;
+        config.validate().map_err(ChannelError::ConfigError)?;
 
         Ok(Box::new(EmailChannel::new("email", config)))
     }

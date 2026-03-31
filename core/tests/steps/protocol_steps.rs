@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use cucumber::{given, when, then};
+use cucumber::{given, then, when};
 
 use crate::world::{AlephWorld, ProtocolContext};
 use alephcore::providers::protocols::{ConfigurableProtocol, ProtocolDefinition, ProtocolRegistry};
@@ -16,7 +16,8 @@ use alephcore::ProviderConfig;
 async fn given_yaml_extends_with_auth(w: &mut AlephWorld, base: String) {
     let ctx = w.protocol.get_or_insert_with(ProtocolContext::default);
     ProtocolContext::init_registry();
-    ctx.set_yaml(&format!(r#"
+    ctx.set_yaml(&format!(
+        r#"
 name: test-minimal
 extends: {}
 base_url: https://api.test.com
@@ -24,7 +25,9 @@ differences:
   auth:
     header: X-API-Key
     prefix: ""
-"#, base));
+"#,
+        base
+    ));
 }
 
 #[given("a YAML custom protocol definition with request template")]
@@ -72,23 +75,39 @@ async fn given_multiple_protocols(w: &mut AlephWorld, p1: String, p2: String, p3
     ProtocolContext::init_registry();
 
     ctx.protocol_defs = vec![
-        serde_yaml::from_str(&format!(r#"
+        serde_yaml::from_str(&format!(
+            r#"
 name: proto-1
 extends: {}
 base_url: https://api.proto1.com
-"#, p1)).unwrap(),
-        serde_yaml::from_str(&format!(r#"
+"#,
+            p1
+        ))
+        .unwrap(),
+        serde_yaml::from_str(&format!(
+            r#"
 name: proto-2
 extends: {}
 base_url: https://api.proto2.com
-"#, p2)).unwrap(),
-        serde_yaml::from_str(&format!(r#"
+"#,
+            p2
+        ))
+        .unwrap(),
+        serde_yaml::from_str(&format!(
+            r#"
 name: proto-3
 extends: {}
 base_url: https://api.proto3.com
-"#, p3)).unwrap(),
+"#,
+            p3
+        ))
+        .unwrap(),
     ];
-    ctx.protocol_names = vec!["proto-1".to_string(), "proto-2".to_string(), "proto-3".to_string()];
+    ctx.protocol_names = vec![
+        "proto-1".to_string(),
+        "proto-2".to_string(),
+        "proto-3".to_string(),
+    ];
 }
 
 #[given("a temporary directory with protocol files")]
@@ -98,21 +117,30 @@ async fn given_temp_dir_with_protocols(w: &mut AlephWorld) {
     let temp_dir = ctx.create_temp_dir();
 
     let protocols = vec![
-        ("dir-proto-1.yaml", r#"
+        (
+            "dir-proto-1.yaml",
+            r#"
 name: dir-proto-1
 extends: openai
 base_url: https://api.dir1.com
-"#),
-        ("dir-proto-2.yaml", r#"
+"#,
+        ),
+        (
+            "dir-proto-2.yaml",
+            r#"
 name: dir-proto-2
 extends: anthropic
 base_url: https://api.dir2.com
-"#),
-        ("dir-proto-3.yml", r#"
+"#,
+        ),
+        (
+            "dir-proto-3.yml",
+            r#"
 name: dir-proto-3
 extends: gemini
 base_url: https://api.dir3.com
-"#),
+"#,
+        ),
     ];
 
     for (filename, yaml) in protocols {
@@ -136,20 +164,25 @@ async fn given_invalid_yaml(w: &mut AlephWorld) {
 async fn given_yaml_incomplete(w: &mut AlephWorld) {
     let ctx = w.protocol.get_or_insert_with(ProtocolContext::default);
     ProtocolContext::init_registry();
-    ctx.set_yaml(r#"
+    ctx.set_yaml(
+        r#"
 name: incomplete
 # Missing extends or custom
-"#);
+"#,
+    );
 }
 
 #[given(expr = "a YAML protocol extending non-existent base {string}")]
 async fn given_yaml_invalid_extends(w: &mut AlephWorld, base: String) {
     let ctx = w.protocol.get_or_insert_with(ProtocolContext::default);
     ProtocolContext::init_registry();
-    ctx.set_yaml(&format!(r#"
+    ctx.set_yaml(&format!(
+        r#"
 name: invalid-extends
 extends: {}
-"#, base));
+"#,
+        base
+    ));
 }
 
 #[given("a provider config with non-existent protocol")]
@@ -166,7 +199,8 @@ async fn given_nonexistent_protocol_config(w: &mut AlephWorld) {
 async fn given_yaml_no_prefix(w: &mut AlephWorld) {
     let ctx = w.protocol.get_or_insert_with(ProtocolContext::default);
     ProtocolContext::init_registry();
-    ctx.set_yaml(r#"
+    ctx.set_yaml(
+        r#"
 name: no-prefix
 extends: openai
 base_url: https://api.test.com
@@ -174,14 +208,16 @@ differences:
   auth:
     header: X-API-Key
     prefix: ""
-"#);
+"#,
+    );
 }
 
 #[given("a YAML protocol with Bearer auth prefix")]
 async fn given_yaml_bearer_prefix(w: &mut AlephWorld) {
     let ctx = w.protocol.get_or_insert_with(ProtocolContext::default);
     ProtocolContext::init_registry();
-    ctx.set_yaml(r#"
+    ctx.set_yaml(
+        r#"
 name: with-prefix
 extends: openai
 base_url: https://api.test.com
@@ -189,7 +225,8 @@ differences:
   auth:
     header: Authorization
     prefix: "Bearer "
-"#);
+"#,
+    );
 }
 
 #[given("a YAML custom protocol with complex template")]
@@ -224,11 +261,14 @@ async fn given_registry_initialized(w: &mut AlephWorld) {
 async fn given_yaml_with_base_url(w: &mut AlephWorld, base_url: String) {
     let ctx = w.protocol.get_or_insert_with(ProtocolContext::default);
     ProtocolContext::init_registry();
-    ctx.set_yaml(&format!(r#"
+    ctx.set_yaml(&format!(
+        r#"
 name: url-override
 extends: openai
 base_url: {}
-"#, base_url));
+"#,
+        base_url
+    ));
 }
 
 // =========================================================================
@@ -237,13 +277,19 @@ base_url: {}
 
 #[when("I parse the protocol definition")]
 async fn when_parse_protocol(w: &mut AlephWorld) {
-    let ctx = w.protocol.as_mut().expect("Protocol context not initialized");
+    let ctx = w
+        .protocol
+        .as_mut()
+        .expect("Protocol context not initialized");
     ctx.last_result = Some(ctx.parse_yaml());
 }
 
 #[when("I try to parse the protocol definition")]
 async fn when_try_parse_protocol(w: &mut AlephWorld) {
-    let ctx = w.protocol.as_mut().expect("Protocol context not initialized");
+    let ctx = w
+        .protocol
+        .as_mut()
+        .expect("Protocol context not initialized");
     ctx.last_result = Some(ctx.parse_yaml());
 }
 
@@ -253,13 +299,19 @@ async fn when_try_parse_protocol(w: &mut AlephWorld) {
 
 #[when("I create a ConfigurableProtocol from the definition")]
 async fn when_create_protocol(w: &mut AlephWorld) {
-    let ctx = w.protocol.as_mut().expect("Protocol context not initialized");
+    let ctx = w
+        .protocol
+        .as_mut()
+        .expect("Protocol context not initialized");
     ctx.last_result = Some(ctx.create_protocol());
 }
 
 #[when("I try to create a ConfigurableProtocol")]
 async fn when_try_create_protocol(w: &mut AlephWorld) {
-    let ctx = w.protocol.as_mut().expect("Protocol context not initialized");
+    let ctx = w
+        .protocol
+        .as_mut()
+        .expect("Protocol context not initialized");
     ctx.last_result = Some(ctx.create_protocol());
 }
 
@@ -269,13 +321,19 @@ async fn when_try_create_protocol(w: &mut AlephWorld) {
 
 #[when("I register the protocol in the registry")]
 async fn when_register_protocol(w: &mut AlephWorld) {
-    let ctx = w.protocol.as_mut().expect("Protocol context not initialized");
+    let ctx = w
+        .protocol
+        .as_mut()
+        .expect("Protocol context not initialized");
     ctx.last_result = Some(ctx.register_protocol());
 }
 
 #[when("I register all protocols in the registry")]
 async fn when_register_all_protocols(w: &mut AlephWorld) {
-    let ctx = w.protocol.as_mut().expect("Protocol context not initialized");
+    let ctx = w
+        .protocol
+        .as_mut()
+        .expect("Protocol context not initialized");
 
     for def in ctx.protocol_defs.clone() {
         let protocol = ConfigurableProtocol::new(def.clone(), reqwest::Client::new())
@@ -288,12 +346,18 @@ async fn when_register_all_protocols(w: &mut AlephWorld) {
 
 #[when(expr = "I register a custom protocol {string}")]
 async fn when_register_custom_protocol(w: &mut AlephWorld, name: String) {
-    let ctx = w.protocol.as_mut().expect("Protocol context not initialized");
-    let yaml = format!(r#"
+    let ctx = w
+        .protocol
+        .as_mut()
+        .expect("Protocol context not initialized");
+    let yaml = format!(
+        r#"
 name: {}
 extends: openai
 base_url: https://api.{}.com
-"#, name, name);
+"#,
+        name, name
+    );
     let def: ProtocolDefinition = serde_yaml::from_str(&yaml).unwrap();
     let protocol = ConfigurableProtocol::new(def.clone(), reqwest::Client::new())
         .expect("Failed to create protocol");
@@ -305,7 +369,10 @@ base_url: https://api.{}.com
 
 #[when(expr = "I unregister protocol {string}")]
 async fn when_unregister_protocol(w: &mut AlephWorld, name: String) {
-    let ctx = w.protocol.as_mut().expect("Protocol context not initialized");
+    let ctx = w
+        .protocol
+        .as_mut()
+        .expect("Protocol context not initialized");
     ctx.unregister_protocol(&name);
     ctx.protocol_names.retain(|n| n != &name);
 }
@@ -316,13 +383,19 @@ async fn when_unregister_protocol(w: &mut AlephWorld, name: String) {
 
 #[when(expr = "I create a provider using protocol {string}")]
 async fn when_create_provider(w: &mut AlephWorld, protocol_name: String) {
-    let ctx = w.protocol.as_mut().expect("Protocol context not initialized");
+    let ctx = w
+        .protocol
+        .as_mut()
+        .expect("Protocol context not initialized");
     ctx.last_result = Some(ctx.create_provider(&protocol_name));
 }
 
 #[when("I create providers for all protocols")]
 async fn when_create_all_providers(w: &mut AlephWorld) {
-    let ctx = w.protocol.as_mut().expect("Protocol context not initialized");
+    let ctx = w
+        .protocol
+        .as_mut()
+        .expect("Protocol context not initialized");
     for name in ctx.protocol_names.clone() {
         let result = ctx.create_provider(&name);
         if result.is_err() {
@@ -335,15 +408,27 @@ async fn when_create_all_providers(w: &mut AlephWorld) {
 
 #[when("I try to create a provider")]
 async fn when_try_create_provider(w: &mut AlephWorld) {
-    let ctx = w.protocol.as_mut().expect("Protocol context not initialized");
-    let config = ctx.provider_config.clone().expect("Provider config not set");
-    let protocol_name = config.protocol.clone().unwrap_or_else(|| "test".to_string());
+    let ctx = w
+        .protocol
+        .as_mut()
+        .expect("Protocol context not initialized");
+    let config = ctx
+        .provider_config
+        .clone()
+        .expect("Provider config not set");
+    let protocol_name = config
+        .protocol
+        .clone()
+        .unwrap_or_else(|| "test".to_string());
     ctx.last_result = Some(ctx.create_provider(&protocol_name));
 }
 
 #[when(expr = "I create a provider with base_url {string}")]
 async fn when_create_provider_with_base_url(w: &mut AlephWorld, base_url: String) {
-    let ctx = w.protocol.as_mut().expect("Protocol context not initialized");
+    let ctx = w
+        .protocol
+        .as_mut()
+        .expect("Protocol context not initialized");
     let protocol_name = ctx.protocol_name.clone().expect("Protocol name not set");
     let mut config = ProviderConfig::test_config("model");
     config.protocol = Some(protocol_name.clone());
@@ -359,13 +444,19 @@ async fn when_create_provider_with_base_url(w: &mut AlephWorld, base_url: String
 
 #[when("I build a request with the protocol")]
 async fn when_build_request(w: &mut AlephWorld) {
-    let ctx = w.protocol.as_mut().expect("Protocol context not initialized");
+    let ctx = w
+        .protocol
+        .as_mut()
+        .expect("Protocol context not initialized");
     ctx.request_result = Some(ctx.build_request());
 }
 
 #[when("I try to build a request")]
 async fn when_try_build_request(w: &mut AlephWorld) {
-    let ctx = w.protocol.as_mut().expect("Protocol context not initialized");
+    let ctx = w
+        .protocol
+        .as_mut()
+        .expect("Protocol context not initialized");
     ctx.request_result = Some(ctx.build_request());
 }
 
@@ -377,7 +468,10 @@ async fn when_try_build_request(w: &mut AlephWorld) {
 async fn when_load_from_file(w: &mut AlephWorld) {
     use alephcore::providers::protocols::ProtocolLoader;
 
-    let ctx = w.protocol.as_mut().expect("Protocol context not initialized");
+    let ctx = w
+        .protocol
+        .as_mut()
+        .expect("Protocol context not initialized");
     let temp_dir = ctx.temp_dir.as_ref().expect("Temp dir not created");
     let file_path = temp_dir.path().join("reload-test.yaml");
 
@@ -388,7 +482,10 @@ async fn when_load_from_file(w: &mut AlephWorld) {
 
 #[when("I update the protocol file with v2 configuration")]
 async fn when_update_protocol_v2(w: &mut AlephWorld) {
-    let ctx = w.protocol.as_mut().expect("Protocol context not initialized");
+    let ctx = w
+        .protocol
+        .as_mut()
+        .expect("Protocol context not initialized");
     let temp_dir = ctx.temp_dir.as_ref().expect("Temp dir not created");
     let yaml_v2 = r#"
 name: reload-test
@@ -410,7 +507,10 @@ async fn when_reload_from_file(w: &mut AlephWorld) {
 
 #[when("I create a provider with v2 configuration")]
 async fn when_create_provider_v2(w: &mut AlephWorld) {
-    let ctx = w.protocol.as_mut().expect("Protocol context not initialized");
+    let ctx = w
+        .protocol
+        .as_mut()
+        .expect("Protocol context not initialized");
     let mut config = ProviderConfig::test_config("model-v2");
     config.protocol = Some("reload-test".to_string());
     config.api_key = Some("key-v2".to_string());
@@ -423,7 +523,10 @@ async fn when_create_provider_v2(w: &mut AlephWorld) {
 async fn when_load_from_dir(w: &mut AlephWorld) {
     use alephcore::providers::protocols::ProtocolLoader;
 
-    let ctx = w.protocol.as_mut().expect("Protocol context not initialized");
+    let ctx = w
+        .protocol
+        .as_mut()
+        .expect("Protocol context not initialized");
     let temp_dir = ctx.temp_dir.as_ref().expect("Temp dir not created");
 
     let result = ProtocolLoader::load_from_dir(temp_dir.path()).await;
@@ -437,7 +540,10 @@ async fn when_load_from_dir(w: &mut AlephWorld) {
 
 #[when("I create and register the protocol")]
 async fn when_create_and_register(w: &mut AlephWorld) {
-    let ctx = w.protocol.as_mut().expect("Protocol context not initialized");
+    let ctx = w
+        .protocol
+        .as_mut()
+        .expect("Protocol context not initialized");
     if let Err(e) = ctx.parse_yaml() {
         ctx.last_result = Some(Err(e));
         return;
@@ -451,7 +557,10 @@ async fn when_create_and_register(w: &mut AlephWorld) {
 
 #[when(expr = "I configure provider with max_tokens {int} and temperature {float}")]
 async fn when_configure_provider(w: &mut AlephWorld, max_tokens: u32, temperature: f64) {
-    let ctx = w.protocol.as_mut().expect("Protocol context not initialized");
+    let ctx = w
+        .protocol
+        .as_mut()
+        .expect("Protocol context not initialized");
     ctx.configure_provider("test-model-v2", Some(max_tokens), Some(temperature as f32));
 }
 
@@ -461,22 +570,40 @@ async fn when_configure_provider(w: &mut AlephWorld, max_tokens: u32, temperatur
 
 #[then(expr = "the protocol name should be {string}")]
 async fn then_protocol_name(w: &mut AlephWorld, expected: String) {
-    let ctx = w.protocol.as_ref().expect("Protocol context not initialized");
-    let def = ctx.protocol_def.as_ref().expect("Protocol definition not parsed");
+    let ctx = w
+        .protocol
+        .as_ref()
+        .expect("Protocol context not initialized");
+    let def = ctx
+        .protocol_def
+        .as_ref()
+        .expect("Protocol definition not parsed");
     assert_eq!(def.name, expected, "Protocol name mismatch");
 }
 
 #[then(expr = "the protocol should extend {string}")]
 async fn then_protocol_extends(w: &mut AlephWorld, expected: String) {
-    let ctx = w.protocol.as_ref().expect("Protocol context not initialized");
-    let def = ctx.protocol_def.as_ref().expect("Protocol definition not parsed");
+    let ctx = w
+        .protocol
+        .as_ref()
+        .expect("Protocol context not initialized");
+    let def = ctx
+        .protocol_def
+        .as_ref()
+        .expect("Protocol definition not parsed");
     assert_eq!(def.extends, Some(expected), "Protocol extends mismatch");
 }
 
 #[then("the protocol should have custom config")]
 async fn then_protocol_has_custom(w: &mut AlephWorld) {
-    let ctx = w.protocol.as_ref().expect("Protocol context not initialized");
-    let def = ctx.protocol_def.as_ref().expect("Protocol definition not parsed");
+    let ctx = w
+        .protocol
+        .as_ref()
+        .expect("Protocol context not initialized");
+    let def = ctx
+        .protocol_def
+        .as_ref()
+        .expect("Protocol definition not parsed");
     assert!(def.custom.is_some(), "Protocol should have custom config");
 }
 
@@ -486,7 +613,10 @@ async fn then_protocol_has_custom(w: &mut AlephWorld) {
 
 #[then("the protocol should be created successfully")]
 async fn then_protocol_created(w: &mut AlephWorld) {
-    let ctx = w.protocol.as_ref().expect("Protocol context not initialized");
+    let ctx = w
+        .protocol
+        .as_ref()
+        .expect("Protocol context not initialized");
     match &ctx.last_result {
         Some(Ok(())) => {}
         Some(Err(e)) => panic!("Protocol creation failed: {}", e),
@@ -496,7 +626,10 @@ async fn then_protocol_created(w: &mut AlephWorld) {
 
 #[then("protocol creation should fail")]
 async fn then_protocol_creation_fail(w: &mut AlephWorld) {
-    let ctx = w.protocol.as_ref().expect("Protocol context not initialized");
+    let ctx = w
+        .protocol
+        .as_ref()
+        .expect("Protocol context not initialized");
     match &ctx.last_result {
         Some(Err(_)) => {}
         Some(Ok(())) => panic!("Expected protocol creation to fail"),
@@ -510,40 +643,76 @@ async fn then_protocol_creation_fail(w: &mut AlephWorld) {
 
 #[then(expr = "the protocol should be retrievable as {string}")]
 async fn then_protocol_retrievable(w: &mut AlephWorld, name: String) {
-    let ctx = w.protocol.as_ref().expect("Protocol context not initialized");
-    assert!(ctx.is_protocol_registered(&name), "Protocol {} not in registry", name);
+    let ctx = w
+        .protocol
+        .as_ref()
+        .expect("Protocol context not initialized");
+    assert!(
+        ctx.is_protocol_registered(&name),
+        "Protocol {} not in registry",
+        name
+    );
 }
 
 #[then(expr = "the protocol should be registered as {string}")]
 async fn then_protocol_registered(w: &mut AlephWorld, name: String) {
-    let ctx = w.protocol.as_ref().expect("Protocol context not initialized");
-    assert!(ctx.is_protocol_registered(&name), "Protocol {} not in registry", name);
+    let ctx = w
+        .protocol
+        .as_ref()
+        .expect("Protocol context not initialized");
+    assert!(
+        ctx.is_protocol_registered(&name),
+        "Protocol {} not in registry",
+        name
+    );
 }
 
 #[then("all protocols should be retrievable")]
 async fn then_all_protocols_retrievable(w: &mut AlephWorld) {
-    let ctx = w.protocol.as_ref().expect("Protocol context not initialized");
+    let ctx = w
+        .protocol
+        .as_ref()
+        .expect("Protocol context not initialized");
     for name in &ctx.protocol_names {
-        assert!(ctx.is_protocol_registered(name), "Protocol {} not in registry", name);
+        assert!(
+            ctx.is_protocol_registered(name),
+            "Protocol {} not in registry",
+            name
+        );
     }
 }
 
 #[then(expr = "the registry should contain {string}")]
 async fn then_registry_contains(_w: &mut AlephWorld, name: String) {
     let protocols = ProtocolRegistry::global().list_protocols();
-    assert!(protocols.contains(&name), "Registry should contain {}", name);
+    assert!(
+        protocols.contains(&name),
+        "Registry should contain {}",
+        name
+    );
 }
 
 #[then(expr = "the registry should not contain {string}")]
 async fn then_registry_not_contains(_w: &mut AlephWorld, name: String) {
     let protocols = ProtocolRegistry::global().list_protocols();
-    assert!(!protocols.contains(&name), "Registry should not contain {}", name);
+    assert!(
+        !protocols.contains(&name),
+        "Registry should not contain {}",
+        name
+    );
 }
 
 #[then(expr = "protocol {string} should be registered")]
 async fn then_specific_protocol_registered(w: &mut AlephWorld, name: String) {
-    let ctx = w.protocol.as_ref().expect("Protocol context not initialized");
-    assert!(ctx.is_protocol_registered(&name), "Protocol {} not in registry", name);
+    let ctx = w
+        .protocol
+        .as_ref()
+        .expect("Protocol context not initialized");
+    assert!(
+        ctx.is_protocol_registered(&name),
+        "Protocol {} not in registry",
+        name
+    );
 }
 
 // =========================================================================
@@ -552,7 +721,10 @@ async fn then_specific_protocol_registered(w: &mut AlephWorld, name: String) {
 
 #[then("the provider should be created successfully")]
 async fn then_provider_created(w: &mut AlephWorld) {
-    let ctx = w.protocol.as_ref().expect("Protocol context not initialized");
+    let ctx = w
+        .protocol
+        .as_ref()
+        .expect("Protocol context not initialized");
     match &ctx.last_result {
         Some(Ok(())) => {}
         Some(Err(e)) => panic!("Provider creation failed: {}", e),
@@ -562,7 +734,10 @@ async fn then_provider_created(w: &mut AlephWorld) {
 
 #[then("all providers should be created successfully")]
 async fn then_all_providers_created(w: &mut AlephWorld) {
-    let ctx = w.protocol.as_ref().expect("Protocol context not initialized");
+    let ctx = w
+        .protocol
+        .as_ref()
+        .expect("Protocol context not initialized");
     match &ctx.last_result {
         Some(Ok(())) => {}
         Some(Err(e)) => panic!("Provider creation failed: {}", e),
@@ -572,7 +747,10 @@ async fn then_all_providers_created(w: &mut AlephWorld) {
 
 #[then("provider creation should fail")]
 async fn then_provider_creation_fail(w: &mut AlephWorld) {
-    let ctx = w.protocol.as_ref().expect("Protocol context not initialized");
+    let ctx = w
+        .protocol
+        .as_ref()
+        .expect("Protocol context not initialized");
     match &ctx.last_result {
         Some(Err(_)) => {}
         Some(Ok(())) => panic!("Expected provider creation to fail"),
@@ -582,7 +760,10 @@ async fn then_provider_creation_fail(w: &mut AlephWorld) {
 
 #[then(expr = "the provider name should be {string}")]
 async fn then_provider_name(w: &mut AlephWorld, expected: String) {
-    let ctx = w.protocol.as_ref().expect("Protocol context not initialized");
+    let ctx = w
+        .protocol
+        .as_ref()
+        .expect("Protocol context not initialized");
     let provider = ctx.provider.as_ref().expect("Provider not created");
     assert_eq!(provider.name(), expected, "Provider name mismatch");
 }
@@ -593,7 +774,10 @@ async fn then_provider_name(w: &mut AlephWorld, expected: String) {
 
 #[then("the request should be built successfully")]
 async fn then_request_built(w: &mut AlephWorld) {
-    let ctx = w.protocol.as_ref().expect("Protocol context not initialized");
+    let ctx = w
+        .protocol
+        .as_ref()
+        .expect("Protocol context not initialized");
     match &ctx.request_result {
         Some(Ok(())) => {}
         Some(Err(e)) => panic!("Request build failed: {}", e),
@@ -603,7 +787,10 @@ async fn then_request_built(w: &mut AlephWorld) {
 
 #[then("building the request should fail")]
 async fn then_request_build_fail(w: &mut AlephWorld) {
-    let ctx = w.protocol.as_ref().expect("Protocol context not initialized");
+    let ctx = w
+        .protocol
+        .as_ref()
+        .expect("Protocol context not initialized");
     match &ctx.request_result {
         Some(Err(_)) => {}
         Some(Ok(())) => panic!("Expected request build to fail"),
@@ -617,7 +804,10 @@ async fn then_request_build_fail(w: &mut AlephWorld) {
 
 #[then("parsing should fail")]
 async fn then_parsing_fail(w: &mut AlephWorld) {
-    let ctx = w.protocol.as_ref().expect("Protocol context not initialized");
+    let ctx = w
+        .protocol
+        .as_ref()
+        .expect("Protocol context not initialized");
     match &ctx.last_result {
         Some(Err(_)) => {}
         Some(Ok(())) => panic!("Expected parsing to fail"),

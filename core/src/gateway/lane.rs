@@ -40,12 +40,12 @@ impl Lane {
             "agent.run" | "chat.send" | "poe.run" | "poe.prepare" => Lane::Execute,
 
             // Mutate lane
-            "config.patch" | "config.apply" | "config.set" | "memory.store"
-            | "memory.delete" | "session.compact" | "session.delete" => Lane::Mutate,
+            "config.patch" | "config.apply" | "config.set" | "memory.store" | "memory.delete"
+            | "session.compact" | "session.delete" => Lane::Mutate,
 
             // System lane
-            "plugins.install" | "plugins.uninstall" | "skills.install"
-            | "skills.delete" | "logs.setLevel" => Lane::System,
+            "plugins.install" | "plugins.uninstall" | "skills.install" | "skills.delete"
+            | "logs.setLevel" => Lane::System,
 
             // Everything else is a query
             _ => Lane::Query,
@@ -132,7 +132,10 @@ impl LaneManager {
     /// Create a new `LaneManager` from the given configuration.
     pub fn new(config: LaneConfig) -> Self {
         let mut lanes = HashMap::new();
-        lanes.insert(Lane::Query, Arc::new(Semaphore::new(config.query_concurrency)));
+        lanes.insert(
+            Lane::Query,
+            Arc::new(Semaphore::new(config.query_concurrency)),
+        );
         lanes.insert(
             Lane::Execute,
             Arc::new(Semaphore::new(config.execute_concurrency)),
@@ -234,7 +237,10 @@ mod tests {
 
         // Second acquire should time out
         let result = manager.acquire("chat.send").await;
-        assert!(result.is_err(), "second acquire should fail (lane saturated)");
+        assert!(
+            result.is_err(),
+            "second acquire should fail (lane saturated)"
+        );
         match result.unwrap_err() {
             LaneError::Congested(lane) => {
                 assert_eq!(lane, Lane::Execute);

@@ -1,26 +1,30 @@
 //! Provider RPC handler functions.
 
-use serde_json::json;
 use crate::sync_primitives::Arc;
+use serde_json::json;
 use tokio::sync::RwLock;
 use tracing::{error, info};
 
-use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
-use crate::gateway::event_bus::{ConfigChangedEvent, GatewayEvent, GatewayEventBus};
-use crate::config::{Config, ProviderConfig};
-use crate::gateway::security::SharedTokenManager;
+use super::helpers::*;
 use super::parse_params;
 use super::types::*;
-use super::helpers::*;
-use crate::providers::message::UnifiedMessage;
+use crate::config::{Config, ProviderConfig};
+use crate::gateway::event_bus::{ConfigChangedEvent, GatewayEvent, GatewayEventBus};
+use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
+use crate::gateway::security::SharedTokenManager;
 use crate::providers::adapter::RequestPayload;
+use crate::providers::message::UnifiedMessage;
 
 // ============================================================================
 // List
 // ============================================================================
 
 /// List all providers
-pub async fn handle_list(request: JsonRpcRequest, config: Arc<RwLock<Config>>, vault: Arc<SharedTokenManager>) -> JsonRpcResponse {
+pub async fn handle_list(
+    request: JsonRpcRequest,
+    config: Arc<RwLock<Config>>,
+    vault: Arc<SharedTokenManager>,
+) -> JsonRpcResponse {
     let config = config.read().await;
     let default_provider = config.general.default_provider.clone();
 
@@ -53,7 +57,11 @@ pub async fn handle_list(request: JsonRpcRequest, config: Arc<RwLock<Config>>, v
 // ============================================================================
 
 /// Get a single provider
-pub async fn handle_get(request: JsonRpcRequest, config: Arc<RwLock<Config>>, vault: Arc<SharedTokenManager>) -> JsonRpcResponse {
+pub async fn handle_get(
+    request: JsonRpcRequest,
+    config: Arc<RwLock<Config>>,
+    vault: Arc<SharedTokenManager>,
+) -> JsonRpcResponse {
     let params: GetParams = match parse_params(&request) {
         Ok(p) => p,
         Err(e) => return e,
@@ -427,7 +435,10 @@ async fn handle_test_inner(
     // Test the connection with a simple ping
     let start = std::time::Instant::now();
     let ping_msgs = [UnifiedMessage::user("ping")];
-    match provider.process(RequestPayload::new(&ping_msgs).with_system(Some("Reply with 'pong'"))).await {
+    match provider
+        .process(RequestPayload::new(&ping_msgs).with_system(Some("Reply with 'pong'")))
+        .await
+    {
         Ok(_) => {
             let latency_ms = start.elapsed().as_millis() as u64;
 
@@ -478,7 +489,10 @@ async fn handle_test_inner(
 ///
 /// Returns true if no provider is both enabled and verified.
 /// Panel calls this on startup to decide whether to show the setup wizard.
-pub async fn handle_needs_setup(request: JsonRpcRequest, config_store: Arc<RwLock<Config>>) -> JsonRpcResponse {
+pub async fn handle_needs_setup(
+    request: JsonRpcRequest,
+    config_store: Arc<RwLock<Config>>,
+) -> JsonRpcResponse {
     let cfg = config_store.read().await;
     let provider_count = cfg.providers.len();
     let has_verified = cfg.providers.values().any(|p| p.enabled && p.verified);
@@ -523,7 +537,14 @@ pub async fn handle_set_default(
         Err(e) => return e,
     };
 
-    set_default_provider_inner(&request, &params, &config, &event_bus, Some(&multi_registry)).await
+    set_default_provider_inner(
+        &request,
+        &params,
+        &config,
+        &event_bus,
+        Some(&multi_registry),
+    )
+    .await
 }
 
 /// Shared implementation for setting the default provider
@@ -558,7 +579,10 @@ async fn set_default_provider_inner(
                 return JsonRpcResponse::error(
                     request.id.clone(),
                     INVALID_PARAMS,
-                    format!("Provider '{}' must pass a connection test before being set as default", name),
+                    format!(
+                        "Provider '{}' must pass a connection test before being set as default",
+                        name
+                    ),
                 );
             }
             _ => {}
@@ -566,7 +590,9 @@ async fn set_default_provider_inner(
 
         // Capture provider config before setting default (for runtime swap)
         provider_config_for_swap = if multi_registry.is_some() {
-            cfg.providers.get(&name).map(|pc| (name.clone(), pc.clone()))
+            cfg.providers
+                .get(&name)
+                .map(|pc| (name.clone(), pc.clone()))
         } else {
             None
         };
@@ -592,7 +618,9 @@ async fn set_default_provider_inner(
     }
 
     // Hot-swap the runtime provider using MultiProviderRegistry
-    if let (Some(registry), Some((name, provider_config))) = (multi_registry, provider_config_for_swap) {
+    if let (Some(registry), Some((name, provider_config))) =
+        (multi_registry, provider_config_for_swap)
+    {
         match crate::providers::create_provider(&name, provider_config) {
             Ok(new_provider) => {
                 registry.register(name.clone(), new_provider);

@@ -57,13 +57,18 @@ fn test_unified_tool_builder() {
 
 #[test]
 fn test_tool_to_prompt_line() {
-    let tool = UnifiedTool::new("native:search", "search", "Search the web", ToolSource::Native)
-        .with_parameters_schema(json!({
-            "properties": {
-                "query": {},
-                "limit": {}
-            }
-        }));
+    let tool = UnifiedTool::new(
+        "native:search",
+        "search",
+        "Search the web",
+        ToolSource::Native,
+    )
+    .with_parameters_schema(json!({
+        "properties": {
+            "query": {},
+            "limit": {}
+        }
+    }));
 
     let line = tool.to_prompt_line();
     assert!(line.contains("**search**"));
@@ -294,14 +299,9 @@ fn test_dispatch_mode_default() {
 
 #[test]
 fn test_dispatch_mode_builder() {
-    let tool = UnifiedTool::new(
-        "builtin:help",
-        "help",
-        "Show help",
-        ToolSource::Builtin,
-    )
-    .with_dispatch_mode(DispatchMode::Direct)
-    .with_visible_channels(vec![ChannelType::Panel, ChannelType::Cli]);
+    let tool = UnifiedTool::new("builtin:help", "help", "Show help", ToolSource::Builtin)
+        .with_dispatch_mode(DispatchMode::Direct)
+        .with_visible_channels(vec![ChannelType::Panel, ChannelType::Cli]);
 
     assert_eq!(tool.dispatch_mode, DispatchMode::Direct);
     assert_eq!(tool.visible_channels.len(), 2);

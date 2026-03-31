@@ -99,8 +99,7 @@ mod tests {
 
     #[test]
     fn test_config_builder() {
-        let config = RoutingConfig::new("custom-agent")
-            .with_dm_scope(DmScope::Main);
+        let config = RoutingConfig::new("custom-agent").with_dm_scope(DmScope::Main);
 
         assert_eq!(config.default_agent, "custom-agent");
         assert_eq!(config.dm_scope, DmScope::Main);

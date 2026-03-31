@@ -3,8 +3,8 @@
 //! Creates AI providers from environment variables or configuration.
 //! Primarily used by the Gateway to initialize the ExecutionEngine.
 
-use std::env;
 use crate::sync_primitives::Arc;
+use std::env;
 use tracing::info;
 
 use crate::config::ProviderConfig;
@@ -115,9 +115,7 @@ pub fn create_openai_provider_from_env() -> Result<Arc<dyn AiProvider>, Provider
         .unwrap_or_else(|| DEFAULT_OPENAI_MODEL.to_string());
 
     // Read optional base URL
-    let base_url = env::var("OPENAI_BASE_URL")
-        .ok()
-        .filter(|s| !s.is_empty());
+    let base_url = env::var("OPENAI_BASE_URL").ok().filter(|s| !s.is_empty());
 
     info!(
         model = %model,
@@ -162,7 +160,8 @@ pub fn create_openai_provider_from_env() -> Result<Arc<dyn AiProvider>, Provider
 /// Tries providers in order:
 /// 1. Anthropic (ANTHROPIC_API_KEY)
 /// 2. OpenAI (OPENAI_API_KEY)
-pub fn create_provider_registry_from_env() -> Result<Arc<SingleProviderRegistry>, ProviderFactoryError> {
+pub fn create_provider_registry_from_env(
+) -> Result<Arc<SingleProviderRegistry>, ProviderFactoryError> {
     // Try Anthropic first
     if let Ok(provider) = create_claude_provider_from_env() {
         return Ok(Arc::new(SingleProviderRegistry::new(provider)));

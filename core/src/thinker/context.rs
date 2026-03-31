@@ -67,7 +67,9 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::interaction::{Capability, InteractionConstraints, InteractionManifest, InteractionParadigm};
+use super::interaction::{
+    Capability, InteractionConstraints, InteractionManifest, InteractionParadigm,
+};
 use super::security_context::{SecurityContext, ToolPermission};
 use crate::agent_loop::ToolInfo;
 
@@ -136,7 +138,8 @@ impl EnvironmentContract {
 
         // Active capabilities
         if !self.active_capabilities.is_empty() {
-            let cap_hints: Vec<String> = self.active_capabilities
+            let cap_hints: Vec<String> = self
+                .active_capabilities
                 .iter()
                 .map(|c| {
                     let (name, hint) = c.prompt_hint();
@@ -160,10 +163,14 @@ impl EnvironmentContract {
 
         // Security notes
         if !self.security_notes.is_empty() {
-            parts.push(format!("Security:\n{}", self.security_notes.iter()
-                .map(|n| format!("- {}", n))
-                .collect::<Vec<_>>()
-                .join("\n")));
+            parts.push(format!(
+                "Security:\n{}",
+                self.security_notes
+                    .iter()
+                    .map(|n| format!("- {}", n))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            ));
         }
 
         parts.join("\n\n")
@@ -327,7 +334,9 @@ mod tests {
         let resolved = ContextAggregator::resolve(&interaction, &security, &tools);
 
         // Only read_skill should be available (web_search blocked by network policy)
-        let available_names: Vec<&str> = resolved.available_tools.iter()
+        let available_names: Vec<&str> = resolved
+            .available_tools
+            .iter()
             .map(|t| t.name.as_str())
             .collect();
         assert!(available_names.contains(&"read_skill"));
@@ -335,7 +344,9 @@ mod tests {
         assert!(!available_names.contains(&"exec"));
 
         // file_ops, exec should be in disabled list with BlockedByPolicy
-        let file_ops_disabled = resolved.disabled_tools.iter()
+        let file_ops_disabled = resolved
+            .disabled_tools
+            .iter()
             .find(|d| d.name == "file_ops");
         assert!(file_ops_disabled.is_some());
         assert!(matches!(
@@ -343,8 +354,7 @@ mod tests {
             DisableReason::BlockedByPolicy { .. }
         ));
 
-        let exec_disabled = resolved.disabled_tools.iter()
-            .find(|d| d.name == "exec");
+        let exec_disabled = resolved.disabled_tools.iter().find(|d| d.name == "exec");
         assert!(exec_disabled.is_some());
         assert!(matches!(
             exec_disabled.unwrap().reason,
@@ -358,23 +368,21 @@ mod tests {
         let interaction = InteractionManifest::new(InteractionParadigm::WebRich);
         let security = SecurityContext::standard_sandbox(PathBuf::from("/workspace"));
 
-        let tools = vec![
-            make_tool("web_search"),
-            make_tool("bash"),
-        ];
+        let tools = vec![make_tool("web_search"), make_tool("bash")];
 
         let resolved = ContextAggregator::resolve(&interaction, &security, &tools);
 
         // bash should be in available_tools
-        let available_names: Vec<&str> = resolved.available_tools.iter()
+        let available_names: Vec<&str> = resolved
+            .available_tools
+            .iter()
             .map(|t| t.name.as_str())
             .collect();
         assert!(available_names.contains(&"bash"));
         assert!(available_names.contains(&"web_search"));
 
         // bash should ALSO be in disabled_tools with RequiresApproval
-        let bash_disabled = resolved.disabled_tools.iter()
-            .find(|d| d.name == "bash");
+        let bash_disabled = resolved.disabled_tools.iter().find(|d| d.name == "bash");
         assert!(bash_disabled.is_some());
         assert!(matches!(
             bash_disabled.unwrap().reason,
@@ -382,7 +390,9 @@ mod tests {
         ));
 
         // web_search should NOT be in disabled_tools
-        let web_disabled = resolved.disabled_tools.iter()
+        let web_disabled = resolved
+            .disabled_tools
+            .iter()
             .find(|d| d.name == "web_search");
         assert!(web_disabled.is_none());
     }
@@ -401,7 +411,9 @@ mod tests {
 
         // Check capabilities (CLI has RichText, CodeHighlight, Streaming)
         assert!(contract.active_capabilities.contains(&Capability::RichText));
-        assert!(contract.active_capabilities.contains(&Capability::Streaming));
+        assert!(contract
+            .active_capabilities
+            .contains(&Capability::Streaming));
         assert!(!contract.active_capabilities.contains(&Capability::Canvas));
 
         // Check constraints
@@ -410,7 +422,10 @@ mod tests {
         // Check security notes (strict mode should have several notes)
         assert!(!contract.security_notes.is_empty());
         assert!(contract.security_notes.iter().any(|n| n.contains("Strict")));
-        assert!(contract.security_notes.iter().any(|n| n.contains("Network Access: Disabled")));
+        assert!(contract
+            .security_notes
+            .iter()
+            .any(|n| n.contains("Network Access: Disabled")));
     }
 
     #[test]
@@ -419,15 +434,14 @@ mod tests {
         let interaction = InteractionManifest::new(InteractionParadigm::CLI);
         let security = SecurityContext::permissive();
 
-        let tools = vec![
-            make_tool("web_search"),
-            make_tool("canvas"),
-        ];
+        let tools = vec![make_tool("web_search"), make_tool("canvas")];
 
         let resolved = ContextAggregator::resolve(&interaction, &security, &tools);
 
         // web_search should be available
-        let available_names: Vec<&str> = resolved.available_tools.iter()
+        let available_names: Vec<&str> = resolved
+            .available_tools
+            .iter()
             .map(|t| t.name.as_str())
             .collect();
         assert!(available_names.contains(&"web_search"));
@@ -436,8 +450,7 @@ mod tests {
         assert!(!available_names.contains(&"canvas"));
 
         // canvas should be in disabled_tools with UnsupportedByChannel
-        let canvas_disabled = resolved.disabled_tools.iter()
-            .find(|d| d.name == "canvas");
+        let canvas_disabled = resolved.disabled_tools.iter().find(|d| d.name == "canvas");
         assert!(canvas_disabled.is_some());
         assert!(matches!(
             canvas_disabled.unwrap().reason,

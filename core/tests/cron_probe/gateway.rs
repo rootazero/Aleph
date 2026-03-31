@@ -22,7 +22,13 @@ async fn service_create_and_list() {
     assert_eq!(v.id, "gateway-list-1");
     assert_eq!(v.name, "gateway-list-1");
     assert!(
-        matches!(v.schedule_kind, ScheduleKind::Every { every_ms: 30_000, .. }),
+        matches!(
+            v.schedule_kind,
+            ScheduleKind::Every {
+                every_ms: 30_000,
+                ..
+            }
+        ),
         "expected Every(30_000), got {:?}",
         v.schedule_kind,
     );

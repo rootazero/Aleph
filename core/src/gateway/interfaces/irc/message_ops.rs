@@ -170,16 +170,14 @@ impl IrcMessageOps {
 
         for chunk in &chunks {
             let raw = format!("PRIVMSG {} :{}\r\n", target, chunk);
-            write_tx.send(raw).await.map_err(|e| {
-                ChannelError::SendFailed(format!("IRC write channel closed: {e}"))
-            })?;
+            write_tx
+                .send(raw)
+                .await
+                .map_err(|e| ChannelError::SendFailed(format!("IRC write channel closed: {e}")))?;
         }
 
         Ok(SendResult {
-            message_id: MessageId::new(format!(
-                "irc-sent-{}",
-                Utc::now().timestamp_millis()
-            )),
+            message_id: MessageId::new(format!("irc-sent-{}", Utc::now().timestamp_millis())),
             timestamp: Utc::now(),
         })
     }
@@ -410,8 +408,7 @@ mod tests {
 
     #[test]
     fn test_parse_simple_privmsg() {
-        let line =
-            parse_irc_line(":nick!user@host PRIVMSG #channel :Hello world").unwrap();
+        let line = parse_irc_line(":nick!user@host PRIVMSG #channel :Hello world").unwrap();
         assert_eq!(line.prefix.as_deref(), Some("nick!user@host"));
         assert_eq!(line.command, "PRIVMSG");
         assert_eq!(line.params, vec!["#channel"]);
@@ -429,8 +426,7 @@ mod tests {
 
     #[test]
     fn test_parse_welcome() {
-        let line =
-            parse_irc_line(":server 001 nick :Welcome to IRC").unwrap();
+        let line = parse_irc_line(":server 001 nick :Welcome to IRC").unwrap();
         assert_eq!(line.prefix.as_deref(), Some("server"));
         assert_eq!(line.command, "001");
         assert_eq!(line.params, vec!["nick"]);
@@ -439,17 +435,11 @@ mod tests {
 
     #[test]
     fn test_parse_nick_in_use() {
-        let line = parse_irc_line(
-            ":server 433 * nick :Nickname is already in use",
-        )
-        .unwrap();
+        let line = parse_irc_line(":server 433 * nick :Nickname is already in use").unwrap();
         assert_eq!(line.prefix.as_deref(), Some("server"));
         assert_eq!(line.command, "433");
         assert_eq!(line.params, vec!["*", "nick"]);
-        assert_eq!(
-            line.trailing.as_deref(),
-            Some("Nickname is already in use")
-        );
+        assert_eq!(line.trailing.as_deref(), Some("Nickname is already in use"));
     }
 
     #[test]
@@ -479,8 +469,7 @@ mod tests {
 
     #[test]
     fn test_parse_join_with_trailing() {
-        let line =
-            parse_irc_line(":alice!alice@host JOIN :#channel").unwrap();
+        let line = parse_irc_line(":alice!alice@host JOIN :#channel").unwrap();
         assert_eq!(line.prefix.as_deref(), Some("alice!alice@host"));
         assert_eq!(line.command, "JOIN");
         assert!(line.params.is_empty());
@@ -489,8 +478,7 @@ mod tests {
 
     #[test]
     fn test_parse_join_without_trailing() {
-        let line =
-            parse_irc_line(":alice!alice@host JOIN #channel").unwrap();
+        let line = parse_irc_line(":alice!alice@host JOIN #channel").unwrap();
         assert_eq!(line.command, "JOIN");
         assert_eq!(line.params, vec!["#channel"]);
         assert!(line.trailing.is_none());
@@ -498,14 +486,10 @@ mod tests {
 
     #[test]
     fn test_parse_notice() {
-        let line = parse_irc_line(
-            ":NickServ!NickServ@services NOTICE bot :This nickname is registered",
-        )
-        .unwrap();
-        assert_eq!(
-            line.prefix.as_deref(),
-            Some("NickServ!NickServ@services")
-        );
+        let line =
+            parse_irc_line(":NickServ!NickServ@services NOTICE bot :This nickname is registered")
+                .unwrap();
+        assert_eq!(line.prefix.as_deref(), Some("NickServ!NickServ@services"));
         assert_eq!(line.command, "NOTICE");
         assert_eq!(line.params, vec!["bot"]);
         assert_eq!(
@@ -516,8 +500,7 @@ mod tests {
 
     #[test]
     fn test_parse_quit() {
-        let line =
-            parse_irc_line(":alice!alice@host QUIT :Leaving").unwrap();
+        let line = parse_irc_line(":alice!alice@host QUIT :Leaving").unwrap();
         assert_eq!(line.command, "QUIT");
         assert!(line.params.is_empty());
         assert_eq!(line.trailing.as_deref(), Some("Leaving"));
@@ -546,16 +529,10 @@ mod tests {
 
     #[test]
     fn test_parse_multiple_params() {
-        let line = parse_irc_line(
-            ":server 353 bot = #channel :alice bob charlie",
-        )
-        .unwrap();
+        let line = parse_irc_line(":server 353 bot = #channel :alice bob charlie").unwrap();
         assert_eq!(line.command, "353");
         assert_eq!(line.params, vec!["bot", "=", "#channel"]);
-        assert_eq!(
-            line.trailing.as_deref(),
-            Some("alice bob charlie")
-        );
+        assert_eq!(line.trailing.as_deref(), Some("alice bob charlie"));
     }
 
     #[test]
@@ -570,28 +547,16 @@ mod tests {
 
     #[test]
     fn test_parse_privmsg_dm() {
-        let line = parse_irc_line(
-            ":alice!alice@host PRIVMSG bot :Hey, private message",
-        )
-        .unwrap();
+        let line = parse_irc_line(":alice!alice@host PRIVMSG bot :Hey, private message").unwrap();
         assert_eq!(line.command, "PRIVMSG");
         assert_eq!(line.params, vec!["bot"]);
-        assert_eq!(
-            line.trailing.as_deref(),
-            Some("Hey, private message")
-        );
+        assert_eq!(line.trailing.as_deref(), Some("Hey, private message"));
     }
 
     #[test]
     fn test_parse_mode_with_prefix() {
-        let line = parse_irc_line(
-            ":ChanServ!ChanServ@services MODE #channel +o nick",
-        )
-        .unwrap();
-        assert_eq!(
-            line.prefix.as_deref(),
-            Some("ChanServ!ChanServ@services")
-        );
+        let line = parse_irc_line(":ChanServ!ChanServ@services MODE #channel +o nick").unwrap();
+        assert_eq!(line.prefix.as_deref(), Some("ChanServ!ChanServ@services"));
         assert_eq!(line.command, "MODE");
         assert_eq!(line.params, vec!["#channel", "+o", "nick"]);
         assert!(line.trailing.is_none());
@@ -618,10 +583,7 @@ mod tests {
 
     #[test]
     fn test_nick_from_prefix_complex() {
-        assert_eq!(
-            nick_from_prefix("alice!alice@host.example.com"),
-            "alice"
-        );
+        assert_eq!(nick_from_prefix("alice!alice@host.example.com"), "alice");
     }
 
     #[test]
@@ -802,10 +764,7 @@ mod tests {
         let config = make_config();
         let msg = convert_privmsg(&parsed, &channel_id, "alephbot", &config).unwrap();
 
-        assert_eq!(
-            msg.text,
-            "Check this: http://example.com:8080/path"
-        );
+        assert_eq!(msg.text, "Check this: http://example.com:8080/path");
     }
 
     #[test]

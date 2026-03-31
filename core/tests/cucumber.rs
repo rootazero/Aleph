@@ -4,8 +4,8 @@
 //! Run specific feature: cargo test --test cucumber -- tests/features/config/
 //! Run with tag: cargo test --test cucumber -- --tags @wip
 
-mod world;
 mod steps;
+mod world;
 
 use cucumber::World;
 use world::AlephWorld;

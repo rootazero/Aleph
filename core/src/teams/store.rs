@@ -9,9 +9,7 @@ use async_trait::async_trait;
 use rusqlite::{params, Connection, OptionalExtension};
 use tokio::sync::Mutex;
 
-use super::types::{
-    NewTeam, NewTeamMember, Team, TeamMember, TeamStatus, TeamSummary,
-};
+use super::types::{NewTeam, NewTeamMember, Team, TeamMember, TeamStatus, TeamSummary};
 use crate::error::AlephError;
 
 // ---------------------------------------------------------------------------
@@ -410,7 +408,6 @@ impl TeamStore for SqliteTeamStore {
 
         Ok(summaries)
     }
-
 }
 
 // ---------------------------------------------------------------------------

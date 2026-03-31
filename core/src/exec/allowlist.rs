@@ -8,7 +8,10 @@ pub fn match_allowlist<'a>(
     allowlist: &'a [AllowlistEntry],
     resolution: &CommandResolution,
 ) -> Option<&'a AllowlistEntry> {
-    allowlist.iter().find(|&entry| matches_entry(entry, resolution)).map(|v| v as _)
+    allowlist
+        .iter()
+        .find(|&entry| matches_entry(entry, resolution))
+        .map(|v| v as _)
 }
 
 /// Check if a resolution matches a single entry
@@ -45,7 +48,8 @@ fn matches_entry(entry: &AllowlistEntry, resolution: &CommandResolution) -> bool
                 .resolved_path
                 .as_ref()
                 .map(|p| {
-                    let filename = p.file_name()
+                    let filename = p
+                        .file_name()
                         .map(|f| f.to_string_lossy().to_string())
                         .unwrap_or_default();
                     glob_match(pattern, &filename)

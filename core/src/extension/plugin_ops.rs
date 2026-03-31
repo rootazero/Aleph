@@ -1,9 +1,9 @@
 //! Plugin execution operations for ExtensionManager
 
-use crate::extension::manifest;
-use crate::extension::types::*;
 use crate::extension::error::*;
+use crate::extension::manifest;
 use crate::extension::registry::PluginRegistry;
+use crate::extension::types::*;
 
 use super::ExtensionManager;
 
@@ -36,9 +36,9 @@ impl ExtensionManager {
     /// Ensure a plugin is loaded into the runtime.
     pub(crate) async fn ensure_plugin_loaded(&self, plugin_id: &str) -> ExtensionResult<()> {
         let registry = self.plugin_registry.read().await;
-        let record = registry.get_plugin(plugin_id).ok_or_else(|| {
-            ExtensionError::PluginNotFound(plugin_id.to_string())
-        })?;
+        let record = registry
+            .get_plugin(plugin_id)
+            .ok_or_else(|| ExtensionError::PluginNotFound(plugin_id.to_string()))?;
         let root_dir = record.root_dir.clone();
         drop(registry);
 
@@ -50,7 +50,10 @@ impl ExtensionManager {
         }
         let mut registry = self.plugin_registry.write().await;
         loader.load_plugin(&manifest, &mut registry)?;
-        tracing::info!(plugin_id = plugin_id, "Auto-loaded plugin for tool execution");
+        tracing::info!(
+            plugin_id = plugin_id,
+            "Auto-loaded plugin for tool execution"
+        );
         Ok(())
     }
 
@@ -86,7 +89,9 @@ impl ExtensionManager {
     }
 
     /// Get mutable access to the plugin registry.
-    pub async fn get_plugin_registry_mut(&self) -> tokio::sync::RwLockWriteGuard<'_, PluginRegistry> {
+    pub async fn get_plugin_registry_mut(
+        &self,
+    ) -> tokio::sync::RwLockWriteGuard<'_, PluginRegistry> {
         self.plugin_registry.write().await
     }
 
@@ -96,7 +101,10 @@ impl ExtensionManager {
     }
 
     /// Load a runtime plugin from a manifest.
-    pub async fn load_runtime_plugin(&self, manifest: &super::PluginManifest) -> ExtensionResult<()> {
+    pub async fn load_runtime_plugin(
+        &self,
+        manifest: &super::PluginManifest,
+    ) -> ExtensionResult<()> {
         let mut loader = self.plugin_loader.write().await;
         let mut registry = self.plugin_registry.write().await;
         loader.load_plugin(manifest, &mut registry)

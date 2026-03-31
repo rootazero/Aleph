@@ -3,9 +3,9 @@
 
 use crate::event::bus::EventBus;
 use crate::event::types::{AlephEvent, EventType};
-use async_trait::async_trait;
-use crate::sync_primitives::{AtomicBool, Ordering};
 use crate::sync_primitives::Arc;
+use crate::sync_primitives::{AtomicBool, Ordering};
+use async_trait::async_trait;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, trace};
 

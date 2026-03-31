@@ -3,10 +3,10 @@
 //! SessionStore is a simplified in-memory implementation for development/testing.
 //! Production uses the database-backed handlers in `db_handlers`.
 
+use crate::sync_primitives::Arc;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
 use tracing::debug;
 
@@ -96,11 +96,7 @@ impl SessionStore {
 
         sessions
             .iter()
-            .filter(|(_, data)| {
-                agent_id
-                    .map(|id| data.key.agent_id() == id)
-                    .unwrap_or(true)
-            })
+            .filter(|(_, data)| agent_id.map(|id| data.key.agent_id() == id).unwrap_or(true))
             .map(|(key, data)| self.data_to_info(key, data))
             .collect()
     }
@@ -185,10 +181,7 @@ impl Default for SessionStore {
 }
 
 /// Handle sessions.list RPC request
-pub async fn handle_list(
-    request: JsonRpcRequest,
-    store: Arc<SessionStore>,
-) -> JsonRpcResponse {
+pub async fn handle_list(request: JsonRpcRequest, store: Arc<SessionStore>) -> JsonRpcResponse {
     let agent_id = request
         .params
         .as_ref()
@@ -207,10 +200,7 @@ pub async fn handle_list(
 }
 
 /// Handle sessions.history RPC request
-pub async fn handle_history(
-    request: JsonRpcRequest,
-    store: Arc<SessionStore>,
-) -> JsonRpcResponse {
+pub async fn handle_history(request: JsonRpcRequest, store: Arc<SessionStore>) -> JsonRpcResponse {
     let params = match &request.params {
         Some(Value::Object(map)) => map,
         _ => {
@@ -244,10 +234,7 @@ pub async fn handle_history(
 }
 
 /// Handle sessions.reset RPC request
-pub async fn handle_reset(
-    request: JsonRpcRequest,
-    store: Arc<SessionStore>,
-) -> JsonRpcResponse {
+pub async fn handle_reset(request: JsonRpcRequest, store: Arc<SessionStore>) -> JsonRpcResponse {
     let session_key = match &request.params {
         Some(Value::Object(map)) => map.get("session_key").and_then(|v| v.as_str()),
         _ => None,
@@ -269,10 +256,7 @@ pub async fn handle_reset(
 }
 
 /// Handle sessions.delete RPC request
-pub async fn handle_delete(
-    request: JsonRpcRequest,
-    store: Arc<SessionStore>,
-) -> JsonRpcResponse {
+pub async fn handle_delete(request: JsonRpcRequest, store: Arc<SessionStore>) -> JsonRpcResponse {
     let session_key = match &request.params {
         Some(Value::Object(map)) => map.get("session_key").and_then(|v| v.as_str()),
         _ => None,
@@ -294,10 +278,7 @@ pub async fn handle_delete(
 }
 
 /// Handle session.compact — compress session history by summarizing older messages
-pub async fn handle_compact(
-    request: JsonRpcRequest,
-    store: Arc<SessionStore>,
-) -> JsonRpcResponse {
+pub async fn handle_compact(request: JsonRpcRequest, store: Arc<SessionStore>) -> JsonRpcResponse {
     #[derive(Deserialize)]
     struct CompactParams {
         session_key: String,
@@ -342,9 +323,13 @@ pub async fn handle_compact(
 
     // Reset session and re-add summary + recent messages
     store.reset(&params.session_key).await;
-    store.add_message(&params.session_key, "system", &summary).await;
+    store
+        .add_message(&params.session_key, "system", &summary)
+        .await;
     for msg in &messages[before_count - keep_count..] {
-        store.add_message(&params.session_key, &msg.role, &msg.content).await;
+        store
+            .add_message(&params.session_key, &msg.role, &msg.content)
+            .await;
     }
 
     let after_count = keep_count + 1; // kept messages + summary
@@ -442,7 +427,9 @@ mod tests {
 
         store.get_or_create(&SessionKey::main("main")).await;
         store.get_or_create(&SessionKey::main("work")).await;
-        store.get_or_create(&SessionKey::peer("main", "window-1")).await;
+        store
+            .get_or_create(&SessionKey::peer("main", "window-1"))
+            .await;
 
         let all = store.list(None).await;
         assert_eq!(all.len(), 3);
@@ -459,7 +446,9 @@ mod tests {
 
         store.get_or_create(&key).await;
         for i in 0..10 {
-            store.add_message(&key_str, "user", &format!("Message {}", i)).await;
+            store
+                .add_message(&key_str, "user", &format!("Message {}", i))
+                .await;
         }
 
         let limited = store.get_history(&key_str, Some(3)).await.unwrap();

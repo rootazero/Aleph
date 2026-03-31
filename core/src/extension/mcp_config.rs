@@ -75,12 +75,8 @@ pub fn read_mcp_json(
         ExtensionError::config_parse(&mcp_path, format!("Failed to read .mcp.json: {}", e))
     })?;
 
-    parse_mcp_json_content(&content, plugin_dir, plugin_id).map_err(|e| {
-        ExtensionError::config_parse(
-            &mcp_path,
-            format!("Invalid .mcp.json: {}", e),
-        )
-    })
+    parse_mcp_json_content(&content, plugin_dir, plugin_id)
+        .map_err(|e| ExtensionError::config_parse(&mcp_path, format!("Invalid .mcp.json: {}", e)))
 }
 
 /// Parse .mcp.json content and return MCP manager configs.
@@ -160,20 +156,13 @@ mod tests {
         assert_eq!(config.command, Some("node".to_string()));
         assert_eq!(
             config.args,
-            vec![
-                "/plugins/test-plugin/src/server.js",
-                "--port",
-                "3000"
-            ]
+            vec!["/plugins/test-plugin/src/server.js", "--port", "3000"]
         );
         assert_eq!(
             config.env.get("PLUGIN_DIR"),
             Some(&"/plugins/test-plugin".to_string())
         );
-        assert_eq!(
-            config.env.get("NODE_ENV"),
-            Some(&"production".to_string())
-        );
+        assert_eq!(config.env.get("NODE_ENV"), Some(&"production".to_string()));
         assert!(config.auto_start);
     }
 
@@ -192,8 +181,7 @@ mod tests {
             }
         }"#;
 
-        let result =
-            parse_mcp_json_content(content, Path::new("/plugins/multi"), "multi").unwrap();
+        let result = parse_mcp_json_content(content, Path::new("/plugins/multi"), "multi").unwrap();
 
         assert_eq!(result.len(), 2);
         assert!(result.contains_key("plugin:multi/alpha"));
@@ -204,8 +192,7 @@ mod tests {
     fn test_parse_mcp_json_empty_servers() {
         let content = r#"{ "mcpServers": {} }"#;
 
-        let result =
-            parse_mcp_json_content(content, Path::new("/plugins/empty"), "empty").unwrap();
+        let result = parse_mcp_json_content(content, Path::new("/plugins/empty"), "empty").unwrap();
 
         assert!(result.is_empty());
     }
@@ -229,10 +216,7 @@ mod tests {
         );
         // Both in same string
         assert_eq!(
-            substitute_vars(
-                "${ALEPH_PLUGIN_ROOT}:${CLAUDE_PLUGIN_ROOT}",
-                "/root"
-            ),
+            substitute_vars("${ALEPH_PLUGIN_ROOT}:${CLAUDE_PLUGIN_ROOT}", "/root"),
             "/root:/root"
         );
         // No vars
@@ -253,8 +237,7 @@ mod tests {
             }
         }"#;
 
-        let result =
-            parse_mcp_json_content(content, Path::new("/p/a"), "my-plugin").unwrap();
+        let result = parse_mcp_json_content(content, Path::new("/p/a"), "my-plugin").unwrap();
 
         // Server ID should be namespaced with plugin ID
         assert!(result.contains_key("plugin:my-plugin/srv"));

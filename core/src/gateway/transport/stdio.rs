@@ -38,10 +38,10 @@
 //! # }
 //! ```
 
+use crate::sync_primitives::Arc;
+use crate::sync_primitives::{AtomicBool, AtomicU64, Ordering};
 use std::collections::HashMap;
 use std::fmt;
-use crate::sync_primitives::{AtomicBool, AtomicU64, Ordering};
-use crate::sync_primitives::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -493,10 +493,7 @@ mod tests {
                 "{{\"jsonrpc\":\"2.0\",\"id\":{},\"result\":{{\"ok\":true}}}}\n",
                 id
             );
-            server_writer
-                .write_all(response.as_bytes())
-                .await
-                .unwrap();
+            server_writer.write_all(response.as_bytes()).await.unwrap();
             server_writer.flush().await.unwrap();
         });
 
@@ -516,7 +513,8 @@ mod tests {
         transport.set_connected();
 
         // Write an event notification (no id, has method).
-        let event_json = "{\"jsonrpc\":\"2.0\",\"method\":\"event\",\"params\":{\"type\":\"ready\"}}\n";
+        let event_json =
+            "{\"jsonrpc\":\"2.0\",\"method\":\"event\",\"params\":{\"type\":\"ready\"}}\n";
         server_writer
             .write_all(event_json.as_bytes())
             .await
@@ -553,9 +551,7 @@ mod tests {
         let (transport, _server_reader, _server_writer) = make_test_transport();
         // Do not call set_connected().
 
-        let result = transport
-            .request("test", serde_json::Value::Null)
-            .await;
+        let result = transport.request("test", serde_json::Value::Null).await;
         assert!(matches!(result, Err(TransportError::NotConnected)));
     }
 

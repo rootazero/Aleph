@@ -16,16 +16,19 @@ mod semantic_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::EmbeddingProvider;
     use crate::memory::embedding_provider::tests::MockEmbeddingProvider;
     use crate::memory::store::{LanceMemoryBackend, MemoryBackend};
+    use crate::memory::EmbeddingProvider;
     use crate::sync_primitives::Arc;
     use tempfile::tempdir;
 
     fn create_test_db(temp_dir: &std::path::Path) -> MemoryBackend {
         let db_path = temp_dir.join("lance_db");
         let rt = tokio::runtime::Runtime::new().unwrap();
-        Arc::new(rt.block_on(LanceMemoryBackend::open_or_create(&db_path)).unwrap())
+        Arc::new(
+            rt.block_on(LanceMemoryBackend::open_or_create(&db_path))
+                .unwrap(),
+        )
     }
 
     // NOTE: test_index_turn_basic removed - requires StateDatabase-specific
@@ -43,7 +46,8 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let db = create_test_db(temp_dir.path());
         let embedder = {
-            let mock: Arc<dyn EmbeddingProvider> = Arc::new(MockEmbeddingProvider::new(1024, "mock-model"));
+            let mock: Arc<dyn EmbeddingProvider> =
+                Arc::new(MockEmbeddingProvider::new(1024, "mock-model"));
             mock
         };
 
@@ -65,20 +69,21 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let db = create_test_db(temp_dir.path());
         let embedder = {
-            let mock: Arc<dyn EmbeddingProvider> = Arc::new(MockEmbeddingProvider::new(1024, "mock-model"));
+            let mock: Arc<dyn EmbeddingProvider> =
+                Arc::new(MockEmbeddingProvider::new(1024, "mock-model"));
             mock
         };
 
         let indexer = TranscriptIndexer::new(db, embedder);
 
         // Test token estimation
-        let text = "1234";  // 4 chars = 1 token
+        let text = "1234"; // 4 chars = 1 token
         assert_eq!(indexer.estimate_tokens(text), 1);
 
-        let text = "12345678";  // 8 chars = 2 tokens
+        let text = "12345678"; // 8 chars = 2 tokens
         assert_eq!(indexer.estimate_tokens(text), 2);
 
-        let text = "123456789";  // 9 chars = 3 tokens (rounded up)
+        let text = "123456789"; // 9 chars = 3 tokens (rounded up)
         assert_eq!(indexer.estimate_tokens(text), 3);
     }
 
@@ -102,7 +107,7 @@ mod tests {
     fn test_chunk_long_text() {
         // Test that long text is chunked
         let config = TranscriptIndexerConfig {
-            max_tokens_per_chunk: 50,  // Small for testing
+            max_tokens_per_chunk: 50, // Small for testing
             overlap_tokens: 10,
             enable_chunking: true,
         };
@@ -112,12 +117,20 @@ mod tests {
         let chunks = chunk_text_helper(&long_text, &config);
 
         // Should have multiple chunks
-        assert!(chunks.len() > 1, "Expected multiple chunks, got {}", chunks.len());
+        assert!(
+            chunks.len() > 1,
+            "Expected multiple chunks, got {}",
+            chunks.len()
+        );
 
         // Each chunk should be within token limit (with some margin)
         for chunk in &chunks {
             let tokens = estimate_tokens_helper(chunk);
-            assert!(tokens <= config.max_tokens_per_chunk + 20, "Chunk too large: {} tokens", tokens);
+            assert!(
+                tokens <= config.max_tokens_per_chunk + 20,
+                "Chunk too large: {} tokens",
+                tokens
+            );
         }
     }
 
@@ -129,14 +142,22 @@ mod tests {
             enable_chunking: true,
         };
 
-        let text = "First sentence. Second sentence. Third sentence. Fourth sentence. Fifth sentence.";
+        let text =
+            "First sentence. Second sentence. Third sentence. Fourth sentence. Fifth sentence.";
         let chunks = chunk_text_helper(text, &config);
 
         if chunks.len() > 1 {
             // Check that consecutive chunks have overlap
             for i in 0..chunks.len() - 1 {
                 // Use char-based slicing to avoid panics on multi-byte chars
-                let current_end: String = chunks[i].chars().rev().take(40).collect::<Vec<_>>().into_iter().rev().collect();
+                let current_end: String = chunks[i]
+                    .chars()
+                    .rev()
+                    .take(40)
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .collect();
                 let next_start: String = chunks[i + 1].chars().take(40).collect();
 
                 // There should be some common text
@@ -151,7 +172,7 @@ mod tests {
         let config = TranscriptIndexerConfig {
             max_tokens_per_chunk: 50,
             overlap_tokens: 10,
-            enable_chunking: false,  // Disabled
+            enable_chunking: false, // Disabled
         };
 
         let long_text = "word ".repeat(200);
@@ -181,7 +202,9 @@ mod tests {
         for sentence in sentences {
             let sentence_tokens = estimate_tokens_helper(sentence);
 
-            if current_tokens + sentence_tokens > config.max_tokens_per_chunk && !current_chunk.is_empty() {
+            if current_tokens + sentence_tokens > config.max_tokens_per_chunk
+                && !current_chunk.is_empty()
+            {
                 chunks.push(current_chunk.clone());
 
                 // Add overlap from previous chunk (UTF-8 safe)
@@ -221,6 +244,6 @@ mod tests {
     }
 
     fn estimate_tokens_helper(text: &str) -> usize {
-        text.len().div_ceil(4)  // 4 chars per token, round up
+        text.len().div_ceil(4) // 4 chars per token, round up
     }
 }

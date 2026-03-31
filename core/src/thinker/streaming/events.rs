@@ -9,32 +9,19 @@ use serde::{Deserialize, Serialize};
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum StreamEvent {
     /// Assistant message started
-    AssistantStart {
-        message_index: u32,
-    },
+    AssistantStart { message_index: u32 },
 
     /// Text content delta
-    TextDelta {
-        delta: String,
-        accumulated: String,
-    },
+    TextDelta { delta: String, accumulated: String },
 
     /// Thinking content delta
-    ThinkingDelta {
-        delta: String,
-        accumulated: String,
-    },
+    ThinkingDelta { delta: String, accumulated: String },
 
     /// Thinking block completed
-    ThinkingComplete {
-        content: String,
-    },
+    ThinkingComplete { content: String },
 
     /// Tool execution started
-    ToolStart {
-        tool_id: String,
-        tool_name: String,
-    },
+    ToolStart { tool_id: String, tool_name: String },
 
     /// Tool execution completed
     ToolComplete {
@@ -43,10 +30,7 @@ pub enum StreamEvent {
     },
 
     /// Block reply (for TTS/chunked output)
-    BlockReply {
-        text: String,
-        is_final: bool,
-    },
+    BlockReply { text: String, is_final: bool },
 
     /// Assistant message completed
     AssistantComplete {
@@ -56,10 +40,7 @@ pub enum StreamEvent {
     },
 
     /// Error occurred
-    Error {
-        message: String,
-        recoverable: bool,
-    },
+    Error { message: String, recoverable: bool },
 }
 
 /// Token usage statistics

@@ -96,16 +96,31 @@ pub struct RateLimitConfig {
     pub exempt_loopback: bool,
 }
 
-impl RateLimitConfig {
-}
+impl RateLimitConfig {}
 
 impl Default for RateLimitConfig {
     fn default() -> Self {
         Self {
-            auth: WindowConfig { max_requests: 10, window_secs: 60, lockout_secs: Some(300) },
-            rpc_default: WindowConfig { max_requests: 100, window_secs: 60, lockout_secs: None },
-            rpc_write: WindowConfig { max_requests: 20, window_secs: 60, lockout_secs: None },
-            rpc_heavy: WindowConfig { max_requests: 5, window_secs: 60, lockout_secs: None },
+            auth: WindowConfig {
+                max_requests: 10,
+                window_secs: 60,
+                lockout_secs: Some(300),
+            },
+            rpc_default: WindowConfig {
+                max_requests: 100,
+                window_secs: 60,
+                lockout_secs: None,
+            },
+            rpc_write: WindowConfig {
+                max_requests: 20,
+                window_secs: 60,
+                lockout_secs: None,
+            },
+            rpc_heavy: WindowConfig {
+                max_requests: 5,
+                window_secs: 60,
+                lockout_secs: None,
+            },
             exempt_loopback: true,
         }
     }
@@ -145,11 +160,23 @@ pub enum RateLimitError {
 impl fmt::Display for RateLimitError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Exceeded { scope, retry_after_ms } => {
-                write!(f, "rate limit exceeded for {scope}, retry after {retry_after_ms}ms")
+            Self::Exceeded {
+                scope,
+                retry_after_ms,
+            } => {
+                write!(
+                    f,
+                    "rate limit exceeded for {scope}, retry after {retry_after_ms}ms"
+                )
             }
-            Self::LockedOut { scope, lockout_remaining_ms } => {
-                write!(f, "locked out for {scope}, remaining {lockout_remaining_ms}ms")
+            Self::LockedOut {
+                scope,
+                lockout_remaining_ms,
+            } => {
+                write!(
+                    f,
+                    "locked out for {scope}, remaining {lockout_remaining_ms}ms"
+                )
             }
         }
     }
@@ -161,12 +188,14 @@ impl RateLimitError {
     /// Convert to an HTTP 429 JSON body suitable for JSON-RPC error responses.
     pub fn to_jsonrpc_error(&self) -> String {
         let (retry_after_ms, message) = match self {
-            Self::Exceeded { scope, retry_after_ms } => {
-                (*retry_after_ms, format!("Rate limit exceeded for {scope}"))
-            }
-            Self::LockedOut { scope, lockout_remaining_ms } => {
-                (*lockout_remaining_ms, format!("Locked out for {scope}"))
-            }
+            Self::Exceeded {
+                scope,
+                retry_after_ms,
+            } => (*retry_after_ms, format!("Rate limit exceeded for {scope}")),
+            Self::LockedOut {
+                scope,
+                lockout_remaining_ms,
+            } => (*lockout_remaining_ms, format!("Locked out for {scope}")),
         };
         format!(
             r#"{{"jsonrpc":"2.0","error":{{"code":-32029,"message":"{}","data":{{"retry_after_ms":{}}}}},"id":null}}"#,
@@ -178,7 +207,10 @@ impl RateLimitError {
     pub fn retry_after_secs(&self) -> u64 {
         let ms = match self {
             Self::Exceeded { retry_after_ms, .. } => *retry_after_ms,
-            Self::LockedOut { lockout_remaining_ms, .. } => *lockout_remaining_ms,
+            Self::LockedOut {
+                lockout_remaining_ms,
+                ..
+            } => *lockout_remaining_ms,
         };
         ms.div_ceil(1000)
     }
@@ -240,7 +272,10 @@ impl RateLimiter {
         let max = wc.max_requests;
         let now = Instant::now();
 
-        let mut entry = self.windows.entry(key.clone()).or_insert_with(SlidingWindow::new);
+        let mut entry = self
+            .windows
+            .entry(key.clone())
+            .or_insert_with(SlidingWindow::new);
         let sw = entry.value_mut();
 
         // 1. Check lockout
@@ -279,7 +314,10 @@ impl RateLimiter {
             }
 
             // No lockout — compute retry_after from oldest timestamp
-            let oldest = sw.timestamps.front().expect("timestamps non-empty when over limit");
+            let oldest = sw
+                .timestamps
+                .front()
+                .expect("timestamps non-empty when over limit");
             let expires_at = *oldest + window_dur;
             let retry_after = if expires_at > now {
                 expires_at.duration_since(now)
@@ -325,10 +363,8 @@ impl RateLimiter {
 pub fn scope_for_method(method: &str) -> RateLimitScope {
     match method {
         // State-changing writes
-        "config.patch" | "config.apply" | "config.set"
-        | "memory.store" | "memory.delete"
-        | "session.compact" | "session.delete"
-        | "plugins.install" | "plugins.uninstall"
+        "config.patch" | "config.apply" | "config.set" | "memory.store" | "memory.delete"
+        | "session.compact" | "session.delete" | "plugins.install" | "plugins.uninstall"
         | "skills.install" | "skills.delete" => RateLimitScope::RpcWrite,
 
         // Resource-intensive operations
@@ -348,7 +384,9 @@ pub fn scope_for_method(method: &str) -> RateLimitScope {
 /// Handles both bare IPs ("127.0.0.1") and socket-address strings
 /// that include a port suffix ("127.0.0.1:54321", "[::1]:8080").
 fn is_loopback(identity: &str) -> bool {
-    identity == "127.0.0.1" || identity == "::1" || identity == "localhost"
+    identity == "127.0.0.1"
+        || identity == "::1"
+        || identity == "localhost"
         || identity.starts_with("127.0.0.1:")
         || identity.starts_with("[::1]:")
 }
@@ -434,9 +472,15 @@ mod tests {
         // 4th triggers lockout
         let err = limiter.check_and_record(&key).unwrap_err();
         match err {
-            RateLimitError::LockedOut { scope, lockout_remaining_ms } => {
+            RateLimitError::LockedOut {
+                scope,
+                lockout_remaining_ms,
+            } => {
                 assert_eq!(scope, RateLimitScope::Auth);
-                assert!(lockout_remaining_ms > 0, "lockout should have positive remaining time");
+                assert!(
+                    lockout_remaining_ms > 0,
+                    "lockout should have positive remaining time"
+                );
             }
             other => panic!("expected LockedOut, got: {other:?}"),
         }
@@ -468,7 +512,10 @@ mod tests {
         for _ in 0..3 {
             limiter.check_and_record(&auth_key).unwrap();
         }
-        assert!(limiter.check_and_record(&auth_key).is_err(), "auth should be exhausted");
+        assert!(
+            limiter.check_and_record(&auth_key).is_err(),
+            "auth should be exhausted"
+        );
 
         // RpcDefault should still work
         let rpc_key = RateLimitKey::new(identity, RateLimitScope::RpcDefault);
@@ -482,11 +529,17 @@ mod tests {
     fn test_scope_for_method() {
         // RpcWrite methods
         for method in &[
-            "config.patch", "config.apply", "config.set",
-            "memory.store", "memory.delete",
-            "session.compact", "session.delete",
-            "plugins.install", "plugins.uninstall",
-            "skills.install", "skills.delete",
+            "config.patch",
+            "config.apply",
+            "config.set",
+            "memory.store",
+            "memory.delete",
+            "session.compact",
+            "session.delete",
+            "plugins.install",
+            "plugins.uninstall",
+            "skills.install",
+            "skills.delete",
         ] {
             assert_eq!(
                 scope_for_method(method),
@@ -507,7 +560,10 @@ mod tests {
         // Default
         assert_eq!(scope_for_method("session.list"), RateLimitScope::RpcDefault);
         assert_eq!(scope_for_method("config.get"), RateLimitScope::RpcDefault);
-        assert_eq!(scope_for_method("unknown.method"), RateLimitScope::RpcDefault);
+        assert_eq!(
+            scope_for_method("unknown.method"),
+            RateLimitScope::RpcDefault
+        );
     }
 
     #[test]

@@ -4,13 +4,13 @@
 //! that tracks context window pressure across turns and issues directives to the
 //! agent loop (compact, force final reply, or stop on diminishing returns).
 
-pub mod pressure;
-pub mod pipeline;
 pub mod diagnostics;
+pub mod pipeline;
+pub mod pressure;
 
+use super::tool::ToolDefinition;
 use crate::memory::session_compactor::context_window::{estimate_tokens, estimate_total_tokens};
 use crate::providers::message::UnifiedMessage;
-use super::tool::ToolDefinition;
 
 // =============================================================================
 // ContextPressure
@@ -378,8 +378,16 @@ mod tests {
     fn test_diminishing_returns_not_enough_history() {
         let mut dr = DiminishingReturnsDetector::new(4, 500);
         // Only 2 unproductive turns — not enough for window of 4
-        assert!(!dr.record(TurnMetrics { output_tokens: 10, tool_calls: 1, productive: false }));
-        assert!(!dr.record(TurnMetrics { output_tokens: 10, tool_calls: 1, productive: false }));
+        assert!(!dr.record(TurnMetrics {
+            output_tokens: 10,
+            tool_calls: 1,
+            productive: false
+        }));
+        assert!(!dr.record(TurnMetrics {
+            output_tokens: 10,
+            tool_calls: 1,
+            productive: false
+        }));
     }
 
     #[test]
@@ -429,8 +437,16 @@ mod tests {
             ..default_config()
         };
         let mut budget = ContextBudget::new(&config);
-        budget.after_turn(TurnMetrics { output_tokens: 10, tool_calls: 1, productive: false });
-        let directive = budget.after_turn(TurnMetrics { output_tokens: 10, tool_calls: 1, productive: false });
+        budget.after_turn(TurnMetrics {
+            output_tokens: 10,
+            tool_calls: 1,
+            productive: false,
+        });
+        let directive = budget.after_turn(TurnMetrics {
+            output_tokens: 10,
+            tool_calls: 1,
+            productive: false,
+        });
         assert_eq!(directive, LoopDirective::StopDiminishing);
     }
 

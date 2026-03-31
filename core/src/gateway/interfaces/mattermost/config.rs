@@ -55,9 +55,7 @@ impl MattermostConfig {
             return Err("server_url is required".to_string());
         }
         if !self.server_url.starts_with("http://") && !self.server_url.starts_with("https://") {
-            return Err(
-                "server_url must start with 'http://' or 'https://'".to_string(),
-            );
+            return Err("server_url must start with 'http://' or 'https://'".to_string());
         }
         if self.bot_token.is_empty() {
             return Err("bot_token is required".to_string());
@@ -235,8 +233,7 @@ mod tests {
 
     #[test]
     fn test_serde_defaults() {
-        let json =
-            r#"{"server_url": "https://mm.example.com", "bot_token": "test-token"}"#;
+        let json = r#"{"server_url": "https://mm.example.com", "bot_token": "test-token"}"#;
         let config: MattermostConfig = serde_json::from_str(json).unwrap();
 
         assert!(config.send_typing);

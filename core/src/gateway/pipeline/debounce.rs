@@ -176,10 +176,7 @@ impl DebounceBuffer {
     }
 
     /// Extract and remove a batch from the pending map, aborting its timer.
-    fn take_batch(
-        pending: &mut HashMap<String, DebounceBatch>,
-        key: &str,
-    ) -> Vec<InboundContext> {
+    fn take_batch(pending: &mut HashMap<String, DebounceBatch>, key: &str) -> Vec<InboundContext> {
         if let Some(mut batch) = pending.remove(key) {
             if let Some(handle) = batch.timer_handle.take() {
                 handle.abort();
@@ -201,9 +198,7 @@ mod tests {
     use chrono::Utc;
     use tokio::sync::Notify;
 
-    use crate::gateway::channel::{
-        ChannelId, ConversationId, InboundMessage, MessageId, UserId,
-    };
+    use crate::gateway::channel::{ChannelId, ConversationId, InboundMessage, MessageId, UserId};
     use crate::gateway::inbound_context::ReplyRoute;
     use crate::gateway::router::SessionKey;
 
@@ -248,11 +243,7 @@ mod tests {
         InboundContext::new(msg, route, session_key)
     }
 
-    fn make_context_with_channel(
-        text: &str,
-        msg_id: &str,
-        channel_id: &str,
-    ) -> InboundContext {
+    fn make_context_with_channel(text: &str, msg_id: &str, channel_id: &str) -> InboundContext {
         let msg = InboundMessage {
             id: MessageId::new(msg_id),
             channel_id: ChannelId::new(channel_id),
@@ -266,10 +257,7 @@ mod tests {
             is_group: false,
             raw: None,
         };
-        let route = ReplyRoute::new(
-            ChannelId::new(channel_id),
-            ConversationId::new("conv-1"),
-        );
+        let route = ReplyRoute::new(ChannelId::new(channel_id), ConversationId::new("conv-1"));
         let session_key = SessionKey::main("main");
         InboundContext::new(msg, route, session_key)
     }

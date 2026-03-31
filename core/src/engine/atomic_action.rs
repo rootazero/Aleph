@@ -103,7 +103,10 @@ impl AtomicAction {
 
     /// Check if this action is read-only
     pub fn is_read_only(&self) -> bool {
-        matches!(self, AtomicAction::Read { .. } | AtomicAction::Search { .. })
+        matches!(
+            self,
+            AtomicAction::Read { .. } | AtomicAction::Search { .. }
+        )
     }
 
     /// Check if this action modifies the filesystem
@@ -173,7 +176,6 @@ pub enum WriteMode {
     /// Create only if file doesn't exist (fail if exists)
     CreateOnly,
 }
-
 
 /// Search pattern types
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

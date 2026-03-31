@@ -10,17 +10,17 @@
 //! 3. Replacing old parts with the summary
 
 // Submodules
+mod compactor;
 pub mod config;
+mod event_handler;
 pub mod model_limits;
 pub mod token_usage;
-mod compactor;
-mod event_handler;
 
 #[cfg(test)]
 mod tests;
 
 // Re-export public types
-pub use config::{CompactionConfig, LlmCallback, PruneInfo, compaction_prompt};
+pub use compactor::SessionCompactor;
+pub use config::{compaction_prompt, CompactionConfig, LlmCallback, PruneInfo};
 pub use model_limits::{ModelLimit, TokenTracker};
 pub use token_usage::EnhancedTokenUsage;
-pub use compactor::SessionCompactor;

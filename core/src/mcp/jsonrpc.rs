@@ -2,9 +2,9 @@
 //!
 //! Provides types and utilities for MCP's JSON-RPC based communication.
 
+use crate::sync_primitives::{AtomicU64, Ordering};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use crate::sync_primitives::{AtomicU64, Ordering};
 
 /// JSON-RPC 2.0 Request
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -16,9 +16,9 @@
 //! [`find_bridge_binary`] looks for `aleph-desktop` next to the current
 //! server binary first, then falls back to `$PATH`.
 
+use crate::sync_primitives::Arc;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use crate::sync_primitives::Arc;
 
 use serde_json::Value;
 use tracing::{debug, info, warn};
@@ -199,9 +199,7 @@ impl DesktopBridgeManager {
 
     /// Returns `true` if the bridge transport is connected.
     pub fn is_connected(&self) -> bool {
-        self.transport
-            .as_ref()
-            .is_some_and(|t| t.is_connected())
+        self.transport.as_ref().is_some_and(|t| t.is_connected())
     }
 
     /// Check whether the bridge reported a specific capability during
@@ -219,11 +217,7 @@ impl DesktopBridgeManager {
     ///
     /// This is the low-level call used by the convenience methods
     /// ([`show_panel`], [`hide_panel`], etc.).
-    pub async fn call(
-        &self,
-        method: &str,
-        params: Value,
-    ) -> Result<Value, TransportError> {
+    pub async fn call(&self, method: &str, params: Value) -> Result<Value, TransportError> {
         let transport = self
             .transport
             .as_ref()
@@ -244,7 +238,8 @@ impl DesktopBridgeManager {
 
     /// Ask the bridge to hide the web panel.
     pub async fn hide_panel(&self) -> Result<(), TransportError> {
-        self.call("webview.hide", serde_json::json!({ "label": "halo" })).await?;
+        self.call("webview.hide", serde_json::json!({ "label": "halo" }))
+            .await?;
         Ok(())
     }
 

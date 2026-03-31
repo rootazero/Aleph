@@ -2,8 +2,17 @@
 
 use alephcore::memory::store::{LanceMemoryBackend, MemoryBackend};
 use alephcore::memory::{
-    ContextAnchor, EmbeddingProvider, FactSpecificity, FactType, MemoryEntry, MemoryFact,
-    MemoryIngestion, MemoryLayer, MemoryRetrieval, MemoryScope, MemoryTier,
+    ContextAnchor,
+    EmbeddingProvider,
+    FactSpecificity,
+    FactType,
+    MemoryEntry,
+    MemoryFact,
+    MemoryIngestion,
+    MemoryLayer,
+    MemoryRetrieval,
+    MemoryScope,
+    MemoryTier,
     // TODO: removed — type deleted: PromptAugmenter,
     TemporalScope,
 };
@@ -227,9 +236,7 @@ impl MemoryContext {
 
     /// Set context anchor for memory operations
     pub fn set_context(&mut self, window_title: &str) {
-        self.context_anchor = Some(ContextAnchor::now(
-            window_title.to_string(),
-        ));
+        self.context_anchor = Some(ContextAnchor::now(window_title.to_string()));
     }
 }
 

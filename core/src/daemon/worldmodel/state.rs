@@ -11,9 +11,9 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 // Import types from dispatcher module (implemented in Task 2)
-use crate::daemon::dispatcher::policy::{ActionType, RiskLevel};
 #[cfg(test)]
 use crate::daemon::dispatcher::policy::NotificationPriority;
+use crate::daemon::dispatcher::policy::{ActionType, RiskLevel};
 
 // =============================================================================
 // Layer 1: CoreState (KB-level, must be persisted)
@@ -51,9 +51,7 @@ impl CoreState {
     pub fn prune_expired(&mut self) {
         let before_count = self.pending_actions.len();
 
-        self.pending_actions.retain(|action| {
-            !action.is_expired()
-        });
+        self.pending_actions.retain(|action| !action.is_expired());
 
         let removed_count = before_count - self.pending_actions.len();
         if removed_count > 0 {
@@ -302,8 +300,7 @@ mod tests {
         assert!(!json.is_empty());
 
         // Deserialize back
-        let deserialized: CoreState =
-            serde_json::from_str(&json).expect("Failed to deserialize");
+        let deserialized: CoreState = serde_json::from_str(&json).expect("Failed to deserialize");
 
         // Verify fields match
         assert_eq!(
@@ -311,7 +308,10 @@ mod tests {
             format!("{:?}", deserialized.activity)
         );
         assert_eq!(state.session_id, deserialized.session_id);
-        assert_eq!(state.pending_actions.len(), deserialized.pending_actions.len());
+        assert_eq!(
+            state.pending_actions.len(),
+            deserialized.pending_actions.len()
+        );
     }
 
     #[test]

@@ -24,9 +24,9 @@ mod tests;
 pub use bus::{EventBus, EventBusConfig, EventBusError, EventSubscriber};
 pub use handler::{EventContext, EventHandler, EventHandlerRegistry, HandlerError};
 pub use types::{
-    AlephEvent,
     // AI response
     AiResponse,
+    AlephEvent,
     CompactionInfo,
     ErrorKind,
     EventType,

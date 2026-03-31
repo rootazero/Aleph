@@ -61,7 +61,7 @@ mod tests {
 
         // Create unrelated fact and transcript with different embeddings
         let mut fact_embedding = vec![0.0; 1024];
-        fact_embedding[0] = 1.0;  // Point in first dimension
+        fact_embedding[0] = 1.0; // Point in first dimension
 
         let fact = MemoryFact::new(
             "User likes Python".to_string(),
@@ -78,7 +78,7 @@ mod tests {
             "Rust is a systems language".to_string(),
         );
         let mut transcript_embedding = vec![0.0; 1024];
-        transcript_embedding[1] = 1.0;  // Point in second dimension (orthogonal)
+        transcript_embedding[1] = 1.0; // Point in second dimension (orthogonal)
         transcript.embedding = Some(transcript_embedding);
 
         let result = RetrievalResult {
@@ -108,7 +108,7 @@ mod tests {
                 vec![],
             );
             fact.embedding = Some(vec![0.1 * (i as f32); 1024]);
-            fact.similarity_score = Some(0.9 - (i as f32) * 0.1);  // Decreasing scores
+            fact.similarity_score = Some(0.9 - (i as f32) * 0.1); // Decreasing scores
             facts.push(fact);
         }
 
@@ -122,7 +122,7 @@ mod tests {
                 format!("Answer {}", i),
             );
             transcript.embedding = Some(vec![0.2 * (i as f32); 1024]);
-            transcript.similarity_score = Some(0.8 - (i as f32) * 0.1);  // Decreasing scores
+            transcript.similarity_score = Some(0.8 - (i as f32) * 0.1); // Decreasing scores
             transcripts.push(transcript);
         }
 
@@ -175,12 +175,15 @@ mod tests {
             raw_memories: vec![],
         };
 
-        let budget = TokenBudget::new(10000);  // Large budget
+        let budget = TokenBudget::new(10000); // Large budget
         let arbitrated = comptroller.arbitrate(result, budget);
 
         // High priority fact should come first
         assert_eq!(arbitrated.facts.len(), 2);
-        assert!(arbitrated.facts[0].similarity_score.unwrap() > arbitrated.facts[1].similarity_score.unwrap());
+        assert!(
+            arbitrated.facts[0].similarity_score.unwrap()
+                > arbitrated.facts[1].similarity_score.unwrap()
+        );
         assert_eq!(arbitrated.facts[0].content, "High priority fact");
     }
 }

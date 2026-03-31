@@ -5,8 +5,8 @@
 use crate::config::Config;
 use crate::gateway::event_bus::{ConfigChangedEvent, GatewayEvent, GatewayEventBus};
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
-use serde_json::Value;
 use crate::sync_primitives::Arc;
+use serde_json::Value;
 use tokio::sync::RwLock;
 
 // =============================================================================
@@ -14,10 +14,7 @@ use tokio::sync::RwLock;
 // =============================================================================
 
 /// Get general configuration
-pub async fn handle_get(
-    request: JsonRpcRequest,
-    config: Arc<RwLock<Config>>,
-) -> JsonRpcResponse {
+pub async fn handle_get(request: JsonRpcRequest, config: Arc<RwLock<Config>>) -> JsonRpcResponse {
     let cfg = config.read().await;
     let general = &cfg.general;
 

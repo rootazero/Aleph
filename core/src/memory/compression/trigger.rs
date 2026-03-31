@@ -38,10 +38,7 @@ pub enum TriggerReason {
     /// Triggered by signal detection
     Signal(CompressionSignal),
     /// Triggered by token threshold
-    TokenThreshold {
-        current: usize,
-        max: usize,
-    },
+    TokenThreshold { current: usize, max: usize },
     /// Both signal and threshold
     Both {
         signal: CompressionSignal,
@@ -64,12 +61,8 @@ impl TriggerReason {
             TriggerReason::Signal(CompressionSignal::ContextSwitch { .. }) => {
                 CompressionAggressiveness::TopicOnly
             }
-            TriggerReason::TokenThreshold { .. } => {
-                CompressionAggressiveness::Aggressive
-            }
-            TriggerReason::Both { .. } => {
-                CompressionAggressiveness::Full
-            }
+            TriggerReason::TokenThreshold { .. } => CompressionAggressiveness::Aggressive,
+            TriggerReason::Both { .. } => CompressionAggressiveness::Full,
             _ => CompressionAggressiveness::Normal,
         }
     }
@@ -206,13 +199,22 @@ mod tests {
         });
         assert_eq!(milestone.aggressiveness(), CompressionAggressiveness::Full);
 
-        let threshold = TriggerReason::TokenThreshold { current: 100, max: 90 };
-        assert_eq!(threshold.aggressiveness(), CompressionAggressiveness::Aggressive);
+        let threshold = TriggerReason::TokenThreshold {
+            current: 100,
+            max: 90,
+        };
+        assert_eq!(
+            threshold.aggressiveness(),
+            CompressionAggressiveness::Aggressive
+        );
     }
 
     #[test]
     fn test_is_safety_net() {
-        let threshold = TriggerReason::TokenThreshold { current: 100, max: 90 };
+        let threshold = TriggerReason::TokenThreshold {
+            current: 100,
+            max: 90,
+        };
         assert!(threshold.is_safety_net());
 
         let signal = TriggerReason::Signal(CompressionSignal::Milestone {

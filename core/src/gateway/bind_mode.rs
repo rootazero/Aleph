@@ -28,9 +28,7 @@ impl BindMode {
     /// Real Tailscale IP resolution is planned for a future iteration.
     pub fn resolve_addr(&self, port: u16) -> SocketAddr {
         let ip: IpAddr = match self {
-            Self::Loopback | Self::Tailnet | Self::Auto => {
-                IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1))
-            }
+            Self::Loopback | Self::Tailnet | Self::Auto => IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
             Self::Lan => IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)),
         };
         SocketAddr::new(ip, port)
@@ -54,8 +52,16 @@ mod tests {
 
         assert_eq!(BindMode::Loopback.resolve_addr(port), loopback);
         assert_eq!(BindMode::Lan.resolve_addr(port), all);
-        assert_eq!(BindMode::Tailnet.resolve_addr(port), loopback, "Tailnet should fallback to loopback");
-        assert_eq!(BindMode::Auto.resolve_addr(port), loopback, "Auto should fallback to loopback");
+        assert_eq!(
+            BindMode::Tailnet.resolve_addr(port),
+            loopback,
+            "Tailnet should fallback to loopback"
+        );
+        assert_eq!(
+            BindMode::Auto.resolve_addr(port),
+            loopback,
+            "Auto should fallback to loopback"
+        );
     }
 
     #[test]

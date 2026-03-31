@@ -2,13 +2,13 @@
 //!
 //! Implements file I/O operations: Read, Write, Move
 
-use std::path::{Path, PathBuf};
+use crate::error::Result;
 use crate::sync_primitives::Arc;
 use async_trait::async_trait;
+use std::path::{Path, PathBuf};
 use tracing::debug;
-use crate::error::Result;
 
-use super::{FileOps, ExecutorContext, AtomicResult, LineRange, WriteMode, FileFilter};
+use super::{AtomicResult, ExecutorContext, FileFilter, FileOps, LineRange, WriteMode};
 
 /// File operations handler
 ///
@@ -84,13 +84,14 @@ impl FileOpsHandler {
 
         // Find all Rust files in the workspace
         let mut rust_files = Vec::new();
-        self.context.collect_files_from_directory(
-            &self.context.working_dir,
-            true,
-            &[FileFilter::Extension("rs".to_string())],
-            &mut rust_files,
-        )
-        .await?;
+        self.context
+            .collect_files_from_directory(
+                &self.context.working_dir,
+                true,
+                &[FileFilter::Extension("rs".to_string())],
+                &mut rust_files,
+            )
+            .await?;
 
         // Update imports in each file
         for file in &rust_files {
@@ -201,7 +202,11 @@ impl FileOps for FileOpsHandler {
 
         Ok(AtomicResult {
             success: true,
-            output: format!("Wrote {} bytes to {}", content.len(), resolved_path.display()),
+            output: format!(
+                "Wrote {} bytes to {}",
+                content.len(),
+                resolved_path.display()
+            ),
             error: None,
         })
     }
@@ -246,7 +251,10 @@ impl FileOps for FileOpsHandler {
             return Ok(AtomicResult {
                 success: false,
                 output: String::new(),
-                error: Some(format!("Destination already exists: {}", dest_path.display())),
+                error: Some(format!(
+                    "Destination already exists: {}",
+                    dest_path.display()
+                )),
             });
         }
 
@@ -279,16 +287,14 @@ impl FileOps for FileOpsHandler {
         // Update imports if requested
         let mut import_updates = Vec::new();
         if update_imports {
-            import_updates = self.update_imports_after_move(&source_path, &dest_path).await?;
+            import_updates = self
+                .update_imports_after_move(&source_path, &dest_path)
+                .await?;
         }
 
         // Format output
         let output = if import_updates.is_empty() {
-            format!(
-                "Moved {} to {}",
-                source_path.display(),
-                dest_path.display()
-            )
+            format!("Moved {} to {}", source_path.display(), dest_path.display())
         } else {
             format!(
                 "Moved {} to {}\nUpdated imports in {} files:\n{}",

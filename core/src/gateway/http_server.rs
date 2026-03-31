@@ -59,8 +59,7 @@ impl HttpServer {
         }
 
         // Create serve directory service
-        let serve_dir = ServeDir::new(static_dir.clone())
-            .append_index_html_on_directories(true);
+        let serve_dir = ServeDir::new(static_dir.clone()).append_index_html_on_directories(true);
 
         // If we have a fallback file, use it for SPA routing
         let router = if let Some(fallback) = &self.config.fallback_file {
@@ -70,15 +69,12 @@ impl HttpServer {
                     .append_index_html_on_directories(true)
                     .fallback(tower_http::services::ServeFile::new(fallback_path));
 
-                Router::new()
-                    .fallback_service(fallback_service)
+                Router::new().fallback_service(fallback_service)
             } else {
-                Router::new()
-                    .fallback_service(serve_dir)
+                Router::new().fallback_service(serve_dir)
             }
         } else {
-            Router::new()
-                .fallback_service(serve_dir)
+            Router::new().fallback_service(serve_dir)
         };
 
         info!("Static file serving enabled: {}", static_dir.display());
@@ -96,13 +92,31 @@ pub fn is_static_file_request(uri: &Uri) -> bool {
     let path = uri.path();
 
     // Check for file extensions
-    let has_extension = path.rfind('.').map(|i| {
-        let ext = &path[i + 1..];
-        matches!(
-            ext.to_lowercase().as_str(),
-            "html" | "css" | "js" | "mjs" | "json" | "svg" | "png" | "jpg" | "jpeg" | "gif" | "ico" | "woff" | "woff2" | "ttf" | "eot" | "map"
-        )
-    }).unwrap_or(false);
+    let has_extension = path
+        .rfind('.')
+        .map(|i| {
+            let ext = &path[i + 1..];
+            matches!(
+                ext.to_lowercase().as_str(),
+                "html"
+                    | "css"
+                    | "js"
+                    | "mjs"
+                    | "json"
+                    | "svg"
+                    | "png"
+                    | "jpg"
+                    | "jpeg"
+                    | "gif"
+                    | "ico"
+                    | "woff"
+                    | "woff2"
+                    | "ttf"
+                    | "eot"
+                    | "map"
+            )
+        })
+        .unwrap_or(false);
 
     // Check for common static paths
     let is_static_path = path.starts_with("/assets/")
@@ -163,13 +177,11 @@ pub async fn serve_static_file(
         let fallback_path = static_dir.join(fallback);
         if fallback_path.exists() {
             match tokio::fs::read(&fallback_path).await {
-                Ok(content) => {
-                    Response::builder()
-                        .status(StatusCode::OK)
-                        .header("Content-Type", "text/html; charset=utf-8")
-                        .body(Body::from(content))
-                        .unwrap_or_else(|_| not_found())
-                }
+                Ok(content) => Response::builder()
+                    .status(StatusCode::OK)
+                    .header("Content-Type", "text/html; charset=utf-8")
+                    .body(Body::from(content))
+                    .unwrap_or_else(|_| not_found()),
                 Err(_) => not_found(),
             }
         } else {

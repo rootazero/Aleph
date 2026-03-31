@@ -9,18 +9,20 @@
 #[allow(clippy::module_inception)]
 mod tests {
     use crate::dispatcher::tool_index::{
-        HydrationLevel, HydratedTool, SemanticPurposeInferrer, ToolIndexCoordinator, ToolMeta,
+        HydratedTool, HydrationLevel, SemanticPurposeInferrer, ToolIndexCoordinator, ToolMeta,
         ToolRetrieval, ToolRetrievalConfig,
     };
     use crate::memory::context::{FactType, MemoryFact};
-    use crate::memory::store::MemoryBackend;
     use crate::memory::store::lance::LanceMemoryBackend;
+    use crate::memory::store::MemoryBackend;
     use crate::sync_primitives::Arc;
 
     /// Create a test database using a temp directory for isolation
     async fn setup_test_db() -> (MemoryBackend, tempfile::TempDir) {
         let temp_dir = tempfile::TempDir::new().expect("Failed to create temp dir");
-        let backend = LanceMemoryBackend::open_or_create(temp_dir.path()).await.expect("Failed to create LanceDB backend");
+        let backend = LanceMemoryBackend::open_or_create(temp_dir.path())
+            .await
+            .expect("Failed to create LanceDB backend");
         (Arc::new(backend), temp_dir)
     }
 
@@ -151,12 +153,10 @@ mod tests {
             .expect("sync_tool should succeed");
 
         // Verify it exists
-        assert!(
-            coordinator
-                .tool_exists("test_tool")
-                .await
-                .expect("tool_exists should succeed")
-        );
+        assert!(coordinator
+            .tool_exists("test_tool")
+            .await
+            .expect("tool_exists should succeed"));
 
         // Remove it
         coordinator
@@ -165,12 +165,10 @@ mod tests {
             .expect("remove_tool should succeed");
 
         // Verify it's gone (invalidated)
-        assert!(
-            !coordinator
-                .tool_exists("test_tool")
-                .await
-                .expect("tool_exists should succeed")
-        );
+        assert!(!coordinator
+            .tool_exists("test_tool")
+            .await
+            .expect("tool_exists should succeed"));
     }
 
     #[tokio::test]
@@ -770,7 +768,10 @@ mod tests {
         // Add schema
         let tool_with_schema = tool.with_schema(r#"{"type": "object"}"#.to_string());
         assert!(tool_with_schema.has_schema());
-        assert_eq!(tool_with_schema.schema_json(), Some(r#"{"type": "object"}"#));
+        assert_eq!(
+            tool_with_schema.schema_json(),
+            Some(r#"{"type": "object"}"#)
+        );
     }
 
     // ============================================================
@@ -779,10 +780,10 @@ mod tests {
 
     #[test]
     fn test_prompt_builder_hydrated_tools_empty() {
+        use crate::dispatcher::tool_index::HydrationResult;
+        use crate::thinker::layers::HydratedToolsLayer;
         use crate::thinker::prompt_builder::PromptConfig;
         use crate::thinker::prompt_layer::{LayerInput, PromptLayer};
-        use crate::thinker::layers::HydratedToolsLayer;
-        use crate::dispatcher::tool_index::HydrationResult;
 
         let config = PromptConfig::default();
         let result = HydrationResult::empty();
@@ -797,10 +798,10 @@ mod tests {
 
     #[test]
     fn test_prompt_builder_hydrated_tools_full_schema() {
+        use crate::dispatcher::tool_index::HydrationResult;
+        use crate::thinker::layers::HydratedToolsLayer;
         use crate::thinker::prompt_builder::PromptConfig;
         use crate::thinker::prompt_layer::{LayerInput, PromptLayer};
-        use crate::thinker::layers::HydratedToolsLayer;
-        use crate::dispatcher::tool_index::HydrationResult;
 
         let prompt_config = PromptConfig::default();
 
@@ -833,10 +834,10 @@ mod tests {
 
     #[test]
     fn test_prompt_builder_hydrated_tools_summary() {
+        use crate::dispatcher::tool_index::HydrationResult;
+        use crate::thinker::layers::HydratedToolsLayer;
         use crate::thinker::prompt_builder::PromptConfig;
         use crate::thinker::prompt_layer::{LayerInput, PromptLayer};
-        use crate::thinker::layers::HydratedToolsLayer;
-        use crate::dispatcher::tool_index::HydrationResult;
 
         let prompt_config = PromptConfig::default();
 
@@ -867,10 +868,10 @@ mod tests {
 
     #[test]
     fn test_prompt_builder_hydrated_tools_indexed() {
+        use crate::dispatcher::tool_index::HydrationResult;
+        use crate::thinker::layers::HydratedToolsLayer;
         use crate::thinker::prompt_builder::PromptConfig;
         use crate::thinker::prompt_layer::{LayerInput, PromptLayer};
-        use crate::thinker::layers::HydratedToolsLayer;
-        use crate::dispatcher::tool_index::HydrationResult;
 
         let prompt_config = PromptConfig::default();
 

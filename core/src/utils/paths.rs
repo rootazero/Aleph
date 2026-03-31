@@ -323,8 +323,9 @@ pub fn get_agent_config_dir(agent_id: &str) -> Result<PathBuf> {
 
     let agent_dir = get_config_dir()?.join("agents").join(agent_id);
 
-    std::fs::create_dir_all(&agent_dir)
-        .map_err(|e| AlephError::config(format!("Failed to create agent config directory: {}", e)))?;
+    std::fs::create_dir_all(&agent_dir).map_err(|e| {
+        AlephError::config(format!("Failed to create agent config directory: {}", e))
+    })?;
 
     Ok(agent_dir)
 }
@@ -335,7 +336,9 @@ pub fn get_agent_config_dir(agent_id: &str) -> Result<PathBuf> {
 /// stored directly in ~/.aleph/ to the new organized layout under ~/.aleph/data/.
 /// Only moves files that exist at the old location and don't exist at the new location.
 pub fn migrate_legacy_db_files() {
-    let Ok(config_dir) = get_config_dir() else { return };
+    let Ok(config_dir) = get_config_dir() else {
+        return;
+    };
     let Ok(data_dir) = get_data_dir() else { return };
 
     for name in &["devices.db", "security.db", "pairing.db", "sessions.db"] {

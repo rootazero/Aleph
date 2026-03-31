@@ -171,7 +171,12 @@ mod tests {
 
         let result = find_latest_log(&dir);
         assert!(result.is_some(), "Should find dated log file");
-        assert!(result.unwrap().file_name().unwrap().to_string_lossy().contains("aleph-server"));
+        assert!(result
+            .unwrap()
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .contains("aleph-server"));
 
         // Cleanup
         let _ = std::fs::remove_dir_all(&dir);

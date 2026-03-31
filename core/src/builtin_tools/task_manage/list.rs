@@ -93,12 +93,7 @@ fn format_task_board(tasks: &[CoordTask]) -> String {
         };
         lines.push(format!(
             "{} {} [{}]{}{} — {}",
-            status_icon,
-            task.id,
-            task.status,
-            owner_str,
-            deps_str,
-            task.subject,
+            status_icon, task.id, task.status, owner_str, deps_str, task.subject,
         ));
     }
 
@@ -122,7 +117,10 @@ impl AlephTool for TaskListTool {
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         let filter = CoordTaskFilter {
             team_id: args.team_id,
-            status: args.status.as_deref().and_then(CoordTaskStatus::from_stored),
+            status: args
+                .status
+                .as_deref()
+                .and_then(CoordTaskStatus::from_stored),
             owner: args.owner,
         };
 

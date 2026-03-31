@@ -5,10 +5,10 @@
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use super::parse_params;
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR};
-use crate::memory::store::{MemoryBackend, MemoryStore, SessionStore};
+use super::parse_params;
 use crate::gateway::agent_env::AgentEnvFilter;
+use crate::memory::store::{MemoryBackend, MemoryStore, SessionStore};
 use crate::sync_primitives::Arc;
 
 /// Memory entry for JSON serialization
@@ -98,10 +98,7 @@ impl Default for SearchParams {
 /// ```json
 /// {"jsonrpc":"2.0","method":"memory.search","params":{"limit":10},"id":1}
 /// ```
-pub async fn handle_search(
-    request: JsonRpcRequest,
-    db: MemoryBackend,
-) -> JsonRpcResponse {
+pub async fn handle_search(request: JsonRpcRequest, db: MemoryBackend) -> JsonRpcResponse {
     let params: SearchParams = request
         .params
         .as_ref()
@@ -115,10 +112,7 @@ pub async fn handle_search(
     };
 
     // Without a query embedding, fall back to recent memories
-    match db
-        .get_recent_memories(&filter, params.limit as usize)
-        .await
-    {
+    match db.get_recent_memories(&filter, params.limit as usize).await {
         Ok(memories) => {
             let entries: Vec<MemoryEntry> = memories
                 .into_iter()
@@ -135,11 +129,9 @@ pub async fn handle_search(
 
             JsonRpcResponse::success(request.id, json!({ "memories": entries }))
         }
-        Err(e) => JsonRpcResponse::error(
-            request.id,
-            INTERNAL_ERROR,
-            format!("Search failed: {}", e),
-        ),
+        Err(e) => {
+            JsonRpcResponse::error(request.id, INTERNAL_ERROR, format!("Search failed: {}", e))
+        }
     }
 }
 
@@ -155,10 +147,7 @@ pub struct DeleteParams {
 }
 
 /// Delete a single memory
-pub async fn handle_delete(
-    request: JsonRpcRequest,
-    db: MemoryBackend,
-) -> JsonRpcResponse {
+pub async fn handle_delete(request: JsonRpcRequest, db: MemoryBackend) -> JsonRpcResponse {
     let params: DeleteParams = match parse_params(&request) {
         Ok(p) => p,
         Err(e) => return e,
@@ -166,11 +155,9 @@ pub async fn handle_delete(
 
     match db.delete_memory(&params.id).await {
         Ok(()) => JsonRpcResponse::success(request.id, json!({ "ok": true })),
-        Err(e) => JsonRpcResponse::error(
-            request.id,
-            INTERNAL_ERROR,
-            format!("Delete failed: {}", e),
-        ),
+        Err(e) => {
+            JsonRpcResponse::error(request.id, INTERNAL_ERROR, format!("Delete failed: {}", e))
+        }
     }
 }
 
@@ -187,28 +174,20 @@ pub struct ClearParams {
 }
 
 /// Clear memories (with optional filters)
-pub async fn handle_clear(
-    request: JsonRpcRequest,
-    db: MemoryBackend,
-) -> JsonRpcResponse {
+pub async fn handle_clear(request: JsonRpcRequest, db: MemoryBackend) -> JsonRpcResponse {
     let params: ClearParams = request
         .params
         .as_ref()
         .and_then(|p| serde_json::from_value(p.clone()).ok())
         .unwrap_or_default();
 
-    match db
-        .clear_memories(params.window_title.as_deref())
-        .await
-    {
+    match db.clear_memories(params.window_title.as_deref()).await {
         Ok(deleted_count) => {
             JsonRpcResponse::success(request.id, json!({ "deletedCount": deleted_count }))
         }
-        Err(e) => JsonRpcResponse::error(
-            request.id,
-            INTERNAL_ERROR,
-            format!("Clear failed: {}", e),
-        ),
+        Err(e) => {
+            JsonRpcResponse::error(request.id, INTERNAL_ERROR, format!("Clear failed: {}", e))
+        }
     }
 }
 
@@ -249,17 +228,17 @@ pub struct FactEntry {
 }
 
 /// List compressed facts (Layer 2 data)
-pub async fn handle_list_facts(
-    request: JsonRpcRequest,
-    db: MemoryBackend,
-) -> JsonRpcResponse {
+pub async fn handle_list_facts(request: JsonRpcRequest, db: MemoryBackend) -> JsonRpcResponse {
     let params: ListFactsParams = request
         .params
         .as_ref()
         .and_then(|p| serde_json::from_value(p.clone()).ok())
         .unwrap_or_default();
 
-    match db.get_all_facts(params.include_invalid, params.agent_id.as_deref()).await {
+    match db
+        .get_all_facts(params.include_invalid, params.agent_id.as_deref())
+        .await
+    {
         Ok(mut facts) => {
             // Sort by created_at descending (most recent first)
             facts.sort_by(|a, b| b.created_at.cmp(&a.created_at));
@@ -295,10 +274,7 @@ pub async fn handle_list_facts(
 // ============================================================================
 
 /// Clear all compressed facts (Layer 2 data)
-pub async fn handle_clear_facts(
-    request: JsonRpcRequest,
-    _db: MemoryBackend,
-) -> JsonRpcResponse {
+pub async fn handle_clear_facts(request: JsonRpcRequest, _db: MemoryBackend) -> JsonRpcResponse {
     // TODO: Implement clear_facts via new store API
     match Ok::<u64, crate::error::AlephError>(0) {
         Ok(deleted_count) => {
@@ -317,10 +293,7 @@ pub async fn handle_clear_facts(
 // ============================================================================
 
 /// Get memory statistics
-pub async fn handle_stats(
-    request: JsonRpcRequest,
-    db: MemoryBackend,
-) -> JsonRpcResponse {
+pub async fn handle_stats(request: JsonRpcRequest, db: MemoryBackend) -> JsonRpcResponse {
     match db.get_stats().await {
         Ok(stats) => JsonRpcResponse::success(
             request.id,
@@ -372,10 +345,7 @@ pub async fn handle_compress(
 // ============================================================================
 
 /// Get list of windows with memories
-pub async fn handle_app_list(
-    request: JsonRpcRequest,
-    _db: MemoryBackend,
-) -> JsonRpcResponse {
+pub async fn handle_app_list(request: JsonRpcRequest, _db: MemoryBackend) -> JsonRpcResponse {
     // TODO: Implement get_window_list via new store API
     match Ok::<Vec<(String, usize)>, crate::error::AlephError>(Vec::new()) {
         Ok(windows) => {
@@ -400,9 +370,9 @@ pub async fn handle_app_list(
 // Reembed Migration
 // ============================================================================
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use crate::memory::EmbeddingProvider;
 use crate::gateway::event_bus::{GatewayEventBus, TopicEvent};
+use crate::memory::EmbeddingProvider;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Shared state for the reembed background task.
 pub struct ReembedState {
@@ -453,7 +423,11 @@ pub async fn handle_reembed(
     reembed_state: Arc<ReembedState>,
 ) -> JsonRpcResponse {
     // Re-entrancy guard
-    if reembed_state.running.compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed).is_err() {
+    if reembed_state
+        .running
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
+        .is_err()
+    {
         return JsonRpcResponse::error(
             request.id,
             -32001,
@@ -476,14 +450,13 @@ pub async fn handle_reembed(
     let cancel = Arc::clone(&reembed_state.cancel);
 
     // Create progress channel
-    let (progress_tx, mut progress_rx) = tokio::sync::watch::channel(
-        crate::memory::reembed::ReembedProgress {
+    let (progress_tx, mut progress_rx) =
+        tokio::sync::watch::channel(crate::memory::reembed::ReembedProgress {
             phase: "facts",
             total: 0,
             completed: 0,
             failed: 0,
-        },
-    );
+        });
 
     // Spawn progress forwarder
     let eb_progress = Arc::clone(&event_bus);
@@ -510,7 +483,12 @@ pub async fn handle_reembed(
         let _guard = RunningGuard(Arc::clone(&state_ref.running));
 
         let result = crate::memory::reembed::reembed_all(
-            &db, &embedder, target_dim, 32, Some(progress_tx), cancel,
+            &db,
+            &embedder,
+            target_dim,
+            32,
+            Some(progress_tx),
+            cancel,
         )
         .await;
 

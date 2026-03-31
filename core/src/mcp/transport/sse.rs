@@ -7,8 +7,8 @@
 //! This transport is ideal for remote MCP servers that need to push
 //! notifications to clients (e.g., tools/listChanged, resources/updated).
 
-use std::collections::HashMap;
 use crate::sync_primitives::Arc;
+use std::collections::HashMap;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -26,7 +26,8 @@ use crate::security::ssrf::{validate_url, SsrfPolicy};
 use super::sse_events::SseEvent;
 
 /// Callback type for server-initiated requests (sampling, etc.)
-pub type RequestCallback = Box<dyn Fn(serde_json::Value, &str, Option<serde_json::Value>) + Send + Sync>;
+pub type RequestCallback =
+    Box<dyn Fn(serde_json::Value, &str, Option<serde_json::Value>) + Send + Sync>;
 
 /// SSE transport configuration
 #[derive(Debug, Clone)]
@@ -225,9 +226,8 @@ impl SseTransport {
             request = request.header(key, value);
         }
 
-        let mut es = EventSource::new(request).map_err(|e| {
-            AlephError::IoError(format!("Failed to create EventSource: {}", e))
-        })?;
+        let mut es = EventSource::new(request)
+            .map_err(|e| AlephError::IoError(format!("Failed to create EventSource: {}", e)))?;
 
         tracing::debug!(server = %server_name, "SSE EventSource created, waiting for events");
 
@@ -349,9 +349,8 @@ impl McpTransport for SseTransport {
             AlephError::IoError(format!("SSRF blocked for '{}': {}", self.server_name, e))
         })?;
 
-        let body = serde_json::to_string(request).map_err(|e| {
-            AlephError::IoError(format!("Failed to serialize request: {}", e))
-        })?;
+        let body = serde_json::to_string(request)
+            .map_err(|e| AlephError::IoError(format!("Failed to serialize request: {}", e)))?;
 
         tracing::debug!(
             server = %self.server_name,
@@ -375,9 +374,10 @@ impl McpTransport for SseTransport {
             )));
         }
 
-        let text = response.text().await.map_err(|e| {
-            AlephError::IoError(format!("Failed to read response: {}", e))
-        })?;
+        let text = response
+            .text()
+            .await
+            .map_err(|e| AlephError::IoError(format!("Failed to read response: {}", e)))?;
 
         serde_json::from_str(&text).map_err(|e| {
             AlephError::IoError(format!(
@@ -394,9 +394,8 @@ impl McpTransport for SseTransport {
             AlephError::IoError(format!("SSRF blocked for '{}': {}", self.server_name, e))
         })?;
 
-        let body = serde_json::to_string(notification).map_err(|e| {
-            AlephError::IoError(format!("Failed to serialize notification: {}", e))
-        })?;
+        let body = serde_json::to_string(notification)
+            .map_err(|e| AlephError::IoError(format!("Failed to serialize notification: {}", e)))?;
 
         tracing::debug!(
             server = %self.server_name,
@@ -560,17 +559,14 @@ impl SseTransport {
 
     /// Internal helper to send a JSON-RPC response via HTTP POST
     async fn send_json_rpc_response(&self, response: &JsonRpcResponse) -> Result<()> {
-        let response_json = serde_json::to_string(response).map_err(|e| {
-            AlephError::IoError(format!("Failed to serialize response: {}", e))
-        })?;
+        let response_json = serde_json::to_string(response)
+            .map_err(|e| AlephError::IoError(format!("Failed to serialize response: {}", e)))?;
 
         let http_response = self
             .build_request(response_json)
             .send()
             .await
-            .map_err(|e| {
-                AlephError::IoError(format!("Failed to send response: {}", e))
-            })?;
+            .map_err(|e| AlephError::IoError(format!("Failed to send response: {}", e)))?;
 
         if !http_response.status().is_success() {
             return Err(AlephError::IoError(format!(

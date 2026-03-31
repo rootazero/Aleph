@@ -29,8 +29,7 @@ pub fn facts_to_record_batch(facts: &[MemoryFact]) -> Result<RecordBatch, AlephE
     // Scalar string columns
     let id_arr = StringArray::from_iter_values(facts.iter().map(|f| f.id.as_str()));
     let content_arr = StringArray::from_iter_values(facts.iter().map(|f| f.content.as_str()));
-    let fact_type_arr =
-        StringArray::from_iter_values(facts.iter().map(|f| f.fact_type.as_str()));
+    let fact_type_arr = StringArray::from_iter_values(facts.iter().map(|f| f.fact_type.as_str()));
     let fact_source_arr =
         StringArray::from_iter_values(facts.iter().map(|f| f.fact_source.as_str()));
     let specificity_arr =
@@ -57,7 +56,8 @@ pub fn facts_to_record_batch(facts: &[MemoryFact]) -> Result<RecordBatch, AlephE
     let version_arr = Int32Array::from_iter_values(facts.iter().map(|_| 1_i32));
 
     // Boolean
-    let is_valid_arr = BooleanArray::from(facts.iter().map(|f| Some(f.is_valid)).collect::<Vec<_>>());
+    let is_valid_arr =
+        BooleanArray::from(facts.iter().map(|f| Some(f.is_valid)).collect::<Vec<_>>());
 
     // Nullable string
     let invalidation_reason_arr = StringArray::from(
@@ -103,14 +103,13 @@ pub fn facts_to_record_batch(facts: &[MemoryFact]) -> Result<RecordBatch, AlephE
             .collect::<Vec<_>>(),
     );
     let strength_arr = Float32Array::from_iter_values(facts.iter().map(|f| f.strength));
-    let access_count_arr =
-        Int32Array::from_iter_values(facts.iter().map(|f| f.access_count.min(i32::MAX as u32) as i32));
-    let last_accessed_at_arr = Int64Array::from(
+    let access_count_arr = Int32Array::from_iter_values(
         facts
             .iter()
-            .map(|f| f.last_accessed_at)
-            .collect::<Vec<_>>(),
+            .map(|f| f.access_count.min(i32::MAX as u32) as i32),
     );
+    let last_accessed_at_arr =
+        Int64Array::from(facts.iter().map(|f| f.last_accessed_at).collect::<Vec<_>>());
 
     // Vector columns (multi-dimension coexistence).
     // Non-standard dimensions are normalized (truncated + L2-normalized) to
@@ -142,39 +141,39 @@ pub fn facts_to_record_batch(facts: &[MemoryFact]) -> Result<RecordBatch, AlephE
     let batch = RecordBatch::try_new(
         schema,
         vec![
-            Arc::new(id_arr),                    // 0  id
-            Arc::new(content_arr),               // 1  content
-            Arc::new(fact_type_arr),             // 2  fact_type
-            Arc::new(fact_source_arr),           // 3  fact_source
-            Arc::new(specificity_arr),           // 4  specificity
-            Arc::new(temporal_scope_arr),        // 5  temporal_scope
-            Arc::new(layer_arr),                 // 6  layer
-            Arc::new(category_arr),              // 7  category
-            Arc::new(path_arr),                  // 8  path
-            Arc::new(parent_path_arr),           // 9  parent_path
-            Arc::new(namespace_arr),             // 10 namespace
-            Arc::new(workspace_arr),             // 11 workspace
-            Arc::new(tags_arr),                  // 12 tags
-            Arc::new(src_ids_arr),               // 13 source_memory_ids
-            Arc::new(content_hash_arr),          // 14 content_hash
-            Arc::new(confidence_arr),            // 15 confidence
-            Arc::new(decay_score_arr),           // 16 decay_score
-            Arc::new(is_valid_arr),              // 17 is_valid
-            Arc::new(invalidation_reason_arr),   // 18 invalidation_reason
-            Arc::new(embedding_model_arr),       // 19 embedding_model
-            Arc::new(created_at_arr),            // 20 created_at
-            Arc::new(updated_at_arr),            // 21 updated_at
-            Arc::new(decay_invalidated_at_arr),  // 22 decay_invalidated_at
-            Arc::new(version_arr),               // 23 version
-            Arc::new(tier_arr),                  // 24 tier
-            Arc::new(scope_arr),                 // 25 scope
-            Arc::new(persona_id_arr),            // 26 persona_id
-            Arc::new(strength_arr),              // 27 strength
-            Arc::new(access_count_arr),          // 28 access_count
-            Arc::new(last_accessed_at_arr),      // 29 last_accessed_at
-            Arc::new(vec_768),                   // 30 vec_768
-            Arc::new(vec_1024),                  // 31 vec_1024
-            Arc::new(vec_1536),                  // 32 vec_1536
+            Arc::new(id_arr),                   // 0  id
+            Arc::new(content_arr),              // 1  content
+            Arc::new(fact_type_arr),            // 2  fact_type
+            Arc::new(fact_source_arr),          // 3  fact_source
+            Arc::new(specificity_arr),          // 4  specificity
+            Arc::new(temporal_scope_arr),       // 5  temporal_scope
+            Arc::new(layer_arr),                // 6  layer
+            Arc::new(category_arr),             // 7  category
+            Arc::new(path_arr),                 // 8  path
+            Arc::new(parent_path_arr),          // 9  parent_path
+            Arc::new(namespace_arr),            // 10 namespace
+            Arc::new(workspace_arr),            // 11 workspace
+            Arc::new(tags_arr),                 // 12 tags
+            Arc::new(src_ids_arr),              // 13 source_memory_ids
+            Arc::new(content_hash_arr),         // 14 content_hash
+            Arc::new(confidence_arr),           // 15 confidence
+            Arc::new(decay_score_arr),          // 16 decay_score
+            Arc::new(is_valid_arr),             // 17 is_valid
+            Arc::new(invalidation_reason_arr),  // 18 invalidation_reason
+            Arc::new(embedding_model_arr),      // 19 embedding_model
+            Arc::new(created_at_arr),           // 20 created_at
+            Arc::new(updated_at_arr),           // 21 updated_at
+            Arc::new(decay_invalidated_at_arr), // 22 decay_invalidated_at
+            Arc::new(version_arr),              // 23 version
+            Arc::new(tier_arr),                 // 24 tier
+            Arc::new(scope_arr),                // 25 scope
+            Arc::new(persona_id_arr),           // 26 persona_id
+            Arc::new(strength_arr),             // 27 strength
+            Arc::new(access_count_arr),         // 28 access_count
+            Arc::new(last_accessed_at_arr),     // 29 last_accessed_at
+            Arc::new(vec_768),                  // 30 vec_768
+            Arc::new(vec_1024),                 // 31 vec_1024
+            Arc::new(vec_1536),                 // 32 vec_1536
         ],
     )
     .map_err(conv_err)?;
@@ -249,12 +248,8 @@ pub fn record_batch_to_facts(batch: &RecordBatch) -> Result<Vec<MemoryFact>, Ale
             .map(|c| MemoryScope::from_str_or_default(c.value(i)))
             .unwrap_or(MemoryScope::Global);
         let persona_id = persona_id_col.and_then(|c| read_nullable_string(c, i));
-        let strength = strength_col
-            .map(|c| c.value(i))
-            .unwrap_or(1.0);
-        let access_count = access_count_col
-            .map(|c| c.value(i) as u32)
-            .unwrap_or(0);
+        let strength = strength_col.map(|c| c.value(i)).unwrap_or(1.0);
+        let access_count = access_count_col.map(|c| c.value(i) as u32).unwrap_or(0);
         let last_accessed_at = last_accessed_at_col.and_then(|c| read_nullable_i64(c, i));
 
         let fact = MemoryFact {

@@ -3,8 +3,8 @@
 //! RPC handlers for waiting on run completion and queueing messages
 //! to active runs (human-in-the-loop support).
 
-use std::collections::HashMap;
 use crate::sync_primitives::Arc;
+use std::collections::HashMap;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -12,8 +12,8 @@ use serde_json::json;
 use tokio::sync::RwLock;
 
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, RESOURCE_NOT_FOUND, TIMEOUT};
+use super::super::run_event_bus::{wait_for_run_end, ActiveRunHandle, RunEndResult, WaitError};
 use super::parse_params;
-use super::super::run_event_bus::{ActiveRunHandle, RunEndResult, wait_for_run_end, WaitError};
 
 // ============================================================================
 // run.wait
@@ -101,10 +101,7 @@ pub async fn handle_run_wait(
         match runs.get(&params.run_id) {
             Some(handle) => handle.subscribe(),
             None => {
-                return JsonRpcResponse::success(
-                    request.id,
-                    json!(RunWaitResponse::NotFound),
-                );
+                return JsonRpcResponse::success(request.id, json!(RunWaitResponse::NotFound));
             }
         }
     };
@@ -125,10 +122,9 @@ pub async fn handle_run_wait(
                     output_tokens: total_tokens,
                     duration_ms,
                 },
-                RunEndResult::Failed { error, error_code } => RunWaitResponse::Failed {
-                    error,
-                    error_code,
-                },
+                RunEndResult::Failed { error, error_code } => {
+                    RunWaitResponse::Failed { error, error_code }
+                }
                 RunEndResult::Cancelled { reason } => RunWaitResponse::Cancelled { reason },
             };
             JsonRpcResponse::success(request.id, json!(response))
@@ -140,13 +136,11 @@ pub async fn handle_run_wait(
             // Run ended but we missed the event - treat as not found
             JsonRpcResponse::success(request.id, json!(RunWaitResponse::NotFound))
         }
-        Err(WaitError::Lagged(n)) => {
-            JsonRpcResponse::error(
-                request.id,
-                TIMEOUT,
-                format!("Receiver lagged behind, missed {} events", n),
-            )
-        }
+        Err(WaitError::Lagged(n)) => JsonRpcResponse::error(
+            request.id,
+            TIMEOUT,
+            format!("Receiver lagged behind, missed {} events", n),
+        ),
     }
 }
 
@@ -213,33 +207,27 @@ pub async fn handle_run_queue_message(
 
     // Send the message
     match input_sender.try_send(params.message) {
-        Ok(()) => {
-            JsonRpcResponse::success(
-                request.id,
-                json!(RunQueueMessageResponse {
-                    success: true,
-                    error: None,
-                }),
-            )
-        }
-        Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
-            JsonRpcResponse::success(
-                request.id,
-                json!(RunQueueMessageResponse {
-                    success: false,
-                    error: Some("Input queue is full".to_string()),
-                }),
-            )
-        }
-        Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
-            JsonRpcResponse::success(
-                request.id,
-                json!(RunQueueMessageResponse {
-                    success: false,
-                    error: Some("Run has ended".to_string()),
-                }),
-            )
-        }
+        Ok(()) => JsonRpcResponse::success(
+            request.id,
+            json!(RunQueueMessageResponse {
+                success: true,
+                error: None,
+            }),
+        ),
+        Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => JsonRpcResponse::success(
+            request.id,
+            json!(RunQueueMessageResponse {
+                success: false,
+                error: Some("Input queue is full".to_string()),
+            }),
+        ),
+        Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => JsonRpcResponse::success(
+            request.id,
+            json!(RunQueueMessageResponse {
+                success: false,
+                error: Some("Run has ended".to_string()),
+            }),
+        ),
     }
 }
 
@@ -384,10 +372,8 @@ mod tests {
         let active_runs = Arc::new(RwLock::new(HashMap::new()));
 
         // Create an active run
-        let (handle, mut input_rx, _cancel_rx) = ActiveRunHandle::new(
-            "run-123".to_string(),
-            SessionKey::main("main"),
-        );
+        let (handle, mut input_rx, _cancel_rx) =
+            ActiveRunHandle::new("run-123".to_string(), SessionKey::main("main"));
 
         {
             let mut runs = active_runs.write().await;
@@ -418,10 +404,8 @@ mod tests {
         let active_runs = Arc::new(RwLock::new(HashMap::new()));
 
         // Create an active run
-        let (handle, _input_rx, _cancel_rx) = ActiveRunHandle::new(
-            "run-456".to_string(),
-            SessionKey::main("main"),
-        );
+        let (handle, _input_rx, _cancel_rx) =
+            ActiveRunHandle::new("run-456".to_string(), SessionKey::main("main"));
 
         let handle_clone = handle.clone();
         {

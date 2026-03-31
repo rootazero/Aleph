@@ -35,8 +35,7 @@ impl StepStartPart {
 }
 
 /// Reason why a step finished
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub enum StepFinishReason {
     /// Step completed successfully
     #[default]
@@ -50,7 +49,6 @@ pub enum StepFinishReason {
     /// Maximum steps limit reached
     MaxStepsReached,
 }
-
 
 /// Token usage for a step (re-exported from event types or defined locally)
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

@@ -10,7 +10,9 @@ use crate::error::{AlephError, Result};
 use crate::providers::adapter::{ProtocolAdapter, RequestPayload, StopReason, TokenUsage};
 use crate::providers::delta::ProviderDelta;
 use crate::providers::responses::shared;
-use crate::providers::responses::types::{ContextManagement, ResponsesRequest, StreamEvent, TextConfig};
+use crate::providers::responses::types::{
+    ContextManagement, ResponsesRequest, StreamEvent, TextConfig,
+};
 use async_trait::async_trait;
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
@@ -85,10 +87,7 @@ impl OpenAiResponsesProtocol {
     /// For standard variant: normalizes base_url and appends `/v1/responses`.
     /// Default when base_url is None: `https://api.openai.com/v1/responses`
     pub fn build_endpoint(config: &ProviderConfig, variant: &ResponsesVariant) -> String {
-        let endpoint_path = variant
-            .endpoint_path
-            .as_deref()
-            .unwrap_or("/v1/responses");
+        let endpoint_path = variant.endpoint_path.as_deref().unwrap_or("/v1/responses");
 
         if variant.endpoint_path.is_some() {
             // Codex-style: use base_url as-is (no /v1 stripping)
@@ -126,8 +125,8 @@ impl OpenAiResponsesProtocol {
     ) -> ResponsesRequest {
         let input = shared::convert_messages(payload.messages);
         let tools = shared::build_tools(payload.tools);
-        let tool_choice = shared::map_tool_choice(payload.tool_choice.as_ref())
-            .or(Some("auto".to_string()));
+        let tool_choice =
+            shared::map_tool_choice(payload.tool_choice.as_ref()).or(Some("auto".to_string()));
 
         // Determine store and context_management based on variant and endpoint
         let official = is_openai_official(&config.base_url);
@@ -201,12 +200,16 @@ impl ProtocolAdapter for OpenAiResponsesProtocol {
         config: &ProviderConfig,
     ) -> Result<reqwest::RequestBuilder> {
         let endpoint = Self::build_endpoint(config, &self.variant);
-        let actual_model = payload.model.as_deref().unwrap_or_else(|| config.default_model());
+        let actual_model = payload
+            .model
+            .as_deref()
+            .unwrap_or_else(|| config.default_model());
         let request = Self::build_responses_request(payload, actual_model, &self.variant, config);
 
-        let api_key = config.api_key.as_ref().ok_or_else(|| {
-            AlephError::invalid_config("OpenAI API key not set")
-        })?;
+        let api_key = config
+            .api_key
+            .as_ref()
+            .ok_or_else(|| AlephError::invalid_config("OpenAI API key not set"))?;
 
         if let Ok(json) = serde_json::to_string_pretty(&request) {
             debug!(
@@ -331,7 +334,11 @@ impl ProtocolAdapter for OpenAiResponsesProtocol {
                         let remaining = remaining.trim();
                         if !remaining.is_empty() {
                             if let Some(data) = remaining.strip_prefix("data: ") {
-                                parse_sse_event_multi(data, &mut state.item_to_call, &mut state.pending);
+                                parse_sse_event_multi(
+                                    data,
+                                    &mut state.item_to_call,
+                                    &mut state.pending,
+                                );
                             }
                         }
                         state.done = true;
@@ -383,7 +390,9 @@ fn parse_sse_event_multi(
         }
 
         StreamEvent::OutputItemAdded {
-            item: OutputItem::FunctionCall { id, call_id, name, .. },
+            item: OutputItem::FunctionCall {
+                id, call_id, name, ..
+            },
             ..
         } => {
             // Register item_id → call_id for subsequent arg delta correlation
@@ -470,15 +479,18 @@ fn parse_sse_event_multi(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::providers::responses::types::{InputItem, MessageContent, StreamEvent};
     use crate::providers::responses::shared;
+    use crate::providers::responses::types::{InputItem, MessageContent, StreamEvent};
 
     // ─── Variant tests ─────────────────────────────────────────────────────
 
     #[test]
     fn test_codex_variant_fields() {
         let v = ResponsesVariant::codex();
-        assert_eq!(v.endpoint_path.as_deref(), Some("/backend-api/codex/responses"));
+        assert_eq!(
+            v.endpoint_path.as_deref(),
+            Some("/backend-api/codex/responses")
+        );
         assert_eq!(v.store, Some(false));
         assert!(v.text.is_some());
         assert!(v.include.is_some());
@@ -501,7 +513,8 @@ mod tests {
     #[test]
     fn test_build_endpoint_default() {
         let config = ProviderConfig::test_config("gpt-4o");
-        let endpoint = OpenAiResponsesProtocol::build_endpoint(&config, &ResponsesVariant::default());
+        let endpoint =
+            OpenAiResponsesProtocol::build_endpoint(&config, &ResponsesVariant::default());
         assert_eq!(endpoint, "https://api.openai.com/v1/responses");
     }
 
@@ -509,7 +522,8 @@ mod tests {
     fn test_build_endpoint_custom() {
         let mut config = ProviderConfig::test_config("gpt-4o");
         config.base_url = Some("https://custom.api.com/v1".to_string());
-        let endpoint = OpenAiResponsesProtocol::build_endpoint(&config, &ResponsesVariant::default());
+        let endpoint =
+            OpenAiResponsesProtocol::build_endpoint(&config, &ResponsesVariant::default());
         assert_eq!(endpoint, "https://custom.api.com/v1/responses");
     }
 
@@ -517,7 +531,8 @@ mod tests {
     fn test_build_endpoint_openrouter() {
         let mut config = ProviderConfig::test_config("gpt-4o");
         config.base_url = Some("https://openrouter.ai/api/v1".to_string());
-        let endpoint = OpenAiResponsesProtocol::build_endpoint(&config, &ResponsesVariant::default());
+        let endpoint =
+            OpenAiResponsesProtocol::build_endpoint(&config, &ResponsesVariant::default());
         assert_eq!(endpoint, "https://openrouter.ai/api/v1/responses");
     }
 
@@ -525,7 +540,8 @@ mod tests {
     fn test_build_endpoint_trailing_slash() {
         let mut config = ProviderConfig::test_config("gpt-4o");
         config.base_url = Some("https://api.example.com/v1/".to_string());
-        let endpoint = OpenAiResponsesProtocol::build_endpoint(&config, &ResponsesVariant::default());
+        let endpoint =
+            OpenAiResponsesProtocol::build_endpoint(&config, &ResponsesVariant::default());
         assert_eq!(endpoint, "https://api.example.com/v1/responses");
     }
 
@@ -533,7 +549,11 @@ mod tests {
     fn test_build_endpoint_codex_default() {
         let config = ProviderConfig::test_config("codex-mini-latest");
         let endpoint = OpenAiResponsesProtocol::build_endpoint(&config, &ResponsesVariant::codex());
-        assert!(endpoint.ends_with("/backend-api/codex/responses"), "got: {}", endpoint);
+        assert!(
+            endpoint.ends_with("/backend-api/codex/responses"),
+            "got: {}",
+            endpoint
+        );
     }
 
     #[test]
@@ -553,7 +573,10 @@ mod tests {
         let payload = RequestPayload::new(&msgs);
         let config = ProviderConfig::test_config("gpt-4o");
         let request = OpenAiResponsesProtocol::build_responses_request(
-            &payload, "gpt-4o", &ResponsesVariant::default(), &config
+            &payload,
+            "gpt-4o",
+            &ResponsesVariant::default(),
+            &config,
         );
 
         assert_eq!(request.model, "gpt-4o");
@@ -577,7 +600,10 @@ mod tests {
         let mut config = ProviderConfig::test_config("gpt-4o");
         config.base_url = Some("https://openrouter.ai/api/v1".to_string());
         let request = OpenAiResponsesProtocol::build_responses_request(
-            &payload, "gpt-4o", &ResponsesVariant::default(), &config
+            &payload,
+            "gpt-4o",
+            &ResponsesVariant::default(),
+            &config,
         );
 
         // Non-official: no store, no context_management
@@ -593,7 +619,10 @@ mod tests {
         let mut config = ProviderConfig::test_config("codex-mini-latest");
         config.base_url = Some("https://chatgpt.com".to_string());
         let request = OpenAiResponsesProtocol::build_responses_request(
-            &payload, "codex-mini-latest", &ResponsesVariant::codex(), &config
+            &payload,
+            "codex-mini-latest",
+            &ResponsesVariant::codex(),
+            &config,
         );
 
         assert_eq!(request.model, "codex-mini-latest");
@@ -620,7 +649,10 @@ mod tests {
         let payload = RequestPayload::new(&msgs).with_system(Some("You are helpful"));
         let config = ProviderConfig::test_config("gpt-4o");
         let request = OpenAiResponsesProtocol::build_responses_request(
-            &payload, "gpt-4o", &ResponsesVariant::default(), &config
+            &payload,
+            "gpt-4o",
+            &ResponsesVariant::default(),
+            &config,
         );
 
         assert_eq!(request.instructions.as_deref(), Some("You are helpful"));
@@ -631,11 +663,13 @@ mod tests {
         use crate::agents::thinking::ThinkLevel;
         use crate::providers::message::UnifiedMessage;
         let msgs = [UnifiedMessage::user("Think about this")];
-        let payload = RequestPayload::new(&msgs)
-            .with_think_level(Some(ThinkLevel::High));
+        let payload = RequestPayload::new(&msgs).with_think_level(Some(ThinkLevel::High));
         let config = ProviderConfig::test_config("gpt-4o");
         let request = OpenAiResponsesProtocol::build_responses_request(
-            &payload, "gpt-4o", &ResponsesVariant::default(), &config
+            &payload,
+            "gpt-4o",
+            &ResponsesVariant::default(),
+            &config,
         );
 
         let reasoning = request.reasoning.unwrap();
@@ -664,8 +698,12 @@ mod tests {
         assert!(is_openai_official(&None));
         assert!(is_openai_official(&Some(String::new())));
         assert!(is_openai_official(&Some("https://api.openai.com".into())));
-        assert!(is_openai_official(&Some("https://api.openai.com/v1".into())));
-        assert!(!is_openai_official(&Some("https://openrouter.ai/api/v1".into())));
+        assert!(is_openai_official(&Some(
+            "https://api.openai.com/v1".into()
+        )));
+        assert!(!is_openai_official(&Some(
+            "https://openrouter.ai/api/v1".into()
+        )));
         assert!(!is_openai_official(&Some("https://chatgpt.com".into())));
     }
 
@@ -715,7 +753,9 @@ mod tests {
             items[0],
             InputItem::Message {
                 role: "user".to_string(),
-                content: MessageContent::Text { content: "hello".into() },
+                content: MessageContent::Text {
+                    content: "hello".into()
+                },
             }
         );
     }
@@ -811,7 +851,9 @@ mod tests {
             items[0],
             InputItem::Message {
                 role: "user".to_string(),
-                content: MessageContent::Text { content: "Search for Rust tutorials".into() },
+                content: MessageContent::Text {
+                    content: "Search for Rust tutorials".into()
+                },
             }
         );
     }
@@ -901,10 +943,7 @@ mod tests {
         match event {
             StreamEvent::Completed { response } => {
                 assert_eq!(response.status, "completed");
-                assert_eq!(
-                    shared::extract_text(&response),
-                    Some("done".to_string())
-                );
+                assert_eq!(shared::extract_text(&response), Some("done".to_string()));
                 let usage = response.usage.as_ref().expect("usage should be present");
                 assert_eq!(usage.input_tokens, 10);
                 assert_eq!(usage.output_tokens, 5);
@@ -921,10 +960,7 @@ mod tests {
         match event {
             StreamEvent::Completed { response } => {
                 assert_eq!(response.status, "incomplete");
-                assert_eq!(
-                    shared::extract_text(&response),
-                    Some("partial".to_string())
-                );
+                assert_eq!(shared::extract_text(&response), Some("partial".to_string()));
             }
             other => panic!("Expected Completed, got {:?}", other),
         }
@@ -1004,19 +1040,13 @@ mod tests {
 
     // ─── parse_sse_event_multi unit tests ────────────────────────────────
 
-    fn drain_one(
-        data: &str,
-        map: &mut HashMap<String, String>,
-    ) -> Option<ProviderDelta> {
+    fn drain_one(data: &str, map: &mut HashMap<String, String>) -> Option<ProviderDelta> {
         let mut out = std::collections::VecDeque::new();
         parse_sse_event_multi(data, map, &mut out);
         out.pop_front().and_then(|r| r.ok())
     }
 
-    fn drain_all(
-        data: &str,
-        map: &mut HashMap<String, String>,
-    ) -> Vec<ProviderDelta> {
+    fn drain_all(data: &str, map: &mut HashMap<String, String>) -> Vec<ProviderDelta> {
         let mut out = std::collections::VecDeque::new();
         parse_sse_event_multi(data, map, &mut out);
         out.into_iter().filter_map(|r| r.ok()).collect()
@@ -1035,7 +1065,9 @@ mod tests {
         let mut map = HashMap::new();
         let data = r#"{"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"call_abc","name":"search","arguments":""}}"#;
         let delta = drain_one(data, &mut map);
-        assert!(matches!(delta, Some(ProviderDelta::ToolCallStart { ref id, ref name }) if id == "call_abc" && name == "search"));
+        assert!(
+            matches!(delta, Some(ProviderDelta::ToolCallStart { ref id, ref name }) if id == "call_abc" && name == "search")
+        );
         // item_id → call_id mapping populated
         assert_eq!(map.get("fc_1").map(|s| s.as_str()), Some("call_abc"));
     }
@@ -1046,12 +1078,17 @@ mod tests {
         // Without the mapping, arg delta produces no output
         let data = r#"{"type":"response.function_call_arguments.delta","item_id":"fc_1","delta":"{\"q\":"}"#;
         let delta = drain_one(data, &mut map);
-        assert!(delta.is_none(), "Should produce nothing when item_id not mapped");
+        assert!(
+            delta.is_none(),
+            "Should produce nothing when item_id not mapped"
+        );
 
         // Register mapping and try again
         map.insert("fc_1".to_string(), "call_abc".to_string());
         let delta2 = drain_one(data, &mut map);
-        assert!(matches!(delta2, Some(ProviderDelta::ToolCallArgDelta { ref id, .. }) if id == "call_abc"));
+        assert!(
+            matches!(delta2, Some(ProviderDelta::ToolCallArgDelta { ref id, .. }) if id == "call_abc")
+        );
     }
 
     #[test]
@@ -1069,8 +1106,13 @@ mod tests {
         let data = r#"{"type":"response.completed","response":{"id":"r1","status":"completed","model":"test","output":[{"type":"message","id":"m1","role":"assistant","content":[{"type":"output_text","text":"hi"}]}],"usage":{"input_tokens":10,"output_tokens":5,"total_tokens":15}}}"#;
         let deltas = drain_all(data, &mut map);
         assert_eq!(deltas.len(), 2, "Completed should emit Usage + Done");
-        assert!(matches!(&deltas[0], ProviderDelta::Usage(u) if u.input_tokens == 10 && u.output_tokens == 5));
-        assert!(matches!(&deltas[1], ProviderDelta::Done(StopReason::EndTurn)));
+        assert!(
+            matches!(&deltas[0], ProviderDelta::Usage(u) if u.input_tokens == 10 && u.output_tokens == 5)
+        );
+        assert!(matches!(
+            &deltas[1],
+            ProviderDelta::Done(StopReason::EndTurn)
+        ));
     }
 
     #[test]
@@ -1078,8 +1120,15 @@ mod tests {
         let mut map = HashMap::new();
         let data = r#"{"type":"response.completed","response":{"id":"r1","status":"completed","model":"test","output":[]}}"#;
         let deltas = drain_all(data, &mut map);
-        assert_eq!(deltas.len(), 1, "Completed with no usage should emit only Done");
-        assert!(matches!(&deltas[0], ProviderDelta::Done(StopReason::EndTurn)));
+        assert_eq!(
+            deltas.len(),
+            1,
+            "Completed with no usage should emit only Done"
+        );
+        assert!(matches!(
+            &deltas[0],
+            ProviderDelta::Done(StopReason::EndTurn)
+        ));
     }
 
     #[test]
@@ -1106,7 +1155,10 @@ mod tests {
             &payload, "o3-mini", &variant, &config,
         );
         assert!(request.include.is_some());
-        assert!(request.include.unwrap().contains(&"reasoning.encrypted_content".to_string()));
+        assert!(request
+            .include
+            .unwrap()
+            .contains(&"reasoning.encrypted_content".to_string()));
     }
 
     #[test]

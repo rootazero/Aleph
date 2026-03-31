@@ -3,11 +3,11 @@
 //! Wraps [`VisionPipeline`] behind the [`AlephTool`] interface so the AI agent
 //! can describe images, answer visual questions, and extract text via OCR.
 
+use crate::sync_primitives::Arc;
 use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use crate::sync_primitives::Arc;
 
 use crate::error::Result;
 use crate::tools::AlephTool;
@@ -235,10 +235,7 @@ mod tests {
             })
         }
 
-        async fn ocr(
-            &self,
-            _image: &ImageInput,
-        ) -> std::result::Result<OcrResult, VisionError> {
+        async fn ocr(&self, _image: &ImageInput) -> std::result::Result<OcrResult, VisionError> {
             Ok(OcrResult {
                 full_text: "Mock OCR text".to_string(),
                 lines: vec![OcrLine {

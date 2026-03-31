@@ -66,7 +66,10 @@ pub struct DistillationService {
 
 impl DistillationService {
     /// Create a new distillation service
-    pub fn new(db: MemoryBackend, config: DistillationConfig) -> (Self, mpsc::Receiver<PrioritizedTask>) {
+    pub fn new(
+        db: MemoryBackend,
+        config: DistillationConfig,
+    ) -> (Self, mpsc::Receiver<PrioritizedTask>) {
         let (task_tx, task_rx) = mpsc::channel(config.queue_capacity);
 
         let service = Self {
@@ -173,7 +176,10 @@ impl DistillationService {
     }
 
     /// Process a single distillation task
-    async fn process_task(_db: &crate::memory::store::lance::LanceMemoryBackend, task: &DistillationTask) -> Result<()> {
+    async fn process_task(
+        _db: &crate::memory::store::lance::LanceMemoryBackend,
+        task: &DistillationTask,
+    ) -> Result<()> {
         // Placeholder implementation
         // Will be replaced with actual pattern extraction in Task #7
         debug!("Processing task: {:?}", task);
@@ -189,7 +195,10 @@ mod tests {
 
     async fn create_test_db() -> (MemoryBackend, TempDir) {
         let temp_dir = TempDir::new().unwrap();
-        let backend = crate::memory::store::lance::LanceMemoryBackend::open_or_create(temp_dir.path()).await.unwrap();
+        let backend =
+            crate::memory::store::lance::LanceMemoryBackend::open_or_create(temp_dir.path())
+                .await
+                .unwrap();
         (Arc::new(backend), temp_dir)
     }
 

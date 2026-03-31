@@ -6,18 +6,22 @@ use serde::{Deserialize, Serialize};
 
 use crate::sync_primitives::Arc;
 
+use super::{notify_tool_result, notify_tool_start};
 use crate::error::Result;
 use crate::gateway::security::SharedTokenManager;
 use crate::tools::AlephTool;
-use super::{notify_tool_start, notify_tool_result};
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct VaultStoreArgs {
     /// Action to perform
-    #[schemars(description = "Action: 'store' to save a secret, 'delete' to remove one, 'list' to see all key names")]
+    #[schemars(
+        description = "Action: 'store' to save a secret, 'delete' to remove one, 'list' to see all key names"
+    )]
     pub action: VaultAction,
     /// Secret key name (e.g., "provider:openai", "gen:stability"). Required for store/delete.
-    #[schemars(description = "Key name for the secret. Convention: provider:{name}, gen:{name}, channel:{type}:{id}")]
+    #[schemars(
+        description = "Key name for the secret. Convention: provider:{name}, gen:{name}, channel:{type}:{id}"
+    )]
     pub key: Option<String>,
     /// Secret value. Required for 'store' action only.
     #[schemars(description = "The secret value to store. Only used with 'store' action.")]
@@ -59,7 +63,9 @@ impl AlephTool for VaultStoreTool {
     type Args = VaultStoreArgs;
     type Output = VaultStoreOutput;
 
-    fn requires_confirmation(&self) -> bool { true }
+    fn requires_confirmation(&self) -> bool {
+        true
+    }
 
     fn examples(&self) -> Option<Vec<String>> {
         Some(vec![
@@ -74,11 +80,14 @@ impl AlephTool for VaultStoreTool {
 
         let result = match args.action {
             VaultAction::Store => {
-                let key = args.key.as_deref()
-                    .ok_or_else(|| crate::error::AlephError::tool("'key' is required for store action"))?;
-                let secret = args.secret.as_deref()
-                    .ok_or_else(|| crate::error::AlephError::tool("'secret' is required for store action"))?;
-                self.manager.store_secret(key, secret)
+                let key = args.key.as_deref().ok_or_else(|| {
+                    crate::error::AlephError::tool("'key' is required for store action")
+                })?;
+                let secret = args.secret.as_deref().ok_or_else(|| {
+                    crate::error::AlephError::tool("'secret' is required for store action")
+                })?;
+                self.manager
+                    .store_secret(key, secret)
                     .map_err(|e| crate::error::AlephError::tool(e.to_string()))?;
                 VaultStoreOutput {
                     success: true,
@@ -87,9 +96,12 @@ impl AlephTool for VaultStoreTool {
                 }
             }
             VaultAction::Delete => {
-                let key = args.key.as_deref()
-                    .ok_or_else(|| crate::error::AlephError::tool("'key' is required for delete action"))?;
-                let deleted = self.manager.delete_secret(key)
+                let key = args.key.as_deref().ok_or_else(|| {
+                    crate::error::AlephError::tool("'key' is required for delete action")
+                })?;
+                let deleted = self
+                    .manager
+                    .delete_secret(key)
                     .map_err(|e| crate::error::AlephError::tool(e.to_string()))?;
                 VaultStoreOutput {
                     success: deleted,
@@ -102,7 +114,9 @@ impl AlephTool for VaultStoreTool {
                 }
             }
             VaultAction::List => {
-                let names = self.manager.list_secret_names()
+                let names = self
+                    .manager
+                    .list_secret_names()
                     .map_err(|e| crate::error::AlephError::tool(e.to_string()))?;
                 VaultStoreOutput {
                     success: true,

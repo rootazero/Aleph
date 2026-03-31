@@ -21,8 +21,8 @@
 //! };
 //! ```
 
-use std::collections::HashMap;
 use crate::sync_primitives::Arc;
+use std::collections::HashMap;
 
 use async_trait::async_trait;
 use schemars::JsonSchema;
@@ -386,7 +386,8 @@ impl SessionsSendTool {
                     Some(content) => {
                         // Check if the sub-agent's response was truncated (contains truncation marker)
                         // If so, automatically send a continuation request once
-                        let content = if content.contains("⚠️ 输出因 token 限制被截断") {
+                        let content = if content.contains("⚠️ 输出因 token 限制被截断")
+                        {
                             info!(
                                 run_id = %run_id,
                                 target = %target_key_str,
@@ -400,19 +401,29 @@ impl SessionsSendTool {
                                 timeout_secs: Some(args.timeout_seconds as u64),
                                 metadata: HashMap::new(),
                                 attachments: Vec::new(),
-                                pending_media: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+                                pending_media: std::sync::Arc::new(std::sync::Mutex::new(
+                                    Vec::new(),
+                                )),
                             };
-                            let continue_emitter: Arc<dyn crate::gateway::event_emitter::EventEmitter + Send + Sync> =
-                                Arc::new(NoOpEventEmitter::new());
+                            let continue_emitter: Arc<
+                                dyn crate::gateway::event_emitter::EventEmitter + Send + Sync,
+                            > = Arc::new(NoOpEventEmitter::new());
                             let continue_result = tokio::time::timeout(
                                 timeout_duration,
-                                execution_adapter.execute(continue_request, target_agent.clone(), continue_emitter),
-                            ).await;
+                                execution_adapter.execute(
+                                    continue_request,
+                                    target_agent.clone(),
+                                    continue_emitter,
+                                ),
+                            )
+                            .await;
 
                             match continue_result {
                                 Ok(Ok(())) => {
                                     // Fetch the continuation reply
-                                    let continuation = Self::fetch_last_reply(&target_agent, &target_session_key).await;
+                                    let continuation =
+                                        Self::fetch_last_reply(&target_agent, &target_session_key)
+                                            .await;
                                     match continuation {
                                         Some(cont_text) => {
                                             // Strip the truncation marker from original, append continuation
@@ -536,8 +547,7 @@ mod tests {
 
     #[test]
     fn test_args_default_timeout() {
-        let args: SessionsSendArgs =
-            serde_json::from_str(r#"{"message": "hello"}"#).unwrap();
+        let args: SessionsSendArgs = serde_json::from_str(r#"{"message": "hello"}"#).unwrap();
         assert_eq!(args.timeout_seconds, 30);
         assert!(args.session_key.is_none());
     }
@@ -607,39 +617,31 @@ mod tests {
 
     #[test]
     fn test_output_accepted() {
-        let output = SessionsSendOutput::accepted(
-            "run-2".to_string(),
-            "agent:main:main".to_string(),
-        );
+        let output =
+            SessionsSendOutput::accepted("run-2".to_string(), "agent:main:main".to_string());
         assert_eq!(output.status, SessionsSendStatus::Accepted);
         assert!(output.reply.is_none());
     }
 
     #[test]
     fn test_output_timeout() {
-        let output = SessionsSendOutput::timeout(
-            "run-3".to_string(),
-            "agent:main:main".to_string(),
-        );
+        let output =
+            SessionsSendOutput::timeout("run-3".to_string(), "agent:main:main".to_string());
         assert_eq!(output.status, SessionsSendStatus::Timeout);
     }
 
     #[test]
     fn test_output_forbidden() {
-        let output = SessionsSendOutput::forbidden(
-            "run-4".to_string(),
-            "Policy denied".to_string(),
-        );
+        let output =
+            SessionsSendOutput::forbidden("run-4".to_string(), "Policy denied".to_string());
         assert_eq!(output.status, SessionsSendStatus::Forbidden);
         assert_eq!(output.error, Some("Policy denied".to_string()));
     }
 
     #[test]
     fn test_output_error() {
-        let output = SessionsSendOutput::error(
-            "run-5".to_string(),
-            "Something went wrong".to_string(),
-        );
+        let output =
+            SessionsSendOutput::error("run-5".to_string(), "Something went wrong".to_string());
         assert_eq!(output.status, SessionsSendStatus::Error);
         assert_eq!(output.error, Some("Something went wrong".to_string()));
     }
@@ -673,7 +675,10 @@ mod tests {
         let output = AlephTool::call(&tool, args).await.unwrap();
         assert_eq!(output.status, SessionsSendStatus::Error);
         assert!(output.error.is_some());
-        assert!(output.error.unwrap().contains("GatewayContext not configured"));
+        assert!(output
+            .error
+            .unwrap()
+            .contains("GatewayContext not configured"));
     }
 
     // ============================================================================
@@ -687,7 +692,9 @@ mod tests {
         let routing_key = RoutingKey::main("test-agent");
         let gateway_key = session_key_to_gateway(&routing_key);
 
-        assert!(matches!(gateway_key, SessionKey::Main { agent_id, .. } if agent_id == "test-agent"));
+        assert!(
+            matches!(gateway_key, SessionKey::Main { agent_id, .. } if agent_id == "test-agent")
+        );
     }
 
     #[test]
@@ -697,7 +704,9 @@ mod tests {
         let routing_key = RoutingKey::dm("main", "telegram", "user123", DmScope::PerPeer);
         let gateway_key = session_key_to_gateway(&routing_key);
 
-        assert!(matches!(gateway_key, SessionKey::PerPeer { agent_id, peer_id, .. } if agent_id == "main" && peer_id == "user123"));
+        assert!(
+            matches!(gateway_key, SessionKey::PerPeer { agent_id, peer_id, .. } if agent_id == "main" && peer_id == "user123")
+        );
     }
 
     #[test]
@@ -707,6 +716,8 @@ mod tests {
         let routing_key = RoutingKey::task("main", "cron", "daily");
         let gateway_key = session_key_to_gateway(&routing_key);
 
-        assert!(matches!(gateway_key, SessionKey::Task { agent_id, task_type, task_id } if agent_id == "main" && task_type == "cron" && task_id == "daily"));
+        assert!(
+            matches!(gateway_key, SessionKey::Task { agent_id, task_type, task_id } if agent_id == "main" && task_type == "cron" && task_id == "daily")
+        );
     }
 }

@@ -231,7 +231,11 @@ mod tests {
         let invalid_suffix = "memory-backup-2026-02-24.json";
 
         assert!(valid.starts_with("memory-backup-") && valid.ends_with(".jsonl"));
-        assert!(!(invalid_prefix.starts_with("memory-backup-") && invalid_prefix.ends_with(".jsonl")));
-        assert!(!(invalid_suffix.starts_with("memory-backup-") && invalid_suffix.ends_with(".jsonl")));
+        assert!(
+            !(invalid_prefix.starts_with("memory-backup-") && invalid_prefix.ends_with(".jsonl"))
+        );
+        assert!(
+            !(invalid_suffix.starts_with("memory-backup-") && invalid_suffix.ends_with(".jsonl"))
+        );
     }
 }

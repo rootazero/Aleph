@@ -1,9 +1,9 @@
 //! PTY-based supervisor implementation.
 
+use crate::sync_primitives::Arc;
+use crate::sync_primitives::{AtomicBool, Ordering};
 use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize as PortablePtySize};
 use std::io::{BufRead, BufReader, Write};
-use crate::sync_primitives::{AtomicBool, Ordering};
-use crate::sync_primitives::Arc;
 use tokio::sync::mpsc;
 
 use crate::exec::SecretMasker;

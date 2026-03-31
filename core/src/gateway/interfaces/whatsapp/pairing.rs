@@ -174,7 +174,10 @@ pub fn validate_transition(from: &PairingState, to: &PairingState) -> Result<(),
         ),
 
         PairingState::QrExpired => {
-            matches!(to, PairingState::WaitingQr { .. } | PairingState::Failed { .. })
+            matches!(
+                to,
+                PairingState::WaitingQr { .. } | PairingState::Failed { .. }
+            )
         }
 
         PairingState::Scanned => {
@@ -188,7 +191,9 @@ pub fn validate_transition(from: &PairingState, to: &PairingState) -> Result<(),
 
         PairingState::Syncing { .. } => matches!(
             to,
-            PairingState::Syncing { .. } | PairingState::Connected { .. } | PairingState::Failed { .. }
+            PairingState::Syncing { .. }
+                | PairingState::Connected { .. }
+                | PairingState::Failed { .. }
         ),
 
         PairingState::Connected { .. } => matches!(to, PairingState::Disconnected { .. }),
@@ -257,7 +262,10 @@ mod tests {
 
     #[test]
     fn test_channel_status_idle() {
-        assert_eq!(PairingState::Idle.to_channel_status(), ChannelStatus::Disconnected);
+        assert_eq!(
+            PairingState::Idle.to_channel_status(),
+            ChannelStatus::Disconnected
+        );
     }
 
     #[test]

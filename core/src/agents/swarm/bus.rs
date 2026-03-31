@@ -190,7 +190,7 @@ impl Default for AgentMessageBus {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agents::swarm::events::{CriticalEvent, ImportantEvent, InfoEvent, FileOperation};
+    use crate::agents::swarm::events::{CriticalEvent, FileOperation, ImportantEvent, InfoEvent};
 
     #[tokio::test]
     async fn test_bus_creation() {
@@ -275,8 +275,7 @@ mod tests {
     async fn test_subscribe_all() {
         let bus = AgentMessageBus::new();
 
-        let (mut critical_rx, mut important_rx, mut info_rx) =
-            bus.subscribe_all().await.unwrap();
+        let (mut critical_rx, mut important_rx, mut info_rx) = bus.subscribe_all().await.unwrap();
 
         // Publish events to all tiers
         bus.publish(AgentEvent::Critical(CriticalEvent::GlobalFailure {

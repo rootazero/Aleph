@@ -15,11 +15,11 @@ use crate::sync_primitives::Arc;
 use async_trait::async_trait;
 use serde_json;
 
-use aleph_desktop::pim_types::{NewCalendarEvent, NewReminder};
 use crate::approval::{ActionRequest, ActionType, ApprovalDecision, ApprovalPolicy};
 use crate::desktop::DesktopBridgeClient;
 use crate::error::Result;
 use crate::tools::AlephTool;
+use aleph_desktop::pim_types::{NewCalendarEvent, NewReminder};
 
 /// PIM tool — unified access to macOS Calendar, Reminders, Notes, and Contacts.
 #[derive(Clone)]
@@ -479,7 +479,10 @@ mod tests {
         args.from = Some("2026-02-27T00:00:00Z".into());
         args.to = Some("2026-02-28T00:00:00Z".into());
         let req = build_pim_request(&args).unwrap();
-        assert!(matches!(req, crate::desktop::DesktopRequest::PimCalendarList { .. }));
+        assert!(matches!(
+            req,
+            crate::desktop::DesktopRequest::PimCalendarList { .. }
+        ));
     }
 
     #[test]
@@ -501,7 +504,10 @@ mod tests {
         let mut args = make_args("calendar_get");
         args.id = Some("evt-123".into());
         let req = build_pim_request(&args).unwrap();
-        assert!(matches!(req, crate::desktop::DesktopRequest::PimCalendarGet { .. }));
+        assert!(matches!(
+            req,
+            crate::desktop::DesktopRequest::PimCalendarGet { .. }
+        ));
     }
 
     #[test]
@@ -517,7 +523,10 @@ mod tests {
         args.start = Some("2026-02-27T09:00:00Z".into());
         args.end = Some("2026-02-27T10:00:00Z".into());
         let req = build_pim_request(&args).unwrap();
-        assert!(matches!(req, crate::desktop::DesktopRequest::PimCalendarCreate { .. }));
+        assert!(matches!(
+            req,
+            crate::desktop::DesktopRequest::PimCalendarCreate { .. }
+        ));
     }
 
     #[test]
@@ -534,7 +543,10 @@ mod tests {
         args.id = Some("evt-123".into());
         args.title = Some("Updated title".into());
         let req = build_pim_request(&args).unwrap();
-        assert!(matches!(req, crate::desktop::DesktopRequest::PimCalendarUpdate { .. }));
+        assert!(matches!(
+            req,
+            crate::desktop::DesktopRequest::PimCalendarUpdate { .. }
+        ));
     }
 
     #[test]
@@ -542,14 +554,20 @@ mod tests {
         let mut args = make_args("calendar_delete");
         args.id = Some("evt-123".into());
         let req = build_pim_request(&args).unwrap();
-        assert!(matches!(req, crate::desktop::DesktopRequest::PimCalendarDelete { .. }));
+        assert!(matches!(
+            req,
+            crate::desktop::DesktopRequest::PimCalendarDelete { .. }
+        ));
     }
 
     #[test]
     fn test_build_calendar_calendars() {
         let args = make_args("calendar_calendars");
         let req = build_pim_request(&args).unwrap();
-        assert!(matches!(req, crate::desktop::DesktopRequest::PimCalendarCalendars));
+        assert!(matches!(
+            req,
+            crate::desktop::DesktopRequest::PimCalendarCalendars
+        ));
     }
 
     // -- Reminders tests -----------------------------------------------------
@@ -558,7 +576,10 @@ mod tests {
     fn test_build_reminders_list() {
         let args = make_args("reminders_list");
         let req = build_pim_request(&args).unwrap();
-        assert!(matches!(req, crate::desktop::DesktopRequest::PimRemindersList { .. }));
+        assert!(matches!(
+            req,
+            crate::desktop::DesktopRequest::PimRemindersList { .. }
+        ));
     }
 
     #[test]
@@ -566,7 +587,10 @@ mod tests {
         let mut args = make_args("reminders_get");
         args.id = Some("rem-456".into());
         let req = build_pim_request(&args).unwrap();
-        assert!(matches!(req, crate::desktop::DesktopRequest::PimRemindersGet { .. }));
+        assert!(matches!(
+            req,
+            crate::desktop::DesktopRequest::PimRemindersGet { .. }
+        ));
     }
 
     #[test]
@@ -575,7 +599,10 @@ mod tests {
         args.title = Some("Buy milk".into());
         args.priority = Some(1);
         let req = build_pim_request(&args).unwrap();
-        assert!(matches!(req, crate::desktop::DesktopRequest::PimRemindersCreate { .. }));
+        assert!(matches!(
+            req,
+            crate::desktop::DesktopRequest::PimRemindersCreate { .. }
+        ));
     }
 
     #[test]
@@ -590,7 +617,10 @@ mod tests {
         args.id = Some("rem-456".into());
         args.completed = Some(true);
         let req = build_pim_request(&args).unwrap();
-        assert!(matches!(req, crate::desktop::DesktopRequest::PimRemindersComplete { .. }));
+        assert!(matches!(
+            req,
+            crate::desktop::DesktopRequest::PimRemindersComplete { .. }
+        ));
     }
 
     #[test]
@@ -605,14 +635,20 @@ mod tests {
         let mut args = make_args("reminders_delete");
         args.id = Some("rem-456".into());
         let req = build_pim_request(&args).unwrap();
-        assert!(matches!(req, crate::desktop::DesktopRequest::PimRemindersDelete { .. }));
+        assert!(matches!(
+            req,
+            crate::desktop::DesktopRequest::PimRemindersDelete { .. }
+        ));
     }
 
     #[test]
     fn test_build_reminders_lists() {
         let args = make_args("reminders_lists");
         let req = build_pim_request(&args).unwrap();
-        assert!(matches!(req, crate::desktop::DesktopRequest::PimRemindersLists));
+        assert!(matches!(
+            req,
+            crate::desktop::DesktopRequest::PimRemindersLists
+        ));
     }
 
     // -- Notes tests ---------------------------------------------------------
@@ -621,7 +657,10 @@ mod tests {
     fn test_build_notes_list() {
         let args = make_args("notes_list");
         let req = build_pim_request(&args).unwrap();
-        assert!(matches!(req, crate::desktop::DesktopRequest::PimNotesList { .. }));
+        assert!(matches!(
+            req,
+            crate::desktop::DesktopRequest::PimNotesList { .. }
+        ));
     }
 
     #[test]
@@ -629,7 +668,10 @@ mod tests {
         let mut args = make_args("notes_get");
         args.id = Some("note-789".into());
         let req = build_pim_request(&args).unwrap();
-        assert!(matches!(req, crate::desktop::DesktopRequest::PimNotesGet { .. }));
+        assert!(matches!(
+            req,
+            crate::desktop::DesktopRequest::PimNotesGet { .. }
+        ));
     }
 
     #[test]
@@ -638,7 +680,10 @@ mod tests {
         args.title = Some("My note".into());
         args.body = Some("Some content".into());
         let req = build_pim_request(&args).unwrap();
-        assert!(matches!(req, crate::desktop::DesktopRequest::PimNotesCreate { .. }));
+        assert!(matches!(
+            req,
+            crate::desktop::DesktopRequest::PimNotesCreate { .. }
+        ));
     }
 
     #[test]
@@ -653,7 +698,10 @@ mod tests {
         args.id = Some("note-789".into());
         args.body = Some("Updated content".into());
         let req = build_pim_request(&args).unwrap();
-        assert!(matches!(req, crate::desktop::DesktopRequest::PimNotesUpdate { .. }));
+        assert!(matches!(
+            req,
+            crate::desktop::DesktopRequest::PimNotesUpdate { .. }
+        ));
     }
 
     #[test]
@@ -661,14 +709,20 @@ mod tests {
         let mut args = make_args("notes_delete");
         args.id = Some("note-789".into());
         let req = build_pim_request(&args).unwrap();
-        assert!(matches!(req, crate::desktop::DesktopRequest::PimNotesDelete { .. }));
+        assert!(matches!(
+            req,
+            crate::desktop::DesktopRequest::PimNotesDelete { .. }
+        ));
     }
 
     #[test]
     fn test_build_notes_folders() {
         let args = make_args("notes_folders");
         let req = build_pim_request(&args).unwrap();
-        assert!(matches!(req, crate::desktop::DesktopRequest::PimNotesFolders));
+        assert!(matches!(
+            req,
+            crate::desktop::DesktopRequest::PimNotesFolders
+        ));
     }
 
     // -- Contacts tests ------------------------------------------------------
@@ -678,7 +732,10 @@ mod tests {
         let mut args = make_args("contacts_search");
         args.query = Some("John".into());
         let req = build_pim_request(&args).unwrap();
-        assert!(matches!(req, crate::desktop::DesktopRequest::PimContactsSearch { .. }));
+        assert!(matches!(
+            req,
+            crate::desktop::DesktopRequest::PimContactsSearch { .. }
+        ));
     }
 
     #[test]
@@ -692,7 +749,10 @@ mod tests {
         let mut args = make_args("contacts_get");
         args.id = Some("ct-abc".into());
         let req = build_pim_request(&args).unwrap();
-        assert!(matches!(req, crate::desktop::DesktopRequest::PimContactsGet { .. }));
+        assert!(matches!(
+            req,
+            crate::desktop::DesktopRequest::PimContactsGet { .. }
+        ));
     }
 
     #[test]
@@ -702,7 +762,10 @@ mod tests {
         args.family_name = Some("Doe".into());
         args.emails = Some(vec!["jane@example.com".into()]);
         let req = build_pim_request(&args).unwrap();
-        assert!(matches!(req, crate::desktop::DesktopRequest::PimContactsCreate { .. }));
+        assert!(matches!(
+            req,
+            crate::desktop::DesktopRequest::PimContactsCreate { .. }
+        ));
     }
 
     #[test]
@@ -717,7 +780,10 @@ mod tests {
         args.id = Some("ct-abc".into());
         args.organization = Some("Acme Corp".into());
         let req = build_pim_request(&args).unwrap();
-        assert!(matches!(req, crate::desktop::DesktopRequest::PimContactsUpdate { .. }));
+        assert!(matches!(
+            req,
+            crate::desktop::DesktopRequest::PimContactsUpdate { .. }
+        ));
     }
 
     #[test]
@@ -725,14 +791,20 @@ mod tests {
         let mut args = make_args("contacts_delete");
         args.id = Some("ct-abc".into());
         let req = build_pim_request(&args).unwrap();
-        assert!(matches!(req, crate::desktop::DesktopRequest::PimContactsDelete { .. }));
+        assert!(matches!(
+            req,
+            crate::desktop::DesktopRequest::PimContactsDelete { .. }
+        ));
     }
 
     #[test]
     fn test_build_contacts_groups() {
         let args = make_args("contacts_groups");
         let req = build_pim_request(&args).unwrap();
-        assert!(matches!(req, crate::desktop::DesktopRequest::PimContactsGroups));
+        assert!(matches!(
+            req,
+            crate::desktop::DesktopRequest::PimContactsGroups
+        ));
     }
 
     // -- Error tests ---------------------------------------------------------
@@ -741,7 +813,10 @@ mod tests {
     fn test_build_unknown_action() {
         let args = make_args("invalid_action");
         let err = build_pim_request(&args).unwrap_err();
-        assert!(err.contains("invalid_action"), "error should mention the unknown action");
+        assert!(
+            err.contains("invalid_action"),
+            "error should mention the unknown action"
+        );
     }
 
     // -- Write action classification tests -----------------------------------
@@ -810,11 +885,7 @@ mod tests {
         args.end = Some("2026-02-27T10:00:00Z".into());
         let output = AlephTool::call(&tool, args).await.unwrap();
         assert!(!output.success);
-        assert!(output
-            .message
-            .as_deref()
-            .unwrap()
-            .contains("Action denied"));
+        assert!(output.message.as_deref().unwrap().contains("Action denied"));
     }
 
     #[tokio::test]

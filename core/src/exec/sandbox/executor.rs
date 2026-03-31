@@ -7,8 +7,8 @@ use crate::error::{AlephError, Result};
 use crate::exec::sandbox::adapter::{ExecutionResult, SandboxAdapter, SandboxCommand};
 use crate::exec::sandbox::audit::{ExecutionStatus, SandboxAuditLog};
 use crate::exec::sandbox::capabilities::Capabilities;
-use serde::{Deserialize, Serialize};
 use crate::sync_primitives::Arc;
+use serde::{Deserialize, Serialize};
 
 /// Policy for handling sandbox unavailability
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -123,9 +123,7 @@ impl SandboxManager {
         );
 
         match self.fallback_policy {
-            FallbackPolicy::Deny => {
-                Err(AlephError::SandboxUnavailable { reason })
-            }
+            FallbackPolicy::Deny => Err(AlephError::SandboxUnavailable { reason }),
             FallbackPolicy::RequestApproval => {
                 // TODO: Implement approval workflow
                 Err(AlephError::SandboxUnavailable {

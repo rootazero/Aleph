@@ -45,9 +45,9 @@ impl ChromeMcpDriver {
         self.ensure_session(profile_name).await?;
 
         let sessions = self.sessions.read().await;
-        let session = sessions
-            .get(profile_name)
-            .ok_or_else(|| BrowserError::ChromeMcpError("Session not found after creation".into()))?;
+        let session = sessions.get(profile_name).ok_or_else(|| {
+            BrowserError::ChromeMcpError("Session not found after creation".into())
+        })?;
 
         // MCP tools are namespaced with server prefix: "chrome-mcp-{profile}:{tool}"
         let server_name = format!("chrome-mcp-{profile_name}");
@@ -74,7 +74,9 @@ impl ChromeMcpDriver {
 
         if !result.success {
             return Err(BrowserError::ChromeMcpError(
-                result.error.unwrap_or_else(|| "Unknown Chrome MCP error".into()),
+                result
+                    .error
+                    .unwrap_or_else(|| "Unknown Chrome MCP error".into()),
             ));
         }
         Ok(result.content)
@@ -119,9 +121,7 @@ impl ChromeMcpDriver {
         let client = McpClient::new();
         match client.start_external_server(config).await {
             Ok(()) => {
-                tracing::info!(
-                    "Chrome DevTools MCP session started for profile '{profile_name}'"
-                );
+                tracing::info!("Chrome DevTools MCP session started for profile '{profile_name}'");
                 tracing::warn!(
                     "Existing-session mode connects to your Chrome with remote debugging enabled. \
                      Any local process can access browser data (cookies, passwords) via the debug port. \
@@ -260,7 +260,10 @@ mod integration_tests {
         let config = ChromeMcpConfig::default();
         let driver = Arc::new(ChromeMcpDriver::new(config));
         // Ensure session is created
-        driver.ensure_session("user").await.expect("session should start");
+        driver
+            .ensure_session("user")
+            .await
+            .expect("session should start");
         let sessions = driver.sessions.read().await;
         let session = sessions.get("user").expect("session exists");
         let tools = session.client.list_tools().await;
@@ -282,13 +285,17 @@ mod integration_tests {
 
         // Call directly via client with full prefixed name
         println!("=== Calling chrome-mcp-user:list_pages via client...");
-        let r1 = session.client.call_tool("chrome-mcp-user:list_pages", serde_json::json!({})).await;
+        let r1 = session
+            .client
+            .call_tool("chrome-mcp-user:list_pages", serde_json::json!({}))
+            .await;
         println!("=== client result: {r1:?}");
 
         // Also try raw without prefix via the connection directly
         // Let's just see what tool names the server actually has
         let tools = session.client.list_tools().await;
-        let page_tools: Vec<_> = tools.iter()
+        let page_tools: Vec<_> = tools
+            .iter()
             .filter(|t| t.name.contains("page"))
             .map(|t| &t.name)
             .collect();
@@ -327,11 +334,22 @@ mod integration_tests {
         let tabs = backend.list_tabs().await.expect("list_tabs");
         println!("Tabs for snapshot: {tabs:?}");
         // Use second tab (skip chrome://inspect which may not have useful content)
-        let tab_id = tabs.get(1).or(tabs.first()).expect("need at least one tab").id.clone();
+        let tab_id = tabs
+            .get(1)
+            .or(tabs.first())
+            .expect("need at least one tab")
+            .id
+            .clone();
         let tab_id = &tab_id;
 
-        let snapshot = backend.snapshot(tab_id).await.expect("snapshot should succeed");
-        assert!(!snapshot.elements.is_empty(), "Snapshot should have elements");
+        let snapshot = backend
+            .snapshot(tab_id)
+            .await
+            .expect("snapshot should succeed");
+        assert!(
+            !snapshot.elements.is_empty(),
+            "Snapshot should have elements"
+        );
         println!("Snapshot elements: {}", snapshot.elements.len());
     }
 }

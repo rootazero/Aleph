@@ -87,27 +87,47 @@ impl SignalDetector {
         let mut signals = Vec::new();
 
         // Check for preferences
-        if self.preference_keywords.iter().any(|kw| lower_text.contains(kw)) {
+        if self
+            .preference_keywords
+            .iter()
+            .any(|kw| lower_text.contains(kw))
+        {
             signals.push(Signal::UserPreference);
         }
 
         // Check for greetings
-        if self.greeting_keywords.iter().any(|kw| lower_text.contains(kw)) {
+        if self
+            .greeting_keywords
+            .iter()
+            .any(|kw| lower_text.contains(kw))
+        {
             signals.push(Signal::Greeting);
         }
 
         // Check for small talk
-        if self.small_talk_keywords.iter().any(|kw| lower_text.contains(kw)) {
+        if self
+            .small_talk_keywords
+            .iter()
+            .any(|kw| lower_text.contains(kw))
+        {
             signals.push(Signal::SmallTalk);
         }
 
         // Check for decisions
-        if self.decision_keywords.iter().any(|kw| lower_text.contains(kw)) {
+        if self
+            .decision_keywords
+            .iter()
+            .any(|kw| lower_text.contains(kw))
+        {
             signals.push(Signal::Decision);
         }
 
         // Check for personal info
-        if self.personal_keywords.iter().any(|kw| lower_text.contains(kw)) {
+        if self
+            .personal_keywords
+            .iter()
+            .any(|kw| lower_text.contains(kw))
+        {
             signals.push(Signal::PersonalInfo);
         }
 
@@ -117,8 +137,11 @@ impl SignalDetector {
         }
 
         // Check for answers (heuristic: contains "is", "are", "was", "were")
-        if lower_text.contains(" is ") || lower_text.contains(" are ") ||
-           lower_text.contains(" was ") || lower_text.contains(" were ") {
+        if lower_text.contains(" is ")
+            || lower_text.contains(" are ")
+            || lower_text.contains(" was ")
+            || lower_text.contains(" were ")
+        {
             signals.push(Signal::Answer);
         }
 

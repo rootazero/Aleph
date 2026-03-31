@@ -36,12 +36,12 @@
 //! agent.generate_and_deploy_rules().await;
 //! ```
 
-use super::AtomicAction;
 use super::reflex_layer::ReflexLayer;
-use super::rule_learner::{RuleLearner, LearnerStats};
+use super::rule_learner::{LearnerStats, RuleLearner};
+use super::AtomicAction;
+use crate::sync_primitives::Arc;
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
-use crate::sync_primitives::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
@@ -68,14 +68,9 @@ pub enum LearningEvent {
         error: String,
     },
     /// Rule generated
-    RuleGenerated {
-        pattern: String,
-        confidence: f64,
-    },
+    RuleGenerated { pattern: String, confidence: f64 },
     /// Rule deployed to L2
-    RuleDeployed {
-        pattern: String,
-    },
+    RuleDeployed { pattern: String },
 }
 
 /// Learning agent for automatic rule generation
@@ -242,10 +237,7 @@ impl LearningAgent {
 
     /// Record a learning event
     async fn record_event(&self, key: &str, event: LearningEvent) {
-        self.events
-            .entry(key.to_string())
-            .or_default()
-            .push(event);
+        self.events.entry(key.to_string()).or_default().push(event);
     }
 
     /// Get learning statistics
@@ -319,7 +311,11 @@ mod tests {
 
         for _ in 0..5 {
             agent
-                .on_l3_success("search for TODO", action.clone(), Duration::from_millis(100))
+                .on_l3_success(
+                    "search for TODO",
+                    action.clone(),
+                    Duration::from_millis(100),
+                )
                 .await;
         }
 
@@ -342,7 +338,11 @@ mod tests {
         };
 
         agent
-            .on_l3_failure("run invalid command", action, "Command not found".to_string())
+            .on_l3_failure(
+                "run invalid command",
+                action,
+                "Command not found".to_string(),
+            )
             .await;
 
         let stats = agent.stats().await;

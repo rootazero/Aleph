@@ -4,8 +4,8 @@ use std::collections::HashSet;
 
 use crate::memory::context::MemoryFact;
 use crate::memory::namespace::NamespaceScope;
-use crate::memory::store::{MemoryBackend, MemoryStore};
 use crate::memory::store::types::SearchFilter;
+use crate::memory::store::{MemoryBackend, MemoryStore};
 use crate::Result;
 
 use super::config::{RippleConfig, RippleResult};
@@ -51,12 +51,7 @@ impl RippleTask {
                 let dim_hint = embedding.len() as u32;
                 let scored_facts = self
                     .database
-                    .vector_search(
-                        embedding,
-                        dim_hint,
-                        &filter,
-                        self.config.max_facts_per_hop,
-                    )
+                    .vector_search(embedding, dim_hint, &filter, self.config.max_facts_per_hop)
                     .await?;
 
                 // Convert ScoredFact to MemoryFact, attaching similarity_score

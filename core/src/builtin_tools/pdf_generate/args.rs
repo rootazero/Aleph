@@ -27,7 +27,10 @@ impl PageSize {
             PageSize::A4 => (210.0, 297.0),
             PageSize::Letter => (215.9, 279.4),
             PageSize::A3 => (297.0, 420.0),
-            PageSize::Custom { width_mm, height_mm } => (*width_mm, *height_mm),
+            PageSize::Custom {
+                width_mm,
+                height_mm,
+            } => (*width_mm, *height_mm),
         }
     }
 
@@ -79,9 +82,7 @@ impl ContentFormat {
                 score += 1;
             }
             // Ordered list items: 1. item
-            if trimmed.len() > 2
-                && trimmed.as_bytes()[0].is_ascii_digit()
-                && trimmed.contains(". ")
+            if trimmed.len() > 2 && trimmed.as_bytes()[0].is_ascii_digit() && trimmed.contains(". ")
             {
                 score += 1;
             }

@@ -116,7 +116,11 @@ mod tests {
             ..Default::default()
         };
         let err = config.validate().unwrap_err();
-        assert!(err.contains("/"), "Error should mention '/' requirement: {}", err);
+        assert!(
+            err.contains("/"),
+            "Error should mention '/' requirement: {}",
+            err
+        );
     }
 
     #[test]
@@ -150,10 +154,7 @@ mod tests {
     #[test]
     fn test_sender_allowed_with_list() {
         let config = WebhookChannelConfig {
-            allowed_senders: vec![
-                "user-123".to_string(),
-                "user-456".to_string(),
-            ],
+            allowed_senders: vec!["user-123".to_string(), "user-456".to_string()],
             ..Default::default()
         };
         assert!(config.is_sender_allowed("user-123"));

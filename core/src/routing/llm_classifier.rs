@@ -95,10 +95,7 @@ fn extract_json(text: &str) -> &str {
     if let Some(start) = trimmed.find("```") {
         let after_backticks = &trimmed[start + 3..];
         // Skip optional language identifier (e.g., "json")
-        let json_start = after_backticks
-            .find('\n')
-            .map(|i| i + 1)
-            .unwrap_or(0);
+        let json_start = after_backticks.find('\n').map(|i| i + 1).unwrap_or(0);
         let content = &after_backticks[json_start..];
         if let Some(end) = content.find("```") {
             return content[..end].trim();
@@ -146,8 +143,7 @@ mod tests {
 
     #[test]
     fn parse_collaborative() {
-        let response =
-            r#"{"category": "collaborative", "reason": "debate", "collab_strategy": "adversarial"}"#;
+        let response = r#"{"category": "collaborative", "reason": "debate", "collab_strategy": "adversarial"}"#;
         let route = parse_classify_response(response);
         assert_eq!(route.label(), "collaborative");
         if let TaskRoute::Collaborative { strategy, .. } = &route {

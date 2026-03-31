@@ -18,7 +18,10 @@ use crate::builtin_tools::error::ToolError;
 ///
 /// Takes a reference to args and a pre-resolved output path.
 /// Path resolution is handled by the caller (mod.rs).
-pub fn generate(args: &PdfGenerateArgs, output_path: &Path) -> Result<PdfGenerateOutput, ToolError> {
+pub fn generate(
+    args: &PdfGenerateArgs,
+    output_path: &Path,
+) -> Result<PdfGenerateOutput, ToolError> {
     let (page_width_mm, page_height_mm) = args.page_size.dimensions_mm();
     let _margin = Mm(args.margin_mm);
 
@@ -37,9 +40,10 @@ pub fn generate(args: &PdfGenerateArgs, output_path: &Path) -> Result<PdfGenerat
     // Try to load a font
     let font = if let Some(font_path) = find_system_font() {
         debug!("Using system font: {:?}", font_path);
-        match doc.add_external_font(File::open(&font_path).map_err(|e| {
-            ToolError::Execution(format!("Failed to open font file: {}", e))
-        })?) {
+        match doc.add_external_font(
+            File::open(&font_path)
+                .map_err(|e| ToolError::Execution(format!("Failed to open font file: {}", e)))?,
+        ) {
             Ok(f) => Some(f),
             Err(e) => {
                 warn!("Failed to load font: {}, using built-in font", e);
@@ -52,9 +56,9 @@ pub fn generate(args: &PdfGenerateArgs, output_path: &Path) -> Result<PdfGenerat
     };
 
     // Use built-in font if external font failed
-    let builtin_font = doc.add_builtin_font(BuiltinFont::Helvetica).map_err(|e| {
-        ToolError::Execution(format!("Failed to add built-in font: {}", e))
-    })?;
+    let builtin_font = doc
+        .add_builtin_font(BuiltinFont::Helvetica)
+        .map_err(|e| ToolError::Execution(format!("Failed to add built-in font: {}", e)))?;
 
     let active_font = font.as_ref().unwrap_or(&builtin_font);
 
@@ -65,26 +69,24 @@ pub fn generate(args: &PdfGenerateArgs, output_path: &Path) -> Result<PdfGenerat
 
     // Helper to add new page
     let add_new_page = |doc: &PdfDocumentReference| -> (PdfPageIndex, PdfLayerReference) {
-        let (new_page, new_layer) =
-            doc.add_page(Mm(page_width_mm), Mm(page_height_mm), "Layer 1");
+        let (new_page, new_layer) = doc.add_page(Mm(page_width_mm), Mm(page_height_mm), "Layer 1");
         (new_page, doc.get_page(new_page).get_layer(new_layer))
     };
 
     // Helper to check and handle page break
-    let check_page_break =
-        |y: &mut f32,
-         doc: &PdfDocumentReference,
-         layer: &mut PdfLayerReference,
-         page: &mut PdfPageIndex,
-         count: &mut usize| {
-            if *y < args.margin_mm + line_height {
-                let (new_page, new_layer) = add_new_page(doc);
-                *page = new_page;
-                *layer = new_layer;
-                *count += 1;
-                *y = page_height_mm - args.margin_mm - args.font_size;
-            }
-        };
+    let check_page_break = |y: &mut f32,
+                            doc: &PdfDocumentReference,
+                            layer: &mut PdfLayerReference,
+                            page: &mut PdfPageIndex,
+                            count: &mut usize| {
+        if *y < args.margin_mm + line_height {
+            let (new_page, new_layer) = add_new_page(doc);
+            *page = new_page;
+            *layer = new_layer;
+            *count += 1;
+            *y = page_height_mm - args.margin_mm - args.font_size;
+        }
+    };
 
     // Render title if provided
     if let Some(ref title) = args.title {
@@ -331,13 +333,11 @@ pub fn generate(args: &PdfGenerateArgs, output_path: &Path) -> Result<PdfGenerat
     }
 
     // Save PDF
-    let file = File::create(output_path).map_err(|e| {
-        ToolError::Execution(format!("Failed to create PDF file: {}", e))
-    })?;
+    let file = File::create(output_path)
+        .map_err(|e| ToolError::Execution(format!("Failed to create PDF file: {}", e)))?;
 
-    doc.save(&mut BufWriter::new(file)).map_err(|e| {
-        ToolError::Execution(format!("Failed to save PDF: {}", e))
-    })?;
+    doc.save(&mut BufWriter::new(file))
+        .map_err(|e| ToolError::Execution(format!("Failed to save PDF: {}", e)))?;
 
     info!(
         output = %output_path.display(),
@@ -379,15 +379,15 @@ pub fn find_system_font() -> Option<PathBuf> {
     // (PingFang/Hiragino/STHeiti support both Latin AND CJK characters)
     let font_paths = if cfg!(target_os = "macos") {
         vec![
-            "/System/Library/Fonts/PingFang.ttc",            // macOS 10.11+ (may be absent on some versions)
-            "/System/Library/Fonts/Hiragino Sans GB.ttc",    // CJK sans-serif, widely available
-            "/System/Library/Fonts/STHeiti Medium.ttc",      // STHeiti CJK
+            "/System/Library/Fonts/PingFang.ttc", // macOS 10.11+ (may be absent on some versions)
+            "/System/Library/Fonts/Hiragino Sans GB.ttc", // CJK sans-serif, widely available
+            "/System/Library/Fonts/STHeiti Medium.ttc", // STHeiti CJK
             "/System/Library/Fonts/Supplemental/Songti.ttc", // CJK serif fallback
-            "/System/Library/Fonts/Helvetica.ttc",           // Latin-only last resort
+            "/System/Library/Fonts/Helvetica.ttc", // Latin-only last resort
         ]
     } else if cfg!(target_os = "windows") {
         vec![
-            "C:\\Windows\\Fonts\\msyh.ttc", // Microsoft YaHei — CJK + Latin
+            "C:\\Windows\\Fonts\\msyh.ttc",   // Microsoft YaHei — CJK + Latin
             "C:\\Windows\\Fonts\\simsun.ttc", // SimSun — CJK fallback
             "C:\\Windows\\Fonts\\arial.ttf",
         ]
@@ -421,10 +421,7 @@ pub fn wrap_text(text: &str, max_width_mm: f32, font_size: f32) -> Vec<String> {
     }
 
     // Quick check: calculate display width
-    let display_width: usize = text
-        .chars()
-        .map(|c| if is_cjk(c) { 2 } else { 1 })
-        .sum();
+    let display_width: usize = text.chars().map(|c| if is_cjk(c) { 2 } else { 1 }).sum();
     if display_width <= max_units {
         return vec![text.to_string()];
     }
@@ -488,13 +485,7 @@ pub fn render_text(
                 *y_position = page_height_mm - margin - font_size;
             }
 
-            current_layer.use_text(
-                &wrapped_line,
-                font_size,
-                Mm(margin),
-                Mm(*y_position),
-                font,
-            );
+            current_layer.use_text(&wrapped_line, font_size, Mm(margin), Mm(*y_position), font);
             *y_position -= line_height;
         }
     }

@@ -95,8 +95,14 @@ impl FeatureExtractor {
         Self {
             intent_keywords: IntentKeywords::default(),
             stop_words: Self::default_stop_words(),
-            file_extension_regex: Regex::new(r"\b\w+\.(rs|toml|md|txt|json|yaml|yml|js|ts|py|go|java|c|cpp|h|hpp)\b").unwrap(),
-            command_regex: Regex::new(r"\b(git|cargo|npm|python|node|bash|sh|ls|cd|pwd|cat|grep|find|mv|cp|rm|mkdir)\b").unwrap(),
+            file_extension_regex: Regex::new(
+                r"\b\w+\.(rs|toml|md|txt|json|yaml|yml|js|ts|py|go|java|c|cpp|h|hpp)\b",
+            )
+            .unwrap(),
+            command_regex: Regex::new(
+                r"\b(git|cargo|npm|python|node|bash|sh|ls|cd|pwd|cat|grep|find|mv|cp|rm|mkdir)\b",
+            )
+            .unwrap(),
             pattern_regex: Regex::new(r#"['"]([^'"]+)['"]"#).unwrap(),
         }
     }
@@ -138,32 +144,50 @@ impl FeatureExtractor {
     /// Detect intent from input and keywords
     fn detect_intent(&self, input: &str, keywords: &[String]) -> Intent {
         // Check for read intent
-        if keywords.iter().any(|k| self.intent_keywords.read.contains(&k.as_str())) {
+        if keywords
+            .iter()
+            .any(|k| self.intent_keywords.read.contains(&k.as_str()))
+        {
             return Intent::Read;
         }
 
         // Check for write intent
-        if keywords.iter().any(|k| self.intent_keywords.write.contains(&k.as_str())) {
+        if keywords
+            .iter()
+            .any(|k| self.intent_keywords.write.contains(&k.as_str()))
+        {
             return Intent::Write;
         }
 
         // Check for search intent
-        if keywords.iter().any(|k| self.intent_keywords.search.contains(&k.as_str())) {
+        if keywords
+            .iter()
+            .any(|k| self.intent_keywords.search.contains(&k.as_str()))
+        {
             return Intent::Search;
         }
 
         // Check for replace intent
-        if keywords.iter().any(|k| self.intent_keywords.replace.contains(&k.as_str())) {
+        if keywords
+            .iter()
+            .any(|k| self.intent_keywords.replace.contains(&k.as_str()))
+        {
             return Intent::Replace;
         }
 
         // Check for move intent
-        if keywords.iter().any(|k| self.intent_keywords.move_.contains(&k.as_str())) {
+        if keywords
+            .iter()
+            .any(|k| self.intent_keywords.move_.contains(&k.as_str()))
+        {
             return Intent::Move;
         }
 
         // Check for execute intent
-        if keywords.iter().any(|k| self.intent_keywords.execute.contains(&k.as_str())) {
+        if keywords
+            .iter()
+            .any(|k| self.intent_keywords.execute.contains(&k.as_str()))
+        {
             return Intent::Execute;
         }
 
@@ -204,7 +228,12 @@ impl FeatureExtractor {
     }
 
     /// Calculate confidence score based on feature quality
-    fn calculate_confidence(&self, keywords: &[String], intent: &Intent, entities: &[Entity]) -> f64 {
+    fn calculate_confidence(
+        &self,
+        keywords: &[String],
+        intent: &Intent,
+        entities: &[Entity],
+    ) -> f64 {
         let mut confidence: f64 = 0.0;
 
         // Base confidence from keywords
@@ -228,12 +257,11 @@ impl FeatureExtractor {
     /// Default stop words
     fn default_stop_words() -> HashSet<String> {
         vec![
-            "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for",
-            "of", "with", "by", "from", "up", "about", "into", "through", "during",
-            "is", "are", "was", "were", "be", "been", "being", "have", "has", "had",
-            "do", "does", "did", "will", "would", "should", "could", "may", "might",
-            "can", "this", "that", "these", "those", "i", "you", "he", "she", "it",
-            "we", "they", "me", "him", "her", "us", "them", "my", "your", "his",
+            "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for", "of", "with",
+            "by", "from", "up", "about", "into", "through", "during", "is", "are", "was", "were",
+            "be", "been", "being", "have", "has", "had", "do", "does", "did", "will", "would",
+            "should", "could", "may", "might", "can", "this", "that", "these", "those", "i", "you",
+            "he", "she", "it", "we", "they", "me", "him", "her", "us", "them", "my", "your", "his",
             "its", "our", "their",
         ]
         .into_iter()
@@ -261,7 +289,9 @@ struct IntentKeywords {
 impl Default for IntentKeywords {
     fn default() -> Self {
         Self {
-            read: vec!["read", "show", "display", "cat", "view", "see", "get", "fetch"],
+            read: vec![
+                "read", "show", "display", "cat", "view", "see", "get", "fetch",
+            ],
             write: vec!["write", "create", "save", "make", "generate", "produce"],
             execute: vec!["run", "execute", "exec", "launch", "start", "invoke"],
             search: vec!["search", "find", "grep", "look", "locate", "query"],
@@ -282,7 +312,10 @@ mod tests {
 
         assert_eq!(features.intent, Intent::Read);
         assert!(features.keywords.contains(&"show".to_string()));
-        assert!(features.entities.iter().any(|e| matches!(e, Entity::FilePath(_))));
+        assert!(features
+            .entities
+            .iter()
+            .any(|e| matches!(e, Entity::FilePath(_))));
         assert!(features.confidence > 0.5);
     }
 
@@ -293,7 +326,10 @@ mod tests {
 
         assert_eq!(features.intent, Intent::Search);
         assert!(features.keywords.contains(&"search".to_string()));
-        assert!(features.entities.iter().any(|e| matches!(e, Entity::FilePath(_))));
+        assert!(features
+            .entities
+            .iter()
+            .any(|e| matches!(e, Entity::FilePath(_))));
     }
 
     #[test]
@@ -302,7 +338,10 @@ mod tests {
         let features = extractor.extract("run git status");
 
         assert_eq!(features.intent, Intent::Execute);
-        assert!(features.entities.iter().any(|e| matches!(e, Entity::Command(cmd) if cmd == "git")));
+        assert!(features
+            .entities
+            .iter()
+            .any(|e| matches!(e, Entity::Command(cmd) if cmd == "git")));
     }
 
     #[test]
@@ -311,7 +350,10 @@ mod tests {
         let features = extractor.extract("replace 'old' with 'new' in file.txt");
 
         assert_eq!(features.intent, Intent::Replace);
-        assert!(features.entities.iter().any(|e| matches!(e, Entity::Pattern(_))));
+        assert!(features
+            .entities
+            .iter()
+            .any(|e| matches!(e, Entity::Pattern(_))));
     }
 
     #[test]
@@ -329,8 +371,14 @@ mod tests {
         let features = extractor.extract("git status in src/main.rs");
 
         // Should extract both command and file path
-        assert!(features.entities.iter().any(|e| matches!(e, Entity::Command(cmd) if cmd == "git")));
-        assert!(features.entities.iter().any(|e| matches!(e, Entity::FilePath(_))));
+        assert!(features
+            .entities
+            .iter()
+            .any(|e| matches!(e, Entity::Command(cmd) if cmd == "git")));
+        assert!(features
+            .entities
+            .iter()
+            .any(|e| matches!(e, Entity::FilePath(_))));
     }
 
     #[test]

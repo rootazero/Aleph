@@ -87,7 +87,9 @@ async fn p4_prepare_history_includes_summaries() {
     for msg in &context_messages {
         let text = msg.text_content();
         assert!(
-            text.contains("depth=\"d0\"") || text.contains("depth=\"d1\"") || text.contains("depth=\"d2\""),
+            text.contains("depth=\"d0\"")
+                || text.contains("depth=\"d1\"")
+                || text.contains("depth=\"d2\""),
             "session_context block should contain depth attribute, got: {}",
             &text[..text.len().min(200)]
         );

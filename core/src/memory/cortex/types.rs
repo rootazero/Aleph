@@ -296,11 +296,26 @@ mod tests {
 
     #[test]
     fn test_evolution_status_from_str() {
-        assert_eq!(EvolutionStatus::from_str_or_default("candidate"), EvolutionStatus::Candidate);
-        assert_eq!(EvolutionStatus::from_str_or_default("verified"), EvolutionStatus::Verified);
-        assert_eq!(EvolutionStatus::from_str_or_default("distilled"), EvolutionStatus::Distilled);
-        assert_eq!(EvolutionStatus::from_str_or_default("archived"), EvolutionStatus::Archived);
-        assert_eq!(EvolutionStatus::from_str_or_default("unknown"), EvolutionStatus::Candidate);
+        assert_eq!(
+            EvolutionStatus::from_str_or_default("candidate"),
+            EvolutionStatus::Candidate
+        );
+        assert_eq!(
+            EvolutionStatus::from_str_or_default("verified"),
+            EvolutionStatus::Verified
+        );
+        assert_eq!(
+            EvolutionStatus::from_str_or_default("distilled"),
+            EvolutionStatus::Distilled
+        );
+        assert_eq!(
+            EvolutionStatus::from_str_or_default("archived"),
+            EvolutionStatus::Archived
+        );
+        assert_eq!(
+            EvolutionStatus::from_str_or_default("unknown"),
+            EvolutionStatus::Candidate
+        );
     }
 
     #[test]

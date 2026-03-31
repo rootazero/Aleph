@@ -102,9 +102,7 @@ pub struct AsyncTaskData {
 impl AsyncTaskData {
     /// Get the output URL from whichever field is present
     pub fn output_url(&self) -> Option<&str> {
-        self.output
-            .as_deref()
-            .or(self.url.as_deref())
+        self.output.as_deref().or(self.url.as_deref())
     }
 }
 

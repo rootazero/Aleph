@@ -72,13 +72,28 @@ pub fn default_config() -> PermissionConfigMap {
     let mut config = HashMap::new();
 
     // Read operations are generally safe
-    config.insert("read".into(), PermissionConfig::Simple(PermissionAction::Allow));
-    config.insert("glob".into(), PermissionConfig::Simple(PermissionAction::Allow));
-    config.insert("grep".into(), PermissionConfig::Simple(PermissionAction::Allow));
-    config.insert("list".into(), PermissionConfig::Simple(PermissionAction::Allow));
+    config.insert(
+        "read".into(),
+        PermissionConfig::Simple(PermissionAction::Allow),
+    );
+    config.insert(
+        "glob".into(),
+        PermissionConfig::Simple(PermissionAction::Allow),
+    );
+    config.insert(
+        "grep".into(),
+        PermissionConfig::Simple(PermissionAction::Allow),
+    );
+    config.insert(
+        "list".into(),
+        PermissionConfig::Simple(PermissionAction::Allow),
+    );
 
     // Edit operations need user consent by default
-    config.insert("edit".into(), PermissionConfig::Simple(PermissionAction::Ask));
+    config.insert(
+        "edit".into(),
+        PermissionConfig::Simple(PermissionAction::Ask),
+    );
 
     // Bash commands need careful handling
     let mut bash_patterns = HashMap::new();
@@ -98,11 +113,20 @@ pub fn default_config() -> PermissionConfigMap {
     );
 
     // User interaction (question tool)
-    config.insert("question".into(), PermissionConfig::Simple(PermissionAction::Allow));
+    config.insert(
+        "question".into(),
+        PermissionConfig::Simple(PermissionAction::Allow),
+    );
 
     // Web operations
-    config.insert("webfetch".into(), PermissionConfig::Simple(PermissionAction::Ask));
-    config.insert("websearch".into(), PermissionConfig::Simple(PermissionAction::Ask));
+    config.insert(
+        "webfetch".into(),
+        PermissionConfig::Simple(PermissionAction::Ask),
+    );
+    config.insert(
+        "websearch".into(),
+        PermissionConfig::Simple(PermissionAction::Ask),
+    );
 
     config
 }
@@ -132,15 +156,25 @@ mod tests {
         let rules = config.to_rules("bash");
 
         assert_eq!(rules.len(), 2);
-        assert!(rules.iter().any(|r| r.pattern == "git *" && r.action == PermissionAction::Allow));
-        assert!(rules.iter().any(|r| r.pattern == "*" && r.action == PermissionAction::Ask));
+        assert!(rules
+            .iter()
+            .any(|r| r.pattern == "git *" && r.action == PermissionAction::Allow));
+        assert!(rules
+            .iter()
+            .any(|r| r.pattern == "*" && r.action == PermissionAction::Ask));
     }
 
     #[test]
     fn test_config_to_ruleset() {
         let mut config = HashMap::new();
-        config.insert("edit".into(), PermissionConfig::Simple(PermissionAction::Allow));
-        config.insert("read".into(), PermissionConfig::Simple(PermissionAction::Allow));
+        config.insert(
+            "edit".into(),
+            PermissionConfig::Simple(PermissionAction::Allow),
+        );
+        config.insert(
+            "read".into(),
+            PermissionConfig::Simple(PermissionAction::Allow),
+        );
 
         let ruleset = config_to_ruleset(&config);
         assert_eq!(ruleset.len(), 2);
@@ -170,6 +204,9 @@ mod tests {
         ));
 
         // Bash should have patterns
-        assert!(matches!(config.get("bash"), Some(PermissionConfig::Patterned(_))));
+        assert!(matches!(
+            config.get("bash"),
+            Some(PermissionConfig::Patterned(_))
+        ));
     }
 }

@@ -1,7 +1,6 @@
 /// OpenAI API types
 ///
 /// Data structures for OpenAI chat completion requests and responses.
-
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -66,12 +65,21 @@ impl Message {
     }
 
     /// Create an assistant message with tool calls
-    pub fn assistant_with_tool_calls(text: Option<String>, tool_calls: Vec<OpenAiToolCallOut>) -> Self {
+    pub fn assistant_with_tool_calls(
+        text: Option<String>,
+        tool_calls: Vec<OpenAiToolCallOut>,
+    ) -> Self {
         Self {
             role: "assistant".to_string(),
             tool_call_id: None,
-            tool_calls: if tool_calls.is_empty() { None } else { Some(tool_calls) },
-            content: MessageContent::Text { content: text.unwrap_or_default() },
+            tool_calls: if tool_calls.is_empty() {
+                None
+            } else {
+                Some(tool_calls)
+            },
+            content: MessageContent::Text {
+                content: text.unwrap_or_default(),
+            },
         }
     }
 

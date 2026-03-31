@@ -35,10 +35,7 @@ pub(crate) struct BrowserConfigResponse {
 // =============================================================================
 
 /// Get browser configuration
-pub async fn handle_get(
-    request: JsonRpcRequest,
-    config: Arc<RwLock<Config>>,
-) -> JsonRpcResponse {
+pub async fn handle_get(request: JsonRpcRequest, config: Arc<RwLock<Config>>) -> JsonRpcResponse {
     let cfg = config.read().await;
     let browser = &cfg.general.browser;
 
@@ -67,7 +64,11 @@ pub async fn handle_get(
         .to_string();
 
     // Headless detection: ON unless explicitly opted out with --headed or --no-headless
-    let has_headed = browser.playwright_mcp.args.iter().any(|a| a == "--headed" || a == "--no-headless");
+    let has_headed = browser
+        .playwright_mcp
+        .args
+        .iter()
+        .any(|a| a == "--headed" || a == "--no-headless");
     let headless = !has_headed;
 
     // DevTools profile: "user" (Your Chrome) unless explicitly set to Managed
@@ -180,7 +181,10 @@ pub async fn handle_update(
         }
 
         // Update headless flag in playwright_mcp args
-        browser.playwright_mcp.args.retain(|a| a != "--headless" && a != "--headed" && a != "--no-headless");
+        browser
+            .playwright_mcp
+            .args
+            .retain(|a| a != "--headless" && a != "--headed" && a != "--no-headless");
         if update.headless {
             browser.playwright_mcp.args.push("--headless".to_string());
         } else {

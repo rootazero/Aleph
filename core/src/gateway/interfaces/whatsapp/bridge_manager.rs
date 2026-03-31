@@ -165,10 +165,7 @@ impl BridgeManager {
         if !binary.is_absolute() {
             // For relative / bare names, check PATH
             which::which(binary).map_err(|_| {
-                BridgeError::BinaryNotFound(format!(
-                    "Binary {:?} not found in PATH",
-                    binary
-                ))
+                BridgeError::BinaryNotFound(format!("Binary {:?} not found in PATH", binary))
             })?;
         } else if !binary.exists() {
             return Err(BridgeError::BinaryNotFound(format!(
@@ -374,10 +371,7 @@ mod tests {
         assert!(manager.child.is_none());
         assert_eq!(manager.restart_count, 0);
         assert_eq!(manager.config.max_restarts, 3);
-        assert_eq!(
-            manager.config.binary_path,
-            PathBuf::from("whatsapp-bridge")
-        );
+        assert_eq!(manager.config.binary_path, PathBuf::from("whatsapp-bridge"));
     }
 
     // ── start() with missing binary ─────────────────────────────────
@@ -408,10 +402,8 @@ mod tests {
         }
 
         // Cleanup
-        let _ = tokio::fs::remove_dir_all(
-            std::env::temp_dir().join("test-bridge-missing-data"),
-        )
-        .await;
+        let _ =
+            tokio::fs::remove_dir_all(std::env::temp_dir().join("test-bridge-missing-data")).await;
     }
 
     // ── start() with absolute path missing binary ───────────────────
@@ -436,8 +428,7 @@ mod tests {
         }
 
         // Cleanup
-        let _ =
-            tokio::fs::remove_dir_all(std::env::temp_dir().join("test-bridge-abs-data")).await;
+        let _ = tokio::fs::remove_dir_all(std::env::temp_dir().join("test-bridge-abs-data")).await;
     }
 
     // ── stop() when not running ─────────────────────────────────────
@@ -479,10 +470,8 @@ mod tests {
         }
 
         // Cleanup
-        let _ = tokio::fs::remove_dir_all(
-            std::env::temp_dir().join("test-bridge-restart-data"),
-        )
-        .await;
+        let _ =
+            tokio::fs::remove_dir_all(std::env::temp_dir().join("test-bridge-restart-data")).await;
     }
 
     // ── reset_restart_count ─────────────────────────────────────────
@@ -589,9 +578,7 @@ mod tests {
         assert_eq!(manager.restart_count(), 1);
 
         // Cleanup
-        let _ = tokio::fs::remove_dir_all(
-            std::env::temp_dir().join("test-bridge-count-data"),
-        )
-        .await;
+        let _ =
+            tokio::fs::remove_dir_all(std::env::temp_dir().join("test-bridge-count-data")).await;
     }
 }

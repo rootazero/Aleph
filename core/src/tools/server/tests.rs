@@ -114,9 +114,7 @@ async fn test_server_list_tools() {
 async fn test_server_tool_not_found() {
     let server = AlephToolServer::new();
 
-    let result = server
-        .call("nonexistent", serde_json::json!({}))
-        .await;
+    let result = server.call("nonexistent", serde_json::json!({})).await;
 
     assert!(result.is_err());
     assert!(matches!(

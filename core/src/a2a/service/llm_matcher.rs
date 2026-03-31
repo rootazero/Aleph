@@ -3,9 +3,9 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use crate::a2a::port::RegisteredAgent;
-use crate::providers::AiProvider;
 use crate::providers::adapter::RequestPayload;
 use crate::providers::message::UnifiedMessage;
+use crate::providers::AiProvider;
 
 use super::smart_router::{LlmMatcher, RoutingDecision, RoutingMethod};
 
@@ -44,7 +44,10 @@ impl SemanticLlmMatcher {
         );
 
         for (i, agent) in agents.iter().enumerate() {
-            prompt.push_str(&format!("\n{}. {} ({})\n", i, agent.card.name, agent.card.id));
+            prompt.push_str(&format!(
+                "\n{}. {} ({})\n",
+                i, agent.card.name, agent.card.id
+            ));
 
             if let Some(ref desc) = agent.card.description {
                 prompt.push_str(&format!("   Description: {}\n", desc));
@@ -125,9 +128,11 @@ impl LlmMatcher for SemanticLlmMatcher {
         let prompt = self.build_routing_prompt(intent, agents);
 
         let msgs = [UnifiedMessage::user(&prompt)];
-        match self.provider.process(
-            RequestPayload::new(&msgs).with_system(Some(&system))
-        ).await {
+        match self
+            .provider
+            .process(RequestPayload::new(&msgs).with_system(Some(&system)))
+            .await
+        {
             Ok(response) => self.parse_response(&response.text_content(), agents),
             Err(e) => {
                 tracing::warn!(error = %e, "LLM semantic matching failed, skipping tier 3");
@@ -144,7 +149,7 @@ mod tests {
     use crate::a2a::port::AgentHealth;
     use crate::error::AlephError;
     use crate::providers::adapter::{ProviderResponse, RequestPayload};
-    
+
     use chrono::Utc;
     use std::future::Future;
     use std::pin::Pin;
@@ -173,7 +178,8 @@ mod tests {
         fn process<'a>(
             &'a self,
             _payload: RequestPayload<'a>,
-        ) -> Pin<Box<dyn Future<Output = crate::error::Result<ProviderResponse>> + Send + 'a>> {
+        ) -> Pin<Box<dyn Future<Output = crate::error::Result<ProviderResponse>> + Send + 'a>>
+        {
             let result = match &self.response {
                 Ok(s) => Ok(ProviderResponse::text_only(s.clone())),
                 Err(e) => Err(AlephError::ProviderError {
@@ -195,7 +201,11 @@ mod tests {
 
     // --- Test helpers ---
 
-    fn make_agent(name: &str, description: Option<&str>, skills: Vec<AgentSkill>) -> RegisteredAgent {
+    fn make_agent(
+        name: &str,
+        description: Option<&str>,
+        skills: Vec<AgentSkill>,
+    ) -> RegisteredAgent {
         RegisteredAgent {
             card: AgentCard {
                 id: format!("{}-id", name.to_lowercase().replace(' ', "-")),
@@ -238,7 +248,11 @@ mod tests {
         let provider = Arc::new(MockProvider::with_response(""));
         let matcher = SemanticLlmMatcher::new(provider);
 
-        let skill = make_skill("translate", "Translation", Some("Translate text between languages"));
+        let skill = make_skill(
+            "translate",
+            "Translation",
+            Some("Translate text between languages"),
+        );
         let agents = vec![
             make_agent("CodeBot", Some("A coding assistant"), vec![]),
             make_agent("TranslateBot", Some("A translation expert"), vec![skill]),
@@ -417,7 +431,9 @@ mod tests {
             vec![make_skill("translate", "Translation", None)],
         )];
 
-        let result = matcher.match_intent("translate hello to French", &agents).await;
+        let result = matcher
+            .match_intent("translate hello to French", &agents)
+            .await;
         assert!(result.is_some());
         let decision = result.unwrap();
         assert_eq!(decision.agent.card.name, "TranslateBot");
@@ -443,7 +459,9 @@ mod tests {
         let matcher = SemanticLlmMatcher::new(provider);
 
         let agents = vec![make_agent("Agent0", None, vec![])];
-        let result = matcher.match_intent("something completely unrelated", &agents).await;
+        let result = matcher
+            .match_intent("something completely unrelated", &agents)
+            .await;
         assert!(result.is_none());
     }
 }

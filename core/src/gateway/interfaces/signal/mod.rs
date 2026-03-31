@@ -31,8 +31,8 @@ pub use message_ops::SignalMessageOps;
 
 use crate::gateway::channel::{
     Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
-    ChannelResult, ChannelState, ChannelStatus, ConversationId, MessageId,
-    OutboundMessage, SendResult,
+    ChannelResult, ChannelState, ChannelStatus, ConversationId, MessageId, OutboundMessage,
+    SendResult,
 };
 use async_trait::async_trait;
 use tokio::sync::watch;
@@ -109,9 +109,7 @@ impl Channel for SignalChannel {
 
     async fn start(&mut self) -> ChannelResult<()> {
         // Validate configuration
-        self.config
-            .validate()
-            .map_err(ChannelError::ConfigError)?;
+        self.config.validate().map_err(ChannelError::ConfigError)?;
 
         self.set_status(ChannelStatus::Connecting).await;
         tracing::info!(
@@ -124,31 +122,24 @@ impl Channel for SignalChannel {
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         self.shutdown_tx = Some(shutdown_tx);
 
-            // Spawn polling loop
-            let client = self.client.clone();
-            let config = self.config.clone();
-            let channel_id = self.info.id.clone();
-            let inbound_tx = self.channel_state.sender();
-            let status = self.channel_state.status_handle();
+        // Spawn polling loop
+        let client = self.client.clone();
+        let config = self.config.clone();
+        let channel_id = self.info.id.clone();
+        let inbound_tx = self.channel_state.sender();
+        let status = self.channel_state.status_handle();
 
         tokio::spawn(async move {
             *status.write().await = ChannelStatus::Connected;
 
-            SignalMessageOps::run_poll_loop(
-                client,
-                config,
-                channel_id,
-                inbound_tx,
-                shutdown_rx,
-            )
-            .await;
+            SignalMessageOps::run_poll_loop(client, config, channel_id, inbound_tx, shutdown_rx)
+                .await;
 
             *status.write().await = ChannelStatus::Disconnected;
         });
 
         self.set_status(ChannelStatus::Connected).await;
         Ok(())
-
     }
 
     async fn stop(&mut self) -> ChannelResult<()> {
@@ -171,7 +162,6 @@ impl Channel for SignalChannel {
             &message.text,
         )
         .await
-
     }
 
     async fn send_typing(&self, conversation_id: &ConversationId) -> ChannelResult<()> {
@@ -181,14 +171,24 @@ impl Channel for SignalChannel {
         Ok(())
     }
 
-    async fn edit(&self, conversation_id: &ConversationId, message_id: &MessageId, new_text: &str) -> ChannelResult<()> {
+    async fn edit(
+        &self,
+        conversation_id: &ConversationId,
+        message_id: &MessageId,
+        new_text: &str,
+    ) -> ChannelResult<()> {
         let _ = (conversation_id, message_id, new_text);
         Err(ChannelError::UnsupportedFeature(
             "Signal does not support message editing".to_string(),
         ))
     }
 
-    async fn react(&self, _conversation_id: &ConversationId, message_id: &MessageId, reaction: &str) -> ChannelResult<()> {
+    async fn react(
+        &self,
+        _conversation_id: &ConversationId,
+        message_id: &MessageId,
+        reaction: &str,
+    ) -> ChannelResult<()> {
         // Signal supports reactions but signal-cli REST API support varies.
         let _ = (message_id, reaction);
         Err(ChannelError::UnsupportedFeature(
@@ -210,9 +210,7 @@ impl ChannelFactory for SignalChannelFactory {
         let config: SignalConfig = serde_json::from_value(config)
             .map_err(|e| ChannelError::ConfigError(format!("Invalid Signal config: {}", e)))?;
 
-        config
-            .validate()
-            .map_err(ChannelError::ConfigError)?;
+        config.validate().map_err(ChannelError::ConfigError)?;
 
         Ok(Box::new(SignalChannel::new("signal", config)))
     }

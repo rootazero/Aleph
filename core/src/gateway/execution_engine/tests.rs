@@ -1,15 +1,15 @@
 //! Tests for the execution engine module.
 
-use super::*;
 use super::engine::wait_for_deadline;
+use super::*;
 use crate::sync_primitives::{AtomicUsize, Ordering};
 
 use crate::gateway::agent_instance::{AgentInstance, AgentInstanceConfig};
 use crate::gateway::event_emitter::{EventEmitError, EventEmitter, StreamEvent};
 use crate::gateway::router::SessionKey;
 
-use async_trait::async_trait;
 use crate::sync_primitives::Arc;
+use async_trait::async_trait;
 use tokio::sync::RwLock;
 
 /// Test event emitter that collects events
@@ -77,8 +77,12 @@ async fn test_simple_execution_engine_basic() {
     assert!(!events.is_empty());
 
     // Check for expected events
-    let has_run_accepted = events.iter().any(|e| matches!(e, StreamEvent::RunAccepted { .. }));
-    let has_run_complete = events.iter().any(|e| matches!(e, StreamEvent::RunComplete { .. }));
+    let has_run_accepted = events
+        .iter()
+        .any(|e| matches!(e, StreamEvent::RunAccepted { .. }));
+    let has_run_complete = events
+        .iter()
+        .any(|e| matches!(e, StreamEvent::RunComplete { .. }));
 
     assert!(has_run_accepted, "Should have RunAccepted event");
     assert!(has_run_complete, "Should have RunComplete event");
@@ -112,13 +116,19 @@ async fn test_simple_execution_engine_run() {
     };
 
     // This should succeed and complete quickly
-    let result = engine.execute(request, agent.clone(), emitter.clone()).await;
+    let result = engine
+        .execute(request, agent.clone(), emitter.clone())
+        .await;
     assert!(result.is_ok());
 
     // Verify events were emitted
     let events = emitter.get_events().await;
-    let has_reasoning = events.iter().any(|e| matches!(e, StreamEvent::Reasoning { .. }));
-    let has_response = events.iter().any(|e| matches!(e, StreamEvent::ResponseChunk { .. }));
+    let has_reasoning = events
+        .iter()
+        .any(|e| matches!(e, StreamEvent::Reasoning { .. }));
+    let has_response = events
+        .iter()
+        .any(|e| matches!(e, StreamEvent::ResponseChunk { .. }));
 
     assert!(has_reasoning, "Should have Reasoning event");
     assert!(has_response, "Should have ResponseChunk event");
@@ -134,9 +144,7 @@ fn resolve_timeout(
     agent_timeout: Option<u64>,
     engine_default: u64,
 ) -> u64 {
-    request_timeout
-        .or(agent_timeout)
-        .unwrap_or(engine_default)
+    request_timeout.or(agent_timeout).unwrap_or(engine_default)
 }
 
 #[test]
@@ -239,12 +247,10 @@ async fn test_wait_for_deadline_multiple_extensions() {
     // Extend twice: at 30ms and at 100ms
     tokio::spawn(async move {
         tokio::time::sleep(tokio::time::Duration::from_millis(30)).await;
-        *dl.lock().await =
-            tokio::time::Instant::now() + tokio::time::Duration::from_millis(100);
+        *dl.lock().await = tokio::time::Instant::now() + tokio::time::Duration::from_millis(100);
 
         tokio::time::sleep(tokio::time::Duration::from_millis(80)).await;
-        *dl.lock().await =
-            tokio::time::Instant::now() + tokio::time::Duration::from_millis(100);
+        *dl.lock().await = tokio::time::Instant::now() + tokio::time::Duration::from_millis(100);
     });
 
     let start = tokio::time::Instant::now();

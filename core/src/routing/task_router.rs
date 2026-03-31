@@ -7,9 +7,17 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum TaskRoute {
     Simple,
-    MultiStep { reason: String },
-    Critical { reason: String, manifest_hints: ManifestHints },
-    Collaborative { reason: String, strategy: CollabStrategy },
+    MultiStep {
+        reason: String,
+    },
+    Critical {
+        reason: String,
+        manifest_hints: ManifestHints,
+    },
+    Collaborative {
+        reason: String,
+        strategy: CollabStrategy,
+    },
 }
 
 impl TaskRoute {

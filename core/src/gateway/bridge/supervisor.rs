@@ -30,9 +30,9 @@
 //! # }
 //! ```
 
+use crate::sync_primitives::Arc;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use crate::sync_primitives::Arc;
 use std::time::{Duration, Instant};
 
 use tokio::process::{Child, Command};
@@ -360,14 +360,10 @@ impl BridgeSupervisor {
             }
             TransportType::Stdio => {
                 let stdin = child.stdin.take().ok_or_else(|| {
-                    BridgeSupervisorError::SpawnFailed(
-                        "Failed to capture child stdin".to_string(),
-                    )
+                    BridgeSupervisorError::SpawnFailed("Failed to capture child stdin".to_string())
                 })?;
                 let stdout = child.stdout.take().ok_or_else(|| {
-                    BridgeSupervisorError::SpawnFailed(
-                        "Failed to capture child stdout".to_string(),
-                    )
+                    BridgeSupervisorError::SpawnFailed("Failed to capture child stdout".to_string())
                 })?;
                 let transport = StdioTransport::from_child(stdin, stdout);
                 transport.set_connected();
@@ -574,7 +570,11 @@ impl BridgeSupervisor {
                                 let was_unhealthy = proc.status == ProcessStatus::Unhealthy;
                                 proc.last_heartbeat = Instant::now();
                                 proc.status = ProcessStatus::Running;
-                                if was_unhealthy { Some(true) } else { None }
+                                if was_unhealthy {
+                                    Some(true)
+                                } else {
+                                    None
+                                }
                             }
                             Err(_) => {
                                 proc.status = ProcessStatus::Unhealthy;
@@ -588,7 +588,9 @@ impl BridgeSupervisor {
                 };
                 // Log outside the lock.
                 match log_action {
-                    Some(true) => info!(link_id = %link_id, "Bridge recovered — marking as Running"),
+                    Some(true) => {
+                        info!(link_id = %link_id, "Bridge recovered — marking as Running")
+                    }
                     Some(false) => {
                         let err = result.unwrap_err();
                         warn!(link_id = %link_id, error = %err, "Health check failed");

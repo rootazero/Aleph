@@ -155,9 +155,10 @@ pub(crate) async fn edit_image_impl(
         })?;
 
     let status = response.status();
-    let response_text = response.text().await.map_err(|e| {
-        GenerationError::network(format!("Failed to read response body: {}", e))
-    })?;
+    let response_text = response
+        .text()
+        .await
+        .map_err(|e| GenerationError::network(format!("Failed to read response body: {}", e)))?;
 
     // Handle non-success status codes
     if !status.is_success() {
@@ -182,9 +183,10 @@ pub(crate) async fn edit_image_impl(
         })?;
 
     // Extract first image
-    let first_image = api_response.data.first().ok_or_else(|| {
-        GenerationError::provider("No images in response", None, &provider.name)
-    })?;
+    let first_image = api_response
+        .data
+        .first()
+        .ok_or_else(|| GenerationError::provider("No images in response", None, &provider.name))?;
 
     // Convert to GenerationData
     let data = if let Some(url) = &first_image.url {
@@ -225,8 +227,7 @@ pub(crate) async fn edit_image_impl(
         "OpenAI-compatible image editing completed"
     );
 
-    let mut output =
-        GenerationOutput::new(request.generation_type, data).with_metadata(metadata);
+    let mut output = GenerationOutput::new(request.generation_type, data).with_metadata(metadata);
 
     if let Some(id) = request_id {
         output = output.with_request_id(id);

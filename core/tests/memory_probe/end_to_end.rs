@@ -4,9 +4,7 @@
 //! RRF fusion, tiered decay, access reinforcement, tier promotion,
 //! and reflection-to-storage round trip.
 
-use alephcore::memory::context::{
-    FactType, MemoryCategory, MemoryFact, MemoryLayer, MemoryTier,
-};
+use alephcore::memory::context::{FactType, MemoryCategory, MemoryFact, MemoryLayer, MemoryTier};
 use alephcore::memory::decay::{MemoryStrength, TieredDecayConfig};
 use alephcore::memory::hybrid_retrieval::fusion::rrf_fuse;
 use alephcore::memory::promotion::{check_promotion, PromotionCriteria};
@@ -77,10 +75,8 @@ fn p6_02_rrf_fusion_outperforms_single_source() {
         ("doc_star".into(), 0.90),
         ("doc_c".into(), 0.70),
     ];
-    let text_results: Vec<(String, f32)> = vec![
-        ("doc_star".into(), 0.92),
-        ("doc_only_text".into(), 0.85),
-    ];
+    let text_results: Vec<(String, f32)> =
+        vec![("doc_star".into(), 0.92), ("doc_only_text".into(), 0.85)];
 
     let fused = rrf_fuse(&vector_results, &text_results, 60, 0.3);
 
@@ -116,8 +112,7 @@ fn p6_03_tiered_decay_reshuffles_ranking_over_time() {
         creation_time: 0,
     };
 
-    let s_core =
-        ms.calculate_strength_tiered(&config, &MemoryTier::Core, &FactType::Other, now);
+    let s_core = ms.calculate_strength_tiered(&config, &MemoryTier::Core, &FactType::Other, now);
     let s_short =
         ms.calculate_strength_tiered(&config, &MemoryTier::ShortTerm, &FactType::Other, now);
 
@@ -160,18 +155,10 @@ fn p6_04_access_reinforcement_keeps_popular_fact_alive() {
         creation_time: 0,
     };
 
-    let s_cold = ms_cold.calculate_strength_tiered(
-        &config,
-        &MemoryTier::ShortTerm,
-        &FactType::Other,
-        now,
-    );
-    let s_hot = ms_hot.calculate_strength_tiered(
-        &config,
-        &MemoryTier::ShortTerm,
-        &FactType::Other,
-        now,
-    );
+    let s_cold =
+        ms_cold.calculate_strength_tiered(&config, &MemoryTier::ShortTerm, &FactType::Other, now);
+    let s_hot =
+        ms_hot.calculate_strength_tiered(&config, &MemoryTier::ShortTerm, &FactType::Other, now);
 
     assert!(
         s_hot > s_cold,
@@ -246,7 +233,11 @@ fn p6_06_reflection_to_storage_round_trip() {
     let facts = map_to_facts(&output);
 
     // Open loops excluded → 3 facts total
-    assert_eq!(facts.len(), 3, "Should produce 3 facts (open loops excluded)");
+    assert_eq!(
+        facts.len(),
+        3,
+        "Should produce 3 facts (open loops excluded)"
+    );
 
     // Invariant: "prefers" keyword → Preference type, Core tier, confidence 0.85
     let inv = &facts[0];

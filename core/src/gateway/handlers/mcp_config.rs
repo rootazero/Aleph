@@ -3,16 +3,16 @@
 //! Handlers for MCP server configuration management: list, create, update, delete.
 //! These handlers manage MCP server configurations in the config file.
 
+use crate::sync_primitives::Arc;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
-use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
 use tracing::{error, info};
 
+use super::super::event_bus::{ConfigChangedEvent, GatewayEvent, GatewayEventBus};
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 use super::parse_params;
-use super::super::event_bus::{ConfigChangedEvent, GatewayEvent, GatewayEventBus};
 use crate::config::{Config, McpServerConfig};
 
 // ============================================================================

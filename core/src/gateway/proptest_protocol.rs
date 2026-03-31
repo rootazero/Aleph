@@ -6,7 +6,9 @@
 use proptest::prelude::*;
 use serde_json::Value;
 
-use super::protocol::{JsonRpcError, JsonRpcRequest, JsonRpcResponse, ToolCallParams, ToolCallContext, ToolCallResult};
+use super::protocol::{
+    JsonRpcError, JsonRpcRequest, JsonRpcResponse, ToolCallContext, ToolCallParams, ToolCallResult,
+};
 
 // ============================================================================
 // Strategies
@@ -38,33 +40,30 @@ fn arb_json_value_non_null() -> impl Strategy<Value = Value> {
 
 /// Generate an optional JSON value (never Some(Null) to ensure roundtrip fidelity).
 fn arb_opt_json_value() -> impl Strategy<Value = Option<Value>> {
-    prop_oneof![
-        Just(None),
-        arb_json_value_non_null().prop_map(Some),
-    ]
+    prop_oneof![Just(None), arb_json_value_non_null().prop_map(Some),]
 }
 
 /// Strategy for JsonRpcRequest.
 fn arb_jsonrpc_request() -> impl Strategy<Value = JsonRpcRequest> {
     (
-        "[a-zA-Z][a-zA-Z0-9_.]{0,30}",  // method (non-empty)
-        arb_opt_json_value(),              // params
-        arb_opt_json_value(),              // id
+        "[a-zA-Z][a-zA-Z0-9_.]{0,30}", // method (non-empty)
+        arb_opt_json_value(),          // params
+        arb_opt_json_value(),          // id
     )
-        .prop_map(|(method, params, id)| {
-            JsonRpcRequest::new(method, params, id)
-        })
+        .prop_map(|(method, params, id)| JsonRpcRequest::new(method, params, id))
 }
 
 /// Strategy for JsonRpcError.
 fn arb_jsonrpc_error() -> impl Strategy<Value = JsonRpcError> {
     (
-        any::<i32>(),                      // code
-        "[a-zA-Z0-9 _.]{1,50}",           // message
-        arb_opt_json_value(),              // data
+        any::<i32>(),           // code
+        "[a-zA-Z0-9 _.]{1,50}", // message
+        arb_opt_json_value(),   // data
     )
-        .prop_map(|(code, message, data)| {
-            JsonRpcError { code, message, data }
+        .prop_map(|(code, message, data)| JsonRpcError {
+            code,
+            message,
+            data,
         })
 }
 
@@ -72,41 +71,39 @@ fn arb_jsonrpc_error() -> impl Strategy<Value = JsonRpcError> {
 fn arb_jsonrpc_response() -> impl Strategy<Value = JsonRpcResponse> {
     prop_oneof![
         // Success response (result uses non-null to survive skip_serializing_if roundtrip)
-        (arb_opt_json_value(), arb_json_value_non_null()).prop_map(|(id, result)| {
-            JsonRpcResponse::success(id, result)
-        }),
+        (arb_opt_json_value(), arb_json_value_non_null())
+            .prop_map(|(id, result)| { JsonRpcResponse::success(id, result) }),
         // Error response
-        (arb_opt_json_value(), any::<i32>(), "[a-zA-Z0-9 ]{1,30}").prop_map(|(id, code, msg)| {
-            JsonRpcResponse::error(id, code, msg)
-        }),
+        (arb_opt_json_value(), any::<i32>(), "[a-zA-Z0-9 ]{1,30}")
+            .prop_map(|(id, code, msg)| { JsonRpcResponse::error(id, code, msg) }),
     ]
 }
 
 /// Strategy for ToolCallContext.
 fn arb_tool_call_context() -> impl Strategy<Value = ToolCallContext> {
     (
-        proptest::option::of("[a-z0-9]{4,12}"),   // request_id
-        proptest::option::of("[a-z0-9]{4,12}"),   // session_id
-        proptest::option::of(any::<u64>()),        // timeout_ms
+        proptest::option::of("[a-z0-9]{4,12}"), // request_id
+        proptest::option::of("[a-z0-9]{4,12}"), // session_id
+        proptest::option::of(any::<u64>()),     // timeout_ms
     )
-        .prop_map(|(request_id, session_id, timeout_ms)| {
-            ToolCallContext {
-                request_id,
-                session_id,
-                timeout_ms,
-            }
+        .prop_map(|(request_id, session_id, timeout_ms)| ToolCallContext {
+            request_id,
+            session_id,
+            timeout_ms,
         })
 }
 
 /// Strategy for ToolCallParams.
 fn arb_tool_call_params() -> impl Strategy<Value = ToolCallParams> {
     (
-        "[a-zA-Z][a-zA-Z0-9:._]{0,20}",   // tool
-        arb_json_value(),                   // args (non-optional, Null is fine)
-        proptest::option::of(arb_tool_call_context()),  // context
+        "[a-zA-Z][a-zA-Z0-9:._]{0,20}",                // tool
+        arb_json_value(),                              // args (non-optional, Null is fine)
+        proptest::option::of(arb_tool_call_context()), // context
     )
-        .prop_map(|(tool, args, context)| {
-            ToolCallParams { tool, args, context }
+        .prop_map(|(tool, args, context)| ToolCallParams {
+            tool,
+            args,
+            context,
         })
 }
 
@@ -114,13 +111,11 @@ fn arb_tool_call_params() -> impl Strategy<Value = ToolCallParams> {
 fn arb_tool_call_result() -> impl Strategy<Value = ToolCallResult> {
     prop_oneof![
         // Success result
-        (arb_json_value(), any::<u64>()).prop_map(|(output, exec_ms)| {
-            ToolCallResult::success(output, exec_ms)
-        }),
+        (arb_json_value(), any::<u64>())
+            .prop_map(|(output, exec_ms)| { ToolCallResult::success(output, exec_ms) }),
         // Failure result
-        ("[a-zA-Z0-9 ]{1,30}", any::<u64>()).prop_map(|(error, exec_ms)| {
-            ToolCallResult::failure(error, exec_ms)
-        }),
+        ("[a-zA-Z0-9 ]{1,30}", any::<u64>())
+            .prop_map(|(error, exec_ms)| { ToolCallResult::failure(error, exec_ms) }),
     ]
 }
 

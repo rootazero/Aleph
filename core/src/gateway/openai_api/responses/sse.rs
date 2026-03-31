@@ -21,9 +21,8 @@ use super::super::types::ResponsesUsage;
 
 /// Format a single SSE frame with `event:` and `data:` lines.
 fn sse_event(event_type: &str, data: &Value) -> String {
-    let json = serde_json::to_string(data).unwrap_or_else(|e| {
-        json!({"error": e.to_string()}).to_string()
-    });
+    let json =
+        serde_json::to_string(data).unwrap_or_else(|e| json!({"error": e.to_string()}).to_string());
     format!("event: {event_type}\ndata: {json}\n\n")
 }
 
@@ -144,7 +143,9 @@ pub fn provider_deltas_to_responses_sse(
                             return Some((frame, state));
                         }
                         ProviderDelta::ToolCallStart { id, name } => {
-                            state.tool_calls.push((id.clone(), name.clone(), String::new()));
+                            state
+                                .tool_calls
+                                .push((id.clone(), name.clone(), String::new()));
                             let frame = sse_event(
                                 "response.output_item.added",
                                 &json!({
@@ -159,7 +160,10 @@ pub fn provider_deltas_to_responses_sse(
                             );
                             return Some((frame, state));
                         }
-                        ProviderDelta::ToolCallArgDelta { id, delta: arg_frag } => {
+                        ProviderDelta::ToolCallArgDelta {
+                            id,
+                            delta: arg_frag,
+                        } => {
                             // Accumulate into tool_calls state
                             if let Some(entry) =
                                 state.tool_calls.iter_mut().find(|(tid, _, _)| tid == &id)
@@ -320,10 +324,9 @@ mod tests {
         ];
         let input = Box::pin(fstream::iter(deltas)) as BoxStream<'static, _>;
 
-        let frames: Vec<String> =
-            provider_deltas_to_responses_sse(input, "gpt-4".to_string())
-                .collect()
-                .await;
+        let frames: Vec<String> = provider_deltas_to_responses_sse(input, "gpt-4".to_string())
+            .collect()
+            .await;
 
         // created + 2 text deltas + completed
         assert_eq!(frames.len(), 4);
@@ -346,10 +349,9 @@ mod tests {
         ];
         let input = Box::pin(fstream::iter(deltas)) as BoxStream<'static, _>;
 
-        let frames: Vec<String> =
-            provider_deltas_to_responses_sse(input, "gpt-4".to_string())
-                .collect()
-                .await;
+        let frames: Vec<String> = provider_deltas_to_responses_sse(input, "gpt-4".to_string())
+            .collect()
+            .await;
 
         // created + thinking + text + completed
         assert_eq!(frames.len(), 4);
@@ -375,10 +377,9 @@ mod tests {
         ];
         let input = Box::pin(fstream::iter(deltas)) as BoxStream<'static, _>;
 
-        let frames: Vec<String> =
-            provider_deltas_to_responses_sse(input, "gpt-4".to_string())
-                .collect()
-                .await;
+        let frames: Vec<String> = provider_deltas_to_responses_sse(input, "gpt-4".to_string())
+            .collect()
+            .await;
 
         // created + item.added + args.delta + args.done + completed
         assert_eq!(frames.len(), 5);
@@ -404,10 +405,9 @@ mod tests {
         ];
         let input = Box::pin(fstream::iter(deltas)) as BoxStream<'static, _>;
 
-        let frames: Vec<String> =
-            provider_deltas_to_responses_sse(input, "gpt-4".to_string())
-                .collect()
-                .await;
+        let frames: Vec<String> = provider_deltas_to_responses_sse(input, "gpt-4".to_string())
+            .collect()
+            .await;
 
         // created + text + completed (usage not a separate frame)
         assert_eq!(frames.len(), 3);
@@ -426,10 +426,9 @@ mod tests {
         ];
         let input = Box::pin(fstream::iter(deltas)) as BoxStream<'static, _>;
 
-        let frames: Vec<String> =
-            provider_deltas_to_responses_sse(input, "gpt-4".to_string())
-                .collect()
-                .await;
+        let frames: Vec<String> = provider_deltas_to_responses_sse(input, "gpt-4".to_string())
+            .collect()
+            .await;
 
         // created + text + failed
         assert_eq!(frames.len(), 3);
@@ -445,10 +444,9 @@ mod tests {
         ];
         let input = Box::pin(fstream::iter(deltas)) as BoxStream<'static, _>;
 
-        let frames: Vec<String> =
-            provider_deltas_to_responses_sse(input, "gpt-4".to_string())
-                .collect()
-                .await;
+        let frames: Vec<String> = provider_deltas_to_responses_sse(input, "gpt-4".to_string())
+            .collect()
+            .await;
 
         // created + text + failed
         assert_eq!(frames.len(), 3);

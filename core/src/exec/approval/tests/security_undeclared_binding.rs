@@ -11,12 +11,9 @@ use std::collections::HashMap;
 /// Test fixed binding violation - exact value mismatch
 #[test]
 fn test_fixed_binding_violation() {
-    let declared_bindings = HashMap::from([
-        ("file_path".to_string(), "/tmp/output.txt".to_string()),
-    ]);
-    let runtime_params = HashMap::from([
-        ("file_path".to_string(), "/etc/passwd".to_string()),
-    ]);
+    let declared_bindings =
+        HashMap::from([("file_path".to_string(), "/tmp/output.txt".to_string())]);
+    let runtime_params = HashMap::from([("file_path".to_string(), "/etc/passwd".to_string())]);
 
     let result = check_binding_compliance(&runtime_params, &declared_bindings);
     assert!(
@@ -33,12 +30,9 @@ fn test_fixed_binding_violation() {
 /// Test fixed binding match (control test)
 #[test]
 fn test_fixed_binding_match() {
-    let declared_bindings = HashMap::from([
-        ("file_path".to_string(), "/tmp/output.txt".to_string()),
-    ]);
-    let runtime_params = HashMap::from([
-        ("file_path".to_string(), "/tmp/output.txt".to_string()),
-    ]);
+    let declared_bindings =
+        HashMap::from([("file_path".to_string(), "/tmp/output.txt".to_string())]);
+    let runtime_params = HashMap::from([("file_path".to_string(), "/tmp/output.txt".to_string())]);
 
     let result = check_binding_compliance(&runtime_params, &declared_bindings);
     assert!(
@@ -50,12 +44,8 @@ fn test_fixed_binding_match() {
 /// Test pattern binding violation - file extension mismatch
 #[test]
 fn test_pattern_binding_violation() {
-    let declared_bindings = HashMap::from([
-        ("file_path".to_string(), "/tmp/*.txt".to_string()),
-    ]);
-    let runtime_params = HashMap::from([
-        ("file_path".to_string(), "/tmp/data.json".to_string()),
-    ]);
+    let declared_bindings = HashMap::from([("file_path".to_string(), "/tmp/*.txt".to_string())]);
+    let runtime_params = HashMap::from([("file_path".to_string(), "/tmp/data.json".to_string())]);
 
     let result = check_binding_compliance(&runtime_params, &declared_bindings);
     assert!(
@@ -72,12 +62,8 @@ fn test_pattern_binding_violation() {
 /// Test pattern binding match (control test)
 #[test]
 fn test_pattern_binding_match() {
-    let declared_bindings = HashMap::from([
-        ("file_path".to_string(), "/tmp/*.txt".to_string()),
-    ]);
-    let runtime_params = HashMap::from([
-        ("file_path".to_string(), "/tmp/output.txt".to_string()),
-    ]);
+    let declared_bindings = HashMap::from([("file_path".to_string(), "/tmp/*.txt".to_string())]);
+    let runtime_params = HashMap::from([("file_path".to_string(), "/tmp/output.txt".to_string())]);
 
     let result = check_binding_compliance(&runtime_params, &declared_bindings);
     assert!(
@@ -89,12 +75,11 @@ fn test_pattern_binding_match() {
 /// Test pattern binding with subdirectory match
 #[test]
 fn test_pattern_binding_subdirectory_match() {
-    let declared_bindings = HashMap::from([
-        ("file_path".to_string(), "/tmp/**/*.txt".to_string()),
-    ]);
-    let runtime_params = HashMap::from([
-        ("file_path".to_string(), "/tmp/subdir/output.txt".to_string()),
-    ]);
+    let declared_bindings = HashMap::from([("file_path".to_string(), "/tmp/**/*.txt".to_string())]);
+    let runtime_params = HashMap::from([(
+        "file_path".to_string(),
+        "/tmp/subdir/output.txt".to_string(),
+    )]);
 
     let result = check_binding_compliance(&runtime_params, &declared_bindings);
     assert!(
@@ -106,12 +91,8 @@ fn test_pattern_binding_subdirectory_match() {
 /// Test range binding violation - port outside range
 #[test]
 fn test_range_binding_violation() {
-    let declared_bindings = HashMap::from([
-        ("port".to_string(), "8000-9000".to_string()),
-    ]);
-    let runtime_params = HashMap::from([
-        ("port".to_string(), "80".to_string()),
-    ]);
+    let declared_bindings = HashMap::from([("port".to_string(), "8000-9000".to_string())]);
+    let runtime_params = HashMap::from([("port".to_string(), "80".to_string())]);
 
     let result = check_binding_compliance(&runtime_params, &declared_bindings);
     assert!(
@@ -128,12 +109,8 @@ fn test_range_binding_violation() {
 /// Test range binding match (control test)
 #[test]
 fn test_range_binding_match() {
-    let declared_bindings = HashMap::from([
-        ("port".to_string(), "8000-9000".to_string()),
-    ]);
-    let runtime_params = HashMap::from([
-        ("port".to_string(), "8080".to_string()),
-    ]);
+    let declared_bindings = HashMap::from([("port".to_string(), "8000-9000".to_string())]);
+    let runtime_params = HashMap::from([("port".to_string(), "8080".to_string())]);
 
     let result = check_binding_compliance(&runtime_params, &declared_bindings);
     assert!(
@@ -145,35 +122,25 @@ fn test_range_binding_match() {
 /// Test range binding at boundaries
 #[test]
 fn test_range_binding_boundaries() {
-    let declared_bindings = HashMap::from([
-        ("port".to_string(), "8000-9000".to_string()),
-    ]);
+    let declared_bindings = HashMap::from([("port".to_string(), "8000-9000".to_string())]);
 
     // Test lower boundary
-    let runtime_params = HashMap::from([
-        ("port".to_string(), "8000".to_string()),
-    ]);
+    let runtime_params = HashMap::from([("port".to_string(), "8000".to_string())]);
     let result = check_binding_compliance(&runtime_params, &declared_bindings);
     assert!(result.is_ok(), "Lower boundary should be included");
 
     // Test upper boundary
-    let runtime_params = HashMap::from([
-        ("port".to_string(), "9000".to_string()),
-    ]);
+    let runtime_params = HashMap::from([("port".to_string(), "9000".to_string())]);
     let result = check_binding_compliance(&runtime_params, &declared_bindings);
     assert!(result.is_ok(), "Upper boundary should be included");
 
     // Test below lower boundary
-    let runtime_params = HashMap::from([
-        ("port".to_string(), "7999".to_string()),
-    ]);
+    let runtime_params = HashMap::from([("port".to_string(), "7999".to_string())]);
     let result = check_binding_compliance(&runtime_params, &declared_bindings);
     assert!(result.is_err(), "Below lower boundary should fail");
 
     // Test above upper boundary
-    let runtime_params = HashMap::from([
-        ("port".to_string(), "9001".to_string()),
-    ]);
+    let runtime_params = HashMap::from([("port".to_string(), "9001".to_string())]);
     let result = check_binding_compliance(&runtime_params, &declared_bindings);
     assert!(result.is_err(), "Above upper boundary should fail");
 }
@@ -181,9 +148,8 @@ fn test_range_binding_boundaries() {
 /// Test missing required binding
 #[test]
 fn test_missing_required_binding() {
-    let declared_bindings = HashMap::from([
-        ("file_path".to_string(), "/tmp/output.txt".to_string()),
-    ]);
+    let declared_bindings =
+        HashMap::from([("file_path".to_string(), "/tmp/output.txt".to_string())]);
     let runtime_params = HashMap::new(); // Empty params
 
     let result = check_binding_compliance(&runtime_params, &declared_bindings);
@@ -201,9 +167,8 @@ fn test_missing_required_binding() {
 /// Test extra undeclared parameters
 #[test]
 fn test_extra_undeclared_parameters() {
-    let declared_bindings = HashMap::from([
-        ("file_path".to_string(), "/tmp/output.txt".to_string()),
-    ]);
+    let declared_bindings =
+        HashMap::from([("file_path".to_string(), "/tmp/output.txt".to_string())]);
     let runtime_params = HashMap::from([
         ("file_path".to_string(), "/tmp/output.txt".to_string()),
         ("extra_param".to_string(), "value".to_string()),
@@ -281,12 +246,8 @@ fn test_empty_bindings_and_params() {
 /// Test case sensitivity in pattern matching
 #[test]
 fn test_pattern_case_sensitivity() {
-    let declared_bindings = HashMap::from([
-        ("file_path".to_string(), "/tmp/*.TXT".to_string()),
-    ]);
-    let runtime_params = HashMap::from([
-        ("file_path".to_string(), "/tmp/output.txt".to_string()),
-    ]);
+    let declared_bindings = HashMap::from([("file_path".to_string(), "/tmp/*.TXT".to_string())]);
+    let runtime_params = HashMap::from([("file_path".to_string(), "/tmp/output.txt".to_string())]);
 
     let result = check_binding_compliance(&runtime_params, &declared_bindings);
     // Pattern matching should be case-sensitive by default

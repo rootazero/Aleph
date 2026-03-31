@@ -26,9 +26,15 @@ pub struct MsTeamsConfig {
     pub send_typing: bool,
 }
 
-fn default_tenant() -> String { "common".into() }
-fn default_true() -> bool { true }
-fn default_webhook_path() -> String { "/msteams/messages".into() }
+fn default_tenant() -> String {
+    "common".into()
+}
+fn default_true() -> bool {
+    true
+}
+fn default_webhook_path() -> String {
+    "/msteams/messages".into()
+}
 impl Default for MsTeamsConfig {
     fn default() -> Self {
         Self {

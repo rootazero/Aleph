@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use tokio::sync::RwLock;
 
-use crate::a2a::port::{AgentHealth, RegisteredAgent, A2AResult};
 use super::http_client::A2AClient;
+use crate::a2a::port::{A2AResult, AgentHealth, RegisteredAgent};
 
 /// Connection pool managing A2AClient instances per agent.
 ///

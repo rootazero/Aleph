@@ -1,9 +1,9 @@
 //! Provider handler helper functions.
 
-use crate::config::{Config, ProviderConfig};
 use crate::config::presets_override::PresetsOverride;
-use crate::providers::presets::get_merged_preset;
+use crate::config::{Config, ProviderConfig};
 use crate::gateway::security::SharedTokenManager;
+use crate::providers::presets::get_merged_preset;
 
 use super::types::ProviderConfigJson;
 
@@ -47,7 +47,9 @@ pub(super) fn build_provider_config_for_persistence(
 
     let models = {
         // Filter empty models from the input
-        let non_empty: Vec<String> = params.models.iter()
+        let non_empty: Vec<String> = params
+            .models
+            .iter()
             .map(|m| m.trim().to_string())
             .filter(|m| !m.is_empty())
             .collect();
@@ -64,9 +66,9 @@ pub(super) fn build_provider_config_for_persistence(
     };
 
     // Ensure protocol is always persisted (prevents "openai" default on reload)
-    let protocol = params.protocol.or_else(|| {
-        preset.as_ref().map(|p| p.protocol.clone())
-    });
+    let protocol = params
+        .protocol
+        .or_else(|| preset.as_ref().map(|p| p.protocol.clone()));
 
     ProviderConfig {
         protocol,

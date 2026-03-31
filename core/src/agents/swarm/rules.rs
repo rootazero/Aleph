@@ -2,8 +2,8 @@
 //!
 //! Pattern-matching based aggregation for 90% of high-frequency events.
 
-use std::collections::HashMap;
 use crate::sync_primitives::Arc;
+use std::collections::HashMap;
 use tokio::sync::RwLock;
 
 use super::aggregator::SlidingWindow;
@@ -30,13 +30,9 @@ pub enum EventPattern {
         operation: Option<FileOperation>,
     },
     /// Symbol search
-    SymbolSearch {
-        symbol: Option<String>,
-    },
+    SymbolSearch { symbol: Option<String> },
     /// Tool execution
-    ToolExecution {
-        tool: Option<String>,
-    },
+    ToolExecution { tool: Option<String> },
 }
 
 impl EventPattern {
@@ -44,14 +40,23 @@ impl EventPattern {
     pub fn matches(&self, event: &InfoEvent) -> bool {
         match (self, event) {
             (
-                EventPattern::FileAccess { path_prefix, operation },
-                InfoEvent::FileAccessed { path, operation: op, .. },
+                EventPattern::FileAccess {
+                    path_prefix,
+                    operation,
+                },
+                InfoEvent::FileAccessed {
+                    path,
+                    operation: op,
+                    ..
+                },
             ) => {
-                let path_match = path_prefix.as_ref()
+                let path_match = path_prefix
+                    .as_ref()
                     .map(|prefix| path.starts_with(prefix))
                     .unwrap_or(true);
 
-                let op_match = operation.as_ref()
+                let op_match = operation
+                    .as_ref()
                     .map(|expected| expected == op)
                     .unwrap_or(true);
 
@@ -60,18 +65,12 @@ impl EventPattern {
             (
                 EventPattern::SymbolSearch { symbol },
                 InfoEvent::SymbolSearched { symbol: s, .. },
-            ) => {
-                symbol.as_ref()
-                    .map(|expected| expected == s)
-                    .unwrap_or(true)
-            }
-            (
-                EventPattern::ToolExecution { tool },
-                InfoEvent::ToolExecuted { tool: t, .. },
-            ) => {
-                tool.as_ref()
-                    .map(|expected| expected == t)
-                    .unwrap_or(true)
+            ) => symbol
+                .as_ref()
+                .map(|expected| expected == s)
+                .unwrap_or(true),
+            (EventPattern::ToolExecution { tool }, InfoEvent::ToolExecuted { tool: t, .. }) => {
+                tool.as_ref().map(|expected| expected == t).unwrap_or(true)
             }
             _ => false,
         }
@@ -120,8 +119,8 @@ impl RuleEngine {
                 recent
                     .into_iter()
                     .filter(|e| {
-                        rule.pattern.matches(e) &&
-                        now.saturating_sub(e.timestamp()) <= rule.window_secs
+                        rule.pattern.matches(e)
+                            && now.saturating_sub(e.timestamp()) <= rule.window_secs
                     })
                     .cloned()
                     .collect::<Vec<_>>()
@@ -162,7 +161,8 @@ fn default_rules() -> Vec<AggregationRule> {
             threshold: 3,
             output: |events| {
                 // Extract common path prefix
-                let paths: Vec<&str> = events.iter()
+                let paths: Vec<&str> = events
+                    .iter()
                     .filter_map(|e| match e {
                         InfoEvent::FileAccessed { path, .. } => Some(path.as_str()),
                         _ => None,
@@ -187,7 +187,6 @@ fn default_rules() -> Vec<AggregationRule> {
                 }
             },
         },
-
         // Rule 2: Multiple symbol searches -> Confirmed Insight
         AggregationRule {
             pattern: EventPattern::SymbolSearch { symbol: None },
@@ -199,13 +198,17 @@ fn default_rules() -> Vec<AggregationRule> {
                 let mut sources = Vec::new();
 
                 for event in &events {
-                    if let InfoEvent::SymbolSearched { symbol, agent_id, .. } = event {
+                    if let InfoEvent::SymbolSearched {
+                        symbol, agent_id, ..
+                    } = event
+                    {
                         *symbol_counts.entry(symbol.clone()).or_insert(0) += 1;
                         sources.push(agent_id.clone());
                     }
                 }
 
-                let (symbol, count) = symbol_counts.iter()
+                let (symbol, count) = symbol_counts
+                    .iter()
                     .max_by_key(|(_, &count)| count)
                     .map(|(s, &c)| (s.clone(), c))
                     .unwrap_or_else(|| ("unknown".to_string(), 0));
@@ -231,7 +234,9 @@ fn find_common_prefix<'a>(paths: &'a [&'a str]) -> Option<&'a str> {
     let mut prefix_byte_len = first.len();
 
     for path in &paths[1..] {
-        let common_bytes = first.as_bytes().iter()
+        let common_bytes = first
+            .as_bytes()
+            .iter()
             .zip(path.as_bytes().iter())
             .take_while(|(a, b)| a == b)
             .count();
@@ -325,10 +330,7 @@ mod tests {
 
     #[test]
     fn test_find_common_prefix_no_common() {
-        let paths = vec![
-            "/src/auth/login.rs",
-            "/core/main.rs",
-        ];
+        let paths = vec!["/src/auth/login.rs", "/core/main.rs"];
 
         let prefix = find_common_prefix(&paths);
         assert_eq!(prefix, Some("/"));

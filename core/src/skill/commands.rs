@@ -80,9 +80,7 @@ fn spec_from_manifest(manifest: &SkillManifest) -> SkillCommandSpec {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::skill::{
-        InvocationPolicy, SkillContent, SkillManifest, SkillSource,
-    };
+    use crate::domain::skill::{InvocationPolicy, SkillContent, SkillManifest, SkillSource};
 
     fn make_manifest(id: &str, name: &str, invocable: bool) -> SkillManifest {
         let mut m = SkillManifest::new(

@@ -67,7 +67,11 @@ impl MediaPipeline {
         }
 
         // 2. Find providers that support this media type
-        let eligible: Vec<_> = self.providers.iter().filter(|p| p.supports(media_type)).collect();
+        let eligible: Vec<_> = self
+            .providers
+            .iter()
+            .filter(|p| p.supports(media_type))
+            .collect();
 
         if eligible.is_empty() {
             return Err(MediaError::NoProvider {
@@ -294,7 +298,11 @@ mod tests {
             .unwrap();
         match result {
             MediaOutput::Description { text, .. } => {
-                assert!(text.contains("[high]"), "Expected high-priority, got: {}", text)
+                assert!(
+                    text.contains("[high]"),
+                    "Expected high-priority, got: {}",
+                    text
+                )
             }
             _ => panic!("Expected Description"),
         }

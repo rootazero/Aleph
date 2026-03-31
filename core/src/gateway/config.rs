@@ -241,7 +241,6 @@ impl AgentConfig {
 // a raw Value to avoid parse errors — the actual parsing happens in
 // Config::resolved_channels().
 
-
 /// Sandbox configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -463,7 +462,12 @@ fn expand_env_var(s: &str) -> String {
             let var_name = &result[start + 2..start + end];
             let value = std::env::var(var_name).unwrap_or_default();
             let value_len = value.len();
-            result = format!("{}{}{}", &result[..start], value, &result[start + end + 1..]);
+            result = format!(
+                "{}{}{}",
+                &result[..start],
+                value,
+                &result[start + end + 1..]
+            );
             search_from = start + value_len;
         } else {
             break;
@@ -620,5 +624,4 @@ model = "test"
         let config = GatewayConfig::from_toml(toml).unwrap();
         assert!(matches!(config.gateway.auth.mode, AuthMode::Token));
     }
-
 }

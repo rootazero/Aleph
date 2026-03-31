@@ -3,8 +3,8 @@
 //! Watches configuration files for changes and broadcasts reload events.
 //! Supports atomic validation and rollback on failure.
 
-use std::path::{Path, PathBuf};
 use crate::sync_primitives::Arc;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use notify::{EventKind, RecursiveMode, Watcher};
@@ -167,7 +167,10 @@ impl ConfigWatcher {
         let mut debouncer = new_debouncer(
             debounce_duration,
             None,
-            move |result: Result<Vec<notify_debouncer_full::DebouncedEvent>, Vec<notify::Error>>| {
+            move |result: Result<
+                Vec<notify_debouncer_full::DebouncedEvent>,
+                Vec<notify::Error>,
+            >| {
                 match result {
                     Ok(events) => {
                         for event in events {
@@ -305,7 +308,10 @@ model = "claude-sonnet-4-5"
 
         let result = ConfigWatcher::new(config);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), ConfigWatcherError::ConfigNotFound(_)));
+        assert!(matches!(
+            result.unwrap_err(),
+            ConfigWatcherError::ConfigNotFound(_)
+        ));
     }
 
     #[tokio::test]
@@ -364,21 +370,39 @@ model = "claude-opus-4-5"
 
     #[test]
     fn test_reload_mode_hot_reload_decisions() {
-        let sections = ["ui", "channels", "skills", "workspace", "cron", "agents", "gateway", "providers"];
+        let sections = [
+            "ui",
+            "channels",
+            "skills",
+            "workspace",
+            "cron",
+            "agents",
+            "gateway",
+            "providers",
+        ];
 
         // Off → always false
         for s in &sections {
-            assert!(!ReloadMode::Off.should_hot_reload(s), "Off should never hot-reload '{s}'");
+            assert!(
+                !ReloadMode::Off.should_hot_reload(s),
+                "Off should never hot-reload '{s}'"
+            );
         }
 
         // Hot → always true
         for s in &sections {
-            assert!(ReloadMode::Hot.should_hot_reload(s), "Hot should always hot-reload '{s}'");
+            assert!(
+                ReloadMode::Hot.should_hot_reload(s),
+                "Hot should always hot-reload '{s}'"
+            );
         }
 
         // Restart → always false
         for s in &sections {
-            assert!(!ReloadMode::Restart.should_hot_reload(s), "Restart should never hot-reload '{s}'");
+            assert!(
+                !ReloadMode::Restart.should_hot_reload(s),
+                "Restart should never hot-reload '{s}'"
+            );
         }
 
         // Hybrid → true only for safe sections
@@ -386,10 +410,16 @@ model = "claude-opus-4-5"
         let hybrid_unsafe = ["agents", "gateway", "providers", "security", "memory"];
 
         for s in &hybrid_safe {
-            assert!(ReloadMode::Hybrid.should_hot_reload(s), "Hybrid should hot-reload '{s}'");
+            assert!(
+                ReloadMode::Hybrid.should_hot_reload(s),
+                "Hybrid should hot-reload '{s}'"
+            );
         }
         for s in &hybrid_unsafe {
-            assert!(!ReloadMode::Hybrid.should_hot_reload(s), "Hybrid should NOT hot-reload '{s}'");
+            assert!(
+                !ReloadMode::Hybrid.should_hot_reload(s),
+                "Hybrid should NOT hot-reload '{s}'"
+            );
         }
     }
 

@@ -25,12 +25,12 @@
 //! - **OutboundMessage**: Message to be sent through a channel
 //! - **ChannelCapabilities**: What a channel supports (attachments, reactions, etc.)
 
-use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
-use std::sync::Mutex as StdMutex;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
 use tokio::sync::mpsc;
 
 use crate::thinker::interaction::{Capability, InteractionManifest};
@@ -390,7 +390,10 @@ impl ChannelState {
 
     /// Read current status (non-blocking via try_read, fallback Connecting).
     pub fn status(&self) -> ChannelStatus {
-        self.status.try_read().map(|s| *s).unwrap_or(ChannelStatus::Connecting)
+        self.status
+            .try_read()
+            .map(|s| *s)
+            .unwrap_or(ChannelStatus::Connecting)
     }
 
     /// Set status (async, takes write lock).
@@ -400,7 +403,10 @@ impl ChannelState {
 
     /// Take the inbound receiver (can only succeed once).
     pub fn take_receiver(&self) -> Option<mpsc::Receiver<InboundMessage>> {
-        self.inbound_rx.lock().unwrap_or_else(|e| e.into_inner()).take()
+        self.inbound_rx
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
     }
 
     /// Get a clone of the inbound sender.
@@ -493,7 +499,9 @@ pub trait Channel: Send + Sync {
     /// Send a typing indicator
     async fn send_typing(&self, conversation_id: &ConversationId) -> ChannelResult<()> {
         if !self.capabilities().typing_indicator {
-            return Err(ChannelError::UnsupportedFeature("typing indicator".to_string()));
+            return Err(ChannelError::UnsupportedFeature(
+                "typing indicator".to_string(),
+            ));
         }
         // Default implementation does nothing
         let _ = conversation_id;
@@ -503,7 +511,9 @@ pub trait Channel: Send + Sync {
     /// Mark a message as read
     async fn mark_read(&self, message_id: &MessageId) -> ChannelResult<()> {
         if !self.capabilities().read_receipts {
-            return Err(ChannelError::UnsupportedFeature("read receipts".to_string()));
+            return Err(ChannelError::UnsupportedFeature(
+                "read receipts".to_string(),
+            ));
         }
         // Default implementation does nothing
         let _ = message_id;
@@ -511,7 +521,12 @@ pub trait Channel: Send + Sync {
     }
 
     /// React to a message
-    async fn react(&self, conversation_id: &ConversationId, message_id: &MessageId, reaction: &str) -> ChannelResult<()> {
+    async fn react(
+        &self,
+        conversation_id: &ConversationId,
+        message_id: &MessageId,
+        reaction: &str,
+    ) -> ChannelResult<()> {
         if !self.capabilities().reactions {
             return Err(ChannelError::UnsupportedFeature("reactions".to_string()));
         }
@@ -521,7 +536,12 @@ pub trait Channel: Send + Sync {
     }
 
     /// Edit a previously sent message
-    async fn edit(&self, conversation_id: &ConversationId, message_id: &MessageId, new_text: &str) -> ChannelResult<()> {
+    async fn edit(
+        &self,
+        conversation_id: &ConversationId,
+        message_id: &MessageId,
+        new_text: &str,
+    ) -> ChannelResult<()> {
         if !self.capabilities().editing {
             return Err(ChannelError::UnsupportedFeature("editing".to_string()));
         }
@@ -531,7 +551,11 @@ pub trait Channel: Send + Sync {
     }
 
     /// Delete a message
-    async fn delete(&self, conversation_id: &ConversationId, message_id: &MessageId) -> ChannelResult<()> {
+    async fn delete(
+        &self,
+        conversation_id: &ConversationId,
+        message_id: &MessageId,
+    ) -> ChannelResult<()> {
         if !self.capabilities().deletion {
             return Err(ChannelError::UnsupportedFeature("deletion".to_string()));
         }
@@ -550,11 +574,26 @@ pub trait Channel: Send + Sync {
 #[async_trait]
 pub trait NativeStreamHandler: Send + Sync {
     /// Start streaming — send initial status indicator, returns stream_id
-    async fn stream_start(&self, conversation_id: &ConversationId, status_text: &str) -> ChannelResult<String>;
+    async fn stream_start(
+        &self,
+        conversation_id: &ConversationId,
+        status_text: &str,
+    ) -> ChannelResult<String>;
     /// Send accumulated text as streaming update
-    async fn stream_update(&self, conversation_id: &ConversationId, stream_id: &str, text: &str, sequence: u32) -> ChannelResult<()>;
+    async fn stream_update(
+        &self,
+        conversation_id: &ConversationId,
+        stream_id: &str,
+        text: &str,
+        sequence: u32,
+    ) -> ChannelResult<()>;
     /// Finalize stream with complete message
-    async fn stream_finalize(&self, conversation_id: &ConversationId, stream_id: &str, message: OutboundMessage) -> ChannelResult<SendResult>;
+    async fn stream_finalize(
+        &self,
+        conversation_id: &ConversationId,
+        stream_id: &str,
+        message: OutboundMessage,
+    ) -> ChannelResult<SendResult>;
 }
 
 /// Provider of interaction manifest for a channel
@@ -604,8 +643,7 @@ mod tests {
 
     #[test]
     fn test_outbound_message_builder() {
-        let msg = OutboundMessage::text("conv-123", "Hello world")
-            .with_reply_to("msg-456");
+        let msg = OutboundMessage::text("conv-123", "Hello world").with_reply_to("msg-456");
 
         assert_eq!(msg.conversation_id.as_str(), "conv-123");
         assert_eq!(msg.text, "Hello world");
@@ -631,8 +669,14 @@ mod tests {
     fn test_inline_keyboard_builder() {
         let keyboard = InlineKeyboard::new()
             .row(vec![
-                InlineButton { text: "Allow Once".into(), callback_data: "approve:abc:once".into() },
-                InlineButton { text: "Allow Always".into(), callback_data: "approve:abc:always".into() },
+                InlineButton {
+                    text: "Allow Once".into(),
+                    callback_data: "approve:abc:once".into(),
+                },
+                InlineButton {
+                    text: "Allow Always".into(),
+                    callback_data: "approve:abc:always".into(),
+                },
             ])
             .button("Deny", "approve:abc:deny");
 

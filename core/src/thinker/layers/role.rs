@@ -6,13 +6,22 @@ use crate::thinker::prompt_mode::PromptMode;
 pub struct RoleLayer;
 
 impl PromptLayer for RoleLayer {
-    fn name(&self) -> &'static str { "role" }
-    fn priority(&self) -> u32 { 100 }
+    fn name(&self) -> &'static str {
+        "role"
+    }
+    fn priority(&self) -> u32 {
+        100
+    }
     fn supports_mode(&self, mode: PromptMode) -> bool {
         !matches!(mode, PromptMode::Minimal)
     }
     fn paths(&self) -> &'static [AssemblyPath] {
-        &[AssemblyPath::Basic, AssemblyPath::Hydration, AssemblyPath::Soul, AssemblyPath::Context]
+        &[
+            AssemblyPath::Basic,
+            AssemblyPath::Hydration,
+            AssemblyPath::Soul,
+            AssemblyPath::Context,
+        ]
     }
     fn inject(&self, output: &mut String, _input: &LayerInput) {
         output.push_str("You are an AI assistant executing tasks step by step.\n\n");

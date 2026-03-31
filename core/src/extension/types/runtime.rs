@@ -26,7 +26,6 @@ pub enum ServiceState {
     Failed,
 }
 
-
 /// Running service information
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServiceInfo {
@@ -130,7 +129,6 @@ pub enum ChannelState {
     /// Channel connection failed
     Failed,
 }
-
 
 /// Channel info
 ///

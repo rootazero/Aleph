@@ -324,8 +324,8 @@ mod tests {
 
     #[test]
     fn test_endpoint_validation_success() {
-        let config = WebhookEndpointConfig::new("test", "/webhooks/test", "main")
-            .with_secret("secret");
+        let config =
+            WebhookEndpointConfig::new("test", "/webhooks/test", "main").with_secret("secret");
         assert!(config.validate().is_ok());
     }
 
@@ -359,12 +359,10 @@ mod tests {
     fn test_webhooks_config_validation() {
         let mut config = WebhooksConfig::default();
         config.endpoints.push(
-            WebhookEndpointConfig::new("github", "/webhooks/github", "main")
-                .with_secret("secret1"),
+            WebhookEndpointConfig::new("github", "/webhooks/github", "main").with_secret("secret1"),
         );
         config.endpoints.push(
-            WebhookEndpointConfig::new("stripe", "/webhooks/stripe", "main")
-                .with_secret("secret2"),
+            WebhookEndpointConfig::new("stripe", "/webhooks/stripe", "main").with_secret("secret2"),
         );
 
         assert!(config.validate(&["main"]).is_ok());

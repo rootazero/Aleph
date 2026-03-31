@@ -9,11 +9,11 @@ use super::AnchorStore;
 use crate::error::AlephError;
 use crate::memory::cortex::types::Experience;
 use crate::memory::store::MemoryBackend;
-use crate::providers::AiProvider;
 use crate::providers::adapter::RequestPayload;
 use crate::providers::message::UnifiedMessage;
-use serde::{Deserialize, Serialize};
+use crate::providers::AiProvider;
 use crate::sync_primitives::{Arc, RwLock};
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 /// Configuration for critic scanning behavior
@@ -37,7 +37,7 @@ pub struct CriticScanConfig {
 impl Default for CriticScanConfig {
     fn default() -> Self {
         Self {
-            min_idle_seconds: 300,    // 5 minutes
+            min_idle_seconds: 300,     // 5 minutes
             batch_size: 10,            // Scan 10 experiences per batch
             efficiency_threshold: 0.7, // Below 70% efficiency triggers criticism
             redundancy_threshold: 3,   // 3+ redundant operations triggers optimization
@@ -172,8 +172,8 @@ impl CriticAgent {
     /// * `Result<ChainAnalysis>` - Analysis results
     pub fn analyze_task_chain(&self, exp: &Experience) -> Result<ChainAnalysis, AlephError> {
         // Parse tool sequence from JSON
-        let tool_sequence: Vec<TaskStep> = serde_json::from_str(&exp.tool_sequence_json)
-            .unwrap_or_else(|_| Vec::new());
+        let tool_sequence: Vec<TaskStep> =
+            serde_json::from_str(&exp.tool_sequence_json).unwrap_or_else(|_| Vec::new());
 
         // Analyze the chain
         let redundant_reads = self.count_redundant_file_reads(&tool_sequence);
@@ -232,7 +232,8 @@ impl CriticAgent {
 
         // Example heuristic: consecutive identical tool calls
         for i in 1..chain.len() {
-            if chain[i].tool == chain[i - 1].tool && chain[i].parameters == chain[i - 1].parameters {
+            if chain[i].tool == chain[i - 1].tool && chain[i].parameters == chain[i - 1].parameters
+            {
                 unnecessary.push(format!("Duplicate {} call", chain[i].tool));
             }
         }
@@ -262,7 +263,10 @@ impl CriticAgent {
 
         for (tool, count) in tool_counts {
             if count >= 3 {
-                optimizations.push(format!("Consider batching {} operations (found {})", tool, count));
+                optimizations.push(format!(
+                    "Consider batching {} operations (found {})",
+                    tool, count
+                ));
             }
         }
 
@@ -472,7 +476,10 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let db_path = temp_dir.path().join("lance_db");
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let db: MemoryBackend = Arc::new(rt.block_on(LanceMemoryBackend::open_or_create(&db_path)).unwrap());
+        let db: MemoryBackend = Arc::new(
+            rt.block_on(LanceMemoryBackend::open_or_create(&db_path))
+                .unwrap(),
+        );
 
         // Create mock provider that returns properly formatted JSON
         let mock_response = r#"{
@@ -653,7 +660,7 @@ mod tests {
         // Check that we got a meaningful response from the mock LLM
         assert!(!report.suggested_anchor.rule_text.is_empty());
         assert_eq!(report.suggested_anchor.priority, 50); // Medium priority
-        // Confidence comes from LLM response
+                                                          // Confidence comes from LLM response
         assert!(report.suggested_anchor.confidence > 0.0);
         assert!(matches!(
             report.suggested_anchor.source,

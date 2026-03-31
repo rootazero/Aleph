@@ -38,19 +38,11 @@ pub enum ProviderDelta {
     /// Incremental extended-thinking content
     ThinkingDelta(String),
     /// A tool call began — provides the id and name
-    ToolCallStart {
-        id: String,
-        name: String,
-    },
+    ToolCallStart { id: String, name: String },
     /// Additional argument JSON fragment for a tool call
-    ToolCallArgDelta {
-        id: String,
-        delta: String,
-    },
+    ToolCallArgDelta { id: String, delta: String },
     /// A tool call's argument stream is complete
-    ToolCallEnd {
-        id: String,
-    },
+    ToolCallEnd { id: String },
     /// Token usage statistics (usually the last event before Done)
     Usage(TokenUsage),
     /// Stream finished successfully
@@ -142,13 +134,25 @@ impl DeltaCollector {
                         }
                     }
                 };
-                NativeToolCall { id, name, arguments }
+                NativeToolCall {
+                    id,
+                    name,
+                    arguments,
+                }
             })
             .collect();
 
         ProviderResponse {
-            text: if self.text.is_empty() { None } else { Some(self.text) },
-            thinking: if self.thinking.is_empty() { None } else { Some(self.thinking) },
+            text: if self.text.is_empty() {
+                None
+            } else {
+                Some(self.text)
+            },
+            thinking: if self.thinking.is_empty() {
+                None
+            } else {
+                Some(self.thinking)
+            },
             tool_calls,
             usage: self.usage,
             stop_reason: self.stop_reason,
@@ -263,8 +267,10 @@ fn collect_response_deltas(response: ProviderResponse) -> Vec<ProviderDelta> {
 pub fn response_to_delta_stream(
     response: ProviderResponse,
 ) -> BoxStream<'static, anyhow::Result<ProviderDelta>> {
-    let events: Vec<anyhow::Result<ProviderDelta>> =
-        collect_response_deltas(response).into_iter().map(Ok).collect();
+    let events: Vec<anyhow::Result<ProviderDelta>> = collect_response_deltas(response)
+        .into_iter()
+        .map(Ok)
+        .collect();
     Box::pin(stream::iter(events))
 }
 
@@ -275,8 +281,10 @@ pub fn response_to_delta_stream(
 pub(crate) fn response_to_delta_stream_result(
     response: ProviderResponse,
 ) -> BoxStream<'static, crate::error::Result<ProviderDelta>> {
-    let events: Vec<crate::error::Result<ProviderDelta>> =
-        collect_response_deltas(response).into_iter().map(Ok).collect();
+    let events: Vec<crate::error::Result<ProviderDelta>> = collect_response_deltas(response)
+        .into_iter()
+        .map(Ok)
+        .collect();
     Box::pin(stream::iter(events))
 }
 
@@ -330,13 +338,18 @@ mod tests {
             id: "tc1".to_string(),
             delta: r#""rust"}"#.to_string(),
         });
-        c.push(ProviderDelta::ToolCallEnd { id: "tc1".to_string() });
+        c.push(ProviderDelta::ToolCallEnd {
+            id: "tc1".to_string(),
+        });
         c.push(ProviderDelta::Done(StopReason::ToolUse));
 
         let resp = c.finish();
         assert_eq!(resp.tool_calls.len(), 1);
         assert_eq!(resp.tool_calls[0].name, "search");
-        assert_eq!(resp.tool_calls[0].arguments, serde_json::json!({"q": "rust"}));
+        assert_eq!(
+            resp.tool_calls[0].arguments,
+            serde_json::json!({"q": "rust"})
+        );
         assert_eq!(resp.stop_reason, StopReason::ToolUse);
     }
 
@@ -351,13 +364,18 @@ mod tests {
             id: "tc1".to_string(),
             delta: "not json{".to_string(),
         });
-        c.push(ProviderDelta::ToolCallEnd { id: "tc1".to_string() });
+        c.push(ProviderDelta::ToolCallEnd {
+            id: "tc1".to_string(),
+        });
         c.push(ProviderDelta::Done(StopReason::ToolUse));
 
         let resp = c.finish();
         assert_eq!(resp.tool_calls.len(), 1);
         // Malformed args fall back to Value::String
-        assert_eq!(resp.tool_calls[0].arguments, Value::String("not json{".to_string()));
+        assert_eq!(
+            resp.tool_calls[0].arguments,
+            Value::String("not json{".to_string())
+        );
     }
 
     #[test]
@@ -400,8 +418,12 @@ mod tests {
             id: "tc2".to_string(),
             delta: r#"{"url":"https://example.com"}"#.to_string(),
         });
-        c.push(ProviderDelta::ToolCallEnd { id: "tc1".to_string() });
-        c.push(ProviderDelta::ToolCallEnd { id: "tc2".to_string() });
+        c.push(ProviderDelta::ToolCallEnd {
+            id: "tc1".to_string(),
+        });
+        c.push(ProviderDelta::ToolCallEnd {
+            id: "tc2".to_string(),
+        });
         c.push(ProviderDelta::Done(StopReason::ToolUse));
 
         let resp = c.finish();
@@ -409,8 +431,14 @@ mod tests {
         // Order is preserved (insertion order)
         assert_eq!(resp.tool_calls[0].name, "search");
         assert_eq!(resp.tool_calls[1].name, "fetch");
-        assert_eq!(resp.tool_calls[0].arguments, serde_json::json!({"q": "test"}));
-        assert_eq!(resp.tool_calls[1].arguments, serde_json::json!({"url": "https://example.com"}));
+        assert_eq!(
+            resp.tool_calls[0].arguments,
+            serde_json::json!({"q": "test"})
+        );
+        assert_eq!(
+            resp.tool_calls[1].arguments,
+            serde_json::json!({"url": "https://example.com"})
+        );
     }
 
     #[test]
@@ -443,15 +471,15 @@ mod tests {
             thinking: None,
         };
 
-        let deltas: Vec<_> = response_to_delta_stream(resp)
-            .collect::<Vec<_>>()
-            .await;
+        let deltas: Vec<_> = response_to_delta_stream(resp).collect::<Vec<_>>().await;
 
         // All events should be Ok
         let unwrapped: Vec<ProviderDelta> = deltas.into_iter().map(|r| r.unwrap()).collect();
 
         // Verify TextDelta present
-        let has_text = unwrapped.iter().any(|d| matches!(d, ProviderDelta::TextDelta(t) if t == "Hello!"));
+        let has_text = unwrapped
+            .iter()
+            .any(|d| matches!(d, ProviderDelta::TextDelta(t) if t == "Hello!"));
         assert!(has_text, "Expected TextDelta");
 
         // Verify Done at end

@@ -8,10 +8,10 @@ use super::anchor_store::AnchorStore;
 use super::reactive::LLMConfig;
 use super::types::BehavioralAnchor;
 use crate::error::AlephError;
+use crate::sync_primitives::{Arc, RwLock};
 use lru::LruCache;
 use std::collections::HashSet;
 use std::num::NonZeroUsize;
-use crate::sync_primitives::{Arc, RwLock};
 
 /// Extracts relevant tags from user intent
 ///
@@ -28,7 +28,9 @@ impl TagExtractor {
     ///
     /// * `llm_config` - Configuration for LLM-based tag extraction (fallback)
     pub fn new(llm_config: LLMConfig) -> Self {
-        Self { _llm_config: llm_config }
+        Self {
+            _llm_config: llm_config,
+        }
     }
 
     /// Extract tags from user intent using heuristic rules
@@ -91,7 +93,10 @@ impl TagExtractor {
         }
 
         // Tools and technologies
-        if intent_lower.contains("shell") || intent_lower.contains("bash") || intent_lower.contains("zsh") {
+        if intent_lower.contains("shell")
+            || intent_lower.contains("bash")
+            || intent_lower.contains("zsh")
+        {
             tags.insert("shell".to_string());
         }
         if intent_lower.contains("git") {
@@ -106,7 +111,10 @@ impl TagExtractor {
         if intent_lower.contains("database") || intent_lower.contains("sql") {
             tags.insert("database".to_string());
         }
-        if intent_lower.contains("api") || intent_lower.contains("rest") || intent_lower.contains("http") {
+        if intent_lower.contains("api")
+            || intent_lower.contains("rest")
+            || intent_lower.contains("http")
+        {
             tags.insert("API".to_string());
         }
 
@@ -173,7 +181,9 @@ impl AnchorRetriever {
         Self {
             anchor_store,
             tag_extractor,
-            cache: LruCache::new(NonZeroUsize::new(cache_size).unwrap_or(NonZeroUsize::new(1).unwrap())),
+            cache: LruCache::new(
+                NonZeroUsize::new(cache_size).unwrap_or(NonZeroUsize::new(1).unwrap()),
+            ),
         }
     }
 
@@ -200,7 +210,10 @@ impl AnchorRetriever {
     /// # let mut retriever = AnchorRetriever::new(anchor_store, tag_extractor, 100);
     /// let anchors = retriever.retrieve_for_intent("Run Python script on macOS").unwrap();
     /// ```
-    pub fn retrieve_for_intent(&mut self, intent: &str) -> Result<Vec<BehavioralAnchor>, AlephError> {
+    pub fn retrieve_for_intent(
+        &mut self,
+        intent: &str,
+    ) -> Result<Vec<BehavioralAnchor>, AlephError> {
         // Check cache first
         if let Some(cached_anchors) = self.cache.get(intent) {
             return Ok(cached_anchors.clone());
@@ -212,11 +225,9 @@ impl AnchorRetriever {
         // Query anchor store for anchors matching any of the tags
         let store = self.anchor_store.read().unwrap_or_else(|e| e.into_inner());
 
-        let all_anchors = store.list_all().map_err(|e| {
-            AlephError::Other {
-                message: format!("Failed to list anchors: {}", e),
-                suggestion: None,
-            }
+        let all_anchors = store.list_all().map_err(|e| AlephError::Other {
+            message: format!("Failed to list anchors: {}", e),
+            suggestion: None,
         })?;
 
         // Filter anchors that match any of the extracted tags
@@ -259,7 +270,9 @@ impl AnchorRetriever {
             match b.priority.cmp(&a.priority) {
                 std::cmp::Ordering::Equal => {
                     // If priorities are equal, sort by confidence (descending)
-                    b.confidence.partial_cmp(&a.confidence).unwrap_or(std::cmp::Ordering::Equal)
+                    b.confidence
+                        .partial_cmp(&a.confidence)
+                        .unwrap_or(std::cmp::Ordering::Equal)
                 }
                 other => other,
             }
@@ -347,7 +360,9 @@ mod tests {
         let tags = extractor.extract_tags("Compile Rust code").unwrap();
         assert!(tags.contains(&"Rust".to_string()));
 
-        let tags = extractor.extract_tags("Debug JavaScript application").unwrap();
+        let tags = extractor
+            .extract_tags("Debug JavaScript application")
+            .unwrap();
         assert!(tags.contains(&"JavaScript".to_string()));
     }
 
@@ -563,4 +578,3 @@ mod tests {
         assert!(formatted.contains("2. **Rule 2**"));
     }
 }
-

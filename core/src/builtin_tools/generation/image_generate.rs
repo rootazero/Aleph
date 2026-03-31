@@ -3,20 +3,20 @@
 //! Generates images from text prompts using configured AI providers.
 //! Implements AlephTool trait for AI agent integration.
 
+use crate::sync_primitives::{Arc, RwLock};
 use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use crate::sync_primitives::{Arc, RwLock};
 use std::time::Instant;
 use tracing::{debug, info};
 
+use crate::builtin_tools::error::ToolError;
 use crate::error::Result;
+use crate::gateway::media::{detect_mime, MediaItem};
 use crate::generation::{
     GenerationParams, GenerationProviderRegistry, GenerationRequest, GenerationType,
 };
-use crate::builtin_tools::error::ToolError;
 use crate::tools::AlephTool;
-use crate::gateway::media::{MediaItem, detect_mime};
 
 /// Arguments for image generation
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -97,7 +97,10 @@ impl ImageGenerateTool {
     }
 
     /// Execute image generation (internal implementation)
-    async fn call_impl(&self, args: ImageGenerateArgs) -> std::result::Result<ImageGenerateOutput, ToolError> {
+    async fn call_impl(
+        &self,
+        args: ImageGenerateArgs,
+    ) -> std::result::Result<ImageGenerateOutput, ToolError> {
         use crate::builtin_tools::{notify_tool_result, notify_tool_start};
 
         let start = Instant::now();
@@ -133,7 +136,8 @@ impl ImageGenerateTool {
 
                 // Check if provider supports image generation
                 if !provider.supports(GenerationType::Image) {
-                    let error_msg = format!("Provider '{}' does not support image generation", name);
+                    let error_msg =
+                        format!("Provider '{}' does not support image generation", name);
                     notify_tool_result(Self::NAME, &error_msg, false);
                     return Err(ToolError::InvalidArgs(error_msg));
                 }
@@ -257,7 +261,8 @@ impl Clone for ImageGenerateTool {
 #[async_trait]
 impl AlephTool for ImageGenerateTool {
     const NAME: &'static str = "image_generate";
-    const DESCRIPTION: &'static str = r#"Generate images from text prompts using AI image generation providers."#;
+    const DESCRIPTION: &'static str =
+        r#"Generate images from text prompts using AI image generation providers."#;
 
     type Args = ImageGenerateArgs;
     type Output = ImageGenerateOutput;
@@ -366,7 +371,11 @@ mod tests {
         // Error is now AlephError
         let err = result.unwrap_err();
         let err_msg = err.to_string();
-        assert!(err_msg.contains("not found"), "Error should contain 'not found': {}", err_msg);
+        assert!(
+            err_msg.contains("not found"),
+            "Error should contain 'not found': {}",
+            err_msg
+        );
     }
 
     #[tokio::test]
@@ -390,7 +399,11 @@ mod tests {
         // Error is now AlephError
         let err = result.unwrap_err();
         let err_msg = err.to_string();
-        assert!(err_msg.contains("No image generation provider"), "Error should contain 'No image generation provider': {}", err_msg);
+        assert!(
+            err_msg.contains("No image generation provider"),
+            "Error should contain 'No image generation provider': {}",
+            err_msg
+        );
     }
 
     #[tokio::test]

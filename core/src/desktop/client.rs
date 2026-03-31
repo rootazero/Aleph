@@ -49,7 +49,11 @@ impl DesktopBridgeClient {
         let standalone = home.join(".aleph").join("bridge.sock");
 
         // Prefer managed socket (from BridgeSupervisor) when it exists
-        let socket_path = if managed.exists() { managed } else { standalone };
+        let socket_path = if managed.exists() {
+            managed
+        } else {
+            standalone
+        };
         Self { socket_path }
     }
 
@@ -64,10 +68,7 @@ impl DesktopBridgeClient {
     }
 
     /// Send a `DesktopRequest` and return the JSON `result` value on success.
-    pub async fn send(
-        &self,
-        request: DesktopRequest,
-    ) -> Result<serde_json::Value, DesktopError> {
+    pub async fn send(&self, request: DesktopRequest) -> Result<serde_json::Value, DesktopError> {
         if !self.socket_path.exists() {
             return Err(DesktopError::AppNotRunning);
         }
@@ -89,8 +90,8 @@ impl DesktopBridgeClient {
             "params": params,
         });
 
-        let mut wire = serde_json::to_string(&envelope)
-            .map_err(|e| DesktopError::Protocol(e.to_string()))?;
+        let mut wire =
+            serde_json::to_string(&envelope).map_err(|e| DesktopError::Protocol(e.to_string()))?;
         wire.push('\n');
 
         debug!("desktop → {}", wire.trim_end());
@@ -104,14 +105,16 @@ impl DesktopBridgeClient {
         let mut lines = BufReader::new(reader).lines();
         let line = timeout(Duration::from_secs(30), lines.next_line())
             .await
-            .map_err(|_| DesktopError::Protocol("desktop bridge request timed out after 30s".into()))?
+            .map_err(|_| {
+                DesktopError::Protocol("desktop bridge request timed out after 30s".into())
+            })?
             .map_err(DesktopError::ConnectionFailed)?
             .ok_or_else(|| DesktopError::Protocol("connection closed without response".into()))?;
 
         debug!("desktop ← {}", line.trim_end());
 
-        let response: serde_json::Value = serde_json::from_str(&line)
-            .map_err(|e| DesktopError::Protocol(e.to_string()))?;
+        let response: serde_json::Value =
+            serde_json::from_str(&line).map_err(|e| DesktopError::Protocol(e.to_string()))?;
 
         if let Some(error) = response.get("error") {
             let msg = error
@@ -145,10 +148,7 @@ impl DesktopBridgeClient {
     }
 
     /// Always returns `AppNotRunning` on non-Unix platforms.
-    pub async fn send(
-        &self,
-        _request: DesktopRequest,
-    ) -> Result<serde_json::Value, DesktopError> {
+    pub async fn send(&self, _request: DesktopRequest) -> Result<serde_json::Value, DesktopError> {
         Err(DesktopError::AppNotRunning)
     }
 }
@@ -182,13 +182,21 @@ fn request_to_jsonrpc(request: &DesktopRequest) -> (&'static str, serde_json::Va
         DesktopRequest::AxTree { app_bundle_id } => {
             ("desktop.ax_tree", json!({ "app_bundle_id": app_bundle_id }))
         }
-        DesktopRequest::Click { ref_id, x, y, button } => {
+        DesktopRequest::Click {
+            ref_id,
+            x,
+            y,
+            button,
+        } => {
             let btn = match button {
                 MouseButton::Left => "left",
                 MouseButton::Right => "right",
                 MouseButton::Middle => "middle",
             };
-            ("desktop.click", json!({ "ref": ref_id, "x": x, "y": y, "button": btn }))
+            (
+                "desktop.click",
+                json!({ "ref": ref_id, "x": x, "y": y, "button": btn }),
+            )
         }
         DesktopRequest::TypeText { ref_id, text } => {
             ("desktop.type_text", json!({ "ref": ref_id, "text": text }))
@@ -201,40 +209,67 @@ fn request_to_jsonrpc(request: &DesktopRequest) -> (&'static str, serde_json::Va
         DesktopRequest::FocusWindow { window_id } => {
             ("desktop.focus_window", json!({ "window_id": window_id }))
         }
-        DesktopRequest::Snapshot { app_bundle_id, max_depth, include_non_interactive } => {
-            ("desktop.snapshot", json!({
+        DesktopRequest::Snapshot {
+            app_bundle_id,
+            max_depth,
+            include_non_interactive,
+        } => (
+            "desktop.snapshot",
+            json!({
                 "app_bundle_id": app_bundle_id,
                 "max_depth": max_depth,
                 "include_non_interactive": include_non_interactive,
-            }))
-        }
-        DesktopRequest::Scroll { ref_id, x, y, delta_x, delta_y } => {
-            ("desktop.scroll", json!({
+            }),
+        ),
+        DesktopRequest::Scroll {
+            ref_id,
+            x,
+            y,
+            delta_x,
+            delta_y,
+        } => (
+            "desktop.scroll",
+            json!({
                 "ref": ref_id, "x": x, "y": y,
                 "delta_x": delta_x, "delta_y": delta_y,
-            }))
-        }
-        DesktopRequest::DoubleClick { ref_id, x, y, button } => {
+            }),
+        ),
+        DesktopRequest::DoubleClick {
+            ref_id,
+            x,
+            y,
+            button,
+        } => {
             let btn = match button {
                 MouseButton::Left => "left",
                 MouseButton::Right => "right",
                 MouseButton::Middle => "middle",
             };
-            ("desktop.double_click", json!({ "ref": ref_id, "x": x, "y": y, "button": btn }))
+            (
+                "desktop.double_click",
+                json!({ "ref": ref_id, "x": x, "y": y, "button": btn }),
+            )
         }
-        DesktopRequest::Drag { start_ref, start_x, start_y, end_ref, end_x, end_y, duration_ms } => {
-            ("desktop.drag", json!({
+        DesktopRequest::Drag {
+            start_ref,
+            start_x,
+            start_y,
+            end_ref,
+            end_x,
+            end_y,
+            duration_ms,
+        } => (
+            "desktop.drag",
+            json!({
                 "start_ref": start_ref, "start_x": start_x, "start_y": start_y,
                 "end_ref": end_ref, "end_x": end_x, "end_y": end_y,
                 "duration_ms": duration_ms,
-            }))
-        }
+            }),
+        ),
         DesktopRequest::Hover { ref_id, x, y } => {
             ("desktop.hover", json!({ "ref": ref_id, "x": x, "y": y }))
         }
-        DesktopRequest::Paste { text } => {
-            ("desktop.paste", json!({ "text": text }))
-        }
+        DesktopRequest::Paste { text } => ("desktop.paste", json!({ "text": text })),
         DesktopRequest::CanvasShow { html, position } => (
             "desktop.canvas_show",
             json!({
@@ -255,94 +290,135 @@ fn request_to_jsonrpc(request: &DesktopRequest) -> (&'static str, serde_json::Va
         // ========= PIM (Personal Information Management) =========
 
         // Calendar
-        DesktopRequest::PimCalendarList { from, to, calendar_id } => {
-            ("pim.calendar.list", json!({ "from": from, "to": to, "calendar_id": calendar_id }))
-        }
-        DesktopRequest::PimCalendarGet { id } => {
-            ("pim.calendar.get", json!({ "id": id }))
-        }
-        DesktopRequest::PimCalendarCreate { title, start, end, calendar_id, location, notes, all_day } => {
-            ("pim.calendar.create", json!({
+        DesktopRequest::PimCalendarList {
+            from,
+            to,
+            calendar_id,
+        } => (
+            "pim.calendar.list",
+            json!({ "from": from, "to": to, "calendar_id": calendar_id }),
+        ),
+        DesktopRequest::PimCalendarGet { id } => ("pim.calendar.get", json!({ "id": id })),
+        DesktopRequest::PimCalendarCreate {
+            title,
+            start,
+            end,
+            calendar_id,
+            location,
+            notes,
+            all_day,
+        } => (
+            "pim.calendar.create",
+            json!({
                 "title": title, "start": start, "end": end,
                 "calendar_id": calendar_id, "location": location,
                 "notes": notes, "all_day": all_day,
-            }))
-        }
-        DesktopRequest::PimCalendarUpdate { id, title, start, end, location, notes, all_day, calendar_id } => {
-            ("pim.calendar.update", json!({
+            }),
+        ),
+        DesktopRequest::PimCalendarUpdate {
+            id,
+            title,
+            start,
+            end,
+            location,
+            notes,
+            all_day,
+            calendar_id,
+        } => (
+            "pim.calendar.update",
+            json!({
                 "id": id, "title": title, "start": start,
                 "end": end, "location": location, "notes": notes,
                 "all_day": all_day, "calendar_id": calendar_id,
-            }))
-        }
-        DesktopRequest::PimCalendarDelete { id } => {
-            ("pim.calendar.delete", json!({ "id": id }))
-        }
+            }),
+        ),
+        DesktopRequest::PimCalendarDelete { id } => ("pim.calendar.delete", json!({ "id": id })),
         DesktopRequest::PimCalendarCalendars => ("pim.calendar.calendars", json!({})),
 
         // Reminders
-        DesktopRequest::PimRemindersList { list_id, include_completed } => {
-            ("pim.reminders.list", json!({ "list_id": list_id, "include_completed": include_completed }))
-        }
-        DesktopRequest::PimRemindersGet { id } => {
-            ("pim.reminders.get", json!({ "id": id }))
-        }
-        DesktopRequest::PimRemindersCreate { title, list_id, due_date, priority, notes } => {
-            ("pim.reminders.create", json!({
+        DesktopRequest::PimRemindersList {
+            list_id,
+            include_completed,
+        } => (
+            "pim.reminders.list",
+            json!({ "list_id": list_id, "include_completed": include_completed }),
+        ),
+        DesktopRequest::PimRemindersGet { id } => ("pim.reminders.get", json!({ "id": id })),
+        DesktopRequest::PimRemindersCreate {
+            title,
+            list_id,
+            due_date,
+            priority,
+            notes,
+        } => (
+            "pim.reminders.create",
+            json!({
                 "title": title, "list_id": list_id,
                 "due_date": due_date, "priority": priority, "notes": notes,
-            }))
-        }
-        DesktopRequest::PimRemindersComplete { id, completed } => {
-            ("pim.reminders.complete", json!({ "id": id, "completed": completed }))
-        }
-        DesktopRequest::PimRemindersDelete { id } => {
-            ("pim.reminders.delete", json!({ "id": id }))
-        }
+            }),
+        ),
+        DesktopRequest::PimRemindersComplete { id, completed } => (
+            "pim.reminders.complete",
+            json!({ "id": id, "completed": completed }),
+        ),
+        DesktopRequest::PimRemindersDelete { id } => ("pim.reminders.delete", json!({ "id": id })),
         DesktopRequest::PimRemindersLists => ("pim.reminders.lists", json!({})),
 
         // Notes
-        DesktopRequest::PimNotesList { folder } => {
-            ("pim.notes.list", json!({ "folder": folder }))
-        }
-        DesktopRequest::PimNotesGet { id } => {
-            ("pim.notes.get", json!({ "id": id }))
-        }
-        DesktopRequest::PimNotesCreate { title, body, folder } => {
-            ("pim.notes.create", json!({ "title": title, "body": body, "folder": folder }))
-        }
-        DesktopRequest::PimNotesUpdate { id, title, body } => {
-            ("pim.notes.update", json!({ "id": id, "title": title, "body": body }))
-        }
-        DesktopRequest::PimNotesDelete { id } => {
-            ("pim.notes.delete", json!({ "id": id }))
-        }
+        DesktopRequest::PimNotesList { folder } => ("pim.notes.list", json!({ "folder": folder })),
+        DesktopRequest::PimNotesGet { id } => ("pim.notes.get", json!({ "id": id })),
+        DesktopRequest::PimNotesCreate {
+            title,
+            body,
+            folder,
+        } => (
+            "pim.notes.create",
+            json!({ "title": title, "body": body, "folder": folder }),
+        ),
+        DesktopRequest::PimNotesUpdate { id, title, body } => (
+            "pim.notes.update",
+            json!({ "id": id, "title": title, "body": body }),
+        ),
+        DesktopRequest::PimNotesDelete { id } => ("pim.notes.delete", json!({ "id": id })),
         DesktopRequest::PimNotesFolders => ("pim.notes.folders", json!({})),
 
         // Contacts
         DesktopRequest::PimContactsSearch { query } => {
             ("pim.contacts.search", json!({ "query": query }))
         }
-        DesktopRequest::PimContactsGet { id } => {
-            ("pim.contacts.get", json!({ "id": id }))
-        }
-        DesktopRequest::PimContactsCreate { given_name, family_name, organization, notes, phone_numbers, emails } => {
-            ("pim.contacts.create", json!({
+        DesktopRequest::PimContactsGet { id } => ("pim.contacts.get", json!({ "id": id })),
+        DesktopRequest::PimContactsCreate {
+            given_name,
+            family_name,
+            organization,
+            notes,
+            phone_numbers,
+            emails,
+        } => (
+            "pim.contacts.create",
+            json!({
                 "given_name": given_name, "family_name": family_name,
                 "organization": organization, "notes": notes,
                 "phone_numbers": phone_numbers, "emails": emails,
-            }))
-        }
-        DesktopRequest::PimContactsUpdate { id, given_name, family_name, organization, notes, phone_numbers, emails } => {
-            ("pim.contacts.update", json!({
+            }),
+        ),
+        DesktopRequest::PimContactsUpdate {
+            id,
+            given_name,
+            family_name,
+            organization,
+            notes,
+            phone_numbers,
+            emails,
+        } => (
+            "pim.contacts.update",
+            json!({
                 "id": id, "given_name": given_name, "family_name": family_name,
                 "organization": organization, "notes": notes,
                 "phone_numbers": phone_numbers, "emails": emails,
-            }))
-        }
-        DesktopRequest::PimContactsDelete { id } => {
-            ("pim.contacts.delete", json!({ "id": id }))
-        }
+            }),
+        ),
+        DesktopRequest::PimContactsDelete { id } => ("pim.contacts.delete", json!({ "id": id })),
         DesktopRequest::PimContactsGroups => ("pim.contacts.groups", json!({})),
     }
 }
@@ -368,9 +444,15 @@ mod tests {
 
     #[test]
     fn test_request_to_jsonrpc_screenshot_with_region() {
-        let region = ScreenRegion { x: 10.0, y: 20.0, width: 100.0, height: 200.0 };
-        let (method, params) =
-            request_to_jsonrpc(&DesktopRequest::Screenshot { region: Some(region) });
+        let region = ScreenRegion {
+            x: 10.0,
+            y: 20.0,
+            width: 100.0,
+            height: 200.0,
+        };
+        let (method, params) = request_to_jsonrpc(&DesktopRequest::Screenshot {
+            region: Some(region),
+        });
         assert_eq!(method, "desktop.screenshot");
         assert_eq!(params["region"]["x"], 10.0);
         assert_eq!(params["region"]["width"], 100.0);
@@ -410,8 +492,10 @@ mod tests {
     fn test_request_to_jsonrpc_scroll() {
         let (method, params) = request_to_jsonrpc(&DesktopRequest::Scroll {
             ref_id: Some("e3".into()),
-            x: None, y: None,
-            delta_x: 0.0, delta_y: -200.0,
+            x: None,
+            y: None,
+            delta_x: 0.0,
+            delta_y: -200.0,
         });
         assert_eq!(method, "desktop.scroll");
         assert_eq!(params["ref"], "e3");
@@ -422,7 +506,8 @@ mod tests {
     fn test_request_to_jsonrpc_double_click() {
         let (method, params) = request_to_jsonrpc(&DesktopRequest::DoubleClick {
             ref_id: Some("e1".into()),
-            x: None, y: None,
+            x: None,
+            y: None,
             button: MouseButton::Left,
         });
         assert_eq!(method, "desktop.double_click");
@@ -432,8 +517,12 @@ mod tests {
     #[test]
     fn test_request_to_jsonrpc_drag() {
         let (method, params) = request_to_jsonrpc(&DesktopRequest::Drag {
-            start_ref: Some("e1".into()), start_x: None, start_y: None,
-            end_ref: Some("e5".into()), end_x: None, end_y: None,
+            start_ref: Some("e1".into()),
+            start_x: None,
+            start_y: None,
+            end_ref: Some("e5".into()),
+            end_x: None,
+            end_y: None,
             duration_ms: Some(500),
         });
         assert_eq!(method, "desktop.drag");
@@ -445,7 +534,8 @@ mod tests {
     fn test_request_to_jsonrpc_hover() {
         let (method, params) = request_to_jsonrpc(&DesktopRequest::Hover {
             ref_id: None,
-            x: Some(300.0), y: Some(400.0),
+            x: Some(300.0),
+            y: Some(400.0),
         });
         assert_eq!(method, "desktop.hover");
         assert_eq!(params["x"], 300.0);
@@ -464,7 +554,8 @@ mod tests {
     fn test_request_to_jsonrpc_click_with_ref() {
         let (method, params) = request_to_jsonrpc(&DesktopRequest::Click {
             ref_id: Some("e7".into()),
-            x: None, y: None,
+            x: None,
+            y: None,
             button: MouseButton::Left,
         });
         assert_eq!(method, "desktop.click");

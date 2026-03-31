@@ -13,9 +13,9 @@
 //! - Search backends (`search.backends.*`)  → vault prefix `search:`
 //! - Channels (`channels.*`)               → vault prefix `channel:`
 
-use crate::Config;
 use crate::gateway::security::SharedTokenManager;
 use crate::sync_primitives::Arc;
+use crate::Config;
 use tokio::sync::RwLock;
 
 /// Migrate all plaintext secrets from config to vault at startup.
@@ -65,8 +65,12 @@ pub async fn migrate_all_secrets_to_vault(
         sections_to_save.push("channels");
     }
 
-    let total = ai_migrated + gen_migrated + embed_migrated + rerank_migrated
-        + search_migrated + channel_migrated;
+    let total = ai_migrated
+        + gen_migrated
+        + embed_migrated
+        + rerank_migrated
+        + search_migrated
+        + channel_migrated;
 
     if total > 0 {
         tracing::info!(

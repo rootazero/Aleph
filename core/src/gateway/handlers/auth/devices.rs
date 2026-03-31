@@ -2,13 +2,13 @@
 //!
 //! Handles device listing and revocation.
 
+use crate::sync_primitives::Arc;
 use serde::Deserialize;
 use serde_json::json;
-use crate::sync_primitives::Arc;
 use tracing::{info, warn};
 
-use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse};
 use crate::gateway::handlers::parse_params;
+use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse};
 
 use super::AuthContext;
 
@@ -62,12 +62,8 @@ pub async fn handle_devices_revoke(
             info!(device_id = %params.device_id, "Device revoked");
             JsonRpcResponse::success(request.id, json!({"revoked": true}))
         }
-        Ok(false) => {
-            JsonRpcResponse::error(request.id, -32004, "Device not found")
-        }
-        Err(e) => {
-            JsonRpcResponse::error(request.id, -32603, format!("Failed to revoke: {}", e))
-        }
+        Ok(false) => JsonRpcResponse::error(request.id, -32004, "Device not found"),
+        Err(e) => JsonRpcResponse::error(request.id, -32603, format!("Failed to revoke: {}", e)),
     }
 }
 

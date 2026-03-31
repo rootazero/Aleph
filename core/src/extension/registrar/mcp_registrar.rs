@@ -6,11 +6,11 @@
 //!
 //! This avoids holding RwLockWriteGuard across await points.
 
-use anyhow::Result;
 use crate::extension::capability::CapabilityDeclaration;
 use crate::extension::manifest::PluginPermission;
 use crate::extension::registrar::api::CapabilityApi;
 use crate::extension::registry::PluginRegistry;
+use anyhow::Result;
 
 /// Registrar for MCP-based plugins using collect-then-batch pattern.
 pub struct McpRegistrar {
@@ -20,7 +20,10 @@ pub struct McpRegistrar {
 
 impl McpRegistrar {
     pub fn new(plugin_id: String, permissions: Vec<PluginPermission>) -> Self {
-        Self { plugin_id, permissions }
+        Self {
+            plugin_id,
+            permissions,
+        }
     }
 
     /// Phase 2 (sync): Write collected capabilities into registry.
@@ -30,7 +33,8 @@ impl McpRegistrar {
         caps: Vec<CapabilityDeclaration>,
         registry: &mut PluginRegistry,
     ) -> Result<()> {
-        let mut api = CapabilityApi::new(registry, self.plugin_id.clone(), self.permissions.clone());
+        let mut api =
+            CapabilityApi::new(registry, self.plugin_id.clone(), self.permissions.clone());
         for cap in caps {
             api.register_capability(cap)?;
         }
@@ -62,15 +66,13 @@ mod tests {
         let mut registry = make_registry_with_plugin("test-mcp");
 
         let registrar = McpRegistrar::new("test-mcp".into(), vec![]);
-        let caps = vec![
-            CapabilityDeclaration::Tool(ToolRegistration {
-                name: "mcp-tool".into(),
-                description: "A tool from MCP".into(),
-                parameters: serde_json::json!({}),
-                handler: "mcp_handler".into(),
-                plugin_id: "test-mcp".into(),
-            }),
-        ];
+        let caps = vec![CapabilityDeclaration::Tool(ToolRegistration {
+            name: "mcp-tool".into(),
+            description: "A tool from MCP".into(),
+            parameters: serde_json::json!({}),
+            handler: "mcp_handler".into(),
+            plugin_id: "test-mcp".into(),
+        })];
 
         registrar.batch_register(caps, &mut registry).unwrap();
         assert!(registry.get_tool("mcp-tool").is_some());
@@ -109,15 +111,13 @@ mod tests {
 
         // No Background permission → Service registration should fail
         let registrar = McpRegistrar::new("test-mcp".into(), vec![]);
-        let caps = vec![
-            CapabilityDeclaration::Service(ServiceRegistration {
-                id: "test-service".into(),
-                name: "Test Service".into(),
-                start_handler: "start".into(),
-                stop_handler: "stop".into(),
-                plugin_id: "test-mcp".into(),
-            }),
-        ];
+        let caps = vec![CapabilityDeclaration::Service(ServiceRegistration {
+            id: "test-service".into(),
+            name: "Test Service".into(),
+            start_handler: "start".into(),
+            stop_handler: "stop".into(),
+            plugin_id: "test-mcp".into(),
+        })];
 
         assert!(registrar.batch_register(caps, &mut registry).is_err());
     }

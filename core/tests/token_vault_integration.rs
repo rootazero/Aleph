@@ -18,10 +18,7 @@ fn make_manager(dir: &tempfile::TempDir) -> (Arc<SecurityStore>, SharedTokenMana
 }
 
 /// Helper: create a manager reusing an existing store (simulates restart).
-fn restart_manager(
-    store: Arc<SecurityStore>,
-    vault_path: &std::path::Path,
-) -> SharedTokenManager {
+fn restart_manager(store: Arc<SecurityStore>, vault_path: &std::path::Path) -> SharedTokenManager {
     SharedTokenManager::new(store, vault_path)
 }
 
@@ -50,9 +47,18 @@ fn full_lifecycle_startup_configure_restart() {
     assert!(loaded.is_some(), "Should load token from DB");
 
     // Verify all 3 keys readable
-    assert_eq!(mgr2.get_secret("anthropic").unwrap().unwrap().expose(), "sk-ant-key1");
-    assert_eq!(mgr2.get_secret("openai").unwrap().unwrap().expose(), "sk-openai-key1");
-    assert_eq!(mgr2.get_secret("google").unwrap().unwrap().expose(), "sk-google-key1");
+    assert_eq!(
+        mgr2.get_secret("anthropic").unwrap().unwrap().expose(),
+        "sk-ant-key1"
+    );
+    assert_eq!(
+        mgr2.get_secret("openai").unwrap().unwrap().expose(),
+        "sk-openai-key1"
+    );
+    assert_eq!(
+        mgr2.get_secret("google").unwrap().unwrap().expose(),
+        "sk-google-key1"
+    );
 }
 
 #[test]
@@ -72,7 +78,10 @@ fn lifecycle_add_update_delete_across_restarts() {
     mgr.try_load_token_from_db();
     mgr.store_secret("anthropic", "sk-v2").unwrap();
     mgr.store_secret("openai", "sk-openai").unwrap();
-    assert_eq!(mgr.get_secret("anthropic").unwrap().unwrap().expose(), "sk-v2");
+    assert_eq!(
+        mgr.get_secret("anthropic").unwrap().unwrap().expose(),
+        "sk-v2"
+    );
     drop(mgr);
 
     // Boot3: delete "anthropic"
@@ -85,7 +94,10 @@ fn lifecycle_add_update_delete_across_restarts() {
     let mgr = restart_manager(store, &vault_path);
     mgr.try_load_token_from_db();
     assert!(mgr.get_secret("anthropic").unwrap().is_none());
-    assert_eq!(mgr.get_secret("openai").unwrap().unwrap().expose(), "sk-openai");
+    assert_eq!(
+        mgr.get_secret("openai").unwrap().unwrap().expose(),
+        "sk-openai"
+    );
 }
 
 #[test]
@@ -137,10 +149,22 @@ fn lifecycle_multiple_resets() {
     mgr.store_secret("epoch3_key", "epoch3_val").unwrap();
 
     // All secrets from all epochs readable
-    assert_eq!(mgr.get_secret("epoch0_key").unwrap().unwrap().expose(), "epoch0_val");
-    assert_eq!(mgr.get_secret("epoch1_key").unwrap().unwrap().expose(), "epoch1_val");
-    assert_eq!(mgr.get_secret("epoch2_key").unwrap().unwrap().expose(), "epoch2_val");
-    assert_eq!(mgr.get_secret("epoch3_key").unwrap().unwrap().expose(), "epoch3_val");
+    assert_eq!(
+        mgr.get_secret("epoch0_key").unwrap().unwrap().expose(),
+        "epoch0_val"
+    );
+    assert_eq!(
+        mgr.get_secret("epoch1_key").unwrap().unwrap().expose(),
+        "epoch1_val"
+    );
+    assert_eq!(
+        mgr.get_secret("epoch2_key").unwrap().unwrap().expose(),
+        "epoch2_val"
+    );
+    assert_eq!(
+        mgr.get_secret("epoch3_key").unwrap().unwrap().expose(),
+        "epoch3_val"
+    );
 
     let names = mgr.list_secret_names().unwrap();
     assert_eq!(names.len(), 4);
@@ -196,7 +220,8 @@ fn concurrent_reads() {
 
     // Store 10 secrets
     for i in 0..10 {
-        mgr.store_secret(&format!("key_{}", i), &format!("val_{}", i)).unwrap();
+        mgr.store_secret(&format!("key_{}", i), &format!("val_{}", i))
+            .unwrap();
     }
 
     let mgr = Arc::new(mgr);
@@ -232,7 +257,8 @@ fn concurrent_writes() {
     for i in 0..10 {
         let mgr = Arc::clone(&mgr);
         handles.push(std::thread::spawn(move || {
-            mgr.store_secret(&format!("writer_{}", i), &format!("value_{}", i)).unwrap();
+            mgr.store_secret(&format!("writer_{}", i), &format!("value_{}", i))
+                .unwrap();
         }));
     }
 
@@ -260,7 +286,8 @@ fn concurrent_read_write_mixed() {
 
     // Pre-store 5 secrets
     for i in 0..5 {
-        mgr.store_secret(&format!("pre_{}", i), &format!("pre_val_{}", i)).unwrap();
+        mgr.store_secret(&format!("pre_{}", i), &format!("pre_val_{}", i))
+            .unwrap();
     }
 
     let mgr = Arc::new(mgr);
@@ -281,7 +308,8 @@ fn concurrent_read_write_mixed() {
     for i in 0..5 {
         let mgr = Arc::clone(&mgr);
         handles.push(std::thread::spawn(move || {
-            mgr.store_secret(&format!("new_{}", i), &format!("new_val_{}", i)).unwrap();
+            mgr.store_secret(&format!("new_{}", i), &format!("new_val_{}", i))
+                .unwrap();
         }));
     }
 
@@ -303,7 +331,8 @@ fn concurrent_reset_during_reads() {
 
     // Store 5 secrets
     for i in 0..5 {
-        mgr.store_secret(&format!("s_{}", i), &format!("v_{}", i)).unwrap();
+        mgr.store_secret(&format!("s_{}", i), &format!("v_{}", i))
+            .unwrap();
     }
 
     let mgr = Arc::new(mgr);
@@ -476,7 +505,7 @@ fn tampered_vault_file_detected() {
         let result = mgr2.get_secret("important");
         // It should either error or return wrong data
         match result {
-            Err(_) => {} // Expected: decryption error
+            Err(_) => {}   // Expected: decryption error
             Ok(None) => {} // Vault may have failed to parse the entry
             Ok(Some(_)) => {
                 panic!("Tampered ciphertext should never decrypt successfully with AES-GCM");
@@ -500,7 +529,10 @@ fn empty_and_special_values() {
     // Unicode
     let unicode_val = "密钥🔑";
     mgr.store_secret("unicode", unicode_val).unwrap();
-    assert_eq!(mgr.get_secret("unicode").unwrap().unwrap().expose(), unicode_val);
+    assert_eq!(
+        mgr.get_secret("unicode").unwrap().unwrap().expose(),
+        unicode_val
+    );
 
     // 10KB string
     let large = "x".repeat(10_240);
@@ -566,7 +598,10 @@ fn vault_file_missing_recreates_empty() {
 
     // Can store new secrets
     mgr2.store_secret("new_key", "new_val").unwrap();
-    assert_eq!(mgr2.get_secret("new_key").unwrap().unwrap().expose(), "new_val");
+    assert_eq!(
+        mgr2.get_secret("new_key").unwrap().unwrap().expose(),
+        "new_val"
+    );
 }
 
 #[test]

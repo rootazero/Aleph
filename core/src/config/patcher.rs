@@ -201,10 +201,7 @@ impl ConfigPatcher {
 
         // 6. Deserialize back to Config
         let new_config: Config = serde_json::from_value(patched_json.clone()).map_err(|e| {
-            AlephError::invalid_config(format!(
-                "Patched config failed deserialization: {}",
-                e
-            ))
+            AlephError::invalid_config(format!("Patched config failed deserialization: {}", e))
         })?;
 
         // 7. Run Config::validate()
@@ -263,13 +260,12 @@ impl ConfigPatcher {
             })?;
             let mut re_patched = latest_json;
             set_nested_value(&mut re_patched, &request.path, &request.patch)?;
-            let final_config: Config =
-                serde_json::from_value(re_patched).map_err(|e| {
-                    AlephError::invalid_config(format!(
-                        "Re-patched config failed deserialization: {}",
-                        e
-                    ))
-                })?;
+            let final_config: Config = serde_json::from_value(re_patched).map_err(|e| {
+                AlephError::invalid_config(format!(
+                    "Re-patched config failed deserialization: {}",
+                    e
+                ))
+            })?;
             *config = final_config;
             config.save_incremental_to_file(&self.config_path, &[&top_section])?;
         }
@@ -302,9 +298,8 @@ impl ConfigPatcher {
     pub fn validate_schema(&self, config_json: &serde_json::Value) -> Result<()> {
         let schema_json = cached_config_schema();
 
-        let validator = jsonschema::validator_for(schema_json).map_err(|e| {
-            AlephError::invalid_config(format!("Invalid JSON Schema: {}", e))
-        })?;
+        let validator = jsonschema::validator_for(schema_json)
+            .map_err(|e| AlephError::invalid_config(format!("Invalid JSON Schema: {}", e)))?;
 
         let errors: Vec<String> = validator
             .iter_errors(config_json)
@@ -344,7 +339,6 @@ impl ConfigPatcher {
 
         Ok(())
     }
-
 }
 
 // =============================================================================
@@ -554,10 +548,7 @@ mod tests {
             get_nested_value(&v, "providers.deepseek.model"),
             Some(&json!("deepseek-chat"))
         );
-        assert_eq!(
-            get_nested_value(&v, "memory.enabled"),
-            Some(&json!(true))
-        );
+        assert_eq!(get_nested_value(&v, "memory.enabled"), Some(&json!(true)));
 
         // Top-level access
         assert!(get_nested_value(&v, "providers").unwrap().is_object());

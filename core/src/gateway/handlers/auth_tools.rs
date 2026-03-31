@@ -1,10 +1,10 @@
 //! Auth management tools exposed as RPC handlers.
 //! Follows R9 (Everything is a Tool) — auth config via natural language.
 
-use serde_json::json;
-use crate::sync_primitives::Arc;
-use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse};
 use super::auth::AuthContext;
+use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse};
+use crate::sync_primitives::Arc;
+use serde_json::json;
 
 /// Handle "auth.show_token" — display current shared token
 pub async fn handle_auth_show_token(
@@ -12,14 +12,20 @@ pub async fn handle_auth_show_token(
     ctx: Arc<AuthContext>,
 ) -> JsonRpcResponse {
     match ctx.shared_token_mgr.get_current_token() {
-        Some(token) => JsonRpcResponse::success(request.id, json!({
-            "token": token,
-            "message": "This is your current access token"
-        })),
-        None => JsonRpcResponse::success(request.id, json!({
-            "token": null,
-            "message": "No token in memory. Server may need restart."
-        })),
+        Some(token) => JsonRpcResponse::success(
+            request.id,
+            json!({
+                "token": token,
+                "message": "This is your current access token"
+            }),
+        ),
+        None => JsonRpcResponse::success(
+            request.id,
+            json!({
+                "token": null,
+                "message": "No token in memory. Server may need restart."
+            }),
+        ),
     }
 }
 
@@ -29,17 +35,16 @@ pub async fn handle_auth_reset_token(
     ctx: Arc<AuthContext>,
 ) -> JsonRpcResponse {
     match ctx.shared_token_mgr.reset_token() {
-        Ok(token) => {
-            JsonRpcResponse::success(request.id, json!({
+        Ok(token) => JsonRpcResponse::success(
+            request.id,
+            json!({
                 "token": token,
                 "message": "Token regenerated. Vault secrets re-encrypted. All existing sessions are now invalid."
-            }))
-        }
-        Err(e) => JsonRpcResponse::error(
-            request.id,
-            -32603,
-            format!("Failed to reset token: {}", e),
+            }),
         ),
+        Err(e) => {
+            JsonRpcResponse::error(request.id, -32603, format!("Failed to reset token: {}", e))
+        }
     }
 }
 
@@ -62,10 +67,13 @@ pub async fn handle_auth_list_sessions(
                 })
                 .collect();
             let count = items.len();
-            JsonRpcResponse::success(request.id, json!({
-                "sessions": items,
-                "count": count,
-            }))
+            JsonRpcResponse::success(
+                request.id,
+                json!({
+                    "sessions": items,
+                    "count": count,
+                }),
+            )
         }
         Err(e) => JsonRpcResponse::error(
             request.id,
@@ -88,37 +96,38 @@ pub async fn handle_auth_revoke_session(
 
     match session_id {
         Some(id) => match ctx.security_store.delete_session(id) {
-            Ok(()) => JsonRpcResponse::success(request.id, json!({
-                "revoked": true,
-                "session_id": id,
-            })),
+            Ok(()) => JsonRpcResponse::success(
+                request.id,
+                json!({
+                    "revoked": true,
+                    "session_id": id,
+                }),
+            ),
             Err(e) => JsonRpcResponse::error(
                 request.id,
                 -32603,
                 format!("Failed to revoke session: {}", e),
             ),
         },
-        None => JsonRpcResponse::error(
-            request.id,
-            -32602,
-            "Missing required parameter: session_id",
-        ),
+        None => {
+            JsonRpcResponse::error(request.id, -32602, "Missing required parameter: session_id")
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
-    use crate::gateway::security::{
-        SecurityStore, SharedTokenManager, TokenManager, PairingManager,
-        InvitationManager, GuestSessionManager,
-    };
-    use crate::gateway::security::store::DeviceUpsertData;
+    use crate::gateway::config::AuthMode;
     use crate::gateway::device_store::DeviceStore;
     use crate::gateway::event_bus::GatewayEventBus;
-    use crate::gateway::config::AuthMode;
     use crate::gateway::protocol::JsonRpcRequest;
+    use crate::gateway::security::store::DeviceUpsertData;
+    use crate::gateway::security::{
+        GuestSessionManager, InvitationManager, PairingManager, SecurityStore, SharedTokenManager,
+        TokenManager,
+    };
+    use serde_json::json;
 
     fn create_test_context() -> Arc<AuthContext> {
         let store = Arc::new(SecurityStore::in_memory().unwrap());

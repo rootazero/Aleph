@@ -3,10 +3,9 @@
 //! Manages human-in-the-loop approval requests from MCP servers.
 //! Approval requests are forwarded to the UI layer via Gateway events.
 
-use std::collections::HashMap;
 use crate::sync_primitives::Arc;
+use std::collections::HashMap;
 use std::time::Duration;
-
 
 use tokio::sync::{oneshot, RwLock};
 use tokio::time::timeout;

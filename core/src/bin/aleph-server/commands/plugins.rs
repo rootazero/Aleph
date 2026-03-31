@@ -19,11 +19,18 @@ pub async fn handle_plugins_list() -> Result<(), Box<dyn std::error::Error>> {
         println!("No plugins installed");
     } else {
         println!("Installed plugins:");
-        println!("{:<25} {:<12} {:<10} {:<40}", "NAME", "VERSION", "STATUS", "DESCRIPTION");
+        println!(
+            "{:<25} {:<12} {:<10} {:<40}",
+            "NAME", "VERSION", "STATUS", "DESCRIPTION"
+        );
         println!("{}", "-".repeat(90));
         for plugin in &plugins {
             let version = plugin.version.clone().unwrap_or_else(|| "-".to_string());
-            let status = if plugin.enabled { "enabled" } else { "disabled" };
+            let status = if plugin.enabled {
+                "enabled"
+            } else {
+                "disabled"
+            };
             let description = plugin.description.clone().unwrap_or_default();
             // Truncate description if too long
             let description = if description.chars().count() > 38 {
@@ -95,7 +102,10 @@ pub async fn handle_plugins_install(url: &str) -> Result<(), Box<dyn std::error:
                 Err(e) => {
                     // Cleanup on failure
                     eprintln!("Warning: Plugin cloned but failed to load: {}", e);
-                    eprintln!("The plugin directory has been kept at: {}", dest_path.display());
+                    eprintln!(
+                        "The plugin directory has been kept at: {}",
+                        dest_path.display()
+                    );
                     eprintln!("You may need to check the plugin's manifest file.");
                 }
             }
@@ -188,9 +198,12 @@ pub fn handle_plugins_disable(name: &str) -> Result<(), Box<dyn std::error::Erro
 }
 
 /// Install plugin from marketplace (by name) or URL (legacy path)
-pub async fn handle_plugin_install(source: &str, scope: &str) -> Result<(), Box<dyn std::error::Error>> {
-    use alephcore::extension::marketplace::MarketplaceManager;
+pub async fn handle_plugin_install(
+    source: &str,
+    scope: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
     use alephcore::extension::marketplace::types::{MarketplaceConfig, MarketplaceSourceType};
+    use alephcore::extension::marketplace::MarketplaceManager;
     use alephcore::extension::scope::parse_scope;
     use alephcore::Config;
 
@@ -202,13 +215,21 @@ pub async fn handle_plugin_install(source: &str, scope: &str) -> Result<(), Box<
         let marketplace_configs: std::collections::HashMap<String, MarketplaceConfig> = config
             .plugin_marketplaces
             .iter()
-            .map(|(name, entry): (&String, &alephcore::PluginMarketplaceEntry)| {
-                let source_type = match entry.source_type.as_str() {
-                    "local" => MarketplaceSourceType::Local,
-                    _ => MarketplaceSourceType::Github,
-                };
-                (name.clone(), MarketplaceConfig { source: entry.source.clone(), source_type })
-            })
+            .map(
+                |(name, entry): (&String, &alephcore::PluginMarketplaceEntry)| {
+                    let source_type = match entry.source_type.as_str() {
+                        "local" => MarketplaceSourceType::Local,
+                        _ => MarketplaceSourceType::Github,
+                    };
+                    (
+                        name.clone(),
+                        MarketplaceConfig {
+                            source: entry.source.clone(),
+                            source_type,
+                        },
+                    )
+                },
+            )
             .collect();
 
         let manager = MarketplaceManager::new(marketplace_configs, None);
@@ -232,9 +253,11 @@ pub async fn handle_plugin_install(source: &str, scope: &str) -> Result<(), Box<
 }
 
 /// Handle marketplace subcommands
-pub async fn handle_marketplace_command(action: MarketplaceAction) -> Result<(), Box<dyn std::error::Error>> {
-    use alephcore::extension::marketplace::MarketplaceManager;
+pub async fn handle_marketplace_command(
+    action: MarketplaceAction,
+) -> Result<(), Box<dyn std::error::Error>> {
     use alephcore::extension::marketplace::types::{MarketplaceConfig, MarketplaceSourceType};
+    use alephcore::extension::marketplace::MarketplaceManager;
     use alephcore::{Config, PluginMarketplaceEntry};
 
     // Load marketplace config from config.toml
@@ -247,7 +270,13 @@ pub async fn handle_marketplace_command(action: MarketplaceAction) -> Result<(),
                 "local" => MarketplaceSourceType::Local,
                 _ => MarketplaceSourceType::Github,
             };
-            (name.clone(), MarketplaceConfig { source: entry.source.clone(), source_type })
+            (
+                name.clone(),
+                MarketplaceConfig {
+                    source: entry.source.clone(),
+                    source_type,
+                },
+            )
         })
         .collect();
 
@@ -271,7 +300,11 @@ pub async fn handle_marketplace_command(action: MarketplaceAction) -> Result<(),
             // Derive name and type from source
             let (name, source_type) = if source.contains('/') && !source.starts_with('/') {
                 // GitHub: "owner/repo" -> name from repo part
-                let repo = source.split('/').next_back().unwrap_or(&source).to_lowercase();
+                let repo = source
+                    .split('/')
+                    .next_back()
+                    .unwrap_or(&source)
+                    .to_lowercase();
                 (repo, MarketplaceSourceType::Github)
             } else {
                 // Local path
@@ -283,20 +316,26 @@ pub async fn handle_marketplace_command(action: MarketplaceAction) -> Result<(),
                 (name, MarketplaceSourceType::Local)
             };
 
-            manager.add(name.clone(), MarketplaceConfig {
-                source: source.clone(),
-                source_type: source_type.clone(),
-            });
+            manager.add(
+                name.clone(),
+                MarketplaceConfig {
+                    source: source.clone(),
+                    source_type: source_type.clone(),
+                },
+            );
 
             // Save to config
             let mut config = Config::load()?;
-            config.plugin_marketplaces.insert(name.clone(), PluginMarketplaceEntry {
-                source: source.clone(),
-                source_type: match source_type {
-                    MarketplaceSourceType::Github => "github".to_string(),
-                    MarketplaceSourceType::Local => "local".to_string(),
+            config.plugin_marketplaces.insert(
+                name.clone(),
+                PluginMarketplaceEntry {
+                    source: source.clone(),
+                    source_type: match source_type {
+                        MarketplaceSourceType::Github => "github".to_string(),
+                        MarketplaceSourceType::Local => "local".to_string(),
+                    },
                 },
-            });
+            );
             config.save_incremental(&["plugin_marketplaces"])?;
 
             println!("Added marketplace '{}' ({})", name, source);
@@ -308,24 +347,22 @@ pub async fn handle_marketplace_command(action: MarketplaceAction) -> Result<(),
                 Err(e) => println!(" failed: {}", e),
             }
         }
-        MarketplaceAction::Update { name } => {
-            match name {
-                Some(n) => {
-                    println!("Updating marketplace '{}'...", n);
-                    match manager.update(&n) {
-                        Ok(path) => println!("Updated: {:?}", path),
-                        Err(e) => eprintln!("Error: {}", e),
-                    }
-                }
-                None => {
-                    println!("Updating all marketplaces...");
-                    match manager.update_all() {
-                        Ok(()) => println!("All marketplaces updated."),
-                        Err(e) => eprintln!("Some updates failed: {}", e),
-                    }
+        MarketplaceAction::Update { name } => match name {
+            Some(n) => {
+                println!("Updating marketplace '{}'...", n);
+                match manager.update(&n) {
+                    Ok(path) => println!("Updated: {:?}", path),
+                    Err(e) => eprintln!("Error: {}", e),
                 }
             }
-        }
+            None => {
+                println!("Updating all marketplaces...");
+                match manager.update_all() {
+                    Ok(()) => println!("All marketplaces updated."),
+                    Err(e) => eprintln!("Some updates failed: {}", e),
+                }
+            }
+        },
         MarketplaceAction::Remove { name } => {
             manager.remove(&name)?;
 

@@ -118,7 +118,11 @@ mod tests {
     }
 
     /// Create a minimal task with no dependencies. Returns the task id.
-    async fn make_task(store: &SqliteCoordTaskStore, subject: &str, blocked_by: Vec<String>) -> String {
+    async fn make_task(
+        store: &SqliteCoordTaskStore,
+        subject: &str,
+        blocked_by: Vec<String>,
+    ) -> String {
         store
             .create_task(NewCoordTask {
                 team_id: None,
@@ -202,7 +206,10 @@ mod tests {
         // New task E depends on both B and C — no cycle.
         let e_placeholder = "task-e-not-yet-created";
         let result = check_no_cycle(&store, e_placeholder, &[b_id, c_id]).await;
-        assert!(result.is_ok(), "diamond shape should not be a cycle: {result:?}");
+        assert!(
+            result.is_ok(),
+            "diamond shape should not be a cycle: {result:?}"
+        );
     }
 
     /// Verify that create_task itself rejects a cyclic dependency.
@@ -219,7 +226,10 @@ mod tests {
         // creating a NEW task with a_id equivalent logic isn't possible;
         // instead, directly test check_no_cycle with A's id and B as dep.
         let cycle_result = check_no_cycle(&store, &a_id, &[b_id.clone()]).await;
-        assert!(cycle_result.is_err(), "B→A when A is upstream of B is a cycle");
+        assert!(
+            cycle_result.is_err(),
+            "B→A when A is upstream of B is a cycle"
+        );
 
         // Verify that create_task also rejects it when we attempt to create
         // a new task C that depends on B AND A's dependent chain would cycle.

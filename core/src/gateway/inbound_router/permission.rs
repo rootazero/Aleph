@@ -17,7 +17,10 @@ use super::normalize_phone;
 
 impl InboundMessageRouter {
     /// Check if message is permitted
-    pub(super) async fn check_permission(&self, mut ctx: InboundContext) -> Result<InboundContext, RoutingError> {
+    pub(super) async fn check_permission(
+        &self,
+        mut ctx: InboundContext,
+    ) -> Result<InboundContext, RoutingError> {
         let channel_id = ctx.message.channel_id.as_str();
         let channel_config = self
             .channel_configs
@@ -58,9 +61,7 @@ impl InboundMessageRouter {
             // DM permission check
             match channel_config.dm_policy {
                 DmPolicy::Disabled => {
-                    return Err(RoutingError::PermissionDenied(
-                        "DMs disabled".to_string(),
-                    ));
+                    return Err(RoutingError::PermissionDenied("DMs disabled".to_string()));
                 }
                 DmPolicy::Open => {
                     // Always allow
@@ -76,7 +77,11 @@ impl InboundMessageRouter {
                     // Check allowlist first
                     if self.is_in_allowlist(&ctx.sender_normalized, &channel_config.allow_from) {
                         // Already approved via config
-                    } else if self.pairing_store.is_approved(channel_id, &ctx.sender_normalized).await? {
+                    } else if self
+                        .pairing_store
+                        .is_approved(channel_id, &ctx.sender_normalized)
+                        .await?
+                    {
                         // Approved via pairing
                     } else {
                         // Need pairing
@@ -134,12 +139,18 @@ impl InboundMessageRouter {
     ///
     /// Always sends the pairing code message, even if the request already exists
     /// (the initial delivery may have failed due to channel not being connected).
-    pub(super) async fn send_pairing_request(&self, ctx: &InboundContext) -> Result<(), RoutingError> {
+    pub(super) async fn send_pairing_request(
+        &self,
+        ctx: &InboundContext,
+    ) -> Result<(), RoutingError> {
         let channel_id = ctx.message.channel_id.as_str();
         let sender_id = &ctx.sender_normalized;
 
         let mut metadata = HashMap::new();
-        metadata.insert("sender_display".to_string(), ctx.message.sender_id.as_str().to_string());
+        metadata.insert(
+            "sender_display".to_string(),
+            ctx.message.sender_id.as_str().to_string(),
+        );
 
         let (code, created) = self
             .pairing_store
@@ -147,9 +158,15 @@ impl InboundMessageRouter {
             .await?;
 
         if created {
-            info!("Created new pairing request for {}:{} with code {}", channel_id, sender_id, code);
+            info!(
+                "Created new pairing request for {}:{} with code {}",
+                channel_id, sender_id, code
+            );
         } else {
-            info!("Resending existing pairing code for {}:{}", channel_id, sender_id);
+            info!(
+                "Resending existing pairing code for {}:{}",
+                channel_id, sender_id
+            );
         }
 
         // Always send the pairing message (not just on first create)
@@ -163,17 +180,17 @@ impl InboundMessageRouter {
             sender_id, code
         );
 
-        let outbound = OutboundMessage::text(
-            ctx.reply_route.conversation_id.as_str(),
-            message,
-        );
+        let outbound = OutboundMessage::text(ctx.reply_route.conversation_id.as_str(), message);
 
         if let Err(e) = self
             .channel_registry
             .send(&ctx.reply_route.channel_id, outbound)
             .await
         {
-            warn!("Failed to send pairing message to {}:{}: {}", channel_id, sender_id, e);
+            warn!(
+                "Failed to send pairing message to {}:{}: {}",
+                channel_id, sender_id, e
+            );
         } else {
             info!("Sent pairing code {} to {}:{}", code, channel_id, sender_id);
         }

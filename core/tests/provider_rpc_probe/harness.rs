@@ -48,8 +48,8 @@ pub async fn get_server() -> &'static AlephTestServer {
 impl AlephTestServer {
     /// Find a random available port by binding to :0 and reading the assigned port.
     fn find_free_port() -> u16 {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0")
-            .expect("Failed to bind to random port");
+        let listener =
+            std::net::TcpListener::bind("127.0.0.1:0").expect("Failed to bind to random port");
         listener.local_addr().unwrap().port()
     }
 
@@ -76,8 +76,7 @@ enabled = true
 {extra_toml}
 "#
         );
-        std::fs::write(&config_path, config_content)
-            .expect("Failed to write test config.toml");
+        std::fs::write(&config_path, config_content).expect("Failed to write test config.toml");
     }
 
     /// Start the server with default config.
@@ -109,9 +108,12 @@ enabled = true
         // Spawn the pre-built binary directly (no cargo overhead)
         let child = Command::new(&binary_path)
             .args([
-                "--config", config_path.to_str().unwrap(),
-                "--port", &port.to_string(),
-                "--bind", "127.0.0.1",
+                "--config",
+                config_path.to_str().unwrap(),
+                "--port",
+                &port.to_string(),
+                "--bind",
+                "127.0.0.1",
             ])
             // Pipe stderr for debugging, suppress stdout
             .stdout(std::process::Stdio::null())
@@ -265,16 +267,15 @@ enabled = true
     /// Remove all providers except "test" to restore clean state between tests.
     pub async fn clean_providers(&self) {
         let result = self.rpc_ok("providers.list", json!({})).await;
-        let providers = result["providers"]
-            .as_array()
-            .cloned()
-            .unwrap_or_default();
+        let providers = result["providers"].as_array().cloned().unwrap_or_default();
 
         for provider in providers {
             let name = provider["name"].as_str().unwrap_or("");
             if name != "test" {
                 // Ignore errors (e.g., trying to delete the default provider)
-                let _ = self.rpc_call("providers.delete", json!({ "name": name })).await;
+                let _ = self
+                    .rpc_call("providers.delete", json!({ "name": name }))
+                    .await;
             }
         }
     }

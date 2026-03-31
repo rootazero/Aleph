@@ -118,7 +118,7 @@ mod tests {
     #[test]
     fn test_flush_empty_returns_none() {
         let mut buffer = StreamBuffer::new();
-        buffer.append("   ");  // Only whitespace
+        buffer.append("   "); // Only whitespace
 
         let flushed = buffer.flush_before_tool();
         assert!(flushed.is_none());

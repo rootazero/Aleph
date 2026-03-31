@@ -3,9 +3,9 @@
 //! Provides database operations for tiered event persistence
 //! using the Skeleton & Pulse model.
 
+use super::StateDatabase;
 use crate::error::AlephError;
 use crate::resilience::AgentEvent;
-use super::StateDatabase;
 use rusqlite::params;
 use rusqlite::OptionalExtension;
 use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};

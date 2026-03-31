@@ -127,7 +127,10 @@ impl MergedMessage {
     /// Text is joined by newlines; attachments are aggregated in order.
     /// The first context becomes the primary (used for routing).
     pub fn from_batch(contexts: Vec<InboundContext>) -> Self {
-        assert!(!contexts.is_empty(), "from_batch requires at least one context");
+        assert!(
+            !contexts.is_empty(),
+            "from_batch requires at least one context"
+        );
 
         let mut iter = contexts.into_iter();
         let first = iter.next().unwrap();
@@ -190,20 +193,12 @@ impl EnrichedMessage {
     /// Append an `[Attachment Understanding]` section to the original text.
     ///
     /// Skipped entries are omitted from the output.
-    pub fn build_enriched_text(
-        original: &str,
-        understandings: &[MediaUnderstanding],
-    ) -> String {
+    pub fn build_enriched_text(original: &str, understandings: &[MediaUnderstanding]) -> String {
         let descriptions: Vec<String> = understandings
             .iter()
             .filter(|u| !matches!(u.understanding_type, UnderstandingType::Skipped(_)))
             .map(|u| {
-                let filename = u
-                    .media
-                    .original
-                    .filename
-                    .as_deref()
-                    .unwrap_or("attachment");
+                let filename = u.media.original.filename.as_deref().unwrap_or("attachment");
                 format!("- {}: {}", filename, u.description)
             })
             .collect();
@@ -353,10 +348,7 @@ mod tests {
             MediaCategory::Document
         );
 
-        assert_eq!(
-            MediaCategory::from_mime("text/html"),
-            MediaCategory::Link
-        );
+        assert_eq!(MediaCategory::from_mime("text/html"), MediaCategory::Link);
 
         assert_eq!(
             MediaCategory::from_mime("application/octet-stream"),

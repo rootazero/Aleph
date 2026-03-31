@@ -27,17 +27,9 @@ async fn multi_turn_produces_d0_facts() {
     let replies = server.send_messages(&topics, &session_key).await;
 
     // Verify we got replies for all messages
-    assert_eq!(
-        replies.len(),
-        5,
-        "Should have received 5 assistant replies"
-    );
+    assert_eq!(replies.len(), 5, "Should have received 5 assistant replies");
     for (i, reply) in replies.iter().enumerate() {
-        assert!(
-            !reply.is_empty(),
-            "Reply {} should not be empty",
-            i
-        );
+        assert!(!reply.is_empty(), "Reply {} should not be empty", i);
     }
 
     // Wait for compression to produce facts
@@ -60,7 +52,8 @@ async fn multi_turn_produces_d0_facts() {
 
         // Verify facts have content related to Rust topics
         let facts = server.query_memory_facts(None).await;
-        let session_facts: Vec<_> = facts.iter()
+        let session_facts: Vec<_> = facts
+            .iter()
             .filter(|f| {
                 let path = f["path"].as_str().unwrap_or("");
                 path.contains("aleph://session/")
@@ -75,8 +68,10 @@ async fn multi_turn_produces_d0_facts() {
         // Check that at least one fact references Rust concepts
         let has_rust_content = session_facts.iter().any(|f| {
             let content = f["content"].as_str().unwrap_or("").to_lowercase();
-            content.contains("rust") || content.contains("ownership")
-                || content.contains("borrow") || content.contains("lifetime")
+            content.contains("rust")
+                || content.contains("ownership")
+                || content.contains("borrow")
+                || content.contains("lifetime")
         });
 
         eprintln!(
@@ -117,10 +112,12 @@ async fn ai_recalls_compressed_content() {
 
     // Ask about earlier content — the AI should recall it from either
     // fresh tail or injected session context summaries
-    let recall_reply = server.send_message(
-        "What consensus algorithm does my Nexus project use?",
-        &session_key,
-    ).await;
+    let recall_reply = server
+        .send_message(
+            "What consensus algorithm does my Nexus project use?",
+            &session_key,
+        )
+        .await;
 
     eprintln!(
         "[ai_recalls_compressed_content] Recall reply: {}",

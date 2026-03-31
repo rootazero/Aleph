@@ -65,7 +65,10 @@ fn test_mark_failure_triggers_cooldown() {
 
     // Check that profile is in cooldown
     let profiles = manager.profiles_for_provider("anthropic");
-    let primary = profiles.iter().find(|p| p.id == "anthropic_primary").unwrap();
+    let primary = profiles
+        .iter()
+        .find(|p| p.id == "anthropic_primary")
+        .unwrap();
     assert!(primary.in_cooldown);
     assert!(primary.cooldown_remaining_ms.is_some());
     assert_eq!(primary.failure_count, 1);
@@ -106,7 +109,10 @@ fn test_mark_success_clears_cooldown() {
 
     // Should not be in cooldown
     let profiles = manager.profiles_for_provider("anthropic");
-    let primary = profiles.iter().find(|p| p.id == "anthropic_primary").unwrap();
+    let primary = profiles
+        .iter()
+        .find(|p| p.id == "anthropic_primary")
+        .unwrap();
     assert!(!primary.in_cooldown);
     assert_eq!(primary.failure_count, 0);
 }
@@ -229,7 +235,10 @@ fn test_clear_cooldown() {
 
     // Should not be in cooldown
     let profiles = manager.profiles_for_provider("anthropic");
-    let primary = profiles.iter().find(|p| p.id == "anthropic_primary").unwrap();
+    let primary = profiles
+        .iter()
+        .find(|p| p.id == "anthropic_primary")
+        .unwrap();
     assert!(!primary.in_cooldown);
 }
 

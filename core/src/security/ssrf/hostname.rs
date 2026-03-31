@@ -12,18 +12,12 @@ pub(crate) fn is_blocked_hostname(hostname: &str) -> bool {
     // Exact matches
     if matches!(
         lower.as_str(),
-        "localhost"
-            | "localhost.localdomain"
-            | "metadata.google.internal"
-            | "metadata.internal"
+        "localhost" | "localhost.localdomain" | "metadata.google.internal" | "metadata.internal"
     ) {
         return true;
     }
     // Suffix matches
-    if lower.ends_with(".localhost")
-        || lower.ends_with(".local")
-        || lower.ends_with(".internal")
-    {
+    if lower.ends_with(".localhost") || lower.ends_with(".local") || lower.ends_with(".internal") {
         return true;
     }
     false
@@ -72,10 +66,7 @@ pub(crate) fn is_legacy_ip_literal(hostname: &str) -> bool {
 
     // Decimal integer: all digits, more than 3 digits, no dots
     // (normal IPs like "8.8.8.8" have dots; "2130706433" is suspicious)
-    if !lower.contains('.')
-        && lower.len() > 3
-        && lower.chars().all(|c| c.is_ascii_digit())
-    {
+    if !lower.contains('.') && lower.len() > 3 && lower.chars().all(|c| c.is_ascii_digit()) {
         return true;
     }
 
@@ -83,8 +74,7 @@ pub(crate) fn is_legacy_ip_literal(hostname: &str) -> bool {
     let parts: Vec<&str> = lower.split('.').collect();
     if parts.len() >= 2 && parts.len() <= 4 {
         for part in &parts {
-            if part.len() > 1 && part.starts_with('0') && part.chars().all(|c| c.is_ascii_digit())
-            {
+            if part.len() > 1 && part.starts_with('0') && part.chars().all(|c| c.is_ascii_digit()) {
                 return true;
             }
         }
@@ -94,7 +84,9 @@ pub(crate) fn is_legacy_ip_literal(hostname: &str) -> bool {
     // e.g., "127.1" → resolves to 127.0.0.1 on many systems
     if parts.len() >= 2
         && parts.len() < 4
-        && parts.iter().all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()))
+        && parts
+            .iter()
+            .all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()))
     {
         return true;
     }

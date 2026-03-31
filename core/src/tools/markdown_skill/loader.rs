@@ -2,8 +2,8 @@
 //!
 //! Batch loading of Markdown skills from directory.
 
-use std::path::{Path, PathBuf};
 use anyhow::Result;
+use std::path::{Path, PathBuf};
 use tokio::fs;
 use tracing::{debug, error, info, warn};
 use walkdir::WalkDir;
@@ -147,8 +147,7 @@ impl SkillLoader {
             .map_err(|e| anyhow::anyhow!("Failed to read file: {}", e))?;
 
         // Parse spec
-        let spec =
-            parse_skill_file(&content).map_err(|e| anyhow::anyhow!("Parse error: {}", e))?;
+        let spec = parse_skill_file(&content).map_err(|e| anyhow::anyhow!("Parse error: {}", e))?;
 
         // Validate binary availability (optional warning)
         self.check_binary_availability(&spec);

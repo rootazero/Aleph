@@ -112,13 +112,19 @@ source = "owner/world-plugin"
         assert_eq!(owner.name, "Alice");
         assert_eq!(owner.email.as_deref(), Some("alice@example.com"));
         assert_eq!(owner.url.as_deref(), Some("https://example.com"));
-        assert_eq!(manifest.metadata.description.as_deref(), Some("A test marketplace"));
+        assert_eq!(
+            manifest.metadata.description.as_deref(),
+            Some("A test marketplace")
+        );
         assert_eq!(manifest.metadata.version.as_deref(), Some("1.0.0"));
         assert_eq!(manifest.metadata.plugin_root.as_deref(), Some("plugins"));
         assert_eq!(manifest.plugins.len(), 2);
         assert_eq!(manifest.plugins[0].name, "hello-plugin");
         assert_eq!(manifest.plugins[0].source, "owner/hello-plugin");
-        assert_eq!(manifest.plugins[0].description.as_deref(), Some("Says hello"));
+        assert_eq!(
+            manifest.plugins[0].description.as_deref(),
+            Some("Says hello")
+        );
         assert_eq!(manifest.plugins[0].version.as_deref(), Some("0.1.0"));
         assert_eq!(manifest.plugins[1].name, "world-plugin");
         assert!(manifest.plugins[1].description.is_none());

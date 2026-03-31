@@ -70,9 +70,8 @@ pub fn load_extension_config(dir: &Path) -> Result<Option<AlephConfig>, Extensio
 /// * `.jsonc` - JSON with comments
 /// * `.json` - Standard JSON
 pub fn load_config_file(path: &Path) -> Result<AlephConfig, ExtensionError> {
-    let content = std::fs::read_to_string(path).map_err(|e| {
-        ExtensionError::config_parse(path, format!("Failed to read file: {}", e))
-    })?;
+    let content = std::fs::read_to_string(path)
+        .map_err(|e| ExtensionError::config_parse(path, format!("Failed to read file: {}", e)))?;
 
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
 
@@ -88,9 +87,8 @@ pub fn load_config_file(path: &Path) -> Result<AlephConfig, ExtensionError> {
 
 /// Parse TOML content into AlephConfig.
 fn parse_toml(content: &str, path: &Path) -> Result<AlephConfig, ExtensionError> {
-    toml::from_str(content).map_err(|e| {
-        ExtensionError::config_parse(path, format!("TOML parse error: {}", e))
-    })
+    toml::from_str(content)
+        .map_err(|e| ExtensionError::config_parse(path, format!("TOML parse error: {}", e)))
 }
 
 /// Parse JSONC (JSON with comments) content into AlephConfig.
@@ -100,9 +98,8 @@ fn parse_jsonc(content: &str, path: &Path) -> Result<AlephConfig, ExtensionError
     let trailing_comma_re = regex::Regex::new(r",(\s*[\]}])").unwrap();
     let cleaned = trailing_comma_re.replace_all(&stripped, "$1").to_string();
 
-    serde_json::from_str(&cleaned).map_err(|e| {
-        ExtensionError::config_parse(path, format!("JSONC parse error: {}", e))
-    })
+    serde_json::from_str(&cleaned)
+        .map_err(|e| ExtensionError::config_parse(path, format!("JSONC parse error: {}", e)))
 }
 
 /// Strip single-line and multi-line comments from JSON.

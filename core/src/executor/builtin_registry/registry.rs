@@ -1,13 +1,13 @@
 //! Core registry implementation for builtin tools
 
+use crate::sync_primitives::Arc;
 use std::collections::HashMap;
 use std::pin::Pin;
-use crate::sync_primitives::Arc;
 
 use serde_json::Value;
 use tracing::{debug, error, info};
 
-use crate::builtin_tools::meta_tools::{ListToolsTool, GetToolSchemaTool};
+use crate::builtin_tools::meta_tools::{GetToolSchemaTool, ListToolsTool};
 use crate::builtin_tools::sessions::{SessionsListTool, SessionsSendTool};
 use crate::dispatcher::{ToolRegistry as DispatcherToolRegistry, ToolSource, UnifiedTool};
 use crate::error::{AlephError, Result};
@@ -90,11 +90,16 @@ pub struct BuiltinToolRegistry {
     /// Cron management tool (optional - requires SharedCronService)
     pub(crate) cron_manage_tool: Option<crate::builtin_tools::cron_manage::CronManageTool>,
     /// Heartbeat management tools (optional - require SharedHeartbeatService)
-    pub(crate) heartbeat_list_tool: Option<crate::builtin_tools::heartbeat_manage::HeartbeatListTool>,
-    pub(crate) heartbeat_create_tool: Option<crate::builtin_tools::heartbeat_manage::HeartbeatCreateTool>,
-    pub(crate) heartbeat_update_tool: Option<crate::builtin_tools::heartbeat_manage::HeartbeatUpdateTool>,
-    pub(crate) heartbeat_delete_tool: Option<crate::builtin_tools::heartbeat_manage::HeartbeatDeleteTool>,
-    pub(crate) heartbeat_toggle_tool: Option<crate::builtin_tools::heartbeat_manage::HeartbeatToggleTool>,
+    pub(crate) heartbeat_list_tool:
+        Option<crate::builtin_tools::heartbeat_manage::HeartbeatListTool>,
+    pub(crate) heartbeat_create_tool:
+        Option<crate::builtin_tools::heartbeat_manage::HeartbeatCreateTool>,
+    pub(crate) heartbeat_update_tool:
+        Option<crate::builtin_tools::heartbeat_manage::HeartbeatUpdateTool>,
+    pub(crate) heartbeat_delete_tool:
+        Option<crate::builtin_tools::heartbeat_manage::HeartbeatDeleteTool>,
+    pub(crate) heartbeat_toggle_tool:
+        Option<crate::builtin_tools::heartbeat_manage::HeartbeatToggleTool>,
     /// Heartbeat report tool — always available (used during L2 heartbeat execution)
     pub(crate) heartbeat_report_tool: crate::builtin_tools::heartbeat_manage::HeartbeatReportTool,
     /// Agent management tools (optional - requires AgentRegistry + AgentEnvStore)
@@ -120,7 +125,8 @@ pub struct BuiltinToolRegistry {
     /// Shared session key handle for memory_search scope=current_session
     pub(super) memory_session_key_handle: Option<Arc<RwLock<String>>>,
     /// Session context handle for agent management tools
-    pub(super) session_context_handle: Option<crate::builtin_tools::agent_manage::SessionContextHandle>,
+    pub(super) session_context_handle:
+        Option<crate::builtin_tools::agent_manage::SessionContextHandle>,
     /// Tool policy handle for per-agent tool access control
     pub(super) tool_policy_handle: Option<crate::builtin_tools::agent_manage::ToolPolicyHandle>,
     /// Tool context handle for workspace-scoped output paths
@@ -253,7 +259,9 @@ impl ToolRegistry for BuiltinToolRegistry {
     fn smart_recall_config_handle(
         &self,
     ) -> Option<Arc<RwLock<Option<crate::config::types::profile::SmartRecallConfig>>>> {
-        self.memory_search_tool.as_ref().map(|t| t.smart_recall_config_handle())
+        self.memory_search_tool
+            .as_ref()
+            .map(|t| t.smart_recall_config_handle())
     }
 
     fn session_context_handle(
@@ -262,7 +270,9 @@ impl ToolRegistry for BuiltinToolRegistry {
         self.session_context_handle.clone()
     }
 
-    fn tool_policy_handle(&self) -> Option<Arc<RwLock<crate::builtin_tools::agent_manage::ToolPolicy>>> {
+    fn tool_policy_handle(
+        &self,
+    ) -> Option<Arc<RwLock<crate::builtin_tools::agent_manage::ToolPolicy>>> {
         self.tool_policy_handle.clone()
     }
 
@@ -311,30 +321,40 @@ impl ToolRegistry for BuiltinToolRegistry {
             "file_ops" => Box::pin(async move { self.file_ops_tool.call_json(arguments).await }),
             "bash" => Box::pin(async move { self.bash_tool.call_json(arguments).await }),
             "code_exec" => Box::pin(async move { self.code_exec_tool.call_json(arguments).await }),
-            "pdf_generate" => Box::pin(async move { self.pdf_generate_tool.call_json(arguments).await }),
+            "pdf_generate" => {
+                Box::pin(async move { self.pdf_generate_tool.call_json(arguments).await })
+            }
 
             // Generation tools - image uses AlephTool, video/audio use legacy execute_* methods
             "image_generate" => Box::pin(async move {
                 let tool = self.image_generate_tool.as_ref().ok_or_else(|| {
-                    AlephError::tool("Image generation not available: no generation registry configured")
+                    AlephError::tool(
+                        "Image generation not available: no generation registry configured",
+                    )
                 })?;
                 tool.call_json(arguments).await
             }),
             "video_generate" => Box::pin(async move {
                 let tool = self.video_generate_tool.as_ref().ok_or_else(|| {
-                    AlephError::tool("Video generation not available: no generation registry configured")
+                    AlephError::tool(
+                        "Video generation not available: no generation registry configured",
+                    )
                 })?;
                 tool.call_json(arguments).await
             }),
             "audio_generate" => Box::pin(async move {
                 let tool = self.audio_generate_tool.as_ref().ok_or_else(|| {
-                    AlephError::tool("Audio generation not available: no generation registry configured")
+                    AlephError::tool(
+                        "Audio generation not available: no generation registry configured",
+                    )
                 })?;
                 tool.call_json(arguments).await
             }),
             "speech_generate" => Box::pin(async move {
                 let tool = self.speech_generate_tool.as_ref().ok_or_else(|| {
-                    AlephError::tool("Speech generation not available: no generation registry configured")
+                    AlephError::tool(
+                        "Speech generation not available: no generation registry configured",
+                    )
                 })?;
                 tool.call_json(arguments).await
             }),
@@ -349,17 +369,27 @@ impl ToolRegistry for BuiltinToolRegistry {
             }),
             "get_tool_schema" => Box::pin(async move {
                 let registry = self.dispatcher_registry.as_ref().ok_or_else(|| {
-                    AlephError::tool("get_tool_schema not available: no dispatcher registry configured")
+                    AlephError::tool(
+                        "get_tool_schema not available: no dispatcher registry configured",
+                    )
                 })?;
                 let tool = GetToolSchemaTool::new(Arc::clone(registry));
                 tool.call_json(arguments).await
             }),
 
             // Self-management tools
-            "skill_list" => Box::pin(async move { self.list_skills_tool.call_json(arguments).await }),
-            "skill_read" => Box::pin(async move { self.read_skill_tool.call_json(arguments).await }),
-            "read_config_guide" => Box::pin(async move { self.config_guide_tool.call_json(arguments).await }),
-            "self_manage" => Box::pin(async move { self.self_manage_tool.call_json(arguments).await }),
+            "skill_list" => {
+                Box::pin(async move { self.list_skills_tool.call_json(arguments).await })
+            }
+            "skill_read" => {
+                Box::pin(async move { self.read_skill_tool.call_json(arguments).await })
+            }
+            "read_config_guide" => {
+                Box::pin(async move { self.config_guide_tool.call_json(arguments).await })
+            }
+            "self_manage" => {
+                Box::pin(async move { self.self_manage_tool.call_json(arguments).await })
+            }
             "vault_store" => Box::pin(async move {
                 let tool = self.vault_store_tool.as_ref().ok_or_else(|| {
                     AlephError::tool("vault_store not available: no SharedTokenManager configured")
@@ -369,10 +399,16 @@ impl ToolRegistry for BuiltinToolRegistry {
             "desktop" => Box::pin(async move { self.desktop_tool.call_json(arguments).await }),
             "pim" => Box::pin(async move { self.pim_tool.call_json(arguments).await }),
             "system" => Box::pin(async move { self.system_tool.call_json(arguments).await }),
-            "automation" => Box::pin(async move { self.automation_tool.call_json(arguments).await }),
-            "permission" => Box::pin(async move { self.permission_tool.call_json(arguments).await }),
+            "automation" => {
+                Box::pin(async move { self.automation_tool.call_json(arguments).await })
+            }
+            "permission" => {
+                Box::pin(async move { self.permission_tool.call_json(arguments).await })
+            }
             "media" => Box::pin(async move { self.media_tool.call_json(arguments).await }),
-            "scratchpad" => Box::pin(async move { self.scratchpad_tool.call_json(arguments).await }),
+            "scratchpad" => {
+                Box::pin(async move { self.scratchpad_tool.call_json(arguments).await })
+            }
 
             // Memory tools - search and browse personal memory
             "memory_search" => Box::pin(async move {
@@ -405,20 +441,48 @@ impl ToolRegistry for BuiltinToolRegistry {
             }),
 
             // Browser tools
-            "browser_open" => Box::pin(async move { self.browser_open_tool.call_json(arguments).await }),
-            "browser_click" => Box::pin(async move { self.browser_click_tool.call_json(arguments).await }),
-            "browser_type" => Box::pin(async move { self.browser_type_tool.call_json(arguments).await }),
-            "browser_screenshot" => Box::pin(async move { self.browser_screenshot_tool.call_json(arguments).await }),
-            "browser_snapshot" => Box::pin(async move { self.browser_snapshot_tool.call_json(arguments).await }),
-            "browser_navigate" => Box::pin(async move { self.browser_navigate_tool.call_json(arguments).await }),
-            "browser_tabs" => Box::pin(async move { self.browser_tabs_tool.call_json(arguments).await }),
-            "browser_select" => Box::pin(async move { self.browser_select_tool.call_json(arguments).await }),
-            "browser_evaluate" => Box::pin(async move { self.browser_evaluate_tool.call_json(arguments).await }),
-            "browser_fill_form" => Box::pin(async move { self.browser_fill_form_tool.call_json(arguments).await }),
-            "browser_press_key" => Box::pin(async move { self.browser_press_key_tool.call_json(arguments).await }),
-            "browser_wait_for" => Box::pin(async move { self.browser_wait_for_tool.call_json(arguments).await }),
-            "browser_console" => Box::pin(async move { self.browser_console_tool.call_json(arguments).await }),
-            "browser_profile" => Box::pin(async move { self.browser_profile_tool.call_json(arguments).await }),
+            "browser_open" => {
+                Box::pin(async move { self.browser_open_tool.call_json(arguments).await })
+            }
+            "browser_click" => {
+                Box::pin(async move { self.browser_click_tool.call_json(arguments).await })
+            }
+            "browser_type" => {
+                Box::pin(async move { self.browser_type_tool.call_json(arguments).await })
+            }
+            "browser_screenshot" => {
+                Box::pin(async move { self.browser_screenshot_tool.call_json(arguments).await })
+            }
+            "browser_snapshot" => {
+                Box::pin(async move { self.browser_snapshot_tool.call_json(arguments).await })
+            }
+            "browser_navigate" => {
+                Box::pin(async move { self.browser_navigate_tool.call_json(arguments).await })
+            }
+            "browser_tabs" => {
+                Box::pin(async move { self.browser_tabs_tool.call_json(arguments).await })
+            }
+            "browser_select" => {
+                Box::pin(async move { self.browser_select_tool.call_json(arguments).await })
+            }
+            "browser_evaluate" => {
+                Box::pin(async move { self.browser_evaluate_tool.call_json(arguments).await })
+            }
+            "browser_fill_form" => {
+                Box::pin(async move { self.browser_fill_form_tool.call_json(arguments).await })
+            }
+            "browser_press_key" => {
+                Box::pin(async move { self.browser_press_key_tool.call_json(arguments).await })
+            }
+            "browser_wait_for" => {
+                Box::pin(async move { self.browser_wait_for_tool.call_json(arguments).await })
+            }
+            "browser_console" => {
+                Box::pin(async move { self.browser_console_tool.call_json(arguments).await })
+            }
+            "browser_profile" => {
+                Box::pin(async move { self.browser_profile_tool.call_json(arguments).await })
+            }
 
             // Session new tool — inject session key from session context
             "session_new" => {
@@ -427,7 +491,10 @@ impl ToolRegistry for BuiltinToolRegistry {
                     if let Some(ref h) = self.session_context_handle {
                         if let Ok(ctx) = h.try_read() {
                             if let Some(obj) = args.as_object_mut() {
-                                obj.insert("__session_key".into(), serde_json::Value::String(ctx.session_key_str.clone()));
+                                obj.insert(
+                                    "__session_key".into(),
+                                    serde_json::Value::String(ctx.session_key_str.clone()),
+                                );
                             }
                         }
                     }
@@ -448,7 +515,10 @@ impl ToolRegistry for BuiltinToolRegistry {
                     if let Some(ref h) = self.session_context_handle {
                         if let Ok(ctx) = h.try_read() {
                             if let Some(obj) = args.as_object_mut() {
-                                obj.insert("__session_key".into(), serde_json::Value::String(ctx.session_key_str.clone()));
+                                obj.insert(
+                                    "__session_key".into(),
+                                    serde_json::Value::String(ctx.session_key_str.clone()),
+                                );
                             }
                         }
                     }
@@ -456,7 +526,9 @@ impl ToolRegistry for BuiltinToolRegistry {
                 };
                 Box::pin(async move {
                     let tool = self.session_set_topic_tool.as_ref().ok_or_else(|| {
-                        AlephError::tool("session_rename not available: no SessionManager configured")
+                        AlephError::tool(
+                            "session_rename not available: no SessionManager configured",
+                        )
                     })?;
                     tool.call_json(arguments).await
                 })
@@ -477,8 +549,14 @@ impl ToolRegistry for BuiltinToolRegistry {
                     if let Some(ref h) = self.session_context_handle {
                         if let Ok(ctx) = h.try_read() {
                             if let Some(obj) = args.as_object_mut() {
-                                obj.insert("__channel".into(), serde_json::Value::String(ctx.channel.clone()));
-                                obj.insert("__conversation_id".into(), serde_json::Value::String(ctx.conversation_id.clone()));
+                                obj.insert(
+                                    "__channel".into(),
+                                    serde_json::Value::String(ctx.channel.clone()),
+                                );
+                                obj.insert(
+                                    "__conversation_id".into(),
+                                    serde_json::Value::String(ctx.conversation_id.clone()),
+                                );
                             }
                         }
                     }
@@ -490,43 +568,53 @@ impl ToolRegistry for BuiltinToolRegistry {
                     })?;
                     tool.call_json(arguments).await
                 })
-            },
+            }
 
             // Heartbeat management tools
             "heartbeat_list" => Box::pin(async move {
                 let tool = self.heartbeat_list_tool.as_ref().ok_or_else(|| {
-                    AlephError::tool("heartbeat_list not available: heartbeat service not configured")
+                    AlephError::tool(
+                        "heartbeat_list not available: heartbeat service not configured",
+                    )
                 })?;
                 tool.call_json(arguments).await
             }),
             "heartbeat_create" => Box::pin(async move {
                 let tool = self.heartbeat_create_tool.as_ref().ok_or_else(|| {
-                    AlephError::tool("heartbeat_create not available: heartbeat service not configured")
+                    AlephError::tool(
+                        "heartbeat_create not available: heartbeat service not configured",
+                    )
                 })?;
                 tool.call_json(arguments).await
             }),
             "heartbeat_update" => Box::pin(async move {
                 let tool = self.heartbeat_update_tool.as_ref().ok_or_else(|| {
-                    AlephError::tool("heartbeat_update not available: heartbeat service not configured")
+                    AlephError::tool(
+                        "heartbeat_update not available: heartbeat service not configured",
+                    )
                 })?;
                 tool.call_json(arguments).await
             }),
             "heartbeat_delete" => Box::pin(async move {
                 let tool = self.heartbeat_delete_tool.as_ref().ok_or_else(|| {
-                    AlephError::tool("heartbeat_delete not available: heartbeat service not configured")
+                    AlephError::tool(
+                        "heartbeat_delete not available: heartbeat service not configured",
+                    )
                 })?;
                 tool.call_json(arguments).await
             }),
             "heartbeat_toggle" => Box::pin(async move {
                 let tool = self.heartbeat_toggle_tool.as_ref().ok_or_else(|| {
-                    AlephError::tool("heartbeat_toggle not available: heartbeat service not configured")
+                    AlephError::tool(
+                        "heartbeat_toggle not available: heartbeat service not configured",
+                    )
                 })?;
                 tool.call_json(arguments).await
             }),
             // Heartbeat report tool — always available (used during L2 heartbeat execution)
-            "heartbeat_report" => Box::pin(async move {
-                self.heartbeat_report_tool.call_json(arguments).await
-            }),
+            "heartbeat_report" => {
+                Box::pin(async move { self.heartbeat_report_tool.call_json(arguments).await })
+            }
 
             // Agent management tools — snapshot session context into arguments
             // to avoid race conditions from concurrent reads of the shared handle.
@@ -537,7 +625,10 @@ impl ToolRegistry for BuiltinToolRegistry {
                     if let Some(ref h) = self.session_context_handle {
                         if let Ok(ctx) = h.try_read() {
                             if let Some(obj) = args.as_object_mut() {
-                                obj.insert("__channel".into(), serde_json::Value::String(ctx.channel.clone()));
+                                obj.insert(
+                                    "__channel".into(),
+                                    serde_json::Value::String(ctx.channel.clone()),
+                                );
                             }
                         }
                     }
@@ -569,7 +660,9 @@ impl ToolRegistry for BuiltinToolRegistry {
 
             // Task coordination tools
             "task_create" => Box::pin(async move {
-                let tool = self.task_create_tool.as_ref().ok_or_else(|| AlephError::tool("task_create not available: no CoordTaskStore configured"))?;
+                let tool = self.task_create_tool.as_ref().ok_or_else(|| {
+                    AlephError::tool("task_create not available: no CoordTaskStore configured")
+                })?;
                 tool.call_json(arguments).await
             }),
             "task_update" => Box::pin(async move {
@@ -577,21 +670,29 @@ impl ToolRegistry for BuiltinToolRegistry {
                 tool.call_json(arguments).await
             }),
             "task_list" => Box::pin(async move {
-                let tool = self.task_list_tool.as_ref().ok_or_else(|| AlephError::tool("task_list not available: no CoordTaskStore configured"))?;
+                let tool = self.task_list_tool.as_ref().ok_or_else(|| {
+                    AlephError::tool("task_list not available: no CoordTaskStore configured")
+                })?;
                 tool.call_json(arguments).await
             }),
-            "task_wait" => Box::pin(async move {
-                let tool = self.task_wait_tool.as_ref().ok_or_else(|| AlephError::tool("task_wait not available: no CoordTaskStore or AgentMessageBus configured"))?;
-                tool.call_json(arguments).await
-            }),
+            "task_wait" => {
+                Box::pin(async move {
+                    let tool = self.task_wait_tool.as_ref().ok_or_else(|| AlephError::tool("task_wait not available: no CoordTaskStore or AgentMessageBus configured"))?;
+                    tool.call_json(arguments).await
+                })
+            }
 
             // Team management tools
             "team_create" => Box::pin(async move {
-                let tool = self.team_create_tool.as_ref().ok_or_else(|| AlephError::tool("team_create not available: no TeamStore configured"))?;
+                let tool = self.team_create_tool.as_ref().ok_or_else(|| {
+                    AlephError::tool("team_create not available: no TeamStore configured")
+                })?;
                 tool.call_json(arguments).await
             }),
             "team_delegate" => Box::pin(async move {
-                let tool = self.team_delegate_tool.as_ref().ok_or_else(|| AlephError::tool("team_delegate not available: no TeamStore configured"))?;
+                let tool = self.team_delegate_tool.as_ref().ok_or_else(|| {
+                    AlephError::tool("team_delegate not available: no TeamStore configured")
+                })?;
                 // Inject GatewayContext from OnceCell (deferred — same pattern as session_send)
                 let context = self.gateway_context.get().ok_or_else(|| {
                     AlephError::tool("team_delegate not available: GatewayContext not yet injected")
@@ -601,39 +702,57 @@ impl ToolRegistry for BuiltinToolRegistry {
                 delegate.call_json(arguments).await
             }),
             "team_status" => Box::pin(async move {
-                let tool = self.team_status_tool.as_ref().ok_or_else(|| AlephError::tool("team_status not available: no TeamStore configured"))?;
+                let tool = self.team_status_tool.as_ref().ok_or_else(|| {
+                    AlephError::tool("team_status not available: no TeamStore configured")
+                })?;
                 tool.call_json(arguments).await
             }),
             "team_disband" => Box::pin(async move {
-                let tool = self.team_disband_tool.as_ref().ok_or_else(|| AlephError::tool("team_disband not available: no TeamStore configured"))?;
+                let tool = self.team_disband_tool.as_ref().ok_or_else(|| {
+                    AlephError::tool("team_disband not available: no TeamStore configured")
+                })?;
                 tool.call_json(arguments).await
             }),
             "team_digest" => Box::pin(async move {
-                let tool = self.team_digest_tool.as_ref().ok_or_else(|| AlephError::tool("team_digest not available: no EventLogStore configured"))?;
+                let tool = self.team_digest_tool.as_ref().ok_or_else(|| {
+                    AlephError::tool("team_digest not available: no EventLogStore configured")
+                })?;
                 tool.call_json(arguments).await
             }),
 
             // Team messaging tools
             "message_send" => Box::pin(async move {
-                let tool = self.message_send_tool.as_ref().ok_or_else(|| AlephError::tool("message_send not available: no MessageRouter configured"))?;
+                let tool = self.message_send_tool.as_ref().ok_or_else(|| {
+                    AlephError::tool("message_send not available: no MessageRouter configured")
+                })?;
                 tool.call_json(arguments).await
             }),
             "inbox_read" => Box::pin(async move {
-                let tool = self.inbox_read_tool.as_ref().ok_or_else(|| AlephError::tool("inbox_read not available: no Inbox configured"))?;
+                let tool = self.inbox_read_tool.as_ref().ok_or_else(|| {
+                    AlephError::tool("inbox_read not available: no Inbox configured")
+                })?;
                 tool.call_json(arguments).await
             }),
 
             // Collaborative session tools
             "session_collaborate" => Box::pin(async move {
-                let tool = self.session_collaborate_tool.as_ref().ok_or_else(|| AlephError::tool("session_collaborate not available: no SessionCoordinator configured"))?;
+                let tool = self.session_collaborate_tool.as_ref().ok_or_else(|| {
+                    AlephError::tool(
+                        "session_collaborate not available: no SessionCoordinator configured",
+                    )
+                })?;
                 tool.call_json(arguments).await
             }),
             "session_turn" => Box::pin(async move {
-                let tool = self.session_turn_tool.as_ref().ok_or_else(|| AlephError::tool("session_turn not available: no SessionCoordinator configured"))?;
+                let tool = self.session_turn_tool.as_ref().ok_or_else(|| {
+                    AlephError::tool("session_turn not available: no SessionCoordinator configured")
+                })?;
                 tool.call_json(arguments).await
             }),
             "session_read" => Box::pin(async move {
-                let tool = self.session_read_tool.as_ref().ok_or_else(|| AlephError::tool("session_read not available: no SessionStore configured"))?;
+                let tool = self.session_read_tool.as_ref().ok_or_else(|| {
+                    AlephError::tool("session_read not available: no SessionStore configured")
+                })?;
                 tool.call_json(arguments).await
             }),
 
@@ -645,27 +764,38 @@ impl ToolRegistry for BuiltinToolRegistry {
 
             // Task artifact tools
             "task_submit" => Box::pin(async move {
-                let tool = self.task_submit_tool.as_ref().ok_or_else(|| AlephError::tool("task_submit not available: no ArtifactStore configured"))?;
+                let tool = self.task_submit_tool.as_ref().ok_or_else(|| {
+                    AlephError::tool("task_submit not available: no ArtifactStore configured")
+                })?;
                 tool.call_json(arguments).await
             }),
             "task_read_artifact" => Box::pin(async move {
-                let tool = self.task_read_artifact_tool.as_ref().ok_or_else(|| AlephError::tool("task_read_artifact not available: no ArtifactStore configured"))?;
+                let tool = self.task_read_artifact_tool.as_ref().ok_or_else(|| {
+                    AlephError::tool(
+                        "task_read_artifact not available: no ArtifactStore configured",
+                    )
+                })?;
                 tool.call_json(arguments).await
             }),
 
             // Channel pairing tool (deferred — ChannelRegistry injected after construction)
             "channel_pairing" => Box::pin(async move {
                 let cr = self.channel_registry_cell.get().ok_or_else(|| {
-                    AlephError::tool("channel_pairing not available: ChannelRegistry not yet injected")
+                    AlephError::tool(
+                        "channel_pairing not available: ChannelRegistry not yet injected",
+                    )
                 })?;
-                let tool = crate::builtin_tools::channel_manage::ChannelPairingTool::new(Arc::clone(cr));
+                let tool =
+                    crate::builtin_tools::channel_manage::ChannelPairingTool::new(Arc::clone(cr));
                 tool.call_json(arguments).await
             }),
 
             // Voice mode tool (deferred — ChannelRegistry injected after construction)
             "voice_mode_set" => Box::pin(async move {
                 let cr = self.channel_registry_cell.get().ok_or_else(|| {
-                    AlephError::tool("voice_mode_set not available: ChannelRegistry not yet injected")
+                    AlephError::tool(
+                        "voice_mode_set not available: ChannelRegistry not yet injected",
+                    )
                 })?;
                 let tool = crate::builtin_tools::voice_tools::VoiceModeSetTool::new(Arc::clone(cr));
                 tool.call_json(arguments).await
@@ -676,7 +806,9 @@ impl ToolRegistry for BuiltinToolRegistry {
 
             // Media send tool — no dependencies, always available
             "media_send" => Box::pin(async move {
-                crate::builtin_tools::media_send::MediaSendTool::new().call_json(arguments).await
+                crate::builtin_tools::media_send::MediaSendTool::new()
+                    .call_json(arguments)
+                    .await
             }),
 
             // ACP delegate tool (unified)
@@ -694,9 +826,15 @@ impl ToolRegistry for BuiltinToolRegistry {
             }),
 
             // Skill management tools
-            "skill_status" => Box::pin(async move { self.skill_status_tool.call_json(arguments).await }),
-            "skill_install" => Box::pin(async move { self.skill_install_tool.call_json(arguments).await }),
-            "skill_manage" => Box::pin(async move { self.skill_manage_tool.call_json(arguments).await }),
+            "skill_status" => {
+                Box::pin(async move { self.skill_status_tool.call_json(arguments).await })
+            }
+            "skill_install" => {
+                Box::pin(async move { self.skill_install_tool.call_json(arguments).await })
+            }
+            "skill_manage" => {
+                Box::pin(async move { self.skill_manage_tool.call_json(arguments).await })
+            }
 
             _ => {
                 // Check if this is a plugin tool
@@ -711,17 +849,21 @@ impl ToolRegistry for BuiltinToolRegistry {
                                 AlephError::tool("Plugin tool execution unavailable: extension manager not configured")
                             })?;
                             info!(plugin = %plugin_id, tool = %handler, "Executing plugin tool");
-                            ext_mgr.call_plugin_tool(&plugin_id, &handler, arguments)
+                            ext_mgr
+                                .call_plugin_tool(&plugin_id, &handler, arguments)
                                 .await
-                                .map_err(|e| AlephError::tool(format!("Plugin tool '{}' failed: {}", handler, e)))
+                                .map_err(|e| {
+                                    AlephError::tool(format!(
+                                        "Plugin tool '{}' failed: {}",
+                                        handler, e
+                                    ))
+                                })
                         });
                     }
                 }
                 let tool = tool_name.to_string();
                 error!(tool = %tool, "Unknown tool requested");
-                Box::pin(async move {
-                    Err(AlephError::tool(format!("Unknown tool: {}", tool)))
-                })
+                Box::pin(async move { Err(AlephError::tool(format!("Unknown tool: {}", tool))) })
             }
         }
     }

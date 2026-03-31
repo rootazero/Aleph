@@ -105,8 +105,7 @@ pub type ProfileManagerResult<T> = Result<T, ProfileManagerError>;
 // ============================================================================
 
 /// Runtime status for a profile (not persisted)
-#[derive(Debug, Clone)]
-#[derive(Default)]
+#[derive(Debug, Clone, Default)]
 pub struct RuntimeStatus {
     /// Whether the profile is currently rate limited
     pub is_rate_limited: bool,
@@ -124,7 +123,8 @@ pub struct RuntimeStatus {
 impl RuntimeStatus {
     /// Check if currently in cooldown
     pub fn is_in_cooldown(&self) -> bool {
-        self.cooldown_until.is_some_and(|until| Instant::now() < until)
+        self.cooldown_until
+            .is_some_and(|until| Instant::now() < until)
     }
 
     /// Get remaining cooldown duration in milliseconds
@@ -221,9 +221,7 @@ impl AgentState {
 
     /// Get mutable usage for a profile, creating if needed
     pub fn get_or_create_usage(&mut self, profile_id: &str) -> &mut ProfileUsage {
-        self.usage
-            .entry(profile_id.to_string())
-            .or_default()
+        self.usage.entry(profile_id.to_string()).or_default()
     }
 
     /// Get override for a profile
@@ -233,9 +231,7 @@ impl AgentState {
 
     /// Check if a profile is disabled for this agent
     pub fn is_profile_disabled(&self, profile_id: &str) -> bool {
-        self.overrides
-            .get(profile_id)
-            .is_some_and(|o| o.disabled)
+        self.overrides.get(profile_id).is_some_and(|o| o.disabled)
     }
 
     /// Check if a profile exceeds budget

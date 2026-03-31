@@ -123,8 +123,14 @@ fn test_memory_fact_with_path() {
 
 #[test]
 fn test_compute_parent_path() {
-    assert_eq!(compute_parent_path("aleph://user/preferences/coding/"), "aleph://user/preferences/");
-    assert_eq!(compute_parent_path("aleph://user/preferences/"), "aleph://user/");
+    assert_eq!(
+        compute_parent_path("aleph://user/preferences/coding/"),
+        "aleph://user/preferences/"
+    );
+    assert_eq!(
+        compute_parent_path("aleph://user/preferences/"),
+        "aleph://user/"
+    );
     assert_eq!(compute_parent_path("aleph://user/"), "aleph://");
     assert_eq!(compute_parent_path(""), "");
 }

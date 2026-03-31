@@ -99,12 +99,10 @@ impl SecretsCrypto {
         })?;
 
         let nonce = Nonce::from_slice(nonce_bytes);
-        let plaintext = cipher
-            .decrypt(nonce, ciphertext)
-            .map_err(|_| {
-                key.fill(0);
-                SecretError::DecryptionFailed
-            })?;
+        let plaintext = cipher.decrypt(nonce, ciphertext).map_err(|_| {
+            key.fill(0);
+            SecretError::DecryptionFailed
+        })?;
 
         // Zeroize derived key on stack
         key.fill(0);
@@ -123,7 +121,9 @@ mod tests {
         let plaintext = "sk-ant-api03-very-secret-key";
 
         let encrypted = crypto.encrypt(plaintext).unwrap();
-        let decrypted = crypto.decrypt(&encrypted.ciphertext, &encrypted.nonce, &encrypted.salt).unwrap();
+        let decrypted = crypto
+            .decrypt(&encrypted.ciphertext, &encrypted.nonce, &encrypted.salt)
+            .unwrap();
 
         assert_eq!(decrypted, plaintext);
     }
@@ -179,7 +179,9 @@ mod tests {
     fn test_empty_plaintext() {
         let crypto = SecretsCrypto::new("test-key");
         let encrypted = crypto.encrypt("").unwrap();
-        let decrypted = crypto.decrypt(&encrypted.ciphertext, &encrypted.nonce, &encrypted.salt).unwrap();
+        let decrypted = crypto
+            .decrypt(&encrypted.ciphertext, &encrypted.nonce, &encrypted.salt)
+            .unwrap();
         assert_eq!(decrypted, "");
     }
 
@@ -188,7 +190,9 @@ mod tests {
         let crypto = SecretsCrypto::new("test-key");
         let plaintext = "密钥测试🔑";
         let encrypted = crypto.encrypt(plaintext).unwrap();
-        let decrypted = crypto.decrypt(&encrypted.ciphertext, &encrypted.nonce, &encrypted.salt).unwrap();
+        let decrypted = crypto
+            .decrypt(&encrypted.ciphertext, &encrypted.nonce, &encrypted.salt)
+            .unwrap();
         assert_eq!(decrypted, plaintext);
     }
 }

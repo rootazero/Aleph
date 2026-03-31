@@ -37,7 +37,10 @@ mod benches {
         let avg_time_ms = avg_time_us as f64 / 1000.0;
 
         println!("L1 exact match: {} iterations in {:?}", iterations, elapsed);
-        println!("Average time per lookup: {:.3}ms ({} μs)", avg_time_ms, avg_time_us);
+        println!(
+            "Average time per lookup: {:.3}ms ({} μs)",
+            avg_time_ms, avg_time_us
+        );
 
         // Verify < 10ms (actually should be < 1ms)
         assert!(
@@ -83,7 +86,10 @@ mod benches {
                 "L2 routing for '{}': {} iterations in {:?}",
                 test_input, iterations, elapsed
             );
-            println!("Average time per lookup: {:.3}ms ({} μs)", avg_time_ms, avg_time_us);
+            println!(
+                "Average time per lookup: {:.3}ms ({} μs)",
+                avg_time_ms, avg_time_us
+            );
 
             // Verify < 50ms
             assert!(
@@ -120,8 +126,14 @@ mod benches {
         let avg_time_us = elapsed.as_micros() / iterations;
         let avg_time_ms = avg_time_us as f64 / 1000.0;
 
-        println!("L3 fallback detection: {} iterations in {:?}", iterations, elapsed);
-        println!("Average time per check: {:.3}ms ({} μs)", avg_time_ms, avg_time_us);
+        println!(
+            "L3 fallback detection: {} iterations in {:?}",
+            iterations, elapsed
+        );
+        println!(
+            "Average time per check: {:.3}ms ({} μs)",
+            avg_time_ms, avg_time_us
+        );
 
         // Fallback detection should be very fast (< 10ms)
         assert!(
@@ -153,7 +165,10 @@ mod benches {
         let avg_time_ms = avg_time_us as f64 / 1000.0;
 
         println!("Learning: {} patterns in {:?}", iterations, elapsed);
-        println!("Average time per learn: {:.3}ms ({} μs)", avg_time_ms, avg_time_us);
+        println!(
+            "Average time per learn: {:.3}ms ({} μs)",
+            avg_time_ms, avg_time_us
+        );
 
         // Learning should be fast (< 1ms)
         assert!(
@@ -198,7 +213,10 @@ mod benches {
                 "Cache size {}: {} iterations in {:?}",
                 size, iterations, elapsed
             );
-            println!("Average time per lookup: {:.3}ms ({} μs)", avg_time_ms, avg_time_us);
+            println!(
+                "Average time per lookup: {:.3}ms ({} μs)",
+                avg_time_ms, avg_time_us
+            );
 
             // Should still be fast even with large cache (DashMap is concurrent)
             assert!(

@@ -53,7 +53,12 @@ pub(super) async fn get_definition_impl(tools: &ToolMap, name: &str) -> Option<T
 }
 
 pub(super) async fn list_definitions_impl(tools: &ToolMap) -> Vec<ToolDefinition> {
-    let mut defs: Vec<_> = tools.read().await.values().map(|t| t.definition()).collect();
+    let mut defs: Vec<_> = tools
+        .read()
+        .await
+        .values()
+        .map(|t| t.definition())
+        .collect();
     defs.sort_by(|a, b| a.name.cmp(&b.name));
     defs
 }

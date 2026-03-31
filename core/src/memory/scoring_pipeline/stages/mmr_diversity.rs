@@ -109,7 +109,10 @@ mod tests {
         assert_eq!(result.len(), 3);
         assert_eq!(result[0].fact.content, "A");
         // B and C should be at the end (deferred)
-        let deferred_contents: Vec<&str> = result[1..].iter().map(|r| r.fact.content.as_str()).collect();
+        let deferred_contents: Vec<&str> = result[1..]
+            .iter()
+            .map(|r| r.fact.content.as_str())
+            .collect();
         assert!(deferred_contents.contains(&"B"));
         assert!(deferred_contents.contains(&"C"));
     }

@@ -181,15 +181,27 @@ mod tests {
     #[test]
     fn test_runtime_kind_from_str() {
         assert_eq!(RuntimeKind::from_str_or_default("node"), RuntimeKind::Node);
-        assert_eq!(RuntimeKind::from_str_or_default("nodejs"), RuntimeKind::Node);
+        assert_eq!(
+            RuntimeKind::from_str_or_default("nodejs"),
+            RuntimeKind::Node
+        );
         assert_eq!(RuntimeKind::from_str_or_default("Node"), RuntimeKind::Node);
-        assert_eq!(RuntimeKind::from_str_or_default("python"), RuntimeKind::Python);
-        assert_eq!(RuntimeKind::from_str_or_default("python3"), RuntimeKind::Python);
+        assert_eq!(
+            RuntimeKind::from_str_or_default("python"),
+            RuntimeKind::Python
+        );
+        assert_eq!(
+            RuntimeKind::from_str_or_default("python3"),
+            RuntimeKind::Python
+        );
         assert_eq!(RuntimeKind::from_str_or_default("bun"), RuntimeKind::Bun);
         assert_eq!(RuntimeKind::from_str_or_default("deno"), RuntimeKind::Deno);
         assert_eq!(RuntimeKind::from_str_or_default("none"), RuntimeKind::None);
         assert_eq!(RuntimeKind::from_str_or_default(""), RuntimeKind::None);
-        assert_eq!(RuntimeKind::from_str_or_default("unknown"), RuntimeKind::None);
+        assert_eq!(
+            RuntimeKind::from_str_or_default("unknown"),
+            RuntimeKind::None
+        );
     }
 
     #[test]

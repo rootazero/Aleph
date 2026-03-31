@@ -103,9 +103,7 @@ impl PiiEngine {
     /// Reload configuration (hot-reload support)
     pub fn reload(config: PrivacyConfig) {
         if let Some(engine) = PII_ENGINE.get() {
-            let mut guard = engine
-                .write()
-                .unwrap_or_else(|e| e.into_inner());
+            let mut guard = engine.write().unwrap_or_else(|e| e.into_inner());
             guard.config = config;
         }
     }

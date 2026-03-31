@@ -160,9 +160,8 @@ impl OAuthStorage {
             }
         };
 
-        let storage: StorageFile = serde_json::from_str(&content).map_err(|e| {
-            AlephError::IoError(format!("Failed to parse OAuth storage: {}", e))
-        })?;
+        let storage: StorageFile = serde_json::from_str(&content)
+            .map_err(|e| AlephError::IoError(format!("Failed to parse OAuth storage: {}", e)))?;
 
         // Update cache
         {
@@ -186,9 +185,9 @@ impl OAuthStorage {
             AlephError::IoError(format!("Failed to serialize OAuth storage: {}", e))
         })?;
 
-        fs::write(&self.file_path, content).await.map_err(|e| {
-            AlephError::IoError(format!("Failed to write OAuth storage: {}", e))
-        })?;
+        fs::write(&self.file_path, content)
+            .await
+            .map_err(|e| AlephError::IoError(format!("Failed to write OAuth storage: {}", e)))?;
 
         // Set file permissions to 0600 on Unix (owner read/write only)
         #[cfg(unix)]
@@ -209,9 +208,8 @@ impl OAuthStorage {
     /// Load storage from file without using cache
     async fn load_from_file(&self) -> Result<StorageFile> {
         match fs::read_to_string(&self.file_path).await {
-            Ok(content) => serde_json::from_str(&content).map_err(|e| {
-                AlephError::IoError(format!("Failed to parse OAuth storage: {}", e))
-            }),
+            Ok(content) => serde_json::from_str(&content)
+                .map_err(|e| AlephError::IoError(format!("Failed to parse OAuth storage: {}", e))),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(StorageFile::default()),
             Err(e) => Err(AlephError::IoError(format!(
                 "Failed to read OAuth storage: {}",

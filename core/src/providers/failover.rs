@@ -57,12 +57,12 @@
 use crate::config::ProviderConfig;
 use crate::error::{AlephError, Result};
 use crate::providers::{adapter, create_provider, AiProvider, ProviderResponse};
+use crate::sync_primitives::Arc;
+use crate::sync_primitives::{AtomicU64, Ordering};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
-use crate::sync_primitives::{AtomicU64, Ordering};
-use crate::sync_primitives::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 
@@ -168,7 +168,8 @@ impl ProviderMetrics {
     pub fn record_success(&self, latency_ms: u64) {
         self.total_requests.fetch_add(1, Ordering::Relaxed);
         self.success_count.fetch_add(1, Ordering::Relaxed);
-        self.total_latency_ms.fetch_add(latency_ms, Ordering::Relaxed);
+        self.total_latency_ms
+            .fetch_add(latency_ms, Ordering::Relaxed);
     }
 
     pub fn record_failure(&self) {
@@ -242,7 +243,10 @@ impl FailoverProvider {
         tracing::info!(
             "Created FailoverProvider with {} providers: {:?}",
             provider_states.len(),
-            provider_states.iter().map(|p| &p.entry.name).collect::<Vec<_>>()
+            provider_states
+                .iter()
+                .map(|p| &p.entry.name)
+                .collect::<Vec<_>>()
         );
 
         Ok(Self {

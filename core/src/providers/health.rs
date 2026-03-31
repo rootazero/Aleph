@@ -3,7 +3,6 @@
 /// This module provides types for tracking provider health state and
 /// classifying errors into transient (retriable) vs permanent categories.
 /// Used by the failover system to make routing decisions.
-
 use serde::{Deserialize, Serialize};
 use std::time::{Duration, Instant};
 
@@ -66,10 +65,7 @@ pub enum ProviderHealth {
         consecutive_failures: u32,
     },
     /// Provider is permanently unavailable until user intervention
-    Unavailable {
-        since: Instant,
-        reason: String,
-    },
+    Unavailable { since: Instant, reason: String },
 }
 
 impl Default for ProviderHealth {
@@ -107,9 +103,11 @@ impl ProviderHealth {
         match error {
             ProviderError::Transient(transient) => {
                 let (consecutive_failures, old_since) = match self {
-                    ProviderHealth::Degraded { consecutive_failures, since, .. } => {
-                        (*consecutive_failures + 1, Some(*since))
-                    }
+                    ProviderHealth::Degraded {
+                        consecutive_failures,
+                        since,
+                        ..
+                    } => (*consecutive_failures + 1, Some(*since)),
                     _ => (1, None),
                 };
 
@@ -143,7 +141,10 @@ impl ProviderHealth {
 fn calculate_cooldown(consecutive_failures: u32, transient: &TransientError) -> Duration {
     // For first RateLimited with retry_after, use max(retry_after, 30s)
     let base = if consecutive_failures == 1 {
-        if let TransientError::RateLimited { retry_after: Some(retry_after) } = transient {
+        if let TransientError::RateLimited {
+            retry_after: Some(retry_after),
+        } = transient
+        {
             (*retry_after).max(BASE_COOLDOWN)
         } else {
             BASE_COOLDOWN
@@ -183,9 +184,7 @@ impl From<&AlephError> for Option<ProviderError> {
             AlephError::AuthenticationError { .. } => {
                 Some(ProviderError::Permanent(PermanentError::AuthFailed))
             }
-            AlephError::ProviderError { message, .. } => {
-                classify_provider_error_message(message)
-            }
+            AlephError::ProviderError { message, .. } => classify_provider_error_message(message),
             _ => None,
         }
     }
@@ -199,7 +198,9 @@ fn classify_provider_error_message(message: &str) -> Option<ProviderError> {
     // Check for 5xx server errors
     for status in [500, 502, 503, 504, 529] {
         if message.contains(&status.to_string()) {
-            return Some(ProviderError::Transient(TransientError::ServerError { status }));
+            return Some(ProviderError::Transient(TransientError::ServerError {
+                status,
+            }));
         }
     }
 
@@ -304,7 +305,10 @@ mod tests {
         health.record_failure(&error);
 
         match &health {
-            ProviderHealth::Degraded { consecutive_failures, .. } => {
+            ProviderHealth::Degraded {
+                consecutive_failures,
+                ..
+            } => {
                 assert_eq!(*consecutive_failures, 1);
             }
             other => panic!("Expected Degraded, got {:?}", other),
@@ -321,7 +325,12 @@ mod tests {
         // First failure: 30s cooldown
         health.record_failure(&error);
         let cooldown_1 = match &health {
-            ProviderHealth::Degraded { cooldown_until, since, consecutive_failures, .. } => {
+            ProviderHealth::Degraded {
+                cooldown_until,
+                since,
+                consecutive_failures,
+                ..
+            } => {
                 assert_eq!(*consecutive_failures, 1);
                 *cooldown_until - *since
             }
@@ -331,9 +340,14 @@ mod tests {
         // Second failure: should be ~60s (30s * 2^1)
         health.record_failure(&error);
         let cooldown_2 = match &health {
-            ProviderHealth::Degraded { cooldown_until, since, consecutive_failures, .. } => {
+            ProviderHealth::Degraded {
+                cooldown_until,
+                since,
+                consecutive_failures,
+                ..
+            } => {
                 assert_eq!(*consecutive_failures, 2);
-                *cooldown_until - *since  // extract actual cooldown from state
+                *cooldown_until - *since // extract actual cooldown from state
             }
             other => panic!("Expected Degraded, got {:?}", other),
         };
@@ -341,15 +355,30 @@ mod tests {
         // Third failure: should be ~120s (30s * 2^2)
         health.record_failure(&error);
         let cooldown_3 = match &health {
-            ProviderHealth::Degraded { cooldown_until, since, consecutive_failures, .. } => {
+            ProviderHealth::Degraded {
+                cooldown_until,
+                since,
+                consecutive_failures,
+                ..
+            } => {
                 assert_eq!(*consecutive_failures, 3);
                 *cooldown_until - *since
             }
             other => panic!("Expected Degraded, got {:?}", other),
         };
 
-        assert!(cooldown_2 > cooldown_1, "second cooldown ({:?}) should exceed first ({:?})", cooldown_2, cooldown_1);
-        assert!(cooldown_3 > cooldown_2, "third cooldown ({:?}) should exceed second ({:?})", cooldown_3, cooldown_2);
+        assert!(
+            cooldown_2 > cooldown_1,
+            "second cooldown ({:?}) should exceed first ({:?})",
+            cooldown_2,
+            cooldown_1
+        );
+        assert!(
+            cooldown_3 > cooldown_2,
+            "third cooldown ({:?}) should exceed second ({:?})",
+            cooldown_3,
+            cooldown_2
+        );
         // Verify approximate values (allow 1s tolerance for Instant arithmetic)
         assert!(cooldown_1 >= Duration::from_secs(29) && cooldown_1 <= Duration::from_secs(31));
         assert!(cooldown_2 >= Duration::from_secs(59) && cooldown_2 <= Duration::from_secs(61));
@@ -391,7 +420,12 @@ mod tests {
         health.record_failure(&error);
 
         match &health {
-            ProviderHealth::Degraded { cooldown_until, since, consecutive_failures, .. } => {
+            ProviderHealth::Degraded {
+                cooldown_until,
+                since,
+                consecutive_failures,
+                ..
+            } => {
                 assert_eq!(*consecutive_failures, 1);
                 let cooldown = *cooldown_until - *since;
                 // retry_after=120s > base=30s, so cooldown should be 120s
@@ -410,7 +444,9 @@ mod tests {
         let provider_err: Option<ProviderError> = (&err).into();
         assert_eq!(
             provider_err,
-            Some(ProviderError::Transient(TransientError::RateLimited { retry_after: None }))
+            Some(ProviderError::Transient(TransientError::RateLimited {
+                retry_after: None
+            }))
         );
     }
 
@@ -418,28 +454,40 @@ mod tests {
     fn aleph_timeout_converts() {
         let err = AlephError::Timeout { suggestion: None };
         let provider_err: Option<ProviderError> = (&err).into();
-        assert_eq!(provider_err, Some(ProviderError::Transient(TransientError::Timeout)));
+        assert_eq!(
+            provider_err,
+            Some(ProviderError::Transient(TransientError::Timeout))
+        );
     }
 
     #[test]
     fn aleph_execution_timeout_converts() {
         let err = AlephError::ExecutionTimeout { timeout_secs: 30 };
         let provider_err: Option<ProviderError> = (&err).into();
-        assert_eq!(provider_err, Some(ProviderError::Transient(TransientError::Timeout)));
+        assert_eq!(
+            provider_err,
+            Some(ProviderError::Transient(TransientError::Timeout))
+        );
     }
 
     #[test]
     fn aleph_network_error_converts() {
         let err = AlephError::network("connection refused");
         let provider_err: Option<ProviderError> = (&err).into();
-        assert_eq!(provider_err, Some(ProviderError::Transient(TransientError::ConnectionFailed)));
+        assert_eq!(
+            provider_err,
+            Some(ProviderError::Transient(TransientError::ConnectionFailed))
+        );
     }
 
     #[test]
     fn aleph_auth_error_converts() {
         let err = AlephError::authentication("openai", "401 Unauthorized");
         let provider_err: Option<ProviderError> = (&err).into();
-        assert_eq!(provider_err, Some(ProviderError::Permanent(PermanentError::AuthFailed)));
+        assert_eq!(
+            provider_err,
+            Some(ProviderError::Permanent(PermanentError::AuthFailed))
+        );
     }
 
     #[test]
@@ -448,7 +496,9 @@ mod tests {
         let provider_err: Option<ProviderError> = (&err).into();
         assert_eq!(
             provider_err,
-            Some(ProviderError::Transient(TransientError::ServerError { status: 502 }))
+            Some(ProviderError::Transient(TransientError::ServerError {
+                status: 502
+            }))
         );
     }
 
@@ -456,7 +506,10 @@ mod tests {
     fn aleph_provider_error_404_model_converts() {
         let err = AlephError::provider("404: model 'gpt-5' not found");
         let provider_err: Option<ProviderError> = (&err).into();
-        assert_eq!(provider_err, Some(ProviderError::Permanent(PermanentError::ModelNotFound)));
+        assert_eq!(
+            provider_err,
+            Some(ProviderError::Permanent(PermanentError::ModelNotFound))
+        );
     }
 
     #[test]
@@ -482,7 +535,11 @@ mod tests {
         health.record_failure(&error);
 
         match &health {
-            ProviderHealth::Degraded { cooldown_until, since, .. } => {
+            ProviderHealth::Degraded {
+                cooldown_until,
+                since,
+                ..
+            } => {
                 let cooldown = *cooldown_until - *since;
                 // Should use base (30s) since retry_after (5s) < base
                 assert!(cooldown >= Duration::from_secs(29));

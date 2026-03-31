@@ -78,11 +78,7 @@ impl InboundContext {
             .display_name
             .as_deref()
             .unwrap_or(&self.sender.id);
-        let role = if self.sender.is_owner {
-            " (owner)"
-        } else {
-            ""
-        };
+        let role = if self.sender.is_owner { " (owner)" } else { "" };
         lines.push(format!("Sender: {}{}", sender_name, role));
 
         // Channel
@@ -117,11 +113,7 @@ impl InboundContext {
         if self.message.has_attachments && !self.message.attachment_types.is_empty() {
             let count = self.message.attachment_types.len();
             // Group by type and show counts
-            let summary = format!(
-                "{} ({})",
-                self.message.attachment_types.join(", "),
-                count
-            );
+            let summary = format!("{} ({})", self.message.attachment_types.join(", "), count);
             lines.push(format!("Attachments: {}", summary));
         }
 

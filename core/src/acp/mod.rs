@@ -20,9 +20,19 @@ mod tests;
 /// Events emitted by the ACP manager for session persistence.
 #[derive(Debug, Clone)]
 pub enum AcpSessionEvent {
-    Created { harness_id: String, acp_session_id: String, cwd: String },
-    Updated { harness_id: String, acp_session_id: String },
-    Removed { harness_id: String, cwd: String },
+    Created {
+        harness_id: String,
+        acp_session_id: String,
+        cwd: String,
+    },
+    Updated {
+        harness_id: String,
+        acp_session_id: String,
+    },
+    Removed {
+        harness_id: String,
+        cwd: String,
+    },
 }
 
 /// Callback for real-time ACP streaming chunks.

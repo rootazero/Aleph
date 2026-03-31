@@ -25,10 +25,7 @@ async fn resolve_target(page: &Page, target: &ActionTarget) -> Result<(f64, f64)
         ActionTarget::Ref { ref_id } => {
             let snapshot: AriaSnapshot = take_aria_snapshot(page).await?;
             resolve_ref_to_point(&snapshot, ref_id).ok_or_else(|| {
-                BrowserError::ActionFailed(format!(
-                    "ARIA ref '{}' not found in snapshot",
-                    ref_id
-                ))
+                BrowserError::ActionFailed(format!("ARIA ref '{}' not found in snapshot", ref_id))
             })
         }
 
@@ -51,9 +48,7 @@ async fn resolve_target(page: &Page, target: &ActionTarget) -> Result<(f64, f64)
                 .await
                 .map_err(|e| BrowserError::EvalError(e.to_string()))?;
 
-            let value: serde_json::Value = result
-                .into_value()
-                .unwrap_or(serde_json::Value::Null);
+            let value: serde_json::Value = result.into_value().unwrap_or(serde_json::Value::Null);
 
             if value.is_null() {
                 return Err(BrowserError::ActionFailed(format!(
@@ -114,9 +109,8 @@ pub async fn click(page: &Page, target: &ActionTarget) -> Result<(), BrowserErro
 pub async fn type_text(page: &Page, target: &ActionTarget, text: &str) -> Result<(), BrowserError> {
     let (x, y) = resolve_target(page, target).await?;
 
-    let escaped_text = serde_json::to_string(text).map_err(|e| {
-        BrowserError::ActionFailed(format!("Failed to escape text: {e}"))
-    })?;
+    let escaped_text = serde_json::to_string(text)
+        .map_err(|e| BrowserError::ActionFailed(format!("Failed to escape text: {e}")))?;
 
     let js = format!(
         r#"(() => {{
@@ -155,9 +149,8 @@ pub async fn type_text(page: &Page, target: &ActionTarget, text: &str) -> Result
 pub async fn fill(page: &Page, target: &ActionTarget, value: &str) -> Result<(), BrowserError> {
     let (x, y) = resolve_target(page, target).await?;
 
-    let escaped_value = serde_json::to_string(value).map_err(|e| {
-        BrowserError::ActionFailed(format!("Failed to escape fill value: {e}"))
-    })?;
+    let escaped_value = serde_json::to_string(value)
+        .map_err(|e| BrowserError::ActionFailed(format!("Failed to escape fill value: {e}")))?;
 
     let js = format!(
         r#"(() => {{

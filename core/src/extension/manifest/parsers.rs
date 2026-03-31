@@ -105,7 +105,9 @@ struct McpServerEntry {
 ///
 /// Returns (parsed frontmatter, body text). If no frontmatter delimiters are
 /// found, returns default frontmatter and the full content as body.
-fn parse_frontmatter<T: serde::de::DeserializeOwned + Default>(content: &str) -> Result<(T, String)> {
+fn parse_frontmatter<T: serde::de::DeserializeOwned + Default>(
+    content: &str,
+) -> Result<(T, String)> {
     let content = content.trim();
     if !content.starts_with("---") {
         return Ok((T::default(), content.to_string()));
@@ -180,8 +182,13 @@ where
     }
 
     let mut caps = Vec::new();
-    let entries = std::fs::read_dir(&dir)
-        .with_context(|| format!("Failed to read {} dir: {}", config.component_name, dir.display()))?;
+    let entries = std::fs::read_dir(&dir).with_context(|| {
+        format!(
+            "Failed to read {} dir: {}",
+            config.component_name,
+            dir.display()
+        )
+    })?;
 
     for entry in entries {
         let entry = entry?;
@@ -215,7 +222,10 @@ where
 
         match result {
             Ok(cap) => caps.push(cap),
-            Err(e) => warn!("Failed to parse {} from {:?}: {}", config.component_name, path, e),
+            Err(e) => warn!(
+                "Failed to parse {} from {:?}: {}",
+                config.component_name, path, e
+            ),
         }
     }
 
@@ -343,7 +353,10 @@ fn parse_single_agent(
 
     Ok(CapabilityDeclaration::Agent(AgentRegistration {
         name: fm.name.unwrap_or_else(|| default_name.to_string()),
-        description: fm.description.map(|d| if d.is_empty() { None } else { Some(d) }).unwrap_or(None),
+        description: fm
+            .description
+            .map(|d| if d.is_empty() { None } else { Some(d) })
+            .unwrap_or(None),
         content: body,
         model: fm.model,
         plugin_id: plugin_id.to_string(),
@@ -789,14 +802,8 @@ mod tests {
         match &caps[0] {
             CapabilityDeclaration::McpServer(m) => {
                 assert_eq!(m.command, "node");
-                assert_eq!(
-                    m.args,
-                    vec![format!("{}/server.js", dir.path().display())]
-                );
-                assert_eq!(
-                    m.env.get("ROOT"),
-                    Some(&dir.path().display().to_string())
-                );
+                assert_eq!(m.args, vec![format!("{}/server.js", dir.path().display())]);
+                assert_eq!(m.env.get("ROOT"), Some(&dir.path().display().to_string()));
             }
             other => panic!("Expected McpServer, got {:?}", other),
         }
@@ -829,10 +836,7 @@ mod tests {
             substitute_vars("${ALEPH_PLUGIN_ROOT}/bin", "/home/p"),
             "/home/p/bin"
         );
-        assert_eq!(
-            substitute_vars("${CLAUDE_PLUGIN_ROOT}/x", "/tmp"),
-            "/tmp/x"
-        );
+        assert_eq!(substitute_vars("${CLAUDE_PLUGIN_ROOT}/x", "/tmp"), "/tmp/x");
         assert_eq!(substitute_vars("plain", "/root"), "plain");
     }
 
@@ -913,7 +917,11 @@ mod tests {
         use crate::extension::types::PromptScope;
 
         let dir = tempdir().unwrap();
-        fs::write(dir.path().join("tool-prompt.md"), "Use this tool carefully.").unwrap();
+        fs::write(
+            dir.path().join("tool-prompt.md"),
+            "Use this tool carefully.",
+        )
+        .unwrap();
 
         let section = PromptSection {
             file: "tool-prompt.md".to_string(),

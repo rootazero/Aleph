@@ -4,8 +4,8 @@ use std::collections::HashMap;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::failure::AuthProfileFailureReason;
-use super::store::AuthProfileStore;
 use super::normalize_provider_id;
+use super::store::AuthProfileStore;
 
 /// Configuration for cooldown behavior
 #[derive(Debug, Clone)]

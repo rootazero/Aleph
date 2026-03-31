@@ -77,10 +77,7 @@ mod tests {
     #[test]
     fn trace_records_stages() {
         let mut trace = RetrievalTrace::new("test query", 1000);
-        let facts = vec![
-            ("fact-1".to_string(), 0.95),
-            ("fact-2".to_string(), 0.80),
-        ];
+        let facts = vec![("fact-1".to_string(), 0.95), ("fact-2".to_string(), 0.80)];
 
         trace.record_stage("vector_search", 42, 100, &facts);
 

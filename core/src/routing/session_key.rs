@@ -20,7 +20,6 @@ pub enum DmScope {
     PerChannelPeer,
 }
 
-
 /// Peer type for group sessions
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -216,12 +215,22 @@ impl SessionKey {
     /// For non-epoch types (Group, Task, Subagent, Ephemeral), returns clone unchanged.
     pub fn with_next_epoch(&self) -> Self {
         match self {
-            Self::Main { agent_id, main_key, epoch } => Self::Main {
+            Self::Main {
+                agent_id,
+                main_key,
+                epoch,
+            } => Self::Main {
                 agent_id: agent_id.clone(),
                 main_key: main_key.clone(),
                 epoch: epoch + 1,
             },
-            Self::DirectMessage { agent_id, channel, peer_id, dm_scope, epoch } => Self::DirectMessage {
+            Self::DirectMessage {
+                agent_id,
+                channel,
+                peer_id,
+                dm_scope,
+                epoch,
+            } => Self::DirectMessage {
                 agent_id: agent_id.clone(),
                 channel: channel.clone(),
                 peer_id: peer_id.clone(),
@@ -235,10 +244,18 @@ impl SessionKey {
     /// Return the base key string WITHOUT epoch suffix (for SQL LIKE queries).
     pub fn base_key_pattern(&self) -> String {
         match self {
-            Self::Main { agent_id, main_key, .. } => {
+            Self::Main {
+                agent_id, main_key, ..
+            } => {
                 format!("agent:{}:{}", agent_id, main_key)
             }
-            Self::DirectMessage { agent_id, channel, peer_id, dm_scope, .. } => match dm_scope {
+            Self::DirectMessage {
+                agent_id,
+                channel,
+                peer_id,
+                dm_scope,
+                ..
+            } => match dm_scope {
                 DmScope::Main => format!("agent:{}:main", agent_id),
                 DmScope::PerPeer => format!("agent:{}:dm:{}", agent_id, peer_id),
                 DmScope::PerChannelPeer => {
@@ -253,9 +270,17 @@ impl SessionKey {
     /// Serialize to string key for storage/lookup
     pub fn to_key_string(&self) -> String {
         match self {
-            Self::Main { agent_id, main_key, epoch } => {
+            Self::Main {
+                agent_id,
+                main_key,
+                epoch,
+            } => {
                 let base = format!("agent:{}:{}", agent_id, main_key);
-                if *epoch > 0 { format!("{}:s{}", base, epoch) } else { base }
+                if *epoch > 0 {
+                    format!("{}:s{}", base, epoch)
+                } else {
+                    base
+                }
             }
             Self::DirectMessage {
                 agent_id,
@@ -271,7 +296,11 @@ impl SessionKey {
                         format!("agent:{}:{}:dm:{}", agent_id, channel, peer_id)
                     }
                 };
-                if *epoch > 0 { format!("{}:s{}", base, epoch) } else { base }
+                if *epoch > 0 {
+                    format!("{}:s{}", base, epoch)
+                } else {
+                    base
+                }
             }
             Self::Group {
                 agent_id,
@@ -572,7 +601,9 @@ mod tests {
     fn test_main_session_key_from_any() {
         let dm = SessionKey::dm("work", "telegram", "user1", DmScope::PerPeer);
         let main = dm.main_session_key();
-        assert!(matches!(main, SessionKey::Main { agent_id, main_key, .. } if agent_id == "work" && main_key == "main"));
+        assert!(
+            matches!(main, SessionKey::Main { agent_id, main_key, .. } if agent_id == "work" && main_key == "main")
+        );
     }
 
     // --- Serialization tests ---
@@ -610,7 +641,10 @@ mod tests {
     #[test]
     fn test_to_key_string_group_thread() {
         let key = SessionKey::group_thread("main", "telegram", PeerKind::Group, "chat789", "t1");
-        assert_eq!(key.to_key_string(), "agent:main:telegram:group:chat789:thread:t1");
+        assert_eq!(
+            key.to_key_string(),
+            "agent:main:telegram:group:chat789:thread:t1"
+        );
     }
 
     #[test]
@@ -634,25 +668,33 @@ mod tests {
     #[test]
     fn test_parse_main() {
         let key = SessionKey::parse("agent:main:main").unwrap();
-        assert!(matches!(key, SessionKey::Main { agent_id, main_key, .. } if agent_id == "main" && main_key == "main"));
+        assert!(
+            matches!(key, SessionKey::Main { agent_id, main_key, .. } if agent_id == "main" && main_key == "main")
+        );
     }
 
     #[test]
     fn test_parse_dm_per_peer() {
         let key = SessionKey::parse("agent:main:dm:user123").unwrap();
-        assert!(matches!(key, SessionKey::DirectMessage { peer_id, dm_scope: DmScope::PerPeer, .. } if peer_id == "user123"));
+        assert!(
+            matches!(key, SessionKey::DirectMessage { peer_id, dm_scope: DmScope::PerPeer, .. } if peer_id == "user123")
+        );
     }
 
     #[test]
     fn test_parse_dm_per_channel_peer() {
         let key = SessionKey::parse("agent:main:telegram:dm:user123").unwrap();
-        assert!(matches!(key, SessionKey::DirectMessage { channel, peer_id, dm_scope: DmScope::PerChannelPeer, .. } if channel == "telegram" && peer_id == "user123"));
+        assert!(
+            matches!(key, SessionKey::DirectMessage { channel, peer_id, dm_scope: DmScope::PerChannelPeer, .. } if channel == "telegram" && peer_id == "user123")
+        );
     }
 
     #[test]
     fn test_parse_group() {
         let key = SessionKey::parse("agent:main:discord:group:guild456").unwrap();
-        assert!(matches!(key, SessionKey::Group { channel, peer_kind: PeerKind::Group, peer_id, .. } if channel == "discord" && peer_id == "guild456"));
+        assert!(
+            matches!(key, SessionKey::Group { channel, peer_kind: PeerKind::Group, peer_id, .. } if channel == "discord" && peer_id == "guild456")
+        );
     }
 
     #[test]
@@ -664,13 +706,17 @@ mod tests {
     #[test]
     fn test_parse_task() {
         let key = SessionKey::parse("agent:main:cron:daily").unwrap();
-        assert!(matches!(key, SessionKey::Task { task_type, task_id, .. } if task_type == "cron" && task_id == "daily"));
+        assert!(
+            matches!(key, SessionKey::Task { task_type, task_id, .. } if task_type == "cron" && task_id == "daily")
+        );
     }
 
     #[test]
     fn test_parse_ephemeral() {
         let key = SessionKey::parse("agent:main:ephemeral:abc-123").unwrap();
-        assert!(matches!(key, SessionKey::Ephemeral { ephemeral_id, .. } if ephemeral_id == "abc-123"));
+        assert!(
+            matches!(key, SessionKey::Ephemeral { ephemeral_id, .. } if ephemeral_id == "abc-123")
+        );
     }
 
     #[test]
@@ -765,16 +811,28 @@ mod tests {
     #[test]
     fn test_epoch_roundtrip_all_types() {
         let keys_with_epoch = vec![
-            SessionKey::Main { agent_id: "work".to_string(), main_key: "main".to_string(), epoch: 5 },
+            SessionKey::Main {
+                agent_id: "work".to_string(),
+                main_key: "main".to_string(),
+                epoch: 5,
+            },
             SessionKey::DirectMessage {
-                agent_id: "main".to_string(), channel: "telegram".to_string(),
-                peer_id: "u1".to_string(), dm_scope: DmScope::PerChannelPeer, epoch: 2,
+                agent_id: "main".to_string(),
+                channel: "telegram".to_string(),
+                peer_id: "u1".to_string(),
+                dm_scope: DmScope::PerChannelPeer,
+                epoch: 2,
             },
         ];
         for key in keys_with_epoch {
             let s = key.to_key_string();
             let parsed = SessionKey::parse(&s).unwrap_or_else(|| panic!("Failed to parse: {}", s));
-            assert_eq!(parsed.epoch(), key.epoch(), "Epoch roundtrip failed for: {}", s);
+            assert_eq!(
+                parsed.epoch(),
+                key.epoch(),
+                "Epoch roundtrip failed for: {}",
+                s
+            );
         }
     }
 }

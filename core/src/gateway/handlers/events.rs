@@ -2,16 +2,16 @@
 //!
 //! Handles subscribing and unsubscribing from event topics.
 
+use crate::sync_primitives::Arc;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
-use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, info};
 
 use crate::gateway::event_bus::TopicFilter;
-use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INVALID_PARAMS};
 use crate::gateway::handlers::parse_params;
+use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INVALID_PARAMS};
 
 /// Tracks subscriptions per connection
 pub struct SubscriptionManager {
@@ -213,7 +213,10 @@ mod tests {
 
         // Add subscriptions
         manager
-            .add_patterns("conn1", vec!["agent.*".to_string(), "session.*".to_string()])
+            .add_patterns(
+                "conn1",
+                vec!["agent.*".to_string(), "session.*".to_string()],
+            )
             .await;
 
         // Check filtering
@@ -230,7 +233,10 @@ mod tests {
         let manager = SubscriptionManager::new();
 
         manager
-            .add_patterns("conn1", vec!["agent.*".to_string(), "session.*".to_string()])
+            .add_patterns(
+                "conn1",
+                vec!["agent.*".to_string(), "session.*".to_string()],
+            )
             .await;
 
         let removed = manager

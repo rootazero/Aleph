@@ -48,19 +48,12 @@ impl MattermostMessageOps {
             )));
         }
 
-        let body: serde_json::Value = resp
-            .json()
-            .await
-            .map_err(|e| ChannelError::AuthFailed(format!("users/me response parse failed: {e}")))?;
+        let body: serde_json::Value = resp.json().await.map_err(|e| {
+            ChannelError::AuthFailed(format!("users/me response parse failed: {e}"))
+        })?;
 
-        let user_id = body["id"]
-            .as_str()
-            .unwrap_or("unknown")
-            .to_string();
-        let username = body["username"]
-            .as_str()
-            .unwrap_or("unknown")
-            .to_string();
+        let user_id = body["id"].as_str().unwrap_or("unknown").to_string();
+        let username = body["username"].as_str().unwrap_or("unknown").to_string();
 
         Ok((user_id, username))
     }
@@ -114,17 +107,11 @@ impl MattermostMessageOps {
                 )));
             }
 
-            let resp_json: serde_json::Value = resp
-                .json()
-                .await
-                .map_err(|e| {
-                    ChannelError::SendFailed(format!("posts response parse failed: {e}"))
-                })?;
+            let resp_json: serde_json::Value = resp.json().await.map_err(|e| {
+                ChannelError::SendFailed(format!("posts response parse failed: {e}"))
+            })?;
 
-            let post_id = resp_json["id"]
-                .as_str()
-                .unwrap_or("")
-                .to_string();
+            let post_id = resp_json["id"].as_str().unwrap_or("").to_string();
 
             last_result = Some(SendResult {
                 message_id: MessageId::new(post_id),
@@ -132,8 +119,7 @@ impl MattermostMessageOps {
             });
         }
 
-        last_result
-            .ok_or_else(|| ChannelError::SendFailed("No message chunks to send".to_string()))
+        last_result.ok_or_else(|| ChannelError::SendFailed("No message chunks to send".to_string()))
     }
 
     /// Send a typing indicator via `POST /api/v4/users/me/typing`.
@@ -227,14 +213,14 @@ impl MattermostMessageOps {
         };
 
         // Sender display name from event data
-        let sender_name = event["data"]["sender_name"]
-            .as_str()
-            .unwrap_or(user_id);
+        let sender_name = event["data"]["sender_name"].as_str().unwrap_or(user_id);
 
         // Parse create_at timestamp (milliseconds since epoch)
         let timestamp = post["create_at"]
             .as_i64()
-            .and_then(|ms| chrono::DateTime::from_timestamp(ms / 1000, ((ms % 1000) * 1_000_000) as u32))
+            .and_then(|ms| {
+                chrono::DateTime::from_timestamp(ms / 1000, ((ms % 1000) * 1_000_000) as u32)
+            })
             .unwrap_or_else(Utc::now);
 
         Some(InboundMessage {
@@ -378,12 +364,9 @@ impl MattermostMessageOps {
                 }
 
                 // Parse posted events
-                if let Some(inbound) = Self::convert_posted_event(
-                    &payload,
-                    &channel_id,
-                    &user_id,
-                    &config,
-                ) {
+                if let Some(inbound) =
+                    Self::convert_posted_event(&payload, &channel_id, &user_id, &config)
+                {
                     tracing::debug!(
                         "Mattermost message from {}: {}",
                         inbound.sender_name.as_deref().unwrap_or("?"),
@@ -413,7 +396,11 @@ impl MattermostMessageOps {
 mod tests {
     use super::*;
 
-    fn make_posted_event(post: &serde_json::Value, channel_type: &str, sender_name: &str) -> serde_json::Value {
+    fn make_posted_event(
+        post: &serde_json::Value,
+        channel_type: &str,
+        sender_name: &str,
+    ) -> serde_json::Value {
         serde_json::json!({
             "event": "posted",
             "data": {
@@ -439,10 +426,9 @@ mod tests {
         let channel_id = ChannelId::new("mattermost");
         let config = MattermostConfig::default();
 
-        let msg = MattermostMessageOps::convert_posted_event(
-            &event, &channel_id, "bot-123", &config,
-        )
-        .unwrap();
+        let msg =
+            MattermostMessageOps::convert_posted_event(&event, &channel_id, "bot-123", &config)
+                .unwrap();
 
         assert_eq!(msg.channel_id.as_str(), "mattermost");
         assert_eq!(msg.conversation_id.as_str(), "ch-789");
@@ -469,10 +455,9 @@ mod tests {
         let channel_id = ChannelId::new("mattermost");
         let config = MattermostConfig::default();
 
-        let msg = MattermostMessageOps::convert_posted_event(
-            &event, &channel_id, "bot-123", &config,
-        )
-        .unwrap();
+        let msg =
+            MattermostMessageOps::convert_posted_event(&event, &channel_id, "bot-123", &config)
+                .unwrap();
 
         assert!(!msg.is_group);
     }
@@ -492,10 +477,9 @@ mod tests {
         let channel_id = ChannelId::new("mattermost");
         let config = MattermostConfig::default();
 
-        let msg = MattermostMessageOps::convert_posted_event(
-            &event, &channel_id, "bot-123", &config,
-        )
-        .unwrap();
+        let msg =
+            MattermostMessageOps::convert_posted_event(&event, &channel_id, "bot-123", &config)
+                .unwrap();
 
         assert_eq!(msg.reply_to.as_ref().unwrap().as_str(), "post-1");
     }
@@ -515,9 +499,8 @@ mod tests {
         let channel_id = ChannelId::new("mattermost");
         let config = MattermostConfig::default();
 
-        let msg = MattermostMessageOps::convert_posted_event(
-            &event, &channel_id, "bot-123", &config,
-        );
+        let msg =
+            MattermostMessageOps::convert_posted_event(&event, &channel_id, "bot-123", &config);
         assert!(msg.is_none());
     }
 
@@ -540,9 +523,8 @@ mod tests {
             allowed_channels: vec!["ch-111".to_string(), "ch-222".to_string()],
             ..Default::default()
         };
-        let msg = MattermostMessageOps::convert_posted_event(
-            &event, &channel_id, "bot-123", &config,
-        );
+        let msg =
+            MattermostMessageOps::convert_posted_event(&event, &channel_id, "bot-123", &config);
         assert!(msg.is_none());
 
         // In allowed channels
@@ -550,9 +532,8 @@ mod tests {
             allowed_channels: vec!["ch-789".to_string()],
             ..Default::default()
         };
-        let msg = MattermostMessageOps::convert_posted_event(
-            &event, &channel_id, "bot-123", &config,
-        );
+        let msg =
+            MattermostMessageOps::convert_posted_event(&event, &channel_id, "bot-123", &config);
         assert!(msg.is_some());
     }
 
@@ -566,9 +547,8 @@ mod tests {
         let channel_id = ChannelId::new("mattermost");
         let config = MattermostConfig::default();
 
-        let msg = MattermostMessageOps::convert_posted_event(
-            &event, &channel_id, "bot-123", &config,
-        );
+        let msg =
+            MattermostMessageOps::convert_posted_event(&event, &channel_id, "bot-123", &config);
         assert!(msg.is_none());
     }
 
@@ -587,9 +567,8 @@ mod tests {
         let channel_id = ChannelId::new("mattermost");
         let config = MattermostConfig::default();
 
-        let msg = MattermostMessageOps::convert_posted_event(
-            &event, &channel_id, "bot-123", &config,
-        );
+        let msg =
+            MattermostMessageOps::convert_posted_event(&event, &channel_id, "bot-123", &config);
         assert!(msg.is_none());
     }
 
@@ -608,10 +587,9 @@ mod tests {
         let channel_id = ChannelId::new("mattermost");
         let config = MattermostConfig::default();
 
-        let msg = MattermostMessageOps::convert_posted_event(
-            &event, &channel_id, "bot-123", &config,
-        )
-        .unwrap();
+        let msg =
+            MattermostMessageOps::convert_posted_event(&event, &channel_id, "bot-123", &config)
+                .unwrap();
 
         assert_eq!(msg.timestamp.timestamp(), 1700000000);
     }
@@ -632,10 +610,9 @@ mod tests {
         let channel_id = ChannelId::new("mattermost");
         let config = MattermostConfig::default();
 
-        let msg = MattermostMessageOps::convert_posted_event(
-            &event, &channel_id, "bot-123", &config,
-        )
-        .unwrap();
+        let msg =
+            MattermostMessageOps::convert_posted_event(&event, &channel_id, "bot-123", &config)
+                .unwrap();
 
         assert!(msg.is_group);
     }
@@ -656,10 +633,9 @@ mod tests {
         let channel_id = ChannelId::new("mattermost");
         let config = MattermostConfig::default();
 
-        let msg = MattermostMessageOps::convert_posted_event(
-            &event, &channel_id, "bot-123", &config,
-        )
-        .unwrap();
+        let msg =
+            MattermostMessageOps::convert_posted_event(&event, &channel_id, "bot-123", &config)
+                .unwrap();
 
         assert!(msg.is_group);
     }
@@ -679,10 +655,9 @@ mod tests {
         let channel_id = ChannelId::new("mattermost");
         let config = MattermostConfig::default();
 
-        let msg = MattermostMessageOps::convert_posted_event(
-            &event, &channel_id, "bot-123", &config,
-        )
-        .unwrap();
+        let msg =
+            MattermostMessageOps::convert_posted_event(&event, &channel_id, "bot-123", &config)
+                .unwrap();
 
         assert!(msg.raw.is_some());
         assert_eq!(msg.raw.unwrap()["event"].as_str().unwrap(), "posted");

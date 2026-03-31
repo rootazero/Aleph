@@ -4,7 +4,9 @@
 //! to render group chat messages in their native format and parse channel-specific
 //! commands into group chat requests.
 
-use super::protocol::{GroupChatMessage, GroupChatRequest, Persona, PersonaSource, RenderedContent};
+use super::protocol::{
+    GroupChatMessage, GroupChatRequest, Persona, PersonaSource, RenderedContent,
+};
 
 /// Renders group chat messages in channel-specific format.
 ///
@@ -155,9 +157,7 @@ fn parse_inline_role(spec: &str) -> Option<Persona> {
         return None;
     }
 
-    let id = name
-        .to_lowercase()
-        .replace([' ', '-'], "_");
+    let id = name.to_lowercase().replace([' ', '-'], "_");
 
     Some(Persona {
         id,
@@ -350,7 +350,10 @@ mod tests {
         let parser = DefaultGroupChatCommandParser;
         // No --preset or --role flags → empty personas → None
         let result = parser.parse_group_chat_command("/groupchat start just some message");
-        assert!(result.is_none(), "should return None when no personas specified");
+        assert!(
+            result.is_none(),
+            "should return None when no personas specified"
+        );
     }
 
     #[test]

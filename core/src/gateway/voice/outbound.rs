@@ -3,8 +3,7 @@
 use crate::config::types::generation::GenerationConfig;
 use crate::gateway::channel::Attachment;
 use crate::generation::{
-    GenerationData, GenerationParams, GenerationProviderRegistry, GenerationRequest,
-    GenerationType,
+    GenerationData, GenerationParams, GenerationProviderRegistry, GenerationRequest, GenerationType,
 };
 use tracing::{debug, warn};
 
@@ -54,7 +53,9 @@ pub async fn generate_tts(
                 p.as_str()
             }
             None => {
-                warn!("TTS: no speech provider available — no override, no default, no auto-detect");
+                warn!(
+                    "TTS: no speech provider available — no override, no default, no auto-detect"
+                );
                 return None;
             }
         }

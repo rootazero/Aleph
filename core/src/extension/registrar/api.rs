@@ -387,11 +387,7 @@ mod tests {
 
         // First registration
         {
-            let mut api = CapabilityApi::new(
-                &mut registry,
-                "test-plugin".to_string(),
-                vec![],
-            );
+            let mut api = CapabilityApi::new(&mut registry, "test-plugin".to_string(), vec![]);
             api.register_capability(make_tool()).unwrap();
             assert!(api.registry().get_tool("my_tool").is_some());
         }
@@ -405,11 +401,7 @@ mod tests {
                 crate::extension::types::PluginOrigin::Global,
             );
 
-            let mut api = CapabilityApi::new(
-                &mut registry,
-                "test-plugin".to_string(),
-                vec![],
-            );
+            let mut api = CapabilityApi::new(&mut registry, "test-plugin".to_string(), vec![]);
 
             api.reload(new_record, vec![make_skill()]).unwrap();
 

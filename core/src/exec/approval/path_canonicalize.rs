@@ -3,7 +3,7 @@
 //! Resolves symlinks, normalizes `..` segments, decodes percent-encoding,
 //! and rejects null bytes before checking if a path falls within allowed scopes.
 
-use std::path::{Path, PathBuf, Component};
+use std::path::{Component, Path, PathBuf};
 
 #[derive(Debug, thiserror::Error)]
 pub enum PathSecurityError {
@@ -95,7 +95,9 @@ fn safe_canonicalize(path: &str) -> PathBuf {
     let mut result = existing;
     for component in remaining {
         match component {
-            Component::ParentDir => { result.pop(); }
+            Component::ParentDir => {
+                result.pop();
+            }
             Component::CurDir => {}
             Component::Normal(s) => result.push(s),
             other => result.push(other),
@@ -108,7 +110,9 @@ fn normalize_components(path: &Path) -> PathBuf {
     let mut result = PathBuf::new();
     for component in path.components() {
         match component {
-            Component::ParentDir => { result.pop(); }
+            Component::ParentDir => {
+                result.pop();
+            }
             Component::CurDir => {}
             other => result.push(other),
         }
@@ -146,7 +150,8 @@ mod tests {
 
     #[test]
     fn test_blocks_percent_encoded_traversal() {
-        let result = validate_path_in_scope("/tmp/%2e%2e/%2e%2e/etc/passwd", &[PathBuf::from("/tmp")]);
+        let result =
+            validate_path_in_scope("/tmp/%2e%2e/%2e%2e/etc/passwd", &[PathBuf::from("/tmp")]);
         assert!(matches!(result, Err(PathSecurityError::ScopeEscape { .. })));
     }
 

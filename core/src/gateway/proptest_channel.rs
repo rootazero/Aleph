@@ -3,8 +3,8 @@
 //! Uses proptest to verify serialization/deserialization correctness
 //! for channel identifiers, status, pairing data, and capabilities.
 
-use proptest::prelude::*;
 use proptest::collection::vec as prop_vec;
+use proptest::prelude::*;
 
 use super::channel::{ChannelCapabilities, ChannelId, ChannelStatus, PairingData};
 
@@ -41,27 +41,25 @@ fn arb_pairing_data() -> impl Strategy<Value = PairingData> {
 /// Uses a fixed-size boolean vec to avoid proptest's tuple size limits.
 fn arb_channel_capabilities() -> impl Strategy<Value = ChannelCapabilities> {
     (
-        prop_vec(any::<bool>(), 11..=11),  // exactly 11 booleans
-        0..100_000usize,                   // max_message_length
-        0..100_000_000u64,                 // max_attachment_size
+        prop_vec(any::<bool>(), 11..=11), // exactly 11 booleans
+        0..100_000usize,                  // max_message_length
+        0..100_000_000u64,                // max_attachment_size
     )
-        .prop_map(|(bools, max_msg, max_att)| {
-            ChannelCapabilities {
-                attachments: bools[0],
-                images: bools[1],
-                audio: bools[2],
-                video: bools[3],
-                reactions: bools[4],
-                replies: bools[5],
-                editing: bools[6],
-                deletion: bools[7],
-                typing_indicator: bools[8],
-                read_receipts: bools[9],
-                rich_text: bools[10],
-                max_message_length: max_msg,
-                max_attachment_size: max_att,
-                stream_protocol: Default::default(),
-            }
+        .prop_map(|(bools, max_msg, max_att)| ChannelCapabilities {
+            attachments: bools[0],
+            images: bools[1],
+            audio: bools[2],
+            video: bools[3],
+            reactions: bools[4],
+            replies: bools[5],
+            editing: bools[6],
+            deletion: bools[7],
+            typing_indicator: bools[8],
+            read_receipts: bools[9],
+            rich_text: bools[10],
+            max_message_length: max_msg,
+            max_attachment_size: max_att,
+            stream_protocol: Default::default(),
         })
 }
 

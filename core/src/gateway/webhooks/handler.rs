@@ -2,6 +2,7 @@
 //!
 //! Axum-based HTTP handler for receiving webhook requests.
 
+use crate::sync_primitives::Arc;
 use axum::{
     body::Bytes,
     extract::{Path, State},
@@ -12,7 +13,6 @@ use axum::{
 };
 use chrono::Utc;
 use serde::Serialize;
-use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
@@ -205,12 +205,7 @@ async fn handle_webhook(
         .and_then(|v| v.to_str().ok());
 
     let secret = endpoint.secret.as_deref().unwrap_or("");
-    let verification = verify_signature(
-        endpoint.signature_format,
-        secret,
-        signature_header,
-        &body,
-    );
+    let verification = verify_signature(endpoint.signature_format, secret, signature_header, &body);
 
     if verification.is_err() {
         let error_msg = match &verification {
@@ -389,8 +384,8 @@ fn extract_event_type(headers: &HeaderMap, body: &[u8]) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::config::WebhookEndpointConfig;
+    use super::*;
     use axum::http::Request;
     use tower::ServiceExt;
 

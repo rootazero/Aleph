@@ -126,9 +126,8 @@ impl McpTransport for HttpTransport {
             AlephError::IoError(format!("SSRF blocked for '{}': {}", self.server_name, e))
         })?;
 
-        let body = serde_json::to_string(request).map_err(|e| {
-            AlephError::IoError(format!("Failed to serialize request: {}", e))
-        })?;
+        let body = serde_json::to_string(request)
+            .map_err(|e| AlephError::IoError(format!("Failed to serialize request: {}", e)))?;
 
         tracing::debug!(
             server = %self.server_name,
@@ -152,9 +151,10 @@ impl McpTransport for HttpTransport {
             )));
         }
 
-        let text = response.text().await.map_err(|e| {
-            AlephError::IoError(format!("Failed to read response: {}", e))
-        })?;
+        let text = response
+            .text()
+            .await
+            .map_err(|e| AlephError::IoError(format!("Failed to read response: {}", e)))?;
 
         serde_json::from_str(&text).map_err(|e| {
             AlephError::IoError(format!(
@@ -171,9 +171,8 @@ impl McpTransport for HttpTransport {
             AlephError::IoError(format!("SSRF blocked for '{}': {}", self.server_name, e))
         })?;
 
-        let body = serde_json::to_string(notification).map_err(|e| {
-            AlephError::IoError(format!("Failed to serialize notification: {}", e))
-        })?;
+        let body = serde_json::to_string(notification)
+            .map_err(|e| AlephError::IoError(format!("Failed to serialize notification: {}", e)))?;
 
         tracing::debug!(
             server = %self.server_name,
@@ -303,7 +302,8 @@ mod tests {
         };
 
         // Verify it can be used as a trait object
-        let transport: Box<dyn McpTransport> = Box::new(HttpTransport::new("test", config).unwrap());
+        let transport: Box<dyn McpTransport> =
+            Box::new(HttpTransport::new("test", config).unwrap());
 
         assert!(transport.is_alive().await);
         assert_eq!(transport.server_name(), "test");

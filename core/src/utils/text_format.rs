@@ -31,8 +31,8 @@ pub fn format_timestamp(timestamp: i64) -> String {
 pub fn truncate_text(text: &str, max_chars: usize) -> String {
     // Single-pass: find the byte offset of the (max_chars)th character
     match text.char_indices().nth(max_chars) {
-        None => text.to_string(),                          // under limit
-        Some((idx, _)) => format!("{}...", &text[..idx]),  // truncate
+        None => text.to_string(),                         // under limit
+        Some((idx, _)) => format!("{}...", &text[..idx]), // truncate
     }
 }
 
@@ -97,5 +97,4 @@ mod tests {
         assert!(result.contains("\\["));
         assert!(result.contains("\\*"));
     }
-
 }

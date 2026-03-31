@@ -348,7 +348,10 @@ mod tests {
         let json = r#"{"type": "qr", "qr_data": "2@ABC123", "expires_in_secs": 60}"#;
         let event: BridgeEvent = serde_json::from_str(json).unwrap();
         match event {
-            BridgeEvent::Qr { qr_data, expires_in_secs } => {
+            BridgeEvent::Qr {
+                qr_data,
+                expires_in_secs,
+            } => {
                 assert_eq!(qr_data, "2@ABC123");
                 assert_eq!(expires_in_secs, 60);
             }
@@ -391,7 +394,10 @@ mod tests {
         }"#;
         let event: BridgeEvent = serde_json::from_str(json).unwrap();
         match event {
-            BridgeEvent::Connected { device_name, phone_number } => {
+            BridgeEvent::Connected {
+                device_name,
+                phone_number,
+            } => {
                 assert_eq!(device_name, "Pixel 8");
                 assert_eq!(phone_number, "+8613800138000");
             }
@@ -528,7 +534,10 @@ mod tests {
         }"#;
         let event: BridgeEvent = serde_json::from_str(json).unwrap();
         match event {
-            BridgeEvent::Receipt { message_id, receipt_type } => {
+            BridgeEvent::Receipt {
+                message_id,
+                receipt_type,
+            } => {
                 assert_eq!(message_id, "3EB0A1B2C3D4");
                 assert_eq!(receipt_type, "read");
             }
@@ -634,7 +643,9 @@ mod tests {
             );
             let event: BridgeEvent = serde_json::from_str(&json).unwrap();
             match event {
-                BridgeEvent::Receipt { receipt_type: rt, .. } => {
+                BridgeEvent::Receipt {
+                    receipt_type: rt, ..
+                } => {
                     assert_eq!(rt, *receipt_type);
                 }
                 _ => panic!("Expected Receipt event"),

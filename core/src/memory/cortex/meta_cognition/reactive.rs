@@ -8,12 +8,12 @@ use super::types::{AnchorScope, AnchorSource, BehavioralAnchor};
 use super::AnchorStore;
 use crate::error::AlephError;
 use crate::memory::store::MemoryBackend;
-use crate::providers::AiProvider;
 use crate::providers::adapter::RequestPayload;
 use crate::providers::message::UnifiedMessage;
+use crate::providers::AiProvider;
+use crate::sync_primitives::{Arc, RwLock};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use crate::sync_primitives::{Arc, RwLock};
 use uuid::Uuid;
 
 /// Signals that trigger reactive reflection
@@ -178,13 +178,14 @@ impl ReactiveReflector {
         // Step 4: Persist anchor to store
         {
             let mut store = self.anchor_store.write().unwrap_or_else(|e| e.into_inner());
-            store.add(anchor.clone()).map_err(|e| {
-                AlephError::config(format!("Failed to persist anchor: {}", e))
-            })?;
+            store
+                .add(anchor.clone())
+                .map_err(|e| AlephError::config(format!("Failed to persist anchor: {}", e)))?;
         }
 
         // Step 5: Determine if retry is appropriate
-        let should_retry = root_cause.preventable && matches!(signal, FailureSignal::ExecutionError { .. });
+        let should_retry =
+            root_cause.preventable && matches!(signal, FailureSignal::ExecutionError { .. });
 
         Ok(ReflectionResult {
             anchor,
@@ -383,10 +384,7 @@ impl ReactiveReflector {
     /// # Returns
     ///
     /// * `Result<RootCause>` - Root cause analysis result
-    pub fn analyze_root_cause(
-        &self,
-        snapshot: &FailureSnapshot,
-    ) -> Result<RootCause, AlephError> {
+    pub fn analyze_root_cause(&self, snapshot: &FailureSnapshot) -> Result<RootCause, AlephError> {
         // Try to get current runtime handle, or create a new runtime
         match tokio::runtime::Handle::try_current() {
             Ok(handle) => {
@@ -471,13 +469,14 @@ impl ReactiveReflector {
         // Persist anchor to store
         {
             let mut store = self.anchor_store.write().unwrap_or_else(|e| e.into_inner());
-            store.add(anchor.clone()).map_err(|e| {
-                AlephError::config(format!("Failed to persist anchor: {}", e))
-            })?;
+            store
+                .add(anchor.clone())
+                .map_err(|e| AlephError::config(format!("Failed to persist anchor: {}", e)))?;
         }
 
         // Determine if retry is appropriate
-        let should_retry = root_cause.preventable && matches!(signal, FailureSignal::ExecutionError { .. });
+        let should_retry =
+            root_cause.preventable && matches!(signal, FailureSignal::ExecutionError { .. });
 
         Ok(ReflectionResult {
             anchor,
@@ -507,7 +506,10 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let db_path = temp_dir.path().join("lance_db");
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let db: MemoryBackend = Arc::new(rt.block_on(LanceMemoryBackend::open_or_create(&db_path)).unwrap());
+        let db: MemoryBackend = Arc::new(
+            rt.block_on(LanceMemoryBackend::open_or_create(&db_path))
+                .unwrap(),
+        );
 
         // Create mock provider that returns properly formatted JSON
         let mock_response = r#"{
@@ -679,4 +681,3 @@ mod tests {
         assert!(!result.should_retry);
     }
 }
-

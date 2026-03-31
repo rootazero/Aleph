@@ -8,9 +8,9 @@
 //! - **Path Security**: Centralized path traversal prevention and canonicalization
 //! - **Shared State**: Future extensibility for global state (dry_run, audit logging, etc.)
 
-use std::path::{Path, PathBuf};
-use crate::error::Result;
 use super::FileFilter;
+use crate::error::Result;
+use std::path::{Path, PathBuf};
 
 /// Shared execution context for atomic operations
 ///
@@ -135,8 +135,8 @@ impl ExecutorContext {
             match filter {
                 FileFilter::Code => {
                     let code_exts = [
-                        "rs", "py", "js", "ts", "jsx", "tsx", "go", "java", "c", "cpp", "h",
-                        "hpp", "cs", "rb", "php", "swift", "kt", "scala", "sh", "bash",
+                        "rs", "py", "js", "ts", "jsx", "tsx", "go", "java", "c", "cpp", "h", "hpp",
+                        "cs", "rb", "php", "swift", "kt", "scala", "sh", "bash",
                     ];
                     if !code_exts.contains(&extension) {
                         return false;

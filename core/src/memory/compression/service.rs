@@ -13,13 +13,13 @@ use super::signal_detector::{CompressionPriority, SignalDetector};
 use crate::error::AlephError;
 use crate::memory::context::{CompressionResult, CompressionSession};
 use crate::memory::events::handler::MemoryCommandHandler;
-use crate::memory::store::{MemoryBackend, MemoryStore, SessionStore, CompressionStore};
 use crate::memory::graph::GraphStore;
-use crate::memory::EmbeddingProvider;
+use crate::memory::store::{CompressionStore, MemoryBackend, MemoryStore, SessionStore};
 use crate::memory::vfs::L1Generator;
+use crate::memory::EmbeddingProvider;
 use crate::providers::AiProvider;
-use std::collections::HashSet;
 use crate::sync_primitives::Arc;
+use std::collections::HashSet;
 use std::time::{Duration, Instant};
 use tokio::task::JoinHandle;
 use tokio::time::interval;
@@ -146,7 +146,8 @@ impl CompressionService {
     /// Extracted facts are tagged with DEFAULT_AGENT ("default").
     /// Use `compress_in_workspace()` to tag facts with a specific workspace.
     pub async fn compress(&self) -> Result<CompressionResult, AlephError> {
-        self.compress_in_workspace(crate::memory::DEFAULT_AGENT).await
+        self.compress_in_workspace(crate::memory::DEFAULT_AGENT)
+            .await
     }
 
     /// Execute a compression operation with workspace tagging.
@@ -493,7 +494,10 @@ impl CompressionService {
     pub fn record_turn_and_check(self: &Arc<Self>) {
         // Use the return value of fetch_add to trigger exactly once when
         // the threshold is crossed, avoiding race conditions.
-        let old_turns = self.scheduler.pending_turns.fetch_add(1, crate::sync_primitives::Ordering::AcqRel);
+        let old_turns = self
+            .scheduler
+            .pending_turns
+            .fetch_add(1, crate::sync_primitives::Ordering::AcqRel);
         let turns = old_turns + 1;
         let threshold = self.config.scheduler.turn_threshold;
 
@@ -548,15 +552,20 @@ mod tests {
         (service, database)
     }
 
-    async fn create_test_service_with_tempdir() -> (CompressionService, MemoryBackend, TempDir)
-    {
+    async fn create_test_service_with_tempdir() -> (CompressionService, MemoryBackend, TempDir) {
         let temp_dir = tempdir().unwrap();
-        let database: MemoryBackend =
-            Arc::new(crate::memory::store::lance::LanceMemoryBackend::open_or_create(temp_dir.path()).await.unwrap());
+        let database: MemoryBackend = Arc::new(
+            crate::memory::store::lance::LanceMemoryBackend::open_or_create(temp_dir.path())
+                .await
+                .unwrap(),
+        );
 
         let provider = create_mock_provider();
         let embedder: Arc<dyn EmbeddingProvider> = Arc::new(
-            crate::memory::embedding_provider::tests::MockEmbeddingProvider::new(1024, "mock-model"),
+            crate::memory::embedding_provider::tests::MockEmbeddingProvider::new(
+                1024,
+                "mock-model",
+            ),
         );
 
         let config = CompressionConfig::default();
@@ -604,9 +613,7 @@ mod tests {
         let (service, database, _temp_dir) = create_test_service_with_tempdir().await;
 
         // Store a memory with learning signal
-        let context = crate::memory::context::ContextAnchor::now(
-            "test.txt".to_string(),
-        );
+        let context = crate::memory::context::ContextAnchor::now("test.txt".to_string());
         // Create dummy embedding (1024-dim)
         let embedding = vec![0.0f32; 1024];
         let memory = crate::memory::context::MemoryEntry::with_embedding(
@@ -622,7 +629,10 @@ mod tests {
 
         // Check with signal detection
         let message = "记住，我喜欢用 Vim";
-        let result = service.check_and_compress_with_signal(message).await.unwrap();
+        let result = service
+            .check_and_compress_with_signal(message)
+            .await
+            .unwrap();
 
         // Learning signal should trigger deferred compression
         // Since we only have 1 memory and turn threshold is not reached,

@@ -17,8 +17,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::acp::manager::AcpHarnessManager;
-use crate::config::Config;
 use crate::config::types::acp::AcpHarnessEntry;
+use crate::config::Config;
 use crate::gateway::event_bus::{ConfigChangedEvent, GatewayEvent, GatewayEventBus};
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 use crate::sync_primitives::Arc;
@@ -100,10 +100,7 @@ async fn build_harness_info(
                 .to_string()
         });
 
-    let executable = entry
-        .executable
-        .clone()
-        .unwrap_or_default();
+    let executable = entry.executable.clone().unwrap_or_default();
 
     AcpHarnessInfo {
         id: id.to_string(),
@@ -124,7 +121,9 @@ fn is_valid_harness_id(id: &str) -> bool {
     }
     let mut chars = id.chars();
     // Safety: id.is_empty() check above guarantees at least one char
-    let Some(first) = chars.next() else { return false };
+    let Some(first) = chars.next() else {
+        return false;
+    };
     if !first.is_ascii_lowercase() && !first.is_ascii_digit() {
         return false;
     }
@@ -225,7 +224,11 @@ pub async fn handle_get(
     };
 
     let is_available = acp_manager.is_harness_available(&params.id).await;
-    let available_ids = if is_available { vec![params.id.clone()] } else { vec![] };
+    let available_ids = if is_available {
+        vec![params.id.clone()]
+    } else {
+        vec![]
+    };
     let info = build_harness_info(&params.id, &entry, &available_ids, &acp_manager).await;
 
     JsonRpcResponse::success(
@@ -265,7 +268,10 @@ pub async fn handle_create(
     }
 
     // Register with manager
-    if let Err(e) = acp_manager.register_harness(params.id.clone(), params.config.clone()).await {
+    if let Err(e) = acp_manager
+        .register_harness(params.id.clone(), params.config.clone())
+        .await
+    {
         return JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
@@ -276,7 +282,9 @@ pub async fn handle_create(
     // Persist to config
     {
         let mut cfg = config.write().await;
-        cfg.acp.harnesses.insert(params.id.clone(), params.config.clone());
+        cfg.acp
+            .harnesses
+            .insert(params.id.clone(), params.config.clone());
         if let Err(e) = cfg.save_incremental(&["acp"]) {
             return JsonRpcResponse::error(
                 request.id,
@@ -289,7 +297,11 @@ pub async fn handle_create(
     broadcast_acp_changed(&event_bus, "created");
 
     let is_available = acp_manager.is_harness_available(&params.id).await;
-    let available_ids = if is_available { vec![params.id.clone()] } else { vec![] };
+    let available_ids = if is_available {
+        vec![params.id.clone()]
+    } else {
+        vec![]
+    };
     let info = build_harness_info(&params.id, &params.config, &available_ids, &acp_manager).await;
 
     JsonRpcResponse::success(
@@ -313,7 +325,10 @@ pub async fn handle_update(
     tracing::info!(harness_id = %params.id, "acp.update: saving harness config");
 
     // Update in manager
-    if let Err(e) = acp_manager.update_harness(&params.id, params.config.clone()).await {
+    if let Err(e) = acp_manager
+        .update_harness(&params.id, params.config.clone())
+        .await
+    {
         return JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
@@ -324,7 +339,9 @@ pub async fn handle_update(
     // Persist to config
     {
         let mut cfg = config.write().await;
-        cfg.acp.harnesses.insert(params.id.clone(), params.config.clone());
+        cfg.acp
+            .harnesses
+            .insert(params.id.clone(), params.config.clone());
         if let Err(e) = cfg.save_incremental(&["acp"]) {
             return JsonRpcResponse::error(
                 request.id,
@@ -337,7 +354,11 @@ pub async fn handle_update(
     broadcast_acp_changed(&event_bus, "updated");
 
     let is_available = acp_manager.is_harness_available(&params.id).await;
-    let available_ids = if is_available { vec![params.id.clone()] } else { vec![] };
+    let available_ids = if is_available {
+        vec![params.id.clone()]
+    } else {
+        vec![]
+    };
     let info = build_harness_info(&params.id, &params.config, &available_ids, &acp_manager).await;
 
     JsonRpcResponse::success(
@@ -509,7 +530,14 @@ pub async fn handle_set_enabled(
         }
     }
 
-    broadcast_acp_changed(&event_bus, if params.enabled { "enabled" } else { "disabled" });
+    broadcast_acp_changed(
+        &event_bus,
+        if params.enabled {
+            "enabled"
+        } else {
+            "disabled"
+        },
+    );
 
     JsonRpcResponse::success(request.id, json!({ "success": true }))
 }
@@ -671,7 +699,10 @@ mod tests {
             enabled: true,
             ..Default::default()
         };
-        manager.register_harness("temp-tool".to_string(), entry.clone()).await.unwrap();
+        manager
+            .register_harness("temp-tool".to_string(), entry.clone())
+            .await
+            .unwrap();
         {
             let mut cfg = config.write().await;
             cfg.acp.harnesses.insert("temp-tool".to_string(), entry);

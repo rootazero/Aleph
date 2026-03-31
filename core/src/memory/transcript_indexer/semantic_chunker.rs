@@ -169,7 +169,9 @@ impl SemanticChunker {
         for sentence in sentences {
             let sentence_tokens = self.estimate_tokens(sentence);
 
-            if current_tokens + sentence_tokens > self.config.max_chunk_size && !current_chunk.is_empty() {
+            if current_tokens + sentence_tokens > self.config.max_chunk_size
+                && !current_chunk.is_empty()
+            {
                 chunks.push(current_chunk.clone());
                 current_chunk.clear();
                 current_tokens = 0;
@@ -221,7 +223,8 @@ mod tests {
         let config = SemanticChunkConfig::default();
         let embedder = {
             use crate::memory::embedding_provider::tests::MockEmbeddingProvider;
-            let mock: Arc<dyn EmbeddingProvider> = Arc::new(MockEmbeddingProvider::new(1024, "mock-model"));
+            let mock: Arc<dyn EmbeddingProvider> =
+                Arc::new(MockEmbeddingProvider::new(1024, "mock-model"));
             mock
         };
         let chunker = SemanticChunker::new(embedder, config);
@@ -240,7 +243,8 @@ mod tests {
         let config = SemanticChunkConfig::default();
         let embedder = {
             use crate::memory::embedding_provider::tests::MockEmbeddingProvider;
-            let mock: Arc<dyn EmbeddingProvider> = Arc::new(MockEmbeddingProvider::new(1024, "mock-model"));
+            let mock: Arc<dyn EmbeddingProvider> =
+                Arc::new(MockEmbeddingProvider::new(1024, "mock-model"));
             mock
         };
         let chunker = SemanticChunker::new(embedder, config);
@@ -259,7 +263,8 @@ mod tests {
         let config = SemanticChunkConfig::default();
         let embedder = {
             use crate::memory::embedding_provider::tests::MockEmbeddingProvider;
-            let mock: Arc<dyn EmbeddingProvider> = Arc::new(MockEmbeddingProvider::new(1024, "mock-model"));
+            let mock: Arc<dyn EmbeddingProvider> =
+                Arc::new(MockEmbeddingProvider::new(1024, "mock-model"));
             mock
         };
         let chunker = SemanticChunker::new(embedder, config);

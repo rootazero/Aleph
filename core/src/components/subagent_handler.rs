@@ -3,8 +3,8 @@
 //! Enhanced to integrate with ExecutionCoordinator and ResultCollector
 //! for synchronous result collection and tool call aggregation.
 
-use std::collections::HashMap;
 use crate::sync_primitives::Arc;
+use std::collections::HashMap;
 use std::time::Instant;
 
 use async_trait::async_trait;
@@ -12,8 +12,8 @@ use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
 use crate::agents::sub_agents::{
-    CollectedToolStatus, ExecutionCoordinator, ResultCollector, ToolCallProgress, ToolCallStatus,
-    ToolCallRecord, SubAgentResult as TraitsSubAgentResult,
+    CollectedToolStatus, ExecutionCoordinator, ResultCollector,
+    SubAgentResult as TraitsSubAgentResult, ToolCallProgress, ToolCallRecord, ToolCallStatus,
 };
 use crate::agents::{AgentDef, AgentRegistry};
 use crate::event::{
@@ -244,10 +244,9 @@ impl SubAgentHandler {
                 };
 
                 // Create enhanced result for coordinator
-                let enhanced_result =
-                    TraitsSubAgentResult::success(request_id, &result.summary)
-                        .with_iterations(session.iteration_count)
-                        .with_tools_called(tools_called);
+                let enhanced_result = TraitsSubAgentResult::success(request_id, &result.summary)
+                    .with_iterations(session.iteration_count)
+                    .with_tools_called(tools_called);
 
                 // Notify coordinator
                 if let Some(ref coordinator) = self.coordinator {
@@ -278,7 +277,12 @@ impl SubAgentHandler {
             // Record in collector
             if let Some(ref collector) = self.collector {
                 collector
-                    .record_tool_start(&request_id, &event.call_id, &event.tool, event.input.clone())
+                    .record_tool_start(
+                        &request_id,
+                        &event.call_id,
+                        &event.tool,
+                        event.input.clone(),
+                    )
                     .await;
             }
 
@@ -323,8 +327,7 @@ impl SubAgentHandler {
 
         if let Some(request_id) = request_id {
             // Truncate output for preview
-            let output_preview =
-                crate::agents::sub_agents::truncate_for_preview(&event.output);
+            let output_preview = crate::agents::sub_agents::truncate_for_preview(&event.output);
 
             // Update collector
             if let Some(ref collector) = self.collector {
@@ -654,7 +657,8 @@ mod tests {
         let coordinator = Arc::new(ExecutionCoordinator::new(CoordinatorConfig::default()));
         let collector = Arc::new(ResultCollector::new());
 
-        let handler = SubAgentHandler::with_components(registry, coordinator.clone(), collector.clone());
+        let handler =
+            SubAgentHandler::with_components(registry, coordinator.clone(), collector.clone());
         let ctx = create_test_context();
 
         // Start a session
@@ -685,7 +689,8 @@ mod tests {
         let coordinator = Arc::new(ExecutionCoordinator::new(CoordinatorConfig::default()));
         let collector = Arc::new(ResultCollector::new());
 
-        let handler = SubAgentHandler::with_components(registry, coordinator.clone(), collector.clone());
+        let handler =
+            SubAgentHandler::with_components(registry, coordinator.clone(), collector.clone());
         let ctx = create_test_context();
 
         // Start a session

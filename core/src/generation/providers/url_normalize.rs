@@ -104,49 +104,71 @@ mod tests {
     #[test]
     fn test_full_path_is_custom() {
         let r = resolve_base_url("https://api.example.com/v2/videos/generations");
-        assert!(matches!(r, ResolvedUrl::Custom(ref u) if u == "https://api.example.com/v2/videos/generations"));
+        assert!(
+            matches!(r, ResolvedUrl::Custom(ref u) if u == "https://api.example.com/v2/videos/generations")
+        );
     }
 
     #[test]
     fn test_custom_path_is_custom() {
         let r = resolve_base_url("https://api.example.com/custom/tts");
-        assert!(matches!(r, ResolvedUrl::Custom(ref u) if u == "https://api.example.com/custom/tts"));
+        assert!(
+            matches!(r, ResolvedUrl::Custom(ref u) if u == "https://api.example.com/custom/tts")
+        );
     }
 
     #[test]
     fn test_primary_endpoint_image() {
         let r = ResolvedUrl::Standard("https://api.example.com".into());
-        assert_eq!(r.primary_endpoint(GenerationType::Image), "https://api.example.com/v1/images/generations");
+        assert_eq!(
+            r.primary_endpoint(GenerationType::Image),
+            "https://api.example.com/v1/images/generations"
+        );
     }
 
     #[test]
     fn test_primary_endpoint_speech() {
         let r = ResolvedUrl::Standard("https://api.example.com".into());
-        assert_eq!(r.primary_endpoint(GenerationType::Speech), "https://api.example.com/v1/audio/speech");
+        assert_eq!(
+            r.primary_endpoint(GenerationType::Speech),
+            "https://api.example.com/v1/audio/speech"
+        );
     }
 
     #[test]
     fn test_primary_endpoint_video() {
         let r = ResolvedUrl::Standard("https://api.example.com".into());
-        assert_eq!(r.primary_endpoint(GenerationType::Video), "https://api.example.com/v1/videos/generations");
+        assert_eq!(
+            r.primary_endpoint(GenerationType::Video),
+            "https://api.example.com/v1/videos/generations"
+        );
     }
 
     #[test]
     fn test_primary_endpoint_audio() {
         let r = ResolvedUrl::Standard("https://api.example.com".into());
-        assert_eq!(r.primary_endpoint(GenerationType::Audio), "https://api.example.com/v1/audio/generations");
+        assert_eq!(
+            r.primary_endpoint(GenerationType::Audio),
+            "https://api.example.com/v1/audio/generations"
+        );
     }
 
     #[test]
     fn test_secondary_endpoint_image_edit() {
         let r = ResolvedUrl::Standard("https://api.example.com".into());
-        assert_eq!(r.secondary_endpoint(GenerationType::Image), Some("https://api.example.com/v1/images/edits".into()));
+        assert_eq!(
+            r.secondary_endpoint(GenerationType::Image),
+            Some("https://api.example.com/v1/images/edits".into())
+        );
     }
 
     #[test]
     fn test_secondary_endpoint_speech_stt() {
         let r = ResolvedUrl::Standard("https://api.example.com".into());
-        assert_eq!(r.secondary_endpoint(GenerationType::Speech), Some("https://api.example.com/v1/audio/transcriptions".into()));
+        assert_eq!(
+            r.secondary_endpoint(GenerationType::Speech),
+            Some("https://api.example.com/v1/audio/transcriptions".into())
+        );
     }
 
     #[test]
@@ -158,7 +180,10 @@ mod tests {
     #[test]
     fn test_custom_url_primary() {
         let r = ResolvedUrl::Custom("https://custom.api.com/my/endpoint".into());
-        assert_eq!(r.primary_endpoint(GenerationType::Speech), "https://custom.api.com/my/endpoint");
+        assert_eq!(
+            r.primary_endpoint(GenerationType::Speech),
+            "https://custom.api.com/my/endpoint"
+        );
     }
 
     #[test]

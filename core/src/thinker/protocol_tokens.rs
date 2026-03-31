@@ -72,10 +72,10 @@ impl ProtocolToken {
         ));
         s.push_str("Rules:\n");
         s.push_str("- Token must be the ENTIRE message. Never mix with normal text.\n");
+        s.push_str("- Use ALEPH_HEARTBEAT_OK for routine heartbeat checks with no findings.\n");
         s.push_str(
-            "- Use ALEPH_HEARTBEAT_OK for routine heartbeat checks with no findings.\n",
+            "- Use ALEPH_NEEDS_ATTENTION only when there is genuinely actionable information.\n\n",
         );
-        s.push_str("- Use ALEPH_NEEDS_ATTENTION only when there is genuinely actionable information.\n\n");
         s
     }
 }
@@ -136,10 +136,10 @@ mod tests {
 
     #[test]
     fn test_parse_normal_json_returns_none() {
-        assert!(ProtocolToken::parse(
-            r#"{"reasoning": "hello", "action": {"type": "complete"}}"#
-        )
-        .is_none());
+        assert!(
+            ProtocolToken::parse(r#"{"reasoning": "hello", "action": {"type": "complete"}}"#)
+                .is_none()
+        );
     }
 
     #[test]

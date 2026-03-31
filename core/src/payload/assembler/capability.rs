@@ -90,14 +90,12 @@ pub fn format_capability_instructions(capabilities: &[&CapabilityDeclaration]) -
     lines.push("- Does it ask about specific real-world entities/events? → SEARCH".to_string());
     lines.push("- Would outdated information harm the user? → SEARCH".to_string());
     lines.push(
-        "- Is it purely about concepts, code, or creative tasks? → RESPOND DIRECTLY"
-            .to_string(),
+        "- Is it purely about concepts, code, or creative tasks? → RESPOND DIRECTLY".to_string(),
     );
     lines.push(String::new());
     lines.push("**Step 2: When in doubt, SEARCH**".to_string());
     lines.push(
-        "- It's better to search and provide accurate info than to guess and be wrong"
-            .to_string(),
+        "- It's better to search and provide accurate info than to guess and be wrong".to_string(),
     );
     lines.push("- Users expect you to use your search capability proactively".to_string());
     lines.push(String::new());

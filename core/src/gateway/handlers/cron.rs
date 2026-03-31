@@ -11,11 +11,8 @@ use serde_json::{json, Value};
 
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 use crate::tasks::cron::clock::Clock;
-use crate::tasks::cron::{
-    CronJob, CronJobView, ScheduleKind, SharedCronService,
-    SessionTarget,
-};
 use crate::tasks::cron::service::ops::CronJobUpdates;
+use crate::tasks::cron::{CronJob, CronJobView, ScheduleKind, SessionTarget, SharedCronService};
 
 // ============================================================================
 // Helper functions
@@ -165,7 +162,9 @@ pub async fn handle_create(request: JsonRpcRequest, cron: SharedCronService) -> 
             let at_human = chrono::DateTime::from_timestamp_millis(*at)
                 .map(|dt| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
                 .unwrap_or_else(|| format!("{}ms", at));
-            let now_human = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC").to_string();
+            let now_human = chrono::Utc::now()
+                .format("%Y-%m-%d %H:%M:%S UTC")
+                .to_string();
             return JsonRpcResponse::error(
                 request.id,
                 INVALID_PARAMS,
@@ -201,9 +200,7 @@ pub async fn handle_create(request: JsonRpcRequest, cron: SharedCronService) -> 
             Ok(view) => {
                 JsonRpcResponse::success(request.id, json!({ "job": job_view_to_json(&view) }))
             }
-            Err(_) => {
-                JsonRpcResponse::success(request.id, json!({ "job": { "id": job_id } }))
-            }
+            Err(_) => JsonRpcResponse::success(request.id, json!({ "job": { "id": job_id } })),
         },
         Err(e) => JsonRpcResponse::error(
             request.id,
@@ -381,7 +378,9 @@ pub async fn handle_runs(request: JsonRpcRequest, cron: SharedCronService) -> Js
     };
 
     let limit = match &request.params {
-        Some(Value::Object(map)) => map.get("limit").and_then(|v| v.as_u64()).unwrap_or(20) as usize,
+        Some(Value::Object(map)) => {
+            map.get("limit").and_then(|v| v.as_u64()).unwrap_or(20) as usize
+        }
         _ => 20,
     };
 
@@ -389,23 +388,25 @@ pub async fn handle_runs(request: JsonRpcRequest, cron: SharedCronService) -> Js
     let store = service.state().store.lock().await;
     match store.get_runs(&job_id, limit) {
         Ok(runs) => {
-            let runs_json: Vec<Value> = runs.iter().map(|r| json!({
-                "id": r.id,
-                "job_id": r.job_id,
-                "trigger_source": r.trigger_source,
-                "status": r.status,
-                "started_at": r.started_at,
-                "ended_at": r.ended_at,
-                "duration_ms": r.duration_ms,
-                "error": r.error,
-                "error_reason": r.error_reason,
-                "delivery_status": r.delivery_status,
-                "created_at": r.created_at,
-            })).collect();
-            JsonRpcResponse::success(
-                request.id,
-                json!({ "job_id": job_id, "runs": runs_json }),
-            )
+            let runs_json: Vec<Value> = runs
+                .iter()
+                .map(|r| {
+                    json!({
+                        "id": r.id,
+                        "job_id": r.job_id,
+                        "trigger_source": r.trigger_source,
+                        "status": r.status,
+                        "started_at": r.started_at,
+                        "ended_at": r.ended_at,
+                        "duration_ms": r.duration_ms,
+                        "error": r.error,
+                        "error_reason": r.error_reason,
+                        "delivery_status": r.delivery_status,
+                        "created_at": r.created_at,
+                    })
+                })
+                .collect();
+            JsonRpcResponse::success(request.id, json!({ "job_id": job_id, "runs": runs_json }))
         }
         Err(e) => JsonRpcResponse::error(
             request.id,

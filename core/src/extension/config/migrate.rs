@@ -102,7 +102,10 @@ pub fn migrate_to_toml(jsonc_path: &Path) -> Result<MigrationResult, ExtensionEr
     let backup_path = if target_path.exists() {
         let backup = target_path.with_extension("toml.bak");
         std::fs::rename(&target_path, &backup).map_err(|e| {
-            ExtensionError::config_parse(&target_path, format!("Failed to backup existing file: {}", e))
+            ExtensionError::config_parse(
+                &target_path,
+                format!("Failed to backup existing file: {}", e),
+            )
         })?;
         Some(backup)
     } else {
@@ -319,7 +322,10 @@ mod tests {
         // Has jsonc
         let jsonc_path = temp_dir.path().join("aleph.jsonc");
         std::fs::write(&jsonc_path, "{}").unwrap();
-        assert_eq!(get_migration_source(temp_dir.path()), Some(jsonc_path.clone()));
+        assert_eq!(
+            get_migration_source(temp_dir.path()),
+            Some(jsonc_path.clone())
+        );
 
         // Has toml too (no migration needed)
         let toml_path = temp_dir.path().join("aleph.toml");

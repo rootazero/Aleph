@@ -26,8 +26,8 @@
 use crate::generation::error::{GenerationError, GenerationResult};
 use crate::generation::types::GenerationType;
 use crate::generation::{GenerationProvider, VoiceInfo};
-use std::collections::HashMap;
 use crate::sync_primitives::Arc;
+use std::collections::HashMap;
 
 /// Registry for managing generation providers
 ///

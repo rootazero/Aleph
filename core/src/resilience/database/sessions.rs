@@ -3,9 +3,9 @@
 //! Provides database operations for long-lived subagent session management
 //! (Session-as-a-Service).
 
+use super::StateDatabase;
 use crate::error::AlephError;
 use crate::resilience::{SessionStatus, SubagentSession};
-use super::StateDatabase;
 use rusqlite::params;
 use rusqlite::OptionalExtension;
 
@@ -178,10 +178,7 @@ impl StateDatabase {
     }
 
     /// Count sessions by status
-    pub async fn count_sessions_by_status(
-        &self,
-        status: SessionStatus,
-    ) -> Result<u64, AlephError> {
+    pub async fn count_sessions_by_status(&self, status: SessionStatus) -> Result<u64, AlephError> {
         let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
         let count: i64 = conn
             .query_row(

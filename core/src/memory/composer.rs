@@ -84,11 +84,26 @@ mod tests {
         let req = make_request(Some("reviewer"));
         let filter = ContextComposer::build_core_filter(&req);
         let sql = filter.to_lance_filter().unwrap();
-        assert!(sql.contains("tier = 'core'"), "Should filter by Core tier, got: {sql}");
-        assert!(sql.contains("scope = 'global'"), "Should include Global scope, got: {sql}");
-        assert!(sql.contains("scope = 'persona'"), "Should include Persona scope, got: {sql}");
-        assert!(sql.contains("persona_id = 'reviewer'"), "Should filter by persona, got: {sql}");
-        assert!(sql.contains("is_valid = true"), "Should only return valid facts, got: {sql}");
+        assert!(
+            sql.contains("tier = 'core'"),
+            "Should filter by Core tier, got: {sql}"
+        );
+        assert!(
+            sql.contains("scope = 'global'"),
+            "Should include Global scope, got: {sql}"
+        );
+        assert!(
+            sql.contains("scope = 'persona'"),
+            "Should include Persona scope, got: {sql}"
+        );
+        assert!(
+            sql.contains("persona_id = 'reviewer'"),
+            "Should filter by persona, got: {sql}"
+        );
+        assert!(
+            sql.contains("is_valid = true"),
+            "Should only return valid facts, got: {sql}"
+        );
     }
 
     #[test]
@@ -96,9 +111,18 @@ mod tests {
         let req = make_request(None);
         let filter = ContextComposer::build_core_filter(&req);
         let sql = filter.to_lance_filter().unwrap();
-        assert!(sql.contains("tier = 'core'"), "Should filter by Core tier, got: {sql}");
-        assert!(sql.contains("scope = 'global'"), "Should include Global, got: {sql}");
-        assert!(!sql.contains("persona"), "Should NOT include persona without persona_id, got: {sql}");
+        assert!(
+            sql.contains("tier = 'core'"),
+            "Should filter by Core tier, got: {sql}"
+        );
+        assert!(
+            sql.contains("scope = 'global'"),
+            "Should include Global, got: {sql}"
+        );
+        assert!(
+            !sql.contains("persona"),
+            "Should NOT include persona without persona_id, got: {sql}"
+        );
     }
 
     #[test]
@@ -106,10 +130,22 @@ mod tests {
         let req = make_request(Some("reviewer"));
         let filter = ContextComposer::build_retrieval_filter(&req);
         let sql = filter.to_lance_filter().unwrap();
-        assert!(!sql.contains("tier = 'core'"), "Retrieval filter should NOT restrict to Core, got: {sql}");
-        assert!(sql.contains("scope = 'global'"), "Should include Global, got: {sql}");
-        assert!(sql.contains("scope = 'agent'"), "Should include Agent, got: {sql}");
-        assert!(sql.contains("scope = 'persona'"), "Should include Persona, got: {sql}");
+        assert!(
+            !sql.contains("tier = 'core'"),
+            "Retrieval filter should NOT restrict to Core, got: {sql}"
+        );
+        assert!(
+            sql.contains("scope = 'global'"),
+            "Should include Global, got: {sql}"
+        );
+        assert!(
+            sql.contains("scope = 'agent'"),
+            "Should include Agent, got: {sql}"
+        );
+        assert!(
+            sql.contains("scope = 'persona'"),
+            "Should include Persona, got: {sql}"
+        );
     }
 
     #[test]
@@ -117,8 +153,17 @@ mod tests {
         let req = make_request(None);
         let filter = ContextComposer::build_retrieval_filter(&req);
         let sql = filter.to_lance_filter().unwrap();
-        assert!(sql.contains("scope = 'global'"), "Should include Global, got: {sql}");
-        assert!(sql.contains("scope = 'agent'"), "Should include Agent, got: {sql}");
-        assert!(!sql.contains("persona"), "Should NOT include persona, got: {sql}");
+        assert!(
+            sql.contains("scope = 'global'"),
+            "Should include Global, got: {sql}"
+        );
+        assert!(
+            sql.contains("scope = 'agent'"),
+            "Should include Agent, got: {sql}"
+        );
+        assert!(
+            !sql.contains("persona"),
+            "Should NOT include persona, got: {sql}"
+        );
     }
 }

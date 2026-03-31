@@ -15,18 +15,18 @@ pub mod toml_types;
 mod types;
 
 // Re-export TOML types and parsing
+pub use cc_plugin_json::{
+    parse_cc_plugin_json, parse_cc_plugin_json_content, parse_cc_plugin_json_sync, CC_PLUGIN_JSON,
+};
+pub use cc_plugin_toml::{
+    parse_cc_plugin_toml, parse_cc_plugin_toml_content, parse_cc_plugin_toml_sync, CC_PLUGIN_TOML,
+};
 pub use toml_types::{
     convert_permissions, parse_aleph_plugin_toml, parse_aleph_plugin_toml_content,
     parse_aleph_plugin_toml_sync, AlephPluginToml, CapabilitiesSection, ChannelSection,
     CommandSection, FilesystemPermission, HookSection, HttpRouteSection, PermissionsSection,
     PluginAuthorToml, PluginSection, PromptSection, ProviderSection, ServiceSection, ToolSection,
     ALEPH_PLUGIN_TOML,
-};
-pub use cc_plugin_json::{
-    parse_cc_plugin_json, parse_cc_plugin_json_content, parse_cc_plugin_json_sync, CC_PLUGIN_JSON,
-};
-pub use cc_plugin_toml::{
-    parse_cc_plugin_toml, parse_cc_plugin_toml_content, parse_cc_plugin_toml_sync, CC_PLUGIN_TOML,
 };
 pub use types::{
     AlephExtensions, AlephRuntime, AuthorInfo, ConfigUiHint, FilesystemAccess, PluginManifest,

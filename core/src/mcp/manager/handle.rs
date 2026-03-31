@@ -306,8 +306,9 @@ impl McpManagerHandle {
     ) -> std::result::Result<(), String>
     where
         F: Fn(crate::mcp::jsonrpc::mcp::SamplingRequest) -> Fut + Send + Sync + 'static,
-        Fut: std::future::Future<Output = crate::error::Result<crate::mcp::jsonrpc::mcp::SamplingResponse>>
-            + Send
+        Fut: std::future::Future<
+                Output = crate::error::Result<crate::mcp::jsonrpc::mcp::SamplingResponse>,
+            > + Send
             + 'static,
     {
         let boxed: crate::mcp::sampling::SamplingCallback =

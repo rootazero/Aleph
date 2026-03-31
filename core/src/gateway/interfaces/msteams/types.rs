@@ -155,9 +155,8 @@ pub fn build_welcome_card(bot_name: &str, prompt_starters: &[&str]) -> serde_jso
 
 pub fn strip_mentions(text: &str) -> String {
     use std::sync::LazyLock;
-    static RE: LazyLock<regex::Regex> = LazyLock::new(|| {
-        regex::Regex::new(r"<at>[^<]*</at>\s*").unwrap()
-    });
+    static RE: LazyLock<regex::Regex> =
+        LazyLock::new(|| regex::Regex::new(r"<at>[^<]*</at>\s*").unwrap());
     RE.replace_all(text, "").trim().to_string()
 }
 
@@ -204,8 +203,19 @@ mod tests {
         let activity: Activity = serde_json::from_str(json).unwrap();
         assert_eq!(activity.activity_type, "message");
         assert_eq!(activity.text.as_deref(), Some("Hello bot"));
-        assert_eq!(activity.from.as_ref().unwrap().aad_object_id.as_deref(), Some("aad-123"));
-        assert_eq!(activity.conversation.as_ref().unwrap().conversation_type.as_deref(), Some("personal"));
+        assert_eq!(
+            activity.from.as_ref().unwrap().aad_object_id.as_deref(),
+            Some("aad-123")
+        );
+        assert_eq!(
+            activity
+                .conversation
+                .as_ref()
+                .unwrap()
+                .conversation_type
+                .as_deref(),
+            Some("personal")
+        );
     }
 
     #[test]

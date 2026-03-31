@@ -1,11 +1,11 @@
-use std::collections::HashMap;
 use crate::agents::sub_agents::Lane;
+use std::collections::HashMap;
 
 /// Configuration for a single lane
 #[derive(Debug, Clone)]
 pub struct LaneQuota {
     pub max_concurrent: usize,
-    pub token_budget_per_min: u64,  // 0 = unlimited
+    pub token_budget_per_min: u64, // 0 = unlimited
     pub priority: i8,
 }
 
@@ -38,8 +38,14 @@ impl Default for LaneConfig {
     fn default() -> Self {
         let mut quotas = HashMap::new();
         quotas.insert(Lane::Main, LaneQuota::new(2, 10));
-        quotas.insert(Lane::Nested, LaneQuota::new(4, 8).with_token_budget(200_000));
-        quotas.insert(Lane::Subagent, LaneQuota::new(8, 5).with_token_budget(500_000));
+        quotas.insert(
+            Lane::Nested,
+            LaneQuota::new(4, 8).with_token_budget(200_000),
+        );
+        quotas.insert(
+            Lane::Subagent,
+            LaneQuota::new(8, 5).with_token_budget(500_000),
+        );
         quotas.insert(Lane::Cron, LaneQuota::new(2, 0).with_token_budget(100_000));
 
         Self {

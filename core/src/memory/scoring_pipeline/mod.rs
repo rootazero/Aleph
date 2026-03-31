@@ -139,11 +139,7 @@ mod tests {
     /// Helper: create a `ScoredFact` from a string and score.
     fn scored(content: &str, score: f32) -> ScoredFact {
         ScoredFact {
-            fact: MemoryFact::new(
-                content.to_string(),
-                FactType::Other,
-                vec![],
-            ),
+            fact: MemoryFact::new(content.to_string(), FactType::Other, vec![]),
             score,
         }
     }
@@ -199,8 +195,14 @@ mod tests {
         fact_b.confidence = 1.0;
 
         let candidates = vec![
-            ScoredFact { fact: fact_a, score: 0.95 },
-            ScoredFact { fact: fact_b, score: 0.80 },
+            ScoredFact {
+                fact: fact_a,
+                score: 0.95,
+            },
+            ScoredFact {
+                fact: fact_b,
+                score: 0.80,
+            },
         ];
         let ctx = default_ctx();
         let result = pipeline.run(candidates, &ctx);
@@ -261,18 +263,23 @@ mod tests {
         fact2.confidence = 0.5;
 
         // Candidate 3: low starting score — will be filtered
-        let mut fact3 = MemoryFact::new(
-            "marginal fact".to_string(),
-            FactType::Other,
-            vec![],
-        );
+        let mut fact3 = MemoryFact::new("marginal fact".to_string(), FactType::Other, vec![]);
         fact3.created_at = now - 180 * 86400;
         fact3.confidence = 0.3;
 
         let candidates = vec![
-            ScoredFact { fact: fact1, score: 0.90 },
-            ScoredFact { fact: fact2, score: 0.70 },
-            ScoredFact { fact: fact3, score: 0.30 }, // below default hard_min_score of 0.35
+            ScoredFact {
+                fact: fact1,
+                score: 0.90,
+            },
+            ScoredFact {
+                fact: fact2,
+                score: 0.70,
+            },
+            ScoredFact {
+                fact: fact3,
+                score: 0.30,
+            }, // below default hard_min_score of 0.35
         ];
 
         let ctx = ScoringContext {
@@ -300,7 +307,11 @@ mod tests {
         );
 
         // We should have at most 2 survivors
-        assert!(result.len() <= 2, "expected at most 2 results, got {}", result.len());
+        assert!(
+            result.len() <= 2,
+            "expected at most 2 results, got {}",
+            result.len()
+        );
 
         // First result should have a meaningfully higher score than second
         if result.len() == 2 {

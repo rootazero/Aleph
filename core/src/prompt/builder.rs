@@ -138,7 +138,11 @@ mod tests {
 
     fn sample_tools() -> Vec<ToolInfo> {
         vec![
-            ToolInfo::new("file_ops", "File Operations", "Read, write, move, and organize files"),
+            ToolInfo::new(
+                "file_ops",
+                "File Operations",
+                "Read, write, move, and organize files",
+            ),
             ToolInfo::new("search", "Web Search", "Search the web for information"),
         ]
     }
@@ -156,8 +160,7 @@ mod tests {
 
     #[test]
     fn test_executor_prompt_includes_guidelines() {
-        let prompt =
-            PromptBuilder::executor_prompt(TaskCategory::FileOrganize, &[], None);
+        let prompt = PromptBuilder::executor_prompt(TaskCategory::FileOrganize, &[], None);
 
         assert!(prompt.contains("File Operations"));
     }
@@ -211,10 +214,7 @@ mod tests {
         for prompt in [&executor, &conversational] {
             assert!(!prompt.contains("NEVER"), "Contains NEVER");
             assert!(!prompt.contains("NOT just"), "Contains NOT just");
-            assert!(
-                !prompt.to_lowercase().contains("don't"),
-                "Contains don't"
-            );
+            assert!(!prompt.to_lowercase().contains("don't"), "Contains don't");
         }
     }
 }

@@ -81,7 +81,11 @@ impl AlephTool for SessionSetTopicTool {
 
         // Truncate to 100 chars (P7: boundary validation)
         let topic = if topic.len() > 100 {
-            &topic[..topic.char_indices().nth(100).map(|(i, _)| i).unwrap_or(topic.len())]
+            &topic[..topic
+                .char_indices()
+                .nth(100)
+                .map(|(i, _)| i)
+                .unwrap_or(topic.len())]
         } else {
             topic
         };

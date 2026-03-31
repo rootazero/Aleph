@@ -66,7 +66,7 @@ pub fn verify_plugin_integrity(
         return Ok(()); // No hash to verify
     };
 
-    use sha2::{Sha256, Digest};
+    use sha2::{Digest, Sha256};
 
     let mut hasher = Sha256::new();
 
@@ -80,7 +80,10 @@ pub fn verify_plugin_integrity(
     files.sort_by(|a, b| a.path().cmp(b.path()));
 
     for entry in files {
-        let relative = entry.path().strip_prefix(source_path).unwrap_or(entry.path());
+        let relative = entry
+            .path()
+            .strip_prefix(source_path)
+            .unwrap_or(entry.path());
         hasher.update(relative.to_string_lossy().as_bytes());
         let content = std::fs::read(entry.path())
             .map_err(|e| format!("Failed to read {}: {}", entry.path().display(), e))?;
@@ -104,13 +107,11 @@ pub fn verify_plugin_integrity(
 
 /// Recursively copy `src` directory into `dst`, skipping any `.git` directories.
 pub(crate) fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
-    std::fs::create_dir_all(dst).map_err(|e| {
-        format!("Failed to create directory '{}': {e}", dst.display())
-    })?;
+    std::fs::create_dir_all(dst)
+        .map_err(|e| format!("Failed to create directory '{}': {e}", dst.display()))?;
 
-    let entries = std::fs::read_dir(src).map_err(|e| {
-        format!("Failed to read directory '{}': {e}", src.display())
-    })?;
+    let entries = std::fs::read_dir(src)
+        .map_err(|e| format!("Failed to read directory '{}': {e}", src.display()))?;
 
     for entry in entries {
         let entry = entry.map_err(|e| format!("Failed to read dir entry: {e}"))?;
@@ -158,7 +159,11 @@ mod tests {
     fn make_plugin_dir(base: &Path) -> PathBuf {
         let plugin = base.join("my-plugin");
         fs::create_dir_all(&plugin).unwrap();
-        fs::write(plugin.join("manifest.toml"), "[plugin]\nname = \"my-plugin\"").unwrap();
+        fs::write(
+            plugin.join("manifest.toml"),
+            "[plugin]\nname = \"my-plugin\"",
+        )
+        .unwrap();
         // Nested subdir.
         let sub = plugin.join("src");
         fs::create_dir_all(&sub).unwrap();
@@ -176,8 +181,7 @@ mod tests {
         let install_root = TempDir::new().unwrap();
 
         let source = make_plugin_dir(cache.path());
-        let result =
-            install_plugin_from_cache(&source, install_root.path(), "my-plugin");
+        let result = install_plugin_from_cache(&source, install_root.path(), "my-plugin");
 
         assert!(result.is_ok(), "{:?}", result.err());
         let dest = result.unwrap();
@@ -212,8 +216,7 @@ mod tests {
         install_plugin_from_cache(&source, install_root.path(), "my-plugin").unwrap();
 
         // Second install should fail.
-        let result =
-            install_plugin_from_cache(&source, install_root.path(), "my-plugin");
+        let result = install_plugin_from_cache(&source, install_root.path(), "my-plugin");
         assert!(result.is_err());
         let msg = result.unwrap_err();
         assert!(msg.contains("already installed"), "got: {msg}");
@@ -232,7 +235,7 @@ mod tests {
         fs::write(tmp.path().join("hello.txt"), "world").unwrap();
 
         // Compute the expected hash by running the same logic
-        use sha2::{Sha256, Digest};
+        use sha2::{Digest, Sha256};
         let mut hasher = Sha256::new();
         hasher.update(b"hello.txt");
         hasher.update(b"world");

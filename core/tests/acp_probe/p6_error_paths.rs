@@ -48,7 +48,9 @@ async fn p6_02_process_crash_returns_error() {
 #[tokio::test]
 async fn p6_03_prompt_to_unregistered_harness() {
     let manager = AcpHarnessManager::from_entries(HashMap::new());
-    let result = manager.prompt("ghost", "test", "/tmp", None, true, None).await;
+    let result = manager
+        .prompt("ghost", "test", "/tmp", None, true, None)
+        .await;
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();
     assert!(
@@ -73,9 +75,7 @@ async fn p6_04_executable_not_found_error() {
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();
     assert!(
-        err.contains("Failed to execute")
-            || err.contains("executable")
-            || err.contains("PATH"),
+        err.contains("Failed to execute") || err.contains("executable") || err.contains("PATH"),
         "got: {}",
         err
     );
@@ -158,12 +158,10 @@ async fn p6_07_shutdown_all_completes() {
 #[tokio::test]
 async fn p6_08_manager_prompt_unknown_harness() {
     let manager = AcpHarnessManager::new();
-    let result = manager.prompt("totally-unknown", "test", "/tmp", None, true, None).await;
+    let result = manager
+        .prompt("totally-unknown", "test", "/tmp", None, true, None)
+        .await;
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();
-    assert!(
-        err.contains("Unknown ACP harness"),
-        "got: {}",
-        err
-    );
+    assert!(err.contains("Unknown ACP harness"), "got: {}", err);
 }

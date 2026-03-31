@@ -7,8 +7,12 @@ use crate::thinker::prompt_mode::PromptMode;
 pub struct ProtocolTokensLayer;
 
 impl PromptLayer for ProtocolTokensLayer {
-    fn name(&self) -> &'static str { "protocol_tokens" }
-    fn priority(&self) -> u32 { 700 }
+    fn name(&self) -> &'static str {
+        "protocol_tokens"
+    }
+    fn priority(&self) -> u32 {
+        700
+    }
     fn supports_mode(&self, mode: PromptMode) -> bool {
         matches!(mode, PromptMode::Full)
     }
@@ -21,7 +25,11 @@ impl PromptLayer for ProtocolTokensLayer {
             None => return,
         };
 
-        if !ctx.environment_contract.active_capabilities.contains(&Capability::SilentReply) {
+        if !ctx
+            .environment_contract
+            .active_capabilities
+            .contains(&Capability::SilentReply)
+        {
             return;
         }
 

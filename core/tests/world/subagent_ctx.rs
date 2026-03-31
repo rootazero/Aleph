@@ -13,15 +13,13 @@ use tempfile::TempDir;
 use tokio::sync::broadcast;
 
 use alephcore::agents::sub_agents::{SubAgentRegistry, SubAgentRun};
-use alephcore::gateway::run_event_bus::{
-    ActiveRunHandle, RunEndResult, RunEvent,
-};
 use alephcore::gateway::router::SessionKey;
+use alephcore::gateway::run_event_bus::{ActiveRunHandle, RunEndResult, RunEvent};
 use alephcore::providers::profile_manager::AuthProfileManager;
 
 #[cfg(feature = "gateway")]
 use alephcore::builtin_tools::sessions::{
-    CleanupPolicy, SessionsSpawnArgs, SessionsSpawnTool, SessionsSpawnOutput,
+    CleanupPolicy, SessionsSpawnArgs, SessionsSpawnOutput, SessionsSpawnTool,
 };
 
 /// Subagent test context
@@ -85,15 +83,27 @@ pub struct SubagentContext {
 impl std::fmt::Debug for SubagentContext {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SubagentContext")
-            .field("run_handle", &self.run_handle.as_ref().map(|_| "ActiveRunHandle"))
+            .field(
+                "run_handle",
+                &self.run_handle.as_ref().map(|_| "ActiveRunHandle"),
+            )
             .field("event_rx", &self.event_rx.as_ref().map(|_| "Receiver"))
             .field("run_end_result", &self.run_end_result)
-            .field("profile_manager", &self.profile_manager.as_ref().map(|_| "AuthProfileManager"))
+            .field(
+                "profile_manager",
+                &self.profile_manager.as_ref().map(|_| "AuthProfileManager"),
+            )
             .field("profile_id", &self.profile_id)
             .field("profile_error", &self.profile_error)
-            .field("registry", &self.registry.as_ref().map(|_| "SubAgentRegistry"))
+            .field(
+                "registry",
+                &self.registry.as_ref().map(|_| "SubAgentRegistry"),
+            )
             .field("registered_run_id", &self.registered_run_id)
-            .field("retrieved_run", &self.retrieved_run.as_ref().map(|r| &r.run_id))
+            .field(
+                "retrieved_run",
+                &self.retrieved_run.as_ref().map(|r| &r.run_id),
+            )
             .finish()
     }
 }
@@ -101,10 +111,8 @@ impl std::fmt::Debug for SubagentContext {
 impl SubagentContext {
     /// Create a new run handle
     pub fn create_run_handle(&mut self, run_id: &str) {
-        let (handle, input_rx, cancel_rx) = ActiveRunHandle::new(
-            run_id.to_string(),
-            SessionKey::main("main"),
-        );
+        let (handle, input_rx, cancel_rx) =
+            ActiveRunHandle::new(run_id.to_string(), SessionKey::main("main"));
         self.run_handle = Some(Arc::new(handle));
         self.input_rx = Some(input_rx);
         self.cancel_rx = Some(cancel_rx);
@@ -130,7 +138,8 @@ tier = "primary"
         )
         .unwrap();
 
-        self.profile_manager = Some(AuthProfileManager::with_paths(config_path, agents_dir).unwrap());
+        self.profile_manager =
+            Some(AuthProfileManager::with_paths(config_path, agents_dir).unwrap());
         self.temp_dir = Some(temp_dir);
     }
 
@@ -164,7 +173,8 @@ tier = "backup"
         )
         .unwrap();
 
-        self.profile_manager = Some(AuthProfileManager::with_paths(config_path, agents_dir).unwrap());
+        self.profile_manager =
+            Some(AuthProfileManager::with_paths(config_path, agents_dir).unwrap());
         self.temp_dir = Some(temp_dir);
     }
 
@@ -176,7 +186,8 @@ tier = "backup"
 
         std::fs::write(&config_path, "").unwrap();
 
-        self.profile_manager = Some(AuthProfileManager::with_paths(config_path, agents_dir).unwrap());
+        self.profile_manager =
+            Some(AuthProfileManager::with_paths(config_path, agents_dir).unwrap());
         self.temp_dir = Some(temp_dir);
     }
 

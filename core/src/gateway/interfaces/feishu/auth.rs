@@ -43,31 +43,43 @@ impl TokenManager {
 
     /// Force-refresh the access token from Feishu API.
     pub async fn refresh_token(&self) -> Result<(), String> {
-        let url = format!("{}/open-apis/auth/v3/app_access_token/internal", self.base_url);
+        let url = format!(
+            "{}/open-apis/auth/v3/app_access_token/internal",
+            self.base_url
+        );
         let body = serde_json::json!({
             "app_id": self.app_id,
             "app_secret": self.app_secret,
         });
 
-        let resp = self.http.post(&url)
+        let resp = self
+            .http
+            .post(&url)
             .header("Content-Type", "application/json; charset=utf-8")
             .json(&body)
             .send()
             .await
             .map_err(|e| format!("Token request failed: {e}"))?;
 
-        let token_resp: TokenResponse = resp.json().await
+        let token_resp: TokenResponse = resp
+            .json()
+            .await
             .map_err(|e| format!("Token response parse failed: {e}"))?;
 
         if token_resp.code != 0 {
-            return Err(format!("Token error: code={}, msg={}", token_resp.code, token_resp.msg));
+            return Err(format!(
+                "Token error: code={}, msg={}",
+                token_resp.code, token_resp.msg
+            ));
         }
 
-        let access_token = token_resp.app_access_token
+        let access_token = token_resp
+            .app_access_token
             .ok_or_else(|| "No access_token in response".to_string())?;
         let expire = token_resp.expire.unwrap_or(DEFAULT_TOKEN_EXPIRY_SECS);
 
-        let expires_at = Instant::now() + Duration::from_secs(expire.saturating_sub(TOKEN_REFRESH_MARGIN_SECS));
+        let expires_at =
+            Instant::now() + Duration::from_secs(expire.saturating_sub(TOKEN_REFRESH_MARGIN_SECS));
 
         let mut state = self.token.write().await;
         state.access_token = access_token;
@@ -125,34 +137,34 @@ impl TokenManager {
                     "app_secret": app_secret,
                 });
 
-                match http.post(&url)
+                match http
+                    .post(&url)
                     .header("Content-Type", "application/json; charset=utf-8")
                     .json(&body)
                     .send()
                     .await
                 {
-                    Ok(resp) => {
-                        match resp.json::<TokenResponse>().await {
-                            Ok(tr) if tr.code == 0 => {
-                                if let Some(at) = tr.app_access_token {
-                                    let expire = tr.expire.unwrap_or(DEFAULT_TOKEN_EXPIRY_SECS);
-                                    let mut state = token.write().await;
-                                    state.access_token = at;
-                                    state.expires_at = Instant::now() + Duration::from_secs(
-                                        expire.saturating_sub(TOKEN_REFRESH_MARGIN_SECS)
+                    Ok(resp) => match resp.json::<TokenResponse>().await {
+                        Ok(tr) if tr.code == 0 => {
+                            if let Some(at) = tr.app_access_token {
+                                let expire = tr.expire.unwrap_or(DEFAULT_TOKEN_EXPIRY_SECS);
+                                let mut state = token.write().await;
+                                state.access_token = at;
+                                state.expires_at = Instant::now()
+                                    + Duration::from_secs(
+                                        expire.saturating_sub(TOKEN_REFRESH_MARGIN_SECS),
                                     );
-                                    tracing::debug!("Feishu token refreshed (background)");
-                                }
+                                tracing::debug!("Feishu token refreshed (background)");
                             }
-                            Ok(tr) => tracing::warn!("Token refresh failed: code={}, msg={}", tr.code, tr.msg),
-                            Err(e) => tracing::warn!("Token refresh parse error: {e}"),
                         }
-                    }
+                        Ok(tr) => {
+                            tracing::warn!("Token refresh failed: code={}, msg={}", tr.code, tr.msg)
+                        }
+                        Err(e) => tracing::warn!("Token refresh parse error: {e}"),
+                    },
                     Err(e) => tracing::warn!("Token refresh request error: {e}"),
                 }
             }
         });
     }
-
-
 }

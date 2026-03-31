@@ -27,12 +27,10 @@ pub enum SanitizeLevel {
 ///   Pass everything else through. Suitable for internal generated text.
 pub fn sanitize_for_prompt(value: &str, level: SanitizeLevel) -> String {
     match level {
-        SanitizeLevel::Strict => {
-            value
-                .chars()
-                .filter(|c| !c.is_control() && !is_format_char(*c))
-                .collect()
-        }
+        SanitizeLevel::Strict => value
+            .chars()
+            .filter(|c| !c.is_control() && !is_format_char(*c))
+            .collect(),
         SanitizeLevel::Moderate => {
             value
                 .chars()
@@ -122,10 +120,7 @@ fn strip_injection_markers(value: &str) -> String {
     ];
 
     // Case-sensitive markers (exact match only)
-    const CS_MARKERS: &[&str] = &[
-        "[INST]",
-        "[/INST]",
-    ];
+    const CS_MARKERS: &[&str] = &["[INST]", "[/INST]"];
 
     let mut result = value.to_string();
 

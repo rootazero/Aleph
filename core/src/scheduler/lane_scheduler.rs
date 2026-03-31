@@ -6,8 +6,8 @@
 //! - Per-lane concurrency limits
 //! - Statistics tracking
 
-use std::collections::HashMap;
 use crate::sync_primitives::Arc;
+use std::collections::HashMap;
 use tokio::sync::Semaphore;
 
 use super::{LaneConfig, LaneState, RecursionTracker, WaitTimeTracker};
@@ -428,7 +428,9 @@ mod tests {
         let stats_before = scheduler.stats().await;
         assert_eq!(stats_before.total_running, 1);
 
-        scheduler.on_run_complete("run-1", Lane::Main, Some(guard)).await;
+        scheduler
+            .on_run_complete("run-1", Lane::Main, Some(guard))
+            .await;
 
         let stats_after = scheduler.stats().await;
         assert_eq!(stats_after.total_running, 0);

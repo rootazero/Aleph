@@ -120,8 +120,7 @@ impl IdentityFiles {
             }
 
             let (content, truncated) = if raw.len() > effective_limit {
-                let truncated_content =
-                    truncate_with_head_tail(raw, effective_limit, 0.7, 0.2);
+                let truncated_content = truncate_with_head_tail(raw, effective_limit, 0.7, 0.2);
                 (truncated_content, true)
             } else {
                 (raw.clone(), false)

@@ -2,19 +2,18 @@
 //!
 //! Implements AlephTool trait for AI agent integration.
 
-use async_trait::async_trait;
 use super::error::ToolError;
 use crate::config::WebFetchPolicy;
 use crate::error::Result;
 use crate::security::content_sanitizer::{wrap_external_content, ContentSource};
 use crate::security::ssrf::{safe_fetch, SafeFetchRequest, SsrfPolicy};
 use crate::tools::AlephTool;
+use async_trait::async_trait;
 use regex::Regex;
 use schemars::JsonSchema;
 use scraper::{Html, Selector};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info};
-
 
 /// Content extraction mode
 #[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema)]
@@ -119,7 +118,10 @@ impl WebFetchTool {
     }
 
     /// Fetch and extract content from a URL (internal implementation)
-    async fn call_impl(&self, args: WebFetchArgs) -> std::result::Result<WebFetchResult, ToolError> {
+    async fn call_impl(
+        &self,
+        args: WebFetchArgs,
+    ) -> std::result::Result<WebFetchResult, ToolError> {
         use super::{notify_tool_result, notify_tool_start};
 
         // Notify tool start
@@ -139,8 +141,9 @@ impl WebFetchTool {
         if let Ok(ua) = reqwest::header::HeaderValue::from_str(&self.user_agent) {
             headers.insert(reqwest::header::USER_AGENT, ua);
         }
-        let fetch_request = SafeFetchRequest::get(std::time::Duration::from_secs(self.timeout_secs))
-            .with_headers(headers);
+        let fetch_request =
+            SafeFetchRequest::get(std::time::Duration::from_secs(self.timeout_secs))
+                .with_headers(headers);
 
         let fetch_response = safe_fetch(&args.url, &ssrf_policy, fetch_request)
             .await
@@ -151,7 +154,10 @@ impl WebFetchTool {
             })?;
 
         if !fetch_response.status.is_success() {
-            let error_msg = format!("HTTP error: {} for URL: {}", fetch_response.status, args.url);
+            let error_msg = format!(
+                "HTTP error: {} for URL: {}",
+                fetch_response.status, args.url
+            );
             notify_tool_result(Self::NAME, &error_msg, false);
             return Err(ToolError::Network(error_msg));
         }
@@ -184,12 +190,13 @@ impl WebFetchTool {
         debug!("Extracted title: {:?}", title);
 
         // Enhanced extraction: Readability + Markdown with selector fallback
-        let (content, extractor) = self.extract_content_enhanced(
-            &html_content,
-            &args.url,
-            &args.extract_mode,
+        let (content, extractor) =
+            self.extract_content_enhanced(&html_content, &args.url, &args.extract_mode);
+        debug!(
+            "Extracted {} chars via {:?} extractor",
+            content.len(),
+            extractor
         );
-        debug!("Extracted {} chars via {:?} extractor", content.len(), extractor);
 
         // Notify success
         let extractor_name = match &extractor {
@@ -206,7 +213,9 @@ impl WebFetchTool {
         // Wrap with external content boundary markers
         let wrapped_content = wrap_external_content(
             &content,
-            ContentSource::WebFetch { url: args.url.clone() },
+            ContentSource::WebFetch {
+                url: args.url.clone(),
+            },
         );
 
         Ok(WebFetchResult {
@@ -336,8 +345,8 @@ impl WebFetchTool {
         let cleaned = re_hidden_attr.replace_all(&cleaned, "").to_string();
 
         // 5. Remove elements with aria-hidden="true"
-        let re_aria = Regex::new(r#"(?si)<[^>]+\saria-hidden\s*=\s*["']true["'][^>]*>.*?</[^>]+>"#)
-            .unwrap();
+        let re_aria =
+            Regex::new(r#"(?si)<[^>]+\saria-hidden\s*=\s*["']true["'][^>]*>.*?</[^>]+>"#).unwrap();
         let cleaned = re_aria.replace_all(&cleaned, "").to_string();
 
         // 6. Remove elements with display:none or visibility:hidden in style attribute
@@ -421,7 +430,6 @@ impl WebFetchTool {
         (content, Extractor::Selector)
     }
 }
-
 
 impl Default for WebFetchTool {
     fn default() -> Self {
@@ -515,7 +523,11 @@ mod tests {
         // Error is now AlephError wrapping the SSRF/fetch error
         let err = result.unwrap_err();
         let err_msg = err.to_string();
-        assert!(err_msg.contains("Fetch blocked or failed"), "Expected 'Fetch blocked or failed' error, got: {}", err_msg);
+        assert!(
+            err_msg.contains("Fetch blocked or failed"),
+            "Expected 'Fetch blocked or failed' error, got: {}",
+            err_msg
+        );
     }
 
     #[test]
@@ -585,9 +597,9 @@ mod tests {
 
     #[test]
     fn test_extract_mode_text() {
-        let args: WebFetchArgs = serde_json::from_str(
-            r#"{"url": "https://example.com", "extract_mode": "text"}"#
-        ).unwrap();
+        let args: WebFetchArgs =
+            serde_json::from_str(r#"{"url": "https://example.com", "extract_mode": "text"}"#)
+                .unwrap();
         assert!(matches!(args.extract_mode, ExtractMode::Text));
     }
 
@@ -599,9 +611,21 @@ mod tests {
             <p>Visible content here</p>
         </body></html>"#;
         let cleaned = WebFetchTool::pre_clean_html(html);
-        assert!(!cleaned.contains("alert"), "Script content should be removed: {}", cleaned);
-        assert!(!cleaned.contains(".hide"), "Style content should be removed: {}", cleaned);
-        assert!(cleaned.contains("Visible content here"), "Visible text should remain: {}", cleaned);
+        assert!(
+            !cleaned.contains("alert"),
+            "Script content should be removed: {}",
+            cleaned
+        );
+        assert!(
+            !cleaned.contains(".hide"),
+            "Style content should be removed: {}",
+            cleaned
+        );
+        assert!(
+            cleaned.contains("Visible content here"),
+            "Visible text should remain: {}",
+            cleaned
+        );
     }
 
     #[test]
@@ -612,16 +636,32 @@ mod tests {
             <p>Visible paragraph</p>
         </body></html>"#;
         let cleaned = WebFetchTool::pre_clean_html(html);
-        assert!(!cleaned.contains("Hidden div"), "display:none should be removed: {}", cleaned);
-        assert!(!cleaned.contains("Aria hidden div"), "aria-hidden should be removed: {}", cleaned);
-        assert!(cleaned.contains("Visible paragraph"), "Visible text should remain: {}", cleaned);
+        assert!(
+            !cleaned.contains("Hidden div"),
+            "display:none should be removed: {}",
+            cleaned
+        );
+        assert!(
+            !cleaned.contains("Aria hidden div"),
+            "aria-hidden should be removed: {}",
+            cleaned
+        );
+        assert!(
+            cleaned.contains("Visible paragraph"),
+            "Visible text should remain: {}",
+            cleaned
+        );
     }
 
     #[test]
     fn test_pre_clean_strips_zero_width_chars() {
         let html = "<html><body><p>Hello\u{200B}World\u{FEFF}Test</p></body></html>";
         let cleaned = WebFetchTool::pre_clean_html(html);
-        assert!(cleaned.contains("HelloWorldTest"), "Zero-width chars should be stripped: {}", cleaned);
+        assert!(
+            cleaned.contains("HelloWorldTest"),
+            "Zero-width chars should be stripped: {}",
+            cleaned
+        );
     }
 
     #[test]
@@ -658,13 +698,20 @@ mod tests {
         </body></html>"#;
 
         let tool = WebFetchTool::new();
-        let (content, extractor) = tool.extract_content_enhanced(html, "https://example.com/article", &ExtractMode::Markdown);
+        let (content, extractor) = tool.extract_content_enhanced(
+            html,
+            "https://example.com/article",
+            &ExtractMode::Markdown,
+        );
 
         // Should produce non-empty content
         assert!(!content.is_empty(), "Content should not be empty");
         // Should contain article text
-        assert!(content.contains("Main Article Title") || content.contains("first paragraph"),
-            "Should contain article content: {}", &content[..content.len().min(500)]);
+        assert!(
+            content.contains("Main Article Title") || content.contains("first paragraph"),
+            "Should contain article content: {}",
+            &content[..content.len().min(500)]
+        );
     }
 
     #[test]
@@ -678,20 +725,29 @@ mod tests {
         </article></body></html>"#;
 
         let tool = WebFetchTool::new();
-        let (content, _) = tool.extract_content_enhanced(html, "https://example.com", &ExtractMode::Text);
+        let (content, _) =
+            tool.extract_content_enhanced(html, "https://example.com", &ExtractMode::Text);
 
         // Should contain the actual text
-        assert!(content.contains("paragraph") || content.contains("Title"),
-            "Should contain article text: {}", content);
+        assert!(
+            content.contains("paragraph") || content.contains("Title"),
+            "Should contain article text: {}",
+            content
+        );
     }
 
     #[test]
     fn test_fallback_to_selector_on_minimal_html() {
         let html = "<html><body><p>Short</p></body></html>";
         let tool = WebFetchTool::new();
-        let (_, extractor) = tool.extract_content_enhanced(html, "https://example.com", &ExtractMode::Markdown);
+        let (_, extractor) =
+            tool.extract_content_enhanced(html, "https://example.com", &ExtractMode::Markdown);
 
-        assert!(matches!(extractor, Extractor::Selector), "Expected Selector fallback, got {:?}", extractor);
+        assert!(
+            matches!(extractor, Extractor::Selector),
+            "Expected Selector fallback, got {:?}",
+            extractor
+        );
     }
 
     #[test]
@@ -706,9 +762,14 @@ mod tests {
 
         let mut tool = WebFetchTool::new();
         tool.enable_readability = false;
-        let (_, extractor) = tool.extract_content_enhanced(html, "https://example.com", &ExtractMode::Markdown);
+        let (_, extractor) =
+            tool.extract_content_enhanced(html, "https://example.com", &ExtractMode::Markdown);
 
-        assert!(matches!(extractor, Extractor::Selector), "Should use Selector when readability disabled, got {:?}", extractor);
+        assert!(
+            matches!(extractor, Extractor::Selector),
+            "Should use Selector when readability disabled, got {:?}",
+            extractor
+        );
     }
 
     #[test]

@@ -47,9 +47,10 @@ impl SignalMessageOps {
             )));
         }
 
-        let messages: Vec<serde_json::Value> = resp.json().await.map_err(|e| {
-            ChannelError::ReceiveFailed(format!("Signal poll parse error: {e}"))
-        })?;
+        let messages: Vec<serde_json::Value> = resp
+            .json()
+            .await
+            .map_err(|e| ChannelError::ReceiveFailed(format!("Signal poll parse error: {e}")))?;
 
         Ok(messages)
     }
@@ -100,9 +101,12 @@ impl SignalMessageOps {
             let resp_json: serde_json::Value = resp.json().await.unwrap_or_default();
             let timestamp = resp_json["timestamp"]
                 .as_u64()
-                .or_else(|| resp_json["timestamps"].as_array()
-                    .and_then(|a| a.first())
-                    .and_then(|v| v.as_u64()))
+                .or_else(|| {
+                    resp_json["timestamps"]
+                        .as_array()
+                        .and_then(|a| a.first())
+                        .and_then(|v| v.as_u64())
+                })
                 .unwrap_or_else(|| Utc::now().timestamp_millis() as u64);
 
             last_result = Some(SendResult {
@@ -111,8 +115,7 @@ impl SignalMessageOps {
             });
         }
 
-        last_result
-            .ok_or_else(|| ChannelError::SendFailed("No message chunks to send".to_string()))
+        last_result.ok_or_else(|| ChannelError::SendFailed("No message chunks to send".to_string()))
     }
 
     /// Convert a signal-cli message envelope JSON to an `InboundMessage`.
@@ -183,9 +186,7 @@ impl SignalMessageOps {
         // Determine if group message and extract conversation ID
         let group_id = data_message["groupInfo"]["groupId"].as_str();
         let is_group = group_id.is_some();
-        let conversation_id = group_id
-            .unwrap_or(&source)
-            .to_string();
+        let conversation_id = group_id.unwrap_or(&source).to_string();
 
         Some(InboundMessage {
             id: MessageId::new(timestamp_ms.to_string()),
@@ -251,12 +252,9 @@ impl SignalMessageOps {
                     backoff = INITIAL_BACKOFF;
 
                     for msg in &messages {
-                        if let Some(inbound) = Self::convert_message(
-                            msg,
-                            &channel_id,
-                            &config.phone_number,
-                            &config,
-                        ) {
+                        if let Some(inbound) =
+                            Self::convert_message(msg, &channel_id, &config.phone_number, &config)
+                        {
                             tracing::debug!(
                                 "Signal message from {}: {}",
                                 inbound.sender_id.as_str(),
@@ -305,13 +303,8 @@ mod tests {
             ..Default::default()
         };
 
-        let inbound = SignalMessageOps::convert_message(
-            &msg,
-            &channel_id,
-            "+1234567890",
-            &config,
-        )
-        .unwrap();
+        let inbound =
+            SignalMessageOps::convert_message(&msg, &channel_id, "+1234567890", &config).unwrap();
 
         assert_eq!(inbound.channel_id.as_str(), "signal");
         assert_eq!(inbound.sender_id.as_str(), "+9876543210");
@@ -345,13 +338,8 @@ mod tests {
             ..Default::default()
         };
 
-        let inbound = SignalMessageOps::convert_message(
-            &msg,
-            &channel_id,
-            "+1234567890",
-            &config,
-        )
-        .unwrap();
+        let inbound =
+            SignalMessageOps::convert_message(&msg, &channel_id, "+1234567890", &config).unwrap();
 
         assert!(inbound.is_group);
         assert_eq!(inbound.conversation_id.as_str(), "abc123group");
@@ -377,12 +365,7 @@ mod tests {
             ..Default::default()
         };
 
-        let result = SignalMessageOps::convert_message(
-            &msg,
-            &channel_id,
-            "+1234567890",
-            &config,
-        );
+        let result = SignalMessageOps::convert_message(&msg, &channel_id, "+1234567890", &config);
         assert!(result.is_none());
     }
 
@@ -407,12 +390,7 @@ mod tests {
             ..Default::default()
         };
 
-        let result = SignalMessageOps::convert_message(
-            &msg,
-            &channel_id,
-            "+1234567890",
-            &config,
-        );
+        let result = SignalMessageOps::convert_message(&msg, &channel_id, "+1234567890", &config);
         assert!(result.is_none());
     }
 
@@ -436,12 +414,7 @@ mod tests {
             ..Default::default()
         };
 
-        let result = SignalMessageOps::convert_message(
-            &msg,
-            &channel_id,
-            "+1234567890",
-            &config,
-        );
+        let result = SignalMessageOps::convert_message(&msg, &channel_id, "+1234567890", &config);
         assert!(result.is_none());
     }
 
@@ -461,12 +434,7 @@ mod tests {
             ..Default::default()
         };
 
-        let result = SignalMessageOps::convert_message(
-            &msg,
-            &channel_id,
-            "+1234567890",
-            &config,
-        );
+        let result = SignalMessageOps::convert_message(&msg, &channel_id, "+1234567890", &config);
         assert!(result.is_none());
     }
 
@@ -489,12 +457,7 @@ mod tests {
             ..Default::default()
         };
 
-        let result = SignalMessageOps::convert_message(
-            &msg,
-            &channel_id,
-            "+1234567890",
-            &config,
-        );
+        let result = SignalMessageOps::convert_message(&msg, &channel_id, "+1234567890", &config);
         assert!(result.is_none());
     }
 
@@ -518,13 +481,8 @@ mod tests {
             ..Default::default()
         };
 
-        let inbound = SignalMessageOps::convert_message(
-            &msg,
-            &channel_id,
-            "+1234567890",
-            &config,
-        )
-        .unwrap();
+        let inbound =
+            SignalMessageOps::convert_message(&msg, &channel_id, "+1234567890", &config).unwrap();
 
         assert_eq!(inbound.timestamp.timestamp(), 1700000000);
     }
@@ -549,13 +507,8 @@ mod tests {
             ..Default::default()
         };
 
-        let inbound = SignalMessageOps::convert_message(
-            &msg,
-            &channel_id,
-            "+1234567890",
-            &config,
-        )
-        .unwrap();
+        let inbound =
+            SignalMessageOps::convert_message(&msg, &channel_id, "+1234567890", &config).unwrap();
 
         assert!(inbound.raw.is_some());
         assert_eq!(
@@ -583,13 +536,8 @@ mod tests {
             ..Default::default()
         };
 
-        let inbound = SignalMessageOps::convert_message(
-            &msg,
-            &channel_id,
-            "+1234567890",
-            &config,
-        )
-        .unwrap();
+        let inbound =
+            SignalMessageOps::convert_message(&msg, &channel_id, "+1234567890", &config).unwrap();
 
         // When sourceName is not present, falls back to source phone number
         assert_eq!(inbound.sender_name.as_deref(), Some("+9876543210"));
@@ -616,12 +564,7 @@ mod tests {
             ..Default::default()
         };
 
-        let result = SignalMessageOps::convert_message(
-            &msg,
-            &channel_id,
-            "+1234567890",
-            &config,
-        );
+        let result = SignalMessageOps::convert_message(&msg, &channel_id, "+1234567890", &config);
         assert!(result.is_some());
     }
 }

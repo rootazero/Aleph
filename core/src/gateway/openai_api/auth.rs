@@ -14,7 +14,11 @@ pub fn extract_bearer_token(header_value: &str) -> Option<&str> {
         return None;
     }
     let token = &header_value[7..];
-    if token.is_empty() { None } else { Some(token) }
+    if token.is_empty() {
+        None
+    } else {
+        Some(token)
+    }
 }
 
 /// API error types for the OpenAI-compatible endpoint.
@@ -89,26 +93,14 @@ mod tests {
     #[test]
     fn test_extract_bearer_token() {
         // Standard Bearer prefix
-        assert_eq!(
-            extract_bearer_token("Bearer sk-abc123"),
-            Some("sk-abc123")
-        );
+        assert_eq!(extract_bearer_token("Bearer sk-abc123"), Some("sk-abc123"));
 
         // Lowercase bearer prefix
-        assert_eq!(
-            extract_bearer_token("bearer sk-abc123"),
-            Some("sk-abc123")
-        );
+        assert_eq!(extract_bearer_token("bearer sk-abc123"), Some("sk-abc123"));
 
         // Mixed case (RFC 6750 case-insensitive)
-        assert_eq!(
-            extract_bearer_token("BEARER sk-abc123"),
-            Some("sk-abc123")
-        );
-        assert_eq!(
-            extract_bearer_token("BeArEr sk-abc123"),
-            Some("sk-abc123")
-        );
+        assert_eq!(extract_bearer_token("BEARER sk-abc123"), Some("sk-abc123"));
+        assert_eq!(extract_bearer_token("BeArEr sk-abc123"), Some("sk-abc123"));
 
         // Wrong prefix (Basic auth)
         assert_eq!(extract_bearer_token("Basic dXNlcjpwYXNz"), None);
@@ -130,14 +122,8 @@ mod tests {
             ApiError::BadRequest("bad request".into()).status_code(),
             400
         );
-        assert_eq!(
-            ApiError::NotFound("not found".into()).status_code(),
-            404
-        );
-        assert_eq!(
-            ApiError::Conflict("conflict".into()).status_code(),
-            409
-        );
+        assert_eq!(ApiError::NotFound("not found".into()).status_code(), 404);
+        assert_eq!(ApiError::Conflict("conflict".into()).status_code(), 409);
         assert_eq!(
             ApiError::InternalError("internal error".into()).status_code(),
             500
@@ -159,13 +145,19 @@ mod tests {
     #[test]
     fn test_api_error_codes() {
         assert_eq!(ApiError::Unauthorized("".into()).code(), "invalid_api_key");
-        assert_eq!(ApiError::BadRequest("".into()).code(), "invalid_request_error");
+        assert_eq!(
+            ApiError::BadRequest("".into()).code(),
+            "invalid_request_error"
+        );
         assert_eq!(ApiError::NotFound("".into()).code(), "model_not_found");
         assert_eq!(ApiError::Conflict("".into()).code(), "agent_busy");
         assert_eq!(ApiError::InternalError("".into()).code(), "internal_error");
         assert_eq!(ApiError::BadGateway("".into()).code(), "provider_error");
         assert_eq!(ApiError::GatewayTimeout("".into()).code(), "timeout");
-        assert_eq!(ApiError::ServiceUnavailable("".into()).code(), "service_unavailable");
+        assert_eq!(
+            ApiError::ServiceUnavailable("".into()).code(),
+            "service_unavailable"
+        );
     }
 
     #[test]

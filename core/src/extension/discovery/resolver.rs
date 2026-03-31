@@ -14,7 +14,10 @@ pub fn resolve_conflicts(candidates: Vec<PluginCandidate>) -> ResolvedPlugins {
 
     // Group by ID
     for candidate in candidates {
-        by_id.entry(candidate.id.clone()).or_default().push(candidate);
+        by_id
+            .entry(candidate.id.clone())
+            .or_default()
+            .push(candidate);
     }
 
     let mut active = Vec::new();

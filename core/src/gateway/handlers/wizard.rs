@@ -5,10 +5,10 @@
 //! - wizard.next - Get next step / answer current step
 //! - wizard.cancel - Cancel the wizard session
 
+use crate::sync_primitives::{Arc, RwLock};
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
-use crate::sync_primitives::{Arc, RwLock};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -19,7 +19,9 @@ use crate::wizard::{
 };
 
 /// Type alias for an async RPC handler function
-type RpcHandler = Box<dyn Fn(JsonRpcRequest) -> Pin<Box<dyn Future<Output = JsonRpcResponse> + Send>> + Send + Sync>;
+type RpcHandler = Box<
+    dyn Fn(JsonRpcRequest) -> Pin<Box<dyn Future<Output = JsonRpcResponse> + Send>> + Send + Sync,
+>;
 
 /// Parameters for wizard.start
 #[derive(Debug, Deserialize)]
@@ -67,7 +69,8 @@ pub struct WizardCancelResponse {
 }
 
 /// Factory function to create wizard flows
-pub type WizardFlowFactory = Arc<dyn Fn(&str, Option<Value>) -> Option<Box<dyn WizardFlow>> + Send + Sync>;
+pub type WizardFlowFactory =
+    Arc<dyn Fn(&str, Option<Value>) -> Option<Box<dyn WizardFlow>> + Send + Sync>;
 
 /// Wizard session manager
 pub struct WizardSessionManager {
@@ -85,10 +88,15 @@ impl WizardSessionManager {
     }
 
     /// Start a new wizard session
-    pub async fn start(&self, wizard_type: &str, initial_data: Option<Value>) -> Result<(String, WizardNextResult), WizardSessionError> {
+    pub async fn start(
+        &self,
+        wizard_type: &str,
+        initial_data: Option<Value>,
+    ) -> Result<(String, WizardNextResult), WizardSessionError> {
         // Create the flow
-        let flow = (self.flow_factory)(wizard_type, initial_data)
-            .ok_or_else(|| WizardSessionError::FlowError(format!("Unknown wizard type: {}", wizard_type)))?;
+        let flow = (self.flow_factory)(wizard_type, initial_data).ok_or_else(|| {
+            WizardSessionError::FlowError(format!("Unknown wizard type: {}", wizard_type))
+        })?;
 
         // Create the session
         let session = Arc::new(WizardSession::new(flow));
@@ -107,7 +115,11 @@ impl WizardSessionManager {
     }
 
     /// Get next step or answer current step
-    pub async fn next(&self, session_id: &str, answer: Option<Value>) -> Result<WizardNextResult, WizardSessionError> {
+    pub async fn next(
+        &self,
+        session_id: &str,
+        answer: Option<Value>,
+    ) -> Result<WizardNextResult, WizardSessionError> {
         // Get the session (clone Arc, release lock immediately)
         let session = {
             let sessions = self.sessions.read().unwrap_or_else(|e| e.into_inner());
@@ -127,7 +139,7 @@ impl WizardSessionManager {
         if let Some(_value) = answer {
             // Answer must include step_id - use wizard.answer instead
             return Err(WizardSessionError::InvalidAnswer(
-                "Answer must include step_id - use wizard.answer instead".to_string()
+                "Answer must include step_id - use wizard.answer instead".to_string(),
             ));
         }
 
@@ -144,7 +156,12 @@ impl WizardSessionManager {
     }
 
     /// Answer a step
-    pub async fn answer(&self, session_id: &str, step_id: &str, value: Value) -> Result<(), WizardSessionError> {
+    pub async fn answer(
+        &self,
+        session_id: &str,
+        step_id: &str,
+        value: Value,
+    ) -> Result<(), WizardSessionError> {
         // Get the session (clone Arc, release lock immediately)
         let session = {
             let sessions = self.sessions.read().unwrap_or_else(|e| e.into_inner());
@@ -197,15 +214,14 @@ pub async fn handle_start(
             }
         },
         None => {
-            return JsonRpcResponse::error(
-                req.id,
-                INVALID_PARAMS,
-                "Missing params".to_string(),
-            )
+            return JsonRpcResponse::error(req.id, INVALID_PARAMS, "Missing params".to_string())
         }
     };
 
-    match manager.start(&params.wizard_type, params.initial_data).await {
+    match manager
+        .start(&params.wizard_type, params.initial_data)
+        .await
+    {
         Ok((session_id, first_result)) => {
             let response = WizardStartResponse {
                 session_id,
@@ -214,12 +230,14 @@ pub async fn handle_start(
             };
             match serde_json::to_value(response) {
                 Ok(v) => JsonRpcResponse::success(req.id, v),
-                Err(e) => JsonRpcResponse::error(req.id, INTERNAL_ERROR, format!("Failed to serialize response: {}", e)),
+                Err(e) => JsonRpcResponse::error(
+                    req.id,
+                    INTERNAL_ERROR,
+                    format!("Failed to serialize response: {}", e),
+                ),
             }
         }
-        Err(e) => {
-            JsonRpcResponse::error(req.id, INTERNAL_ERROR, e.to_string())
-        }
+        Err(e) => JsonRpcResponse::error(req.id, INTERNAL_ERROR, e.to_string()),
     }
 }
 
@@ -251,30 +269,29 @@ pub async fn handle_answer(
             }
         },
         None => {
-            return JsonRpcResponse::error(
-                req.id,
-                INVALID_PARAMS,
-                "Missing params".to_string(),
-            )
+            return JsonRpcResponse::error(req.id, INVALID_PARAMS, "Missing params".to_string())
         }
     };
 
     // Answer the step
-    if let Err(e) = manager.answer(&params.session_id, &params.step_id, params.value).await {
+    if let Err(e) = manager
+        .answer(&params.session_id, &params.step_id, params.value)
+        .await
+    {
         return JsonRpcResponse::error(req.id, INTERNAL_ERROR, e.to_string());
     }
 
     // Get the next step
     match manager.next(&params.session_id, None).await {
-        Ok(result) => {
-            match serde_json::to_value(result) {
-                Ok(v) => JsonRpcResponse::success(req.id, v),
-                Err(e) => JsonRpcResponse::error(req.id, INTERNAL_ERROR, format!("Failed to serialize response: {}", e)),
-            }
-        }
-        Err(e) => {
-            JsonRpcResponse::error(req.id, INTERNAL_ERROR, e.to_string())
-        }
+        Ok(result) => match serde_json::to_value(result) {
+            Ok(v) => JsonRpcResponse::success(req.id, v),
+            Err(e) => JsonRpcResponse::error(
+                req.id,
+                INTERNAL_ERROR,
+                format!("Failed to serialize response: {}", e),
+            ),
+        },
+        Err(e) => JsonRpcResponse::error(req.id, INTERNAL_ERROR, e.to_string()),
     }
 }
 
@@ -295,24 +312,20 @@ pub async fn handle_next(
             }
         },
         None => {
-            return JsonRpcResponse::error(
-                req.id,
-                INVALID_PARAMS,
-                "Missing params".to_string(),
-            )
+            return JsonRpcResponse::error(req.id, INVALID_PARAMS, "Missing params".to_string())
         }
     };
 
     match manager.next(&params.session_id, params.answer).await {
-        Ok(result) => {
-            match serde_json::to_value(result) {
-                Ok(v) => JsonRpcResponse::success(req.id, v),
-                Err(e) => JsonRpcResponse::error(req.id, INTERNAL_ERROR, format!("Failed to serialize response: {}", e)),
-            }
-        }
-        Err(e) => {
-            JsonRpcResponse::error(req.id, INTERNAL_ERROR, e.to_string())
-        }
+        Ok(result) => match serde_json::to_value(result) {
+            Ok(v) => JsonRpcResponse::success(req.id, v),
+            Err(e) => JsonRpcResponse::error(
+                req.id,
+                INTERNAL_ERROR,
+                format!("Failed to serialize response: {}", e),
+            ),
+        },
+        Err(e) => JsonRpcResponse::error(req.id, INTERNAL_ERROR, e.to_string()),
     }
 }
 
@@ -333,11 +346,7 @@ pub async fn handle_cancel(
             }
         },
         None => {
-            return JsonRpcResponse::error(
-                req.id,
-                INVALID_PARAMS,
-                "Missing params".to_string(),
-            )
+            return JsonRpcResponse::error(req.id, INVALID_PARAMS, "Missing params".to_string())
         }
     };
 
@@ -345,7 +354,11 @@ pub async fn handle_cancel(
     let response = WizardCancelResponse { cancelled };
     match serde_json::to_value(response) {
         Ok(v) => JsonRpcResponse::success(req.id, v),
-        Err(e) => JsonRpcResponse::error(req.id, INTERNAL_ERROR, format!("Failed to serialize response: {}", e)),
+        Err(e) => JsonRpcResponse::error(
+            req.id,
+            INTERNAL_ERROR,
+            format!("Failed to serialize response: {}", e),
+        ),
     }
 }
 
@@ -371,33 +384,22 @@ pub async fn handle_status(
             }
         },
         None => {
-            return JsonRpcResponse::error(
-                req.id,
-                INVALID_PARAMS,
-                "Missing params".to_string(),
-            )
+            return JsonRpcResponse::error(req.id, INVALID_PARAMS, "Missing params".to_string())
         }
     };
 
     match manager.status(&params.session_id) {
-        Some(status) => {
-            JsonRpcResponse::success(req.id, json!({ "status": status }))
-        }
-        None => {
-            JsonRpcResponse::error(
-                req.id,
-                INVALID_PARAMS,
-                format!("Session not found: {}", params.session_id),
-            )
-        }
+        Some(status) => JsonRpcResponse::success(req.id, json!({ "status": status })),
+        None => JsonRpcResponse::error(
+            req.id,
+            INVALID_PARAMS,
+            format!("Session not found: {}", params.session_id),
+        ),
     }
 }
 
 /// Create handlers that need the session manager
-pub fn create_handlers(
-    manager: Arc<WizardSessionManager>,
-) -> impl Fn(&str) -> Option<RpcHandler>
-{
+pub fn create_handlers(manager: Arc<WizardSessionManager>) -> impl Fn(&str) -> Option<RpcHandler> {
     move |method: &str| -> Option<RpcHandler> {
         let mgr = manager.clone();
         match method {
@@ -454,7 +456,9 @@ mod tests {
     #[async_trait]
     impl WizardFlow for TestFlow {
         async fn run(&self, prompter: &RpcPrompter) -> Result<(), WizardSessionError> {
-            prompter.prompt(WizardStep::note("intro", "Welcome!")).await?;
+            prompter
+                .prompt(WizardStep::note("intro", "Welcome!"))
+                .await?;
             Ok(())
         }
 
@@ -463,9 +467,14 @@ mod tests {
         }
     }
 
-    fn test_flow_factory(wizard_type: &str, _initial_data: Option<Value>) -> Option<Box<dyn WizardFlow>> {
+    fn test_flow_factory(
+        wizard_type: &str,
+        _initial_data: Option<Value>,
+    ) -> Option<Box<dyn WizardFlow>> {
         match wizard_type {
-            "test" => Some(Box::new(TestFlow { name: "test".to_string() })),
+            "test" => Some(Box::new(TestFlow {
+                name: "test".to_string(),
+            })),
             _ => None,
         }
     }

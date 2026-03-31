@@ -6,13 +6,21 @@ use crate::thinker::prompt_mode::PromptMode;
 pub struct ThinkingGuidanceLayer;
 
 impl PromptLayer for ThinkingGuidanceLayer {
-    fn name(&self) -> &'static str { "thinking_guidance" }
-    fn priority(&self) -> u32 { 1350 }
+    fn name(&self) -> &'static str {
+        "thinking_guidance"
+    }
+    fn priority(&self) -> u32 {
+        1350
+    }
     fn supports_mode(&self, mode: PromptMode) -> bool {
         matches!(mode, PromptMode::Full)
     }
     fn paths(&self) -> &'static [AssemblyPath] {
-        &[AssemblyPath::Basic, AssemblyPath::Hydration, AssemblyPath::Soul]
+        &[
+            AssemblyPath::Basic,
+            AssemblyPath::Hydration,
+            AssemblyPath::Soul,
+        ]
     }
     fn inject(&self, output: &mut String, input: &LayerInput) {
         if !input.config.thinking_transparency {
@@ -46,7 +54,8 @@ impl PromptLayer for ThinkingGuidanceLayer {
         output.push_str("- **High confidence**: \"I'm confident that...\" or \"Clearly,...\"\n");
         output.push_str("- **Medium confidence**: \"I think...\" or \"This should work...\"\n");
         output.push_str("- **Low confidence**: \"I'm not sure, but...\" or \"This might...\"\n");
-        output.push_str("- **Exploratory**: \"Let's try...\" or \"Worth experimenting with...\"\n\n");
+        output
+            .push_str("- **Exploratory**: \"Let's try...\" or \"Worth experimenting with...\"\n\n");
 
         output.push_str("### Acknowledging Alternatives\n");
         output.push_str("When relevant, mention alternatives you considered:\n");
@@ -54,7 +63,9 @@ impl PromptLayer for ThinkingGuidanceLayer {
         output.push_str("- \"Another option would be...\"\n");
         output.push_str("- \"I chose X over Y because...\"\n\n");
 
-        output.push_str("This structured thinking helps users understand your reasoning process.\n\n");
+        output.push_str(
+            "This structured thinking helps users understand your reasoning process.\n\n",
+        );
     }
 }
 

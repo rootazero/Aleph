@@ -87,7 +87,6 @@ pub struct ChallengeManager {
 /// Timestamp tolerance window: challenges are valid for +/- 30 seconds.
 const TIMESTAMP_WINDOW_SECS: u64 = 30;
 
-
 impl Default for ChallengeManager {
     fn default() -> Self {
         Self::with_server_id(Uuid::new_v4().to_string())
@@ -205,13 +204,11 @@ impl ChallengeManager {
     pub fn prune(&self, max_age: Duration) {
         let now = Instant::now();
 
-        self.pending.retain(|_key, entry| {
-            now.duration_since(entry.created_at) < max_age
-        });
+        self.pending
+            .retain(|_key, entry| now.duration_since(entry.created_at) < max_age);
 
-        self.used.retain(|_key, used_at| {
-            now.duration_since(*used_at) < max_age
-        });
+        self.used
+            .retain(|_key, used_at| now.duration_since(*used_at) < max_age);
     }
 }
 
@@ -263,7 +260,10 @@ mod tests {
 
         assert_eq!(challenge.nonce.len(), 64, "nonce should be 64 hex chars");
         assert!(challenge.timestamp > 0, "timestamp must be positive");
-        assert!(!challenge.server_id.is_empty(), "server_id must not be empty");
+        assert!(
+            !challenge.server_id.is_empty(),
+            "server_id must not be empty"
+        );
         assert_eq!(mgr.pending_count(), 1);
     }
 

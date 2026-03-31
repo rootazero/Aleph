@@ -90,19 +90,12 @@ impl SessionCoordinator {
 
     /// Add a turn to the session. If `turn_number == max_rounds`, send a
     /// "final round" notification to all participants.
-    pub async fn submit_turn(
-        &self,
-        session_id: &str,
-        agent_id: &str,
-        content: &str,
-    ) -> Result<()> {
+    pub async fn submit_turn(&self, session_id: &str, agent_id: &str, content: &str) -> Result<()> {
         let session = self
             .session_store
             .get_session(session_id)
             .await?
-            .ok_or_else(|| {
-                AlephError::other(format!("Session not found: {session_id}"))
-            })?;
+            .ok_or_else(|| AlephError::other(format!("Session not found: {session_id}")))?;
 
         // turn_number is computed atomically inside add_turn to avoid TOCTOU races.
         // We pass 0 as a placeholder; the store ignores this value.
@@ -154,19 +147,13 @@ impl SessionCoordinator {
     }
 
     /// Conclude the session, log an event, and optionally save an artifact.
-    pub async fn finalize(
-        &self,
-        session_id: &str,
-        outcome: SessionOutcome,
-    ) -> Result<()> {
+    pub async fn finalize(&self, session_id: &str, outcome: SessionOutcome) -> Result<()> {
         // Fetch session info before concluding (for event logging + artifact)
         let session = self
             .session_store
             .get_session(session_id)
             .await?
-            .ok_or_else(|| {
-                AlephError::other(format!("Session not found: {session_id}"))
-            })?;
+            .ok_or_else(|| AlephError::other(format!("Session not found: {session_id}")))?;
 
         self.session_store
             .conclude_session(session_id, outcome.clone())

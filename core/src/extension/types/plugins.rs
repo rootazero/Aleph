@@ -327,7 +327,10 @@ impl PluginRecord {
 
         Self {
             id: output.plugin_id.clone(),
-            name: output.name.clone().unwrap_or_else(|| output.plugin_id.clone()),
+            name: output
+                .name
+                .clone()
+                .unwrap_or_else(|| output.plugin_id.clone()),
             version: output.version.clone(),
             description: output.description.clone(),
             kind: PluginKind::Static, // default; caller can override

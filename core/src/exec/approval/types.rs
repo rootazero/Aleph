@@ -1,7 +1,7 @@
-use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
 use crate::exec::sandbox::capabilities::Capabilities;
 use crate::exec::sandbox::parameter_binding::RequiredCapabilities;
+use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
 /// Trust stage for capability approval
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

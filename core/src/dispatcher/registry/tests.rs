@@ -1,6 +1,8 @@
+use super::super::types::{
+    ChannelType, ConflictInfo, ConflictResolution, ToolSafetyLevel, ToolSource,
+};
 use super::*;
 use crate::dispatcher::types::ToolPriority;
-use super::super::types::{ChannelType, ConflictInfo, ConflictResolution, ToolSafetyLevel, ToolSource};
 
 #[tokio::test]
 async fn test_registry_new() {
@@ -764,7 +766,9 @@ async fn test_high_risk_tool_channel_restriction() {
         "mcp:server:delete_all",
         "delete_all",
         "Delete everything",
-        ToolSource::Mcp { server: "server".into() },
+        ToolSource::Mcp {
+            server: "server".into(),
+        },
     )
     .with_safety_level(ToolSafetyLevel::IrreversibleHighRisk)
     .with_visible_channels(vec![ChannelType::Panel, ChannelType::Cli]);
@@ -784,12 +788,7 @@ async fn test_high_risk_tool_channel_restriction() {
 
 /// Helper: register a tool with a dotted name directly
 async fn register_tool(registry: &ToolRegistry, id: &str, name: &str) {
-    let tool = UnifiedTool::new(
-        id,
-        name,
-        &format!("Tool {}", name),
-        ToolSource::Builtin,
-    );
+    let tool = UnifiedTool::new(id, name, &format!("Tool {}", name), ToolSource::Builtin);
     registry.register_with_conflict_resolution(tool).await;
 }
 
@@ -846,10 +845,17 @@ async fn test_resolve_command_new_alias() {
 #[tokio::test]
 async fn test_resolve_command_three_level() {
     let registry = ToolRegistry::new();
-    register_tool(&registry, "builtin:plugin_marketplace_install", "plugin_marketplace_install").await;
+    register_tool(
+        &registry,
+        "builtin:plugin_marketplace_install",
+        "plugin_marketplace_install",
+    )
+    .await;
 
     // "/plugin marketplace install x" → plugin_marketplace_install, args = "x"
-    let resolved = registry.resolve_command("/plugin marketplace install x").await;
+    let resolved = registry
+        .resolve_command("/plugin marketplace install x")
+        .await;
     assert!(resolved.is_some());
     let r = resolved.unwrap();
     assert_eq!(r.tool.name, "plugin_marketplace_install");

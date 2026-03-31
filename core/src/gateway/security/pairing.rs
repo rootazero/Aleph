@@ -303,14 +303,16 @@ impl PairingManager {
         }
 
         // This should be extremely rare with 32^8 possibilities
-        Err(PairingError::DatabaseError("Failed to generate unique code".into()))
+        Err(PairingError::DatabaseError(
+            "Failed to generate unique code".into(),
+        ))
     }
 }
 
 fn current_timestamp_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
+        .unwrap_or_default()
         .as_millis() as i64
 }
 
@@ -346,7 +348,9 @@ mod tests {
 
         // Confirm
         let confirmed = manager.confirm_pairing(&code).unwrap();
-        assert!(matches!(confirmed, PairingRequest::Device { device_name, .. } if device_name == "Test iPhone"));
+        assert!(
+            matches!(confirmed, PairingRequest::Device { device_name, .. } if device_name == "Test iPhone")
+        );
 
         // Should be gone
         assert!(manager.get_request(&code).unwrap().is_none());
@@ -363,8 +367,10 @@ mod tests {
         let code = request.code().to_string();
 
         let confirmed = manager.confirm_pairing(&code).unwrap();
-        assert!(matches!(confirmed, PairingRequest::Channel { channel, sender_id, .. }
-            if channel == "telegram" && sender_id == "user123"));
+        assert!(
+            matches!(confirmed, PairingRequest::Channel { channel, sender_id, .. }
+            if channel == "telegram" && sender_id == "user123")
+        );
     }
 
     #[test]

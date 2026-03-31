@@ -49,7 +49,10 @@ mod tests {
 
     #[test]
     fn test_dedup_capacity_eviction() {
-        let mut dedup = MessageDedup { seen: VecDeque::new(), capacity: 3 };
+        let mut dedup = MessageDedup {
+            seen: VecDeque::new(),
+            capacity: 3,
+        };
         assert!(!dedup.is_duplicate("a"));
         assert!(!dedup.is_duplicate("b"));
         assert!(!dedup.is_duplicate("c"));

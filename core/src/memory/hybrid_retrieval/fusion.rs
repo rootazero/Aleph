@@ -75,7 +75,11 @@ pub fn rrf_fuse(
         })
         .collect();
 
-    results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    results.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     results
 }
 
@@ -121,7 +125,11 @@ pub fn weighted_fuse(
         })
         .collect();
 
-    results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    results.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     results
 }
 
@@ -132,16 +140,8 @@ mod tests {
     #[test]
     fn rrf_fuse_combines_both_sources() {
         // "a" and "b" appear in both sources; "c" and "d" in one each.
-        let vec_results = vec![
-            ("a".into(), 0.9),
-            ("b".into(), 0.8),
-            ("c".into(), 0.7),
-        ];
-        let text_results = vec![
-            ("b".into(), 0.9),
-            ("a".into(), 0.7),
-            ("d".into(), 0.5),
-        ];
+        let vec_results = vec![("a".into(), 0.9), ("b".into(), 0.8), ("c".into(), 0.7)];
+        let text_results = vec![("b".into(), 0.9), ("a".into(), 0.7), ("d".into(), 0.5)];
 
         let fused = rrf_fuse(&vec_results, &text_results, 60, 0.0);
 
@@ -153,16 +153,17 @@ mod tests {
 
         // All scores in [0, 1]
         for f in &fused {
-            assert!(f.score >= 0.0 && f.score <= 1.0, "score {} out of range", f.score);
+            assert!(
+                f.score >= 0.0 && f.score <= 1.0,
+                "score {} out of range",
+                f.score
+            );
         }
     }
 
     #[test]
     fn rrf_fuse_empty_text_returns_vector_only() {
-        let vec_results = vec![
-            ("x".into(), 0.9),
-            ("y".into(), 0.5),
-        ];
+        let vec_results = vec![("x".into(), 0.9), ("y".into(), 0.5)];
         let text_results: Vec<(String, f32)> = vec![];
 
         let fused = rrf_fuse(&vec_results, &text_results, 60, 0.0);
@@ -194,13 +195,8 @@ mod tests {
         // "a" only in vector; "b" in both vector and text.
         // Without bonus they would have similar RRF scores, but bonus should
         // push "b" above "a".
-        let vec_results = vec![
-            ("a".into(), 0.9),
-            ("b".into(), 0.8),
-        ];
-        let text_results = vec![
-            ("b".into(), 0.9),
-        ];
+        let vec_results = vec![("a".into(), 0.9), ("b".into(), 0.8)];
+        let text_results = vec![("b".into(), 0.9)];
 
         let fused = rrf_fuse(&vec_results, &text_results, 60, 0.5);
 

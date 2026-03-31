@@ -3,9 +3,9 @@
 //! Handlers for auth profile management: list and status queries.
 //! Profiles are managed through the AuthProfileManager from the providers module.
 
+use crate::sync_primitives::Arc;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use crate::sync_primitives::Arc;
 
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INVALID_PARAMS, RESOURCE_NOT_FOUND};
 use super::parse_params;
@@ -124,10 +124,7 @@ pub async fn handle_list(
         None => profile_manager.list_profiles(),
     };
 
-    JsonRpcResponse::success(
-        request.id,
-        json!(ProfilesListResponse { profiles }),
-    )
+    JsonRpcResponse::success(request.id, json!(ProfilesListResponse { profiles }))
 }
 
 /// Handle profiles.status requests

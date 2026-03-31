@@ -37,10 +37,7 @@ pub struct AgentIdParams {
 // =============================================================================
 
 /// Handle teams.list — list all teams as lightweight summaries
-pub async fn handle_list(
-    request: JsonRpcRequest,
-    store: Arc<dyn TeamStore>,
-) -> JsonRpcResponse {
+pub async fn handle_list(request: JsonRpcRequest, store: Arc<dyn TeamStore>) -> JsonRpcResponse {
     debug!("Handling teams.list request");
 
     match store.list_teams().await {
@@ -95,10 +92,13 @@ pub async fn handle_get(
         }
     };
 
-    let tasks = match coord_store.list_tasks(CoordTaskFilter {
-        team_id: Some(params.team_id.clone()),
-        ..Default::default()
-    }).await {
+    let tasks = match coord_store
+        .list_tasks(CoordTaskFilter {
+            team_id: Some(params.team_id.clone()),
+            ..Default::default()
+        })
+        .await
+    {
         Ok(t) => t,
         Err(e) => {
             return JsonRpcResponse::error(
@@ -116,10 +116,7 @@ pub async fn handle_get(
 }
 
 /// Handle teams.disband — mark a team as disbanded
-pub async fn handle_disband(
-    request: JsonRpcRequest,
-    store: Arc<dyn TeamStore>,
-) -> JsonRpcResponse {
+pub async fn handle_disband(request: JsonRpcRequest, store: Arc<dyn TeamStore>) -> JsonRpcResponse {
     debug!("Handling teams.disband request");
 
     let params: TeamIdParams = match parse_params(&request) {
@@ -138,10 +135,7 @@ pub async fn handle_disband(
 }
 
 /// Handle teams.delete — permanently delete a disbanded team
-pub async fn handle_delete(
-    request: JsonRpcRequest,
-    store: Arc<dyn TeamStore>,
-) -> JsonRpcResponse {
+pub async fn handle_delete(request: JsonRpcRequest, store: Arc<dyn TeamStore>) -> JsonRpcResponse {
     debug!("Handling teams.delete request");
 
     let params: TeamIdParams = match parse_params(&request) {

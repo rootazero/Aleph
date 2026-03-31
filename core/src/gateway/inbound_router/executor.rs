@@ -4,8 +4,8 @@
 //! (execute_for_context / execute_for_context_with_metadata)
 //! into a single parameterized implementation.
 
-use std::collections::HashMap;
 use crate::sync_primitives::Arc;
+use std::collections::HashMap;
 use tracing::{error, info};
 use uuid::Uuid;
 
@@ -18,7 +18,10 @@ use super::InboundMessageRouter;
 
 impl InboundMessageRouter {
     /// Execute the agent for the given context
-    pub(super) async fn execute_for_context(&self, ctx: &InboundContext) -> Result<(), RoutingError> {
+    pub(super) async fn execute_for_context(
+        &self,
+        ctx: &InboundContext,
+    ) -> Result<(), RoutingError> {
         self.execute_for_context_inner(ctx, None).await
     }
 
@@ -28,7 +31,8 @@ impl InboundMessageRouter {
         ctx: &InboundContext,
         slash_command_mode: String,
     ) -> Result<(), RoutingError> {
-        self.execute_for_context_inner(ctx, Some(slash_command_mode)).await
+        self.execute_for_context_inner(ctx, Some(slash_command_mode))
+            .await
     }
 
     /// Unified execution implementation
@@ -63,9 +67,10 @@ impl InboundMessageRouter {
         let agent_id = ctx.session_key.agent_id();
 
         // Look up the agent in the registry
-        let agent = agent_registry.get(agent_id).await.ok_or_else(|| {
-            RoutingError::AgentNotFound(agent_id.to_string())
-        })?;
+        let agent = agent_registry
+            .get(agent_id)
+            .await
+            .ok_or_else(|| RoutingError::AgentNotFound(agent_id.to_string()))?;
 
         // Generate a unique run ID
         let run_id = Uuid::new_v4().to_string();
@@ -81,7 +86,9 @@ impl InboundMessageRouter {
         let mut reply_config = match &self.app_config {
             Some(cfg) => {
                 let cfg = cfg.read().await;
-                let mode = cfg.behavior.as_ref()
+                let mode = cfg
+                    .behavior
+                    .as_ref()
                     .map(|b| b.output_mode.as_str())
                     .unwrap_or("typewriter");
                 ReplyEmitterConfig::from_output_mode(mode)
@@ -107,49 +114,61 @@ impl InboundMessageRouter {
         // Always attach voice deps so that mid-request voice_mode_set
         // tool calls can take effect immediately (dynamic should_voice check)
         let attach_voice = |emitter: ReplyEmitter| -> ReplyEmitter {
-            if let (Some(gen_reg), Some(gen_cfg)) =
-                (self.generation_registry.as_ref(), self.generation_config.as_ref())
-            {
-                return emitter.with_voice(
-                    voice_state.clone(),
-                    gen_reg.clone(),
-                    gen_cfg.clone(),
-                );
+            if let (Some(gen_reg), Some(gen_cfg)) = (
+                self.generation_registry.as_ref(),
+                self.generation_config.as_ref(),
+            ) {
+                return emitter.with_voice(voice_state.clone(), gen_reg.clone(), gen_cfg.clone());
             }
             emitter
         };
 
-        let emitter: Arc<dyn crate::gateway::event_emitter::EventEmitter + Send + Sync> = if is_feishu {
-            // Try to create FeishuEventEmitter with streaming + typing
-            match self.try_create_feishu_emitter(ctx, &run_id, reply_config.clone(), pending_media.clone()).await {
-                Some(fe) => Arc::new(fe),
-                None => {
-                    let re = ReplyEmitter::with_config(
-                        self.channel_registry.clone(),
-                        ctx.reply_route.clone(),
-                        run_id.clone(),
-                        reply_config,
+        let emitter: Arc<dyn crate::gateway::event_emitter::EventEmitter + Send + Sync> =
+            if is_feishu {
+                // Try to create FeishuEventEmitter with streaming + typing
+                match self
+                    .try_create_feishu_emitter(
+                        ctx,
+                        &run_id,
+                        reply_config.clone(),
                         pending_media.clone(),
-                    );
-                    Arc::new(attach_voice(re))
+                    )
+                    .await
+                {
+                    Some(fe) => Arc::new(fe),
+                    None => {
+                        let re = ReplyEmitter::with_config(
+                            self.channel_registry.clone(),
+                            ctx.reply_route.clone(),
+                            run_id.clone(),
+                            reply_config,
+                            pending_media.clone(),
+                        );
+                        Arc::new(attach_voice(re))
+                    }
                 }
-            }
-        } else {
-            let re = ReplyEmitter::with_config(
-                self.channel_registry.clone(),
-                ctx.reply_route.clone(),
-                run_id.clone(),
-                reply_config,
-                pending_media.clone(),
-            );
-            Arc::new(attach_voice(re))
-        };
+            } else {
+                let re = ReplyEmitter::with_config(
+                    self.channel_registry.clone(),
+                    ctx.reply_route.clone(),
+                    run_id.clone(),
+                    reply_config,
+                    pending_media.clone(),
+                );
+                Arc::new(attach_voice(re))
+            };
 
         // Build the run request metadata
         let mut metadata = HashMap::new();
-        metadata.insert("channel_id".to_string(), ctx.message.channel_id.as_str().to_string());
+        metadata.insert(
+            "channel_id".to_string(),
+            ctx.message.channel_id.as_str().to_string(),
+        );
         metadata.insert("sender_id".to_string(), ctx.sender_normalized.clone());
-        metadata.insert("conversation_id".to_string(), ctx.message.conversation_id.as_str().to_string());
+        metadata.insert(
+            "conversation_id".to_string(),
+            ctx.message.conversation_id.as_str().to_string(),
+        );
 
         // Inject user locale for downstream i18n (run_loop, error messages)
         if let Some(ref cfg) = self.app_config {
@@ -192,7 +211,11 @@ impl InboundMessageRouter {
             );
         }
 
-        let label = if is_slash { "slash command for agent" } else { "agent" };
+        let label = if is_slash {
+            "slash command for agent"
+        } else {
+            "agent"
+        };
         info!(
             "Executing {} '{}' for session {} (run_id: {})",
             label,
@@ -223,7 +246,10 @@ impl InboundMessageRouter {
                     error_reply_route.conversation_id.as_str(),
                     &user_msg,
                 );
-                if let Err(send_err) = error_channel_registry.send(&error_reply_route.channel_id, reply).await {
+                if let Err(send_err) = error_channel_registry
+                    .send(&error_reply_route.channel_id, reply)
+                    .await
+                {
                     error!("Failed to send error reply: {}", send_err);
                 }
             }
@@ -240,10 +266,10 @@ impl InboundMessageRouter {
         reply_config: ReplyEmitterConfig,
         pending_media: crate::gateway::media::PendingMedia,
     ) -> Option<crate::gateway::interfaces::feishu::streaming::FeishuEventEmitter> {
-        use crate::gateway::interfaces::feishu::FeishuConfig;
-        use crate::gateway::interfaces::feishu::streaming::FeishuEventEmitter;
         use crate::gateway::interfaces::feishu::api::FeishuApi;
         use crate::gateway::interfaces::feishu::auth::TokenManager;
+        use crate::gateway::interfaces::feishu::streaming::FeishuEventEmitter;
+        use crate::gateway::interfaces::feishu::FeishuConfig;
 
         // Read feishu config from app config
         let feishu_cfg = {
@@ -260,7 +286,12 @@ impl InboundMessageRouter {
         // The lazy get_token() in TokenManager mitigates the worst case.
         let http = reqwest::Client::new();
         let base_url = feishu_cfg.base_url();
-        let auth = Arc::new(TokenManager::new(&feishu_cfg.app_id, &feishu_cfg.app_secret, &base_url, http.clone()));
+        let auth = Arc::new(TokenManager::new(
+            &feishu_cfg.app_id,
+            &feishu_cfg.app_secret,
+            &base_url,
+            http.clone(),
+        ));
         if let Err(e) = auth.refresh_token().await {
             tracing::warn!("Failed to create feishu emitter client: {e}");
             return None;
@@ -276,7 +307,11 @@ impl InboundMessageRouter {
         );
 
         let chat_id = ctx.message.conversation_id.as_str().to_string();
-        let reply_to = ctx.reply_route.reply_to.as_ref().map(|id| id.as_str().to_string());
+        let reply_to = ctx
+            .reply_route
+            .reply_to
+            .as_ref()
+            .map(|id| id.as_str().to_string());
 
         Some(FeishuEventEmitter::new(
             inner,
@@ -289,4 +324,3 @@ impl InboundMessageRouter {
         ))
     }
 }
-

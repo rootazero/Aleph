@@ -33,12 +33,27 @@ impl LeakDecision {
 /// Known secret format patterns.
 static LEAK_PATTERNS: Lazy<Vec<(&str, Regex)>> = Lazy::new(|| {
     vec![
-        ("Anthropic API Key", Regex::new(r"sk-ant-[a-zA-Z0-9\-]{20,}").unwrap()),
-        ("OpenAI API Key", Regex::new(r"sk-[a-zA-Z0-9\-]{20,}").unwrap()),
-        ("Google API Key", Regex::new(r"AIza[a-zA-Z0-9_\-]{35}").unwrap()),
+        (
+            "Anthropic API Key",
+            Regex::new(r"sk-ant-[a-zA-Z0-9\-]{20,}").unwrap(),
+        ),
+        (
+            "OpenAI API Key",
+            Regex::new(r"sk-[a-zA-Z0-9\-]{20,}").unwrap(),
+        ),
+        (
+            "Google API Key",
+            Regex::new(r"AIza[a-zA-Z0-9_\-]{35}").unwrap(),
+        ),
         ("AWS Access Key", Regex::new(r"AKIA[A-Z0-9]{16}").unwrap()),
-        ("GitHub Token", Regex::new(r"gh[pousr]_[a-zA-Z0-9]{36,}").unwrap()),
-        ("Private Key Block", Regex::new(r"-----BEGIN [A-Z ]+ PRIVATE KEY-----").unwrap()),
+        (
+            "GitHub Token",
+            Regex::new(r"gh[pousr]_[a-zA-Z0-9]{36,}").unwrap(),
+        ),
+        (
+            "Private Key Block",
+            Regex::new(r"-----BEGIN [A-Z ]+ PRIVATE KEY-----").unwrap(),
+        ),
     ]
 });
 
@@ -76,7 +91,9 @@ impl LeakDetector {
         for (label, pattern) in LEAK_PATTERNS.iter() {
             if pattern.is_match(&redacted) {
                 found_labels.push(*label);
-                redacted = pattern.replace_all(&redacted, "***LEAKED_REDACTED***").to_string();
+                redacted = pattern
+                    .replace_all(&redacted, "***LEAKED_REDACTED***")
+                    .to_string();
             }
         }
 
@@ -99,7 +116,9 @@ impl LeakDetector {
         for (label, pattern) in LEAK_PATTERNS.iter() {
             if pattern.is_match(&redacted) {
                 found_labels.push(*label);
-                redacted = pattern.replace_all(&redacted, "***LEAKED_REDACTED***").to_string();
+                redacted = pattern
+                    .replace_all(&redacted, "***LEAKED_REDACTED***")
+                    .to_string();
             }
         }
 
@@ -133,7 +152,8 @@ impl LeakDetector {
                 let hash = hasher.finish();
                 if self.injected_hashes.contains(&hash) {
                     return LeakDecision::Block {
-                        reason: "Inbound response contains hash-matched injected secret".to_string(),
+                        reason: "Inbound response contains hash-matched injected secret"
+                            .to_string(),
                         redacted_content: content.replace(word, "***HASH_MATCHED_REDACTED***"),
                     };
                 }
@@ -244,7 +264,10 @@ mod tests {
     fn test_redacted_content_in_block_decision() {
         let detector = LeakDetector::new();
         let content = "Key: sk-abcdefghijklmnopqrstuvwxyz123456789012345678";
-        if let LeakDecision::Block { redacted_content, .. } = detector.scan_outbound(content) {
+        if let LeakDecision::Block {
+            redacted_content, ..
+        } = detector.scan_outbound(content)
+        {
             assert!(redacted_content.contains("***LEAKED_REDACTED***"));
             assert!(!redacted_content.contains("abcdefgh"));
         } else {

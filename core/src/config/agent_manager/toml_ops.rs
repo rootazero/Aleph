@@ -28,9 +28,8 @@ impl AgentManager {
             agents: AgentsConfig,
         }
 
-        let wrapper: Wrapper = toml::from_str(&content).map_err(|e| {
-            AlephError::invalid_config(format!("Failed to parse config: {}", e))
-        })?;
+        let wrapper: Wrapper = toml::from_str(&content)
+            .map_err(|e| AlephError::invalid_config(format!("Failed to parse config: {}", e)))?;
 
         Ok(wrapper.agents)
     }
@@ -55,9 +54,8 @@ impl AgentManager {
         let content = doc.to_string();
         let tmp_path = self.config_path.with_extension("toml.tmp");
 
-        fs::write(&tmp_path, &content).map_err(|e| {
-            AlephError::IoError(format!("Failed to write tmp config: {}", e))
-        })?;
+        fs::write(&tmp_path, &content)
+            .map_err(|e| AlephError::IoError(format!("Failed to write tmp config: {}", e)))?;
 
         // fsync on unix
         #[cfg(unix)]
@@ -70,9 +68,8 @@ impl AgentManager {
             }
         }
 
-        fs::rename(&tmp_path, &self.config_path).map_err(|e| {
-            AlephError::IoError(format!("Failed to rename tmp config: {}", e))
-        })?;
+        fs::rename(&tmp_path, &self.config_path)
+            .map_err(|e| AlephError::IoError(format!("Failed to rename tmp config: {}", e)))?;
 
         debug!("Saved config to {}", self.config_path.display());
         Ok(())
@@ -205,10 +202,7 @@ impl AgentManager {
 
         if agents.get("list").is_none() {
             // Create the array of tables
-            agents.insert(
-                "list",
-                Item::ArrayOfTables(toml_edit::ArrayOfTables::new()),
-            );
+            agents.insert("list", Item::ArrayOfTables(toml_edit::ArrayOfTables::new()));
         }
 
         let list = agents

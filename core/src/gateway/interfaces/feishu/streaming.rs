@@ -1,15 +1,15 @@
-use std::sync::Mutex as StdMutex;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::Mutex as StdMutex;
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use tokio::sync::Mutex;
 use tracing::{debug, warn};
 
-use crate::sync_primitives::Arc;
 use crate::gateway::event_emitter::{EventEmitError, EventEmitter, StreamEvent};
-use crate::gateway::reply_emitter::ReplyEmitter;
 use crate::gateway::inbound_context::ReplyRoute;
+use crate::gateway::reply_emitter::ReplyEmitter;
+use crate::sync_primitives::Arc;
 
 use super::api::FeishuApi;
 use super::types::TypingState;
@@ -45,9 +45,13 @@ impl FeishuStreamingCard {
     }
 
     async fn update(&self, api: &FeishuApi, chunk: &str) {
-        if self.is_closed() { return; }
+        if self.is_closed() {
+            return;
+        }
 
-        { self.accumulated_text.lock().await.push_str(chunk); }
+        {
+            self.accumulated_text.lock().await.push_str(chunk);
+        }
 
         let should_send = {
             let last = self.last_update.lock().await;
@@ -60,23 +64,36 @@ impl FeishuStreamingCard {
     }
 
     async fn flush(&self, api: &FeishuApi) {
-        if self.is_closed() { return; }
+        if self.is_closed() {
+            return;
+        }
 
         let text = self.accumulated_text.lock().await.clone();
-        if text.is_empty() { return; }
+        if text.is_empty() {
+            return;
+        }
 
         let seq = self.next_sequence();
         match api.update_streaming_card(&self.card_id, &text, seq).await {
-            Ok(()) => { *self.last_update.lock().await = Instant::now(); }
-            Err(e) => { warn!("Failed to update streaming card: {e}"); }
+            Ok(()) => {
+                *self.last_update.lock().await = Instant::now();
+            }
+            Err(e) => {
+                warn!("Failed to update streaming card: {e}");
+            }
         }
     }
 
     async fn close(&self, api: &FeishuApi, final_text: &str) {
-        if self.closed.swap(true, Ordering::SeqCst) { return; }
+        if self.closed.swap(true, Ordering::SeqCst) {
+            return;
+        }
 
         let seq = self.next_sequence();
-        if let Err(e) = api.update_streaming_card(&self.card_id, final_text, seq).await {
+        if let Err(e) = api
+            .update_streaming_card(&self.card_id, final_text, seq)
+            .await
+        {
             warn!("Failed to send final streaming card update: {e}");
         }
 
@@ -85,7 +102,10 @@ impl FeishuStreamingCard {
             None => final_text,
         };
         let close_seq = self.next_sequence();
-        if let Err(e) = api.close_streaming_card(&self.card_id, summary, close_seq).await {
+        if let Err(e) = api
+            .close_streaming_card(&self.card_id, summary, close_seq)
+            .await
+        {
             warn!("Failed to close streaming card: {e}");
         }
     }
@@ -128,7 +148,9 @@ impl FeishuEventEmitter {
     }
 
     async fn start_typing(&self) {
-        if !self.typing_enabled { return; }
+        if !self.typing_enabled {
+            return;
+        }
         let msg_id = match &self.reply_to_message_id {
             Some(id) => id.clone(),
             None => return,
@@ -136,7 +158,10 @@ impl FeishuEventEmitter {
         match self.api.add_reaction(&msg_id, "Typing").await {
             Ok(reaction_id) => {
                 let mut state = self.typing_state.lock().unwrap_or_else(|e| e.into_inner());
-                *state = Some(TypingState { message_id: msg_id, reaction_id });
+                *state = Some(TypingState {
+                    message_id: msg_id,
+                    reaction_id,
+                });
                 debug!("Added typing indicator");
             }
             Err(e) => debug!("Failed to add typing indicator (non-critical): {e}"),
@@ -149,7 +174,11 @@ impl FeishuEventEmitter {
             guard.take()
         };
         if let Some(typing) = state {
-            if let Err(e) = self.api.remove_reaction(&typing.message_id, &typing.reaction_id).await {
+            if let Err(e) = self
+                .api
+                .remove_reaction(&typing.message_id, &typing.reaction_id)
+                .await
+            {
                 debug!("Failed to remove typing indicator (non-critical): {e}");
             } else {
                 debug!("Removed typing indicator");
@@ -166,7 +195,11 @@ impl FeishuEventEmitter {
             }
         };
         let reply_to = self.reply_to_message_id.as_deref();
-        match self.api.send_card_message(&self.chat_id, &card_id, reply_to).await {
+        match self
+            .api
+            .send_card_message(&self.chat_id, &card_id, reply_to)
+            .await
+        {
             Ok(_msg_id) => {
                 debug!("Streaming card created and sent: {card_id}");
                 Some(FeishuStreamingCard::new(card_id))
@@ -183,7 +216,12 @@ impl FeishuEventEmitter {
 impl EventEmitter for FeishuEventEmitter {
     async fn emit(&self, event: StreamEvent) -> Result<(), EventEmitError> {
         match &event {
-            StreamEvent::ResponseChunk { content, is_final, is_intermediate, .. } => {
+            StreamEvent::ResponseChunk {
+                content,
+                is_final,
+                is_intermediate,
+                ..
+            } => {
                 if *is_intermediate || !self.streaming_enabled {
                     return self.inner.emit(event).await;
                 }

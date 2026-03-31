@@ -57,12 +57,10 @@ pub fn check_path_escalation(
                 if approved.ends_with("/*") {
                     let prefix = approved.trim_end_matches("/*");
                     let resolved_prefix = resolve_path_with_symlinks(&PathBuf::from(prefix));
-                    path.starts_with(&resolved_prefix)
-                        || path.starts_with(Path::new(prefix))
+                    path.starts_with(&resolved_prefix) || path.starts_with(Path::new(prefix))
                 } else {
                     let resolved_approved = resolve_path_with_symlinks(&PathBuf::from(approved));
-                    path == resolved_approved
-                        || path == Path::new(approved.as_str())
+                    path == resolved_approved || path == Path::new(approved.as_str())
                 }
             });
 

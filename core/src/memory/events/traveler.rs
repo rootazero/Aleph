@@ -143,9 +143,7 @@ impl MemoryTimeTraveler {
 /// Generate a human-readable description for an event envelope.
 fn describe_event(env: &MemoryEventEnvelope) -> String {
     match &env.event {
-        MemoryEvent::FactCreated {
-            content, tier, ..
-        } => {
+        MemoryEvent::FactCreated { content, tier, .. } => {
             format!(
                 "Fact created in {:?} tier: \"{}\"",
                 tier,
@@ -198,9 +196,7 @@ fn describe_event(env: &MemoryEventEnvelope) -> String {
                 old_strength, new_strength
             )
         }
-        MemoryEvent::FactInvalidated {
-            reason, actor, ..
-        } => {
+        MemoryEvent::FactInvalidated { reason, actor, .. } => {
             format!("Invalidated by {}: {}", actor, reason)
         }
         MemoryEvent::FactRestored { new_strength, .. } => {

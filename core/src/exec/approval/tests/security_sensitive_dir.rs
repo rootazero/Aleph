@@ -152,7 +152,10 @@ fn test_false_positive_ssh_name() {
 fn test_escalation_ssh_key_in_scope() {
     let approved_paths = vec!["/Users/test/*".to_string()];
     let mut params = HashMap::new();
-    params.insert("file_path".to_string(), "/Users/test/.ssh/id_rsa".to_string());
+    params.insert(
+        "file_path".to_string(),
+        "/Users/test/.ssh/id_rsa".to_string(),
+    );
 
     let trigger = check_path_escalation(&params, &approved_paths);
     assert!(
@@ -171,7 +174,10 @@ fn test_escalation_ssh_key_in_scope() {
 fn test_escalation_gpg_key_in_scope() {
     let approved_paths = vec!["/Users/test/*".to_string()];
     let mut params = HashMap::new();
-    params.insert("file_path".to_string(), "/Users/test/.gnupg/private-keys-v1.d/key.gpg".to_string());
+    params.insert(
+        "file_path".to_string(),
+        "/Users/test/.gnupg/private-keys-v1.d/key.gpg".to_string(),
+    );
 
     let trigger = check_path_escalation(&params, &approved_paths);
     assert!(
@@ -189,7 +195,10 @@ fn test_escalation_gpg_key_in_scope() {
 fn test_escalation_aws_credentials_in_scope() {
     let approved_paths = vec!["/Users/test/*".to_string()];
     let mut params = HashMap::new();
-    params.insert("file_path".to_string(), "/Users/test/.aws/credentials".to_string());
+    params.insert(
+        "file_path".to_string(),
+        "/Users/test/.aws/credentials".to_string(),
+    );
 
     let trigger = check_path_escalation(&params, &approved_paths);
     assert!(
@@ -207,7 +216,10 @@ fn test_escalation_aws_credentials_in_scope() {
 fn test_escalation_gcloud_credentials_in_scope() {
     let approved_paths = vec!["/Users/test/*".to_string()];
     let mut params = HashMap::new();
-    params.insert("file_path".to_string(), "/Users/test/.config/gcloud/credentials.db".to_string());
+    params.insert(
+        "file_path".to_string(),
+        "/Users/test/.config/gcloud/credentials.db".to_string(),
+    );
 
     let trigger = check_path_escalation(&params, &approved_paths);
     assert!(
@@ -225,7 +237,10 @@ fn test_escalation_gcloud_credentials_in_scope() {
 fn test_escalation_nested_sensitive_path() {
     let approved_paths = vec!["/Users/test/*".to_string()];
     let mut params = HashMap::new();
-    params.insert("file_path".to_string(), "/Users/test/.ssh/config.d/work.conf".to_string());
+    params.insert(
+        "file_path".to_string(),
+        "/Users/test/.ssh/config.d/work.conf".to_string(),
+    );
 
     let trigger = check_path_escalation(&params, &approved_paths);
     assert!(
@@ -243,7 +258,10 @@ fn test_escalation_nested_sensitive_path() {
 fn test_no_escalation_non_sensitive_in_scope() {
     let approved_paths = vec!["/Users/test/*".to_string()];
     let mut params = HashMap::new();
-    params.insert("file_path".to_string(), "/Users/test/Documents/file.txt".to_string());
+    params.insert(
+        "file_path".to_string(),
+        "/Users/test/Documents/file.txt".to_string(),
+    );
 
     let trigger = check_path_escalation(&params, &approved_paths);
     assert!(
@@ -257,8 +275,14 @@ fn test_no_escalation_non_sensitive_in_scope() {
 fn test_escalation_multiple_params_one_sensitive() {
     let approved_paths = vec!["/Users/test/*".to_string()];
     let mut params = HashMap::new();
-    params.insert("input_file".to_string(), "/Users/test/input.txt".to_string());
-    params.insert("output_file".to_string(), "/Users/test/.ssh/id_rsa".to_string());
+    params.insert(
+        "input_file".to_string(),
+        "/Users/test/input.txt".to_string(),
+    );
+    params.insert(
+        "output_file".to_string(),
+        "/Users/test/.ssh/id_rsa".to_string(),
+    );
 
     let trigger = check_path_escalation(&params, &approved_paths);
     assert!(
@@ -355,5 +379,3 @@ fn test_system_level_keychain() {
         "System-level Keychain should be detected"
     );
 }
-
-

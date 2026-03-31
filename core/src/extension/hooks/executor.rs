@@ -59,7 +59,9 @@ impl HookExecutor {
             if let Some(ref matcher) = hook.matcher {
                 if !cache.contains_key(matcher) {
                     match regex::Regex::new(matcher) {
-                        Ok(re) => { cache.insert(matcher.clone(), Some(re)); }
+                        Ok(re) => {
+                            cache.insert(matcher.clone(), Some(re));
+                        }
                         Err(e) => {
                             warn!("Invalid hook matcher regex '{}': {}", matcher, e);
                             cache.insert(matcher.clone(), None);
@@ -75,7 +77,9 @@ impl HookExecutor {
     fn cache_regex(&mut self, pattern: &str) {
         if !self.regex_cache.contains_key(pattern) {
             match regex::Regex::new(pattern) {
-                Ok(re) => { self.regex_cache.insert(pattern.to_string(), Some(re)); }
+                Ok(re) => {
+                    self.regex_cache.insert(pattern.to_string(), Some(re));
+                }
                 Err(e) => {
                     warn!("Invalid hook matcher regex '{}': {}", pattern, e);
                     self.regex_cache.insert(pattern.to_string(), None);
@@ -115,7 +119,9 @@ impl HookExecutor {
 
             // Execute all actions for this hook
             for action in &hook.actions {
-                let action_result = self.execute_action(action, context, &hook.plugin_root).await;
+                let action_result = self
+                    .execute_action(action, context, &hook.plugin_root)
+                    .await;
 
                 match action_result {
                     Ok(ar) => {
@@ -134,8 +140,9 @@ impl HookExecutor {
                                 if let Some(ref output) = ar.output {
                                     if output.trim().to_lowercase().starts_with("block:") {
                                         result.blocked = true;
-                                        result.block_reason =
-                                            Some(output.trim().get(6..).unwrap_or("").trim().to_string());
+                                        result.block_reason = Some(
+                                            output.trim().get(6..).unwrap_or("").trim().to_string(),
+                                        );
                                     }
                                 }
                             }
@@ -225,10 +232,7 @@ impl HookExecutor {
         debug!("Executing hook command: {}", resolved);
 
         // Determine working directory
-        let working_dir = context
-            .working_dir
-            .as_ref()
-            .unwrap_or(plugin_root);
+        let working_dir = context.working_dir.as_ref().unwrap_or(plugin_root);
 
         // Build command
         let mut cmd = if cfg!(windows) {
@@ -385,7 +389,8 @@ impl HookExecutor {
                         if let HookAction::Command { .. } = action {
                             if let Some(ref output) = ar.output {
                                 if output.trim().to_lowercase().starts_with("block:") {
-                                    let reason = output.trim().get(6..).unwrap_or("").trim().to_string();
+                                    let reason =
+                                        output.trim().get(6..).unwrap_or("").trim().to_string();
                                     return Ok((current_context, Some(reason)));
                                 }
                             }

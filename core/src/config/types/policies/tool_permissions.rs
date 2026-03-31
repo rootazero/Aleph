@@ -68,7 +68,10 @@ impl ToolPermissionsConfig {
     /// The effective default is `min(global.default, agent.default)`.
     /// Overrides are merged: if both layers specify a tool, the most
     /// restrictive level is used.
-    pub fn merge(global: &ToolPermissionsConfig, agent: &ToolPermissionsConfig) -> ToolPermissionsConfig {
+    pub fn merge(
+        global: &ToolPermissionsConfig,
+        agent: &ToolPermissionsConfig,
+    ) -> ToolPermissionsConfig {
         let default = restrictive_min(global.default, agent.default);
 
         let mut overrides = HashMap::new();
@@ -121,7 +124,9 @@ mod tests {
     #[test]
     fn test_resolve_with_override() {
         let mut config = ToolPermissionsConfig::default();
-        config.overrides.insert("shell".to_string(), PermissionAction::Ask);
+        config
+            .overrides
+            .insert("shell".to_string(), PermissionAction::Ask);
 
         assert_eq!(config.resolve("shell"), PermissionAction::Ask);
         assert_eq!(config.resolve("read_file"), PermissionAction::Allow);

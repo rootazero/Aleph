@@ -6,8 +6,7 @@
 use super::error::{ExtensionError, ExtensionResult};
 use super::template::SkillTemplate;
 use super::types::{
-    ExtensionSkill, PermissionAction, PermissionRule, SkillContext, SkillMetadata,
-    SkillToolResult,
+    ExtensionSkill, PermissionAction, PermissionRule, SkillContext, SkillMetadata, SkillToolResult,
 };
 use crate::event::{
     AlephEvent, EventFilter, EventType, GlobalBus, PermissionReply, PermissionRequest,
@@ -129,8 +128,8 @@ pub async fn request_skill_permission_async(
     let session_id_owned = session_id.to_string();
     let tx_clone = tx.clone();
 
-    let filter = EventFilter::new(vec![EventType::PermissionReplied])
-        .with_session(&session_id_owned);
+    let filter =
+        EventFilter::new(vec![EventType::PermissionReplied]).with_session(&session_id_owned);
 
     let sub_id = bus
         .subscribe_async(filter, move |global_event| {
@@ -178,12 +177,7 @@ pub async fn request_skill_permission_async(
     match result {
         Ok(Ok(reply)) => {
             let allowed = reply.is_allowed();
-            info!(
-                skill_name,
-                request_id,
-                allowed,
-                "Permission reply received"
-            );
+            info!(skill_name, request_id, allowed, "Permission reply received");
             Ok(allowed)
         }
         Ok(Err(_)) => {
@@ -198,7 +192,9 @@ pub async fn request_skill_permission_async(
             // Timeout
             warn!(
                 skill_name,
-                request_id, "Permission request timed out after {} seconds", PERMISSION_TIMEOUT_SECS
+                request_id,
+                "Permission request timed out after {} seconds",
+                PERMISSION_TIMEOUT_SECS
             );
             Err(ExtensionError::PermissionDenied(format!(
                 "Permission request timed out for skill: {}",
@@ -279,7 +275,10 @@ mod tests {
     #[test]
     fn test_permission_simple_allow() {
         let mut permissions = HashMap::new();
-        permissions.insert("skill".to_string(), PermissionRule::Simple(PermissionAction::Allow));
+        permissions.insert(
+            "skill".to_string(),
+            PermissionRule::Simple(PermissionAction::Allow),
+        );
 
         let ctx = SkillContext {
             session_id: "test".to_string(),
@@ -293,7 +292,10 @@ mod tests {
     #[test]
     fn test_permission_simple_deny() {
         let mut permissions = HashMap::new();
-        permissions.insert("skill".to_string(), PermissionRule::Simple(PermissionAction::Deny));
+        permissions.insert(
+            "skill".to_string(),
+            PermissionRule::Simple(PermissionAction::Deny),
+        );
 
         let ctx = SkillContext {
             session_id: "test".to_string(),

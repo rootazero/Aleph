@@ -21,7 +21,10 @@ fn make_oneshot_entry(script: &str, format: OutputFormatSerde) -> AcpHarnessEntr
 async fn p3_01_oneshot_plaintext() {
     let entry = make_oneshot_entry("mock_codex.sh", OutputFormatSerde::PlainText);
     let harness = CustomHarness::new("test-codex".into(), entry);
-    let result = harness.execute_oneshot("hello world", "/tmp").await.unwrap();
+    let result = harness
+        .execute_oneshot("hello world", "/tmp")
+        .await
+        .unwrap();
     assert!(result.contains("codex response:"), "got: {}", result);
     assert!(result.contains("hello world"), "got: {}", result);
 }
@@ -84,11 +87,7 @@ async fn p3_05_oneshot_with_env_vars() {
         .insert("TEST_VAR".to_string(), "probe_value".to_string());
     let harness = CustomHarness::new("env-test".into(), entry);
     let result = harness.execute_oneshot("ignored", "/tmp").await.unwrap();
-    assert!(
-        result.contains("TEST_VAR=probe_value"),
-        "got: {}",
-        result
-    );
+    assert!(result.contains("TEST_VAR=probe_value"), "got: {}", result);
 }
 
 #[tokio::test]

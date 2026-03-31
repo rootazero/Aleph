@@ -27,8 +27,8 @@ pub mod component_id;
 pub mod config;
 pub mod discovery;
 pub mod hooks;
-pub mod marketplace;
 mod loader;
+pub mod marketplace;
 pub mod runtime;
 pub mod scope;
 pub mod sync_api;
@@ -40,8 +40,8 @@ pub mod registrar;
 mod channel_manager;
 mod error;
 mod http_handler;
-pub mod mcp_config;
 pub mod manifest;
+pub mod mcp_config;
 mod plugin_ops;
 mod provider_adapter;
 pub mod registry;
@@ -53,12 +53,12 @@ mod template;
 mod types;
 pub mod watcher;
 
-pub use component_id::ComponentId;
 pub use channel_manager::{ChannelHandle, ChannelManager};
+pub use component_id::ComponentId;
 pub use error::*;
 pub use http_handler::{match_path, PluginHttpHandler};
-pub use manifest::*;
 pub use loader::PluginLoader;
+pub use manifest::*;
 pub use provider_adapter::PluginProviderAdapter;
 pub use registry::*;
 pub use service_manager::ServiceManager;
@@ -73,18 +73,18 @@ pub use config::{AlephConfig, ConfigManager};
 pub use sync_api::SyncExtensionManager;
 
 // Re-export new plugin system types (Phase 1)
+pub use capability::{CapabilityDeclaration, CapabilitySource, SourceFormat, Tier};
 pub use discovery::{discover_all, DiscoveryConfig as PluginDiscoveryConfig, PluginCandidate};
 pub use manifest::PluginManifest;
+pub use registrar::CapabilityApi;
 pub use registry::{HookRegistration, PluginRegistry, ToolRegistration};
 pub use types::{PluginKind, PluginOrigin, PluginRecord, PluginStatus};
-pub use capability::{CapabilityDeclaration, CapabilitySource, SourceFormat, Tier};
-pub use registrar::CapabilityApi;
 
 use crate::discovery::{DiscoveryConfig, DiscoveryManager};
+use crate::sync_primitives::Arc;
 use hooks::HookExecutor;
 use manifest::adapter::AdapterRegistry;
 use std::path::PathBuf;
-use crate::sync_primitives::Arc;
 use std::time::Instant;
 use tokio::sync::{Mutex, RwLock};
 
@@ -206,7 +206,10 @@ impl ExtensionManager {
                     Ok(output) => {
                         // Collect MCP configs (no-op in CapabilityApi dispatch)
                         for cap in &output.capabilities {
-                            if let crate::extension::capability::CapabilityDeclaration::McpServer(mcp) = cap {
+                            if let crate::extension::capability::CapabilityDeclaration::McpServer(
+                                mcp,
+                            ) = cap
+                            {
                                 let server_name = output.plugin_id.clone();
                                 mcp_configs.push((server_name, mcp.clone()));
                             }
@@ -227,7 +230,8 @@ impl ExtensionManager {
                             if let Err(e) = api.register_capability(cap) {
                                 tracing::debug!(
                                     "Failed to register capability for plugin {}: {}",
-                                    plugin_id, e
+                                    plugin_id,
+                                    e
                                 );
                             }
                         }
@@ -235,11 +239,10 @@ impl ExtensionManager {
                         summary.plugins_loaded += 1;
                     }
                     Err(e) => {
-                        tracing::debug!(
-                            "Failed to parse plugin dir {:?}: {}",
-                            dir_path, e
-                        );
-                        summary.errors.push(format!("{}: {}", dir_path.display(), e));
+                        tracing::debug!("Failed to parse plugin dir {:?}: {}", dir_path, e);
+                        summary
+                            .errors
+                            .push(format!("{}: {}", dir_path.display(), e));
                     }
                 }
             }
@@ -418,11 +421,8 @@ impl ExtensionManager {
 
         // Atomically unregister old capabilities and register new ones
         let mut registry = self.plugin_registry.write().await;
-        let mut api = registrar::CapabilityApi::new(
-            &mut registry,
-            output.plugin_id.clone(),
-            permissions,
-        );
+        let mut api =
+            registrar::CapabilityApi::new(&mut registry, output.plugin_id.clone(), permissions);
         api.reload(record, output.capabilities)?;
 
         tracing::info!(plugin = plugin_id, "Plugin hot-reloaded successfully");
@@ -523,14 +523,18 @@ mod tests {
     #[tokio::test]
     async fn test_extension_manager_get_service_status_not_found() {
         let manager = ExtensionManager::with_defaults().await.unwrap();
-        let status = manager.get_service_status("nonexistent-plugin", "nonexistent-service").await;
+        let status = manager
+            .get_service_status("nonexistent-plugin", "nonexistent-service")
+            .await;
         assert!(status.is_none());
     }
 
     #[tokio::test]
     async fn test_extension_manager_start_service_not_registered() {
         let manager = ExtensionManager::with_defaults().await.unwrap();
-        let result = manager.start_service("nonexistent-plugin", "nonexistent-service").await;
+        let result = manager
+            .start_service("nonexistent-plugin", "nonexistent-service")
+            .await;
         assert!(result.is_err());
         match result {
             Err(ExtensionError::ServiceNotFound(id)) => {
@@ -545,7 +549,9 @@ mod tests {
     #[tokio::test]
     async fn test_extension_manager_stop_service_not_registered() {
         let manager = ExtensionManager::with_defaults().await.unwrap();
-        let result = manager.stop_service("nonexistent-plugin", "nonexistent-service").await;
+        let result = manager
+            .stop_service("nonexistent-plugin", "nonexistent-service")
+            .await;
         assert!(result.is_err());
         match result {
             Err(ExtensionError::ServiceNotFound(id)) => {

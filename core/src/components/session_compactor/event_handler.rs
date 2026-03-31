@@ -2,9 +2,7 @@
 
 use async_trait::async_trait;
 
-use crate::event::{
-    AlephEvent, EventContext, EventHandler, EventType, HandlerError,
-};
+use crate::event::{AlephEvent, EventContext, EventHandler, EventType, HandlerError};
 
 use super::compactor::SessionCompactor;
 

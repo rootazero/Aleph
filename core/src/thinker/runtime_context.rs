@@ -56,11 +56,9 @@ impl RuntimeContext {
         let os = std::env::consts::OS.to_string();
         let arch = std::env::consts::ARCH.to_string();
 
-        let shell = std::env::var("SHELL")
-            .unwrap_or_else(|_| "unknown".to_string());
+        let shell = std::env::var("SHELL").unwrap_or_else(|_| "unknown".to_string());
 
-        let working_dir = std::env::current_dir()
-            .unwrap_or_else(|_| PathBuf::from("/"));
+        let working_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
 
         let hostname = std::env::var("HOSTNAME")
             .or_else(|_| std::env::var("COMPUTERNAME"))
@@ -196,7 +194,10 @@ mod tests {
         let lines: Vec<&str> = section.lines().collect();
         assert_eq!(lines.len(), 2, "should have header + data line");
         assert_eq!(lines[0], "## Runtime Environment");
-        assert!(lines[1].contains(" | "), "data line should use pipe separators");
+        assert!(
+            lines[1].contains(" | "),
+            "data line should use pipe separators"
+        );
     }
 
     #[test]

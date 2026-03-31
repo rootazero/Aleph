@@ -3,9 +3,9 @@
 //! Wraps `ToolRegistry::execute_tool()` + `UnifiedTool` metadata into
 //! LoopTool instances for use in the agent loop.
 
+use crate::sync_primitives::Arc;
 use async_trait::async_trait;
 use serde_json::{json, Value};
-use crate::sync_primitives::Arc;
 
 use crate::dispatcher::UnifiedTool;
 use crate::executor::ToolRegistry;
@@ -95,9 +95,7 @@ impl<R: ToolRegistry + 'static> LoopTool for RegistryToolAdapter<R> {
             input
         };
         match self.registry.execute_tool(&self.name, input).await {
-            Ok(output) => {
-                ToolResult::Success { output }
-            }
+            Ok(output) => ToolResult::Success { output },
             Err(e) => {
                 tracing::warn!(tool = %self.name, error = %e, "Tool execution failed");
                 ToolResult::Error {
@@ -185,12 +183,7 @@ mod tests {
     }
 
     fn make_unified_tool(name: &str, desc: &str) -> UnifiedTool {
-        let mut tool = UnifiedTool::new(
-            format!("native:{}", name),
-            name,
-            desc,
-            ToolSource::Native,
-        );
+        let mut tool = UnifiedTool::new(format!("native:{}", name), name, desc, ToolSource::Native);
         tool.parameters_schema = Some(json!({"type": "object", "properties": {}}));
         tool
     }
@@ -224,7 +217,9 @@ mod tests {
         let result = registry.execute("search", json!({"q": "rust"})).await;
 
         match result {
-            ToolResult::Success { output } | ToolResult::SuccessAndStopLoop { output } => assert_eq!(output["found"], 42),
+            ToolResult::Success { output } | ToolResult::SuccessAndStopLoop { output } => {
+                assert_eq!(output["found"], 42)
+            }
             ToolResult::Error { error, .. } => panic!("expected success: {}", error),
         }
     }
@@ -295,10 +290,7 @@ mod tests {
         let mut inactive = make_unified_tool("disabled", "Should not appear");
         inactive.is_active = false;
 
-        let tools = vec![
-            make_unified_tool("active", "Active tool"),
-            inactive,
-        ];
+        let tools = vec![make_unified_tool("active", "Active tool"), inactive];
 
         let registry = build_registry_from_tools(tool_registry, &tools, None);
         assert_eq!(registry.len(), 1);

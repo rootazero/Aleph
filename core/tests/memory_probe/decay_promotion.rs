@@ -26,8 +26,10 @@ fn p5_01_tiered_decay_short_term_fastest() {
         creation_time: 0,
     };
 
-    let s_short = ms.calculate_strength_tiered(&config, &MemoryTier::ShortTerm, &FactType::Other, now);
-    let s_long = ms.calculate_strength_tiered(&config, &MemoryTier::LongTerm, &FactType::Other, now);
+    let s_short =
+        ms.calculate_strength_tiered(&config, &MemoryTier::ShortTerm, &FactType::Other, now);
+    let s_long =
+        ms.calculate_strength_tiered(&config, &MemoryTier::LongTerm, &FactType::Other, now);
     let s_core = ms.calculate_strength_tiered(&config, &MemoryTier::Core, &FactType::Other, now);
 
     assert!(

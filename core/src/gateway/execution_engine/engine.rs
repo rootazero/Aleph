@@ -6,19 +6,19 @@
 //! Slash command handling lives in `slash_command.rs`.
 //! Agent loop execution and streaming live in `run_loop.rs`.
 
-use std::collections::HashMap;
-use crate::sync_primitives::{AtomicU32, AtomicU64};
 use crate::sync_primitives::Arc;
+use crate::sync_primitives::{AtomicU32, AtomicU64};
+use std::collections::HashMap;
 
 use tokio::sync::{mpsc, RwLock};
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 use super::{ActiveRun, ExecutionEngineConfig, ExecutionError, RunRequest, RunState, RunStatus};
+use crate::gateway::agent_env::AgentEnvStore;
 use crate::gateway::agent_instance::{AgentInstance, AgentState, MessageRole};
 use crate::gateway::event_emitter::{EventEmitter, RunSummary, StreamEvent};
 use crate::gateway::inbound_router::SLASH_COMMAND_MODE_KEY;
-use crate::gateway::agent_env::AgentEnvStore;
 
 use crate::dispatcher::UnifiedTool;
 use crate::executor::ToolRegistry;
@@ -307,10 +307,22 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // ================================================================
         if let Some(sc_handle) = self.tool_registry.session_context_handle() {
             let mut sc = sc_handle.write().await;
-            sc.channel = request.metadata.get("channel_id").cloned().unwrap_or_default();
-            sc.peer_id = request.metadata.get("sender_id").cloned().unwrap_or_default();
+            sc.channel = request
+                .metadata
+                .get("channel_id")
+                .cloned()
+                .unwrap_or_default();
+            sc.peer_id = request
+                .metadata
+                .get("sender_id")
+                .cloned()
+                .unwrap_or_default();
             sc.session_key_str = request.session_key.to_key_string();
-            sc.conversation_id = request.metadata.get("conversation_id").cloned().unwrap_or_default();
+            sc.conversation_id = request
+                .metadata
+                .get("conversation_id")
+                .cloned()
+                .unwrap_or_default();
         }
 
         // Propagate session key to memory_search so scope=current_session works
@@ -324,7 +336,11 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         if let Some(mode_json) = request.metadata.get(SLASH_COMMAND_MODE_KEY) {
             let fast_result = self
                 .execute_slash_command_fast_path(
-                    &run_id, mode_json, &request, agent.clone(), emitter.clone(),
+                    &run_id,
+                    mode_json,
+                    &request,
+                    agent.clone(),
+                    emitter.clone(),
                 )
                 .await;
 
@@ -350,7 +366,13 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 Err(ref e) => {
                     // Direct tool errors: return error response, do NOT fall through
                     return self
-                        .finalize_fast_path_error(&run_id, &request, &agent, &emitter, &e.to_string())
+                        .finalize_fast_path_error(
+                            &run_id,
+                            &request,
+                            &agent,
+                            &emitter,
+                            &e.to_string(),
+                        )
                         .await;
                 }
             }
@@ -364,7 +386,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             .unwrap_or(self.config.default_timeout_secs);
 
         let deadline = Arc::new(tokio::sync::Mutex::new(
-            tokio::time::Instant::now() + tokio::time::Duration::from_secs(timeout_secs)
+            tokio::time::Instant::now() + tokio::time::Duration::from_secs(timeout_secs),
         ));
 
         let result = tokio::select! {
@@ -458,8 +480,11 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
 
                 // Auto-generate session topic on first real message
                 if is_first_message {
-                    if let (Some(sm), Some(eb)) = (self.session_manager.clone(), self.event_bus.clone()) {
-                        let topic_provider = self.provider_registry
+                    if let (Some(sm), Some(eb)) =
+                        (self.session_manager.clone(), self.event_bus.clone())
+                    {
+                        let topic_provider = self
+                            .provider_registry
                             .get("haiku")
                             .unwrap_or_else(|| self.provider_registry.default_provider());
                         let topic_session_key = request.session_key.clone();
@@ -492,7 +517,11 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                             let topic_text = match topic_provider.process(payload).await {
                                 Ok(resp) => {
                                     let text = resp.text_content().trim().to_string();
-                                    if text.is_empty() { None } else { Some(text) }
+                                    if text.is_empty() {
+                                        None
+                                    } else {
+                                        Some(text)
+                                    }
                                 }
                                 Err(e) => {
                                     warn!(error = %e, "Auto-topic: LLM call failed, using fallback");
@@ -530,8 +559,11 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                             }
                         });
                     } else {
-                        info!("Auto-topic: skipped (session_manager={}, event_bus={})",
-                            self.session_manager.is_some(), self.event_bus.is_some());
+                        info!(
+                            "Auto-topic: skipped (session_manager={}, event_bus={})",
+                            self.session_manager.is_some(),
+                            self.event_bus.is_some()
+                        );
                     }
                 }
 
@@ -557,7 +589,10 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     let agent_clone = agent.clone();
                     let session_key_clone = request.session_key.clone();
                     tokio::spawn(async move {
-                        if let Err(e) = sc.post_turn_compress(&agent_clone, &session_key_clone).await {
+                        if let Err(e) = sc
+                            .post_turn_compress(&agent_clone, &session_key_clone)
+                            .await
+                        {
                             warn!(error = %e, "Session compaction failed");
                         }
                     });
@@ -724,7 +759,11 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         let error_response = format!("\u{274c} {}", error_msg);
 
         agent
-            .add_message(&request.session_key, MessageRole::Assistant, &error_response)
+            .add_message(
+                &request.session_key,
+                MessageRole::Assistant,
+                &error_response,
+            )
             .await;
         let _ = emitter
             .emit(StreamEvent::ResponseChunk {

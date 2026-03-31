@@ -1,3 +1,4 @@
+use serde::{Deserialize, Serialize};
 /// Media Generation Provider abstraction for Aleph
 ///
 /// This module defines the `GenerationProvider` trait which provides a unified interface
@@ -33,7 +34,6 @@
 /// - `Speech`: Text-to-speech (ElevenLabs, OpenAI TTS)
 use std::future::Future;
 use std::pin::Pin;
-use serde::{Deserialize, Serialize};
 
 // Sub-modules
 pub mod error;

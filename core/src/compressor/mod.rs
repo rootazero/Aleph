@@ -17,4 +17,3 @@ pub use smart_strategy::{CompactionAction, SmartCompactionStrategy};
 pub use strategy::CompressionPrompt;
 pub use tool_truncator::{ToolTruncator, TruncatedOutput};
 pub use turn_protector::TurnProtector;
-

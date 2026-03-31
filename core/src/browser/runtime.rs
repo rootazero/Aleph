@@ -7,9 +7,7 @@
 use std::collections::HashMap;
 
 use base64::Engine as _;
-use chromiumoxide::browser::{
-    Browser, BrowserConfig as CdpBrowserConfig, BrowserConfigBuilder,
-};
+use chromiumoxide::browser::{Browser, BrowserConfig as CdpBrowserConfig, BrowserConfigBuilder};
 use chromiumoxide::cdp::browser_protocol::page::CaptureScreenshotFormat;
 use chromiumoxide::page::ScreenshotParams;
 use chromiumoxide::Page;
@@ -44,16 +42,12 @@ impl BrowserRuntime {
         let cdp_config = build_cdp_config(&config)?;
 
         let (browser, mut handler) = match &config.mode {
-            LaunchMode::Connect { endpoint } => {
-                Browser::connect(endpoint.as_str())
-                    .await
-                    .map_err(|e| BrowserError::ConnectionFailed(e.to_string()))?
-            }
-            _ => {
-                Browser::launch(cdp_config)
-                    .await
-                    .map_err(|e| BrowserError::LaunchFailed(e.to_string()))?
-            }
+            LaunchMode::Connect { endpoint } => Browser::connect(endpoint.as_str())
+                .await
+                .map_err(|e| BrowserError::ConnectionFailed(e.to_string()))?,
+            _ => Browser::launch(cdp_config)
+                .await
+                .map_err(|e| BrowserError::LaunchFailed(e.to_string()))?,
         };
 
         // Spawn the CDP event loop so the browser stays responsive.
@@ -118,18 +112,8 @@ impl BrowserRuntime {
     pub async fn list_tabs(&self) -> Vec<TabInfo> {
         let mut tabs = Vec::with_capacity(self.pages.len());
         for (id, page) in &self.pages {
-            let url = page
-                .url()
-                .await
-                .ok()
-                .flatten()
-                .unwrap_or_default();
-            let title = page
-                .get_title()
-                .await
-                .ok()
-                .flatten()
-                .unwrap_or_default();
+            let url = page.url().await.ok().flatten().unwrap_or_default();
+            let title = page.get_title().await.ok().flatten().unwrap_or_default();
             tabs.push(TabInfo {
                 id: id.clone(),
                 url,
@@ -207,9 +191,7 @@ impl BrowserRuntime {
             .map_err(|e| BrowserError::EvalError(e.to_string()))?;
 
         // Try to deserialise the result into a generic JSON value.
-        let value: serde_json::Value = result
-            .into_value()
-            .unwrap_or(serde_json::Value::Null);
+        let value: serde_json::Value = result.into_value().unwrap_or(serde_json::Value::Null);
 
         Ok(value)
     }
@@ -241,11 +223,7 @@ impl BrowserRuntime {
     // ── High-level action helpers ───────────────────────────────────────
 
     /// Click the element identified by `target` in the given tab.
-    pub async fn click(
-        &self,
-        tab_id: &str,
-        target: ActionTarget,
-    ) -> Result<(), BrowserError> {
+    pub async fn click(&self, tab_id: &str, target: ActionTarget) -> Result<(), BrowserError> {
         let page = self.find_page(tab_id)?;
         super::actions::click(page, &target).await
     }
@@ -284,20 +262,13 @@ impl BrowserRuntime {
     }
 
     /// Hover over the element identified by `target`.
-    pub async fn hover(
-        &self,
-        tab_id: &str,
-        target: ActionTarget,
-    ) -> Result<(), BrowserError> {
+    pub async fn hover(&self, tab_id: &str, target: ActionTarget) -> Result<(), BrowserError> {
         let page = self.find_page(tab_id)?;
         super::actions::hover(page, &target).await
     }
 
     /// Take an ARIA accessibility snapshot of the given tab.
-    pub async fn snapshot(
-        &self,
-        tab_id: &str,
-    ) -> Result<AriaSnapshot, BrowserError> {
+    pub async fn snapshot(&self, tab_id: &str) -> Result<AriaSnapshot, BrowserError> {
         let page = self.find_page(tab_id)?;
         super::snapshot::take_aria_snapshot(page).await
     }
@@ -322,7 +293,6 @@ impl BrowserRuntime {
             .get(tab_id)
             .ok_or_else(|| BrowserError::TabNotFound(tab_id.to_string()))
     }
-
 }
 
 // ── Free functions ──────────────────────────────────────────────────────────
@@ -409,15 +379,12 @@ fn extract_image_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
             let marker = bytes[i + 1];
             // SOF0, SOF1, SOF2 markers
             if marker == 0xC0 || marker == 0xC1 || marker == 0xC2 {
-                let height =
-                    u16::from_be_bytes([bytes[i + 5], bytes[i + 6]]) as u32;
-                let width =
-                    u16::from_be_bytes([bytes[i + 7], bytes[i + 8]]) as u32;
+                let height = u16::from_be_bytes([bytes[i + 5], bytes[i + 6]]) as u32;
+                let width = u16::from_be_bytes([bytes[i + 7], bytes[i + 8]]) as u32;
                 return Some((width, height));
             }
             // Skip to next marker using segment length.
-            let seg_len =
-                u16::from_be_bytes([bytes[i + 2], bytes[i + 3]]) as usize;
+            let seg_len = u16::from_be_bytes([bytes[i + 2], bytes[i + 3]]) as usize;
             i += 2 + seg_len;
         }
     }

@@ -71,11 +71,7 @@ pub struct InboundContext {
 
 impl InboundContext {
     /// Create a new inbound context
-    pub fn new(
-        message: InboundMessage,
-        reply_route: ReplyRoute,
-        session_key: SessionKey,
-    ) -> Self {
+    pub fn new(message: InboundMessage, reply_route: ReplyRoute, session_key: SessionKey) -> Self {
         let sender_normalized = message.sender_id.as_str().to_string();
         Self {
             message,

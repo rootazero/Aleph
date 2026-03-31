@@ -560,7 +560,9 @@ mod tests {
 
     #[test]
     fn test_part_event_types() {
-        use crate::components::{PartEventType, PartUpdateData, SessionPart, ToolCallPart, ToolCallStatus};
+        use crate::components::{
+            PartEventType, PartUpdateData, SessionPart, ToolCallPart, ToolCallStatus,
+        };
 
         // Create a tool call part
         let tool_call = SessionPart::ToolCall(ToolCallPart {
@@ -584,7 +586,8 @@ mod tests {
         assert_eq!(added_data.session_id, "session-1");
 
         // Test PartUpdated event with delta
-        let delta_data = PartUpdateData::text_delta("session-1", "response-1", "ai_response", "Hello, ");
+        let delta_data =
+            PartUpdateData::text_delta("session-1", "response-1", "ai_response", "Hello, ");
         let event = AlephEvent::PartUpdated(delta_data.clone());
         assert_eq!(event.event_type(), EventType::PartUpdated);
         assert_eq!(event.name(), "PartUpdated");

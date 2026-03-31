@@ -2,9 +2,9 @@
 //!
 //! Handlers for config sub-domains: behavior, search, policies, triggers, security, modelProfiles.
 
+use crate::sync_primitives::Arc;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use crate::sync_primitives::Arc;
 
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse};
 use super::parse_params;

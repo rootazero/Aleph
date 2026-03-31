@@ -6,6 +6,5 @@
 pub mod fences;
 
 pub use fences::{
-    parse_fence_spans, is_safe_fence_break, find_fence_at, get_fence_split,
-    FenceSpan, FenceSplit,
+    find_fence_at, get_fence_split, is_safe_fence_break, parse_fence_spans, FenceSpan, FenceSplit,
 };

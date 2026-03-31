@@ -45,7 +45,7 @@ async fn p5_session_facts_queryable() {
         enabled: true,
         fresh_tail_count: 2,
         context_threshold: 0.75,
-        leaf_chunk_tokens: 50,  // Very small chunks
+        leaf_chunk_tokens: 50, // Very small chunks
         d1_min_fanout: 3,      // Low threshold
         d2_min_fanout: 3,
         max_summary_depth: 2,
@@ -62,8 +62,7 @@ async fn p5_session_facts_queryable() {
     for batch in 0..5 {
         let batch_messages =
             CompactorProbeHarness::make_messages(10, &format!("search-batch-{}", batch));
-        let agent =
-            make_agent_with_messages(&agent_temp, &batch_messages, &session_key).await;
+        let agent = make_agent_with_messages(&agent_temp, &batch_messages, &session_key).await;
 
         let _result = h
             .compactor
@@ -81,14 +80,8 @@ async fn p5_session_facts_queryable() {
     let all_facts = h.query_all_session_facts(&session_id).await;
 
     // Both queries should return non-empty results
-    assert!(
-        !valid_facts.is_empty(),
-        "Expected valid facts to exist"
-    );
-    assert!(
-        !all_facts.is_empty(),
-        "Expected all facts to exist"
-    );
+    assert!(!valid_facts.is_empty(), "Expected valid facts to exist");
+    assert!(!all_facts.is_empty(), "Expected all facts to exist");
 
     // 3. After condensation, all >= valid (condensation invalidates source facts)
     assert!(
@@ -143,5 +136,8 @@ async fn p5_different_sessions_are_isolated() {
     let facts_b = h.query_session_facts(&id_b).await;
 
     assert!(!facts_a.is_empty(), "Session A should have facts");
-    assert!(facts_b.is_empty(), "Session B should have no facts (never compressed)");
+    assert!(
+        facts_b.is_empty(),
+        "Session B should have no facts (never compressed)"
+    );
 }

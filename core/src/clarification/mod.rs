@@ -452,8 +452,7 @@ mod tests {
 
     #[test]
     fn test_question_group_with_default() {
-        let group = QuestionGroup::new("test", "Prompt", vec![])
-            .with_default(3);
+        let group = QuestionGroup::new("test", "Prompt", vec![]).with_default(3);
 
         assert_eq!(group.default_index, Some(3));
     }

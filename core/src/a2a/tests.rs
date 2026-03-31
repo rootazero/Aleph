@@ -12,8 +12,8 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use chrono::Utc;
 use futures::Stream;
-use tower::ServiceExt;
 use tokio_stream::StreamExt;
+use tower::ServiceExt;
 
 use crate::a2a::adapter::auth::TieredAuthenticator;
 use crate::a2a::adapter::server::request_processor::{
@@ -258,7 +258,10 @@ async fn test_task_crud_lifecycle() {
 
     // Cancel completed task -> should fail
     let err = store.cancel_task("task-1").await.unwrap_err();
-    assert!(matches!(err, A2AError::TaskNotCancelable(TaskState::Completed)));
+    assert!(matches!(
+        err,
+        A2AError::TaskNotCancelable(TaskState::Completed)
+    ));
 
     // List tasks
     let result = store.list_tasks(ListTasksParams::default()).await.unwrap();
@@ -340,11 +343,26 @@ async fn test_tiered_auth_localhost_bypass() {
     assert!(principal.permissions.contains(&"*".to_string()));
 
     // Should be authorized for all actions
-    assert!(auth.authorize(&principal, &A2AAction::SendMessage).await.unwrap());
-    assert!(auth.authorize(&principal, &A2AAction::GetTask).await.unwrap());
-    assert!(auth.authorize(&principal, &A2AAction::CancelTask).await.unwrap());
-    assert!(auth.authorize(&principal, &A2AAction::ListTasks).await.unwrap());
-    assert!(auth.authorize(&principal, &A2AAction::Subscribe).await.unwrap());
+    assert!(auth
+        .authorize(&principal, &A2AAction::SendMessage)
+        .await
+        .unwrap());
+    assert!(auth
+        .authorize(&principal, &A2AAction::GetTask)
+        .await
+        .unwrap());
+    assert!(auth
+        .authorize(&principal, &A2AAction::CancelTask)
+        .await
+        .unwrap());
+    assert!(auth
+        .authorize(&principal, &A2AAction::ListTasks)
+        .await
+        .unwrap());
+    assert!(auth
+        .authorize(&principal, &A2AAction::Subscribe)
+        .await
+        .unwrap());
 }
 
 // ============================================================
@@ -459,7 +477,11 @@ async fn test_request_processor_dispatch() {
     };
 
     let resp = processor.process(request, auth.clone()).await;
-    assert!(resp.error.is_none(), "Expected success, got error: {:?}", resp.error);
+    assert!(
+        resp.error.is_none(),
+        "Expected success, got error: {:?}",
+        resp.error
+    );
     let result = resp.result.unwrap();
     assert_eq!(result["id"], "task-send-1");
     assert_eq!(result["status"]["state"], "completed");
@@ -610,9 +632,20 @@ impl AiProvider for MockRoutingProvider {
     fn process(
         &self,
         _payload: crate::providers::adapter::RequestPayload<'_>,
-    ) -> Pin<Box<dyn std::future::Future<Output = crate::error::Result<crate::providers::adapter::ProviderResponse>> + Send + '_>> {
+    ) -> Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = crate::error::Result<crate::providers::adapter::ProviderResponse>,
+                > + Send
+                + '_,
+        >,
+    > {
         let response = self.response.clone();
-        Box::pin(async move { Ok(crate::providers::adapter::ProviderResponse::text_only(response)) })
+        Box::pin(async move {
+            Ok(crate::providers::adapter::ProviderResponse::text_only(
+                response,
+            ))
+        })
     }
 
     fn name(&self) -> &str {
@@ -657,16 +690,11 @@ impl AgentResolver for MockAgentResolver {
         Ok(())
     }
 
-    async fn unregister(
-        &self,
-        _agent_id: &str,
-    ) -> crate::a2a::port::task_manager::A2AResult<()> {
+    async fn unregister(&self, _agent_id: &str) -> crate::a2a::port::task_manager::A2AResult<()> {
         Ok(())
     }
 
-    async fn list_agents(
-        &self,
-    ) -> crate::a2a::port::task_manager::A2AResult<Vec<RegisteredAgent>> {
+    async fn list_agents(&self) -> crate::a2a::port::task_manager::A2AResult<Vec<RegisteredAgent>> {
         let agents = self.agents.lock().unwrap_or_else(|e| e.into_inner());
         Ok(agents.clone())
     }
@@ -768,8 +796,7 @@ async fn test_smart_router_with_llm_fallback() {
         vec![],
     );
 
-    let resolver: Arc<dyn AgentResolver> =
-        Arc::new(MockAgentResolver::new(vec![agent]));
+    let resolver: Arc<dyn AgentResolver> = Arc::new(MockAgentResolver::new(vec![agent]));
 
     // SemanticLlmMatcher backed by mock provider that returns index 0
     let mock_response = "\
@@ -785,12 +812,12 @@ REASON: Financial analyst can help with market data analysis";
     // "help me analyze market data" won't exact-match "Financial Analyst" name
     // (intent doesn't contain "financial analyst"), so it should fall through
     // to the LLM matcher.
-    let decision = router
-        .route("help me analyze market data")
-        .await
-        .unwrap();
+    let decision = router.route("help me analyze market data").await.unwrap();
 
-    assert!(decision.is_some(), "Expected LLM fallback to produce a decision");
+    assert!(
+        decision.is_some(),
+        "Expected LLM fallback to produce a decision"
+    );
     let decision = decision.unwrap();
     assert_eq!(decision.agent.card.name, "Financial Analyst");
     assert_eq!(decision.method, RoutingMethod::LlmSemantic);
@@ -814,8 +841,7 @@ async fn test_sub_agent_can_handle_cached_names() {
         vec![],
     );
 
-    let resolver: Arc<dyn AgentResolver> =
-        Arc::new(MockAgentResolver::new(vec![agent]));
+    let resolver: Arc<dyn AgentResolver> = Arc::new(MockAgentResolver::new(vec![agent]));
     let router = Arc::new(SmartRouter::new(resolver));
     let pool = Arc::new(A2AClientPool::new());
     let sub_agent = A2ASubAgent::new(router, pool);
@@ -856,8 +882,7 @@ async fn test_sub_agent_can_handle_chinese_agent_name() {
         vec![],
     );
 
-    let resolver: Arc<dyn AgentResolver> =
-        Arc::new(MockAgentResolver::new(vec![agent]));
+    let resolver: Arc<dyn AgentResolver> = Arc::new(MockAgentResolver::new(vec![agent]));
     let router = Arc::new(SmartRouter::new(resolver));
     let pool = Arc::new(A2AClientPool::new());
     let sub_agent = A2ASubAgent::new(router, pool);
@@ -900,8 +925,7 @@ async fn test_full_routing_chain_exact_match() {
         }],
     );
 
-    let resolver: Arc<dyn AgentResolver> =
-        Arc::new(MockAgentResolver::new(vec![agent]));
+    let resolver: Arc<dyn AgentResolver> = Arc::new(MockAgentResolver::new(vec![agent]));
     let router = Arc::new(SmartRouter::new(resolver));
     let pool = Arc::new(A2AClientPool::new());
     let sub_agent = A2ASubAgent::new(Arc::clone(&router), pool);

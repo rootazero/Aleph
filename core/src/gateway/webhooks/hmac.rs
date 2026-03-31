@@ -30,7 +30,10 @@ pub enum VerificationResult {
 impl VerificationResult {
     /// Returns true if the signature is valid or verification is disabled
     pub fn is_ok(&self) -> bool {
-        matches!(self, VerificationResult::Valid | VerificationResult::Disabled)
+        matches!(
+            self,
+            VerificationResult::Valid | VerificationResult::Disabled
+        )
     }
 
     /// Returns true if the signature verification failed
@@ -135,7 +138,9 @@ fn verify_stripe_signature(
     let timestamp = match timestamp {
         Some(ts) => ts,
         None => {
-            return VerificationResult::Malformed("Missing timestamp in Stripe signature".to_string())
+            return VerificationResult::Malformed(
+                "Missing timestamp in Stripe signature".to_string(),
+            )
         }
     };
 
@@ -218,7 +223,7 @@ pub fn generate_signature(format: SignatureFormat, secret: &str, payload: &[u8])
         SignatureFormat::Stripe => {
             let timestamp = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
+                .unwrap_or_default()
                 .as_secs();
             let signed_payload = format!("{}.{}", timestamp, String::from_utf8_lossy(payload));
             let stripe_hmac = compute_hmac_sha256(secret, signed_payload.as_bytes());
@@ -330,7 +335,12 @@ mod tests {
         let sig = generate_signature(SignatureFormat::Github, TEST_SECRET, TEST_PAYLOAD);
         assert!(sig.starts_with("sha256="));
 
-        let result = verify_signature(SignatureFormat::Github, TEST_SECRET, Some(&sig), TEST_PAYLOAD);
+        let result = verify_signature(
+            SignatureFormat::Github,
+            TEST_SECRET,
+            Some(&sig),
+            TEST_PAYLOAD,
+        );
         assert!(result.is_ok());
     }
 
@@ -338,7 +348,12 @@ mod tests {
     fn test_generate_generic_signature() {
         let sig = generate_signature(SignatureFormat::Generic, TEST_SECRET, TEST_PAYLOAD);
 
-        let result = verify_signature(SignatureFormat::Generic, TEST_SECRET, Some(&sig), TEST_PAYLOAD);
+        let result = verify_signature(
+            SignatureFormat::Generic,
+            TEST_SECRET,
+            Some(&sig),
+            TEST_PAYLOAD,
+        );
         assert!(result.is_ok());
     }
 

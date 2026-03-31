@@ -75,11 +75,7 @@ impl MediaUnderstander {
     }
 
     /// Process a single media item, returning its understanding.
-    async fn understand_one(
-        &self,
-        media: &LocalMedia,
-        model: &str,
-    ) -> (MediaUnderstanding, u64) {
+    async fn understand_one(&self, media: &LocalMedia, model: &str) -> (MediaUnderstanding, u64) {
         let success_type = match &media.media_category {
             MediaCategory::Image => Some(UnderstandingType::ImageDescription),
             MediaCategory::Link => Some(UnderstandingType::LinkSummary),
@@ -239,7 +235,10 @@ mod tests {
 
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].description, "A cat on a desk");
-        assert_eq!(results[0].understanding_type, UnderstandingType::ImageDescription);
+        assert_eq!(
+            results[0].understanding_type,
+            UnderstandingType::ImageDescription
+        );
         assert_eq!(tokens, 42);
     }
 
@@ -261,9 +260,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_understand_failure_becomes_skipped() {
-        let provider = Arc::new(MockProvider::new(vec![Err(
-            "provider timeout".to_string(),
-        )]));
+        let provider = Arc::new(MockProvider::new(vec![Err("provider timeout".to_string())]));
         let understander = MediaUnderstander::new(provider, "gpt-4o".to_string());
         let media = vec![make_local_media(MediaCategory::Image)];
 
@@ -292,8 +289,14 @@ mod tests {
         let (results, tokens) = understander.understand_all(&media, None).await;
 
         assert_eq!(results.len(), 2);
-        assert_eq!(results[0].understanding_type, UnderstandingType::ImageDescription);
-        assert_eq!(results[1].understanding_type, UnderstandingType::DocumentSummary);
+        assert_eq!(
+            results[0].understanding_type,
+            UnderstandingType::ImageDescription
+        );
+        assert_eq!(
+            results[1].understanding_type,
+            UnderstandingType::DocumentSummary
+        );
         assert_eq!(tokens, 50);
     }
 

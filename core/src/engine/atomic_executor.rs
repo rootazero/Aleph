@@ -13,15 +13,14 @@
 //!
 //! All handlers share a common **ExecutorContext** for working directory and security checks.
 
-use std::path::PathBuf;
 use crate::sync_primitives::Arc;
+use std::path::PathBuf;
 use std::time::Duration;
 use tracing::debug;
 
 use super::atomic::{
-    ExecutorContext, FileOpsHandler, EditOpsHandler,
-    BashOpsHandler, SearchOpsHandler,
-    FileOps, EditOps, BashOps, SearchOps,
+    BashOps, BashOpsHandler, EditOps, EditOpsHandler, ExecutorContext, FileOps, FileOpsHandler,
+    SearchOps, SearchOpsHandler,
 };
 use super::AtomicAction;
 use crate::error::Result;
@@ -82,30 +81,45 @@ impl AtomicExecutor {
         debug!(action = ?action, "Executing atomic action");
 
         let result = match action {
-            AtomicAction::Read { path, range } => {
-                self.file_ops.read(path, range.as_ref()).await?
-            }
-            AtomicAction::Write { path, content, mode } => {
-                self.file_ops.write(path, content, mode).await?
-            }
-            AtomicAction::Move { source, destination, update_imports, create_parent } => {
+            AtomicAction::Read { path, range } => self.file_ops.read(path, range.as_ref()).await?,
+            AtomicAction::Write {
+                path,
+                content,
+                mode,
+            } => self.file_ops.write(path, content, mode).await?,
+            AtomicAction::Move {
+                source,
+                destination,
+                update_imports,
+                create_parent,
+            } => {
                 // Convert PathBuf to &str for the handler
                 let source_str = source.to_str().unwrap_or("");
                 let dest_str = destination.to_str().unwrap_or("");
-                self.file_ops.move_file(source_str, dest_str, *update_imports, *create_parent).await?
+                self.file_ops
+                    .move_file(source_str, dest_str, *update_imports, *create_parent)
+                    .await?
             }
-            AtomicAction::Edit { path, patches } => {
-                self.edit_ops.edit(path, patches).await?
-            }
-            AtomicAction::Replace { search, replacement, scope, preview, dry_run } => {
-                self.edit_ops.replace(search, replacement, scope, *preview, *dry_run).await?
+            AtomicAction::Edit { path, patches } => self.edit_ops.edit(path, patches).await?,
+            AtomicAction::Replace {
+                search,
+                replacement,
+                scope,
+                preview,
+                dry_run,
+            } => {
+                self.edit_ops
+                    .replace(search, replacement, scope, *preview, *dry_run)
+                    .await?
             }
             AtomicAction::Bash { command, cwd } => {
                 self.bash_ops.execute(command, cwd.as_deref()).await?
             }
-            AtomicAction::Search { pattern, scope, filters } => {
-                self.search_ops.search(pattern, scope, filters).await?
-            }
+            AtomicAction::Search {
+                pattern,
+                scope,
+                filters,
+            } => self.search_ops.search(pattern, scope, filters).await?,
         };
 
         Ok(result)
@@ -115,8 +129,8 @@ impl AtomicExecutor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
     use std::fs;
+    use tempfile::TempDir;
 
     fn create_test_executor() -> (AtomicExecutor, TempDir) {
         let temp_dir = TempDir::new().unwrap();

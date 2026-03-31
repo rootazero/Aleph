@@ -5,8 +5,12 @@ use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, PromptLayer};
 pub struct ResponseFormatLayer;
 
 impl PromptLayer for ResponseFormatLayer {
-    fn name(&self) -> &'static str { "response_format" }
-    fn priority(&self) -> u32 { 1200 }
+    fn name(&self) -> &'static str {
+        "response_format"
+    }
+    fn priority(&self) -> u32 {
+        1200
+    }
     fn paths(&self) -> &'static [AssemblyPath] {
         &[
             AssemblyPath::Basic,
@@ -32,7 +36,9 @@ impl PromptLayer for ResponseFormatLayer {
         output.push_str("    \"arguments\": {...},       // if type=tool\n");
         output.push_str("    \"question\": \"...\",        // if type=ask_user\n");
         output.push_str("    \"options\": [...],         // if type=ask_user (optional)\n");
-        output.push_str("    \"summary\": \"...\",         // if type=complete (MUST be detailed report)\n");
+        output.push_str(
+            "    \"summary\": \"...\",         // if type=complete (MUST be detailed report)\n",
+        );
         output.push_str("    \"reason\": \"...\"           // if type=fail\n");
         output.push_str("  }\n");
         output.push_str("}\n");
@@ -43,12 +49,18 @@ impl PromptLayer for ResponseFormatLayer {
         output.push_str("**Mode 1: Single Question** (simple selection or text input)\n");
         output.push_str("- Use `options` field as an array of SEPARATE choices:\n");
         output.push_str("  - ✅ CORRECT: [\"Option 1\", \"Option 2\", \"Option 3\"]\n");
-        output.push_str("  - ❌ WRONG: [\"Option 1 / Option 2 / Option 3\"] (single merged string)\n");
+        output.push_str(
+            "  - ❌ WRONG: [\"Option 1 / Option 2 / Option 3\"] (single merged string)\n",
+        );
         output.push_str("- Each option should be a standalone, selectable choice\n");
-        output.push_str("- If no options (free-form text input), omit the field or use empty array\n\n");
+        output.push_str(
+            "- If no options (free-form text input), omit the field or use empty array\n\n",
+        );
 
         output.push_str("**Mode 2: Multi-Group Questions** (multiple related questions)\n");
-        output.push_str("Use this when you need answers to MULTIPLE independent questions simultaneously.\n");
+        output.push_str(
+            "Use this when you need answers to MULTIPLE independent questions simultaneously.\n",
+        );
         output.push_str("Instead of asking one by one, group them together for better UX.\n\n");
 
         output.push_str("```json\n");
@@ -101,8 +113,11 @@ impl PromptLayer for ResponseFormatLayer {
         output.push_str("}\n");
         output.push_str("```\n\n");
         output.push_str("### Completion Summary Format\n");
-        output.push_str("When `type=complete`, the `summary` is your final response to the user.\n");
-        output.push_str("Write it as natural conversation — the way you would speak to a person.\n\n");
+        output
+            .push_str("When `type=complete`, the `summary` is your final response to the user.\n");
+        output.push_str(
+            "Write it as natural conversation — the way you would speak to a person.\n\n",
+        );
         output.push_str("- For simple greetings or questions: respond naturally and concisely\n");
         output.push_str("- For task completions: briefly describe what was done and the outcome\n");
         output.push_str("- Do NOT use rigid report templates (no 'Task Completed' / 'Results' / 'Generated Files' headers)\n");

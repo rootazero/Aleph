@@ -36,10 +36,10 @@ use crate::gateway::channel::{
     ChannelResult, ChannelState, ChannelStatus, InboundMessage, OutboundMessage, SendResult,
 };
 use crate::gateway::webhook_receiver::{WebhookHandler, WebhookReceiver};
+use crate::sync_primitives::Arc;
 use async_trait::async_trait;
 use axum::body::Bytes;
 use axum::http::HeaderMap;
-use crate::sync_primitives::Arc;
 
 /// Generic webhook channel implementation.
 ///
@@ -135,9 +135,7 @@ impl Channel for WebhookChannel {
 
     async fn start(&mut self) -> ChannelResult<()> {
         // Validate configuration
-        self.config
-            .validate()
-            .map_err(ChannelError::ConfigError)?;
+        self.config.validate().map_err(ChannelError::ConfigError)?;
 
         self.set_status(ChannelStatus::Connecting).await;
         tracing::info!(
@@ -178,7 +176,6 @@ impl Channel for WebhookChannel {
         )
         .await
     }
-
 }
 
 /// WebhookHandler implementation for the generic webhook channel.
@@ -240,9 +237,8 @@ impl ChannelFactory for WebhookChannelFactory {
     }
 
     async fn create(&self, config: serde_json::Value) -> ChannelResult<Box<dyn Channel>> {
-        let config: WebhookChannelConfig = serde_json::from_value(config).map_err(|e| {
-            ChannelError::ConfigError(format!("Invalid Webhook config: {}", e))
-        })?;
+        let config: WebhookChannelConfig = serde_json::from_value(config)
+            .map_err(|e| ChannelError::ConfigError(format!("Invalid Webhook config: {}", e)))?;
 
         config.validate().map_err(ChannelError::ConfigError)?;
 
@@ -453,10 +449,7 @@ mod tests {
         .unwrap();
 
         let headers = HeaderMap::new();
-        let messages = handler
-            .handle(&headers, Bytes::from(body))
-            .await
-            .unwrap();
+        let messages = handler.handle(&headers, Bytes::from(body)).await.unwrap();
 
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].text, "Hello!");
@@ -480,10 +473,7 @@ mod tests {
         .unwrap();
 
         let headers = HeaderMap::new();
-        let messages = handler
-            .handle(&headers, Bytes::from(body))
-            .await
-            .unwrap();
+        let messages = handler.handle(&headers, Bytes::from(body)).await.unwrap();
 
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].sender_id.as_str(), "allowed-user");
@@ -499,9 +489,7 @@ mod tests {
         };
 
         let headers = HeaderMap::new();
-        let result = handler
-            .handle(&headers, Bytes::from("not json"))
-            .await;
+        let result = handler.handle(&headers, Bytes::from("not json")).await;
 
         assert!(result.is_err());
     }

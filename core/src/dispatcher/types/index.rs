@@ -189,7 +189,12 @@ impl ToolIndex {
 
     /// Get total tool count
     pub fn total_count(&self) -> usize {
-        self.core.len() + self.builtin.len() + self.mcp.len() + self.skill.len() + self.custom.len() + self.plugin.len()
+        self.core.len()
+            + self.builtin.len()
+            + self.mcp.len()
+            + self.skill.len()
+            + self.custom.len()
+            + self.plugin.len()
     }
 
     /// Generate markdown prompt for LLM

@@ -61,8 +61,8 @@ pub struct ChatInfo {
 #[derive(Debug, Clone)]
 pub struct Handle {
     pub rowid: i64,
-    pub id: String,       // Phone number or email
-    pub service: String,  // "iMessage" or "SMS"
+    pub id: String,      // Phone number or email
+    pub service: String, // "iMessage" or "SMS"
 }
 
 /// Attachment information
@@ -194,7 +194,9 @@ impl MessagesDb {
                     .into_iter()
                     .map(|a| Attachment {
                         id: a.guid,
-                        mime_type: a.mime_type.unwrap_or_else(|| "application/octet-stream".to_string()),
+                        mime_type: a
+                            .mime_type
+                            .unwrap_or_else(|| "application/octet-stream".to_string()),
                         filename: a.filename.or(a.transfer_name),
                         size: Some(a.total_bytes as u64),
                         url: None,

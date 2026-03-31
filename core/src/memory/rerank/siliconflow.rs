@@ -37,7 +37,11 @@ impl SiliconFlowRerankProvider {
         if base.ends_with("/rerank") {
             return base.to_string();
         }
-        let base = if base.ends_with("/v1") { base.to_string() } else { format!("{}/v1", base) };
+        let base = if base.ends_with("/v1") {
+            base.to_string()
+        } else {
+            format!("{}/v1", base)
+        };
         format!("{}/rerank", base)
     }
 }
@@ -87,9 +91,7 @@ impl RerankProvider for SiliconFlowRerankProvider {
             .json(&body)
             .send()
             .await
-            .map_err(|e| {
-                AlephError::network(format!("SiliconFlow rerank request failed: {e}"))
-            })?;
+            .map_err(|e| AlephError::network(format!("SiliconFlow rerank request failed: {e}")))?;
 
         if !resp.status().is_success() {
             let status = resp.status();

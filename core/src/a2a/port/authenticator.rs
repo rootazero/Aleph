@@ -47,11 +47,7 @@ pub trait A2AAuthenticator: Send + Sync {
     async fn authenticate(&self, context: &A2AAuthContext) -> A2AResult<A2AAuthPrincipal>;
 
     /// Check if a principal is authorized to perform an action
-    async fn authorize(
-        &self,
-        principal: &A2AAuthPrincipal,
-        action: &A2AAction,
-    ) -> A2AResult<bool>;
+    async fn authorize(&self, principal: &A2AAuthPrincipal, action: &A2AAction) -> A2AResult<bool>;
 
     /// Return the security schemes this authenticator supports
     fn supported_schemes(&self) -> Vec<SecurityScheme>;

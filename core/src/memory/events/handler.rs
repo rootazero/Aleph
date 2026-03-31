@@ -43,13 +43,8 @@ impl MemoryCommandHandler {
             source_memory_ids: cmd.source_memory_ids,
         };
 
-        let envelope = MemoryEventEnvelope::new(
-            fact_id.clone(),
-            seq,
-            event,
-            cmd.actor,
-            cmd.correlation_id,
-        );
+        let envelope =
+            MemoryEventEnvelope::new(fact_id.clone(), seq, event, cmd.actor, cmd.correlation_id);
 
         self.db.append_memory_event(&envelope).await?;
         Ok(fact_id)
@@ -73,13 +68,8 @@ impl MemoryCommandHandler {
             reason: cmd.reason,
         };
 
-        let envelope = MemoryEventEnvelope::new(
-            cmd.fact_id,
-            seq,
-            event,
-            cmd.actor,
-            cmd.correlation_id,
-        );
+        let envelope =
+            MemoryEventEnvelope::new(cmd.fact_id, seq, event, cmd.actor, cmd.correlation_id);
 
         self.db.append_memory_event(&envelope).await?;
         Ok(())
@@ -96,13 +86,8 @@ impl MemoryCommandHandler {
             strength_at_invalidation: cmd.strength_at_invalidation,
         };
 
-        let envelope = MemoryEventEnvelope::new(
-            cmd.fact_id,
-            seq,
-            event,
-            cmd.actor,
-            cmd.correlation_id,
-        );
+        let envelope =
+            MemoryEventEnvelope::new(cmd.fact_id, seq, event, cmd.actor, cmd.correlation_id);
 
         self.db.append_memory_event(&envelope).await?;
         Ok(())
@@ -195,13 +180,8 @@ impl MemoryCommandHandler {
             consolidated_content: cmd.consolidated_content,
         };
 
-        let envelope = MemoryEventEnvelope::new(
-            fact_id.clone(),
-            seq,
-            event,
-            cmd.actor,
-            cmd.correlation_id,
-        );
+        let envelope =
+            MemoryEventEnvelope::new(fact_id.clone(), seq, event, cmd.actor, cmd.correlation_id);
 
         self.db.append_memory_event(&envelope).await?;
         Ok(fact_id)
@@ -216,13 +196,8 @@ impl MemoryCommandHandler {
             reason: cmd.reason,
         };
 
-        let envelope = MemoryEventEnvelope::new(
-            cmd.fact_id,
-            seq,
-            event,
-            cmd.actor,
-            cmd.correlation_id,
-        );
+        let envelope =
+            MemoryEventEnvelope::new(cmd.fact_id, seq, event, cmd.actor, cmd.correlation_id);
 
         self.db.append_memory_event(&envelope).await?;
         Ok(())
@@ -495,10 +470,8 @@ mod tests {
         }
 
         // Apply decay to all 3
-        let decay_data: Vec<(String, f32, f32)> = fact_ids
-            .iter()
-            .map(|id| (id.clone(), 1.0, 0.95))
-            .collect();
+        let decay_data: Vec<(String, f32, f32)> =
+            fact_ids.iter().map(|id| (id.clone(), 1.0, 0.95)).collect();
 
         let count = handler
             .apply_decay(ApplyDecayCommand {

@@ -10,9 +10,8 @@ use std::sync::LazyLock;
 
 /// Regex for matching code fence opening/closing lines.
 /// Matches: optional indent (0-3 spaces) + fence marker (``` or ~~~) + optional language tag
-static FENCE_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^( {0,3})(`{3,}|~{3,})(.*)$").expect("Invalid fence regex")
-});
+static FENCE_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^( {0,3})(`{3,}|~{3,})(.*)$").expect("Invalid fence regex"));
 
 /// A span representing a code fence block in text.
 #[derive(Debug, Clone, PartialEq, Eq)]

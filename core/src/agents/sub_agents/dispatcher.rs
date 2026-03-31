@@ -3,17 +3,21 @@
 //! Routes requests to the appropriate sub-agent based on the request
 //! characteristics and available sub-agents.
 
-use std::collections::HashMap;
 use crate::sync_primitives::Arc;
+use std::collections::HashMap;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 use tracing::{debug, info};
 
-use super::coordinator::{CoordinatorConfig, ExecutionCoordinator, ExecutionError, ToolCallSummary};
+use super::coordinator::{
+    CoordinatorConfig, ExecutionCoordinator, ExecutionError, ToolCallSummary,
+};
 use super::result_collector::ResultCollector;
-use super::traits::{SubAgent, SubAgentCapability, SubAgentRequest, SubAgentResult, ToolCallRecord};
+use super::traits::{
+    SubAgent, SubAgentCapability, SubAgentRequest, SubAgentResult, ToolCallRecord,
+};
 use super::{McpSubAgent, SkillSubAgent};
 use crate::dispatcher::ToolRegistry;
 use crate::error::{AlephError, Result};
@@ -278,16 +282,12 @@ impl SubAgentDispatcher {
         let req_id_clone = request_id.clone();
 
         tokio::spawn(async move {
-            let result = Self::execute_dispatch(
-                &dispatcher_agents,
-                &default_agent,
-                request,
-            )
-            .await;
+            let result = Self::execute_dispatch(&dispatcher_agents, &default_agent, request).await;
 
             // Get tool summaries and convert to records
             let summaries = collector.get_summary(&req_id_clone).await;
-            let tool_records: Vec<ToolCallRecord> = summaries.iter().map(summary_to_record).collect();
+            let tool_records: Vec<ToolCallRecord> =
+                summaries.iter().map(summary_to_record).collect();
 
             // Enrich result with tool call information
             let enriched_result = match result {
@@ -386,7 +386,8 @@ impl SubAgentDispatcher {
 
                 // Get tool summaries and convert to records
                 let summaries = collector.get_summary(&req_id_clone).await;
-                let tool_records: Vec<ToolCallRecord> = summaries.iter().map(summary_to_record).collect();
+                let tool_records: Vec<ToolCallRecord> =
+                    summaries.iter().map(summary_to_record).collect();
 
                 // Enrich result
                 let enriched_result = match result {
@@ -468,7 +469,9 @@ impl SubAgentDispatcher {
             // Prefer more specific agents (fewer capabilities = more specialized)
             // Break ties by name for deterministic selection
             capable_agents.sort_by(|a, b| {
-                a.capabilities().len().cmp(&b.capabilities().len())
+                a.capabilities()
+                    .len()
+                    .cmp(&b.capabilities().len())
                     .then_with(|| a.name().cmp(b.name()))
             });
             return Ok(capable_agents[0]);
@@ -598,7 +601,10 @@ mod tests {
     #[test]
     fn test_sub_agent_type_parsing() {
         assert_eq!("mcp".parse::<SubAgentType>().unwrap(), SubAgentType::Mcp);
-        assert_eq!("skill".parse::<SubAgentType>().unwrap(), SubAgentType::Skill);
+        assert_eq!(
+            "skill".parse::<SubAgentType>().unwrap(),
+            SubAgentType::Skill
+        );
         assert!("unknown".parse::<SubAgentType>().is_err());
     }
 
@@ -643,7 +649,9 @@ mod tests {
         let dispatcher = SubAgentDispatcher::with_defaults(registry);
 
         let request = SubAgentRequest::new("Execute skill task");
-        let result = dispatcher.dispatch_sync(request, Duration::from_secs(5)).await;
+        let result = dispatcher
+            .dispatch_sync(request, Duration::from_secs(5))
+            .await;
 
         // Should succeed (skill agent handles it)
         assert!(result.is_ok());
@@ -656,7 +664,9 @@ mod tests {
         let dispatcher = SubAgentDispatcher::new(); // No agents registered
 
         let request = SubAgentRequest::new("Do something");
-        let result = dispatcher.dispatch_sync(request, Duration::from_secs(5)).await;
+        let result = dispatcher
+            .dispatch_sync(request, Duration::from_secs(5))
+            .await;
 
         // Should fail because no agents
         assert!(result.is_ok()); // We get a result, but it indicates failure
@@ -669,7 +679,9 @@ mod tests {
     async fn test_dispatch_parallel_sync_empty() {
         let dispatcher = SubAgentDispatcher::new();
 
-        let results = dispatcher.dispatch_parallel_sync(vec![], Duration::from_secs(5)).await;
+        let results = dispatcher
+            .dispatch_parallel_sync(vec![], Duration::from_secs(5))
+            .await;
         assert!(results.is_empty());
     }
 
@@ -683,7 +695,9 @@ mod tests {
             (SubAgentRequest::new("Task 2"), None),
         ];
 
-        let results = dispatcher.dispatch_parallel_sync(requests, Duration::from_secs(5)).await;
+        let results = dispatcher
+            .dispatch_parallel_sync(requests, Duration::from_secs(5))
+            .await;
 
         assert_eq!(results.len(), 2);
         for (id, result) in results {
@@ -725,5 +739,4 @@ mod tests {
         assert!(!record.success);
         assert_eq!(record.result_summary, "Connection timeout");
     }
-
 }

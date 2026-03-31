@@ -12,10 +12,7 @@ pub struct TranscriptIndexer {
 
 impl TranscriptIndexer {
     /// Create new indexer with default config
-    pub fn new(
-        _database: MemoryBackend,
-        _embedder: Arc<dyn EmbeddingProvider>,
-    ) -> Self {
+    pub fn new(_database: MemoryBackend, _embedder: Arc<dyn EmbeddingProvider>) -> Self {
         Self {
             config: TranscriptIndexerConfig::default(),
         }
@@ -27,9 +24,7 @@ impl TranscriptIndexer {
         _embedder: Arc<dyn EmbeddingProvider>,
         config: TranscriptIndexerConfig,
     ) -> Self {
-        Self {
-            config,
-        }
+        Self { config }
     }
 
     /// Index a single conversation turn
@@ -70,7 +65,9 @@ impl TranscriptIndexer {
         for sentence in sentences {
             let sentence_tokens = self.estimate_tokens(sentence);
 
-            if current_tokens + sentence_tokens > self.config.max_tokens_per_chunk && !current_chunk.is_empty() {
+            if current_tokens + sentence_tokens > self.config.max_tokens_per_chunk
+                && !current_chunk.is_empty()
+            {
                 chunks.push(current_chunk.clone());
 
                 // Add overlap from previous chunk
@@ -100,7 +97,7 @@ impl TranscriptIndexer {
 
     /// Estimate token count for text
     pub fn estimate_tokens(&self, text: &str) -> usize {
-        text.len().div_ceil(4)  // 4 chars per token, round up
+        text.len().div_ceil(4) // 4 chars per token, round up
     }
 
     /// Get overlap text from end of chunk (UTF-8 safe)

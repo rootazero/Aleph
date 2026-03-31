@@ -15,18 +15,14 @@ use crate::sync_primitives::Arc;
 use tokio::sync::RwLock;
 
 use crate::config::Config;
-use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INVALID_PARAMS, INTERNAL_ERROR};
-use crate::gateway::event_bus::{GatewayEventBus, GatewayEvent, ConfigChangedEvent};
+use crate::gateway::event_bus::{ConfigChangedEvent, GatewayEvent, GatewayEventBus};
+use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 
 /// Handle memory_config.get request
-pub async fn handle_get(
-    request: JsonRpcRequest,
-    config: Arc<RwLock<Config>>,
-) -> JsonRpcResponse {
+pub async fn handle_get(request: JsonRpcRequest, config: Arc<RwLock<Config>>) -> JsonRpcResponse {
     let cfg = config.read().await;
 
-    let memory_config = serde_json::to_value(&cfg.memory)
-        .unwrap_or_else(|_| serde_json::json!({}));
+    let memory_config = serde_json::to_value(&cfg.memory).unwrap_or_else(|_| serde_json::json!({}));
 
     JsonRpcResponse::success(request.id, memory_config)
 }
@@ -54,23 +50,40 @@ pub async fn handle_update(
         // Serialize existing memory config to JSON
         let mut base = match serde_json::to_value(&cfg.memory) {
             Ok(v) => v,
-            Err(e) => return JsonRpcResponse::error(request.id, INTERNAL_ERROR, format!("Failed to serialize existing config: {}", e)),
+            Err(e) => {
+                return JsonRpcResponse::error(
+                    request.id,
+                    INTERNAL_ERROR,
+                    format!("Failed to serialize existing config: {}", e),
+                )
+            }
         };
 
         // Merge incoming fields on top of existing (only overwrites keys present in incoming)
         json_merge(&mut base, &incoming);
 
         // Deserialize merged JSON back to MemoryConfig
-        let merged: crate::config::types::memory::MemoryConfig = match serde_json::from_value(base) {
+        let merged: crate::config::types::memory::MemoryConfig = match serde_json::from_value(base)
+        {
             Ok(c) => c,
-            Err(e) => return JsonRpcResponse::error(request.id, INVALID_PARAMS, format!("Invalid memory config after merge: {}", e)),
+            Err(e) => {
+                return JsonRpcResponse::error(
+                    request.id,
+                    INVALID_PARAMS,
+                    format!("Invalid memory config after merge: {}", e),
+                )
+            }
         };
 
         cfg.memory = merged;
 
         // Save to file
         if let Err(e) = cfg.save_incremental(&["memory"]) {
-            return JsonRpcResponse::error(request.id, INTERNAL_ERROR, format!("Failed to save config: {}", e));
+            return JsonRpcResponse::error(
+                request.id,
+                INTERNAL_ERROR,
+                format!("Failed to save config: {}", e),
+            );
         }
     }
 
@@ -101,11 +114,7 @@ pub async fn handle_retrieve_with_trace(request: JsonRpcRequest) -> JsonRpcRespo
         .unwrap_or("");
 
     if query.is_empty() {
-        return JsonRpcResponse::error(
-            request.id,
-            INVALID_PARAMS,
-            "Missing 'query' parameter",
-        );
+        return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Missing 'query' parameter");
     }
 
     let trace = crate::memory::retrieval_trace::RetrievalTrace::new(query, 0);

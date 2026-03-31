@@ -60,12 +60,7 @@ pub async fn handle_create(
 
             // Persist name/icon via update
             let _ = workspace_manager
-                .update(
-                    &params.id,
-                    Some(&ws.name),
-                    None,
-                    params.icon.as_deref(),
-                )
+                .update(&params.id, Some(&ws.name), None, params.icon.as_deref())
                 .await;
 
             JsonRpcResponse::success(
@@ -100,9 +95,7 @@ pub async fn handle_list(
     workspace_manager: Arc<AgentEnvStore>,
 ) -> JsonRpcResponse {
     match workspace_manager.list(false).await {
-        Ok(workspaces) => {
-            JsonRpcResponse::success(request.id, json!({ "workspaces": workspaces }))
-        }
+        Ok(workspaces) => JsonRpcResponse::success(request.id, json!({ "workspaces": workspaces })),
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
@@ -278,24 +271,21 @@ pub async fn handle_set_agent(
     request: JsonRpcRequest,
     workspace_manager: Arc<AgentEnvStore>,
 ) -> JsonRpcResponse {
-    let params: SetAgentParams = match serde_json::from_value(request.params.clone().unwrap_or_default()) {
-        Ok(p) => p,
-        Err(e) => return JsonRpcResponse::error(request.id, INVALID_PARAMS, e.to_string()),
-    };
+    let params: SetAgentParams =
+        match serde_json::from_value(request.params.clone().unwrap_or_default()) {
+            Ok(p) => p,
+            Err(e) => return JsonRpcResponse::error(request.id, INVALID_PARAMS, e.to_string()),
+        };
 
     match params.agent_id {
-        Some(agent_id) => {
-            match workspace_manager.set_active_agent(&params.channel_id, &agent_id) {
-                Ok(()) => JsonRpcResponse::success(request.id, json!({"ok": true})),
-                Err(e) => JsonRpcResponse::error(request.id, INTERNAL_ERROR, e.to_string()),
-            }
-        }
-        None => {
-            match workspace_manager.clear_active_agent(&params.channel_id) {
-                Ok(()) => JsonRpcResponse::success(request.id, json!({"ok": true})),
-                Err(e) => JsonRpcResponse::error(request.id, INTERNAL_ERROR, e.to_string()),
-            }
-        }
+        Some(agent_id) => match workspace_manager.set_active_agent(&params.channel_id, &agent_id) {
+            Ok(()) => JsonRpcResponse::success(request.id, json!({"ok": true})),
+            Err(e) => JsonRpcResponse::error(request.id, INTERNAL_ERROR, e.to_string()),
+        },
+        None => match workspace_manager.clear_active_agent(&params.channel_id) {
+            Ok(()) => JsonRpcResponse::success(request.id, json!({"ok": true})),
+            Err(e) => JsonRpcResponse::error(request.id, INTERNAL_ERROR, e.to_string()),
+        },
     }
 }
 
