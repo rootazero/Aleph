@@ -14,7 +14,10 @@ pub mod retry;
 mod safety;
 pub mod subagent_tool;
 mod tool;
+pub mod context_compactor;
+pub mod truncation_recovery;
 pub mod tool_orchestrator;
+pub mod streaming_bridge;
 
 #[cfg(test)]
 mod integration_probe;
@@ -25,10 +28,13 @@ pub use context_budget::pressure::PressureSensor;
 pub use context_budget::{
     ContextBudget, ContextBudgetConfig, ContextPressure, LoopDirective, TurnMetrics,
 };
+pub use context_compactor::{CompactResult, CompactStrategy, CompactorConfig, ContextCompactor};
 pub use factory::LoopFactory;
+pub use truncation_recovery::{RecoveryAction, RecoveryPhase, TruncationRecovery};
 pub(crate) use loop_core::NoopCallback;
 pub use loop_core::{AgentLoop, LoopCallback, LoopConfig, LoopProvider, LoopRunResult};
 pub use prompt_builder::{PromptBuilder, ToolInfo};
 pub use provider_bridge::AiProviderBridge;
 pub use safety::{SafetyError, SafetyGuard, ToolCall as SafetyToolCall};
+pub use streaming_bridge::{StreamingToolBridge, StreamingToolExecutor};
 pub use tool::{LoopTool, LoopToolRegistry, ToolDefinition, ToolResult};

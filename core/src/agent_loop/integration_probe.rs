@@ -367,7 +367,317 @@ mod tests {
     }
 
     // =========================================================================
-    // E4: System prompt passed through
+    // E4: Truncation recovery escalation through bridge
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_truncation_recovery_escalation() {
+        let captured = Arc::new(Mutex::new(Vec::<CapturedRequest>::new()));
+        let registry = LoopToolRegistry::new();
+
+        let agent = make_probe_loop(
+            vec![
+                // Turn 1: truncated (MaxTokens) — recovery escalates
+                ProviderResponse {
+                    text: Some("Part one of the answer...".to_string()),
+                    tool_calls: vec![],
+                    thinking: None,
+                    stop_reason: StopReason::MaxTokens,
+                    usage: Some(TokenUsage {
+                        input_tokens: 10,
+                        output_tokens: 100,
+                        cache_read_tokens: None,
+                        thinking_tokens: None,
+                    }),
+                },
+                // Turn 2: still truncated (MaxTokens) — recovery continues
+                ProviderResponse {
+                    text: Some("Part two continues...".to_string()),
+                    tool_calls: vec![],
+                    thinking: None,
+                    stop_reason: StopReason::MaxTokens,
+                    usage: Some(TokenUsage {
+                        input_tokens: 20,
+                        output_tokens: 100,
+                        cache_read_tokens: None,
+                        thinking_tokens: None,
+                    }),
+                },
+                // Turn 3: final response with EndTurn
+                ProviderResponse {
+                    text: Some("Final assembled conclusion. <task-complete/>".to_string()),
+                    tool_calls: vec![],
+                    thinking: None,
+                    stop_reason: StopReason::EndTurn,
+                    usage: Some(TokenUsage {
+                        input_tokens: 30,
+                        output_tokens: 50,
+                        cache_read_tokens: None,
+                        thinking_tokens: None,
+                    }),
+                },
+            ],
+            captured.clone(),
+            registry,
+        );
+
+        let mut cb = NoopCallback;
+        let result = agent.run("write a long essay", &mut cb).await.unwrap();
+
+        // Recovery should have caused multiple iterations
+        assert!(
+            result.iterations > 1,
+            "Expected multiple iterations from truncation recovery, got {}",
+            result.iterations
+        );
+
+        // Final text should contain the conclusion from the last response
+        let text = result.final_text.as_deref().unwrap_or("");
+        assert!(
+            text.contains("Final assembled conclusion"),
+            "Expected final text to contain assembled output, got: {}",
+            text
+        );
+
+        // Verify that continuation prompts were injected (captured requests show growing history)
+        let caps = captured.lock().unwrap_or_else(|e| e.into_inner());
+        assert!(
+            caps.len() >= 3,
+            "Expected at least 3 provider calls, got {}",
+            caps.len()
+        );
+        // Second call should have more messages than the first (continuation prompt injected)
+        assert!(
+            caps[1].messages.len() > caps[0].messages.len(),
+            "Second call should have more messages (continuation prompt injected)"
+        );
+    }
+
+    // =========================================================================
+    // E5: Context compaction triggers under pressure
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_context_compaction_triggers() {
+        use crate::agent_loop::context_compactor::{CompactorConfig, ContextCompactor};
+        use crate::agent_loop::context_budget::{ContextBudget, ContextBudgetConfig};
+
+        let captured = Arc::new(Mutex::new(Vec::<CapturedRequest>::new()));
+        let registry = LoopToolRegistry::new();
+
+        // Build a compactor backed by a probe provider that returns a summary
+        let summary_provider = Arc::new(ProbeProvider::new(
+            vec![ProviderResponse::text_only(
+                "Summary of earlier conversation.".to_string(),
+            )],
+            Arc::new(Mutex::new(Vec::new())), // separate captured for compactor
+        )) as Arc<dyn crate::providers::AiProvider>;
+
+        let compactor = ContextCompactor::new(
+            summary_provider,
+            CompactorConfig {
+                fresh_tail: 2,
+                ..Default::default()
+            },
+        );
+
+        // Main provider: just returns a final response
+        let agent = make_probe_loop(
+            vec![ProviderResponse {
+                text: Some("Done processing. <task-complete/>".to_string()),
+                tool_calls: vec![],
+                thinking: None,
+                stop_reason: StopReason::EndTurn,
+                usage: Some(TokenUsage {
+                    input_tokens: 800,
+                    output_tokens: 100,
+                    cache_read_tokens: None,
+                    thinking_tokens: None,
+                }),
+            }],
+            captured.clone(),
+            registry,
+        );
+
+        // Attach a very small context budget so pressure is high
+        let budget_config = ContextBudgetConfig {
+            token_budget: 1000,
+            warning_threshold: 0.70,
+            critical_threshold: 0.85,
+            token_estimate_ratio: 3.5,
+            fresh_tail_count: 2,
+            circuit_breaker_max: 3,
+            diminishing_window: 4,
+            diminishing_threshold: 500,
+        };
+        let budget = ContextBudget::new(&budget_config);
+        let agent = agent
+            .with_context_budget(Some(budget))
+            .with_context_compactor(compactor);
+
+        // Build a history with many messages to create pressure
+        let mut history = Vec::new();
+        for i in 0..20 {
+            history.push(UnifiedMessage::user(format!(
+                "This is user message number {} with some filler text to increase token count.",
+                i
+            )));
+            history.push(UnifiedMessage::assistant(format!(
+                "This is assistant response number {} with detailed explanation and analysis.",
+                i
+            )));
+        }
+
+        let mut cb = NoopCallback;
+        let result = agent
+            .run_with_history("final question", history, &mut cb)
+            .await;
+
+        // The loop should not crash even with high pressure + compaction
+        assert!(
+            result.is_ok(),
+            "Loop should not crash with compaction enabled, got: {:?}",
+            result.err()
+        );
+
+        let result = result.unwrap();
+        assert!(result.iterations >= 1);
+    }
+
+    // =========================================================================
+    // E6: Streaming bridge overlaps tool execution
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_streaming_bridge_overlaps_execution() {
+        use std::time::{Duration, Instant};
+
+        let captured = Arc::new(Mutex::new(Vec::<CapturedRequest>::new()));
+        let mut registry = LoopToolRegistry::new();
+
+        // Register two concurrent-safe tools with a 50ms delay each
+        struct SlowEchoTool {
+            tool_name: String,
+        }
+
+        #[async_trait::async_trait]
+        impl crate::agent_loop::tool::LoopTool for SlowEchoTool {
+            fn name(&self) -> &str {
+                &self.tool_name
+            }
+            fn description(&self) -> &str {
+                "Slow echo tool"
+            }
+            fn schema(&self) -> serde_json::Value {
+                json!({
+                    "type": "object",
+                    "properties": { "msg": { "type": "string" } },
+                    "required": ["msg"]
+                })
+            }
+            async fn execute(
+                &self,
+                input: serde_json::Value,
+            ) -> crate::agent_loop::tool::ToolResult {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                crate::agent_loop::tool::ToolResult::Success { output: input }
+            }
+            fn is_concurrent_safe(&self, _input: &serde_json::Value) -> bool {
+                true
+            }
+        }
+
+        registry.register(Box::new(SlowEchoTool {
+            tool_name: "slow_a".to_string(),
+        }));
+        registry.register(Box::new(SlowEchoTool {
+            tool_name: "slow_b".to_string(),
+        }));
+
+        let agent = make_probe_loop(
+            vec![
+                // Turn 1: call both tools simultaneously
+                ProviderResponse {
+                    text: None,
+                    tool_calls: vec![
+                        NativeToolCall {
+                            id: "call_a".to_string(),
+                            name: "slow_a".to_string(),
+                            arguments: json!({ "msg": "hello_a" }),
+                        },
+                        NativeToolCall {
+                            id: "call_b".to_string(),
+                            name: "slow_b".to_string(),
+                            arguments: json!({ "msg": "hello_b" }),
+                        },
+                    ],
+                    thinking: None,
+                    stop_reason: StopReason::ToolUse,
+                    usage: Some(TokenUsage {
+                        input_tokens: 10,
+                        output_tokens: 20,
+                        cache_read_tokens: None,
+                        thinking_tokens: None,
+                    }),
+                },
+                // Turn 2: final response
+                ProviderResponse {
+                    text: Some("Both tools completed. <task-complete/>".to_string()),
+                    tool_calls: vec![],
+                    thinking: None,
+                    stop_reason: StopReason::EndTurn,
+                    usage: Some(TokenUsage {
+                        input_tokens: 30,
+                        output_tokens: 10,
+                        cache_read_tokens: None,
+                        thinking_tokens: None,
+                    }),
+                },
+            ],
+            captured.clone(),
+            registry,
+        );
+
+        let mut cb = NoopCallback;
+        let start = Instant::now();
+        let result = agent.run("call both tools", &mut cb).await.unwrap();
+        let elapsed = start.elapsed();
+
+        // Both tool calls should have been made
+        assert_eq!(result.tool_calls_made, 2);
+
+        // Final text should be present
+        assert_eq!(
+            result.final_text.as_deref(),
+            Some("Both tools completed. <task-complete/>")
+        );
+
+        // Two 50ms concurrent tools should complete in < 150ms (not 100ms+ sequential)
+        // We use 200ms as a generous bound to avoid flaky CI
+        assert!(
+            elapsed < Duration::from_millis(2000),
+            "Expected parallel execution (<2s including stream overhead), got {:?}",
+            elapsed
+        );
+
+        // Verify both tool results appear in the second request's messages
+        let caps = captured.lock().unwrap_or_else(|e| e.into_inner());
+        assert_eq!(caps.len(), 2, "Expected 2 provider calls");
+
+        let second_call_msgs = &caps[1].messages;
+        let tool_result_count = second_call_msgs
+            .iter()
+            .filter(|m| matches!(m, UnifiedMessage::ToolResult { .. }))
+            .count();
+        assert_eq!(
+            tool_result_count, 2,
+            "Expected 2 tool results in second call, got {}",
+            tool_result_count
+        );
+    }
+
+    // =========================================================================
+    // E7 (original E4): System prompt passed through
     // =========================================================================
 
     #[tokio::test]

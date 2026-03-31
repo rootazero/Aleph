@@ -9,7 +9,7 @@
 //! - `max_iterations` is reached
 //! - Token budget is exhausted
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -43,6 +43,108 @@ const DIMINISHING_RETURNS_NOTICE: &str =
      (1) what you accomplished, (2) what you tried that didn't work, \
      (3) what the user should do next. Then stop.";
 
+const TRUNCATION_NOTICE: &str =
+    "[SYSTEM] Earlier conversation history and memory context were truncated \
+     to fit the model's context window. Continue based on the remaining context.";
+
+/// Find a safe cut point that doesn't split ToolCall/ToolResult pairs.
+fn find_safe_cut_point(messages: &[UnifiedMessage], initial_cut: usize) -> usize {
+    let mut cut = initial_cut;
+    while cut > 0 {
+        if messages[cut].is_tool_result() {
+            cut -= 1;
+        } else {
+            break;
+        }
+    }
+    cut
+}
+
+/// Remove the oldest complete conversation round after the truncation notice.
+fn remove_oldest_complete_round(messages: &mut Vec<UnifiedMessage>) {
+    if messages.len() <= 2 {
+        return;
+    }
+
+    if messages[1].is_assistant() && messages[1].has_tool_calls() {
+        let mut end = 2;
+        while end < messages.len() && messages[end].is_tool_result() {
+            end += 1;
+        }
+        messages.drain(1..end);
+    } else {
+        messages.remove(1);
+    }
+}
+
+/// Hard safety net: truncate message history if total estimated tokens exceed budget.
+///
+/// This runs after the soft compactor and is the last line of defense before
+/// the LLM call. If context is still over budget, it aggressively drops old
+/// messages (session summaries, old turns) while keeping the fresh tail.
+///
+/// **Philosophy**: keep the agent running > preserve history.
+/// **Invariant**: never orphans ToolCall/ToolResult pairs.
+fn enforce_context_limit(
+    messages: &mut Vec<UnifiedMessage>,
+    system_prompt: &str,
+    tool_defs: &[ToolDefinition],
+    token_budget: usize,
+    fresh_tail_count: usize,
+    ratio: f64,
+) {
+    use crate::memory::session_compactor::context_window::{
+        estimate_tokens, estimate_total_tokens,
+    };
+
+    let prompt_tokens = estimate_tokens(system_prompt, ratio);
+    let tool_tokens: usize = tool_defs
+        .iter()
+        .map(|td| {
+            estimate_tokens(&td.name, ratio)
+                + estimate_tokens(&td.description, ratio)
+                + estimate_tokens(&td.parameters.to_string(), ratio)
+        })
+        .sum();
+    let overhead = prompt_tokens + tool_tokens;
+    let msg_budget = token_budget.saturating_sub(overhead);
+    let msg_tokens = estimate_total_tokens(messages, ratio);
+
+    if msg_tokens <= msg_budget {
+        return;
+    }
+
+    tracing::warn!(
+        target: "agent_loop",
+        msg_tokens, msg_budget, overhead,
+        total = msg_tokens + overhead,
+        budget = token_budget,
+        "Context exceeds budget after compaction — enforcing hard limit"
+    );
+
+    // Phase 1: Find safe cut point at round boundary
+    let tail_start = messages.len().saturating_sub(fresh_tail_count);
+    let cut = find_safe_cut_point(messages, tail_start);
+
+    if cut > 0 {
+        messages.drain(0..cut);
+        messages.insert(0, UnifiedMessage::user(TRUNCATION_NOTICE));
+    }
+
+    // Phase 2: If still over budget, remove oldest complete rounds one by one
+    while messages.len() > 2 && estimate_total_tokens(messages, ratio) > msg_budget {
+        remove_oldest_complete_round(messages);
+    }
+
+    let final_tokens = estimate_total_tokens(messages, ratio);
+    tracing::warn!(
+        target: "agent_loop",
+        remaining_messages = messages.len(),
+        final_tokens, msg_budget,
+        "Context limit enforced (pair-aware)"
+    );
+}
+
 // =============================================================================
 // LoopProvider trait
 // =============================================================================
@@ -60,6 +162,11 @@ pub trait LoopProvider: Send + Sync {
         system_prompt: &str,
         tools: &[ToolDefinition],
     ) -> anyhow::Result<BoxStream<'static, anyhow::Result<ProviderDelta>>>;
+
+    /// Maximum output tokens this provider supports.
+    fn max_output_tokens(&self) -> u32 {
+        16_384
+    }
 }
 
 // =============================================================================
@@ -157,9 +264,9 @@ impl LoopCallback for NoopCallback {}
 /// The core agent loop: think → act, repeated until done.
 pub struct AgentLoop<P: LoopProvider> {
     provider: P,
-    tool_registry: LoopToolRegistry,
+    tool_registry: Arc<LoopToolRegistry>,
     prompt_builder: PromptBuilder,
-    safety_guard: SafetyGuard,
+    safety_guard: Arc<SafetyGuard>,
     config: LoopConfig,
     /// Optional context budget for pressure sensing and budget tracking.
     /// Wrapped in `Mutex` for interior mutability — `run_with_history_messages`
@@ -171,6 +278,12 @@ pub struct AgentLoop<P: LoopProvider> {
     compaction_pipeline: CompactionPipeline,
     /// Diagnostics collector for pipeline run history.
     diagnostics: Mutex<ContextDiagnostics>,
+    /// Truncation recovery state machine — handles `MaxTokens` stop reason by
+    /// escalating token limits, generating continuation prompts, and assembling
+    /// fragmented outputs. Wrapped in `Mutex` for interior mutability.
+    truncation_recovery: Mutex<super::truncation_recovery::TruncationRecovery>,
+    /// Optional LLM-based context compactor for elevated pressure.
+    context_compactor: Option<super::context_compactor::ContextCompactor>,
     /// Sink for streaming deltas during the Think step. Defaults to NoopSink.
     delta_sink: Box<dyn DeltaSink>,
     /// Token for cooperative cancellation of streaming and tool execution.
@@ -202,16 +315,21 @@ impl<P: LoopProvider> AgentLoop<P> {
                 ratio: 3.5,
             }),
         ]);
+        let provider_max = provider.max_output_tokens();
         Self {
             provider,
-            tool_registry,
+            tool_registry: Arc::new(tool_registry),
             prompt_builder,
-            safety_guard,
+            safety_guard: Arc::new(safety_guard),
             config,
             context_budget: Mutex::new(None),
             pressure_sensor: Mutex::new(PressureSensor::new(3.5)),
             compaction_pipeline: pipeline,
             diagnostics: Mutex::new(ContextDiagnostics::new()),
+            context_compactor: None,
+            truncation_recovery: Mutex::new(
+                super::truncation_recovery::TruncationRecovery::new(provider_max),
+            ),
             delta_sink: Box::new(NoopSink),
             cancel_token,
         }
@@ -223,6 +341,13 @@ impl<P: LoopProvider> AgentLoop<P> {
             .context_budget
             .lock()
             .unwrap_or_else(|e| e.into_inner()) = budget;
+        self
+    }
+
+    /// Attach a [`ContextCompactor`](super::context_compactor::ContextCompactor) for LLM-based compaction
+    /// at elevated context pressure.
+    pub fn with_context_compactor(mut self, compactor: super::context_compactor::ContextCompactor) -> Self {
+        self.context_compactor = Some(compactor);
         self
     }
 
@@ -299,8 +424,7 @@ impl<P: LoopProvider> AgentLoop<P> {
         let mut stop_requested = false;
         let mut consecutive_errors: usize = 0;
         let mut completion_nudge_count: usize = 0;
-        let mut auto_continue_count: usize = 0;
-        const MAX_AUTO_CONTINUES: usize = 2;
+        let mut current_max_tokens: Option<u32> = None;
         const MAX_CONSECUTIVE_ERRORS: usize = 10;
         const MAX_COMPLETION_NUDGES: usize = 3;
 
@@ -310,7 +434,7 @@ impl<P: LoopProvider> AgentLoop<P> {
 
             // --- Context budget evaluation (single lock scope) ---
             let mut budget_directive = super::context_budget::LoopDirective::Continue;
-            {
+            let (budget_fresh_tail, budget_ratio) = {
                 let mut ctx_budget_ref = self
                     .context_budget
                     .lock()
@@ -346,6 +470,7 @@ impl<P: LoopProvider> AgentLoop<P> {
                                 .unwrap_or_else(|e| e.into_inner())
                                 .record_pipeline(result);
                         }
+                        // NOTE: LLM-based compaction is handled below, outside this lock scope.
                         super::context_budget::LoopDirective::FinalReply => {
                             let result = {
                                 let sensor = self
@@ -373,6 +498,7 @@ impl<P: LoopProvider> AgentLoop<P> {
                         }
                         super::context_budget::LoopDirective::Continue => {}
                     }
+                    (ctx_budget.fresh_tail_count(), ctx_budget.token_estimate_ratio())
                 } else {
                     // No context budget configured — still enforce a hard limit
                     // using the pipeline as a safety net against provider-side
@@ -398,8 +524,46 @@ impl<P: LoopProvider> AgentLoop<P> {
                             6, // default fresh tail
                         );
                     }
+                    (6_usize, 3.5_f64)
                 }
             };
+
+            // LLM-based compaction at elevated pressure (ratio >= 0.78)
+            if let Some(ref compactor) = self.context_compactor {
+                let should_llm_compact = {
+                    let budget = self.context_budget.lock()
+                        .unwrap_or_else(|e| e.into_inner());
+                    budget.as_ref()
+                        .and_then(|b| b.last_pressure())
+                        .map(|p| p.ratio >= 0.78)
+                        .unwrap_or(false)
+                };
+                if should_llm_compact {
+                    match compactor.compact(&mut messages, budget_fresh_tail).await {
+                        Ok(result) => {
+                            tracing::info!(
+                                strategy = ?result.strategy_used,
+                                tokens_before = result.tokens_before,
+                                tokens_after = result.tokens_after,
+                                "context compaction complete"
+                            );
+                        }
+                        Err(e) => {
+                            tracing::warn!("context compaction failed: {e}");
+                        }
+                    }
+                }
+            }
+
+            // Hard safety net: enforce context limit
+            enforce_context_limit(
+                &mut messages,
+                &system_prompt,
+                &tool_defs,
+                self.config.token_budget,
+                budget_fresh_tail,
+                budget_ratio,
+            );
 
             // Think: stream deltas with retry and cancellation
             let delta_stream = super::retry::retry_async(
@@ -409,6 +573,17 @@ impl<P: LoopProvider> AgentLoop<P> {
             )
             .await?;
 
+            // The bridge+executor are created every iteration (even for pure text turns)
+            // because tools must start executing AS THEY STREAM — we cannot know whether
+            // tool calls will arrive until the stream completes. The overhead for non-tool
+            // turns is minimal: 1 mpsc channel + 1 tokio::spawn + 1 abort.
+            let (mut bridge, executor) = super::streaming_bridge::StreamingToolBridge::new(
+                Arc::clone(&self.tool_registry),
+                Arc::clone(&self.safety_guard),
+                self.cancel_token.clone(),
+            );
+            let executor_handle = tokio::spawn(executor.run());
+
             let mut collector = DeltaCollector::new();
             futures::pin_mut!(delta_stream);
             loop {
@@ -417,6 +592,7 @@ impl<P: LoopProvider> AgentLoop<P> {
                         match maybe_delta {
                             Some(Ok(delta)) => {
                                 self.delta_sink.on_delta(&delta).await;
+                                bridge.feed(&delta);
                                 collector.push(delta);
                             }
                             Some(Err(e)) => return Err(e),
@@ -435,6 +611,7 @@ impl<P: LoopProvider> AgentLoop<P> {
                     }
                 }
             }
+            bridge.finish(); // close the channel so executor can drain
             let response = collector.finish();
 
             // Removed debug logging
@@ -462,9 +639,14 @@ impl<P: LoopProvider> AgentLoop<P> {
                     // Strip any intermediate text the LLM repeated at the start
                     let cleaned = strip_repeated_intermediate(text, &intermediate_texts);
                     callback.on_text(&cleaned);
-                    // Append text if auto-continuing from truncation, otherwise replace
+                    // Append text if recovering from truncation, otherwise replace
+                    let is_recovering = {
+                        let recovery = self.truncation_recovery.lock()
+                            .unwrap_or_else(|e| e.into_inner());
+                        *recovery.phase() != super::truncation_recovery::RecoveryPhase::Idle
+                    };
                     if let Some(ref mut existing) = final_text {
-                        if auto_continue_count > 0 {
+                        if is_recovering {
                             existing.push_str(&cleaned);
                         } else {
                             *existing = cleaned;
@@ -477,6 +659,17 @@ impl<P: LoopProvider> AgentLoop<P> {
 
             // Push complete assistant message from response
             messages.push(UnifiedMessage::from_provider_response(&response));
+
+            // Reset truncation recovery on normal completion (not MaxTokens)
+            if response.stop_reason != StopReason::MaxTokens {
+                let mut recovery = self.truncation_recovery.lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                if let Some(original) = recovery.reset() {
+                    current_max_tokens = Some(original);
+                } else {
+                    current_max_tokens = None;
+                }
+            }
 
             // If no tool calls and EndTurn → check completion protocol before stopping
             if !response.has_tool_calls() && response.stop_reason == StopReason::EndTurn {
@@ -524,38 +717,39 @@ impl<P: LoopProvider> AgentLoop<P> {
                 break; // Exhausted all nudges
             }
 
-            // If no tool calls and MaxTokens → auto-continue up to MAX_AUTO_CONTINUES times
+            // If no tool calls and MaxTokens → use TruncationRecovery state machine
             if !response.has_tool_calls() && response.stop_reason == StopReason::MaxTokens {
-                if auto_continue_count < MAX_AUTO_CONTINUES {
-                    auto_continue_count += 1;
+                let action = {
+                    let mut recovery = self.truncation_recovery.lock()
+                        .unwrap_or_else(|e| e.into_inner());
+                    recovery.on_truncation(
+                        current_max_tokens,
+                        response.text.as_deref().unwrap_or(""),
+                    )
+                };
+                if action.should_continue {
+                    if let Some(override_val) = action.max_tokens_override {
+                        current_max_tokens = Some(override_val);
+                    }
+                    messages.push(UnifiedMessage::user(&action.continuation_prompt));
                     tracing::info!(
                         iteration = iterations,
-                        attempt = auto_continue_count,
-                        max = MAX_AUTO_CONTINUES,
-                        "Output truncated by max_tokens, auto-continuing"
+                        escalated = action.max_tokens_override.is_some(),
+                        "truncation recovery: continuing"
                     );
-                    messages.push(UnifiedMessage::user(
-                        "[SYSTEM] Your previous response was truncated due to output token limit. \
-                         Continue exactly where you left off. Do not repeat any content.",
-                    ));
                     continue;
-                }
-                // Exhausted all auto-continue attempts, append truncation notice and stop
-                tracing::warn!(
-                    iteration = iterations,
-                    attempts = auto_continue_count,
-                    "Output still truncated after {} auto-continues, notifying user",
-                    MAX_AUTO_CONTINUES,
-                );
-                let notice = "\n\n---\n⚠️ 输出因 token 限制被截断。请回复「继续」获取剩余内容。";
-                if let Some(ref mut text) = final_text {
-                    text.push_str(notice);
                 } else {
-                    final_text = Some(notice.to_string());
+                    // Recovery exhausted — assemble all fragments
+                    let recovery = self.truncation_recovery.lock()
+                        .unwrap_or_else(|e| e.into_inner());
+                    let assembled = recovery.assemble_output();
+                    let notice = "\n\n---\n⚠️ 输出因 token 限制被截断。请回复「继续」获取剩余内容。";
+                    final_text = Some(format!("{assembled}{notice}"));
+                    callback.on_text(notice);
+                    tracing::warn!(iterations, "truncation recovery exhausted, assembling fragments");
+                    hit_limit = true;
+                    break;
                 }
-                callback.on_text(notice);
-                hit_limit = true;
-                break;
             }
 
             // If no tool calls and not EndTurn/MaxTokens → done
@@ -571,6 +765,9 @@ impl<P: LoopProvider> AgentLoop<P> {
             );
 
             if skip_tools && response.has_tool_calls() {
+                // Abort the streaming executor — tools are being skipped.
+                executor_handle.abort();
+
                 // Inject a tool result telling the LLM tools were skipped
                 for tc in &response.tool_calls {
                     messages.push(UnifiedMessage::tool_result(
@@ -580,25 +777,68 @@ impl<P: LoopProvider> AgentLoop<P> {
                         true,
                     ));
                 }
-            } else {
-                // Act: execute tool calls via orchestrator (concurrent where safe)
-                let outcomes = super::tool_orchestrator::execute_tool_batch(
-                    &response.tool_calls,
-                    &self.tool_registry,
-                    &self.safety_guard,
-                    &self.cancel_token,
-                    callback,
-                )
-                .await;
+            } else if response.has_tool_calls() {
+                // Act: collect tool results from the streaming executor.
+                // Tools started executing during delta streaming — now await completion.
+                let outcomes = match executor_handle.await {
+                    Ok(results) => results,
+                    Err(e) => {
+                        tracing::warn!("streaming tool executor panicked: {e}");
+                        vec![]
+                    }
+                };
+
+                // Fire main-loop callbacks and process outcomes.
+                // The bridge used a no-op callback, so we fire events here
+                // to preserve the callback contract for external consumers.
+                // Build a lookup from tool_id → arguments for on_tool_start.
+                let tool_args_by_id: std::collections::HashMap<&str, &Value> = response
+                    .tool_calls
+                    .iter()
+                    .map(|tc| (tc.id.as_str(), &tc.arguments))
+                    .collect();
 
                 for outcome in &outcomes {
-                    if outcome.is_error {
-                        // Safety denials and retryable errors don't count toward consecutive limit
-                        let is_safety_denial = outcome.output_text.starts_with("[BLOCKED]")
+                    // Determine if this outcome was a safety denial (no execution happened).
+                    let is_safety_denial = outcome.is_error
+                        && (outcome.output_text.starts_with("[BLOCKED]")
                             || outcome.output_text.starts_with("[NEEDS_CONFIRMATION]")
-                            || outcome.output_text.starts_with("[DENIED]")
+                            || outcome.output_text.starts_with("[DENIED]"));
+
+                    // Fire on_tool_start only for tools that actually executed.
+                    if !is_safety_denial {
+                        let args = tool_args_by_id
+                            .get(outcome.tool_id.as_str())
+                            .copied()
+                            .unwrap_or(&Value::Null);
+                        callback.on_tool_start(&outcome.tool_name, args);
+                    }
+
+                    // Reconstruct a ToolResult for the callback.
+                    let tool_result = if outcome.is_error {
+                        ToolResult::Error {
+                            error: outcome.output_text.clone(),
+                            retryable: outcome.retryable,
+                        }
+                    } else if outcome.should_stop {
+                        ToolResult::SuccessAndStopLoop {
+                            output: Value::String(outcome.output_text.clone()),
+                        }
+                    } else {
+                        ToolResult::Success {
+                            output: Value::String(outcome.output_text.clone()),
+                        }
+                    };
+                    if !is_safety_denial {
+                        callback.on_tool_done(&outcome.tool_name, &tool_result);
+                    }
+
+                    if outcome.is_error {
+                        // Safety denials, cancellations, and retryable errors
+                        // don't count toward consecutive limit.
+                        let is_non_counting = is_safety_denial
                             || outcome.output_text.starts_with("[CANCELLED]");
-                        if is_safety_denial {
+                        if is_non_counting {
                             // Fire safety block callback for denied tools
                             if outcome.output_text.starts_with("[BLOCKED]") {
                                 callback.on_safety_block(&SafetyError::Blocked {
@@ -637,6 +877,9 @@ impl<P: LoopProvider> AgentLoop<P> {
                 }
 
                 tool_calls_made += outcomes.len();
+            } else {
+                // No tool calls — abort the idle executor.
+                executor_handle.abort();
             }
 
             // --- After-turn: record metrics for diminishing returns detection ---
