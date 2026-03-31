@@ -12,12 +12,28 @@ use crate::memory::{FactSource, FactType, MemoryFact, MemoryLayer, MemoryScope, 
 // ---------------------------------------------------------------------------
 
 const LEAF_PROMPT: &str = "\
-Summarize this conversation segment. Preserve:\n\
-- Key decisions made and their rationale\n\
-- File operations (reads, writes, modifications) with paths\n\
-- Error messages and how they were resolved\n\
-- TODOs and pending items\n\
-- Important technical details (function names, config values)\n\
+You are a conversation compressor. Condense the following conversation into a structured summary.\n\
+\n\
+First, analyze the conversation in an <analysis> block (this will be stripped before the summary enters context):\n\
+\n\
+<analysis>\n\
+1. User's primary request and intent\n\
+2. Key technical concepts and decisions made\n\
+3. Files and code sections involved (preserve exact paths)\n\
+4. Errors encountered and how they were resolved\n\
+5. Problem-solving approaches tried (what worked, what didn't)\n\
+</analysis>\n\
+\n\
+Then produce the final summary in a <summary> block:\n\
+\n\
+<summary>\n\
+- Preserve ALL user message key points (never lose user intent)\n\
+- Key decisions and their rationale\n\
+- File operations with paths\n\
+- Current work state (most recent operations, detailed)\n\
+- Pending tasks and unresolved problems\n\
+- Next steps (quote from conversation where relevant)\n\
+</summary>\n\
 \n\
 Omit: greetings, filler, repeated information, verbose tool outputs already summarized.";
 
@@ -46,6 +62,28 @@ fn depth_prompt(depth: u32) -> &'static str {
         1 => D1_PROMPT,
         _ => D2_PROMPT,
     }
+}
+
+/// Strip the `<analysis>...</analysis>` scratchpad from LLM summary output.
+///
+/// The analysis block gives the LLM reasoning space but should not enter
+/// the context window. If no analysis block is found, returns input unchanged.
+pub fn strip_analysis_block(text: &str) -> String {
+    if let Some(start) = text.find("<analysis>") {
+        if let Some(end) = text.find("</analysis>") {
+            let after_end = end + "</analysis>".len();
+            let mut result = String::new();
+            result.push_str(text[..start].trim());
+            if after_end < text.len() {
+                if !result.is_empty() {
+                    result.push('\n');
+                }
+                result.push_str(text[after_end..].trim());
+            }
+            return result;
+        }
+    }
+    text.to_string()
 }
 
 // ---------------------------------------------------------------------------
@@ -390,5 +428,30 @@ mod tests {
     fn test_summary_to_fact_path_includes_depth_and_seq() {
         let fact = summary_to_fact("my-session", 1, 7, "x".into(), 0, 0, "a");
         assert_eq!(fact.path, "aleph://session/my-session/d1/7");
+    }
+
+    #[test]
+    fn test_build_prompt_leaf_has_analysis_scratchpad() {
+        let messages = msgs(&[("user", "Fix the bug in auth.rs"), ("assistant", "I found the issue")]);
+        let prompt = build_summary_prompt(&messages, 0, None, FallbackLevel::Normal);
+        assert!(prompt.contains("<analysis>"), "leaf prompt should have analysis scratchpad");
+        assert!(prompt.contains("</analysis>"), "leaf prompt should close analysis tag");
+        assert!(prompt.contains("<summary>"), "leaf prompt should have summary section");
+    }
+
+    #[test]
+    fn test_strip_analysis_block() {
+        let input = "Some preamble\n<analysis>\nDetailed reasoning here\n</analysis>\n<summary>\nThe actual summary\n</summary>";
+        let stripped = strip_analysis_block(input);
+        assert!(!stripped.contains("<analysis>"));
+        assert!(!stripped.contains("Detailed reasoning"));
+        assert!(stripped.contains("The actual summary"));
+    }
+
+    #[test]
+    fn test_strip_analysis_block_no_analysis() {
+        let input = "Just a plain summary with no analysis block.";
+        let stripped = strip_analysis_block(input);
+        assert_eq!(stripped, input);
     }
 }
