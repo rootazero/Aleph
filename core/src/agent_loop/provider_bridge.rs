@@ -56,6 +56,10 @@ impl AiProviderBridge {
 
 #[async_trait]
 impl LoopProvider for AiProviderBridge {
+    fn max_output_tokens(&self) -> u32 {
+        65_536
+    }
+
     async fn stream(
         &self,
         messages: &[UnifiedMessage],

@@ -157,6 +157,11 @@ pub trait LoopProvider: Send + Sync {
         system_prompt: &str,
         tools: &[ToolDefinition],
     ) -> anyhow::Result<BoxStream<'static, anyhow::Result<ProviderDelta>>>;
+
+    /// Maximum output tokens this provider supports.
+    fn max_output_tokens(&self) -> u32 {
+        16_384
+    }
 }
 
 // =============================================================================
@@ -262,6 +267,10 @@ pub struct AgentLoop<P: LoopProvider> {
     /// Wrapped in `Mutex` for interior mutability — `run_with_history_messages`
     /// takes `&self` but the budget needs mutable state across turns.
     context_budget: Mutex<Option<super::context_budget::ContextBudget>>,
+    /// Truncation recovery state machine — handles `MaxTokens` stop reason by
+    /// escalating token limits, generating continuation prompts, and assembling
+    /// fragmented outputs. Wrapped in `Mutex` for interior mutability.
+    truncation_recovery: Mutex<super::truncation_recovery::TruncationRecovery>,
     /// Sink for streaming deltas during the Think step. Defaults to NoopSink.
     delta_sink: Box<dyn DeltaSink>,
     /// Token for cooperative cancellation of streaming and tool execution.
@@ -280,6 +289,7 @@ impl<P: LoopProvider> AgentLoop<P> {
         config: LoopConfig,
         cancel_token: CancellationToken,
     ) -> Self {
+        let provider_max = provider.max_output_tokens();
         Self {
             provider,
             tool_registry,
@@ -287,6 +297,9 @@ impl<P: LoopProvider> AgentLoop<P> {
             safety_guard,
             config,
             context_budget: Mutex::new(None),
+            truncation_recovery: Mutex::new(
+                super::truncation_recovery::TruncationRecovery::new(provider_max),
+            ),
             delta_sink: Box::new(NoopSink),
             cancel_token,
         }
@@ -371,8 +384,7 @@ impl<P: LoopProvider> AgentLoop<P> {
         let mut stop_requested = false;
         let mut consecutive_errors: usize = 0;
         let mut completion_nudge_count: usize = 0;
-        let mut auto_continue_count: usize = 0;
-        const MAX_AUTO_CONTINUES: usize = 2;
+        let mut current_max_tokens: Option<u32> = None;
         const MAX_CONSECUTIVE_ERRORS: usize = 10;
         const MAX_COMPLETION_NUDGES: usize = 3;
 
@@ -484,9 +496,14 @@ impl<P: LoopProvider> AgentLoop<P> {
                     // Strip any intermediate text the LLM repeated at the start
                     let cleaned = strip_repeated_intermediate(text, &intermediate_texts);
                     callback.on_text(&cleaned);
-                    // Append text if auto-continuing from truncation, otherwise replace
+                    // Append text if recovering from truncation, otherwise replace
+                    let is_recovering = {
+                        let recovery = self.truncation_recovery.lock()
+                            .unwrap_or_else(|e| e.into_inner());
+                        *recovery.phase() != super::truncation_recovery::RecoveryPhase::Idle
+                    };
                     if let Some(ref mut existing) = final_text {
-                        if auto_continue_count > 0 {
+                        if is_recovering {
                             existing.push_str(&cleaned);
                         } else {
                             *existing = cleaned;
@@ -499,6 +516,17 @@ impl<P: LoopProvider> AgentLoop<P> {
 
             // Push complete assistant message from response
             messages.push(UnifiedMessage::from_provider_response(&response));
+
+            // Reset truncation recovery on normal completion (not MaxTokens)
+            if response.stop_reason != StopReason::MaxTokens {
+                let mut recovery = self.truncation_recovery.lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                if let Some(original) = recovery.reset() {
+                    current_max_tokens = Some(original);
+                } else {
+                    current_max_tokens = None;
+                }
+            }
 
             // If no tool calls and EndTurn → check completion protocol before stopping
             if !response.has_tool_calls() && response.stop_reason == StopReason::EndTurn {
@@ -546,38 +574,39 @@ impl<P: LoopProvider> AgentLoop<P> {
                 break; // Exhausted all nudges
             }
 
-            // If no tool calls and MaxTokens → auto-continue up to MAX_AUTO_CONTINUES times
+            // If no tool calls and MaxTokens → use TruncationRecovery state machine
             if !response.has_tool_calls() && response.stop_reason == StopReason::MaxTokens {
-                if auto_continue_count < MAX_AUTO_CONTINUES {
-                    auto_continue_count += 1;
+                let action = {
+                    let mut recovery = self.truncation_recovery.lock()
+                        .unwrap_or_else(|e| e.into_inner());
+                    recovery.on_truncation(
+                        current_max_tokens,
+                        response.text.as_deref().unwrap_or(""),
+                    )
+                };
+                if action.should_continue {
+                    if let Some(override_val) = action.max_tokens_override {
+                        current_max_tokens = Some(override_val);
+                    }
+                    messages.push(UnifiedMessage::user(&action.continuation_prompt));
                     tracing::info!(
                         iteration = iterations,
-                        attempt = auto_continue_count,
-                        max = MAX_AUTO_CONTINUES,
-                        "Output truncated by max_tokens, auto-continuing"
+                        escalated = action.max_tokens_override.is_some(),
+                        "truncation recovery: continuing"
                     );
-                    messages.push(UnifiedMessage::user(
-                        "[SYSTEM] Your previous response was truncated due to output token limit. \
-                         Continue exactly where you left off. Do not repeat any content."
-                    ));
                     continue;
-                }
-                // Exhausted all auto-continue attempts, append truncation notice and stop
-                tracing::warn!(
-                    iteration = iterations,
-                    attempts = auto_continue_count,
-                    "Output still truncated after {} auto-continues, notifying user",
-                    MAX_AUTO_CONTINUES,
-                );
-                let notice = "\n\n---\n⚠️ 输出因 token 限制被截断。请回复「继续」获取剩余内容。";
-                if let Some(ref mut text) = final_text {
-                    text.push_str(notice);
                 } else {
-                    final_text = Some(notice.to_string());
+                    // Recovery exhausted — assemble all fragments
+                    let recovery = self.truncation_recovery.lock()
+                        .unwrap_or_else(|e| e.into_inner());
+                    let assembled = recovery.assemble_output();
+                    let notice = "\n\n---\n⚠️ 输出因 token 限制被截断。请回复「继续」获取剩余内容。";
+                    final_text = Some(format!("{assembled}{notice}"));
+                    callback.on_text(notice);
+                    tracing::warn!(iterations, "truncation recovery exhausted, assembling fragments");
+                    hit_limit = true;
+                    break;
                 }
-                callback.on_text(notice);
-                hit_limit = true;
-                break;
             }
 
             // If no tool calls and not EndTurn/MaxTokens → done
