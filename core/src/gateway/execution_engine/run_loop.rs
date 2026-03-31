@@ -5,6 +5,7 @@
 //! `ExecutionAdapter` trait implementation, and background memory persistence.
 
 use async_trait::async_trait;
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -329,6 +330,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 prompt_builder,
                 safety,
                 loop_config,
+                CancellationToken::new(),
             )
             .with_delta_sink(Box::new(streaming_sink))
             .with_tool_compactor_config(tool_compactor_config.clone());

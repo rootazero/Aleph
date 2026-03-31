@@ -10,6 +10,8 @@ mod tests {
     use std::pin::Pin;
     use serde_json::json;
 
+    use tokio_util::sync::CancellationToken;
+
     use crate::agent_loop::loop_core::{AgentLoop, LoopConfig, NoopCallback};
     use crate::agent_loop::prompt_builder::PromptBuilder;
     use crate::agent_loop::provider_bridge::AiProviderBridge;
@@ -167,6 +169,7 @@ mod tests {
                 max_iterations: 10,
                 token_budget: 100_000,
             },
+            CancellationToken::new(),
         )
     }
 

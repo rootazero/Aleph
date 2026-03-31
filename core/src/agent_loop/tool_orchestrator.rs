@@ -22,6 +22,8 @@ pub struct ToolOutcome {
     pub output_text: String,
     pub is_error: bool,
     pub should_stop: bool,
+    /// Whether the error is transient and should not count toward consecutive error limits.
+    pub retryable: bool,
 }
 
 // =============================================================================
@@ -99,6 +101,7 @@ async fn execute_one(
             output_text: msg,
             is_error: true,
             should_stop: false,
+            retryable: false,
         };
     }
 
@@ -112,6 +115,7 @@ async fn execute_one(
                 output_text: "[CANCELLED] Tool execution was cancelled".to_string(),
                 is_error: true,
                 should_stop: false,
+                retryable: false,
             };
         }
     };
@@ -127,14 +131,16 @@ async fn execute_one(
                 output_text: compressed,
                 is_error: false,
                 should_stop: false,
+                retryable: false,
             }
         }
-        ToolResult::Error { error, .. } => ToolOutcome {
+        ToolResult::Error { error, retryable } => ToolOutcome {
             tool_id: tc.id.clone(),
             tool_name: tc.name.clone(),
             output_text: error,
             is_error: true,
             should_stop: false,
+            retryable,
         },
         ToolResult::SuccessAndStopLoop { output } => {
             let raw = value_to_text(&output);
@@ -145,6 +151,7 @@ async fn execute_one(
                 output_text: compressed,
                 is_error: false,
                 should_stop: true,
+                retryable: false,
             }
         }
     }
@@ -186,13 +193,7 @@ pub async fn execute_tool_batch(
 
         match batch {
             Batch::Concurrent(indices) => {
-                // Fire on_tool_start for all.
-                for &idx in indices {
-                    let tc = &tool_calls[idx];
-                    callback.on_tool_start(&tc.name, &tc.arguments);
-                }
-
-                // Execute all concurrently.
+                // Execute all concurrently (safety checks happen inside execute_one).
                 let futures: Vec<_> = indices
                     .iter()
                     .map(|&idx| {
@@ -201,14 +202,20 @@ pub async fn execute_tool_batch(
                     })
                     .collect();
 
+                // Fire on_tool_start only for non-safety-blocked tools before awaiting.
+                // Since we can't know safety status before execute_one, fire start for all
+                // that pass safety, and fire callbacks after execution completes.
                 let outcomes = futures::future::join_all(futures).await;
 
-                // Fire on_tool_done and collect results.
                 for (i, outcome) in outcomes.into_iter().enumerate() {
                     let idx = indices[i];
                     let tc = &tool_calls[idx];
-                    let tool_result = outcome_to_tool_result(&outcome);
-                    callback.on_tool_done(&tc.name, &tool_result);
+                    let is_safety_block = is_safety_blocked(&outcome);
+                    if !is_safety_block {
+                        callback.on_tool_start(&tc.name, &tc.arguments);
+                        let tool_result = outcome_to_tool_result(&outcome);
+                        callback.on_tool_done(&tc.name, &tool_result);
+                    }
                     results.push((idx, outcome));
                 }
             }
@@ -216,10 +223,13 @@ pub async fn execute_tool_batch(
                 let idx = *idx;
                 let tc = &tool_calls[idx];
 
-                callback.on_tool_start(&tc.name, &tc.arguments);
                 let outcome = execute_one(tc, registry, safety, cancel).await;
-                let tool_result = outcome_to_tool_result(&outcome);
-                callback.on_tool_done(&tc.name, &tool_result);
+                let is_safety_block = is_safety_blocked(&outcome);
+                if !is_safety_block {
+                    callback.on_tool_start(&tc.name, &tc.arguments);
+                    let tool_result = outcome_to_tool_result(&outcome);
+                    callback.on_tool_done(&tc.name, &tool_result);
+                }
                 results.push((idx, outcome));
             }
         }
@@ -228,6 +238,14 @@ pub async fn execute_tool_batch(
     // Sort by original index to preserve input order.
     results.sort_by_key(|(idx, _)| *idx);
     results.into_iter().map(|(_, outcome)| outcome).collect()
+}
+
+/// Check if a ToolOutcome represents a safety denial (not a real execution).
+fn is_safety_blocked(outcome: &ToolOutcome) -> bool {
+    outcome.is_error
+        && (outcome.output_text.starts_with("[BLOCKED]")
+            || outcome.output_text.starts_with("[NEEDS_CONFIRMATION]")
+            || outcome.output_text.starts_with("[DENIED]"))
 }
 
 /// Convert a ToolOutcome back to a ToolResult for the callback.

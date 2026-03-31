@@ -4,6 +4,7 @@
 //! "new world" (AgentLoop with flat tool registry and prompt builder).
 
 use crate::sync_primitives::Arc;
+use tokio_util::sync::CancellationToken;
 
 use crate::providers::AiProvider;
 use crate::thinker::soul::SoulManifest;
@@ -52,7 +53,7 @@ impl LoopFactory {
         // Safety guard with sensible defaults
         let safety = SafetyGuard::default_guard();
 
-        AgentLoop::new(bridge, registry, prompt_builder, safety, config)
+        AgentLoop::new(bridge, registry, prompt_builder, safety, config, CancellationToken::new())
     }
 
     /// Build a `AgentLoop` from an `AlephToolServer`.

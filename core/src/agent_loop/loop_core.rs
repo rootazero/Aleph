@@ -12,9 +12,10 @@
 use async_trait::async_trait;
 use futures::StreamExt;
 use serde_json::Value;
+use tokio_util::sync::CancellationToken;
 
 use super::prompt_builder::{PromptBuilder, ToolInfo};
-use super::safety::{SafetyError, SafetyGuard, ToolCall as SafetyToolCall};
+use super::safety::{SafetyError, SafetyGuard};
 use super::tool::{LoopToolRegistry, ToolDefinition, ToolResult};
 use crate::providers::adapter::StopReason;
 use crate::providers::delta::{DeltaCollector, DeltaSink, NoopSink, ProviderDelta};
@@ -198,6 +199,7 @@ pub struct LoopRunResult {
     pub tool_calls_made: usize,
     pub total_tokens: usize,
     pub hit_limit: bool,
+    pub cancelled: bool,
 }
 
 // =============================================================================
@@ -269,6 +271,8 @@ pub struct AgentLoop<P: LoopProvider> {
     tool_compactor_config: Option<ToolCompactorConfig>,
     /// Sink for streaming deltas during the Think step. Defaults to NoopSink.
     delta_sink: Box<dyn DeltaSink>,
+    /// Token for cooperative cancellation of streaming and tool execution.
+    cancel_token: CancellationToken,
 }
 
 impl<P: LoopProvider> AgentLoop<P> {
@@ -281,6 +285,7 @@ impl<P: LoopProvider> AgentLoop<P> {
         prompt_builder: PromptBuilder,
         safety_guard: SafetyGuard,
         config: LoopConfig,
+        cancel_token: CancellationToken,
     ) -> Self {
         Self {
             provider,
@@ -290,6 +295,7 @@ impl<P: LoopProvider> AgentLoop<P> {
             config,
             tool_compactor_config: None,
             delta_sink: Box::new(NoopSink),
+            cancel_token,
         }
     }
 
@@ -410,17 +416,38 @@ impl<P: LoopProvider> AgentLoop<P> {
                     .unwrap_or(3.5),
             );
 
-            // Think: stream deltas from the provider and accumulate into ProviderResponse
-            let delta_stream = self
-                .provider
-                .stream(&messages, &system_prompt, &tool_defs)
-                .await?;
+            // Think: stream deltas with retry and cancellation
+            let delta_stream = super::retry::retry_async(
+                || self.provider.stream(&messages, &system_prompt, &tool_defs),
+                &self.cancel_token,
+                3,
+            ).await?;
+
             let mut collector = DeltaCollector::new();
             futures::pin_mut!(delta_stream);
-            while let Some(delta) = delta_stream.next().await {
-                let delta = delta?;
-                self.delta_sink.on_delta(&delta).await;
-                collector.push(delta);
+            loop {
+                tokio::select! {
+                    maybe_delta = delta_stream.next() => {
+                        match maybe_delta {
+                            Some(Ok(delta)) => {
+                                self.delta_sink.on_delta(&delta).await;
+                                collector.push(delta);
+                            }
+                            Some(Err(e)) => return Err(e.into()),
+                            None => break,
+                        }
+                    }
+                    _ = self.cancel_token.cancelled() => {
+                        return Ok(LoopRunResult {
+                            final_text: None,
+                            iterations,
+                            tool_calls_made,
+                            total_tokens,
+                            hit_limit: false,
+                            cancelled: true,
+                        });
+                    }
+                }
             }
             let response = collector.finish();
 
@@ -545,134 +572,61 @@ impl<P: LoopProvider> AgentLoop<P> {
                 break;
             }
 
-            // Act: process each tool call
-            for tc in &response.tool_calls {
-                // Safety check
-                let safety_call = SafetyToolCall {
-                    name: tc.name.clone(),
-                    input: tc.arguments.clone(),
-                };
+            // Act: execute tool calls via orchestrator (concurrent where safe)
+            let outcomes = super::tool_orchestrator::execute_tool_batch(
+                &response.tool_calls,
+                &self.tool_registry,
+                &self.safety_guard,
+                &self.cancel_token,
+                callback,
+            ).await;
 
-                let safety_result = self.safety_guard.check(&safety_call);
-                tracing::info!(
-                    tool = %tc.name,
-                    result = ?safety_result.as_ref().map(|_| "allowed").unwrap_or("denied"),
-                    "Tool call safety check"
-                );
-
-                match safety_result {
-                    Err(SafetyError::Blocked { ref tool, ref pattern }) => {
-                        let err = SafetyError::Blocked {
-                            tool: tool.clone(),
-                            pattern: pattern.clone(),
-                        };
-                        callback.on_safety_block(&err);
-                        messages.push(UnifiedMessage::tool_result(
-                            tc.id.clone(),
-                            tc.name.clone(),
-                            format!(
-                                "BLOCKED: tool '{}' blocked by safety pattern '{}'",
-                                tool, pattern
-                            ),
-                            true,
-                        ));
-                    }
-                    Err(SafetyError::NeedsConfirmation { ref tool }) => {
-                        let err = SafetyError::NeedsConfirmation { tool: tool.clone() };
-                        callback.on_safety_block(&err);
-                        messages.push(UnifiedMessage::tool_result(
-                            tc.id.clone(),
-                            tc.name.clone(),
-                            format!(
-                                "NEEDS_CONFIRMATION: tool '{}' requires user approval (auto-denied for now)",
-                                tool
-                            ),
-                            true,
-                        ));
-                    }
-                    Err(SafetyError::PolicyDenied { ref tool }) => {
-                        let err = SafetyError::PolicyDenied { tool: tool.clone() };
-                        callback.on_safety_block(&err);
-                        messages.push(UnifiedMessage::tool_result(
-                            tc.id.clone(),
-                            tc.name.clone(),
-                            format!(
-                                "DENIED: tool '{}' is not allowed by permission policy",
-                                tool
-                            ),
-                            true,
-                        ));
-                        // Do NOT increment consecutive_errors
-                    }
-                    Ok(()) => {
-                        // Safe — execute the tool
-                        tracing::info!(tool = %tc.name, "Executing tool");
-                        callback.on_tool_start(&tc.name, &tc.arguments);
-                        let result = self.tool_registry.execute(&tc.name, tc.arguments.clone()).await;
-                        tracing::info!(tool = %tc.name, is_error = matches!(&result, ToolResult::Error { .. }), "Tool execution complete");
-                        callback.on_tool_done(&tc.name, &result);
-
-                        let (output_text, is_error, should_stop) = match &result {
-                            ToolResult::Success { output } => {
-                                consecutive_errors = 0;
-                                let text = serde_json::to_string(output).unwrap_or_else(|e| {
-                                    tracing::error!(tool = %tc.name, error = %e, "Failed to serialize tool output");
-                                    format!("[serialization error: {}]", e)
-                                });
-                                (text, false, false)
-                            },
-                            ToolResult::SuccessAndStopLoop { output } => {
-                                tracing::info!(tool = %tc.name, "Tool returned SuccessAndStopLoop — will break loop");
-                                let text = serde_json::to_string(output).unwrap_or_else(|e| {
-                                    tracing::error!(tool = %tc.name, error = %e, "Failed to serialize tool output");
-                                    format!("[serialization error: {}]", e)
-                                });
-                                (text, false, true)
-                            },
-                            ToolResult::Error { error, retryable } => {
-                                if !retryable {
-                                    consecutive_errors += 1;
-                                }
-                                if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
-                                    tracing::warn!(
-                                        consecutive_errors,
-                                        tool = %tc.name,
-                                        "Too many consecutive tool errors — stopping loop"
-                                    );
-                                }
-                                (error.clone(), true, false)
-                            }
-                        };
-
-                        // Compress verbose tool outputs (especially DevTools MCP tools)
-                        let output_text = if !is_error {
-                            crate::tool_output::compressor::compress_tool_output(&tc.name, &output_text)
-                        } else {
-                            output_text
-                        };
-
-                        messages.push(UnifiedMessage::tool_result(
-                            tc.id.clone(),
-                            tc.name.clone(),
-                            output_text,
-                            is_error,
-                        ));
-
-                        if should_stop {
-                            if final_text.is_none() {
-                                if let Some(UnifiedMessage::ToolResult { content, .. }) = messages.last() {
-                                    if let Some(text) = content.iter().find_map(|b| b.as_text()) {
-                                        final_text = Some(text.to_string());
-                                    }
-                                }
-                            }
-                            stop_requested = true;
+            for outcome in &outcomes {
+                if outcome.is_error {
+                    // Safety denials and retryable errors don't count toward consecutive limit
+                    let is_safety_denial = outcome.output_text.starts_with("[BLOCKED]")
+                        || outcome.output_text.starts_with("[NEEDS_CONFIRMATION]")
+                        || outcome.output_text.starts_with("[DENIED]")
+                        || outcome.output_text.starts_with("[CANCELLED]");
+                    if is_safety_denial {
+                        // Fire safety block callback for denied tools
+                        if outcome.output_text.starts_with("[BLOCKED]") {
+                            callback.on_safety_block(&SafetyError::Blocked {
+                                tool: outcome.tool_name.clone(),
+                                pattern: String::new(),
+                            });
+                        } else if outcome.output_text.starts_with("[NEEDS_CONFIRMATION]") {
+                            callback.on_safety_block(&SafetyError::NeedsConfirmation {
+                                tool: outcome.tool_name.clone(),
+                            });
+                        } else if outcome.output_text.starts_with("[DENIED]") {
+                            callback.on_safety_block(&SafetyError::PolicyDenied {
+                                tool: outcome.tool_name.clone(),
+                            });
                         }
+                    } else if !outcome.retryable {
+                        consecutive_errors += 1;
                     }
+                } else {
+                    consecutive_errors = 0;
                 }
 
-                tool_calls_made += 1;
+                messages.push(UnifiedMessage::tool_result(
+                    outcome.tool_id.clone(),
+                    outcome.tool_name.clone(),
+                    outcome.output_text.clone(),
+                    outcome.is_error,
+                ));
+
+                if outcome.should_stop {
+                    if final_text.is_none() {
+                        final_text = Some(outcome.output_text.clone());
+                    }
+                    stop_requested = true;
+                }
             }
+
+            tool_calls_made += outcomes.len();
 
             if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
                 hit_limit = true;
@@ -706,6 +660,7 @@ impl<P: LoopProvider> AgentLoop<P> {
             tool_calls_made,
             total_tokens,
             hit_limit,
+            cancelled: false,
         })
     }
 }
@@ -721,6 +676,7 @@ mod tests {
     use crate::providers::message::ContentBlock;
     use serde_json::json;
     use crate::sync_primitives::{Arc, Mutex};
+    use tokio_util::sync::CancellationToken;
 
     struct MockProvider {
         responses: Mutex<Vec<ProviderResponse>>,
@@ -925,6 +881,7 @@ mod tests {
                 max_iterations: 10,
                 token_budget: 100_000,
             },
+            CancellationToken::new(),
         )
     }
 
@@ -1036,6 +993,7 @@ mod tests {
                 max_iterations: 5,
                 token_budget: 100_000,
             },
+            CancellationToken::new(),
         );
 
         let mut cb = TrackingCallback::default();
@@ -1082,6 +1040,7 @@ mod tests {
                 max_iterations: 10,
                 token_budget: 100_000,
             },
+            CancellationToken::new(),
         );
 
         let mut cb = TrackingCallback::default();
@@ -1167,6 +1126,7 @@ mod tests {
                 max_iterations: 10,
                 token_budget: 100_000,
             },
+            CancellationToken::new(),
         );
 
         let mut cb = TrackingCallback::default();
@@ -1269,6 +1229,7 @@ mod tests {
                 max_iterations: 25,
                 token_budget: 100_000,
             },
+            CancellationToken::new(),
         );
 
         let mut cb = TrackingCallback::default();
@@ -1362,6 +1323,7 @@ mod tests {
                 max_iterations: 25,
                 token_budget: 100_000,
             },
+            CancellationToken::new(),
         );
 
         let mut cb = TrackingCallback::default();
@@ -1415,6 +1377,7 @@ mod tests {
                 max_iterations: 10,
                 token_budget: 100_000,
             },
+            CancellationToken::new(),
         );
 
         let mut cb = TrackingCallback::default();
@@ -1578,6 +1541,7 @@ mod tests {
                 max_iterations: 10,
                 token_budget: 100_000,
             },
+            CancellationToken::new(),
         );
 
         let history = vec![
@@ -1687,6 +1651,7 @@ mod tests {
                 max_iterations: 10,
                 token_budget: 50,
             },
+            CancellationToken::new(),
         );
 
         let mut cb = TrackingCallback::default();
@@ -1741,6 +1706,7 @@ mod tests {
                 max_iterations: 10,
                 token_budget: 100_000,
             },
+            CancellationToken::new(),
         );
 
         let mut cb = TrackingCallback::default();
@@ -1825,6 +1791,7 @@ mod tests {
                 max_iterations: 10,
                 token_budget: 100_000,
             },
+            CancellationToken::new(),
         );
 
         let mut cb = TrackingCallback::default();
@@ -1918,6 +1885,7 @@ mod tests {
                 max_iterations: 10,
                 token_budget: 100_000,
             },
+            CancellationToken::new(),
         );
 
         let mut cb = TrackingCallback::default();
@@ -1971,6 +1939,7 @@ mod tests {
                 max_iterations: 25,
                 token_budget: 100_000,
             },
+            CancellationToken::new(),
         );
 
         let mut cb = TrackingCallback::default();
@@ -2030,6 +1999,7 @@ mod tests {
                 max_iterations: 10,
                 token_budget: 100_000,
             },
+            CancellationToken::new(),
         );
 
         let mut cb = TrackingCallback::default();
