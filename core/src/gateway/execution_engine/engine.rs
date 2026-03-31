@@ -11,6 +11,7 @@ use crate::sync_primitives::{AtomicU32, AtomicU64};
 use crate::sync_primitives::Arc;
 
 use tokio::sync::{mpsc, RwLock};
+use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 use super::{ActiveRun, ExecutionEngineConfig, ExecutionError, RunRequest, RunState, RunStatus};
@@ -176,6 +177,10 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
 
         // Create cancellation channel
         let (cancel_tx, mut cancel_rx) = mpsc::channel::<()>(1);
+
+        // Create CancellationToken for fine-grained agent loop cancellation.
+        // The bridge task converts the coarse cancel_rx signal into a token cancellation.
+        let cancel_token = CancellationToken::new();
 
         // Atomically check concurrent run limit and register the run
         {
@@ -368,14 +373,18 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 agent.clone(),
                 emitter.clone(),
                 deadline.clone(),
+                cancel_token.clone(),
             ) => result,
 
             _ = cancel_rx.recv() => {
+                // Bridge: coarse cancellation → fine-grained CancellationToken
+                cancel_token.cancel();
                 info!("Run {} cancelled", run_id);
                 Err(ExecutionError::Cancelled)
             }
 
             _ = wait_for_deadline(deadline.clone()) => {
+                cancel_token.cancel();
                 warn!("Run {} timed out after {}s effective time", run_id, timeout_secs);
                 Err(ExecutionError::Timeout)
             }

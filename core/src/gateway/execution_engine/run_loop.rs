@@ -39,6 +39,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         agent: Arc<AgentInstance>,
         emitter: Arc<E>,
         deadline: Arc<tokio::sync::Mutex<tokio::time::Instant>>,
+        cancel_token: CancellationToken,
     ) -> Result<String, ExecutionError> {
         use crate::agent_loop::{
             AgentLoop, PromptBuilder, SafetyGuard, LoopConfig,
@@ -330,7 +331,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 prompt_builder,
                 safety,
                 loop_config,
-                CancellationToken::new(),
+                cancel_token.clone(),
             )
             .with_delta_sink(Box::new(streaming_sink))
             .with_tool_compactor_config(tool_compactor_config.clone());
