@@ -35,7 +35,11 @@ impl BuiltinToolRegistry {
     /// - File operations are sandboxed by PathPermissionChecker
     /// - TODO: Tool policy will be reimplemented following OpenClaw's sandbox pattern
     pub async fn with_config(config: BuiltinToolConfig) -> Self {
-        let search_tool = SearchTool::with_api_key(config.tavily_api_key.clone());
+        let search_tool = if let Some(ref registry) = config.search_registry {
+            SearchTool::with_registry(Arc::clone(registry))
+        } else {
+            SearchTool::with_api_key(config.tavily_api_key.clone())
+        };
         let web_fetch_tool = WebFetchTool::new();
         let file_ops_tool = if let Some(ref tc) = config.tool_context {
             FileOpsTool::new().with_tool_context(std::sync::Arc::clone(tc))
