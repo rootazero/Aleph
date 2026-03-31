@@ -212,6 +212,133 @@ impl CompactionStage for MicroCompact {
 }
 
 // =============================================================================
+// Stage 2: ToolCompactStage
+// =============================================================================
+
+/// Delegates to the existing tool compactor which produces summary lines like
+/// `[Read file, 100 lines, rust]` for old tool results.
+pub struct ToolCompactStage {
+    pub token_budget: u64,
+    pub threshold: f64,
+    pub ratio: f64,
+}
+
+impl CompactionStage for ToolCompactStage {
+    fn name(&self) -> &'static str {
+        "tool_compact"
+    }
+
+    fn compact(&self, messages: &mut [UnifiedMessage], fresh_tail_count: usize) -> usize {
+        let before: usize = messages
+            .iter()
+            .map(|m| estimate_tokens_smart(&m.text_content()))
+            .sum();
+
+        crate::memory::session_compactor::tool_compactor::compact_if_needed(
+            messages,
+            self.token_budget,
+            self.threshold,
+            self.ratio,
+            fresh_tail_count,
+        );
+
+        let after: usize = messages
+            .iter()
+            .map(|m| estimate_tokens_smart(&m.text_content()))
+            .sum();
+
+        before.saturating_sub(after)
+    }
+}
+
+// =============================================================================
+// Stage 3: RoundDrop
+// =============================================================================
+
+/// Groups messages into API rounds (one user turn + all following messages
+/// until the next user turn) and drops the oldest complete rounds when over
+/// budget.
+pub struct RoundDrop {
+    pub token_budget: u64,
+    pub ratio: f64,
+}
+
+const ROUND_DROP_NOTICE: &str =
+    "[SYSTEM] Earlier conversation history was truncated \
+     to fit the model's context window. Continue based on the remaining context.";
+
+impl CompactionStage for RoundDrop {
+    fn name(&self) -> &'static str {
+        "round_drop"
+    }
+
+    fn compact(&self, messages: &mut [UnifiedMessage], fresh_tail_count: usize) -> usize {
+        let partition = partition_fresh_tail(messages, fresh_tail_count);
+        let compressible = &messages[..partition];
+
+        // Count total tokens in the compressible zone.
+        let total_tokens: usize = compressible
+            .iter()
+            .map(|m| estimate_tokens_smart(&m.text_content()))
+            .sum();
+
+        let budget = (self.token_budget as f64 / self.ratio) as usize;
+        if total_tokens <= budget {
+            return 0;
+        }
+
+        // Group compressible messages into rounds.
+        // A round starts at each user message; everything until the next user
+        // message belongs to the same round.
+        let mut rounds: Vec<std::ops::Range<usize>> = Vec::new();
+        let mut round_start: Option<usize> = None;
+
+        for i in 0..partition {
+            if messages[i].is_user() {
+                if let Some(start) = round_start {
+                    rounds.push(start..i);
+                }
+                round_start = Some(i);
+            }
+        }
+        if let Some(start) = round_start {
+            rounds.push(start..partition);
+        }
+
+        if rounds.is_empty() {
+            return 0;
+        }
+
+        // Drop oldest rounds until we have freed enough tokens.
+        let mut freed: usize = 0;
+        let need_to_free = total_tokens.saturating_sub(budget);
+        let mut first_dropped = true;
+
+        for round in &rounds {
+            if freed >= need_to_free {
+                break;
+            }
+
+            for idx in round.clone() {
+                let tokens = estimate_tokens_smart(&messages[idx].text_content());
+                freed += tokens;
+
+                if first_dropped {
+                    // Replace the first dropped message with a truncation notice.
+                    messages[idx] = UnifiedMessage::user(ROUND_DROP_NOTICE);
+                    first_dropped = false;
+                } else {
+                    // Replace subsequent dropped messages with empty placeholders.
+                    messages[idx] = UnifiedMessage::user("");
+                }
+            }
+        }
+
+        freed
+    }
+}
+
+// =============================================================================
 // Tests
 // =============================================================================
 
@@ -357,5 +484,72 @@ mod tests {
         let (_, old) = msgs[1].tool_result_info().unwrap();
         assert_eq!(old, "[Old result cleared]"); // old one cleared
         assert!(freed > 0);
+    }
+
+    #[test]
+    fn tool_compact_stage_delegates_to_existing_compactor() {
+        let mut msgs = vec![
+            UnifiedMessage::user("request"),
+            UnifiedMessage::tool_result("c1", "Read", &"fn main() {}\n".repeat(200), false),
+            UnifiedMessage::assistant("I read the file"),
+            UnifiedMessage::user("latest"),
+        ];
+        let stage = ToolCompactStage { token_budget: 100, threshold: 0.01, ratio: 3.5 };
+        let freed = stage.compact(&mut msgs, 1);
+        let (_, content) = msgs[1].tool_result_info().unwrap();
+        // Should be compressed to summary like "[Read file, ...]" or "[Old result cleared]"
+        assert!(content.len() < 200, "should be compressed, got len: {}", content.len());
+        assert!(freed > 0);
+    }
+
+    #[test]
+    fn round_drop_removes_oldest_round() {
+        let mut msgs = vec![
+            // Round 1
+            UnifiedMessage::user("old question"),
+            UnifiedMessage::assistant("old answer"),
+            // Round 2
+            UnifiedMessage::user("new question"),
+            UnifiedMessage::assistant("new answer"),
+        ];
+        // budget=1, ratio=1.0 → effective budget = 1 token → forces drop of round 1
+        let stage = RoundDrop { token_budget: 1, ratio: 1.0 };
+        let freed = stage.compact(&mut msgs, 2); // fresh_tail=2, protects round 2
+        assert!(freed > 0);
+        // First message should be truncation notice
+        assert!(
+            msgs[0].text_content().contains("truncated") || msgs[0].text_content().contains("SYSTEM"),
+            "first msg should be truncation notice, got: {}",
+            msgs[0].text_content()
+        );
+    }
+
+    #[test]
+    fn round_drop_preserves_tool_pairs() {
+        let mut msgs = vec![
+            // Round 1 with tool calls
+            UnifiedMessage::user("search for X"),
+            UnifiedMessage::tool_result("c1", "Grep", &"x".repeat(500), false),
+            UnifiedMessage::assistant("found X"),
+            // Round 2 (fresh tail)
+            UnifiedMessage::user("next step"),
+            UnifiedMessage::assistant("doing it"),
+        ];
+        let stage = RoundDrop { token_budget: 1, ratio: 1.0 };
+        let freed = stage.compact(&mut msgs, 2);
+        // Should drop entire round 1 (user + tool_result + assistant)
+        assert!(freed > 0);
+    }
+
+    #[test]
+    fn round_drop_noop_when_under_budget() {
+        let mut msgs = vec![
+            UnifiedMessage::user("hi"),
+            UnifiedMessage::assistant("hello"),
+        ];
+        let stage = RoundDrop { token_budget: 100_000, ratio: 3.5 };
+        let freed = stage.compact(&mut msgs, 2);
+        assert_eq!(freed, 0);
+        assert_eq!(msgs.len(), 2);
     }
 }
