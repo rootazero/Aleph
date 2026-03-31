@@ -390,6 +390,8 @@ impl<P: LoopProvider> AgentLoop<P> {
                                 ctx_budget.token_estimate_ratio(),
                                 ctx_budget.fresh_tail_count(),
                             );
+                            // Reset circuit breaker if compaction ran successfully
+                            ctx_budget.notify_compaction_success();
                         }
                         super::context_budget::LoopDirective::FinalReply => {
                             // Force compaction first as last-ditch effort
@@ -710,6 +712,8 @@ impl<P: LoopProvider> AgentLoop<P> {
                 let mut ctx_budget_ref = self.context_budget.lock().unwrap_or_else(|e| e.into_inner());
                 if let Some(ref mut ctx_budget) = *ctx_budget_ref {
                     let turn_productive = response.has_tool_calls()
+                        && !skip_tools
+                        && tool_calls_made > 0
                         && consecutive_errors == 0;
                     let output_tokens = response
                         .usage

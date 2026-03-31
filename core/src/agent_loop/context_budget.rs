@@ -138,8 +138,15 @@ impl CompactionCircuitBreaker {
         self.consecutive_count >= self.max_consecutive
     }
 
-    /// Reset the counter (called when a turn completes without needing compaction).
+    /// Reset the counter (called when pressure drops below warning, or after
+    /// a compaction that actually reduced pressure).
     fn reset(&mut self) {
+        self.consecutive_count = 0;
+    }
+
+    /// Record that a compaction succeeded in reducing pressure.
+    /// Resets the counter so the breaker re-arms.
+    fn record_success(&mut self) {
         self.consecutive_count = 0;
     }
 }
@@ -149,11 +156,13 @@ impl CompactionCircuitBreaker {
 // =============================================================================
 
 /// Sliding window detector for unproductive turns.
+///
+/// Uses a bounded `VecDeque` to avoid unbounded memory growth in long loops.
 #[derive(Debug)]
 struct DiminishingReturnsDetector {
     window_size: usize,
     threshold: usize,
-    history: Vec<TurnMetrics>,
+    history: std::collections::VecDeque<TurnMetrics>,
 }
 
 impl DiminishingReturnsDetector {
@@ -161,19 +170,21 @@ impl DiminishingReturnsDetector {
         Self {
             window_size,
             threshold,
-            history: Vec::new(),
+            history: std::collections::VecDeque::with_capacity(window_size),
         }
     }
 
     /// Record a turn's metrics and return true if diminishing returns detected.
     fn record(&mut self, metrics: TurnMetrics) -> bool {
-        self.history.push(metrics);
+        if self.history.len() >= self.window_size {
+            self.history.pop_front();
+        }
+        self.history.push_back(metrics);
         if self.history.len() < self.window_size {
             return false;
         }
-        let window = &self.history[self.history.len() - self.window_size..];
-        let total_output: usize = window.iter().map(|m| m.output_tokens).sum();
-        let any_productive = window.iter().any(|m| m.productive);
+        let total_output: usize = self.history.iter().map(|m| m.output_tokens).sum();
+        let any_productive = self.history.iter().any(|m| m.productive);
         // Diminishing if: no productive turns AND total output below threshold
         !any_productive && total_output < self.threshold
     }
@@ -277,6 +288,12 @@ impl ContextBudget {
         // Under threshold — reset circuit breaker
         self.circuit_breaker.reset();
         LoopDirective::Continue
+    }
+
+    /// Notify that a compaction succeeded in reducing pressure.
+    /// Resets the circuit breaker so it re-arms for future compaction attempts.
+    pub fn notify_compaction_success(&mut self) {
+        self.circuit_breaker.record_success();
     }
 
     /// Record post-turn metrics and return a directive if diminishing returns detected.
