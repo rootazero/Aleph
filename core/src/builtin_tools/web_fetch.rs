@@ -7,9 +7,8 @@ use super::error::ToolError;
 use crate::config::WebFetchPolicy;
 use crate::error::Result;
 use crate::security::content_sanitizer::{wrap_external_content, ContentSource};
-use crate::security::ssrf::{validate_url, SsrfPolicy};
+use crate::security::ssrf::{safe_fetch, SafeFetchRequest, SsrfPolicy};
 use crate::tools::AlephTool;
-use reqwest::Client;
 use schemars::JsonSchema;
 use scraper::{Html, Selector};
 use serde::{Deserialize, Serialize};
@@ -36,14 +35,13 @@ pub struct WebFetchResult {
 
 /// Web fetch tool for retrieving and extracting content from web pages
 pub struct WebFetchTool {
-    client: Client,
     /// Maximum content length in characters (from policy)
     max_content_length: usize,
     /// Minimum content length to accept a selector match (from policy)
     min_content_length: usize,
     /// User agent string (from policy)
     user_agent: String,
-    /// Request timeout in seconds (preserved across clones)
+    /// Request timeout in seconds
     timeout_secs: u64,
 }
 
@@ -71,13 +69,7 @@ impl WebFetchTool {
 
     /// Create a new WebFetchTool with default settings
     pub fn new() -> Self {
-        let client = Client::builder()
-            .timeout(std::time::Duration::from_secs(Self::DEFAULT_TIMEOUT_SECS))
-            .build()
-            .unwrap_or_else(|_| Client::new());
-
         Self {
-            client,
             max_content_length: Self::DEFAULT_MAX_CONTENT_LENGTH,
             min_content_length: Self::DEFAULT_MIN_CONTENT_LENGTH,
             user_agent: Self::DEFAULT_USER_AGENT.to_string(),
@@ -87,13 +79,7 @@ impl WebFetchTool {
 
     /// Create a new WebFetchTool with policy configuration
     pub fn with_policy(policy: &WebFetchPolicy) -> Self {
-        let client = Client::builder()
-            .timeout(std::time::Duration::from_secs(policy.timeout_seconds))
-            .build()
-            .unwrap_or_else(|_| Client::new());
-
         Self {
-            client,
             max_content_length: policy.max_content_length as usize,
             min_content_length: policy.min_content_length as usize,
             user_agent: policy.user_agent.clone(),
@@ -116,50 +102,30 @@ impl WebFetchTool {
 
         info!("Fetching URL: {}", args.url);
 
-        // Validate URL format
-        if !args.url.starts_with("http://") && !args.url.starts_with("https://") {
-            let error_msg = format!(
-                "Invalid URL format: {}. URL must start with http:// or https://",
-                args.url
-            );
-            notify_tool_result(Self::NAME, &error_msg, false);
-            return Err(ToolError::InvalidArgs(error_msg));
-        }
-
-        // SSRF protection: block requests to internal/private hosts
+        // SSRF-protected fetch with DNS pinning
         let ssrf_policy = SsrfPolicy::default();
-        if let Err(e) = validate_url(&args.url, &ssrf_policy) {
-            let error_msg = format!("SSRF blocked: {}", e);
-            notify_tool_result(Self::NAME, &error_msg, false);
-            return Err(ToolError::InvalidArgs(error_msg));
+        let mut headers = reqwest::header::HeaderMap::new();
+        if let Ok(ua) = reqwest::header::HeaderValue::from_str(&self.user_agent) {
+            headers.insert(reqwest::header::USER_AGENT, ua);
         }
+        let fetch_request = SafeFetchRequest::get(std::time::Duration::from_secs(self.timeout_secs))
+            .with_headers(headers);
 
-        // Fetch the page
-        let response = self
-            .client
-            .get(&args.url)
-            .header("User-Agent", &self.user_agent)
-            .send()
+        let fetch_response = safe_fetch(&args.url, &ssrf_policy, fetch_request)
             .await
             .map_err(|e| {
-                let error_msg = format!("Failed to fetch URL: {}", e);
+                let error_msg = format!("Fetch blocked or failed: {}", e);
                 notify_tool_result(Self::NAME, &error_msg, false);
                 ToolError::Network(error_msg)
             })?;
 
-        // Check status
-        if !response.status().is_success() {
-            let error_msg = format!("HTTP error: {} for URL: {}", response.status(), args.url);
+        if !fetch_response.status.is_success() {
+            let error_msg = format!("HTTP error: {} for URL: {}", fetch_response.status, args.url);
             notify_tool_result(Self::NAME, &error_msg, false);
             return Err(ToolError::Network(error_msg));
         }
 
-        // Get HTML content with size limit to prevent memory exhaustion
-        let bytes = response.bytes().await.map_err(|e| {
-            let error_msg = format!("Failed to read response body: {}", e);
-            notify_tool_result(Self::NAME, &error_msg, false);
-            ToolError::Network(error_msg)
-        })?;
+        let bytes = &fetch_response.body;
 
         if bytes.len() > Self::MAX_RESPONSE_BYTES {
             let error_msg = format!(
@@ -287,14 +253,7 @@ impl Default for WebFetchTool {
 
 impl Clone for WebFetchTool {
     fn clone(&self) -> Self {
-        // Rebuild client preserving the configured timeout
-        let client = Client::builder()
-            .timeout(std::time::Duration::from_secs(self.timeout_secs))
-            .build()
-            .unwrap_or_else(|_| Client::new());
-
         Self {
-            client,
             max_content_length: self.max_content_length,
             min_content_length: self.min_content_length,
             user_agent: self.user_agent.clone(),
@@ -322,6 +281,7 @@ mod tests {
     use super::*;
     use crate::security::ssrf::{validate_url, SsrfPolicy};
     use crate::tools::AlephTool;
+    // Note: validate_url is still used by SSRF unit tests below (test_ssrf_*)
 
     #[test]
     fn test_web_fetch_args() {
@@ -334,7 +294,7 @@ mod tests {
         let tool = WebFetchTool::new();
         assert_eq!(WebFetchTool::NAME, "web_fetch");
         assert!(!WebFetchTool::DESCRIPTION.is_empty());
-        // Verify the tool was created (client is private, so we just ensure no panic)
+        // Verify the tool was created successfully
         drop(tool);
     }
 
@@ -371,10 +331,10 @@ mod tests {
         let result = AlephTool::call(&tool, args).await;
         assert!(result.is_err(), "Expected error for invalid URL");
 
-        // Error is now AlephError
+        // Error is now AlephError wrapping the SSRF/fetch error
         let err = result.unwrap_err();
         let err_msg = err.to_string();
-        assert!(err_msg.contains("Invalid URL format"), "Expected 'Invalid URL format' error, got: {}", err_msg);
+        assert!(err_msg.contains("Fetch blocked or failed"), "Expected 'Fetch blocked or failed' error, got: {}", err_msg);
     }
 
     #[test]

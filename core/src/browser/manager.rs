@@ -7,7 +7,7 @@ use std::sync::Arc;
 use crate::sync_primitives::RwLock;
 
 use super::chrome_mcp::ChromeMcpDriver;
-use super::network_policy::{PolicyViolation, SsrfPolicy};
+use super::network_policy::{BrowserSsrfGuard, PolicyViolation};
 use super::playwright_mcp::PlaywrightMcpDriver;
 use super::profile::{
     BrowserDriver, BrowserSystemConfig, BrowserType, ProfileConfig, ProfileState,
@@ -16,7 +16,7 @@ use super::profile::{
 /// Manages the lifecycle of browser profiles.
 pub struct ProfileManager {
     profiles: RwLock<HashMap<String, ManagedProfile>>,
-    ssrf_policy: SsrfPolicy,
+    ssrf_policy: BrowserSsrfGuard,
     #[allow(dead_code)]
     config: BrowserSystemConfig,
     chrome_mcp_driver: Arc<ChromeMcpDriver>,
@@ -31,7 +31,7 @@ struct ManagedProfile {
 
 impl ProfileManager {
     pub fn new(config: BrowserSystemConfig) -> Self {
-        let ssrf_policy = SsrfPolicy::new(config.policy.clone());
+        let ssrf_policy = BrowserSsrfGuard::new(config.policy.clone());
         let chrome_mcp_driver = Arc::new(ChromeMcpDriver::new(config.chrome_mcp.clone()));
         let playwright_mcp_driver =
             Arc::new(PlaywrightMcpDriver::new(config.playwright_mcp.clone()));

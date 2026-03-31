@@ -1,0 +1,437 @@
+//! Safe HTTP fetch with SSRF protection, DNS pinning, and redirect chain validation.
+//!
+//! Provides `safe_fetch` which validates every URL (including redirect targets)
+//! against the SSRF policy, pins DNS to prevent rebinding, and strips sensitive
+//! headers on cross-origin redirects.
+
+use std::collections::HashSet;
+use std::time::Duration;
+
+use reqwest::header::{HeaderMap, LOCATION};
+use reqwest::{Method, StatusCode};
+use url::Url;
+
+use super::dns::resolve_and_validate;
+use super::hostname::{
+    has_url_credentials, is_allowlisted, is_blocked_hostname, is_blocklisted, is_legacy_ip_literal,
+};
+use super::policy::SsrfPolicy;
+use super::SsrfError;
+
+/// Request configuration for `safe_fetch`.
+pub struct SafeFetchRequest {
+    pub method: Method,
+    pub headers: HeaderMap,
+    pub body: Option<Vec<u8>>,
+    pub timeout: Duration,
+}
+
+impl SafeFetchRequest {
+    /// Creates a GET request with the given timeout.
+    pub fn get(timeout: Duration) -> Self {
+        Self {
+            method: Method::GET,
+            headers: HeaderMap::new(),
+            body: None,
+            timeout,
+        }
+    }
+
+    /// Creates a POST request with a body and timeout.
+    pub fn post(body: Vec<u8>, timeout: Duration) -> Self {
+        Self {
+            method: Method::POST,
+            headers: HeaderMap::new(),
+            body: Some(body),
+            timeout,
+        }
+    }
+
+    /// Sets custom headers on the request.
+    pub fn with_headers(mut self, headers: HeaderMap) -> Self {
+        self.headers = headers;
+        self
+    }
+
+    /// Sets the HTTP method.
+    pub fn with_method(mut self, method: Method) -> Self {
+        self.method = method;
+        self
+    }
+}
+
+/// Response from `safe_fetch`.
+pub struct SafeFetchResponse {
+    pub status: StatusCode,
+    pub headers: HeaderMap,
+    pub body: Vec<u8>,
+    pub final_url: String,
+}
+
+// --- Internal helpers ---
+
+/// Validates the URL scheme (only http and https are allowed).
+fn validate_scheme(url: &Url) -> Result<(), SsrfError> {
+    match url.scheme() {
+        "http" | "https" => Ok(()),
+        other => Err(SsrfError::InvalidUrl(format!(
+            "unsupported scheme: {}",
+            other
+        ))),
+    }
+}
+
+/// Returns true if two URLs have different origins (scheme + host + port).
+fn is_cross_origin(a: &Url, b: &Url) -> bool {
+    a.scheme() != b.scheme() || a.host_str() != b.host_str() || a.port() != b.port()
+}
+
+/// Performs all pre-flight SSRF validation on a URL: scheme, legacy IP, credentials,
+/// hostname blocklist/allowlist, user blocklist, and DNS resolution with pinning.
+///
+/// Returns the parsed URL and a pinned SocketAddr for connection.
+async fn validate_url_full(
+    url_str: &str,
+    policy: &SsrfPolicy,
+) -> Result<(Url, std::net::SocketAddr), SsrfError> {
+    let url = Url::parse(url_str).map_err(|e| SsrfError::InvalidUrl(e.to_string()))?;
+
+    validate_scheme(&url)?;
+
+    let host = url.host_str().ok_or(SsrfError::NoHost)?;
+
+    // Legacy IP literal detection (hex, octal, decimal, short-form)
+    if is_legacy_ip_literal(host) {
+        return Err(SsrfError::BlockedAddress(format!(
+            "legacy IP literal: {}",
+            host
+        )));
+    }
+
+    // URL credentials detection
+    if has_url_credentials(url_str) {
+        return Err(SsrfError::InvalidUrl(
+            "URL contains embedded credentials".to_string(),
+        ));
+    }
+
+    // Allowlist check — bypass further hostname/IP validation
+    if is_allowlisted(host, &policy.allowed_hosts) {
+        let port = url.port_or_known_default().unwrap_or(80);
+        let pinned = resolve_and_validate(host, port, &SsrfPolicy::disabled()).await?;
+        return Ok((url, pinned));
+    }
+
+    // Hostname blocklist (hardcoded names)
+    if is_blocked_hostname(host) {
+        return Err(SsrfError::BlockedAddress(host.to_string()));
+    }
+
+    // User-configured blocklist
+    if is_blocklisted(host, &policy.blocked_hosts) {
+        return Err(SsrfError::BlockedAddress(format!(
+            "host in blocklist: {}",
+            host
+        )));
+    }
+
+    // DNS resolution + IP validation
+    let port = url.port_or_known_default().unwrap_or(80);
+    let pinned = resolve_and_validate(host, port, policy).await?;
+
+    Ok((url, pinned))
+}
+
+/// Strips sensitive authentication headers from a HeaderMap.
+fn strip_auth_headers(headers: &mut HeaderMap) {
+    headers.remove("authorization");
+    headers.remove("cookie");
+    headers.remove("proxy-authorization");
+}
+
+/// Fetches a URL with full SSRF protection.
+///
+/// When `policy.enabled` is false, performs a normal fetch with auto-redirects.
+/// Otherwise validates the URL and every redirect hop against the policy,
+/// pins DNS to prevent rebinding, and strips auth headers on cross-origin redirects.
+pub async fn safe_fetch(
+    url: &str,
+    policy: &SsrfPolicy,
+    request: SafeFetchRequest,
+) -> Result<SafeFetchResponse, SsrfError> {
+    // Bypass mode — normal fetch when SSRF protection is disabled
+    if !policy.enabled {
+        return bypass_fetch(url, request).await;
+    }
+
+    // Full validation of the initial URL
+    let (mut current_url, pinned_addr) = validate_url_full(url, policy).await?;
+
+    // Build client with redirect disabled and DNS pinning
+    let host = current_url
+        .host_str()
+        .ok_or(SsrfError::NoHost)?
+        .to_string();
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .resolve(&host, pinned_addr)
+        .timeout(request.timeout)
+        .build()
+        .map_err(|e| SsrfError::FetchFailed(e.to_string()))?;
+
+    // Send the initial request
+    let mut req_builder = client.request(request.method.clone(), current_url.as_str());
+    req_builder = req_builder.headers(request.headers.clone());
+    if let Some(body) = &request.body {
+        req_builder = req_builder.body(body.clone());
+    }
+
+    let mut response = req_builder
+        .send()
+        .await
+        .map_err(|e| SsrfError::FetchFailed(e.to_string()))?;
+
+    // Redirect loop
+    let mut visited: HashSet<String> = HashSet::new();
+    visited.insert(current_url.to_string());
+    let mut redirect_count: u8 = 0;
+    let mut current_method = request.method;
+    let mut current_headers = request.headers;
+
+    while response.status().is_redirection() {
+        redirect_count += 1;
+        if redirect_count > policy.max_redirects {
+            return Err(SsrfError::TooManyRedirects(policy.max_redirects));
+        }
+
+        // Extract Location header
+        let location = response
+            .headers()
+            .get(LOCATION)
+            .and_then(|v| v.to_str().ok())
+            .ok_or_else(|| {
+                SsrfError::FetchFailed("redirect without valid Location header".to_string())
+            })?
+            .to_string();
+
+        // Resolve relative URLs against current
+        let next_url_str = current_url
+            .join(&location)
+            .map_err(|e| SsrfError::InvalidUrl(e.to_string()))?
+            .to_string();
+
+        // Loop detection
+        if visited.contains(&next_url_str) {
+            return Err(SsrfError::FetchFailed("redirect loop detected".to_string()));
+        }
+        visited.insert(next_url_str.clone());
+
+        // Validate the redirect target
+        let (next_url, next_pinned) = validate_url_full(&next_url_str, policy).await?;
+
+        // Cross-origin detection → strip auth headers
+        if policy.strip_auth_on_cross_origin && is_cross_origin(&current_url, &next_url) {
+            strip_auth_headers(&mut current_headers);
+        }
+
+        // POST → GET on 301/302/303
+        let status = response.status();
+        if matches!(
+            status,
+            StatusCode::MOVED_PERMANENTLY | StatusCode::FOUND | StatusCode::SEE_OTHER
+        ) && current_method == Method::POST
+        {
+            current_method = Method::GET;
+        }
+
+        // Build new client with pinned address for the redirect target
+        let next_host = next_url
+            .host_str()
+            .ok_or(SsrfError::NoHost)?
+            .to_string();
+        let redirect_client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .resolve(&next_host, next_pinned)
+            .timeout(request.timeout)
+            .build()
+            .map_err(|e| SsrfError::FetchFailed(e.to_string()))?;
+
+        let mut req_builder =
+            redirect_client.request(current_method.clone(), next_url.as_str());
+        req_builder = req_builder.headers(current_headers.clone());
+        // Body is not forwarded on redirects (POST→GET drops body)
+
+        response = req_builder
+            .send()
+            .await
+            .map_err(|e| SsrfError::FetchFailed(e.to_string()))?;
+
+        current_url = next_url;
+    }
+
+    // Read response body
+    let status = response.status();
+    let headers = response.headers().clone();
+    let final_url = current_url.to_string();
+    let body = response
+        .bytes()
+        .await
+        .map_err(|e| SsrfError::FetchFailed(e.to_string()))?
+        .to_vec();
+
+    Ok(SafeFetchResponse {
+        status,
+        headers,
+        body,
+        final_url,
+    })
+}
+
+/// Normal fetch without SSRF validation (used when policy.enabled is false).
+async fn bypass_fetch(
+    url: &str,
+    request: SafeFetchRequest,
+) -> Result<SafeFetchResponse, SsrfError> {
+    let client = reqwest::Client::builder()
+        .timeout(request.timeout)
+        .build()
+        .map_err(|e| SsrfError::FetchFailed(e.to_string()))?;
+
+    let mut req_builder = client.request(request.method, url);
+    req_builder = req_builder.headers(request.headers);
+    if let Some(body) = request.body {
+        req_builder = req_builder.body(body);
+    }
+
+    let response = req_builder
+        .send()
+        .await
+        .map_err(|e| SsrfError::FetchFailed(e.to_string()))?;
+
+    let status = response.status();
+    let headers = response.headers().clone();
+    let final_url = response.url().to_string();
+    let body = response
+        .bytes()
+        .await
+        .map_err(|e| SsrfError::FetchFailed(e.to_string()))?
+        .to_vec();
+
+    Ok(SafeFetchResponse {
+        status,
+        headers,
+        body,
+        final_url,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use reqwest::header::HeaderValue;
+
+    #[test]
+    fn validate_scheme_accepts_http() {
+        let url = Url::parse("http://example.com").unwrap();
+        assert!(validate_scheme(&url).is_ok());
+    }
+
+    #[test]
+    fn validate_scheme_accepts_https() {
+        let url = Url::parse("https://example.com").unwrap();
+        assert!(validate_scheme(&url).is_ok());
+    }
+
+    #[test]
+    fn validate_scheme_rejects_ftp() {
+        let url = Url::parse("ftp://example.com").unwrap();
+        assert!(validate_scheme(&url).is_err());
+    }
+
+    #[test]
+    fn validate_scheme_rejects_file() {
+        let url = Url::parse("file:///etc/passwd").unwrap();
+        assert!(validate_scheme(&url).is_err());
+    }
+
+    #[test]
+    fn validate_scheme_rejects_gopher() {
+        let url = Url::parse("gopher://example.com").unwrap();
+        assert!(validate_scheme(&url).is_err());
+    }
+
+    #[test]
+    fn cross_origin_detects_different_host() {
+        let a = Url::parse("https://a.com/path").unwrap();
+        let b = Url::parse("https://b.com/path").unwrap();
+        assert!(is_cross_origin(&a, &b));
+    }
+
+    #[test]
+    fn cross_origin_detects_different_scheme() {
+        let a = Url::parse("https://example.com").unwrap();
+        let b = Url::parse("http://example.com").unwrap();
+        assert!(is_cross_origin(&a, &b));
+    }
+
+    #[test]
+    fn cross_origin_detects_different_port() {
+        let a = Url::parse("https://example.com:443").unwrap();
+        let b = Url::parse("https://example.com:8443").unwrap();
+        assert!(is_cross_origin(&a, &b));
+    }
+
+    #[test]
+    fn same_origin_returns_false() {
+        let a = Url::parse("https://example.com/a").unwrap();
+        let b = Url::parse("https://example.com/b").unwrap();
+        assert!(!is_cross_origin(&a, &b));
+    }
+
+    #[test]
+    fn safe_fetch_request_get_defaults() {
+        let req = SafeFetchRequest::get(Duration::from_secs(30));
+        assert_eq!(req.method, Method::GET);
+        assert!(req.headers.is_empty());
+        assert!(req.body.is_none());
+        assert_eq!(req.timeout, Duration::from_secs(30));
+    }
+
+    #[test]
+    fn safe_fetch_request_post_has_body() {
+        let body = b"hello".to_vec();
+        let req = SafeFetchRequest::post(body.clone(), Duration::from_secs(10));
+        assert_eq!(req.method, Method::POST);
+        assert_eq!(req.body.unwrap(), body);
+    }
+
+    #[test]
+    fn safe_fetch_request_builder_chain() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-custom", HeaderValue::from_static("val"));
+        let req = SafeFetchRequest::get(Duration::from_secs(5))
+            .with_headers(headers)
+            .with_method(Method::PUT);
+        assert_eq!(req.method, Method::PUT);
+        assert!(req.headers.contains_key("x-custom"));
+    }
+
+    #[test]
+    fn strip_auth_headers_removes_sensitive() {
+        let mut headers = HeaderMap::new();
+        headers.insert("authorization", HeaderValue::from_static("Bearer token"));
+        headers.insert("cookie", HeaderValue::from_static("session=abc"));
+        headers.insert(
+            "proxy-authorization",
+            HeaderValue::from_static("Basic xyz"),
+        );
+        headers.insert("content-type", HeaderValue::from_static("text/html"));
+
+        strip_auth_headers(&mut headers);
+
+        assert!(!headers.contains_key("authorization"));
+        assert!(!headers.contains_key("cookie"));
+        assert!(!headers.contains_key("proxy-authorization"));
+        assert!(headers.contains_key("content-type"));
+    }
+}

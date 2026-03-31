@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use super::types::{LocalMedia, MediaCategory, MergedMessage};
 use crate::gateway::channel::Attachment;
-use crate::security::ssrf::{validate_url, SsrfPolicy};
+use crate::security::ssrf::{safe_fetch, SafeFetchRequest, SsrfPolicy};
 
 /// Default maximum file size for downloads (50 MB).
 const DEFAULT_MAX_FILE_SIZE: u64 = 50 * 1024 * 1024;
@@ -24,7 +24,6 @@ const TRAILING_PUNCT: &[char] = &[',', '.', ')', ']', '>', ';', '\u{3002}', '\u{
 /// from message text.
 pub struct MediaDownloader {
     workspace_root: PathBuf,
-    http_client: reqwest::Client,
     max_file_size: u64,
     #[allow(dead_code)]
     supported_prefixes: HashSet<String>,
@@ -39,7 +38,6 @@ impl MediaDownloader {
 
         Self {
             workspace_root,
-            http_client: reqwest::Client::new(),
             max_file_size: DEFAULT_MAX_FILE_SIZE,
             supported_prefixes,
         }
@@ -134,25 +132,18 @@ impl MediaDownloader {
         attachment: &Attachment,
         url: &str,
     ) -> Result<LocalMedia, String> {
-        // SSRF protection
+        // SSRF protection + DNS-pinned fetch
         let ssrf_policy = SsrfPolicy::default();
-        validate_url(url, &ssrf_policy).map_err(|e| format!("SSRF blocked: {e}"))?;
-
-        let response = self
-            .http_client
-            .get(url)
-            .send()
+        let fetch_request = SafeFetchRequest::get(std::time::Duration::from_secs(30));
+        let fetch_response = safe_fetch(url, &ssrf_policy, fetch_request)
             .await
-            .map_err(|e| format!("HTTP request failed: {e}"))?;
+            .map_err(|e| format!("SSRF/fetch error: {e}"))?;
 
-        if !response.status().is_success() {
-            return Err(format!("HTTP {} for {}", response.status(), url));
+        if !fetch_response.status.is_success() {
+            return Err(format!("HTTP {} for {}", fetch_response.status, url));
         }
 
-        let bytes = response
-            .bytes()
-            .await
-            .map_err(|e| format!("Failed to read body: {e}"))?;
+        let bytes = fetch_response.body;
 
         if bytes.len() as u64 > self.max_file_size {
             return Err(format!(
@@ -188,25 +179,18 @@ impl MediaDownloader {
 
     /// Download an extracted URL (from message text) and create a Link entry.
     async fn download_url(&self, url: &str) -> Result<LocalMedia, String> {
-        // SSRF protection
+        // SSRF protection + DNS-pinned fetch
         let ssrf_policy = SsrfPolicy::default();
-        validate_url(url, &ssrf_policy).map_err(|e| format!("SSRF blocked: {e}"))?;
-
-        let response = self
-            .http_client
-            .get(url)
-            .send()
+        let fetch_request = SafeFetchRequest::get(std::time::Duration::from_secs(30));
+        let fetch_response = safe_fetch(url, &ssrf_policy, fetch_request)
             .await
-            .map_err(|e| format!("HTTP request failed: {e}"))?;
+            .map_err(|e| format!("SSRF/fetch error: {e}"))?;
 
-        if !response.status().is_success() {
-            return Err(format!("HTTP {} for {}", response.status(), url));
+        if !fetch_response.status.is_success() {
+            return Err(format!("HTTP {} for {}", fetch_response.status, url));
         }
 
-        let bytes = response
-            .bytes()
-            .await
-            .map_err(|e| format!("Failed to read body: {e}"))?;
+        let bytes = fetch_response.body;
 
         if bytes.len() as u64 > self.max_file_size {
             return Err(format!(
