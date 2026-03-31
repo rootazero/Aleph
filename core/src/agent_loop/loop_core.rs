@@ -9,6 +9,8 @@
 //! - `max_iterations` is reached
 //! - Token budget is exhausted
 
+use std::sync::Mutex;
+
 use async_trait::async_trait;
 use futures::StreamExt;
 use serde_json::Value;
@@ -28,6 +30,16 @@ use futures::stream::BoxStream;
 const TRUNCATION_NOTICE: &str =
     "[SYSTEM] Earlier conversation history and memory context were truncated \
      to fit the model's context window. Continue based on the remaining context.";
+
+const CRITICAL_CONTEXT_NOTICE: &str =
+    "[SYSTEM] Context window is critically full. You MUST respond directly to the user now. \
+     Do NOT call any tools. Summarize your progress and provide the best answer you can \
+     with the information you have.";
+
+const DIMINISHING_RETURNS_NOTICE: &str =
+    "[SYSTEM] Your recent iterations have produced minimal progress. Summarize: \
+     (1) what you accomplished, (2) what you tried that didn't work, \
+     (3) what the user should do next. Then stop.";
 
 /// Find a safe cut point that doesn't split ToolCall/ToolResult pairs.
 fn find_safe_cut_point(messages: &[UnifiedMessage], initial_cut: usize) -> usize {
@@ -147,27 +159,6 @@ pub trait LoopProvider: Send + Sync {
 }
 
 // =============================================================================
-// ToolCompactorConfig
-// =============================================================================
-
-/// Configuration for in-loop tool result compression.
-///
-/// When set on an `AgentLoop`, the compactor runs synchronously before each
-/// LLM call and collapses verbose tool-use/tool-result pairs into compact
-/// summaries when the estimated context exceeds `context_threshold * token_budget`.
-#[derive(Debug, Clone)]
-pub struct ToolCompactorConfig {
-    /// Total token budget for the model context window.
-    pub token_budget: u64,
-    /// Fraction of `token_budget` at which compaction triggers (e.g. 0.80).
-    pub context_threshold: f64,
-    /// Characters-per-token ratio used for token estimation.
-    pub token_estimate_ratio: f64,
-    /// Number of most-recent messages to leave untouched during compaction.
-    pub fresh_tail_count: usize,
-}
-
-// =============================================================================
 // LoopConfig
 // =============================================================================
 
@@ -265,8 +256,10 @@ pub struct AgentLoop<P: LoopProvider> {
     prompt_builder: PromptBuilder,
     safety_guard: SafetyGuard,
     config: LoopConfig,
-    /// Optional in-loop tool result compactor configuration.
-    tool_compactor_config: Option<ToolCompactorConfig>,
+    /// Optional context budget for pressure sensing and budget tracking.
+    /// Wrapped in `Mutex` for interior mutability — `run_with_history_messages`
+    /// takes `&self` but the budget needs mutable state across turns.
+    context_budget: Mutex<Option<super::context_budget::ContextBudget>>,
     /// Sink for streaming deltas during the Think step. Defaults to NoopSink.
     delta_sink: Box<dyn DeltaSink>,
 }
@@ -288,14 +281,14 @@ impl<P: LoopProvider> AgentLoop<P> {
             prompt_builder,
             safety_guard,
             config,
-            tool_compactor_config: None,
+            context_budget: Mutex::new(None),
             delta_sink: Box::new(NoopSink),
         }
     }
 
-    /// Attach an optional `ToolCompactorConfig` to enable in-loop context compression.
-    pub fn with_tool_compactor_config(mut self, cfg: Option<ToolCompactorConfig>) -> Self {
-        self.tool_compactor_config = cfg;
+    /// Attach a [`ContextBudget`](super::context_budget::ContextBudget) for pressure sensing and budget tracking.
+    pub fn with_context_budget(self, budget: Option<super::context_budget::ContextBudget>) -> Self {
+        *self.context_budget.lock().unwrap_or_else(|e| e.into_inner()) = budget;
         self
     }
 
@@ -381,34 +374,57 @@ impl<P: LoopProvider> AgentLoop<P> {
         while iterations < self.config.max_iterations {
             iterations += 1;
 
-            // Compact tool results if context exceeds threshold
-            if let Some(ref tc_config) = self.tool_compactor_config {
-                crate::memory::session_compactor::tool_compactor::compact_if_needed(
-                    &mut messages,
-                    tc_config.token_budget,
-                    tc_config.context_threshold,
-                    tc_config.token_estimate_ratio,
-                    tc_config.fresh_tail_count,
-                );
+            // --- Context budget evaluation ---
+            let mut budget_directive = super::context_budget::LoopDirective::Continue;
+            {
+                let mut ctx_budget_ref = self.context_budget.lock().unwrap_or_else(|e| e.into_inner());
+                if let Some(ref mut ctx_budget) = *ctx_budget_ref {
+                    budget_directive = ctx_budget.before_turn(&messages, &system_prompt, &tool_defs);
+
+                    match budget_directive {
+                        super::context_budget::LoopDirective::CompactAndContinue => {
+                            crate::memory::session_compactor::tool_compactor::compact_if_needed(
+                                &mut messages,
+                                ctx_budget.token_budget(),
+                                ctx_budget.token_estimate_ratio().recip() * 0.70, // warning threshold
+                                ctx_budget.token_estimate_ratio(),
+                                ctx_budget.fresh_tail_count(),
+                            );
+                        }
+                        super::context_budget::LoopDirective::FinalReply => {
+                            // Force compaction first as last-ditch effort
+                            crate::memory::session_compactor::tool_compactor::compact_if_needed(
+                                &mut messages,
+                                ctx_budget.token_budget(),
+                                0.5,
+                                ctx_budget.token_estimate_ratio(),
+                                ctx_budget.fresh_tail_count(),
+                            );
+                            messages.push(UnifiedMessage::user(CRITICAL_CONTEXT_NOTICE));
+                        }
+                        super::context_budget::LoopDirective::StopDiminishing => {
+                            messages.push(UnifiedMessage::user(DIMINISHING_RETURNS_NOTICE));
+                        }
+                        super::context_budget::LoopDirective::Continue => {}
+                    }
+                }
             }
 
-            // Hard safety net: if context STILL exceeds budget after compaction,
-            // aggressively truncate old messages to guarantee the LLM call succeeds.
-            // Priority: keep running > preserve history.
-            enforce_context_limit(
-                &mut messages,
-                &system_prompt,
-                &tool_defs,
-                self.config.token_budget,
-                self.tool_compactor_config
-                    .as_ref()
-                    .map(|c| c.fresh_tail_count)
-                    .unwrap_or(6),
-                self.tool_compactor_config
-                    .as_ref()
-                    .map(|c| c.token_estimate_ratio)
-                    .unwrap_or(3.5),
-            );
+            // Hard safety net: enforce context limit (unchanged logic)
+            {
+                let ctx_budget_ref = self.context_budget.lock().unwrap_or_else(|e| e.into_inner());
+                let fresh_tail = ctx_budget_ref.as_ref().map(|b| b.fresh_tail_count()).unwrap_or(6);
+                let ratio = ctx_budget_ref.as_ref().map(|b| b.token_estimate_ratio()).unwrap_or(3.5);
+                drop(ctx_budget_ref);
+                enforce_context_limit(
+                    &mut messages,
+                    &system_prompt,
+                    &tool_defs,
+                    self.config.token_budget,
+                    fresh_tail,
+                    ratio,
+                );
+            }
 
             // Think: stream deltas from the provider and accumulate into ProviderResponse
             let delta_stream = self
@@ -545,129 +561,172 @@ impl<P: LoopProvider> AgentLoop<P> {
                 break;
             }
 
-            // Act: process each tool call
-            for tc in &response.tool_calls {
-                // Safety check
-                let safety_call = SafetyToolCall {
-                    name: tc.name.clone(),
-                    input: tc.arguments.clone(),
-                };
+            // Skip tool execution if context budget says to stop
+            let skip_tools = matches!(
+                budget_directive,
+                super::context_budget::LoopDirective::FinalReply
+                    | super::context_budget::LoopDirective::StopDiminishing
+            );
 
-                let safety_result = self.safety_guard.check(&safety_call);
-                tracing::info!(
-                    tool = %tc.name,
-                    result = ?safety_result.as_ref().map(|_| "allowed").unwrap_or("denied"),
-                    "Tool call safety check"
-                );
+            if skip_tools && response.has_tool_calls() {
+                // Inject a tool result telling the LLM tools were skipped
+                for tc in &response.tool_calls {
+                    messages.push(UnifiedMessage::tool_result(
+                        tc.id.clone(),
+                        tc.name.clone(),
+                        "[SYSTEM] Tool execution skipped — context budget exhausted. Provide your best response now.",
+                        true,
+                    ));
+                }
+            } else {
+                // Act: process each tool call
+                for tc in &response.tool_calls {
+                    // Safety check
+                    let safety_call = SafetyToolCall {
+                        name: tc.name.clone(),
+                        input: tc.arguments.clone(),
+                    };
 
-                match safety_result {
-                    Err(SafetyError::Blocked { ref tool, ref pattern }) => {
-                        let err = SafetyError::Blocked {
-                            tool: tool.clone(),
-                            pattern: pattern.clone(),
-                        };
-                        callback.on_safety_block(&err);
-                        messages.push(UnifiedMessage::tool_result(
-                            tc.id.clone(),
-                            tc.name.clone(),
-                            format!(
-                                "BLOCKED: tool '{}' blocked by safety pattern '{}'",
-                                tool, pattern
-                            ),
-                            true,
-                        ));
-                    }
-                    Err(SafetyError::NeedsConfirmation { ref tool }) => {
-                        let err = SafetyError::NeedsConfirmation { tool: tool.clone() };
-                        callback.on_safety_block(&err);
-                        messages.push(UnifiedMessage::tool_result(
-                            tc.id.clone(),
-                            tc.name.clone(),
-                            format!(
-                                "NEEDS_CONFIRMATION: tool '{}' requires user approval (auto-denied for now)",
-                                tool
-                            ),
-                            true,
-                        ));
-                    }
-                    Err(SafetyError::PolicyDenied { ref tool }) => {
-                        let err = SafetyError::PolicyDenied { tool: tool.clone() };
-                        callback.on_safety_block(&err);
-                        messages.push(UnifiedMessage::tool_result(
-                            tc.id.clone(),
-                            tc.name.clone(),
-                            format!(
-                                "DENIED: tool '{}' is not allowed by permission policy",
-                                tool
-                            ),
-                            true,
-                        ));
-                        // Do NOT increment consecutive_errors
-                    }
-                    Ok(()) => {
-                        // Safe — execute the tool
-                        tracing::info!(tool = %tc.name, "Executing tool");
-                        callback.on_tool_start(&tc.name, &tc.arguments);
-                        let result = self.tool_registry.execute(&tc.name, tc.arguments.clone()).await;
-                        tracing::info!(tool = %tc.name, is_error = matches!(&result, ToolResult::Error { .. }), "Tool execution complete");
-                        callback.on_tool_done(&tc.name, &result);
+                    let safety_result = self.safety_guard.check(&safety_call);
+                    tracing::info!(
+                        tool = %tc.name,
+                        result = ?safety_result.as_ref().map(|_| "allowed").unwrap_or("denied"),
+                        "Tool call safety check"
+                    );
 
-                        let (output_text, is_error, should_stop) = match &result {
-                            ToolResult::Success { output } | ToolResult::SuccessAndStopLoop { output } => {
-                                let stop = matches!(&result, ToolResult::SuccessAndStopLoop { .. });
-                                if stop {
-                                    tracing::info!(tool = %tc.name, "Tool returned SuccessAndStopLoop — will break loop");
+                    match safety_result {
+                        Err(SafetyError::Blocked { ref tool, ref pattern }) => {
+                            let err = SafetyError::Blocked {
+                                tool: tool.clone(),
+                                pattern: pattern.clone(),
+                            };
+                            callback.on_safety_block(&err);
+                            messages.push(UnifiedMessage::tool_result(
+                                tc.id.clone(),
+                                tc.name.clone(),
+                                format!(
+                                    "BLOCKED: tool '{}' blocked by safety pattern '{}'",
+                                    tool, pattern
+                                ),
+                                true,
+                            ));
+                        }
+                        Err(SafetyError::NeedsConfirmation { ref tool }) => {
+                            let err = SafetyError::NeedsConfirmation { tool: tool.clone() };
+                            callback.on_safety_block(&err);
+                            messages.push(UnifiedMessage::tool_result(
+                                tc.id.clone(),
+                                tc.name.clone(),
+                                format!(
+                                    "NEEDS_CONFIRMATION: tool '{}' requires user approval (auto-denied for now)",
+                                    tool
+                                ),
+                                true,
+                            ));
+                        }
+                        Err(SafetyError::PolicyDenied { ref tool }) => {
+                            let err = SafetyError::PolicyDenied { tool: tool.clone() };
+                            callback.on_safety_block(&err);
+                            messages.push(UnifiedMessage::tool_result(
+                                tc.id.clone(),
+                                tc.name.clone(),
+                                format!(
+                                    "DENIED: tool '{}' is not allowed by permission policy",
+                                    tool
+                                ),
+                                true,
+                            ));
+                            // Do NOT increment consecutive_errors
+                        }
+                        Ok(()) => {
+                            // Safe — execute the tool
+                            tracing::info!(tool = %tc.name, "Executing tool");
+                            callback.on_tool_start(&tc.name, &tc.arguments);
+                            let result = self.tool_registry.execute(&tc.name, tc.arguments.clone()).await;
+                            tracing::info!(tool = %tc.name, is_error = matches!(&result, ToolResult::Error { .. }), "Tool execution complete");
+                            callback.on_tool_done(&tc.name, &result);
+
+                            let (output_text, is_error, should_stop) = match &result {
+                                ToolResult::Success { output } | ToolResult::SuccessAndStopLoop { output } => {
+                                    let stop = matches!(&result, ToolResult::SuccessAndStopLoop { .. });
+                                    if stop {
+                                        tracing::info!(tool = %tc.name, "Tool returned SuccessAndStopLoop — will break loop");
+                                    }
+                                    consecutive_errors = 0;
+                                    let text = serde_json::to_string(output).unwrap_or_else(|e| {
+                                        tracing::error!(tool = %tc.name, error = %e, "Failed to serialize tool output");
+                                        format!("[serialization error: {}]", e)
+                                    });
+                                    (text, false, stop)
+                                },
+                                ToolResult::Error { error, retryable } => {
+                                    if !retryable {
+                                        consecutive_errors += 1;
+                                    }
+                                    if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
+                                        tracing::warn!(
+                                            consecutive_errors,
+                                            tool = %tc.name,
+                                            "Too many consecutive tool errors — stopping loop"
+                                        );
+                                    }
+                                    (error.clone(), true, false)
                                 }
-                                consecutive_errors = 0;
-                                let text = serde_json::to_string(output).unwrap_or_else(|e| {
-                                    tracing::error!(tool = %tc.name, error = %e, "Failed to serialize tool output");
-                                    format!("[serialization error: {}]", e)
-                                });
-                                (text, false, stop)
-                            },
-                            ToolResult::Error { error, retryable } => {
-                                if !retryable {
-                                    consecutive_errors += 1;
-                                }
-                                if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
-                                    tracing::warn!(
-                                        consecutive_errors,
-                                        tool = %tc.name,
-                                        "Too many consecutive tool errors — stopping loop"
-                                    );
-                                }
-                                (error.clone(), true, false)
-                            }
-                        };
+                            };
 
-                        // Compress verbose tool outputs (especially DevTools MCP tools)
-                        let output_text = if !is_error {
-                            crate::tool_output::compressor::compress_tool_output(&tc.name, &output_text)
-                        } else {
-                            output_text
-                        };
+                            // Compress verbose tool outputs (especially DevTools MCP tools)
+                            let output_text = if !is_error {
+                                crate::tool_output::compressor::compress_tool_output(&tc.name, &output_text)
+                            } else {
+                                output_text
+                            };
 
-                        messages.push(UnifiedMessage::tool_result(
-                            tc.id.clone(),
-                            tc.name.clone(),
-                            output_text,
-                            is_error,
-                        ));
+                            messages.push(UnifiedMessage::tool_result(
+                                tc.id.clone(),
+                                tc.name.clone(),
+                                output_text,
+                                is_error,
+                            ));
 
-                        if should_stop {
-                            if final_text.is_none() {
-                                if let Some(UnifiedMessage::ToolResult { content, .. }) = messages.last() {
-                                    if let Some(text) = content.iter().find_map(|b| b.as_text()) {
-                                        final_text = Some(text.to_string());
+                            if should_stop {
+                                if final_text.is_none() {
+                                    if let Some(UnifiedMessage::ToolResult { content, .. }) = messages.last() {
+                                        if let Some(text) = content.iter().find_map(|b| b.as_text()) {
+                                            final_text = Some(text.to_string());
+                                        }
                                     }
                                 }
+                                stop_requested = true;
                             }
-                            stop_requested = true;
                         }
                     }
-                }
 
-                tool_calls_made += 1;
+                    tool_calls_made += 1;
+                }
+            }
+
+            // --- After-turn: record metrics for diminishing returns detection ---
+            {
+                let mut ctx_budget_ref = self.context_budget.lock().unwrap_or_else(|e| e.into_inner());
+                if let Some(ref mut ctx_budget) = *ctx_budget_ref {
+                    let turn_productive = response.has_tool_calls()
+                        && consecutive_errors == 0;
+                    let output_tokens = response
+                        .usage
+                        .as_ref()
+                        .map(|u| u.output_tokens as usize)
+                        .unwrap_or(0);
+                    let post_directive = ctx_budget.after_turn(
+                        super::context_budget::TurnMetrics {
+                            output_tokens,
+                            tool_calls: response.tool_calls.len(),
+                            productive: turn_productive,
+                        },
+                    );
+                    if post_directive == super::context_budget::LoopDirective::StopDiminishing {
+                        messages.push(UnifiedMessage::user(DIMINISHING_RETURNS_NOTICE));
+                    }
+                }
             }
 
             if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
