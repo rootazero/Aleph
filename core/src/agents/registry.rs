@@ -3,7 +3,7 @@
 use crate::sync_primitives::RwLock;
 use std::collections::HashMap;
 
-use crate::agents::types::{AgentDef, AgentMode};
+use crate::agents::types::{AgentDef, AgentMode, ContextMode};
 
 /// Registry for managing agent definitions
 pub struct AgentRegistry {
@@ -105,7 +105,8 @@ pub fn builtin_agents() -> Vec<AgentDef> {
             "glob".into(),
             "grep".into(),
         ])
-        .with_max_iterations(30),
+        .with_max_iterations(30)
+        .with_context_mode(ContextMode::Summary),
         // Researcher agent - search and web
         AgentDef::new(
             "researcher",
@@ -119,6 +120,43 @@ pub fn builtin_agents() -> Vec<AgentDef> {
         ])
         .with_denied_tools(vec!["write_file".into(), "edit_file".into(), "bash".into()])
         .with_max_iterations(15),
+        // Default agent - general-purpose sub-agent
+        AgentDef::new(
+            "default",
+            AgentMode::SubAgent,
+            include_str!("prompts/default.md"),
+        )
+        .with_context_mode(ContextMode::Summary),
+        // Plan agent - read-only planner
+        AgentDef::new(
+            "plan",
+            AgentMode::SubAgent,
+            include_str!("prompts/plan.md"),
+        )
+        .with_allowed_tools(vec![
+            "glob".into(),
+            "grep".into(),
+            "read_file".into(),
+            "bash".into(),
+        ])
+        .with_denied_tools(vec!["write_file".into(), "edit_file".into()])
+        .with_max_iterations(20)
+        .with_context_mode(ContextMode::Summary),
+        // Verify agent - adversarial verifier
+        AgentDef::new(
+            "verify",
+            AgentMode::SubAgent,
+            include_str!("prompts/verify.md"),
+        )
+        .with_allowed_tools(vec![
+            "glob".into(),
+            "grep".into(),
+            "read_file".into(),
+            "bash".into(),
+        ])
+        .with_denied_tools(vec!["write_file".into(), "edit_file".into()])
+        .with_max_iterations(25)
+        .with_context_mode(ContextMode::Summary),
     ]
 }
 
@@ -197,7 +235,7 @@ mod tests {
     #[test]
     fn test_builtin_agents_count() {
         let agents = builtin_agents();
-        assert_eq!(agents.len(), 4);
+        assert_eq!(agents.len(), 7);
     }
 
     #[test]
@@ -232,5 +270,40 @@ mod tests {
         assert!(researcher.is_tool_allowed("web_fetch"));
         assert!(!researcher.is_tool_allowed("write_file"));
         assert_eq!(researcher.max_iterations, Some(15));
+    }
+
+    #[test]
+    fn test_default_agent_config() {
+        let registry = AgentRegistry::with_builtins();
+        let default = registry.get("default").unwrap();
+        assert_eq!(default.mode, AgentMode::SubAgent);
+        assert_eq!(default.context_mode, ContextMode::Summary);
+        assert!(default.is_tool_allowed("glob")); // wildcard
+        assert!(default.is_tool_allowed("bash")); // wildcard
+    }
+
+    #[test]
+    fn test_plan_agent_config() {
+        let registry = AgentRegistry::with_builtins();
+        let plan = registry.get("plan").unwrap();
+        assert_eq!(plan.mode, AgentMode::SubAgent);
+        assert!(plan.is_tool_allowed("glob"));
+        assert!(plan.is_tool_allowed("grep"));
+        assert!(plan.is_tool_allowed("read_file"));
+        assert!(plan.is_tool_allowed("bash"));
+        assert!(!plan.is_tool_allowed("write_file"));
+        assert!(!plan.is_tool_allowed("edit_file"));
+        assert_eq!(plan.context_mode, ContextMode::Summary);
+    }
+
+    #[test]
+    fn test_verify_agent_config() {
+        let registry = AgentRegistry::with_builtins();
+        let verify = registry.get("verify").unwrap();
+        assert_eq!(verify.mode, AgentMode::SubAgent);
+        assert!(verify.is_tool_allowed("glob"));
+        assert!(verify.is_tool_allowed("bash"));
+        assert!(!verify.is_tool_allowed("write_file"));
+        assert_eq!(verify.context_mode, ContextMode::Summary);
     }
 }

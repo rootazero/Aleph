@@ -4,6 +4,7 @@
 //! and repeats until the task is complete.
 
 pub mod adapters;
+pub mod background_tracker;
 pub mod chain_context;
 pub mod context_budget;
 pub mod factory;
