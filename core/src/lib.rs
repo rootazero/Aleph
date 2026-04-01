@@ -47,6 +47,7 @@ mod clipboard;
 pub mod command;
 pub mod components;
 pub mod compressor;
+pub mod context;
 mod config;
 pub mod conversation;
 mod core;
