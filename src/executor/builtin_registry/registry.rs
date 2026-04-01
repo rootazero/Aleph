@@ -449,9 +449,23 @@ impl ToolRegistry for BuiltinToolRegistry {
                         "session_search not available: GatewayContext not yet injected",
                     )
                 })?;
+                // Derive caller identity from session context (agent_id is the first
+                // segment of session_key_str, e.g. "assistant:dm:telegram:…").
+                // Falls back to "main" when session context is unavailable.
+                let caller_id = self
+                    .session_context_handle
+                    .as_ref()
+                    .and_then(|h| h.try_read().ok())
+                    .and_then(|ctx| {
+                        ctx.session_key_str
+                            .split(':')
+                            .next()
+                            .map(|s| s.to_string())
+                    })
+                    .unwrap_or_else(|| "main".to_string());
                 let tool = crate::builtin_tools::SessionSearchTool::new(
                     Arc::clone(context),
-                    "main",
+                    caller_id,
                 );
                 tool.call_json(arguments).await
             }),

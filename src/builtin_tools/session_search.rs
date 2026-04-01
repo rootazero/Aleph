@@ -74,10 +74,13 @@ impl SessionSearchTool {
         let args_summary = format!("搜索历史对话: {}", &args.query);
         notify_tool_start("session_search", &args_summary);
 
+        // Over-fetch to compensate for ACL-filtered results, then truncate.
+        // This prevents inaccessible hits from consuming the entire result window.
+        let fetch_limit = args.max_results * 4;
         let results = self
             .context
             .session_manager()
-            .search_messages(&args.query, args.max_results)
+            .search_messages(&args.query, fetch_limit)
             .await
             .map_err(|e| ToolError::Execution(format!("Session search failed: {}", e)))?;
 
@@ -85,11 +88,13 @@ impl SessionSearchTool {
         let accessible: Vec<_> = results
             .into_iter()
             .filter(|r| self.is_accessible(&r.agent_id))
+            .take(args.max_results)
             .collect();
 
         debug!(
             caller = %self.caller_agent_id,
-            total_before_filter = accessible.len(),
+            returned = accessible.len(),
+            requested = args.max_results,
             "session_search: A2A filtered results"
         );
 
