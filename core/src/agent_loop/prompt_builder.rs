@@ -293,6 +293,83 @@ impl PromptBuilder {
     }
 }
 
+// =============================================================================
+// Convenience constructors
+// =============================================================================
+
+impl PromptBuilder {
+    /// Register identity, tone, directives, custom_instructions from SoulManifest.
+    pub fn with_soul(mut self, soul: &crate::thinker::soul::SoulManifest) -> Self {
+        self.register(super::prompt_sections::identity::render(
+            if soul.identity.is_empty() { None } else { Some(&soul.identity) },
+            None,
+        ));
+        if !soul.voice.tone.is_empty() {
+            self.register(super::prompt_sections::tone::render(&soul.voice.tone));
+        }
+        let dir = super::prompt_sections::directives::render(
+            &soul.directives,
+            &soul.anti_patterns,
+            &soul.expertise,
+        );
+        if !dir.content.is_empty() {
+            self.register(dir);
+        }
+        if let Some(addendum) = &soul.addendum {
+            self.register(super::prompt_sections::custom_instructions::render(addendum));
+        }
+        self
+    }
+
+    /// Register all default behavioral discipline sections.
+    pub fn with_default_behavior_sections(mut self) -> Self {
+        self.register(super::prompt_sections::system_rules::render());
+        self.register(super::prompt_sections::doing_tasks::render());
+        self.register(super::prompt_sections::actions::render());
+        self.register(super::prompt_sections::tool_usage::render());
+        self.register(super::prompt_sections::tone_and_style::render());
+        self.register(super::prompt_sections::output_efficiency::render());
+        self.register(super::prompt_sections::memory_protocol::render());
+        self
+    }
+
+    pub fn with_environment(mut self, env: &crate::context::EnvironmentInfo) -> Self {
+        self.register(super::prompt_sections::environment::render(env));
+        self
+    }
+
+    pub fn with_memory(mut self, ctx: &crate::context::MemoryContext) -> Self {
+        self.register(super::prompt_sections::memory::render(ctx));
+        self
+    }
+
+    pub fn with_tools(mut self, tools: &[ToolInfo]) -> Self {
+        self.register(super::prompt_sections::tools::render(tools));
+        self
+    }
+
+    pub fn with_skills(mut self, skills: &[crate::domain::skill::SkillManifest], active_tools: &[&str]) -> Self {
+        self.register(super::prompt_sections::skills::render(skills, active_tools));
+        self
+    }
+
+    pub fn with_session_guidance(mut self, tool_names: &[&str]) -> Self {
+        self.register(super::prompt_sections::session_guidance::render(tool_names));
+        self
+    }
+
+    pub fn with_model_behavior(mut self, content: &str) -> Self {
+        self.register(super::prompt_sections::model_behavior::render(content));
+        self
+    }
+
+    /// Register identity from a raw string (no SoulManifest).
+    pub fn with_identity(mut self, identity: &str) -> Self {
+        self.register(super::prompt_sections::identity::render(Some(identity), None));
+        self
+    }
+}
+
 impl Default for PromptBuilder {
     fn default() -> Self {
         Self::new()
@@ -476,5 +553,91 @@ mod tests {
         let r2 = builder.build();
         assert_eq!(r1.prompt, r2.prompt);
         assert_eq!(r1.cache_boundary_offset, r2.cache_boundary_offset);
+    }
+
+    #[test]
+    fn with_default_behavior_sections_registers_all() {
+        let builder = PromptBuilder::new().with_default_behavior_sections();
+        let result = builder.build();
+        // Should contain content from all 7 behavioral sections
+        assert!(result.prompt.contains("# System"), "missing system_rules");
+        assert!(!result.prompt.is_empty());
+        // Verify multiple sections were registered (check for separators)
+        assert!(result.prompt.contains("---"), "should have section separators");
+    }
+
+    #[test]
+    fn with_soul_registers_identity_and_tone() {
+        use crate::thinker::soul::{SoulManifest, SoulVoice};
+
+        let soul = SoulManifest {
+            identity: "I am Test Bot.".into(),
+            voice: SoulVoice {
+                tone: "calm and precise".into(),
+                ..Default::default()
+            },
+            directives: vec!["Be helpful.".into()],
+            ..Default::default()
+        };
+
+        let builder = PromptBuilder::new().with_soul(&soul);
+        let result = builder.build();
+        assert!(result.prompt.contains("I am Test Bot."), "missing identity");
+        assert!(result.prompt.contains("calm and precise"), "missing tone");
+        assert!(result.prompt.contains("Be helpful."), "missing directive");
+    }
+
+    #[test]
+    fn with_identity_registers_raw_identity() {
+        let builder = PromptBuilder::new().with_identity("Custom system prompt.");
+        let result = builder.build();
+        assert!(result.prompt.contains("Custom system prompt."));
+    }
+
+    #[test]
+    fn full_prompt_has_correct_structure() {
+        let tools = vec![ToolInfo {
+            name: "web_search".to_string(),
+            description: "Search the web.".to_string(),
+            parameters_schema: None,
+        }];
+
+        let builder = PromptBuilder::new()
+            .with_default_behavior_sections()
+            .with_tools(&tools)
+            .with_environment(&crate::context::EnvironmentInfo::for_test());
+
+        let result = builder.build();
+
+        // Verify stable sections exist
+        assert!(result.prompt.contains("# System"), "missing system_rules");
+        assert!(result.prompt.contains("# Doing Tasks"), "missing doing_tasks");
+        assert!(result.prompt.contains("# Executing Actions"), "missing actions");
+        assert!(result.prompt.contains("# Using Your Tools"), "missing tool_usage");
+        assert!(result.prompt.contains("# Tone and Style"), "missing tone_and_style");
+        assert!(result.prompt.contains("# Output Efficiency"), "missing output_efficiency");
+        assert!(result.prompt.contains("# Available Tools"), "missing tools");
+        assert!(result.prompt.contains("web_search"), "missing tool name");
+
+        // Verify dynamic section exists
+        assert!(result.prompt.contains("# Environment"), "missing environment");
+        assert!(result.prompt.contains("/test/workspace"), "missing cwd from env");
+
+        // Verify ordering: stable before dynamic
+        let system_pos = result.prompt.find("# System").unwrap();
+        let doing_pos = result.prompt.find("# Doing Tasks").unwrap();
+        let tools_pos = result.prompt.find("# Using Your Tools").unwrap();
+        let env_pos = result.prompt.find("# Environment").unwrap();
+
+        assert!(system_pos < doing_pos, "system before doing_tasks");
+        assert!(doing_pos < tools_pos, "doing_tasks before tool_usage");
+
+        // Environment (Dynamic) should be after all Stable sections
+        assert!(env_pos > tools_pos, "environment after stable sections");
+
+        // Cache boundary should be at or before Environment (dynamic zone start)
+        let boundary = result.cache_boundary_offset.expect("boundary should exist");
+        assert!(boundary > 0, "boundary should be > 0");
+        assert!(boundary <= env_pos, "boundary at or before dynamic zone");
     }
 }

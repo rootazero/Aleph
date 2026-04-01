@@ -248,7 +248,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             let behavior_content = {
                 let behavior_name = provider
                     .model_behavior_override()
-                    .or_else(|| protocol_to_behavior(&provider.protocol().to_string()));
+                    .or_else(|| protocol_to_behavior(provider.protocol()));
                 let content = match behavior_name {
                     Some(name) => load_model_behavior(name).await,
                     None => None,
@@ -302,21 +302,18 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             );
 
             // Build prompt builder
-            let prompt_builder = if resolved_soul.is_empty() {
-                PromptBuilder::new()
+            let mut prompt_builder = if resolved_soul.is_empty() {
+                PromptBuilder::new().with_default_behavior_sections()
             } else {
-                PromptBuilder::from_soul(&resolved_soul)
+                PromptBuilder::new().with_soul(&resolved_soul).with_default_behavior_sections()
             };
-            let prompt_builder = if let Some(ref skills) = eligible_skills {
-                prompt_builder.with_eligible_skills(skills.clone())
-            } else {
-                prompt_builder
-            };
-            let prompt_builder = if let Some(ref content) = behavior_content {
-                prompt_builder.with_model_behavior(content)
-            } else {
-                prompt_builder
-            };
+            if let Some(ref skills) = eligible_skills {
+                let active_tools: Vec<&str> = allowed_tools.iter().map(|t| t.name.as_str()).collect();
+                prompt_builder = prompt_builder.with_skills(skills, &active_tools);
+            }
+            if let Some(ref content) = behavior_content {
+                prompt_builder = prompt_builder.with_model_behavior(content);
+            }
 
             // Safety guard from merged global + agent permissions
             let safety = SafetyGuard::from_permissions(&self.global_tool_permissions, &agent_perms);
@@ -360,7 +357,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 language: String::new(),
             };
 
-            let agent_loop = AgentLoop::new(
+            let mut agent_loop = AgentLoop::new(
                 bridge,
                 tool_registry,
                 prompt_builder,

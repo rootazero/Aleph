@@ -46,8 +46,8 @@ impl LoopFactory {
 
         // Build prompt from soul or defaults
         let prompt_builder = match soul {
-            Some(s) => PromptBuilder::from_soul(s),
-            None => PromptBuilder::new(),
+            Some(s) => PromptBuilder::new().with_soul(s).with_default_behavior_sections(),
+            None => PromptBuilder::new().with_default_behavior_sections(),
         };
 
         // Safety guard with sensible defaults

@@ -15,8 +15,6 @@ pub const TOOL_GRAMMAR: &str = include_str!("tool_grammar.md");
 pub const OUTPUT_STYLE: &str = include_str!("output_style.md");
 pub const PERSISTENCE: &str = include_str!("persistence.md");
 
-pub const DEFAULT_IDENTITY: &str = "You are a helpful personal AI assistant.";
-
 // =============================================================================
 // Conditional guidance content
 // =============================================================================

@@ -301,7 +301,7 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use crate::agent_loop::tool::{LoopTool, LoopToolRegistry};
-    use crate::agent_loop::NoopCallback;
+    use crate::agent_loop::loop_core::NoopCallback;
     use crate::extension::PermissionAction;
 
     /// A permissive safety guard for tests — allows everything.

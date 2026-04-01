@@ -147,14 +147,16 @@ impl LoopTool for SubagentTool {
         // 3. Build sub-agent components
         let bridge = AiProviderBridge::new(self.provider.clone());
         let registry = (self.tool_registry_factory)();
-        let prompt_builder = PromptBuilder::new().with_soul_identity(SUBAGENT_SYSTEM_PROMPT);
+        let prompt_builder = PromptBuilder::new()
+            .with_identity(SUBAGENT_SYSTEM_PROMPT)
+            .with_default_behavior_sections();
         let config = LoopConfig {
             max_iterations: 25,
             token_budget: 100_000,
         };
 
         // 4. Create and run the agent loop
-        let agent_loop = AgentLoop::new(
+        let mut agent_loop = AgentLoop::new(
             bridge,
             registry,
             prompt_builder,

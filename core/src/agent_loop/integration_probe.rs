@@ -183,7 +183,7 @@ mod tests {
         let mut registry = LoopToolRegistry::new();
         registry.register(Box::new(EchoTool));
 
-        let agent = make_probe_loop(
+        let mut agent = make_probe_loop(
             vec![
                 // Turn 1: call echo tool
                 ProviderResponse {
@@ -265,7 +265,7 @@ mod tests {
         let mut registry = LoopToolRegistry::new();
         registry.register(Box::new(EchoTool));
 
-        let agent = make_probe_loop(
+        let mut agent = make_probe_loop(
             vec![
                 // Immediate text response
                 ProviderResponse {
@@ -345,7 +345,7 @@ mod tests {
         registry.register(Box::new(EchoTool));
         registry.register(Box::new(UpperTool));
 
-        let agent = make_probe_loop(
+        let mut agent = make_probe_loop(
             vec![ProviderResponse {
                 text: Some("Done.".to_string()),
                 tool_calls: vec![],
@@ -375,7 +375,7 @@ mod tests {
         let captured = Arc::new(Mutex::new(Vec::<CapturedRequest>::new()));
         let registry = LoopToolRegistry::new();
 
-        let agent = make_probe_loop(
+        let mut agent = make_probe_loop(
             vec![
                 // Turn 1: truncated (MaxTokens) — recovery escalates
                 ProviderResponse {
@@ -482,7 +482,7 @@ mod tests {
         );
 
         // Main provider: just returns a final response
-        let agent = make_probe_loop(
+        let mut agent = make_probe_loop(
             vec![ProviderResponse {
                 text: Some("Done processing. <task-complete/>".to_string()),
                 tool_calls: vec![],
@@ -511,7 +511,7 @@ mod tests {
             diminishing_threshold: 500,
         };
         let budget = ContextBudget::new(&budget_config);
-        let agent = agent
+        let mut agent = agent
             .with_context_budget(Some(budget))
             .with_context_compactor(compactor);
 
@@ -594,7 +594,7 @@ mod tests {
             tool_name: "slow_b".to_string(),
         }));
 
-        let agent = make_probe_loop(
+        let mut agent = make_probe_loop(
             vec![
                 // Turn 1: call both tools simultaneously
                 ProviderResponse {
@@ -686,7 +686,7 @@ mod tests {
         let mut registry = LoopToolRegistry::new();
         registry.register(Box::new(EchoTool));
 
-        let agent = make_probe_loop(
+        let mut agent = make_probe_loop(
             vec![ProviderResponse {
                 text: Some("OK.".to_string()),
                 tool_calls: vec![],
@@ -719,5 +719,863 @@ mod tests {
             sys.contains("Echoes the input back"),
             "system prompt should contain tool description"
         );
+    }
+
+    // =========================================================================
+    // E8: Chain context propagated in run result
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_chain_context_in_run_result() {
+        use crate::agent_loop::chain_context::ChainContext;
+
+        let captured = Arc::new(Mutex::new(Vec::<CapturedRequest>::new()));
+        let registry = LoopToolRegistry::new();
+
+        let mut agent = make_probe_loop(
+            vec![ProviderResponse {
+                text: Some("Done.".to_string()),
+                tool_calls: vec![],
+                thinking: None,
+                stop_reason: StopReason::EndTurn,
+                usage: None,
+            }],
+            captured,
+            registry,
+        );
+
+        // Default chain: depth=0, non-empty chain_id
+        let mut cb = NoopCallback;
+        let result = agent.run("hello", &mut cb).await.unwrap();
+        assert!(!result.chain_id.is_empty(), "chain_id should be non-empty");
+        assert_eq!(result.depth, 0, "root agent should have depth 0");
+
+        // Now test with an explicit child chain
+        let captured2 = Arc::new(Mutex::new(Vec::<CapturedRequest>::new()));
+        let registry2 = LoopToolRegistry::new();
+
+        let root_chain = ChainContext::with_max_depth(3);
+        let child_chain = root_chain.child().expect("child should succeed");
+        let expected_chain_id = child_chain.chain_id.clone();
+
+        let mut agent2 = make_probe_loop(
+            vec![ProviderResponse {
+                text: Some("Child done.".to_string()),
+                tool_calls: vec![],
+                thinking: None,
+                stop_reason: StopReason::EndTurn,
+                usage: None,
+            }],
+            captured2,
+            registry2,
+        )
+        .with_chain(child_chain);
+
+        let mut cb2 = NoopCallback;
+        let result2 = agent2.run("child query", &mut cb2).await.unwrap();
+        assert_eq!(result2.chain_id, expected_chain_id);
+        assert_eq!(result2.depth, 1, "child agent should have depth 1");
+    }
+
+    // =========================================================================
+    // E9: Tool refresh signal mechanism
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_tool_refresh_signal() {
+        use crate::agent_loop::tool_refresh::{build_refreshed_registry, ToolRefreshSource};
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        struct MockRefreshSource {
+            flag: AtomicBool,
+            tools: Vec<String>,
+        }
+
+        impl MockRefreshSource {
+            fn new(tool_names: Vec<&str>) -> Self {
+                Self {
+                    flag: AtomicBool::new(false),
+                    tools: tool_names.into_iter().map(String::from).collect(),
+                }
+            }
+
+            fn signal(&self) {
+                self.flag.store(true, Ordering::Release);
+            }
+        }
+
+        /// A named tool wrapper for testing tool refresh with distinct names.
+        struct NamedTool(String);
+
+        #[async_trait::async_trait]
+        impl crate::agent_loop::tool::LoopTool for NamedTool {
+            fn name(&self) -> &str {
+                &self.0
+            }
+            fn description(&self) -> &str {
+                "named test tool"
+            }
+            fn schema(&self) -> serde_json::Value {
+                json!({"type": "object"})
+            }
+            async fn execute(
+                &self,
+                _input: serde_json::Value,
+            ) -> crate::agent_loop::tool::ToolResult {
+                crate::agent_loop::tool::ToolResult::Success {
+                    output: serde_json::Value::Null,
+                }
+            }
+        }
+
+        impl ToolRefreshSource for MockRefreshSource {
+            fn poll_changes(&self) -> bool {
+                self.flag.swap(false, Ordering::AcqRel)
+            }
+
+            fn fetch_tools(&self) -> Vec<Box<dyn crate::agent_loop::tool::LoopTool>> {
+                self.tools
+                    .iter()
+                    .map(|name| -> Box<dyn crate::agent_loop::tool::LoopTool> {
+                        Box::new(NamedTool(name.clone()))
+                    })
+                    .collect()
+            }
+        }
+
+        let src = MockRefreshSource::new(vec!["tool_a", "tool_b"]);
+
+        // Before signal: no changes
+        assert!(!src.poll_changes());
+
+        // After signal: changes detected, then clears
+        src.signal();
+        assert!(src.poll_changes(), "poll after signal should be true");
+        assert!(!src.poll_changes(), "poll should reset to false");
+
+        // fetch_tools returns the configured count
+        let tools = src.fetch_tools();
+        assert_eq!(tools.len(), 2);
+
+        // build_refreshed_registry creates a working registry with distinct tools
+        let registry = build_refreshed_registry(src.fetch_tools());
+        let defs = registry.tool_definitions();
+        assert_eq!(defs.len(), 2);
+    }
+
+    // =========================================================================
+    // E10: Skill prefetcher starts scan and returns handle
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_skill_prefetcher_starts_scan() {
+        use crate::agent_loop::skill_prefetch::{SkillDiscoverySource, SkillInfo, SkillPrefetcher};
+        use std::time::Duration;
+
+        struct MockDiscoverySource {
+            skills: Vec<SkillInfo>,
+        }
+
+        impl SkillDiscoverySource for MockDiscoverySource {
+            fn discover(
+                &self,
+            ) -> Pin<Box<dyn std::future::Future<Output = Vec<SkillInfo>> + Send + '_>> {
+                Box::pin(async { self.skills.clone() })
+            }
+        }
+
+        let source = Arc::new(MockDiscoverySource {
+            skills: vec![
+                SkillInfo {
+                    name: "search".to_string(),
+                    description: "Search skill".to_string(),
+                    schema: None,
+                },
+                SkillInfo {
+                    name: "translate".to_string(),
+                    description: "Translate skill".to_string(),
+                    schema: None,
+                },
+            ],
+        });
+
+        let prefetcher = SkillPrefetcher::new(source, Duration::ZERO);
+
+        // start_scan should return Some(handle)
+        let handle = prefetcher
+            .start_scan()
+            .expect("first scan should not be throttled");
+
+        // Await handle — should return Some(skills) since cache is empty
+        let result = handle.await.unwrap();
+        assert!(result.is_some(), "first scan should detect new skills");
+
+        let skills = result.unwrap();
+        assert_eq!(skills.len(), 2);
+        assert_eq!(skills[0].name, "search");
+        assert_eq!(skills[1].name, "translate");
+    }
+
+    // =========================================================================
+    // E11: Stop hook allows → loop exits normally
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_stop_hook_allows_completion() {
+        let captured = Arc::new(Mutex::new(Vec::<CapturedRequest>::new()));
+        let mut registry = LoopToolRegistry::new();
+        registry.register(Box::new(EchoTool));
+
+        let provider = Arc::new(ProbeProvider::new(
+            vec![
+                // Turn 1: call echo tool
+                ProviderResponse {
+                    text: None,
+                    tool_calls: vec![NativeToolCall {
+                        id: "call_1".to_string(),
+                        name: "echo".to_string(),
+                        arguments: json!({ "message": "hello" }),
+                    }],
+                    thinking: None,
+                    stop_reason: StopReason::ToolUse,
+                    usage: Some(TokenUsage {
+                        input_tokens: 10,
+                        output_tokens: 5,
+                        cache_read_tokens: None,
+                        thinking_tokens: None,
+                    }),
+                },
+                // Turn 2: final text with completion tag
+                ProviderResponse {
+                    text: Some("All done. <task-complete/>".to_string()),
+                    tool_calls: vec![],
+                    thinking: None,
+                    stop_reason: StopReason::EndTurn,
+                    usage: Some(TokenUsage {
+                        input_tokens: 20,
+                        output_tokens: 5,
+                        cache_read_tokens: None,
+                        thinking_tokens: None,
+                    }),
+                },
+            ],
+            captured.clone(),
+        )) as Arc<dyn AiProvider>;
+        let bridge = AiProviderBridge::new(provider);
+
+        let mut agent = AgentLoop::new(
+            bridge,
+            registry,
+            PromptBuilder::new(),
+            SafetyGuard::default_guard(),
+            LoopConfig {
+                max_iterations: 10,
+                token_budget: 100_000,
+            },
+            CancellationToken::new(),
+        )
+        .with_stop_hooks(vec![
+            crate::agent_loop::stop_hooks::StopHook::new("allow_hook", "exit 0"),
+        ]);
+
+        let mut cb = NoopCallback;
+        let result = agent.run("test stop hooks", &mut cb).await.unwrap();
+
+        // Hook allowed → loop should exit normally with 2 iterations
+        assert_eq!(result.iterations, 2);
+        assert_eq!(result.tool_calls_made, 1);
+        assert_eq!(
+            result.final_text.as_deref(),
+            Some("All done. <task-complete/>")
+        );
+    }
+
+    // =========================================================================
+    // E12: Stop hook blocks → loop continues with injected message
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_stop_hook_blocks_then_allows() {
+        let captured = Arc::new(Mutex::new(Vec::<CapturedRequest>::new()));
+        let mut registry = LoopToolRegistry::new();
+        registry.register(Box::new(EchoTool));
+
+        let provider = Arc::new(ProbeProvider::new(
+            vec![
+                // Turn 1: call echo tool
+                ProviderResponse {
+                    text: None,
+                    tool_calls: vec![NativeToolCall {
+                        id: "call_1".to_string(),
+                        name: "echo".to_string(),
+                        arguments: json!({ "message": "test" }),
+                    }],
+                    thinking: None,
+                    stop_reason: StopReason::ToolUse,
+                    usage: Some(TokenUsage {
+                        input_tokens: 10,
+                        output_tokens: 5,
+                        cache_read_tokens: None,
+                        thinking_tokens: None,
+                    }),
+                },
+                // Turn 2: completion tag (will be blocked by hook)
+                ProviderResponse {
+                    text: Some("Done. <task-complete/>".to_string()),
+                    tool_calls: vec![],
+                    thinking: None,
+                    stop_reason: StopReason::EndTurn,
+                    usage: None,
+                },
+                // Turn 3: after block injection, LLM responds with completion again
+                ProviderResponse {
+                    text: Some("Fixed and done. <task-complete/>".to_string()),
+                    tool_calls: vec![],
+                    thinking: None,
+                    stop_reason: StopReason::EndTurn,
+                    usage: None,
+                },
+            ],
+            captured.clone(),
+        )) as Arc<dyn AiProvider>;
+        let bridge = AiProviderBridge::new(provider);
+
+        // Hook blocks first time (exit 2), then allows (the hook always blocks,
+        // but the MAX_STOP_HOOK_BLOCKS=3 limit means after 3 blocks the loop
+        // will exit). For this test we use a hook that blocks once by checking
+        // a file marker.
+        let hook_script = r#"
+            MARKER="/tmp/aleph_e2e_hook_marker_$$"
+            if [ ! -f /tmp/aleph_e2e_stop_hook_passed ]; then
+                echo "tests not passing" && touch /tmp/aleph_e2e_stop_hook_passed && exit 2
+            else
+                rm -f /tmp/aleph_e2e_stop_hook_passed && exit 0
+            fi
+        "#;
+
+        // Clean up any leftover marker
+        let _ = std::fs::remove_file("/tmp/aleph_e2e_stop_hook_passed");
+
+        let mut agent = AgentLoop::new(
+            bridge,
+            registry,
+            PromptBuilder::new(),
+            SafetyGuard::default_guard(),
+            LoopConfig {
+                max_iterations: 10,
+                token_budget: 100_000,
+            },
+            CancellationToken::new(),
+        )
+        .with_stop_hooks(vec![
+            crate::agent_loop::stop_hooks::StopHook::new("conditional_hook", hook_script),
+        ]);
+
+        let mut cb = NoopCallback;
+        let result = agent.run("test blocking hook", &mut cb).await.unwrap();
+
+        // Hook blocked once → LLM got a continuation message → then allowed
+        assert!(
+            result.iterations >= 3,
+            "Expected at least 3 iterations (tool + block + retry), got {}",
+            result.iterations
+        );
+        assert_eq!(
+            result.final_text.as_deref(),
+            Some("Fixed and done. <task-complete/>")
+        );
+
+        // Clean up
+        let _ = std::fs::remove_file("/tmp/aleph_e2e_stop_hook_passed");
+    }
+
+    // =========================================================================
+    // E13: Stop hook timeout → treated as error, non-blocking
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_stop_hook_timeout_non_blocking() {
+        let captured = Arc::new(Mutex::new(Vec::<CapturedRequest>::new()));
+        let mut registry = LoopToolRegistry::new();
+        registry.register(Box::new(EchoTool));
+
+        let provider = Arc::new(ProbeProvider::new(
+            vec![
+                // Turn 1: call tool
+                ProviderResponse {
+                    text: None,
+                    tool_calls: vec![NativeToolCall {
+                        id: "call_1".to_string(),
+                        name: "echo".to_string(),
+                        arguments: json!({ "message": "hi" }),
+                    }],
+                    thinking: None,
+                    stop_reason: StopReason::ToolUse,
+                    usage: None,
+                },
+                // Turn 2: completion
+                ProviderResponse {
+                    text: Some("All done. <task-complete/>".to_string()),
+                    tool_calls: vec![],
+                    thinking: None,
+                    stop_reason: StopReason::EndTurn,
+                    usage: None,
+                },
+            ],
+            captured.clone(),
+        )) as Arc<dyn AiProvider>;
+        let bridge = AiProviderBridge::new(provider);
+
+        let mut agent = AgentLoop::new(
+            bridge,
+            registry,
+            PromptBuilder::new(),
+            SafetyGuard::default_guard(),
+            LoopConfig {
+                max_iterations: 10,
+                token_budget: 100_000,
+            },
+            CancellationToken::new(),
+        )
+        .with_stop_hooks(vec![
+            crate::agent_loop::stop_hooks::StopHook::new("slow_hook", "sleep 60")
+                .with_timeout(std::time::Duration::from_millis(100)),
+        ]);
+
+        let mut cb = NoopCallback;
+        let start = std::time::Instant::now();
+        let result = agent.run("test timeout hook", &mut cb).await.unwrap();
+        let elapsed = start.elapsed();
+
+        // Hook timed out → treated as error (non-blocking) → loop exits normally
+        assert_eq!(result.iterations, 2);
+        assert_eq!(
+            result.final_text.as_deref(),
+            Some("All done. <task-complete/>")
+        );
+        // Should not wait for the full 60s sleep
+        assert!(
+            elapsed < std::time::Duration::from_secs(5),
+            "Hook timeout should be fast, took {:?}",
+            elapsed
+        );
+    }
+
+    // =========================================================================
+    // E14: Cancellation before streaming → clean exit
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_cancellation_during_streaming_clean_exit() {
+        let captured = Arc::new(Mutex::new(Vec::<CapturedRequest>::new()));
+        let registry = LoopToolRegistry::new();
+
+        let provider = Arc::new(ProbeProvider::new(
+            vec![
+                // This response should never be fully consumed because
+                // the cancel token is already fired before the loop starts.
+                ProviderResponse {
+                    text: Some("Should not appear.".to_string()),
+                    tool_calls: vec![],
+                    thinking: None,
+                    stop_reason: StopReason::EndTurn,
+                    usage: None,
+                },
+            ],
+            captured.clone(),
+        )) as Arc<dyn AiProvider>;
+        let bridge = AiProviderBridge::new(provider);
+
+        let cancel = CancellationToken::new();
+        // Fire cancellation BEFORE the run — the select! in the streaming loop
+        // should detect it immediately on the first delta poll.
+        cancel.cancel();
+
+        let mut agent = AgentLoop::new(
+            bridge,
+            registry,
+            PromptBuilder::new(),
+            SafetyGuard::default_guard(),
+            LoopConfig {
+                max_iterations: 10,
+                token_budget: 100_000,
+            },
+            cancel,
+        );
+
+        let mut cb = NoopCallback;
+        let result = agent.run("test cancel", &mut cb).await.unwrap();
+
+        assert!(result.cancelled, "Result should be marked as cancelled");
+    }
+
+    // =========================================================================
+    // E15: Tool refresh rebuilds registry mid-loop
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_tool_refresh_rebuilds_registry_mid_loop() {
+        use crate::agent_loop::tool_refresh::ToolRefreshSource;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        struct DynamicRefreshSource {
+            flag: AtomicBool,
+        }
+
+        impl ToolRefreshSource for DynamicRefreshSource {
+            fn poll_changes(&self) -> bool {
+                self.flag.swap(false, Ordering::AcqRel)
+            }
+            fn fetch_tools(&self) -> Vec<Box<dyn crate::agent_loop::tool::LoopTool>> {
+                vec![
+                    Box::new(EchoTool),
+                    Box::new(UpperTool),
+                ]
+            }
+        }
+
+        let captured = Arc::new(Mutex::new(Vec::<CapturedRequest>::new()));
+        // Start with only EchoTool
+        let mut registry = LoopToolRegistry::new();
+        registry.register(Box::new(EchoTool));
+
+        let refresh_source = Arc::new(DynamicRefreshSource {
+            flag: AtomicBool::new(true), // signal refresh on first poll
+        });
+
+        let provider = Arc::new(ProbeProvider::new(
+            vec![
+                // Turn 1: call echo tool (triggers refresh after tool execution)
+                ProviderResponse {
+                    text: None,
+                    tool_calls: vec![NativeToolCall {
+                        id: "call_1".to_string(),
+                        name: "echo".to_string(),
+                        arguments: json!({ "message": "trigger refresh" }),
+                    }],
+                    thinking: None,
+                    stop_reason: StopReason::ToolUse,
+                    usage: None,
+                },
+                // Turn 2: final response
+                ProviderResponse {
+                    text: Some("Registry refreshed. <task-complete/>".to_string()),
+                    tool_calls: vec![],
+                    thinking: None,
+                    stop_reason: StopReason::EndTurn,
+                    usage: None,
+                },
+            ],
+            captured.clone(),
+        )) as Arc<dyn AiProvider>;
+        let bridge = AiProviderBridge::new(provider);
+
+        let mut agent = AgentLoop::new(
+            bridge,
+            registry,
+            PromptBuilder::new(),
+            SafetyGuard::default_guard(),
+            LoopConfig {
+                max_iterations: 10,
+                token_budget: 100_000,
+            },
+            CancellationToken::new(),
+        )
+        .with_tool_refresh(refresh_source);
+
+        let mut cb = NoopCallback;
+        let result = agent.run("test refresh", &mut cb).await.unwrap();
+
+        assert_eq!(result.iterations, 2);
+        // After refresh, tool definitions should include both echo and upper
+        let final_defs = agent.tool_definitions();
+        assert_eq!(
+            final_defs.len(),
+            2,
+            "After refresh, registry should have 2 tools (echo + upper), got {}",
+            final_defs.len()
+        );
+        let names: Vec<&str> = final_defs.iter().map(|d| d.name.as_str()).collect();
+        assert!(names.contains(&"echo"));
+        assert!(names.contains(&"upper"));
+    }
+
+    // =========================================================================
+    // E16: Chain context depth enforcement across nested calls
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_chain_context_depth_enforcement() {
+        use crate::agent_loop::chain_context::ChainContext;
+
+        // Create a chain at max depth
+        let root = ChainContext::with_max_depth(1);
+        let child = root.child().expect("depth 0→1 should succeed");
+        assert_eq!(child.depth, 1);
+
+        // At max depth, child() returns None
+        let grandchild = child.child();
+        assert!(
+            grandchild.is_none(),
+            "depth 1→2 should be None (max_depth=1)"
+        );
+
+        // Verify the chain context propagates through an AgentLoop run
+        let captured = Arc::new(Mutex::new(Vec::<CapturedRequest>::new()));
+        let registry = LoopToolRegistry::new();
+
+        let provider = Arc::new(ProbeProvider::new(
+            vec![ProviderResponse {
+                text: Some("Depth-limited response.".to_string()),
+                tool_calls: vec![],
+                thinking: None,
+                stop_reason: StopReason::EndTurn,
+                usage: None,
+            }],
+            captured,
+        )) as Arc<dyn AiProvider>;
+        let bridge = AiProviderBridge::new(provider);
+
+        let mut agent = AgentLoop::new(
+            bridge,
+            registry,
+            PromptBuilder::new(),
+            SafetyGuard::default_guard(),
+            LoopConfig {
+                max_iterations: 10,
+                token_budget: 100_000,
+            },
+            CancellationToken::new(),
+        )
+        .with_chain(child);
+
+        let mut cb = NoopCallback;
+        let result = agent.run("test at max depth", &mut cb).await.unwrap();
+        assert_eq!(result.depth, 1, "should run at depth 1");
+        assert_eq!(result.chain_id, root.chain_id, "chain_id should match root");
+    }
+
+    // =========================================================================
+    // E17: Multiple concurrent tool calls with mixed results
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_multiple_tools_mixed_success_and_error() {
+        /// A tool that always errors.
+        struct ErrorTool;
+
+        #[async_trait::async_trait]
+        impl LoopTool for ErrorTool {
+            fn name(&self) -> &str {
+                "error_tool"
+            }
+            fn description(&self) -> &str {
+                "Always errors"
+            }
+            fn schema(&self) -> serde_json::Value {
+                json!({"type": "object", "properties": {}})
+            }
+            async fn execute(&self, _input: serde_json::Value) -> ToolResult {
+                ToolResult::Error {
+                    error: "intentional error".into(),
+                    retryable: false,
+                }
+            }
+        }
+
+        let captured = Arc::new(Mutex::new(Vec::<CapturedRequest>::new()));
+        let mut registry = LoopToolRegistry::new();
+        registry.register(Box::new(EchoTool));
+        registry.register(Box::new(ErrorTool));
+
+        let provider = Arc::new(ProbeProvider::new(
+            vec![
+                // Turn 1: call both tools
+                ProviderResponse {
+                    text: None,
+                    tool_calls: vec![
+                        NativeToolCall {
+                            id: "call_ok".to_string(),
+                            name: "echo".to_string(),
+                            arguments: json!({ "message": "good" }),
+                        },
+                        NativeToolCall {
+                            id: "call_err".to_string(),
+                            name: "error_tool".to_string(),
+                            arguments: json!({}),
+                        },
+                    ],
+                    thinking: None,
+                    stop_reason: StopReason::ToolUse,
+                    usage: None,
+                },
+                // Turn 2: LLM handles the error gracefully
+                ProviderResponse {
+                    text: Some("Partial success. <task-complete/>".to_string()),
+                    tool_calls: vec![],
+                    thinking: None,
+                    stop_reason: StopReason::EndTurn,
+                    usage: None,
+                },
+            ],
+            captured.clone(),
+        )) as Arc<dyn AiProvider>;
+        let bridge = AiProviderBridge::new(provider);
+
+        let mut agent = AgentLoop::new(
+            bridge,
+            registry,
+            PromptBuilder::new(),
+            SafetyGuard::default_guard(),
+            LoopConfig {
+                max_iterations: 10,
+                token_budget: 100_000,
+            },
+            CancellationToken::new(),
+        );
+
+        let mut cb = NoopCallback;
+        let result = agent.run("test mixed tools", &mut cb).await.unwrap();
+
+        assert_eq!(result.iterations, 2);
+        assert_eq!(result.tool_calls_made, 2);
+        assert_eq!(
+            result.final_text.as_deref(),
+            Some("Partial success. <task-complete/>")
+        );
+
+        // Verify both tool results appear in the second request
+        let caps = captured.lock().unwrap_or_else(|e| e.into_inner());
+        assert_eq!(caps.len(), 2);
+        let second_msgs = &caps[1].messages;
+        let tool_results: Vec<_> = second_msgs
+            .iter()
+            .filter(|m| matches!(m, UnifiedMessage::ToolResult { .. }))
+            .collect();
+        assert_eq!(
+            tool_results.len(),
+            2,
+            "Both tool results should be in the history"
+        );
+    }
+
+    // =========================================================================
+    // E18: Full end-to-end: tool call → intermediate text → completion with hooks
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_full_e2e_tool_intermediate_completion_hooks() {
+        let captured = Arc::new(Mutex::new(Vec::<CapturedRequest>::new()));
+        let mut registry = LoopToolRegistry::new();
+        registry.register(Box::new(EchoTool));
+        registry.register(Box::new(UpperTool));
+
+        let provider = Arc::new(ProbeProvider::new(
+            vec![
+                // Turn 1: call echo with intermediate text
+                ProviderResponse {
+                    text: Some("Let me search for that...".to_string()),
+                    tool_calls: vec![NativeToolCall {
+                        id: "call_1".to_string(),
+                        name: "echo".to_string(),
+                        arguments: json!({ "message": "query" }),
+                    }],
+                    thinking: None,
+                    stop_reason: StopReason::ToolUse,
+                    usage: Some(TokenUsage {
+                        input_tokens: 10,
+                        output_tokens: 15,
+                        cache_read_tokens: None,
+                        thinking_tokens: None,
+                    }),
+                },
+                // Turn 2: call upper tool
+                ProviderResponse {
+                    text: Some("Processing results...".to_string()),
+                    tool_calls: vec![NativeToolCall {
+                        id: "call_2".to_string(),
+                        name: "upper".to_string(),
+                        arguments: json!({ "text": "result" }),
+                    }],
+                    thinking: None,
+                    stop_reason: StopReason::ToolUse,
+                    usage: Some(TokenUsage {
+                        input_tokens: 30,
+                        output_tokens: 10,
+                        cache_read_tokens: None,
+                        thinking_tokens: None,
+                    }),
+                },
+                // Turn 3: final answer with completion tag
+                ProviderResponse {
+                    text: Some("Here is your answer: RESULT. <task-complete/>".to_string()),
+                    tool_calls: vec![],
+                    thinking: None,
+                    stop_reason: StopReason::EndTurn,
+                    usage: Some(TokenUsage {
+                        input_tokens: 50,
+                        output_tokens: 20,
+                        cache_read_tokens: None,
+                        thinking_tokens: None,
+                    }),
+                },
+            ],
+            captured.clone(),
+        )) as Arc<dyn AiProvider>;
+        let bridge = AiProviderBridge::new(provider);
+
+        let mut agent = AgentLoop::new(
+            bridge,
+            registry,
+            PromptBuilder::new(),
+            SafetyGuard::default_guard(),
+            LoopConfig {
+                max_iterations: 10,
+                token_budget: 500_000,
+            },
+            CancellationToken::new(),
+        )
+        .with_stop_hooks(vec![
+            crate::agent_loop::stop_hooks::StopHook::new("pass_hook", "exit 0"),
+        ]);
+
+        let mut cb = NoopCallback;
+        let result = agent.run("full e2e test", &mut cb).await.unwrap();
+
+        // Verify full execution path
+        assert_eq!(result.iterations, 3, "should complete in 3 turns");
+        assert_eq!(result.tool_calls_made, 2, "2 tools should have been called");
+        assert!(!result.hit_limit);
+        assert!(!result.cancelled);
+        assert!(result.total_tokens > 0, "tokens should be tracked");
+
+        // Verify final text (intermediate texts stripped from beginning)
+        let final_text = result.final_text.as_deref().unwrap();
+        assert!(
+            final_text.contains("RESULT"),
+            "Final text should contain the answer"
+        );
+        assert!(
+            final_text.contains("<task-complete/>"),
+            "Final text should contain completion tag"
+        );
+
+        // Verify message history accumulation
+        let caps = captured.lock().unwrap_or_else(|e| e.into_inner());
+        assert_eq!(caps.len(), 3, "3 provider calls");
+
+        // Each subsequent call should have more messages
+        assert!(
+            caps[1].messages.len() > caps[0].messages.len(),
+            "2nd call should have more messages than 1st"
+        );
+        assert!(
+            caps[2].messages.len() > caps[1].messages.len(),
+            "3rd call should have more messages than 2nd"
+        );
+
+        // Chain context should be present
+        assert!(!result.chain_id.is_empty());
+        assert_eq!(result.depth, 0, "root agent should be depth 0");
     }
 }

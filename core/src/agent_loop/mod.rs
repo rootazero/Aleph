@@ -43,7 +43,6 @@ pub use retry::{
     RetryVerdict,
 };
 pub use truncation_recovery::{RecoveryAction, RecoveryPhase, TruncationRecovery};
-pub(crate) use loop_core::NoopCallback;
 pub use loop_core::{AgentLoop, LoopCallback, LoopConfig, LoopProvider, LoopRunResult};
 pub use prompt_builder::{PromptBuilder, PromptBudget, PromptResult, PromptSection, Stability, ToolInfo};
 pub use sections::SessionContext;

@@ -529,7 +529,7 @@ impl<P: LoopProvider> AgentLoop<P> {
 
     /// Run the agent loop with the given user input.
     pub async fn run(
-        &self,
+        &mut self,
         input: &str,
         callback: &mut dyn LoopCallback,
     ) -> anyhow::Result<LoopRunResult> {
@@ -538,7 +538,7 @@ impl<P: LoopProvider> AgentLoop<P> {
 
     /// Run the agent loop with conversation history prepended.
     pub async fn run_with_history(
-        &self,
+        &mut self,
         input: &str,
         history: Vec<UnifiedMessage>,
         callback: &mut dyn LoopCallback,
@@ -555,7 +555,7 @@ impl<P: LoopProvider> AgentLoop<P> {
     /// for multimodal content blocks). This method does not append any
     /// additional user message.
     pub async fn run_with_history_messages(
-        &self,
+        &mut self,
         messages: Vec<UnifiedMessage>,
         callback: &mut dyn LoopCallback,
     ) -> anyhow::Result<LoopRunResult> {
@@ -578,7 +578,35 @@ impl<P: LoopProvider> AgentLoop<P> {
                 parameters_schema: Some(td.parameters.clone()),
             })
             .collect();
-        let mut system_prompt = self.prompt_builder.build(&tool_infos, None, self.session_context.as_ref());
+        // Register tools and session guidance into prompt builder
+        self.prompt_builder.register(
+            crate::agent_loop::prompt_sections::tools::render(&tool_infos)
+        );
+        let tool_names: Vec<&str> = tool_infos.iter().map(|t| t.name.as_str()).collect();
+        self.prompt_builder.register(
+            crate::agent_loop::prompt_sections::session_guidance::render(&tool_names)
+        );
+        if let Some(ref ctx) = self.session_context {
+            let env = crate::context::EnvironmentInfo {
+                cwd: ctx.cwd.clone(),
+                is_git: ctx.git_branch.is_some(),
+                git_branch: ctx.git_branch.clone(),
+                os: ctx.os.clone(),
+                os_version: String::new(),
+                shell: ctx.shell.clone(),
+                date: chrono::Local::now().format("%Y-%m-%d").to_string(),
+                model_name: None,
+                knowledge_cutoff: None,
+            };
+            self.prompt_builder.register(
+                crate::agent_loop::prompt_sections::environment::render(&env)
+            );
+        }
+        let prompt_result = self.prompt_builder.build();
+        if !prompt_result.truncated_sections.is_empty() {
+            tracing::warn!(truncated = ?prompt_result.truncated_sections, "prompt budget enforcement removed sections");
+        }
+        let mut system_prompt = prompt_result.prompt;
 
         // Get tool definitions for the provider
         let mut tool_defs = self.tool_registry.read().unwrap_or_else(|e| e.into_inner()).tool_definitions();
@@ -967,7 +995,7 @@ impl<P: LoopProvider> AgentLoop<P> {
                         if let Some(reason) = hook_result.blocking_reason() {
                             stop_hook_blocks += 1;
                             callback.on_stop_hook_block(reason);
-                            messages.push(UnifiedMessage::user(&format!(
+                            messages.push(UnifiedMessage::user(format!(
                                 "[SYSTEM] Stop hook blocked exit: {reason}. Address the issue and try again."
                             )));
                             continue;
@@ -1023,7 +1051,7 @@ impl<P: LoopProvider> AgentLoop<P> {
                         if let Some(reason) = hook_result.blocking_reason() {
                             stop_hook_blocks += 1;
                             callback.on_stop_hook_block(reason);
-                            messages.push(UnifiedMessage::user(&format!(
+                            messages.push(UnifiedMessage::user(format!(
                                 "[SYSTEM] Stop hook blocked exit: {reason}. Address the issue and try again."
                             )));
                             continue;
@@ -1245,10 +1273,12 @@ impl<P: LoopProvider> AgentLoop<P> {
             if let Some(handle) = prefetch_handle {
                 match handle.await {
                     Ok(Some(new_skills)) => {
-                        self.prompt_builder.update_skill_info(&new_skills);
+                        self.prompt_builder.register(
+                            crate::agent_loop::prompt_sections::discovered_skills::render(&new_skills)
+                        );
                         // Rebuild system prompt so the next stream() call
                         // sees the newly discovered skills.
-                        system_prompt = self.prompt_builder.build(&tool_infos, None, self.session_context.as_ref());
+                        system_prompt = self.prompt_builder.build().prompt;
                         if let Some(ref prefetcher) = self.skill_prefetcher {
                             prefetcher.commit(new_skills);
                         }
@@ -1571,7 +1601,7 @@ mod tests {
             }),
         }]);
 
-        let agent = make_loop(provider);
+        let mut agent = make_loop(provider);
         let mut cb = TrackingCallback::default();
         let result = agent.run("Hi", &mut cb).await.unwrap();
 
@@ -1616,7 +1646,7 @@ mod tests {
             },
         ]);
 
-        let agent = make_loop(provider);
+        let mut agent = make_loop(provider);
         let mut cb = TrackingCallback::default();
         let result = agent.run("Echo something", &mut cb).await.unwrap();
 
@@ -1654,7 +1684,7 @@ mod tests {
             .collect();
 
         let provider = MockProvider::new(responses);
-        let agent = AgentLoop::new(
+        let mut agent = AgentLoop::new(
             provider,
             {
                 let mut r = LoopToolRegistry::new();
@@ -1701,7 +1731,7 @@ mod tests {
             },
         ]);
 
-        let agent = AgentLoop::new(
+        let mut agent = AgentLoop::new(
             provider,
             LoopToolRegistry::new(),
             PromptBuilder::new(),
@@ -1794,7 +1824,7 @@ mod tests {
 
         let mut registry = LoopToolRegistry::new();
         registry.register(Box::new(EchoTool));
-        let agent = AgentLoop::new(
+        let mut agent = AgentLoop::new(
             provider,
             registry,
             PromptBuilder::new(),
@@ -1864,7 +1894,7 @@ mod tests {
             },
         ]);
 
-        let agent = make_loop(provider);
+        let mut agent = make_loop(provider);
         let mut cb = TrackingCallback::default();
         let result = agent.run("parallel tools", &mut cb).await.unwrap();
 
@@ -1903,7 +1933,7 @@ mod tests {
         let mut registry = LoopToolRegistry::new();
         registry.register(Box::new(FailTool));
 
-        let agent = AgentLoop::new(
+        let mut agent = AgentLoop::new(
             provider,
             registry,
             PromptBuilder::new(),
@@ -1997,7 +2027,7 @@ mod tests {
         registry.register(Box::new(EchoTool));
         registry.register(Box::new(FailTool));
 
-        let agent = AgentLoop::new(
+        let mut agent = AgentLoop::new(
             provider,
             registry,
             PromptBuilder::new(),
@@ -2054,7 +2084,7 @@ mod tests {
 
         let mut registry = LoopToolRegistry::new();
         registry.register(Box::new(StopTool));
-        let agent = AgentLoop::new(
+        let mut agent = AgentLoop::new(
             provider,
             registry,
             PromptBuilder::new(),
@@ -2109,7 +2139,7 @@ mod tests {
             },
         ]);
 
-        let agent = make_loop(provider);
+        let mut agent = make_loop(provider);
         let mut cb = TrackingCallback::default();
         let result = agent.run("long question", &mut cb).await.unwrap();
 
@@ -2149,7 +2179,7 @@ mod tests {
             },
         ]);
 
-        let agent = make_loop(provider);
+        let mut agent = make_loop(provider);
         let mut cb = TrackingCallback::default();
         let result = agent.run("long question", &mut cb).await.unwrap();
 
@@ -2187,7 +2217,7 @@ mod tests {
             },
         ]);
 
-        let agent = make_loop(provider);
+        let mut agent = make_loop(provider);
         let mut cb = TrackingCallback::default();
         let result = agent.run("long question", &mut cb).await.unwrap();
 
@@ -2218,7 +2248,7 @@ mod tests {
 
         let mut registry = LoopToolRegistry::new();
         registry.register(Box::new(EchoTool));
-        let agent = AgentLoop::new(
+        let mut agent = AgentLoop::new(
             provider,
             registry,
             PromptBuilder::new(),
@@ -2324,7 +2354,7 @@ mod tests {
             },
         ]);
 
-        let agent = AgentLoop::new(
+        let mut agent = AgentLoop::new(
             provider,
             {
                 let mut r = LoopToolRegistry::new();
@@ -2383,7 +2413,7 @@ mod tests {
 
         let mut registry = LoopToolRegistry::new();
         registry.register(Box::new(EchoTool));
-        let agent = AgentLoop::new(
+        let mut agent = AgentLoop::new(
             provider,
             registry,
             PromptBuilder::new(),
@@ -2468,7 +2498,7 @@ mod tests {
 
         let mut registry = LoopToolRegistry::new();
         registry.register(Box::new(EchoTool));
-        let agent = AgentLoop::new(
+        let mut agent = AgentLoop::new(
             provider,
             registry,
             PromptBuilder::new(),
@@ -2565,7 +2595,7 @@ mod tests {
 
         let mut registry = LoopToolRegistry::new();
         registry.register(Box::new(EchoTool));
-        let agent = AgentLoop::new(
+        let mut agent = AgentLoop::new(
             provider,
             registry,
             PromptBuilder::new(),
@@ -2619,7 +2649,7 @@ mod tests {
         let mut registry = LoopToolRegistry::new();
         registry.register(Box::new(RetryableFailTool));
 
-        let agent = AgentLoop::new(
+        let mut agent = AgentLoop::new(
             provider,
             registry,
             PromptBuilder::new(),
@@ -2679,7 +2709,7 @@ mod tests {
 
         let mut registry = LoopToolRegistry::new();
         registry.register(Box::new(EchoTool));
-        let agent = AgentLoop::new(
+        let mut agent = AgentLoop::new(
             provider,
             registry,
             PromptBuilder::new(),
@@ -2752,7 +2782,7 @@ mod tests {
             },
         ]);
 
-        let agent = make_loop(provider);
+        let mut agent = make_loop(provider);
         let mut cb = TrackingCallback::default();
         let result = agent.run("find something", &mut cb).await.unwrap();
 
@@ -2812,7 +2842,7 @@ mod tests {
             },
         ]);
 
-        let agent = make_loop(provider);
+        let mut agent = make_loop(provider);
         let mut cb = TrackingCallback::default();
         let result = agent.run("analyze stocks", &mut cb).await.unwrap();
 
@@ -2844,7 +2874,7 @@ mod tests {
             usage: None,
         }]);
 
-        let agent = make_loop(provider);
+        let mut agent = make_loop(provider);
         let mut cb = TrackingCallback::default();
         let result = agent
             .run("What is the meaning of life?", &mut cb)
@@ -2886,7 +2916,7 @@ mod tests {
             },
         ]);
 
-        let agent = make_loop(provider);
+        let mut agent = make_loop(provider);
         let mut cb = TrackingCallback::default();
         let result = agent.run("complex task", &mut cb).await.unwrap();
 
@@ -2945,7 +2975,7 @@ mod tests {
             },
         ]);
 
-        let agent = make_loop(provider);
+        let mut agent = make_loop(provider);
         let mut cb = TrackingCallback::default();
         let result = agent.run("tricky task", &mut cb).await.unwrap();
 
@@ -3128,7 +3158,7 @@ mod tests {
         let provider = Ptl413ThenOk {
             call_count: AtomicUsize::new(0),
         };
-        let agent = AgentLoop::new(
+        let mut agent = AgentLoop::new(
             provider,
             LoopToolRegistry::new(),
             PromptBuilder::new(),
@@ -3188,7 +3218,7 @@ mod tests {
             }
         }
 
-        let agent = AgentLoop::new(
+        let mut agent = AgentLoop::new(
             OverloadedProvider,
             LoopToolRegistry::new(),
             PromptBuilder::new(),
@@ -3222,7 +3252,7 @@ mod tests {
             }
         }
 
-        let agent = AgentLoop::new(
+        let mut agent = AgentLoop::new(
             OverloadedProvider,
             LoopToolRegistry::new(),
             PromptBuilder::new(),
