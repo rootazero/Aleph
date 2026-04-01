@@ -336,18 +336,24 @@ impl HookExecutor {
         })
     }
 
-    /// Execute interceptor hooks for an event
+    /// Execute interceptor hooks for an event.
     ///
     /// Interceptors run sequentially in priority order and can:
     /// - Block execution (short-circuit)
-    /// - Modify the context for downstream processing
+    /// - Modify tool input via `update_input:`
+    /// - Inject additional contexts and messages
     ///
-    /// Returns the (possibly modified) context and an optional block reason.
+    /// Returns the (possibly modified) context and a `HookResult` that
+    /// accumulates outputs from all non-blocking interceptors. If any
+    /// interceptor blocks, the result's `blocked` field is `true` and
+    /// execution short-circuits.
     pub async fn execute_interceptors(
         &self,
         event: HookEvent,
         context: HookContext,
-    ) -> Result<(HookContext, Option<String>), ExtensionError> {
+    ) -> Result<(HookContext, super::HookResult), ExtensionError> {
+        let mut accumulated = super::HookResult::default();
+
         // Filter hooks by event and kind == Interceptor
         let mut interceptors: Vec<_> = self
             .hooks
@@ -370,6 +376,7 @@ impl HookExecutor {
                 "Executing interceptor hook from plugin '{}' for event {:?}",
                 hook.plugin_name, event
             );
+            accumulated.hooks_executed += 1;
 
             // Execute all actions for this hook
             for action in &hook.actions {
@@ -381,27 +388,27 @@ impl HookExecutor {
                     Ok(ar) => {
                         if let HookAction::Command { .. } = action {
                             if let Some(ref output) = ar.output {
-                                let mut probe = super::HookResult::default();
-                                super::parse_command_output(output, &mut probe);
-                                if probe.blocked {
-                                    return Ok((current_context, probe.block_reason));
+                                super::parse_command_output(output, &mut accumulated);
+                                if accumulated.blocked {
+                                    return Ok((current_context, accumulated));
                                 }
                             }
                         }
+                        accumulated.action_results.push(ar);
                     }
                     Err(e) => {
                         warn!("Interceptor hook action failed: {}", e);
                         // Interceptor failures block by default for safety
-                        return Ok((
-                            current_context,
-                            Some(format!("Interceptor hook failed: {}", e)),
-                        ));
+                        accumulated.blocked = true;
+                        accumulated.block_reason =
+                            Some(format!("Interceptor hook failed: {}", e));
+                        return Ok((current_context, accumulated));
                     }
                 }
             }
         }
 
-        Ok((current_context, None))
+        Ok((current_context, accumulated))
     }
 
     /// Execute observer hooks for an event

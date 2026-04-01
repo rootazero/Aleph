@@ -113,56 +113,40 @@ impl ToolPipeline {
         // -----------------------------------------------------------------
         let effective_args = if self.has_hooks() {
             // Run interceptors — they can block or modify arguments.
-            let (ctx_after, block_reason) = match self
+            let (ctx_after, interceptor_result) = match self
                 .hooks
                 .execute_interceptors(HookEvent::BeforeToolCall, base_ctx.clone())
                 .await
             {
                 Ok(pair) => pair,
                 Err(e) => {
-                    // Interceptor infrastructure failure — treat as block.
                     let msg = format!("[HOOK_BLOCKED] Interceptor error: {}", e);
                     return self.blocked_outcome(id, name, msg);
                 }
             };
 
-            if let Some(reason) = block_reason {
+            if interceptor_result.blocked {
+                let reason = interceptor_result.block_reason.unwrap_or_default();
                 let msg = format!("[HOOK_BLOCKED] {}", reason);
                 return self.blocked_outcome(id, name, msg);
             }
 
-            // Run observer pre-hooks to collect messages and contexts.
-            let pre_result = match self
-                .hooks
-                .execute(HookEvent::BeforeToolCall, &ctx_after)
-                .await
-            {
-                Ok(r) => r,
-                Err(e) => {
-                    tracing::warn!(tool = name, error = %e, "Pre-hook execute failed");
-                    // Non-fatal — continue with original arguments.
-                    return self.run_from_safety(
-                        id,
-                        name,
-                        arguments,
-                        registry,
-                        cancel,
-                        additional_contexts,
-                        hook_messages,
-                        prevent_continuation,
-                    )
-                    .await;
-                }
-            };
-
-            hook_messages.extend(pre_result.messages);
-            additional_contexts.extend(pre_result.additional_contexts);
-            if pre_result.prevent_continuation {
+            // Collect interceptor outputs (messages, contexts, prevent_continuation).
+            hook_messages.extend(interceptor_result.messages);
+            additional_contexts.extend(interceptor_result.additional_contexts);
+            if interceptor_result.prevent_continuation {
                 prevent_continuation = true;
             }
 
-            // Use hook-modified arguments if provided, otherwise originals.
-            pre_result.updated_input.unwrap_or_else(|| arguments.clone())
+            // Run observer-only pre-hooks (fire-and-forget, no duplicate interceptors).
+            self.hooks
+                .execute_observers(HookEvent::BeforeToolCall, &ctx_after)
+                .await;
+
+            // Use interceptor-modified arguments if provided, otherwise originals.
+            interceptor_result
+                .updated_input
+                .unwrap_or_else(|| arguments.clone())
         } else {
             arguments.clone()
         };
@@ -219,8 +203,10 @@ impl ToolPipeline {
         // Stages 5 & 6: Post-hooks
         // -----------------------------------------------------------------
         if self.has_hooks() {
-            let post_ctx = base_ctx
-                .clone()
+            // Build post context from effective_args (not base_ctx) so post-hooks
+            // see the actual arguments the tool was invoked with.
+            let post_ctx = self
+                .build_context(name, &effective_args)
                 .with_tool_output(&outcome.output_text)
                 .with_tool_error(outcome.is_error);
 
@@ -645,7 +631,7 @@ mod tests {
         let hooks = vec![
             HookConfig {
                 event: HookEvent::BeforeToolCall,
-                kind: HookKind::Observer,
+                kind: HookKind::Interceptor,
                 priority: HookPriority::default(),
                 matcher: Some("echo".to_string()),
                 actions: vec![HookAction::Command {
@@ -702,7 +688,7 @@ mod tests {
     async fn pipeline_update_input_modifies_arguments() {
         let hooks = vec![HookConfig {
             event: HookEvent::BeforeToolCall,
-            kind: HookKind::Observer,
+            kind: HookKind::Interceptor,
             priority: HookPriority::default(),
             matcher: None,
             actions: vec![HookAction::Command {

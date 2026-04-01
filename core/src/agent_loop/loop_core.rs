@@ -534,6 +534,19 @@ impl<P: LoopProvider> AgentLoop<P> {
         self
     }
 
+    /// Replace the default (empty) hook executor with one loaded from the extension system.
+    ///
+    /// This rebuilds the internal `ToolPipeline` so that `has_hooks()` returns `true`
+    /// and all pre/post/failure/session hooks actually fire at runtime.
+    pub fn with_hook_executor(mut self, hooks: Arc<HookExecutor>) -> Self {
+        self.tool_pipeline = Arc::new(ToolPipeline::new(
+            hooks,
+            Arc::clone(&self.safety_guard),
+            "", // session_id set at run time via chain_id
+        ));
+        self
+    }
+
     /// Get tool definitions from the registry (for inspection/testing).
     pub fn tool_definitions(&self) -> Vec<ToolDefinition> {
         self.tool_registry.read().unwrap_or_else(|e| e.into_inner()).tool_definitions()
