@@ -3,12 +3,15 @@
 //! Concurrent-safe tools run in parallel via `futures::future::join_all`;
 //! exclusive tools run one at a time. Original order is always preserved.
 
-use serde_json::Value;
+use std::sync::Arc;
+
 use tokio_util::sync::CancellationToken;
 
-use crate::agent_loop::{LoopCallback, LoopToolRegistry, SafetyError, SafetyGuard, ToolResult};
+use crate::agent_loop::tool::LoopToolRegistry;
+use crate::agent_loop::tool_pipeline::{PipelineOutcome, ToolPipeline};
+use crate::agent_loop::{LoopCallback, SafetyToolCall, ToolResult};
 use crate::providers::adapter::NativeToolCall;
-use crate::tool_output::compressor::compress_tool_output;
+use serde_json::Value;
 
 // =============================================================================
 // ToolOutcome
@@ -68,110 +71,6 @@ fn partition_tool_calls(tool_calls: &[NativeToolCall], registry: &LoopToolRegist
 }
 
 // =============================================================================
-// execute_one
-// =============================================================================
-
-/// Execute a single tool call with safety check and cancellation support.
-async fn execute_one(
-    tc: &NativeToolCall,
-    registry: &LoopToolRegistry,
-    safety: &SafetyGuard,
-    cancel: &CancellationToken,
-) -> ToolOutcome {
-    // Safety check first.
-    let safety_call = crate::agent_loop::SafetyToolCall {
-        name: tc.name.clone(),
-        input: tc.arguments.clone(),
-    };
-    if let Err(e) = safety.check(&safety_call) {
-        let msg = match &e {
-            SafetyError::Blocked { tool, pattern } => {
-                format!(
-                    "[BLOCKED] Tool '{}' blocked by safety pattern '{}'",
-                    tool, pattern
-                )
-            }
-            SafetyError::NeedsConfirmation { tool } => {
-                format!(
-                    "[NEEDS_CONFIRMATION] Tool '{}' requires user confirmation",
-                    tool
-                )
-            }
-            SafetyError::PolicyDenied { tool } => {
-                format!("[DENIED] Tool '{}' denied by policy", tool)
-            }
-        };
-        return ToolOutcome {
-            tool_id: tc.id.clone(),
-            tool_name: tc.name.clone(),
-            output_text: msg,
-            is_error: true,
-            should_stop: false,
-            retryable: false,
-        };
-    }
-
-    // Execute with cancellation.
-    let result = tokio::select! {
-        r = registry.execute(&tc.name, tc.arguments.clone()) => r,
-        _ = cancel.cancelled() => {
-            return ToolOutcome {
-                tool_id: tc.id.clone(),
-                tool_name: tc.name.clone(),
-                output_text: "[CANCELLED] Tool execution was cancelled".to_string(),
-                is_error: true,
-                should_stop: false,
-                retryable: false,
-            };
-        }
-    };
-
-    // Map ToolResult to ToolOutcome.
-    match result {
-        ToolResult::Success { output } => {
-            let raw = value_to_text(&output);
-            let compressed = compress_tool_output(&tc.name, &raw);
-            ToolOutcome {
-                tool_id: tc.id.clone(),
-                tool_name: tc.name.clone(),
-                output_text: compressed,
-                is_error: false,
-                should_stop: false,
-                retryable: false,
-            }
-        }
-        ToolResult::Error { error, retryable } => ToolOutcome {
-            tool_id: tc.id.clone(),
-            tool_name: tc.name.clone(),
-            output_text: error,
-            is_error: true,
-            should_stop: false,
-            retryable,
-        },
-        ToolResult::SuccessAndStopLoop { output } => {
-            let raw = value_to_text(&output);
-            let compressed = compress_tool_output(&tc.name, &raw);
-            ToolOutcome {
-                tool_id: tc.id.clone(),
-                tool_name: tc.name.clone(),
-                output_text: compressed,
-                is_error: false,
-                should_stop: true,
-                retryable: false,
-            }
-        }
-    }
-}
-
-/// Convert a JSON Value to a display string.
-fn value_to_text(v: &Value) -> String {
-    match v {
-        Value::String(s) => s.clone(),
-        other => other.to_string(),
-    }
-}
-
-// =============================================================================
 // execute_tool_batch (public)
 // =============================================================================
 
@@ -183,13 +82,13 @@ fn value_to_text(v: &Value) -> String {
 /// - Results are returned in the same order as the input `tool_calls`.
 pub async fn execute_tool_batch(
     tool_calls: &[NativeToolCall],
-    registry: &LoopToolRegistry,
-    safety: &SafetyGuard,
+    registry: &Arc<LoopToolRegistry>,
+    pipeline: &ToolPipeline,
     cancel: &CancellationToken,
     callback: &mut dyn LoopCallback,
-) -> Vec<ToolOutcome> {
+) -> Vec<PipelineOutcome> {
     let batches = partition_tool_calls(tool_calls, registry);
-    let mut results: Vec<(usize, ToolOutcome)> = Vec::with_capacity(tool_calls.len());
+    let mut results: Vec<(usize, PipelineOutcome)> = Vec::with_capacity(tool_calls.len());
 
     for batch in &batches {
         // Early exit on cancellation between batches.
@@ -204,17 +103,19 @@ pub async fn execute_tool_batch(
                 let mut safe_indices: Vec<usize> = Vec::new();
                 for &idx in indices {
                     let tc = &tool_calls[idx];
-                    let safety_call = crate::agent_loop::SafetyToolCall {
+                    let safety_call = SafetyToolCall {
                         name: tc.name.clone(),
                         input: tc.arguments.clone(),
                     };
-                    if safety.check(&safety_call).is_ok() {
+                    if pipeline.safety().check(&safety_call).is_ok() {
                         callback.on_tool_start(&tc.name, &tc.arguments);
                         safe_indices.push(idx);
                     } else {
                         // Safety-blocked: produce outcome directly, skip execution.
-                        let outcome = execute_one(tc, registry, safety, cancel).await;
-                        results.push((idx, outcome));
+                        let po = pipeline
+                            .execute(&tc.id, &tc.name, &tc.arguments, registry, cancel)
+                            .await;
+                        results.push((idx, po));
                     }
                 }
 
@@ -224,17 +125,17 @@ pub async fn execute_tool_batch(
                         .iter()
                         .map(|&idx| {
                             let tc = &tool_calls[idx];
-                            execute_one(tc, registry, safety, cancel)
+                            pipeline.execute(&tc.id, &tc.name, &tc.arguments, registry, cancel)
                         })
                         .collect();
 
                     let outcomes = futures::future::join_all(futures).await;
 
-                    for (i, outcome) in outcomes.into_iter().enumerate() {
+                    for (i, po) in outcomes.into_iter().enumerate() {
                         let idx = safe_indices[i];
-                        let tool_result = outcome_to_tool_result(&outcome);
+                        let tool_result = outcome_to_tool_result(&po.outcome);
                         callback.on_tool_done(&tool_calls[idx].name, &tool_result);
-                        results.push((idx, outcome));
+                        results.push((idx, po));
                     }
                 }
             }
@@ -243,29 +144,31 @@ pub async fn execute_tool_batch(
                 let tc = &tool_calls[idx];
 
                 // Pre-check safety to fire on_tool_start before execution.
-                let safety_call = crate::agent_loop::SafetyToolCall {
+                let safety_call = SafetyToolCall {
                     name: tc.name.clone(),
                     input: tc.arguments.clone(),
                 };
-                let is_safe = safety.check(&safety_call).is_ok();
+                let is_safe = pipeline.safety().check(&safety_call).is_ok();
                 if is_safe {
                     callback.on_tool_start(&tc.name, &tc.arguments);
                 }
 
-                let outcome = execute_one(tc, registry, safety, cancel).await;
+                let po = pipeline
+                    .execute(&tc.id, &tc.name, &tc.arguments, registry, cancel)
+                    .await;
 
                 if is_safe {
-                    let tool_result = outcome_to_tool_result(&outcome);
+                    let tool_result = outcome_to_tool_result(&po.outcome);
                     callback.on_tool_done(&tc.name, &tool_result);
                 }
-                results.push((idx, outcome));
+                results.push((idx, po));
             }
         }
     }
 
     // Sort by original index to preserve input order.
     results.sort_by_key(|(idx, _)| *idx);
-    results.into_iter().map(|(_, outcome)| outcome).collect()
+    results.into_iter().map(|(_, po)| po).collect()
 }
 
 /// Convert a ToolOutcome back to a ToolResult for the callback.
@@ -300,13 +203,18 @@ mod tests {
     use std::sync::Arc;
     use std::time::{Duration, Instant};
 
-    use crate::agent_loop::tool::{LoopTool, LoopToolRegistry};
     use crate::agent_loop::loop_core::NoopCallback;
+    use crate::agent_loop::tool::{LoopTool, LoopToolRegistry};
+    use crate::agent_loop::safety::SafetyGuard;
+    use crate::extension::hooks::HookExecutor;
     use crate::extension::PermissionAction;
 
-    /// A permissive safety guard for tests — allows everything.
-    fn permissive_guard() -> SafetyGuard {
-        SafetyGuard::new(vec![], HashMap::new(), PermissionAction::Allow)
+    fn permissive_pipeline() -> ToolPipeline {
+        ToolPipeline::new(
+            Arc::new(HookExecutor::empty()),
+            Arc::new(SafetyGuard::new(vec![], HashMap::new(), PermissionAction::Allow)),
+            "test-session",
+        )
     }
 
     /// A concurrent-safe tool that sleeps for a given duration, tracking peak concurrency.
@@ -493,6 +401,7 @@ mod tests {
 
         let mut registry = LoopToolRegistry::new();
         registry.register(Box::new(SlowReadTool::new(active.clone(), peak.clone())));
+        let registry = Arc::new(registry);
 
         let calls = vec![
             make_tc_with_args("1", "slow_read", json!({ "ms": 100 })),
@@ -500,17 +409,17 @@ mod tests {
             make_tc_with_args("3", "slow_read", json!({ "ms": 100 })),
         ];
 
-        let safety = permissive_guard();
+        let pipeline = permissive_pipeline();
         let cancel = CancellationToken::new();
         let mut callback = NoopCallback;
 
         let start = Instant::now();
-        let outcomes = execute_tool_batch(&calls, &registry, &safety, &cancel, &mut callback).await;
+        let outcomes = execute_tool_batch(&calls, &registry, &pipeline, &cancel, &mut callback).await;
         let elapsed = start.elapsed();
 
         assert_eq!(outcomes.len(), 3);
         for o in &outcomes {
-            assert!(!o.is_error);
+            assert!(!o.outcome.is_error);
         }
 
         // 3 tools each sleeping 100ms — if parallel, total < 200ms.
@@ -537,6 +446,7 @@ mod tests {
         registry.register(Box::new(SlowReadTool::new(active, peak)));
         registry.register(Box::new(WriteTool));
         registry.register(Box::new(ReadTool));
+        let registry = Arc::new(registry);
 
         // Mixed: [slow_read, write, read, slow_read]
         let calls = vec![
@@ -546,26 +456,26 @@ mod tests {
             make_tc_with_args("d", "slow_read", json!({ "ms": 50 })),
         ];
 
-        let safety = permissive_guard();
+        let pipeline = permissive_pipeline();
         let cancel = CancellationToken::new();
         let mut callback = NoopCallback;
 
-        let outcomes = execute_tool_batch(&calls, &registry, &safety, &cancel, &mut callback).await;
+        let outcomes = execute_tool_batch(&calls, &registry, &pipeline, &cancel, &mut callback).await;
 
         // Verify order matches input.
         assert_eq!(outcomes.len(), 4);
-        assert_eq!(outcomes[0].tool_id, "a");
-        assert_eq!(outcomes[0].tool_name, "slow_read");
-        assert_eq!(outcomes[1].tool_id, "b");
-        assert_eq!(outcomes[1].tool_name, "write");
-        assert_eq!(outcomes[2].tool_id, "c");
-        assert_eq!(outcomes[2].tool_name, "read");
-        assert_eq!(outcomes[3].tool_id, "d");
-        assert_eq!(outcomes[3].tool_name, "slow_read");
+        assert_eq!(outcomes[0].outcome.tool_id, "a");
+        assert_eq!(outcomes[0].outcome.tool_name, "slow_read");
+        assert_eq!(outcomes[1].outcome.tool_id, "b");
+        assert_eq!(outcomes[1].outcome.tool_name, "write");
+        assert_eq!(outcomes[2].outcome.tool_id, "c");
+        assert_eq!(outcomes[2].outcome.tool_name, "read");
+        assert_eq!(outcomes[3].outcome.tool_id, "d");
+        assert_eq!(outcomes[3].outcome.tool_name, "slow_read");
 
         // All should succeed.
         for o in &outcomes {
-            assert!(!o.is_error, "tool {} should not be an error", o.tool_name);
+            assert!(!o.outcome.is_error, "tool {} should not be an error", o.outcome.tool_name);
         }
     }
 
@@ -576,6 +486,7 @@ mod tests {
 
         let mut registry = LoopToolRegistry::new();
         registry.register(Box::new(SlowReadTool::new(active, peak)));
+        let registry = Arc::new(registry);
 
         // Two batches: first sleeps 200ms, second sleeps 200ms.
         // Cancel after 50ms — first batch should get cancelled, second should not start.
@@ -584,7 +495,7 @@ mod tests {
             make_tc_with_args("2", "slow_read", json!({ "ms": 200 })),
         ];
 
-        let safety = permissive_guard();
+        let pipeline = permissive_pipeline();
         let cancel = CancellationToken::new();
         let mut callback = NoopCallback;
 
@@ -594,19 +505,19 @@ mod tests {
             cancel_clone.cancel();
         });
 
-        let outcomes = execute_tool_batch(&calls, &registry, &safety, &cancel, &mut callback).await;
+        let outcomes = execute_tool_batch(&calls, &registry, &pipeline, &cancel, &mut callback).await;
 
         // Should have outcomes (the first batch starts before cancel fires).
         // At least one outcome should be cancelled.
         let cancelled_count = outcomes
             .iter()
-            .filter(|o| o.output_text.contains("CANCELLED"))
+            .filter(|o| o.outcome.output_text.contains("CANCELLED"))
             .count();
 
         assert!(
             cancelled_count > 0,
             "Expected at least one cancelled outcome, got none. Outcomes: {:?}",
-            outcomes.iter().map(|o| &o.output_text).collect::<Vec<_>>()
+            outcomes.iter().map(|o| &o.outcome.output_text).collect::<Vec<_>>()
         );
     }
 }
