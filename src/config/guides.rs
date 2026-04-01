@@ -6,28 +6,28 @@ use std::path::Path;
 const GUIDES: &[(&str, &str)] = &[
     (
         "overview.md",
-        include_str!("../../../docs/guides/overview.md"),
+        include_str!("../../docs/guides/overview.md"),
     ),
     (
         "providers.md",
-        include_str!("../../../docs/guides/providers.md"),
+        include_str!("../../docs/guides/providers.md"),
     ),
-    ("mcp.md", include_str!("../../../docs/guides/mcp.md")),
-    ("skills.md", include_str!("../../../docs/guides/skills.md")),
-    ("agents.md", include_str!("../../../docs/guides/agents.md")),
+    ("mcp.md", include_str!("../../docs/guides/mcp.md")),
+    ("skills.md", include_str!("../../docs/guides/skills.md")),
+    ("agents.md", include_str!("../../docs/guides/agents.md")),
     (
         "general.md",
-        include_str!("../../../docs/guides/general.md"),
+        include_str!("../../docs/guides/general.md"),
     ),
     (
         "generation.md",
-        include_str!("../../../docs/guides/generation.md"),
+        include_str!("../../docs/guides/generation.md"),
     ),
     (
         "channels.md",
-        include_str!("../../../docs/guides/channels.md"),
+        include_str!("../../docs/guides/channels.md"),
     ),
-    ("cron.md", include_str!("../../../docs/guides/cron.md")),
+    ("cron.md", include_str!("../../docs/guides/cron.md")),
 ];
 
 /// Deploy guide files to `{aleph_dir}/guides/`.

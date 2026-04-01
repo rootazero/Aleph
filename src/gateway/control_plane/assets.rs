@@ -5,7 +5,7 @@
 use rust_embed::RustEmbed;
 
 #[derive(RustEmbed)]
-#[folder = "../interfaces/webchat/dist/"]
+#[folder = "interfaces/webchat/dist/"]
 pub struct ControlPlaneAssets;
 
 impl ControlPlaneAssets {
