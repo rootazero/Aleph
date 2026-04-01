@@ -76,87 +76,62 @@ impl AgentRegistry {
 pub fn builtin_agents() -> Vec<AgentDef> {
     vec![
         // Main agent - full access
-        AgentDef::new("main", AgentMode::Primary, include_str!("prompts/main.md")),
+        AgentDef::new("main", AgentMode::Primary),
         // Explore agent - read-only tools
-        AgentDef::new(
-            "explore",
-            AgentMode::SubAgent,
-            include_str!("prompts/explore.md"),
-        )
-        .with_allowed_tools(vec![
-            "glob".into(),
-            "grep".into(),
-            "read_file".into(),
-            "web_fetch".into(),
-            "search".into(),
-        ])
-        .with_denied_tools(vec!["write_file".into(), "edit_file".into(), "bash".into()])
-        .with_max_iterations(20),
+        AgentDef::new("explore", AgentMode::SubAgent)
+            .with_prompt_sections(vec!["explore_constraints".into()])
+            .with_allowed_tools(vec![
+                "glob".into(),
+                "grep".into(),
+                "read_file".into(),
+                "web_fetch".into(),
+                "search".into(),
+            ])
+            .with_denied_tools(vec!["write_file".into(), "edit_file".into(), "bash".into()])
+            .with_max_iterations(20),
         // Coder agent - file operations
-        AgentDef::new(
-            "coder",
-            AgentMode::SubAgent,
-            include_str!("prompts/coder.md"),
-        )
-        .with_allowed_tools(vec![
-            "read_file".into(),
-            "write_file".into(),
-            "edit_file".into(),
-            "glob".into(),
-            "grep".into(),
-        ])
-        .with_max_iterations(30)
-        .with_context_mode(ContextMode::Summary),
+        AgentDef::new("coder", AgentMode::SubAgent)
+            .with_prompt_sections(vec!["coder_guidelines".into()])
+            .with_allowed_tools(vec![
+                "read_file".into(),
+                "write_file".into(),
+                "edit_file".into(),
+                "glob".into(),
+                "grep".into(),
+                "bash".into(),
+            ])
+            .with_max_iterations(30),
         // Researcher agent - search and web
-        AgentDef::new(
-            "researcher",
-            AgentMode::SubAgent,
-            include_str!("prompts/researcher.md"),
-        )
-        .with_allowed_tools(vec![
-            "search".into(),
-            "web_fetch".into(),
-            "read_file".into(),
-        ])
-        .with_denied_tools(vec!["write_file".into(), "edit_file".into(), "bash".into()])
-        .with_max_iterations(15),
+        AgentDef::new("researcher", AgentMode::SubAgent)
+            .with_prompt_sections(vec!["researcher_protocol".into()])
+            .with_allowed_tools(vec![
+                "search".into(),
+                "web_fetch".into(),
+                "read_file".into(),
+            ])
+            .with_denied_tools(vec!["write_file".into(), "edit_file".into(), "bash".into()])
+            .with_max_iterations(15),
         // Default agent - general-purpose sub-agent
-        AgentDef::new(
-            "default",
-            AgentMode::SubAgent,
-            include_str!("prompts/default.md"),
-        )
-        .with_context_mode(ContextMode::Summary),
+        AgentDef::new("default", AgentMode::SubAgent)
+            .with_context_mode(ContextMode::Summary),
         // Plan agent - read-only planner
-        AgentDef::new(
-            "plan",
-            AgentMode::SubAgent,
-            include_str!("prompts/plan.md"),
-        )
-        .with_allowed_tools(vec![
-            "glob".into(),
-            "grep".into(),
-            "read_file".into(),
-            "bash".into(),
-        ])
-        .with_denied_tools(vec!["write_file".into(), "edit_file".into()])
-        .with_max_iterations(20)
-        .with_context_mode(ContextMode::Summary),
+        AgentDef::new("plan", AgentMode::SubAgent)
+            .with_prompt_sections(vec!["plan_protocol".into()])
+            .with_allowed_tools(vec![
+                "glob".into(),
+                "grep".into(),
+                "read_file".into(),
+                "bash".into(),
+            ])
+            .with_denied_tools(vec!["write_file".into(), "edit_file".into()])
+            .with_max_iterations(20)
+            .with_context_mode(ContextMode::Summary),
         // Verify agent - adversarial verifier
-        AgentDef::new(
-            "verify",
-            AgentMode::SubAgent,
-            include_str!("prompts/verify.md"),
-        )
-        .with_allowed_tools(vec![
-            "glob".into(),
-            "grep".into(),
-            "read_file".into(),
-            "bash".into(),
-        ])
-        .with_denied_tools(vec!["write_file".into(), "edit_file".into()])
-        .with_max_iterations(25)
-        .with_context_mode(ContextMode::Summary),
+        AgentDef::new("verify", AgentMode::SubAgent)
+            .with_prompt_sections(vec!["verify_protocol".into()])
+            .with_allowed_tools(vec!["*".into()])
+            .with_max_iterations(25)
+            .with_context_mode(ContextMode::Summary),
     ]
 }
 
@@ -173,13 +148,12 @@ mod tests {
     #[test]
     fn test_registry_register_and_get() {
         let registry = AgentRegistry::new();
-        let agent = AgentDef::new("test", AgentMode::SubAgent, "Test prompt");
+        let agent = AgentDef::new("test", AgentMode::SubAgent);
 
         registry.register(agent);
 
         let retrieved = registry.get("test").unwrap();
         assert_eq!(retrieved.id, "test");
-        assert_eq!(retrieved.system_prompt, "Test prompt");
     }
 
     #[test]
@@ -191,8 +165,8 @@ mod tests {
     #[test]
     fn test_registry_list_ids() {
         let registry = AgentRegistry::new();
-        registry.register(AgentDef::new("a", AgentMode::SubAgent, ""));
-        registry.register(AgentDef::new("b", AgentMode::SubAgent, ""));
+        registry.register(AgentDef::new("a", AgentMode::SubAgent));
+        registry.register(AgentDef::new("b", AgentMode::SubAgent));
 
         let ids = registry.list_ids();
         assert_eq!(ids.len(), 2);
@@ -203,9 +177,9 @@ mod tests {
     #[test]
     fn test_registry_list_subagents() {
         let registry = AgentRegistry::new();
-        registry.register(AgentDef::new("main", AgentMode::Primary, ""));
-        registry.register(AgentDef::new("explore", AgentMode::SubAgent, ""));
-        registry.register(AgentDef::new("coder", AgentMode::SubAgent, ""));
+        registry.register(AgentDef::new("main", AgentMode::Primary));
+        registry.register(AgentDef::new("explore", AgentMode::SubAgent));
+        registry.register(AgentDef::new("coder", AgentMode::SubAgent));
 
         let subagents = registry.list_subagents();
         assert_eq!(subagents.len(), 2);
@@ -215,7 +189,7 @@ mod tests {
     #[test]
     fn test_registry_unregister() {
         let registry = AgentRegistry::new();
-        registry.register(AgentDef::new("test", AgentMode::SubAgent, ""));
+        registry.register(AgentDef::new("test", AgentMode::SubAgent));
 
         let removed = registry.unregister("test");
         assert!(removed.is_some());
@@ -235,7 +209,7 @@ mod tests {
     #[test]
     fn test_builtin_agents_count() {
         let agents = builtin_agents();
-        assert_eq!(agents.len(), 7);
+        assert_eq!(agents.len(), 5);
     }
 
     #[test]
@@ -258,6 +232,7 @@ mod tests {
 
         assert!(coder.is_tool_allowed("write_file"));
         assert!(coder.is_tool_allowed("edit_file"));
+        assert!(coder.is_tool_allowed("bash"));
         assert_eq!(coder.max_iterations, Some(30));
     }
 
@@ -273,37 +248,30 @@ mod tests {
     }
 
     #[test]
-    fn test_default_agent_config() {
-        let registry = AgentRegistry::with_builtins();
-        let default = registry.get("default").unwrap();
-        assert_eq!(default.mode, AgentMode::SubAgent);
-        assert_eq!(default.context_mode, ContextMode::Summary);
-        assert!(default.is_tool_allowed("glob")); // wildcard
-        assert!(default.is_tool_allowed("bash")); // wildcard
-    }
-
-    #[test]
-    fn test_plan_agent_config() {
-        let registry = AgentRegistry::with_builtins();
-        let plan = registry.get("plan").unwrap();
-        assert_eq!(plan.mode, AgentMode::SubAgent);
-        assert!(plan.is_tool_allowed("glob"));
-        assert!(plan.is_tool_allowed("grep"));
-        assert!(plan.is_tool_allowed("read_file"));
-        assert!(plan.is_tool_allowed("bash"));
-        assert!(!plan.is_tool_allowed("write_file"));
-        assert!(!plan.is_tool_allowed("edit_file"));
-        assert_eq!(plan.context_mode, ContextMode::Summary);
-    }
-
-    #[test]
     fn test_verify_agent_config() {
         let registry = AgentRegistry::with_builtins();
         let verify = registry.get("verify").unwrap();
         assert_eq!(verify.mode, AgentMode::SubAgent);
         assert!(verify.is_tool_allowed("glob"));
         assert!(verify.is_tool_allowed("bash"));
-        assert!(!verify.is_tool_allowed("write_file"));
-        assert_eq!(verify.context_mode, ContextMode::Summary);
+        assert!(verify.is_tool_allowed("write_file")); // wildcard allows all
+        assert_eq!(verify.max_iterations, Some(25));
+        assert_eq!(verify.prompt_sections, vec!["verify_protocol"]);
+    }
+
+    #[test]
+    fn test_builtin_agents_have_prompt_sections() {
+        let agents = builtin_agents();
+        let by_id: std::collections::HashMap<&str, &AgentDef> =
+            agents.iter().map(|a| (a.id.as_str(), a)).collect();
+
+        // Main has no sections (uses default prompt builder flow)
+        assert!(by_id["main"].prompt_sections.is_empty());
+
+        // Sub-agents each have their specific section
+        assert_eq!(by_id["explore"].prompt_sections, vec!["explore_constraints"]);
+        assert_eq!(by_id["coder"].prompt_sections, vec!["coder_guidelines"]);
+        assert_eq!(by_id["researcher"].prompt_sections, vec!["researcher_protocol"]);
+        assert_eq!(by_id["verify"].prompt_sections, vec!["verify_protocol"]);
     }
 }

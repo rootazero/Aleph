@@ -38,7 +38,15 @@ pub type SafetyGuardFactory = Arc<dyn Fn() -> SafetyGuard + Send + Sync>;
 
 /// Parsed arguments for the subagent tool.
 #[derive(Debug)]
-struct SubagentArgs {
+enum SubagentAction {
+    /// Run a new sub-agent task.
+    Run(RunArgs),
+    /// Check status of a background sub-agent.
+    CheckStatus(String),
+}
+
+#[derive(Debug)]
+struct RunArgs {
     task: String,
     agent_type: Option<String>,
     model: Option<String>,
@@ -85,13 +93,28 @@ impl SubagentTool {
     }
 }
 
-/// Parse the task and options from the input JSON.
-fn parse_args(input: &Value) -> Result<SubagentArgs, String> {
+/// Parse the input JSON into a SubagentAction.
+fn parse_args(input: &Value) -> Result<SubagentAction, String> {
+    // Check for status-check mode first
+    let request_id = input
+        .get("request_id")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
     let task = input
         .get("task")
         .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
-        .ok_or_else(|| "missing required field: task".to_string())?;
+        .map(|s| s.to_string());
+
+    // If request_id is provided without task, this is a status check
+    if let Some(rid) = request_id {
+        if task.is_none() || task.as_ref().map_or(false, |t| t.trim().is_empty()) {
+            return Ok(SubagentAction::CheckStatus(rid));
+        }
+    }
+
+    // Otherwise, this is a run action — task is required
+    let task = task.ok_or_else(|| "missing required field: task (or provide request_id to check background status)".to_string())?;
 
     if task.trim().is_empty() {
         return Err("task must not be empty".to_string());
@@ -122,14 +145,14 @@ fn parse_args(input: &Value) -> Result<SubagentArgs, String> {
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
 
-    Ok(SubagentArgs {
+    Ok(SubagentAction::Run(RunArgs {
         task,
         agent_type,
         model,
         timeout_secs,
         run_in_background,
         context_summary,
-    })
+    }))
 }
 
 /// Run a sub-agent to completion.
@@ -141,21 +164,26 @@ async fn run_subagent(
     agent_def: AgentDef,
     task: String,
     context_summary: Option<String>,
+    model: Option<String>,
     tool_registry_factory: ToolRegistryFactory,
     safety_guard_factory: SafetyGuardFactory,
     child_chain: super::chain_context::ChainContext,
     timeout_secs: u64,
 ) -> Result<super::loop_core::LoopRunResult, String> {
-    let bridge = AiProviderBridge::new(provider);
+    // Apply model override: explicit arg > agent_def.model_hint > default
+    let resolved_model = model.or_else(|| agent_def.model_hint.clone());
+    let bridge = if let Some(m) = resolved_model {
+        AiProviderBridge::new(provider).with_model(m)
+    } else {
+        AiProviderBridge::new(provider)
+    };
 
     // Build tool registry, then filter to agent's allowed tools
     let mut registry = (tool_registry_factory)();
     registry.retain(|name| agent_def.is_tool_allowed(name));
 
-    // Build prompt with agent's system prompt
-    let mut prompt_builder = PromptBuilder::new()
-        .with_identity(&agent_def.system_prompt)
-        .with_default_behavior_sections();
+    // Build prompt for sub-agent via Section Registry.
+    let mut prompt_builder = PromptBuilder::for_agent(&agent_def);
 
     // Inject parent context if provided
     if let Some(summary) = context_summary {
@@ -238,15 +266,19 @@ impl LoopTool for SubagentTool {
                 "context_summary": {
                     "type": "string",
                     "description": "A summary of the parent agent's context to pass to the sub-agent."
+                },
+                "request_id": {
+                    "type": "string",
+                    "description": "Check status of a background sub-agent. Provide request_id without task to retrieve the result."
                 }
             },
-            "required": ["task"]
+            "required": []
         })
     }
 
     async fn execute(&self, input: Value) -> ToolResult {
         // 1. Parse arguments
-        let args = match parse_args(&input) {
+        let action = match parse_args(&input) {
             Ok(a) => a,
             Err(e) => {
                 return ToolResult::Error {
@@ -254,6 +286,47 @@ impl LoopTool for SubagentTool {
                     retryable: false,
                 }
             }
+        };
+
+        // Handle status check mode
+        let args = match action {
+            SubagentAction::CheckStatus(request_id) => {
+                // Check running first
+                let running = self.background_tracker.list_running();
+                if running.iter().any(|(id, _, _)| id == &request_id) {
+                    return ToolResult::Success {
+                        output: json!({
+                            "status": "running",
+                            "request_id": request_id,
+                        }),
+                    };
+                }
+                // Check completed
+                match self.background_tracker.take_result(&request_id) {
+                    Some(Ok(result)) => {
+                        return ToolResult::Success {
+                            output: json!({
+                                "status": "completed",
+                                "request_id": request_id,
+                                "result": result,
+                            }),
+                        };
+                    }
+                    Some(Err(err)) => {
+                        return ToolResult::Error {
+                            error: format!("Background sub-agent failed: {}", err),
+                            retryable: false,
+                        };
+                    }
+                    None => {
+                        return ToolResult::Error {
+                            error: format!("No background sub-agent found with request_id '{}'", request_id),
+                            retryable: false,
+                        };
+                    }
+                }
+            }
+            SubagentAction::Run(run_args) => run_args,
         };
 
         tracing::info!(
@@ -321,6 +394,7 @@ impl LoopTool for SubagentTool {
             let safety_factory = self.safety_guard_factory.clone();
             let task = args.task.clone();
             let context_summary = args.context_summary;
+            let model = args.model.clone();
             let timeout_secs = args.timeout_secs;
             let tracker = self.background_tracker.clone();
             let rid = request_id.clone();
@@ -331,6 +405,7 @@ impl LoopTool for SubagentTool {
                     agent_def,
                     task,
                     context_summary,
+                    model,
                     factory,
                     safety_factory,
                     child_chain,
@@ -359,6 +434,7 @@ impl LoopTool for SubagentTool {
                 agent_def,
                 args.task.clone(),
                 args.context_summary,
+                args.model,
                 self.tool_registry_factory.clone(),
                 self.safety_guard_factory.clone(),
                 child_chain,
@@ -456,18 +532,23 @@ mod tests {
 
     #[test]
     fn test_parse_args_basic() {
-        let args = parse_args(&json!({ "task": "do something" })).unwrap();
-        assert_eq!(args.task, "do something");
-        assert!(args.agent_type.is_none());
-        assert!(args.model.is_none());
-        assert_eq!(args.timeout_secs, 120);
-        assert!(!args.run_in_background);
-        assert!(args.context_summary.is_none());
+        let action = parse_args(&json!({ "task": "do something" })).unwrap();
+        match action {
+            SubagentAction::Run(args) => {
+                assert_eq!(args.task, "do something");
+                assert!(args.agent_type.is_none());
+                assert!(args.model.is_none());
+                assert_eq!(args.timeout_secs, 120);
+                assert!(!args.run_in_background);
+                assert!(args.context_summary.is_none());
+            }
+            _ => panic!("expected SubagentAction::Run"),
+        }
     }
 
     #[test]
     fn test_parse_args_full() {
-        let args = parse_args(&json!({
+        let action = parse_args(&json!({
             "task": "analyze code",
             "agent_type": "explore",
             "model": "fast",
@@ -477,15 +558,20 @@ mod tests {
         }))
         .unwrap();
 
-        assert_eq!(args.task, "analyze code");
-        assert_eq!(args.agent_type.as_deref(), Some("explore"));
-        assert_eq!(args.model.as_deref(), Some("fast"));
-        assert_eq!(args.timeout_secs, 60);
-        assert!(args.run_in_background);
-        assert_eq!(
-            args.context_summary.as_deref(),
-            Some("We are working on a Rust project.")
-        );
+        match action {
+            SubagentAction::Run(args) => {
+                assert_eq!(args.task, "analyze code");
+                assert_eq!(args.agent_type.as_deref(), Some("explore"));
+                assert_eq!(args.model.as_deref(), Some("fast"));
+                assert_eq!(args.timeout_secs, 60);
+                assert!(args.run_in_background);
+                assert_eq!(
+                    args.context_summary.as_deref(),
+                    Some("We are working on a Rust project.")
+                );
+            }
+            _ => panic!("expected SubagentAction::Run"),
+        }
     }
 
     #[test]
@@ -503,12 +589,30 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_args_check_status() {
+        let action = parse_args(&json!({ "request_id": "abc-123" })).unwrap();
+        match action {
+            SubagentAction::CheckStatus(rid) => assert_eq!(rid, "abc-123"),
+            _ => panic!("expected SubagentAction::CheckStatus"),
+        }
+    }
+
+    #[test]
+    fn test_parse_args_request_id_with_task_is_run() {
+        // When both task and request_id are provided, it's a Run action
+        let action = parse_args(&json!({ "task": "do work", "request_id": "abc" })).unwrap();
+        match action {
+            SubagentAction::Run(args) => assert_eq!(args.task, "do work"),
+            _ => panic!("expected SubagentAction::Run when both task and request_id given"),
+        }
+    }
+
+    #[test]
     fn test_schema_includes_new_fields() {
         let tool = make_tool();
         let schema = tool.schema();
 
         assert_eq!(schema["type"], "object");
-        assert_eq!(schema["required"], json!(["task"]));
 
         let props = &schema["properties"];
         assert!(props["task"].is_object());
@@ -517,6 +621,43 @@ mod tests {
         assert!(props["timeout_secs"].is_object());
         assert!(props["run_in_background"].is_object());
         assert!(props["context_summary"].is_object());
+        assert!(props["request_id"].is_object());
+    }
+
+    #[tokio::test]
+    async fn test_check_status_not_found() {
+        let tool = make_tool();
+        let result = tool.execute(json!({ "request_id": "nonexistent" })).await;
+        match result {
+            ToolResult::Error { error, .. } => {
+                assert!(error.contains("No background sub-agent found"));
+            }
+            _ => panic!("expected error for unknown request_id"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_check_status_completed() {
+        let tracker = Arc::new(BackgroundAgentTracker::new());
+        tracker.mark_completed("test-id", Ok("the result".to_string()));
+
+        let provider: Arc<dyn AiProvider> = Arc::new(MockAiProvider);
+        let factory: ToolRegistryFactory = Arc::new(|| LoopToolRegistry::new());
+        let safety_factory: SafetyGuardFactory = Arc::new(|| SafetyGuard::default_guard());
+        let chain = super::super::chain_context::ChainContext::new();
+        let tool = SubagentTool::new(
+            provider, factory, safety_factory, chain,
+            make_registry(), tracker,
+        );
+
+        let result = tool.execute(json!({ "request_id": "test-id" })).await;
+        match result {
+            ToolResult::Success { output } => {
+                assert_eq!(output["status"], "completed");
+                assert_eq!(output["result"], "the result");
+            }
+            _ => panic!("expected success with completed status"),
+        }
     }
 
     #[tokio::test]
