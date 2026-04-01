@@ -76,6 +76,8 @@ pub struct PromptBuilder {
     custom_instructions: Option<String>,
     eligible_skills: Option<Vec<SkillManifest>>,
     model_behavior: Option<String>,
+    /// Dynamically discovered skill info section (updated via interior mutability).
+    skill_info_section: std::sync::Mutex<Option<String>>,
 }
 
 impl PromptBuilder {
@@ -126,6 +128,7 @@ impl PromptBuilder {
             custom_instructions: None,
             eligible_skills: None,
             model_behavior: None,
+            skill_info_section: std::sync::Mutex::new(None),
         }
     }
 
@@ -176,6 +179,23 @@ impl PromptBuilder {
     pub fn with_model_behavior(mut self, content: &str) -> Self {
         self.model_behavior = Some(content.to_string());
         self
+    }
+
+    /// Update the discovered skill info section (takes `&self` via interior mutability).
+    pub fn update_skill_info(&self, skills: &[super::skill_prefetch::SkillInfo]) {
+        let section = if skills.is_empty() {
+            None
+        } else {
+            let lines: Vec<String> = skills
+                .iter()
+                .map(|s| format!("- **{}**: {}", s.name, s.description))
+                .collect();
+            Some(format!("## Discovered Skills\n{}", lines.join("\n")))
+        };
+        *self
+            .skill_info_section
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = section;
     }
 
     /// Assemble the full system prompt from all configured sections.
@@ -266,7 +286,17 @@ impl PromptBuilder {
             sections.push(format!("# Additional Instructions\n\n{}", instructions));
         }
 
-        // 9. Behavior
+        // 9. Discovered Skills (from async prefetch)
+        let skill_section = self
+            .skill_info_section
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        if let Some(ref section) = skill_section {
+            sections.push(section.clone());
+        }
+
+        // 10. Behavior
         sections.push(format!("# Behavior\n\n{}", BASE_BEHAVIOR));
 
         sections.join(SECTION_SEPARATOR)

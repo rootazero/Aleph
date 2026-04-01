@@ -388,6 +388,8 @@ pub struct AgentLoop<P: LoopProvider> {
     summary_provider: Option<Arc<dyn AiProvider>>,
     /// Chain context tracking subagent call chain nesting.
     chain: super::chain_context::ChainContext,
+    /// Optional skill prefetcher for async discovery during inference.
+    skill_prefetcher: Option<super::skill_prefetch::SkillPrefetcher>,
 }
 
 impl<P: LoopProvider> AgentLoop<P> {
@@ -438,6 +440,7 @@ impl<P: LoopProvider> AgentLoop<P> {
             stop_hooks: Vec::new(),
             summary_provider: None,
             chain: super::chain_context::ChainContext::new(),
+            skill_prefetcher: None,
         }
     }
 
@@ -501,6 +504,12 @@ impl<P: LoopProvider> AgentLoop<P> {
     /// Attach a [`ToolRefreshSource`](super::tool_refresh::ToolRefreshSource) for runtime tool hot-refresh.
     pub fn with_tool_refresh(mut self, source: Arc<dyn super::tool_refresh::ToolRefreshSource>) -> Self {
         self.tool_refresh = Some(source);
+        self
+    }
+
+    /// Attach a [`SkillPrefetcher`](super::skill_prefetch::SkillPrefetcher) for async skill discovery.
+    pub fn with_skill_prefetcher(mut self, prefetcher: super::skill_prefetch::SkillPrefetcher) -> Self {
+        self.skill_prefetcher = Some(prefetcher);
         self
     }
 
@@ -810,6 +819,11 @@ impl<P: LoopProvider> AgentLoop<P> {
                     }
                 }
             };
+
+            // --- Skill prefetch: start async scan while model is thinking ---
+            let prefetch_handle = self.skill_prefetcher
+                .as_ref()
+                .and_then(|p| p.start_scan());
 
             // The bridge+executor are created every iteration (even for pure text turns)
             // because tools must start executing AS THEY STREAM — we cannot know whether
@@ -1215,6 +1229,26 @@ impl<P: LoopProvider> AgentLoop<P> {
                         tools = tool_defs.len(),
                         "tool registry refreshed"
                     );
+                }
+            }
+
+            // --- Skill prefetch: collect results ---
+            if let Some(handle) = prefetch_handle {
+                match handle.await {
+                    Ok(Some(new_skills)) => {
+                        self.prompt_builder.update_skill_info(&new_skills);
+                        if let Some(ref prefetcher) = self.skill_prefetcher {
+                            prefetcher.commit(new_skills);
+                        }
+                        tracing::info!(
+                            chain_id = %self.chain.chain_id,
+                            "skill prefetch: new skills discovered"
+                        );
+                    }
+                    Ok(None) => {} // no changes
+                    Err(e) => {
+                        tracing::warn!("skill prefetch task failed: {e}");
+                    }
                 }
             }
 
