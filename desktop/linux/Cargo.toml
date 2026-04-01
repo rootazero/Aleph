@@ -7,6 +7,6 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-aleph-desktop = { path = "../desktop" }
+aleph-desktop = { path = "../shared" }
 async-trait = "0.1"
 tokio = { version = "1", features = ["rt"] }

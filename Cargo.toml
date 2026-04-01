@@ -4,11 +4,11 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/desktop",
-    "crates/desktop-macos",
-    "crates/desktop-linux",
-    "crates/desktop-windows",
-    "crates/logging",
+    "desktop/shared",
+    "desktop/macos",
+    "desktop/linux",
+    "desktop/windows",
+    "shared/logging",
     "shared/protocol",
     "shared/ui_logic",
 
@@ -228,19 +228,19 @@ cron = "0.13"
 extism = "1.7"
 inquire = "0.7"
 loom = { version = "0.7", optional = true }
-aleph-logging = { path = "crates/logging" }
-aleph-desktop = { path = "crates/desktop" }
+aleph-logging = { path = "shared/logging" }
+aleph-desktop = { path = "desktop/shared" }
 aleph-client = { path = "shared/client" }
 open = "5.3.3"
 
 [target.'cfg(target_os = "macos")'.dependencies]
-aleph-desktop-macos = { path = "crates/desktop-macos" }
+aleph-desktop-macos = { path = "desktop/macos" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-aleph-desktop-linux = { path = "crates/desktop-linux" }
+aleph-desktop-linux = { path = "desktop/linux" }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-aleph-desktop-windows = { path = "crates/desktop-windows" }
+aleph-desktop-windows = { path = "desktop/windows" }
 
 [build-dependencies]
 # No build dependencies - using Gateway WebSocket architecture
