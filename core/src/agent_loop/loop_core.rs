@@ -1241,18 +1241,25 @@ impl<P: LoopProvider> AgentLoop<P> {
                         stop_requested = true;
                     }
 
-                    // Consume hook-injected additional contexts and messages.
-                    // TODO: inject additional_contexts into next LLM turn as system-reminder content
-                    // when a dedicated prompt injection mechanism is available.
-                    if !outcome.additional_contexts.is_empty() {
-                        tracing::debug!(
-                            tool = %o.tool_name,
-                            contexts = ?outcome.additional_contexts,
-                            "hook additional_contexts (pending prompt injection)"
-                        );
-                    }
                     if outcome.prevent_continuation {
                         stop_requested = true;
+                    }
+                }
+
+                // Inject hook-produced contexts and messages into conversation history
+                // so the LLM sees them in the next turn (as <system-reminder> tags).
+                {
+                    let mut hook_parts: Vec<String> = Vec::new();
+                    for po in &outcomes {
+                        for ctx in &po.additional_contexts {
+                            hook_parts.push(format!("<system-reminder>\n{}\n</system-reminder>", ctx));
+                        }
+                        for msg in &po.hook_messages {
+                            hook_parts.push(format!("<system-reminder>\n{}\n</system-reminder>", msg));
+                        }
+                    }
+                    if !hook_parts.is_empty() {
+                        messages.push(UnifiedMessage::user(hook_parts.join("\n")));
                     }
                 }
 
