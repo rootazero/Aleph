@@ -5,7 +5,7 @@ use tracing::{debug, info};
 
 use super::{
     session_type_str, SessionIdentityMeta, SessionManager, SessionManagerError, SessionMetadata,
-    StoredMessage,
+    SessionSearchResult, StoredMessage,
 };
 use crate::gateway::router::SessionKey;
 use aleph_protocol::{GuestScope, IdentityContext, Role};
@@ -110,6 +110,13 @@ impl SessionManager {
             })?;
 
             let message_id = conn.last_insert_rowid();
+
+            // Sync FTS5 index (non-fatal — search degrades gracefully)
+            conn.execute(
+                "INSERT INTO messages_fts(rowid, content) VALUES (?, ?)",
+                params![message_id, content],
+            )
+            .ok();
 
             // Update session stats
             conn.execute(
@@ -616,5 +623,66 @@ impl SessionManager {
         }
 
         Ok(deleted)
+    }
+
+    /// Search messages across all sessions using FTS5 full-text search.
+    pub async fn search_messages(
+        &self,
+        query: &str,
+        max_results: usize,
+    ) -> Result<Vec<SessionSearchResult>, SessionManagerError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {}", e)))?;
+
+        // Graceful degradation for old databases without FTS5
+        let fts_exists: bool = conn
+            .query_row(
+                "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='messages_fts'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(false);
+
+        if !fts_exists {
+            return Ok(Vec::new());
+        }
+
+        let mut stmt = conn
+            .prepare(
+                "SELECT m.id, m.session_key, m.role, m.content, m.timestamp,
+                        s.agent_id, s.metadata
+                 FROM messages_fts f
+                 JOIN messages m ON m.id = f.rowid
+                 JOIN sessions s ON s.key = m.session_key
+                 WHERE messages_fts MATCH ?
+                 ORDER BY rank
+                 LIMIT ?",
+            )
+            .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
+
+        let results: Vec<SessionSearchResult> = stmt
+            .query_map(params![query, max_results as i64], |row| {
+                let metadata_json: Option<String> = row.get(6)?;
+                let topic = metadata_json
+                    .and_then(|json| serde_json::from_str::<serde_json::Value>(&json).ok())
+                    .and_then(|v| v.get("topic")?.as_str().map(|s| s.to_string()));
+
+                Ok(SessionSearchResult {
+                    message_id: row.get(0)?,
+                    session_key: row.get(1)?,
+                    role: row.get(2)?,
+                    content: row.get(3)?,
+                    timestamp: row.get(4)?,
+                    agent_id: row.get(5)?,
+                    topic,
+                })
+            })
+            .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        Ok(results)
     }
 }

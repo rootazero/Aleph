@@ -27,6 +27,18 @@ pub struct StoredMessage {
     pub metadata: Option<String>,
 }
 
+/// A message matched by FTS5 cross-session search.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionSearchResult {
+    pub message_id: i64,
+    pub session_key: String,
+    pub role: String,
+    pub content: String,
+    pub timestamp: i64,
+    pub agent_id: String,
+    pub topic: Option<String>,
+}
+
 /// Session metadata
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionMetadata {
@@ -242,6 +254,12 @@ impl SessionManager {
             CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_key);
             CREATE INDEX IF NOT EXISTS idx_sessions_agent ON sessions(agent_id);
             CREATE INDEX IF NOT EXISTS idx_sessions_last_active ON sessions(last_active_at);
+
+            CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+                content,
+                content=messages,
+                content_rowid=id
+            );
             "#,
         )
         .map_err(|e| SessionManagerError::DatabaseError(format!("Schema init failed: {}", e)))?;
