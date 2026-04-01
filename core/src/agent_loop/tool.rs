@@ -139,6 +139,11 @@ impl LoopToolRegistry {
         }
     }
 
+    /// Remove tools whose names do not satisfy the predicate.
+    pub fn retain(&mut self, f: impl Fn(&str) -> bool) {
+        self.tools.retain(|name, _| f(name));
+    }
+
     /// Collect definitions for all registered tools (sorted by name for determinism).
     pub fn tool_definitions(&self) -> Vec<ToolDefinition> {
         let mut defs: Vec<ToolDefinition> = self
@@ -326,5 +331,42 @@ mod tests {
 
         assert_eq!(defs[1].name, "fail");
         assert_eq!(defs[1].description, "Always fails");
+    }
+
+    /// A minimal tool parameterized by name — for testing registry operations.
+    struct NamedTool(String);
+
+    #[async_trait]
+    impl LoopTool for NamedTool {
+        fn name(&self) -> &str {
+            &self.0
+        }
+        fn description(&self) -> &str {
+            "named tool"
+        }
+        fn schema(&self) -> Value {
+            json!({ "type": "object", "properties": {} })
+        }
+        async fn execute(&self, _input: Value) -> ToolResult {
+            ToolResult::Success {
+                output: json!(null),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_retain_filters_tools() {
+        let mut registry = LoopToolRegistry::new();
+        registry.register(Box::new(NamedTool("alpha".into())));
+        registry.register(Box::new(NamedTool("beta".into())));
+        registry.register(Box::new(NamedTool("gamma".into())));
+        assert_eq!(registry.len(), 3);
+
+        registry.retain(|name| name == "alpha" || name == "gamma");
+
+        assert_eq!(registry.len(), 2);
+        assert!(registry.get("alpha").is_some());
+        assert!(registry.get("beta").is_none());
+        assert!(registry.get("gamma").is_some());
     }
 }
