@@ -43,6 +43,12 @@ impl MemoryStore for LanceMemoryBackend {
     // -- CRUD ---------------------------------------------------------------
 
     async fn insert_fact(&self, fact: &MemoryFact) -> Result<(), AlephError> {
+        if let crate::memory::content_scanner::ScanVerdict::Rejected { reason, pattern } =
+            crate::memory::content_scanner::scan_content(&fact.content)
+        {
+            tracing::warn!(fact_id = %fact.id, pattern = pattern, "Memory content rejected by scanner: {reason}");
+            return Err(AlephError::Validation(format!("Memory content rejected: {reason}")));
+        }
         if !FIRST_WRITE_LOGGED.swap(true, AtomicOrdering::Relaxed) {
             tracing::info!(
                 subsystem = "memory",
@@ -379,6 +385,12 @@ impl MemoryStore for LanceMemoryBackend {
     }
 
     async fn update_fact_content(&self, id: &str, new_content: &str) -> Result<(), AlephError> {
+        if let crate::memory::content_scanner::ScanVerdict::Rejected { reason, pattern } =
+            crate::memory::content_scanner::scan_content(new_content)
+        {
+            tracing::warn!(fact_id = %id, pattern = pattern, "Memory content rejected by scanner: {reason}");
+            return Err(AlephError::Validation(format!("Memory content rejected: {reason}")));
+        }
         let existing = self.get_fact(id).await?;
         let mut fact = existing.ok_or_else(|| AlephError::NotFound(format!("Fact '{}'", id)))?;
 

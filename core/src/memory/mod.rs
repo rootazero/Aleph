@@ -15,6 +15,7 @@
 //! - `DreamStore`, `CompressionStore`: Specialized operations
 
 // Public submodules
+pub mod content_scanner;
 pub mod adaptive_retrieval;
 pub mod ai_retrieval;
 pub mod audit;

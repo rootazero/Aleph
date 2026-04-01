@@ -197,6 +197,10 @@ pub enum AlephError {
     /// Execution timeout error
     #[error("Execution timeout after {timeout_secs} seconds")]
     ExecutionTimeout { timeout_secs: u64 },
+
+    /// Input validation error (content rejected by scanner, schema violation, etc.)
+    #[error("Validation error: {0}")]
+    Validation(String),
 }
 
 impl AlephError {
@@ -366,7 +370,8 @@ impl AlephError {
             | AlephError::CorruptData(_)
             | AlephError::ChannelClosed(_)
             | AlephError::SandboxUnavailable { .. }
-            | AlephError::ExecutionTimeout { .. } => None,
+            | AlephError::ExecutionTimeout { .. }
+            | AlephError::Validation(_) => None,
         }
     }
 
@@ -531,6 +536,9 @@ impl AlephError {
                     "Execution timed out after {} seconds. The command took too long to complete.",
                     timeout_secs
                 )
+            }
+            AlephError::Validation(msg) => {
+                format!("Validation failed: {}", msg)
             }
         }
     }
