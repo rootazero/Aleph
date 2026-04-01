@@ -4,7 +4,6 @@
 [workspace]
 resolver = "2"
 members = [
-    "core",
     "crates/desktop",
     "crates/desktop-macos",
     "crates/desktop-linux",
@@ -99,6 +98,183 @@ lru = "0.12"
 mdns-sd = "0.11"
 
 # UniFFI removed - using Gateway WebSocket architecture
+
+# ===== Package (alephcore) =====
+
+[package]
+name = "alephcore"
+version = "0.2.5"
+edition = "2021"
+rust-version = "1.92"
+
+[lib]
+crate-type = ["rlib", "cdylib"]
+name = "alephcore"
+
+[features]
+default = []
+# Loom concurrency testing (replaces std sync primitives)
+loom = ["dep:loom"]
+# Test helpers for integration tests
+test-helpers = []
+# Control plane UI (Leptos/WASM dashboard)
+control-plane = []
+
+[dependencies]
+tokio = { version = "1.35", features = ["rt-multi-thread", "sync", "time", "macros", "process", "fs", "io-util", "signal", "net"] }
+tokio-util = { version = "0.7", features = ["rt", "compat"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+serde = { version = "1.0", features = ["derive"] }
+thiserror = "2.0"
+aleph-protocol = { path = "shared/protocol" }
+rusqlite = { version = "0.32", features = ["bundled"] }
+sqlite-vec = "0.1.6"
+uuid = { version = "1.7", features = ["v4", "serde"] }
+regex = "1.10"
+aho-corasick = "1.1"
+percent-encoding = "2.3"
+chrono = { version = "0.4", features = ["serde"] }
+chrono-tz = "0.10"
+rand = "0.8"
+reqwest = { version = "0.12", features = ["json", "native-tls", "stream", "multipart"] }
+serde_json = "1.0"
+toml = "0.8"
+toml_edit = "0.22"
+dirs = "5.0"
+log = "0.4"
+tracing = "0.1"
+libc = "0.2"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
+tracing-appender = "0.2"
+notify = { version = "6.1", default-features = false, features = ["macos_fsevent"] }
+notify-debouncer-full = "0.3"
+user-idle = "0.5"
+shellexpand = "3.1"
+handlebars = "5.1"
+jsonpath-rust = "0.5"
+image = { workspace = true }
+base64 = { workspace = true }
+chromiumoxide = { version = "0.7", default-features = false, features = ["tokio-runtime"] }
+async-trait = "0.1"
+anyhow = "1.0"
+futures = "0.3"
+async-stream = "0.3"
+lancedb = "0.26"
+lance-index = "2.0"
+arrow-array = "57"
+arrow-schema = "57"
+arrow-cast = "57"
+once_cell = "1.19"
+serde_yaml = "0.9"
+zip = "2.2"
+tempfile = "3.8"
+git2 = { version = "0.19", features = ["vendored-openssl"] }
+glob = "0.3"
+glob-match = "0.2"
+walkdir = "2.5"
+which = "6.0"
+schemars = "0.8"
+jsonschema = "0.29"
+scraper = "0.22"
+readability = "0.3"
+htmd = "0.1"
+url = "2.5"
+lru = "0.12"
+sha2 = "0.10"
+hmac = "0.12"
+jsonwebtoken = "9"
+subtle = "2.5"
+hex = "0.4"
+ed25519-dalek = { version = "2.1", features = ["rand_core"] }
+siphasher = "1.0"
+aes-gcm = "0.10"
+hkdf = "0.12"
+secrecy = { version = "0.10", features = ["serde"] }
+zeroize = { version = "1.8", features = ["derive"] }
+keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
+k256 = { version = "0.13", features = ["ecdsa", "schnorr"] }
+sha3 = "0.10"
+bincode = "1.3"
+rpassword = "5.0"
+portable-pty = "0.8"
+strip-ansi-escapes = "0.2"
+printpdf = "0.7"
+pulldown-cmark = "0.12"
+rhai = { version = "1.17", features = ["sync", "no_float", "only_i64"] }
+httpdate = "1.0"
+dashmap = "5.5"
+reqwest-eventsource = "0.6"
+plist = "1.7"
+sysinfo = "0.33"
+semver = "1"
+battery = "0.7"
+include_dir = "0.7"
+tokio-tungstenite = "0.26"
+futures-util = "0.3"
+clap = { version = "4.4", features = ["derive"] }
+tower-http = { version = "0.6", features = ["fs", "cors"] }
+axum = { version = "0.8", features = ["ws"] }
+tower = "0.5"
+mime_guess = "2.0"
+mdns-sd = { workspace = true }
+rust-embed = { version = "8.0", features = ["compression"] }
+teloxide = { version = "0.13", features = ["macros"] }
+serenity = { version = "0.12", default-features = false, features = ["client", "gateway", "rustls_backend", "model"] }
+lettre = { version = "0.11", default-features = false, features = ["tokio1-native-tls", "builder", "smtp-transport"] }
+mail-parser = "0.9"
+async-imap = "0.10"
+async-native-tls = "0.5"
+cron = "0.13"
+extism = "1.7"
+inquire = "0.7"
+loom = { version = "0.7", optional = true }
+aleph-logging = { path = "crates/logging" }
+aleph-desktop = { path = "crates/desktop" }
+aleph-client = { path = "shared/client" }
+open = "5.3.3"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+aleph-desktop-macos = { path = "crates/desktop-macos" }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+aleph-desktop-linux = { path = "crates/desktop-linux" }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+aleph-desktop-windows = { path = "crates/desktop-windows" }
+
+[build-dependencies]
+# No build dependencies - using Gateway WebSocket architecture
+
+[[bin]]
+name = "aleph-server"
+path = "src/bin/aleph-server/main.rs"
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports", "async_tokio"] }
+cucumber = { version = "0.21", features = ["macros"] }
+tempfile = "3.8"
+filetime = "0.2"
+serial_test = "3.0"
+aleph-protocol = { path = "shared/protocol" }
+proptest = "1.4"
+http-body-util = "0.1"
+wiremock = "0.6"
+
+[[bench]]
+name = "memory_benchmarks_simple"
+harness = false
+
+[[bench]]
+name = "approval_performance"
+harness = false
+
+[[test]]
+name = "cron_probe"
+required-features = ["test-helpers"]
+
+[[test]]
+name = "cucumber"
+harness = false
 
 # Release profile
 [profile.release]
