@@ -23,7 +23,9 @@ use super::context_budget::pipeline::{
 use super::context_budget::pressure::PressureSensor;
 use super::prompt_builder::{PromptBuilder, ToolInfo};
 use super::safety::{SafetyError, SafetyGuard};
+use super::stop_hooks::{self, StopHook, StopHookContext};
 use super::tool::{LoopToolRegistry, ToolDefinition, ToolResult};
+use crate::providers::AiProvider;
 use crate::providers::adapter::StopReason;
 use crate::providers::delta::{DeltaCollector, DeltaSink, NoopSink, ProviderDelta};
 use crate::providers::message::UnifiedMessage;
@@ -46,6 +48,86 @@ const DIMINISHING_RETURNS_NOTICE: &str =
 const TRUNCATION_NOTICE: &str =
     "[SYSTEM] Earlier conversation history and memory context were truncated \
      to fit the model's context window. Continue based on the remaining context.";
+
+// =============================================================================
+// 413 Prompt-Too-Long (PTL) recovery constants
+// =============================================================================
+
+/// Maximum number of retry attempts after receiving a 413 error.
+const MAX_PTL_RETRIES: usize = 3;
+/// Safety margin multiplier applied to the token gap when calculating how many
+/// groups to drop (e.g. 1.2 = drop 20% more than strictly needed).
+const PTL_SAFETY_MARGIN: f64 = 1.2;
+/// When the token gap is unknown, drop this fraction of droppable groups.
+const PTL_FALLBACK_DROP_RATIO: f64 = 0.20;
+/// Marker inserted at the beginning of the conversation after truncation.
+const PTL_TRUNCATION_MARKER: &str = "[earlier conversation truncated for recovery]";
+
+// =============================================================================
+// 413 emergency truncation helpers
+// =============================================================================
+
+/// Group messages by API round: each group is (user → assistant [→ tool_results]*).
+/// Returns Vec of (start_index, end_index_exclusive) pairs.
+fn group_by_round(messages: &[UnifiedMessage]) -> Vec<(usize, usize)> {
+    let mut groups = Vec::new();
+    let mut start = 0;
+    for (i, msg) in messages.iter().enumerate() {
+        if i > 0 && msg.is_user() && !msg.is_tool_result() {
+            groups.push((start, i));
+            start = i;
+        }
+    }
+    if start < messages.len() {
+        groups.push((start, messages.len()));
+    }
+    groups
+}
+
+/// Emergency truncation for 413 recovery.
+/// Drops oldest message groups to free tokens. Protects the last
+/// `fresh_tail_count` groups.
+fn emergency_truncate(
+    messages: &mut Vec<UnifiedMessage>,
+    token_gap: Option<usize>,
+    fresh_tail_count: usize,
+) {
+    use super::context_budget::pressure::estimate_tokens_smart;
+
+    let groups = group_by_round(messages);
+    if groups.len() <= fresh_tail_count + 1 {
+        return; // Not enough groups to drop
+    }
+
+    let droppable_count = groups.len().saturating_sub(fresh_tail_count);
+    if droppable_count == 0 {
+        return;
+    }
+
+    let groups_to_drop = if let Some(gap) = token_gap {
+        let target = (gap as f64 * PTL_SAFETY_MARGIN) as usize;
+        let mut freed = 0usize;
+        let mut count = 0usize;
+        for &(start, end) in &groups[..droppable_count] {
+            if freed >= target {
+                break;
+            }
+            for msg in &messages[start..end] {
+                freed += estimate_tokens_smart(&msg.text_content());
+            }
+            count += 1;
+        }
+        count.max(1)
+    } else {
+        ((droppable_count as f64 * PTL_FALLBACK_DROP_RATIO).ceil() as usize).max(1)
+    };
+
+    let groups_to_drop = groups_to_drop.min(droppable_count);
+    let drop_end = groups[groups_to_drop - 1].1;
+
+    messages.drain(..drop_end);
+    messages.insert(0, UnifiedMessage::user(PTL_TRUNCATION_MARKER));
+}
 
 /// Find a safe cut point that doesn't split ToolCall/ToolResult pairs.
 fn find_safe_cut_point(messages: &[UnifiedMessage], initial_cut: usize) -> usize {
@@ -251,6 +333,10 @@ pub trait LoopCallback: Send {
     fn on_tool_start(&mut self, _name: &str, _input: &Value) {}
     fn on_tool_done(&mut self, _name: &str, _result: &ToolResult) {}
     fn on_safety_block(&mut self, _error: &SafetyError) {}
+    fn on_model_fallback(&mut self, _reason: &str, _fallback_model: &str) {}
+    fn on_stop_hook_block(&mut self, _reason: &str) {}
+    fn on_stop_hook_error(&mut self, _hook_name: &str, _error: &str) {}
+    fn on_tool_summary(&mut self, _summary: &str) {}
 }
 
 /// No-op callback for when you don't need events.
@@ -264,6 +350,8 @@ impl LoopCallback for NoopCallback {}
 /// The core agent loop: think → act, repeated until done.
 pub struct AgentLoop<P: LoopProvider> {
     provider: P,
+    fallback_provider: Option<Box<dyn LoopProvider>>,
+    fallback_label: Option<String>,
     tool_registry: Arc<LoopToolRegistry>,
     prompt_builder: PromptBuilder,
     safety_guard: Arc<SafetyGuard>,
@@ -288,6 +376,10 @@ pub struct AgentLoop<P: LoopProvider> {
     delta_sink: Box<dyn DeltaSink>,
     /// Token for cooperative cancellation of streaming and tool execution.
     cancel_token: CancellationToken,
+    /// Stop hooks to run before the loop exits at task-completion break points.
+    stop_hooks: Vec<StopHook>,
+    /// Optional lightweight provider for async tool use summaries.
+    summary_provider: Option<Arc<dyn AiProvider>>,
 }
 
 impl<P: LoopProvider> AgentLoop<P> {
@@ -318,6 +410,8 @@ impl<P: LoopProvider> AgentLoop<P> {
         let provider_max = provider.max_output_tokens();
         Self {
             provider,
+            fallback_provider: None,
+            fallback_label: None,
             tool_registry: Arc::new(tool_registry),
             prompt_builder,
             safety_guard: Arc::new(safety_guard),
@@ -332,6 +426,8 @@ impl<P: LoopProvider> AgentLoop<P> {
             ),
             delta_sink: Box::new(NoopSink),
             cancel_token,
+            stop_hooks: Vec::new(),
+            summary_provider: None,
         }
     }
 
@@ -357,6 +453,32 @@ impl<P: LoopProvider> AgentLoop<P> {
     /// to WebSocket clients or other reactive consumers.
     pub fn with_delta_sink(mut self, sink: Box<dyn DeltaSink>) -> Self {
         self.delta_sink = sink;
+        self
+    }
+
+    /// Attach a fallback provider for automatic model switching.
+    ///
+    /// When the primary model is unavailable (overloaded, auth failure,
+    /// not found), the loop automatically switches to this fallback.
+    pub fn with_fallback(
+        mut self,
+        provider: Box<dyn LoopProvider>,
+        label: impl Into<String>,
+    ) -> Self {
+        self.fallback_provider = Some(provider);
+        self.fallback_label = Some(label.into());
+        self
+    }
+
+    /// Register stop hooks to run before the loop exits.
+    pub fn with_stop_hooks(mut self, hooks: Vec<StopHook>) -> Self {
+        self.stop_hooks = hooks;
+        self
+    }
+
+    /// Attach a lightweight provider for async tool use summaries.
+    pub fn with_summary_provider(mut self, provider: Arc<dyn AiProvider>) -> Self {
+        self.summary_provider = Some(provider);
         self
     }
 
@@ -427,10 +549,27 @@ impl<P: LoopProvider> AgentLoop<P> {
         let mut current_max_tokens: Option<u32> = None;
         const MAX_CONSECUTIVE_ERRORS: usize = 10;
         const MAX_COMPLETION_NUDGES: usize = 3;
+        const MAX_STOP_HOOK_BLOCKS: usize = 3;
+        let mut stop_hook_blocks: usize = 0;
+        let mut pending_summary: Option<tokio::task::JoinHandle<Option<String>>> = None;
+
+        #[derive(Clone, Copy)]
+        enum ActiveProvider {
+            Primary,
+            Fallback,
+        }
+        let mut active_provider = ActiveProvider::Primary;
 
         // === THE LOOP ===
         while iterations < self.config.max_iterations {
             iterations += 1;
+
+            // Resolve pending tool summary from previous iteration
+            if let Some(handle) = pending_summary.take() {
+                if let Ok(Some(summary)) = handle.await {
+                    callback.on_tool_summary(&summary);
+                }
+            }
 
             // --- Context budget evaluation (single lock scope) ---
             let mut budget_directive = super::context_budget::LoopDirective::Continue;
@@ -565,13 +704,79 @@ impl<P: LoopProvider> AgentLoop<P> {
                 budget_ratio,
             );
 
-            // Think: stream deltas with retry and cancellation
-            let delta_stream = super::retry::retry_async(
-                || self.provider.stream(&messages, &system_prompt, &tool_defs),
-                &self.cancel_token,
-                3,
-            )
-            .await?;
+            // Think: stream deltas with retry, 413 recovery, and fallback
+            let mut ptl_attempts: usize = 0;
+            let delta_stream = loop {
+                match super::retry::retry_async(
+                    || {
+                        let p: &dyn LoopProvider = match active_provider {
+                            ActiveProvider::Primary => &self.provider,
+                            ActiveProvider::Fallback => {
+                                self.fallback_provider.as_ref().unwrap().as_ref()
+                            }
+                        };
+                        p.stream(&messages, &system_prompt, &tool_defs)
+                    },
+                    &self.cancel_token,
+                    3,
+                )
+                .await
+                {
+                    Ok(stream) => break stream,
+                    Err(e) => {
+                        let verdict = super::retry::classify_exhausted_error(&e);
+                        match verdict {
+                            super::retry::RetryVerdict::CompactAndRetry { token_gap } => {
+                                ptl_attempts += 1;
+                                if ptl_attempts > MAX_PTL_RETRIES {
+                                    return Err(e);
+                                }
+                                let fresh_tail = {
+                                    let ctx = self
+                                        .context_budget
+                                        .lock()
+                                        .unwrap_or_else(|e| e.into_inner());
+                                    ctx.as_ref()
+                                        .map(|b| b.fresh_tail_count())
+                                        .unwrap_or(6)
+                                };
+                                tracing::warn!(
+                                    attempt = ptl_attempts,
+                                    ?token_gap,
+                                    "413 recovery: truncating messages"
+                                );
+                                emergency_truncate(
+                                    &mut messages,
+                                    token_gap,
+                                    fresh_tail,
+                                );
+                                continue;
+                            }
+                            super::retry::RetryVerdict::Fallback { reason }
+                                if self.fallback_provider.is_some()
+                                    && matches!(
+                                        active_provider,
+                                        ActiveProvider::Primary
+                                    ) =>
+                            {
+                                active_provider = ActiveProvider::Fallback;
+                                let label = self
+                                    .fallback_label
+                                    .as_deref()
+                                    .unwrap_or("fallback");
+                                tracing::warn!(
+                                    %reason,
+                                    fallback = label,
+                                    "Switching to fallback model"
+                                );
+                                callback.on_model_fallback(&reason, label);
+                                continue;
+                            }
+                            _ => return Err(e),
+                        }
+                    }
+                }
+            };
 
             // The bridge+executor are created every iteration (even for pure text turns)
             // because tools must start executing AS THEY STREAM — we cannot know whether
@@ -685,6 +890,31 @@ impl<P: LoopProvider> AgentLoop<P> {
                     .is_some_and(|t| t.contains("<task-complete/>"));
 
                 if has_completion_tag {
+                    if !self.stop_hooks.is_empty() && stop_hook_blocks < MAX_STOP_HOOK_BLOCKS {
+                        let ctx = StopHookContext {
+                            final_text: final_text.clone(),
+                            iterations,
+                            tool_calls_made,
+                            stop_reason: "end_turn".to_string(),
+                        };
+                        let hook_result = stop_hooks::execute_stop_hooks(
+                            &self.stop_hooks,
+                            &ctx,
+                            &self.cancel_token,
+                        )
+                        .await;
+                        for (name, msg) in hook_result.errors() {
+                            callback.on_stop_hook_error(name, msg);
+                        }
+                        if let Some(reason) = hook_result.blocking_reason() {
+                            stop_hook_blocks += 1;
+                            callback.on_stop_hook_block(reason);
+                            messages.push(UnifiedMessage::user(&format!(
+                                "[SYSTEM] Stop hook blocked exit: {reason}. Address the issue and try again."
+                            )));
+                            continue;
+                        }
+                    }
                     break;
                 }
 
@@ -714,7 +944,35 @@ impl<P: LoopProvider> AgentLoop<P> {
                     continue;
                 }
 
-                break; // Exhausted all nudges
+                // Exhausted all nudges
+                {
+                    if !self.stop_hooks.is_empty() && stop_hook_blocks < MAX_STOP_HOOK_BLOCKS {
+                        let ctx = StopHookContext {
+                            final_text: final_text.clone(),
+                            iterations,
+                            tool_calls_made,
+                            stop_reason: "nudge_exhausted".to_string(),
+                        };
+                        let hook_result = stop_hooks::execute_stop_hooks(
+                            &self.stop_hooks,
+                            &ctx,
+                            &self.cancel_token,
+                        )
+                        .await;
+                        for (name, msg) in hook_result.errors() {
+                            callback.on_stop_hook_error(name, msg);
+                        }
+                        if let Some(reason) = hook_result.blocking_reason() {
+                            stop_hook_blocks += 1;
+                            callback.on_stop_hook_block(reason);
+                            messages.push(UnifiedMessage::user(&format!(
+                                "[SYSTEM] Stop hook blocked exit: {reason}. Address the issue and try again."
+                            )));
+                            continue;
+                        }
+                    }
+                    break;
+                }
             }
 
             // If no tool calls and MaxTokens → use TruncationRecovery state machine
@@ -877,6 +1135,34 @@ impl<P: LoopProvider> AgentLoop<P> {
                 }
 
                 tool_calls_made += outcomes.len();
+
+                // Fire-and-forget: generate tool summary in background
+                if let Some(ref sp) = self.summary_provider {
+                    let inputs: Vec<super::tool_summary::ToolSummaryInput> = outcomes
+                        .iter()
+                        .map(|o| {
+                            let tool_input = tool_args_by_id
+                                .get(o.tool_id.as_str())
+                                .map(|v| serde_json::to_string(v).unwrap_or_default())
+                                .unwrap_or_default();
+                            super::tool_summary::ToolSummaryInput {
+                                tool_name: o.tool_name.clone(),
+                                tool_input,
+                                tool_output: o.output_text.clone(),
+                            }
+                        })
+                        .collect();
+                    let sp = sp.clone();
+                    let last_text = intermediate_texts.last().cloned();
+                    pending_summary = Some(tokio::spawn(async move {
+                        super::tool_summary::generate_tool_summary(
+                            &*sp,
+                            &inputs,
+                            last_text.as_deref(),
+                        )
+                        .await
+                    }));
+                }
             } else {
                 // No tool calls — abort the idle executor.
                 executor_handle.abort();
@@ -1106,6 +1392,7 @@ mod tests {
         tool_starts: Vec<String>,
         tool_dones: Vec<String>,
         safety_blocks: Vec<String>,
+        fallback_events: Vec<(String, String)>,
     }
 
     impl LoopCallback for TrackingCallback {
@@ -1123,6 +1410,10 @@ mod tests {
         }
         fn on_safety_block(&mut self, error: &SafetyError) {
             self.safety_blocks.push(error.to_string());
+        }
+        fn on_model_fallback(&mut self, reason: &str, fallback_model: &str) {
+            self.fallback_events
+                .push((reason.to_string(), fallback_model.to_string()));
         }
     }
 
@@ -2621,5 +2912,272 @@ mod tests {
         let text = "  Hello   World";
         let result = strip_repeated_intermediate(text, &intermediates);
         assert_eq!(result, "World");
+    }
+
+    // =========================================================================
+    // 413 emergency truncation tests
+    // =========================================================================
+
+    #[test]
+    fn test_group_by_round_basic() {
+        let messages = vec![
+            UnifiedMessage::user("q1"),
+            UnifiedMessage::assistant("a1"),
+            UnifiedMessage::user("q2"),
+            UnifiedMessage::assistant("a2"),
+        ];
+        let groups = group_by_round(&messages);
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0], (0, 2));
+        assert_eq!(groups[1], (2, 4));
+    }
+
+    #[test]
+    fn test_group_by_round_single() {
+        let messages = vec![UnifiedMessage::user("q1")];
+        let groups = group_by_round(&messages);
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0], (0, 1));
+    }
+
+    #[test]
+    fn test_emergency_truncate_drops_oldest_groups() {
+        let mut messages = vec![
+            UnifiedMessage::user("round 1 question"),
+            UnifiedMessage::assistant("round 1 answer"),
+            UnifiedMessage::user("round 2 question"),
+            UnifiedMessage::assistant("round 2 answer"),
+            UnifiedMessage::user("round 3 question"),
+            UnifiedMessage::assistant("round 3 answer"),
+            UnifiedMessage::user("current question"),
+        ];
+        let original_len = messages.len();
+        emergency_truncate(&mut messages, None, 2);
+        assert!(messages.len() < original_len);
+        // First message should be truncation marker
+        assert!(messages[0].text_content().contains("truncated"));
+        // Last message should be preserved
+        assert_eq!(
+            messages.last().unwrap().text_content(),
+            "current question"
+        );
+    }
+
+    #[test]
+    fn test_emergency_truncate_with_known_gap() {
+        let mut messages = vec![];
+        for i in 0..10 {
+            messages.push(UnifiedMessage::user(&format!("question {i} {}", "x".repeat(80))));
+            messages.push(UnifiedMessage::assistant(&format!(
+                "answer {i} {}",
+                "y".repeat(80)
+            )));
+        }
+        messages.push(UnifiedMessage::user("final"));
+        let original_len = messages.len();
+        emergency_truncate(&mut messages, Some(500), 3);
+        assert!(messages.len() < original_len);
+        assert_eq!(messages.last().unwrap().text_content(), "final");
+    }
+
+    #[test]
+    fn test_emergency_truncate_too_few_messages_is_noop() {
+        let mut messages = vec![
+            UnifiedMessage::user("only question"),
+            UnifiedMessage::assistant("only answer"),
+        ];
+        let original_len = messages.len();
+        emergency_truncate(&mut messages, None, 2);
+        assert_eq!(messages.len(), original_len);
+    }
+
+    // =========================================================================
+    // 413 recovery + fallback integration tests
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_413_recovery_retries_after_truncation() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        // 413 errors are classified as CompactAndRetry (not Retry), so
+        // retry_async returns them immediately on the first call.
+        // The recovery loop in the Think step truncates messages and retries.
+        // This provider fails with 413 on the first call, then succeeds.
+        struct Ptl413ThenOk {
+            call_count: AtomicUsize,
+        }
+
+        #[async_trait]
+        impl LoopProvider for Ptl413ThenOk {
+            async fn stream(
+                &self,
+                _messages: &[UnifiedMessage],
+                _system_prompt: &str,
+                _tools: &[ToolDefinition],
+            ) -> anyhow::Result<BoxStream<'static, anyhow::Result<ProviderDelta>>> {
+                let count = self.call_count.fetch_add(1, Ordering::SeqCst);
+                if count < 1 {
+                    Err(anyhow::anyhow!(
+                        "prompt is too long: 137500 tokens > 135000 maximum"
+                    ))
+                } else {
+                    let resp = ProviderResponse::text_only("recovered".to_string());
+                    Ok(crate::providers::delta::response_to_delta_stream(resp))
+                }
+            }
+        }
+
+        let provider = Ptl413ThenOk {
+            call_count: AtomicUsize::new(0),
+        };
+        let agent = AgentLoop::new(
+            provider,
+            LoopToolRegistry::new(),
+            PromptBuilder::new(),
+            SafetyGuard::default_guard(),
+            LoopConfig {
+                max_iterations: 5,
+                token_budget: 200_000,
+            },
+            CancellationToken::new(),
+        );
+
+        let mut history = Vec::new();
+        for i in 0..10 {
+            history.push(UnifiedMessage::user(&format!("question {i}")));
+            history.push(UnifiedMessage::assistant(&format!("answer {i}")));
+        }
+        history.push(UnifiedMessage::user("final question"));
+
+        let mut cb = TrackingCallback::default();
+        let result = agent
+            .run_with_history_messages(history, &mut cb)
+            .await
+            .unwrap();
+
+        assert_eq!(result.final_text.as_deref(), Some("recovered"));
+        assert!(!result.cancelled);
+    }
+
+    #[tokio::test]
+    async fn test_fallback_model_switches_on_overload() {
+        struct OverloadedProvider;
+
+        #[async_trait]
+        impl LoopProvider for OverloadedProvider {
+            async fn stream(
+                &self,
+                _messages: &[UnifiedMessage],
+                _system_prompt: &str,
+                _tools: &[ToolDefinition],
+            ) -> anyhow::Result<BoxStream<'static, anyhow::Result<ProviderDelta>>> {
+                Err(anyhow::anyhow!("HTTP 529 overloaded"))
+            }
+        }
+
+        struct FallbackProvider;
+
+        #[async_trait]
+        impl LoopProvider for FallbackProvider {
+            async fn stream(
+                &self,
+                _messages: &[UnifiedMessage],
+                _system_prompt: &str,
+                _tools: &[ToolDefinition],
+            ) -> anyhow::Result<BoxStream<'static, anyhow::Result<ProviderDelta>>> {
+                let resp = ProviderResponse::text_only("fallback response".to_string());
+                Ok(crate::providers::delta::response_to_delta_stream(resp))
+            }
+        }
+
+        let agent = AgentLoop::new(
+            OverloadedProvider,
+            LoopToolRegistry::new(),
+            PromptBuilder::new(),
+            SafetyGuard::default_guard(),
+            LoopConfig::default(),
+            CancellationToken::new(),
+        )
+        .with_fallback(Box::new(FallbackProvider), "test-fallback");
+
+        let mut cb = TrackingCallback::default();
+        let result = agent.run("hello", &mut cb).await.unwrap();
+
+        assert_eq!(result.final_text.as_deref(), Some("fallback response"));
+        assert_eq!(cb.fallback_events.len(), 1);
+        assert_eq!(cb.fallback_events[0].1, "test-fallback");
+    }
+
+    #[tokio::test]
+    async fn test_fallback_not_available_propagates_error() {
+        struct OverloadedProvider;
+
+        #[async_trait]
+        impl LoopProvider for OverloadedProvider {
+            async fn stream(
+                &self,
+                _messages: &[UnifiedMessage],
+                _system_prompt: &str,
+                _tools: &[ToolDefinition],
+            ) -> anyhow::Result<BoxStream<'static, anyhow::Result<ProviderDelta>>> {
+                Err(anyhow::anyhow!("HTTP 529 overloaded"))
+            }
+        }
+
+        let agent = AgentLoop::new(
+            OverloadedProvider,
+            LoopToolRegistry::new(),
+            PromptBuilder::new(),
+            SafetyGuard::default_guard(),
+            LoopConfig::default(),
+            CancellationToken::new(),
+        );
+
+        let mut cb = NoopCallback;
+        let result = agent.run("hello", &mut cb).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_tier2_all_callbacks_fire() {
+        #[derive(Default)]
+        struct Tier2Callback {
+            fallback_fired: bool,
+            stop_hook_block_fired: bool,
+            stop_hook_error_fired: bool,
+            summary_fired: bool,
+        }
+
+        impl LoopCallback for Tier2Callback {
+            fn on_model_fallback(&mut self, reason: &str, model: &str) {
+                assert!(!reason.is_empty());
+                assert!(!model.is_empty());
+                self.fallback_fired = true;
+            }
+            fn on_stop_hook_block(&mut self, reason: &str) {
+                assert!(!reason.is_empty());
+                self.stop_hook_block_fired = true;
+            }
+            fn on_stop_hook_error(&mut self, name: &str, error: &str) {
+                assert!(!name.is_empty());
+                assert!(!error.is_empty());
+                self.stop_hook_error_fired = true;
+            }
+            fn on_tool_summary(&mut self, summary: &str) {
+                assert!(!summary.is_empty());
+                self.summary_fired = true;
+            }
+        }
+
+        let mut cb = Tier2Callback::default();
+        cb.on_model_fallback("test reason", "test-model");
+        cb.on_stop_hook_block("test block");
+        cb.on_stop_hook_error("test-hook", "test error");
+        cb.on_tool_summary("Searched for bugs");
+
+        assert!(cb.fallback_fired);
+        assert!(cb.stop_hook_block_fired);
+        assert!(cb.stop_hook_error_fired);
+        assert!(cb.summary_fired);
     }
 }
