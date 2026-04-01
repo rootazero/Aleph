@@ -390,6 +390,8 @@ pub struct AgentLoop<P: LoopProvider> {
     chain: super::chain_context::ChainContext,
     /// Optional skill prefetcher for async discovery during inference.
     skill_prefetcher: Option<super::skill_prefetch::SkillPrefetcher>,
+    /// Optional session context for environment info injection.
+    session_context: Option<super::sections::SessionContext>,
 }
 
 impl<P: LoopProvider> AgentLoop<P> {
@@ -441,6 +443,7 @@ impl<P: LoopProvider> AgentLoop<P> {
             summary_provider: None,
             chain: super::chain_context::ChainContext::new(),
             skill_prefetcher: None,
+            session_context: None,
         }
     }
 
@@ -513,6 +516,12 @@ impl<P: LoopProvider> AgentLoop<P> {
         self
     }
 
+    /// Attach a [`SessionContext`] for environment info injection into the prompt.
+    pub fn with_session_context(mut self, ctx: super::sections::SessionContext) -> Self {
+        self.session_context = Some(ctx);
+        self
+    }
+
     /// Get tool definitions from the registry (for inspection/testing).
     pub fn tool_definitions(&self) -> Vec<ToolDefinition> {
         self.tool_registry.read().unwrap_or_else(|e| e.into_inner()).tool_definitions()
@@ -569,7 +578,7 @@ impl<P: LoopProvider> AgentLoop<P> {
                 parameters_schema: Some(td.parameters.clone()),
             })
             .collect();
-        let mut system_prompt = self.prompt_builder.build(&tool_infos, None, None);
+        let mut system_prompt = self.prompt_builder.build(&tool_infos, None, self.session_context.as_ref());
 
         // Get tool definitions for the provider
         let mut tool_defs = self.tool_registry.read().unwrap_or_else(|e| e.into_inner()).tool_definitions();
@@ -1239,7 +1248,7 @@ impl<P: LoopProvider> AgentLoop<P> {
                         self.prompt_builder.update_skill_info(&new_skills);
                         // Rebuild system prompt so the next stream() call
                         // sees the newly discovered skills.
-                        system_prompt = self.prompt_builder.build(&tool_infos, None, None);
+                        system_prompt = self.prompt_builder.build(&tool_infos, None, self.session_context.as_ref());
                         if let Some(ref prefetcher) = self.skill_prefetcher {
                             prefetcher.commit(new_skills);
                         }

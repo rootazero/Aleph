@@ -277,16 +277,20 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 default_working_dir.clone(),
             );
 
+            // Create a shared chain context for this run — both the SubagentTool
+            // and the AgentLoop must share the same chain_id so that subagent
+            // invocations produce consistent end-to-end chain tracing.
+            let run_chain = crate::agent_loop::chain_context::ChainContext::new();
+
             // Register subagent tool
             {
                 use crate::agent_loop::subagent_tool::SubagentTool;
-                use crate::agent_loop::chain_context::ChainContext;
                 let sub_provider = self.provider_registry.default_provider();
                 tool_registry.register(Box::new(SubagentTool::new(
                     sub_provider,
                     sub_tool_factory.clone(),
                     sub_safety_factory.clone(),
-                    ChainContext::new(),
+                    run_chain.clone(),
                 )));
             }
 
@@ -347,6 +351,15 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 crate::agent_loop::ContextBudget::new(&config)
             });
 
+            // Build session context for environment info injection
+            let session_ctx = crate::agent_loop::SessionContext {
+                os: format!("{} {}", std::env::consts::OS, std::env::consts::ARCH),
+                shell: std::env::var("SHELL").unwrap_or_default(),
+                cwd: agent.workspace().to_string_lossy().to_string(),
+                git_branch: detect_git_branch(agent.workspace()).await,
+                language: String::new(),
+            };
+
             let agent_loop = AgentLoop::new(
                 bridge,
                 tool_registry,
@@ -355,8 +368,10 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 loop_config,
                 cancel_token.clone(),
             )
+            .with_chain(run_chain)
             .with_delta_sink(Box::new(streaming_sink))
-            .with_context_budget(context_budget);
+            .with_context_budget(context_budget)
+            .with_session_context(session_ctx);
 
             // Create a streaming callback
             let mut callback = StreamCallback::new(
@@ -799,5 +814,25 @@ pub(super) async fn write_conversation_memory(
         warn!("Failed to write conversation memory: {}", e);
     } else {
         debug!("Conversation memory saved to Layer 1");
+    }
+}
+
+/// Detect current git branch from workspace path.
+async fn detect_git_branch(workspace: &std::path::Path) -> Option<String> {
+    let output = tokio::process::Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .current_dir(workspace)
+        .output()
+        .await
+        .ok()?;
+    if output.status.success() {
+        let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if branch.is_empty() || branch == "HEAD" {
+            None
+        } else {
+            Some(branch)
+        }
+    } else {
+        None
     }
 }
