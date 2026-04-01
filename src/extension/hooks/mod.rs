@@ -190,57 +190,6 @@ impl HookResult {
     }
 }
 
-/// Result from an interceptor hook
-#[derive(Debug, Clone, Default)]
-pub struct InterceptorResult {
-    /// Whether the request should pass through
-    pub pass: bool,
-    /// Modified context (if the interceptor modified the request)
-    pub modified_context: Option<HookContext>,
-    /// Reason for blocking (if pass is false)
-    pub block_reason: Option<String>,
-    /// Whether to suppress the block message from the user
-    pub silent: bool,
-}
-
-impl InterceptorResult {
-    /// Create a passing result
-    pub fn pass() -> Self {
-        Self {
-            pass: true,
-            ..Default::default()
-        }
-    }
-
-    /// Create a blocking result with a reason
-    pub fn block(reason: impl Into<String>) -> Self {
-        Self {
-            pass: false,
-            block_reason: Some(reason.into()),
-            ..Default::default()
-        }
-    }
-
-    /// Create a silent blocking result (no message shown to user)
-    pub fn block_silent(reason: impl Into<String>) -> Self {
-        Self {
-            pass: false,
-            block_reason: Some(reason.into()),
-            silent: true,
-            ..Default::default()
-        }
-    }
-
-    /// Create a passing result with modified context
-    pub fn modified(ctx: HookContext) -> Self {
-        Self {
-            pass: true,
-            modified_context: Some(ctx),
-            ..Default::default()
-        }
-    }
-}
-
 /// Parse structured output from a command hook.
 ///
 /// Each line is parsed independently using a prefix protocol:
