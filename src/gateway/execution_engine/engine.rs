@@ -509,7 +509,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                                 tools: None,
                                 think_level: None,
                                 temperature: Some(0.3),
-                                max_tokens: Some(30),
+                                max_tokens: None,
                                 tool_choice: None,
                                 model: None,
                             };

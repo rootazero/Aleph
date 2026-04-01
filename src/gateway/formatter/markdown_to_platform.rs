@@ -60,7 +60,8 @@ pub(super) fn markdown_to_telegram_html(text: &str) -> String {
 
     // Match trailing-newline behavior of the input.
     trim_trailing_newline(&mut out, text);
-    out
+    // Repair mismatched HTML tag nesting before sending to Telegram
+    repair_html_tags(&out)
 }
 
 /// Apply Telegram-specific inline formatting (bold, italic, strikethrough,

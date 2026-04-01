@@ -450,6 +450,82 @@ pub(super) fn parse_list_item(trimmed: &str) -> Option<&str> {
     }
 }
 
+/// Repair mismatched HTML tag nesting for Telegram's strict parser.
+///
+/// Telegram rejects HTML with improperly nested tags (e.g. `<b>...<i>...</b>...</i>`).
+/// This function ensures all tags are properly closed in LIFO order by tracking
+/// a stack of open tags and closing them as needed.
+pub(super) fn repair_html_tags(html: &str) -> String {
+    // Telegram only supports a small set of tags
+    const TAGS: &[&str] = &["b", "i", "s", "u", "code", "pre"];
+
+    let mut result = String::with_capacity(html.len());
+    let mut stack: Vec<&str> = Vec::new();
+    let mut rest = html;
+
+    while !rest.is_empty() {
+        // Find next '<'
+        let Some(lt_pos) = rest.find('<') else {
+            result.push_str(rest);
+            break;
+        };
+
+        // Copy text before '<'
+        result.push_str(&rest[..lt_pos]);
+        rest = &rest[lt_pos..];
+
+        // Try to parse a tag
+        let Some(gt_pos) = rest.find('>') else {
+            result.push_str(rest);
+            break;
+        };
+
+        let full_tag = &rest[..gt_pos + 1]; // e.g. "<b>" or "</b>" or "<code class=...>"
+        let tag_content = &rest[1..gt_pos]; // e.g. "b" or "/b" or "code class=..."
+        let is_close = tag_content.starts_with('/');
+        let tag_name = if is_close {
+            tag_content[1..].split_whitespace().next().unwrap_or("")
+        } else {
+            tag_content.split_whitespace().next().unwrap_or("")
+        };
+
+        if let Some(&matched_tag) = TAGS.iter().find(|&&t| t == tag_name) {
+            if is_close {
+                // Close tag: unwind stack to find matching open tag
+                if let Some(idx) = stack.iter().rposition(|&t| t == matched_tag) {
+                    let to_reopen: Vec<&str> = stack[idx + 1..].iter().copied().collect();
+                    for &t in stack[idx + 1..].iter().rev() {
+                        result.push_str(&format!("</{t}>"));
+                    }
+                    result.push_str(&format!("</{matched_tag}>"));
+                    stack.truncate(idx);
+                    for &t in &to_reopen {
+                        result.push_str(&format!("<{t}>"));
+                        stack.push(t);
+                    }
+                }
+                // else: orphan close tag — drop silently
+            } else {
+                // Open tag — pass through as-is (preserves attributes)
+                result.push_str(full_tag);
+                stack.push(matched_tag);
+            }
+        } else {
+            // Not a known tag — pass through as-is
+            result.push_str(full_tag);
+        }
+
+        rest = &rest[gt_pos + 1..];
+    }
+
+    // Close any remaining open tags
+    for &t in stack.iter().rev() {
+        result.push_str(&format!("</{t}>"));
+    }
+
+    result
+}
+
 /// Replace Slack-style `<url|text>` links with `[text](url)`.
 pub(super) fn replace_slack_links(text: &str) -> String {
     let mut result = text.to_string();
