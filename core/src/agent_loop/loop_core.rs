@@ -24,6 +24,8 @@ use super::context_budget::pressure::PressureSensor;
 use super::prompt_builder::{PromptBuilder, ToolInfo};
 use super::safety::{SafetyError, SafetyGuard};
 use super::stop_hooks::{self, StopHookContext, StopHookHandler};
+use super::tool_pipeline::ToolPipeline;
+use crate::extension::hooks::HookExecutor;
 use super::tool::{LoopToolRegistry, ToolDefinition, ToolResult};
 use crate::providers::AiProvider;
 use crate::providers::adapter::StopReason;
@@ -361,6 +363,8 @@ pub struct AgentLoop<P: LoopProvider> {
     tool_refresh: Option<Arc<dyn super::tool_refresh::ToolRefreshSource>>,
     prompt_builder: PromptBuilder,
     safety_guard: Arc<SafetyGuard>,
+    /// Hook-integrated tool execution pipeline (wraps safety_guard).
+    tool_pipeline: Arc<ToolPipeline>,
     config: LoopConfig,
     /// Optional context budget for pressure sensing and budget tracking.
     /// Wrapped in `Mutex` for interior mutability — `run_with_history_messages`
@@ -420,6 +424,12 @@ impl<P: LoopProvider> AgentLoop<P> {
             }),
         ]);
         let provider_max = provider.max_output_tokens();
+        let safety_guard = Arc::new(safety_guard);
+        let tool_pipeline = Arc::new(ToolPipeline::new(
+            Arc::new(HookExecutor::empty()),
+            Arc::clone(&safety_guard),
+            "",
+        ));
         Self {
             provider,
             fallback_provider: None,
@@ -427,7 +437,8 @@ impl<P: LoopProvider> AgentLoop<P> {
             tool_registry: std::sync::RwLock::new(Arc::new(tool_registry)),
             tool_refresh: None,
             prompt_builder,
-            safety_guard: Arc::new(safety_guard),
+            safety_guard,
+            tool_pipeline,
             config,
             context_budget: Mutex::new(None),
             pressure_sensor: Mutex::new(PressureSensor::new(3.5)),
@@ -868,7 +879,7 @@ impl<P: LoopProvider> AgentLoop<P> {
             // turns is minimal: 1 mpsc channel + 1 tokio::spawn + 1 abort.
             let (mut bridge, executor) = super::streaming_bridge::StreamingToolBridge::new(
                 Arc::clone(&self.tool_registry.read().unwrap_or_else(|e| e.into_inner())),
-                Arc::clone(&self.safety_guard),
+                Arc::clone(&self.tool_pipeline),
                 self.cancel_token.clone(),
             );
             let executor_handle = tokio::spawn(executor.run());
@@ -1143,62 +1154,63 @@ impl<P: LoopProvider> AgentLoop<P> {
                     .collect();
 
                 for outcome in &outcomes {
+                    let o = &outcome.outcome;
                     // Determine if this outcome was a safety denial (no execution happened).
-                    let is_safety_denial = outcome.is_error
-                        && (outcome.output_text.starts_with("[BLOCKED]")
-                            || outcome.output_text.starts_with("[NEEDS_CONFIRMATION]")
-                            || outcome.output_text.starts_with("[DENIED]"));
+                    let is_safety_denial = o.is_error
+                        && (o.output_text.starts_with("[BLOCKED]")
+                            || o.output_text.starts_with("[NEEDS_CONFIRMATION]")
+                            || o.output_text.starts_with("[DENIED]"));
 
                     // Fire on_tool_start only for tools that actually executed.
                     if !is_safety_denial {
                         let args = tool_args_by_id
-                            .get(outcome.tool_id.as_str())
+                            .get(o.tool_id.as_str())
                             .copied()
                             .unwrap_or(&Value::Null);
-                        callback.on_tool_start(&outcome.tool_name, args);
+                        callback.on_tool_start(&o.tool_name, args);
                     }
 
                     // Reconstruct a ToolResult for the callback.
-                    let tool_result = if outcome.is_error {
+                    let tool_result = if o.is_error {
                         ToolResult::Error {
-                            error: outcome.output_text.clone(),
-                            retryable: outcome.retryable,
+                            error: o.output_text.clone(),
+                            retryable: o.retryable,
                         }
-                    } else if outcome.should_stop {
+                    } else if o.should_stop {
                         ToolResult::SuccessAndStopLoop {
-                            output: Value::String(outcome.output_text.clone()),
+                            output: Value::String(o.output_text.clone()),
                         }
                     } else {
                         ToolResult::Success {
-                            output: Value::String(outcome.output_text.clone()),
+                            output: Value::String(o.output_text.clone()),
                         }
                     };
                     if !is_safety_denial {
-                        callback.on_tool_done(&outcome.tool_name, &tool_result);
+                        callback.on_tool_done(&o.tool_name, &tool_result);
                     }
 
-                    if outcome.is_error {
+                    if o.is_error {
                         // Safety denials, cancellations, and retryable errors
                         // don't count toward consecutive limit.
                         let is_non_counting = is_safety_denial
-                            || outcome.output_text.starts_with("[CANCELLED]");
+                            || o.output_text.starts_with("[CANCELLED]");
                         if is_non_counting {
                             // Fire safety block callback for denied tools
-                            if outcome.output_text.starts_with("[BLOCKED]") {
+                            if o.output_text.starts_with("[BLOCKED]") {
                                 callback.on_safety_block(&SafetyError::Blocked {
-                                    tool: outcome.tool_name.clone(),
+                                    tool: o.tool_name.clone(),
                                     pattern: String::new(),
                                 });
-                            } else if outcome.output_text.starts_with("[NEEDS_CONFIRMATION]") {
+                            } else if o.output_text.starts_with("[NEEDS_CONFIRMATION]") {
                                 callback.on_safety_block(&SafetyError::NeedsConfirmation {
-                                    tool: outcome.tool_name.clone(),
+                                    tool: o.tool_name.clone(),
                                 });
-                            } else if outcome.output_text.starts_with("[DENIED]") {
+                            } else if o.output_text.starts_with("[DENIED]") {
                                 callback.on_safety_block(&SafetyError::PolicyDenied {
-                                    tool: outcome.tool_name.clone(),
+                                    tool: o.tool_name.clone(),
                                 });
                             }
-                        } else if !outcome.retryable {
+                        } else if !o.retryable {
                             consecutive_errors += 1;
                         }
                     } else {
@@ -1206,15 +1218,15 @@ impl<P: LoopProvider> AgentLoop<P> {
                     }
 
                     messages.push(UnifiedMessage::tool_result(
-                        outcome.tool_id.clone(),
-                        outcome.tool_name.clone(),
-                        outcome.output_text.clone(),
-                        outcome.is_error,
+                        o.tool_id.clone(),
+                        o.tool_name.clone(),
+                        o.output_text.clone(),
+                        o.is_error,
                     ));
 
-                    if outcome.should_stop {
+                    if o.should_stop {
                         if final_text.is_none() {
-                            final_text = Some(outcome.output_text.clone());
+                            final_text = Some(o.output_text.clone());
                         }
                         stop_requested = true;
                     }
@@ -1226,7 +1238,8 @@ impl<P: LoopProvider> AgentLoop<P> {
                 if let Some(ref sp) = self.summary_provider {
                     let inputs: Vec<super::tool_summary::ToolSummaryInput> = outcomes
                         .iter()
-                        .map(|o| {
+                        .map(|pipeline_outcome| {
+                            let o = &pipeline_outcome.outcome;
                             let tool_input = tool_args_by_id
                                 .get(o.tool_id.as_str())
                                 .map(|v| serde_json::to_string(v).unwrap_or_default())

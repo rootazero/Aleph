@@ -19,11 +19,10 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
-use crate::agent_loop::safety::{SafetyError, SafetyGuard, ToolCall as SafetyToolCall};
-use crate::agent_loop::tool::{LoopToolRegistry, ToolResult};
+use crate::agent_loop::tool::LoopToolRegistry;
 use crate::agent_loop::tool_orchestrator::ToolOutcome;
+use crate::agent_loop::tool_pipeline::{PipelineOutcome, ToolPipeline};
 use crate::providers::delta::ProviderDelta;
-use crate::tool_output::compressor::compress_tool_output;
 
 // =============================================================================
 // ReadyToolCall
@@ -70,7 +69,7 @@ impl StreamingToolBridge {
     /// LLM responses which rarely exceed 10 parallel tool calls.
     pub fn new(
         registry: Arc<LoopToolRegistry>,
-        safety: Arc<SafetyGuard>,
+        pipeline: Arc<ToolPipeline>,
         cancel: CancellationToken,
     ) -> (Self, StreamingToolExecutor) {
         let (tx, rx) = mpsc::channel(32);
@@ -82,7 +81,7 @@ impl StreamingToolBridge {
         let executor = StreamingToolExecutor {
             ready_rx: rx,
             registry,
-            safety,
+            pipeline,
             cancel,
         };
         (bridge, executor)
@@ -154,15 +153,15 @@ impl StreamingToolBridge {
 pub struct StreamingToolExecutor {
     ready_rx: mpsc::Receiver<ReadyToolCall>,
     registry: Arc<LoopToolRegistry>,
-    safety: Arc<SafetyGuard>,
+    pipeline: Arc<ToolPipeline>,
     cancel: CancellationToken,
 }
 
 impl StreamingToolExecutor {
     /// Consume all ready tool calls and return results sorted by original order.
-    pub async fn run(mut self) -> Vec<ToolOutcome> {
-        let mut results: Vec<(usize, ToolOutcome)> = Vec::new();
-        let mut in_flight: Vec<(usize, JoinHandle<ToolOutcome>)> = Vec::new();
+    pub async fn run(mut self) -> Vec<PipelineOutcome> {
+        let mut results: Vec<(usize, PipelineOutcome)> = Vec::new();
+        let mut in_flight: Vec<(usize, JoinHandle<PipelineOutcome>)> = Vec::new();
         let mut exclusive_queue: Vec<ReadyToolCall> = Vec::new();
 
         // Phase 1: receive tool calls from the channel.
@@ -201,13 +200,18 @@ impl StreamingToolExecutor {
                 Ok(outcome) => results.push((idx, outcome)),
                 Err(e) => {
                     tracing::error!("Spawned tool task panicked: {}", e);
-                    results.push((idx, ToolOutcome {
-                        tool_id: String::new(),
-                        tool_name: String::new(),
-                        output_text: format!("[INTERNAL_ERROR] task panicked: {}", e),
-                        is_error: true,
-                        should_stop: false,
-                        retryable: false,
+                    results.push((idx, PipelineOutcome {
+                        outcome: ToolOutcome {
+                            tool_id: String::new(),
+                            tool_name: String::new(),
+                            output_text: format!("[INTERNAL_ERROR] task panicked: {}", e),
+                            is_error: true,
+                            should_stop: false,
+                            retryable: false,
+                        },
+                        additional_contexts: Vec::new(),
+                        prevent_continuation: false,
+                        hook_messages: Vec::new(),
                     }));
                 }
             }
@@ -233,123 +237,19 @@ impl StreamingToolExecutor {
         id: String,
         name: String,
         arguments: Value,
-    ) -> JoinHandle<ToolOutcome> {
+    ) -> JoinHandle<PipelineOutcome> {
         let registry = Arc::clone(&self.registry);
-        let safety = Arc::clone(&self.safety);
+        let pipeline = Arc::clone(&self.pipeline);
         let cancel = self.cancel.clone();
 
         tokio::spawn(async move {
-            execute_single_tool(&id, &name, &arguments, &registry, &safety, &cancel).await
+            pipeline.execute(&id, &name, &arguments, &registry, &cancel).await
         })
     }
 
     /// Execute a single tool inline (for exclusive tools).
-    async fn execute_one(&self, id: &str, name: &str, arguments: &Value) -> ToolOutcome {
-        execute_single_tool(id, name, arguments, &self.registry, &self.safety, &self.cancel).await
-    }
-}
-
-// =============================================================================
-// execute_single_tool (shared logic)
-// =============================================================================
-
-/// Execute a single tool call with safety check and cancellation.
-///
-/// Callbacks (on_tool_start, on_tool_done, on_safety_block) are NOT fired here.
-/// The main loop fires them when processing `ToolOutcome`s, which is the single
-/// point where callback ordering is deterministic.
-async fn execute_single_tool(
-    id: &str,
-    name: &str,
-    arguments: &Value,
-    registry: &LoopToolRegistry,
-    safety: &SafetyGuard,
-    cancel: &CancellationToken,
-) -> ToolOutcome {
-    // Safety check.
-    let safety_call = SafetyToolCall {
-        name: name.to_string(),
-        input: arguments.clone(),
-    };
-    if let Err(e) = safety.check(&safety_call) {
-        let msg = match &e {
-            SafetyError::Blocked { tool, pattern } => {
-                format!("[BLOCKED] Tool '{}' blocked by safety pattern '{}'", tool, pattern)
-            }
-            SafetyError::NeedsConfirmation { tool } => {
-                format!("[NEEDS_CONFIRMATION] Tool '{}' requires user confirmation", tool)
-            }
-            SafetyError::PolicyDenied { tool } => {
-                format!("[DENIED] Tool '{}' denied by policy", tool)
-            }
-        };
-        return ToolOutcome {
-            tool_id: id.to_string(),
-            tool_name: name.to_string(),
-            output_text: msg,
-            is_error: true,
-            should_stop: false,
-            retryable: false,
-        };
-    }
-
-    // Execute with cancellation.
-    let result = tokio::select! {
-        r = registry.execute(name, arguments.clone()) => r,
-        _ = cancel.cancelled() => {
-            return ToolOutcome {
-                tool_id: id.to_string(),
-                tool_name: name.to_string(),
-                output_text: "[CANCELLED] Tool execution was cancelled".to_string(),
-                is_error: true,
-                should_stop: false,
-                retryable: false,
-            };
-        }
-    };
-
-    // Map ToolResult to ToolOutcome.
-    match &result {
-        ToolResult::Success { output } => {
-            let raw = value_to_text(output);
-            let compressed = compress_tool_output(name, &raw);
-            ToolOutcome {
-                tool_id: id.to_string(),
-                tool_name: name.to_string(),
-                output_text: compressed,
-                is_error: false,
-                should_stop: false,
-                retryable: false,
-            }
-        }
-        ToolResult::Error { error, retryable } => ToolOutcome {
-            tool_id: id.to_string(),
-            tool_name: name.to_string(),
-            output_text: error.clone(),
-            is_error: true,
-            should_stop: false,
-            retryable: *retryable,
-        },
-        ToolResult::SuccessAndStopLoop { output } => {
-            let raw = value_to_text(output);
-            let compressed = compress_tool_output(name, &raw);
-            ToolOutcome {
-                tool_id: id.to_string(),
-                tool_name: name.to_string(),
-                output_text: compressed,
-                is_error: false,
-                should_stop: true,
-                retryable: false,
-            }
-        }
-    }
-}
-
-/// Convert a JSON Value to a display string.
-fn value_to_text(v: &Value) -> String {
-    match v {
-        Value::String(s) => s.clone(),
-        other => other.to_string(),
+    async fn execute_one(&self, id: &str, name: &str, arguments: &Value) -> PipelineOutcome {
+        self.pipeline.execute(id, name, arguments, &self.registry, &self.cancel).await
     }
 }
 
@@ -366,12 +266,18 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::{Duration, Instant};
 
-    use crate::agent_loop::tool::LoopTool;
+    use crate::agent_loop::safety::SafetyGuard;
+    use crate::agent_loop::tool::{LoopTool, LoopToolRegistry, ToolResult};
+    use crate::extension::hooks::HookExecutor;
     use crate::extension::PermissionAction;
 
-    /// A permissive safety guard for tests — allows everything.
-    fn permissive_guard() -> SafetyGuard {
-        SafetyGuard::new(vec![], HashMap::new(), PermissionAction::Allow)
+    /// A permissive pipeline for tests — allows everything, no hooks.
+    fn permissive_pipeline() -> Arc<ToolPipeline> {
+        Arc::new(ToolPipeline::new(
+            Arc::new(HookExecutor::empty()),
+            Arc::new(SafetyGuard::new(vec![], HashMap::new(), PermissionAction::Allow)),
+            "test-session",
+        ))
     }
 
     /// A simple echo tool (concurrent-safe).
@@ -481,7 +387,7 @@ mod tests {
         let cancel = CancellationToken::new();
         let (mut bridge, executor) = StreamingToolBridge::new(
             Arc::new(registry),
-            Arc::new(permissive_guard()),
+            permissive_pipeline(),
             cancel,
         );
 
@@ -490,10 +396,10 @@ mod tests {
 
         let results = executor.run().await;
         assert_eq!(results.len(), 1);
-        assert_eq!(results[0].tool_name, "echo");
-        assert!(!results[0].is_error);
+        assert_eq!(results[0].outcome.tool_name, "echo");
+        assert!(!results[0].outcome.is_error);
         // Echo tool returns the input as output.
-        assert!(results[0].output_text.contains("hello"));
+        assert!(results[0].outcome.output_text.contains("hello"));
     }
 
     // -------------------------------------------------------------------------
@@ -515,7 +421,7 @@ mod tests {
         let cancel = CancellationToken::new();
         let (mut bridge, executor) = StreamingToolBridge::new(
             Arc::new(registry),
-            Arc::new(permissive_guard()),
+            permissive_pipeline(),
             cancel,
         );
 
@@ -530,7 +436,7 @@ mod tests {
 
         assert_eq!(results.len(), 2);
         for r in &results {
-            assert!(!r.is_error);
+            assert!(!r.outcome.is_error);
         }
 
         // Two 50ms tools in parallel should take < 100ms total.
@@ -541,8 +447,8 @@ mod tests {
         );
 
         // Results should be sorted by original index.
-        assert_eq!(results[0].tool_id, "c1");
-        assert_eq!(results[1].tool_id, "c2");
+        assert_eq!(results[0].outcome.tool_id, "c1");
+        assert_eq!(results[1].outcome.tool_id, "c2");
     }
 
     // -------------------------------------------------------------------------
@@ -558,7 +464,7 @@ mod tests {
         let cancel = CancellationToken::new();
         let (mut bridge, executor) = StreamingToolBridge::new(
             Arc::new(registry),
-            Arc::new(permissive_guard()),
+            permissive_pipeline(),
             cancel,
         );
 
@@ -571,14 +477,14 @@ mod tests {
         assert_eq!(results.len(), 2);
 
         // Both should succeed.
-        assert!(!results[0].is_error);
-        assert!(!results[1].is_error);
+        assert!(!results[0].outcome.is_error);
+        assert!(!results[1].outcome.is_error);
 
         // Order preserved.
-        assert_eq!(results[0].tool_id, "t1");
-        assert_eq!(results[0].tool_name, "slow");
-        assert_eq!(results[1].tool_id, "t2");
-        assert_eq!(results[1].tool_name, "exclusive");
+        assert_eq!(results[0].outcome.tool_id, "t1");
+        assert_eq!(results[0].outcome.tool_name, "slow");
+        assert_eq!(results[1].outcome.tool_id, "t2");
+        assert_eq!(results[1].outcome.tool_name, "exclusive");
     }
 
     // -------------------------------------------------------------------------
@@ -591,7 +497,7 @@ mod tests {
         let cancel = CancellationToken::new();
         let (bridge, executor) = StreamingToolBridge::new(
             Arc::new(registry),
-            Arc::new(permissive_guard()),
+            permissive_pipeline(),
             cancel,
         );
 
@@ -614,7 +520,7 @@ mod tests {
         let cancel = CancellationToken::new();
         let (mut bridge, executor) = StreamingToolBridge::new(
             Arc::new(registry),
-            Arc::new(permissive_guard()),
+            permissive_pipeline(),
             cancel.clone(),
         );
 
@@ -642,12 +548,12 @@ mod tests {
         // The spawned tool should have been cancelled.
         assert!(!results.is_empty());
         let cancelled_count = results.iter().filter(|r| {
-            r.output_text.contains("CANCELLED")
+            r.outcome.output_text.contains("CANCELLED")
         }).count();
         assert!(
             cancelled_count > 0,
             "Expected at least one cancelled outcome, got: {:?}",
-            results.iter().map(|r| &r.output_text).collect::<Vec<_>>()
+            results.iter().map(|r| &r.outcome.output_text).collect::<Vec<_>>()
         );
     }
 }
