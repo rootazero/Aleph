@@ -1,7 +1,4 @@
 //! Sub-agent handler component for managing sub-agent lifecycle.
-//!
-//! Enhanced to integrate with ExecutionCoordinator and ResultCollector
-//! for synchronous result collection and tool call aggregation.
 
 use crate::sync_primitives::Arc;
 use std::collections::HashMap;
@@ -11,10 +8,6 @@ use async_trait::async_trait;
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
-use crate::agents::sub_agents::{
-    CollectedToolStatus, ExecutionCoordinator, ResultCollector,
-    SubAgentResult as TraitsSubAgentResult, ToolCallProgress, ToolCallRecord, ToolCallStatus,
-};
 use crate::agents::{AgentDef, AgentRegistry};
 use crate::event::{
     AlephEvent, EventContext, EventHandler, EventType, HandlerError, SubAgentRequest,
@@ -32,19 +25,11 @@ struct SubAgentSession {
 }
 
 /// Handler for sub-agent lifecycle events
-///
-/// This handler now integrates with:
-/// - `ExecutionCoordinator`: For synchronous result wait and concurrency control
-/// - `ResultCollector`: For aggregating tool calls and artifacts
 pub struct SubAgentHandler {
     registry: Arc<AgentRegistry>,
     active_sessions: RwLock<HashMap<String, SubAgentSession>>,
     /// Session ID to Request ID mapping for tool call correlation
     session_to_request: RwLock<HashMap<String, String>>,
-    /// Execution coordinator for synchronous wait (optional)
-    coordinator: Option<Arc<ExecutionCoordinator>>,
-    /// Result collector for tool aggregation (optional)
-    collector: Option<Arc<ResultCollector>>,
 }
 
 impl SubAgentHandler {
@@ -54,34 +39,7 @@ impl SubAgentHandler {
             registry,
             active_sessions: RwLock::new(HashMap::new()),
             session_to_request: RwLock::new(HashMap::new()),
-            coordinator: None,
-            collector: None,
         }
-    }
-
-    /// Create a new SubAgentHandler with coordinator and collector
-    pub fn with_components(
-        registry: Arc<AgentRegistry>,
-        coordinator: Arc<ExecutionCoordinator>,
-        collector: Arc<ResultCollector>,
-    ) -> Self {
-        Self {
-            registry,
-            active_sessions: RwLock::new(HashMap::new()),
-            session_to_request: RwLock::new(HashMap::new()),
-            coordinator: Some(coordinator),
-            collector: Some(collector),
-        }
-    }
-
-    /// Set the execution coordinator
-    pub fn set_coordinator(&mut self, coordinator: Arc<ExecutionCoordinator>) {
-        self.coordinator = Some(coordinator);
-    }
-
-    /// Set the result collector
-    pub fn set_collector(&mut self, collector: Arc<ResultCollector>) {
-        self.collector = Some(collector);
     }
 
     /// Get the agent definition for a sub-agent
@@ -148,7 +106,7 @@ impl SubAgentHandler {
             HandlerError::Internal(format!("Agent not found: {}", request.agent_id))
         })?;
 
-        // Generate request ID if not provided (for backwards compatibility)
+        // Generate request ID for tracking
         let request_id = format!("req_{}", uuid::Uuid::new_v4());
 
         // Create the sub-agent session tracking
@@ -171,16 +129,6 @@ impl SubAgentHandler {
             mapping.insert(request.child_session_id.clone(), request_id.clone());
         }
 
-        // Initialize result collector if available
-        if let Some(ref collector) = self.collector {
-            collector.init_request(&request_id).await;
-        }
-
-        // Start execution tracking if coordinator available
-        if let Some(ref coordinator) = self.coordinator {
-            coordinator.start_execution(&request_id).await;
-        }
-
         info!(
             agent_id = %request.agent_id,
             child_session_id = %request.child_session_id,
@@ -198,9 +146,6 @@ impl SubAgentHandler {
         result: &SubAgentResult,
         _ctx: &EventContext,
     ) -> Result<Vec<AlephEvent>, HandlerError> {
-        // Get the request ID before removing the session
-        let request_id = self.get_request_for_session(&result.child_session_id).await;
-
         // Remove the session from tracking
         let session = {
             let mut sessions = self.active_sessions.write().await;
@@ -224,37 +169,6 @@ impl SubAgentHandler {
                 duration_ms = %execution_duration_ms,
                 "Sub-agent completed"
             );
-
-            // Notify coordinator with aggregated result
-            if let Some(ref request_id) = request_id {
-                // Get tool summary from collector
-                let tools_called = if let Some(ref collector) = self.collector {
-                    let summary = collector.get_summary(request_id).await;
-                    summary
-                        .into_iter()
-                        .map(|s| ToolCallRecord {
-                            name: s.tool,
-                            arguments: serde_json::Value::Null,
-                            success: s.state.status == "completed",
-                            result_summary: s.state.title.unwrap_or_default(),
-                        })
-                        .collect()
-                } else {
-                    Vec::new()
-                };
-
-                // Create enhanced result for coordinator
-                let enhanced_result = TraitsSubAgentResult::success(request_id, &result.summary)
-                    .with_iterations(session.iteration_count)
-                    .with_tools_called(tools_called);
-
-                // Notify coordinator
-                if let Some(ref coordinator) = self.coordinator {
-                    coordinator.on_execution_completed(enhanced_result).await;
-                }
-
-                debug!(request_id = %request_id, "Sub-agent result collected");
-            }
         }
 
         Ok(vec![])
@@ -266,7 +180,6 @@ impl SubAgentHandler {
         event: &ToolCallStarted,
         _ctx: &EventContext,
     ) -> Result<Vec<AlephEvent>, HandlerError> {
-        // Get request ID from session if available
         let request_id = if let Some(ref session_id) = event.session_id {
             self.get_request_for_session(session_id).await
         } else {
@@ -274,33 +187,6 @@ impl SubAgentHandler {
         };
 
         if let Some(request_id) = request_id {
-            // Record in collector
-            if let Some(ref collector) = self.collector {
-                collector
-                    .record_tool_start(
-                        &request_id,
-                        &event.call_id,
-                        &event.tool,
-                        event.input.clone(),
-                    )
-                    .await;
-            }
-
-            // Record progress in coordinator
-            if let Some(ref coordinator) = self.coordinator {
-                coordinator
-                    .on_tool_progress(
-                        &request_id,
-                        ToolCallProgress {
-                            call_id: event.call_id.clone(),
-                            tool_name: event.tool.clone(),
-                            status: ToolCallStatus::Running,
-                            timestamp: Instant::now(),
-                        },
-                    )
-                    .await;
-            }
-
             debug!(
                 request_id = %request_id,
                 call_id = %event.call_id,
@@ -318,7 +204,6 @@ impl SubAgentHandler {
         event: &ToolCallResult,
         _ctx: &EventContext,
     ) -> Result<Vec<AlephEvent>, HandlerError> {
-        // Get request ID from session if available
         let request_id = if let Some(ref session_id) = event.session_id {
             self.get_request_for_session(session_id).await
         } else {
@@ -326,38 +211,6 @@ impl SubAgentHandler {
         };
 
         if let Some(request_id) = request_id {
-            // Truncate output for preview
-            let output_preview = crate::agents::sub_agents::truncate_for_preview(&event.output);
-
-            // Update collector
-            if let Some(ref collector) = self.collector {
-                collector
-                    .update_tool_status(
-                        &request_id,
-                        &event.call_id,
-                        CollectedToolStatus::Completed {
-                            output_preview: output_preview.clone(),
-                        },
-                        Some(format!("{} completed", event.tool)),
-                    )
-                    .await;
-            }
-
-            // Record progress in coordinator
-            if let Some(ref coordinator) = self.coordinator {
-                coordinator
-                    .on_tool_progress(
-                        &request_id,
-                        ToolCallProgress {
-                            call_id: event.call_id.clone(),
-                            tool_name: event.tool.clone(),
-                            status: ToolCallStatus::Completed { output_preview },
-                            timestamp: Instant::now(),
-                        },
-                    )
-                    .await;
-            }
-
             debug!(
                 request_id = %request_id,
                 call_id = %event.call_id,
@@ -375,7 +228,6 @@ impl SubAgentHandler {
         event: &ToolCallError,
         _ctx: &EventContext,
     ) -> Result<Vec<AlephEvent>, HandlerError> {
-        // Get request ID from session if available
         let request_id = if let Some(ref session_id) = event.session_id {
             self.get_request_for_session(session_id).await
         } else {
@@ -383,37 +235,6 @@ impl SubAgentHandler {
         };
 
         if let Some(request_id) = request_id {
-            // Update collector
-            if let Some(ref collector) = self.collector {
-                collector
-                    .update_tool_status(
-                        &request_id,
-                        &event.call_id,
-                        CollectedToolStatus::Failed {
-                            error: event.error.clone(),
-                        },
-                        Some(format!("{} failed", event.tool)),
-                    )
-                    .await;
-            }
-
-            // Record progress in coordinator
-            if let Some(ref coordinator) = self.coordinator {
-                coordinator
-                    .on_tool_progress(
-                        &request_id,
-                        ToolCallProgress {
-                            call_id: event.call_id.clone(),
-                            tool_name: event.tool.clone(),
-                            status: ToolCallStatus::Failed {
-                                error: event.error.clone(),
-                            },
-                            timestamp: Instant::now(),
-                        },
-                    )
-                    .await;
-            }
-
             warn!(
                 request_id = %request_id,
                 call_id = %event.call_id,
@@ -437,7 +258,6 @@ impl EventHandler for SubAgentHandler {
         vec![
             EventType::SubAgentStarted,
             EventType::SubAgentCompleted,
-            // New subscriptions for tool call tracking
             EventType::ToolCallStarted,
             EventType::ToolCallCompleted,
             EventType::ToolCallFailed,
@@ -463,7 +283,6 @@ impl EventHandler for SubAgentHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agents::sub_agents::CoordinatorConfig;
     use crate::event::EventBus;
     use crate::sync_primitives::Arc;
 
@@ -526,7 +345,6 @@ mod tests {
             handler.get_parent_session("child-1").await,
             Some("parent-1".into())
         );
-        // Should have request ID mapping
         assert!(handler.get_request_for_session("child-1").await.is_some());
     }
 
@@ -649,105 +467,5 @@ mod tests {
         let handler = SubAgentHandler::new(registry);
 
         assert!(handler.increment_iteration("nonexistent").await.is_none());
-    }
-
-    #[tokio::test]
-    async fn test_with_components() {
-        let registry = create_test_registry();
-        let coordinator = Arc::new(ExecutionCoordinator::new(CoordinatorConfig::default()));
-        let collector = Arc::new(ResultCollector::new());
-
-        let handler =
-            SubAgentHandler::with_components(registry, coordinator.clone(), collector.clone());
-        let ctx = create_test_context();
-
-        // Start a session
-        let request = SubAgentRequest {
-            agent_id: "explore".into(),
-            prompt: "Find files".into(),
-            parent_session_id: "parent-1".into(),
-            child_session_id: "child-1".into(),
-        };
-        handler
-            .handle(&AlephEvent::SubAgentStarted(request), &ctx)
-            .await
-            .unwrap();
-
-        // Get the request ID
-        let request_id = handler.get_request_for_session("child-1").await.unwrap();
-
-        // Collector should have the request initialized
-        assert!(collector.has_request(&request_id).await);
-
-        // Coordinator should be tracking
-        assert!(coordinator.is_pending(&request_id).await);
-    }
-
-    #[tokio::test]
-    async fn test_tool_call_tracking() {
-        let registry = create_test_registry();
-        let coordinator = Arc::new(ExecutionCoordinator::new(CoordinatorConfig::default()));
-        let collector = Arc::new(ResultCollector::new());
-
-        let handler =
-            SubAgentHandler::with_components(registry, coordinator.clone(), collector.clone());
-        let ctx = create_test_context();
-
-        // Start a session
-        let request = SubAgentRequest {
-            agent_id: "explore".into(),
-            prompt: "Find files".into(),
-            parent_session_id: "parent-1".into(),
-            child_session_id: "child-1".into(),
-        };
-        handler
-            .handle(&AlephEvent::SubAgentStarted(request), &ctx)
-            .await
-            .unwrap();
-
-        let request_id = handler.get_request_for_session("child-1").await.unwrap();
-
-        // Simulate a tool call with session_id
-        let tool_started = ToolCallStarted {
-            call_id: "call-1".into(),
-            tool: "glob".into(),
-            input: serde_json::json!({"pattern": "*.rs"}),
-            timestamp: chrono::Utc::now().timestamp_millis(),
-            session_id: Some("child-1".into()),
-        };
-        handler
-            .handle(&AlephEvent::ToolCallStarted(tool_started), &ctx)
-            .await
-            .unwrap();
-
-        // Collector should have the tool call
-        assert_eq!(collector.get_total_count(&request_id).await, 1);
-        assert_eq!(collector.get_running_count(&request_id).await, 1);
-
-        // Complete the tool call
-        let tool_completed = ToolCallResult {
-            call_id: "call-1".into(),
-            tool: "glob".into(),
-            input: serde_json::json!({"pattern": "*.rs"}),
-            output: "Found 10 files".into(),
-            started_at: 1000,
-            completed_at: 2000,
-            token_usage: crate::event::TokenUsage::default(),
-            session_id: Some("child-1".into()),
-        };
-        handler
-            .handle(&AlephEvent::ToolCallCompleted(tool_completed), &ctx)
-            .await
-            .unwrap();
-
-        // Collector should show completed
-        assert_eq!(collector.get_completed_count(&request_id).await, 1);
-        assert!(collector.all_completed(&request_id).await);
-
-        // Get summary
-        let summary = collector.get_summary(&request_id).await;
-        assert_eq!(summary.len(), 1);
-        assert_eq!(summary[0].tool, "glob");
-        assert_eq!(summary[0].state.status, "completed");
     }
 }

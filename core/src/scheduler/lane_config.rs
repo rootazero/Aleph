@@ -1,4 +1,4 @@
-use crate::agents::sub_agents::Lane;
+use super::Lane;
 use std::collections::HashMap;
 
 /// Configuration for a single lane

@@ -72,8 +72,6 @@ pub struct BuiltinToolConfig {
     pub team_store: Option<Arc<dyn crate::teams::TeamStore>>,
     /// Artifact store for persisting task artifacts (delegation results, reports, etc.)
     pub artifact_store: Option<Arc<dyn crate::teams::artifacts::ArtifactStore>>,
-    /// Sub-agent registry for team management tools
-    pub sub_agent_registry: Option<Arc<crate::agents::sub_agents::SubAgentRegistry>>,
     /// Current agent ID for team tools (leader identity)
     pub current_agent_id: Option<String>,
     /// Current session key for team tools (parent session for spawned sub-agents)

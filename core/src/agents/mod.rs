@@ -6,7 +6,6 @@
 //! - `AgentDef`: Agent definition with tools and limits
 //! - `AgentMode`: Primary vs SubAgent distinction
 //! - `AgentRegistry`: Registry for managing agents
-//! - `TaskTool`: Tool for calling sub-agents
 //!
 //! ## Agent Configuration (`agents::rig::`)
 //! - `RigAgentConfig`: Configuration for the agent loop
@@ -16,10 +15,8 @@
 //!
 //! ## Sub-agent infrastructure (`agents::sub_agents::`)
 //! - `SubAgent`: Trait for specialized sub-agents (used by A2A)
-//! - `SubAgentDispatcher`: Routes requests to appropriate sub-agents
 
 mod registry;
-mod task_tool;
 mod types;
 
 /// Thinking levels system for LLM reasoning depth control.
@@ -37,12 +34,7 @@ pub mod sub_agents;
 /// Swarm intelligence for horizontal agent collaboration.
 pub mod swarm;
 
-#[cfg(test)]
-mod integration_test;
-
-// Sub-agent delegation exports
 pub use registry::{builtin_agents, AgentRegistry};
-pub use task_tool::{TaskTool, TaskToolError, TaskToolResult};
 pub use types::{AgentDef, AgentMode};
 
 // Re-export rig module types for convenience
@@ -52,10 +44,7 @@ pub use rig::{
 };
 
 // Re-export sub_agents module types for convenience
-pub use sub_agents::{
-    DelegateTool, McpSubAgent, SkillSubAgent, SubAgent, SubAgentCapability, SubAgentDispatcher,
-    SubAgentRequest, SubAgentResult, SubAgentType,
-};
+pub use sub_agents::{SubAgent, SubAgentCapability, SubAgentRequest, SubAgentResult};
 
 // Re-export swarm module types for convenience
 pub use swarm::{AgentEvent, AgentMessageBus, CriticalEvent, EventTier, ImportantEvent, InfoEvent};

@@ -106,16 +106,6 @@ impl SubAgentConfig {
         Self::default()
     }
 
-    /// Convert to CoordinatorConfig for use with ExecutionCoordinator
-    pub fn to_coordinator_config(&self) -> crate::agents::sub_agents::CoordinatorConfig {
-        crate::agents::sub_agents::CoordinatorConfig {
-            execution_timeout_ms: self.execution_timeout_ms,
-            result_ttl_ms: self.result_ttl_ms,
-            max_concurrent: self.max_concurrent,
-            progress_events_enabled: self.progress_events_enabled,
-        }
-    }
-
     /// Validate the configuration
     pub fn validate(&self) -> Result<(), String> {
         if self.execution_timeout_ms == 0 {
@@ -175,23 +165,6 @@ mod tests {
             ..SubAgentConfig::default()
         };
         assert!(config.validate().is_err());
-    }
-
-    #[test]
-    fn test_to_coordinator_config() {
-        let config = SubAgentConfig {
-            execution_timeout_ms: 60_000,
-            result_ttl_ms: 120_000,
-            max_concurrent: 10,
-            progress_events_enabled: false,
-            ..Default::default()
-        };
-
-        let coordinator_config = config.to_coordinator_config();
-        assert_eq!(coordinator_config.execution_timeout_ms, 60_000);
-        assert_eq!(coordinator_config.result_ttl_ms, 120_000);
-        assert_eq!(coordinator_config.max_concurrent, 10);
-        assert!(!coordinator_config.progress_events_enabled);
     }
 
     #[test]

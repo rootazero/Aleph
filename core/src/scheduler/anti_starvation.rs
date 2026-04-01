@@ -7,7 +7,7 @@ use crate::sync_primitives::Arc;
 use std::collections::HashMap;
 use tokio::sync::RwLock;
 
-use crate::agents::sub_agents::Lane;
+use super::Lane;
 
 /// Tracks wait times for queued runs to prevent starvation
 ///

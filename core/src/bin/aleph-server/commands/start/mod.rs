@@ -787,14 +787,8 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 let client_pool = Arc::new(A2AClientPool::new());
 
                 // 9. Create A2ASubAgent and refresh cached names for can_handle
-                let a2a_sub_agent = Arc::new(A2ASubAgent::new(smart_router, client_pool));
-                a2a_sub_agent.refresh_agent_names().await;
-
-                // 10. Register with SubAgentDispatcher (enables delegate tool)
-                if let Some(ref dispatcher) = agent_result.sub_agent_dispatcher {
-                    let mut disp = dispatcher.write().await;
-                    disp.register(a2a_sub_agent);
-                }
+                let _a2a_sub_agent = Arc::new(A2ASubAgent::new(smart_router, client_pool));
+                _a2a_sub_agent.refresh_agent_names().await;
 
                 if !args.daemon {
                     println!("A2A protocol: enabled");

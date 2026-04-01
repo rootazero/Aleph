@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use tokio::sync::Semaphore;
 
 use super::{LaneConfig, LaneState, RecursionTracker, WaitTimeTracker};
-use crate::agents::sub_agents::Lane;
+use super::Lane;
 
 /// RAII guard for scheduled run permits.
 ///

@@ -34,8 +34,6 @@ pub(in crate::commands::start) struct AgentHandlersResult {
     pub agent_registry: Option<Arc<AgentRegistry>>,
     pub default_provider: Option<Arc<dyn alephcore::providers::AiProvider>>,
     pub dispatch_registry: Option<Arc<alephcore::dispatcher::ToolRegistry>>,
-    pub sub_agent_dispatcher:
-        Option<Arc<tokio::sync::RwLock<alephcore::agents::sub_agents::SubAgentDispatcher>>>,
     pub embedder: Option<std::sync::Arc<dyn alephcore::memory::EmbeddingProvider>>,
     pub compression_service:
         Option<std::sync::Arc<alephcore::memory::compression::CompressionService>>,
@@ -83,9 +81,6 @@ pub(in crate::commands::start) async fn register_agent_handlers(
     let mut agent_reg: Option<Arc<AgentRegistry>> = None;
     let mut default_prov: Option<Arc<dyn alephcore::providers::AiProvider>> = None;
     let dispatch_reg: Option<Arc<alephcore::dispatcher::ToolRegistry>>;
-    let mut sub_agent_disp: Option<
-        Arc<tokio::sync::RwLock<alephcore::agents::sub_agents::SubAgentDispatcher>>,
-    > = None;
     let mut embedder_out: Option<std::sync::Arc<dyn alephcore::memory::EmbeddingProvider>> = None;
     let mut compression_out: Option<
         std::sync::Arc<alephcore::memory::compression::CompressionService>,
@@ -632,14 +627,6 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         // Capture embedder before it's moved into tool_config
         embedder_out = embedder.clone();
 
-        // Create SubAgentDispatcher only when A2A is enabled.
-        // Used by A2A subsystem to register A2ASubAgent for remote delegation.
-        if app_config.a2a.enabled {
-            let disp = Arc::new(tokio::sync::RwLock::new(
-                alephcore::agents::sub_agents::SubAgentDispatcher::new(),
-            ));
-            sub_agent_disp = Some(disp);
-        }
 
         // Get extension manager for plugin tool execution
         let extension_manager = {
@@ -1479,7 +1466,6 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         agent_registry: agent_reg,
         default_provider: default_prov,
         dispatch_registry: dispatch_reg,
-        sub_agent_dispatcher: sub_agent_disp,
         embedder: embedder_out,
         compression_service: compression_out,
         multi_registry: multi_reg,
