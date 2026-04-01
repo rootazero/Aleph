@@ -30,6 +30,7 @@ pub use context_budget::{
 };
 pub use context_compactor::{CompactResult, CompactStrategy, CompactorConfig, ContextCompactor};
 pub use factory::LoopFactory;
+pub use retry::{backoff_delay, classify_error, retry_async, RetryVerdict};
 pub use truncation_recovery::{RecoveryAction, RecoveryPhase, TruncationRecovery};
 pub(crate) use loop_core::NoopCallback;
 pub use loop_core::{AgentLoop, LoopCallback, LoopConfig, LoopProvider, LoopRunResult};
