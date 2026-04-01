@@ -32,7 +32,10 @@ pub use context_budget::{
 };
 pub use context_compactor::{CompactResult, CompactStrategy, CompactorConfig, ContextCompactor};
 pub use factory::LoopFactory;
-pub use retry::{backoff_delay, classify_error, retry_async, RetryVerdict};
+pub use retry::{
+    backoff_delay, classify_error, classify_exhausted_error, parse_token_gap, retry_async,
+    RetryVerdict,
+};
 pub use truncation_recovery::{RecoveryAction, RecoveryPhase, TruncationRecovery};
 pub(crate) use loop_core::NoopCallback;
 pub use loop_core::{AgentLoop, LoopCallback, LoopConfig, LoopProvider, LoopRunResult};
@@ -41,6 +44,5 @@ pub use provider_bridge::AiProviderBridge;
 pub use safety::{SafetyError, SafetyGuard, ToolCall as SafetyToolCall};
 pub use streaming_bridge::{StreamingToolBridge, StreamingToolExecutor};
 pub use tool::{LoopTool, LoopToolRegistry, ToolDefinition, ToolResult};
-pub use retry::{classify_exhausted_error, parse_token_gap, RetryVerdict};
 pub use stop_hooks::{StopHook, StopHookAggregateResult, StopHookContext, StopHookVerdict};
 pub use tool_summary::{generate_tool_summary, ToolSummaryInput};
