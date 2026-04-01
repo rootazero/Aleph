@@ -783,6 +783,254 @@ impl ApprovalBridge {
 
 ---
 
+## SSRF Protection (Outbound Request Security)
+
+> Server-Side Request Forgery defense: DNS pinning, redirect chain validation, IP classification, legacy literal blocking
+
+**Location**: `core/src/security/ssrf/`
+
+### Overview
+
+Aleph's SSRF engine validates ALL outbound HTTP requests before they leave the server. It protects against:
+- Accessing private networks (10.x, 172.16.x, 192.168.x) via user-provided URLs
+- Cloud metadata endpoint attacks (169.254.169.254)
+- DNS rebinding (TOCTOU) attacks
+- Redirect chain pivoting (public URL → private redirect target)
+- Legacy IPv4 literal bypass (octal, hex, decimal encoding)
+- IPv6 embedded IPv4 bypass (NAT64, 6to4, Teredo)
+- URL credential obfuscation (http://evil.com@127.0.0.1)
+
+### Architecture
+
+```
+core/src/security/ssrf/
+├── mod.rs        — Public API: validate_url, validate_url_async, safe_fetch, SsrfError
+├── policy.rs     — SsrfPolicy configuration struct
+├── ip.rs         — IPv4/IPv6 classification against blocked ranges
+├── hostname.rs   — Hostname blocklist, allowlist, legacy IP detection
+├── dns.rs        — Async DNS resolution with address pinning
+└── fetch.rs      — safe_fetch() with redirect chain validation
+```
+
+### SsrfPolicy
+
+```rust
+pub struct SsrfPolicy {
+    pub enabled: bool,                    // Master switch (default: true)
+    pub allow_private_network: bool,      // Allow private IPs (default: false)
+    pub allowed_hosts: Vec<String>,       // Allowlist: ["*.corp.internal"]
+    pub blocked_hosts: Vec<String>,       // Blocklist: ["*.malware.com"]
+    pub max_redirects: u8,                // Redirect limit (default: 5)
+    pub strip_auth_on_cross_origin: bool, // Strip Auth/Cookie on cross-origin redirects (default: true)
+}
+```
+
+### IP Classification (`ip.rs`)
+
+**Blocked IPv4 ranges:**
+
+| Range | Purpose |
+|-------|---------|
+| `0.0.0.0/8` | Current network (unspecified) |
+| `10.0.0.0/8` | RFC1918 private |
+| `100.64.0.0/10` | Carrier-grade NAT |
+| `127.0.0.0/8` | Loopback |
+| `169.254.0.0/16` | Link-local (includes cloud metadata) |
+| `172.16.0.0/12` | RFC1918 private |
+| `192.0.2.0/24` | TEST-NET-1 |
+| `192.168.0.0/16` | RFC1918 private |
+| `198.18.0.0/15` | Benchmark testing |
+| `198.51.100.0/24` | TEST-NET-2 |
+| `203.0.113.0/24` | TEST-NET-3 |
+| `224.0.0.0/4` | Multicast |
+| `240.0.0.0/4` | Reserved + broadcast |
+
+**Blocked IPv6 ranges:**
+
+| Range | Purpose |
+|-------|---------|
+| `::1` | Loopback |
+| `::` | Unspecified |
+| `fe80::/10` | Link-local |
+| `fc00::/7` | Unique local address |
+| `ff00::/8` | Multicast |
+
+**IPv6 embedded IPv4 extraction** — extracts inner IPv4 and validates:
+
+| Format | Example | Extraction |
+|--------|---------|------------|
+| IPv4-mapped | `::ffff:127.0.0.1` | Direct mapping |
+| NAT64 | `64:ff9b::7f00:1` | Last 32 bits |
+| 6to4 | `2002:7f00:0001::` | Segments 1-2 |
+| Teredo | `2001:0000::80ff:fffe` | Last 32 bits XOR `0xFFFFFFFF` |
+| IPv4-compatible | `::127.0.0.1` | Last 32 bits |
+
+### Hostname Blocking (`hostname.rs`)
+
+**Hardcoded blocklist:**
+- `localhost`, `localhost.localdomain`
+- `metadata.google.internal`, `metadata.internal`
+- Suffixes: `.localhost`, `.local`, `.internal`
+
+**Legacy IPv4 literal detection** — blocks non-standard IP formats that bypass naive parsing:
+- Octal: `0177.0.0.1` → 127.0.0.1
+- Hexadecimal: `0x7f000001` → 127.0.0.1
+- Decimal: `2130706433` → 127.0.0.1
+- Short-form: `127.1` → 127.0.0.1
+
+**URL credential obfuscation** — detects `http://evil.com@127.0.0.1:8080/` patterns.
+
+### DNS Pinning (`dns.rs`)
+
+Prevents DNS rebinding (TOCTOU) attacks:
+
+```
+1. Async DNS resolution via tokio::net::lookup_host
+2. Validate ALL returned IPs against policy
+3. Return first valid SocketAddr
+4. Caller pins via reqwest::Client::builder().resolve(host, validated_addr)
+5. No TOCTOU window — reqwest connects to pre-validated IP
+```
+
+### safe_fetch (`fetch.rs`)
+
+**Single entry point for all outbound HTTP requests.** Replaces direct `reqwest::Client` usage.
+
+```rust
+pub async fn safe_fetch(
+    url: &str,
+    policy: &SsrfPolicy,
+    request: SafeFetchRequest,
+) -> Result<SafeFetchResponse, SsrfError>
+```
+
+**Execution flow:**
+
+```
+1. URL format + scheme validation (http/https only)
+2. Legacy IPv4 literal rejection
+3. URL credential obfuscation detection
+4. Hostname blocklist/allowlist check
+5. IP literal check OR async DNS resolve + validate all IPs
+6. DNS pinning via reqwest resolve()
+7. Send request (redirect::Policy::none())
+8. If 3xx → redirect loop:
+   a. Extract Location header
+   b. Repeat steps 1-6 for new URL
+   c. Cross-origin → strip Authorization/Cookie/Proxy-Authorization
+   d. Redirect counter + loop detection (URL set dedup)
+   e. Exceeds max_redirects → SsrfError::TooManyRedirects
+9. Return final response
+```
+
+### Callers
+
+All outbound HTTP requests go through the SSRF engine:
+
+| Caller | File | Method |
+|--------|------|--------|
+| Web fetch tool | `builtin_tools/web_fetch.rs` | `safe_fetch()` |
+| Webhook delivery | `tasks/cron/webhook_target.rs` | `safe_fetch()` |
+| Media downloader | `gateway/pipeline/media_download.rs` | `safe_fetch()` |
+| MCP HTTP transport | `mcp/transport/http.rs` | `validate_url()` |
+| Browser navigation | `browser/network_policy.rs` | `validate_url()` via `BrowserSsrfGuard` |
+
+### Browser SSRF Guard
+
+**Location**: `core/src/browser/network_policy.rs`
+
+Thin wrapper over the core SSRF engine with browser-specific features:
+
+```rust
+pub struct BrowserSsrfGuard {
+    config: SsrfConfig,  // block_private, blocked_domains, allowed_domains
+}
+
+impl BrowserSsrfGuard {
+    pub fn check_url(&self, url: &str) -> Result<(), PolicyViolation> {
+        // Delegates to ssrf::validate_url() with converted policy
+        // Adds browser-specific allowlist-only mode
+    }
+}
+```
+
+### Content Sanitization
+
+**Location**: `core/src/security/content_sanitizer.rs`
+
+Wraps fetched external content with boundary markers to prevent prompt injection:
+
+```rust
+pub fn wrap_external_content(content: &str, source: ContentSource) -> String
+```
+
+### Audit Logging
+
+**Location**: `core/src/security/audit.rs`
+
+SSRF blocks are logged with context, hostname, and rejection reason for security monitoring.
+
+### Panel Configuration
+
+Users configure SSRF settings via the Panel UI (Settings → Security → Outbound Request Protection):
+
+| Setting | Config Key | Default |
+|---------|-----------|---------|
+| Enable SSRF Protection | `security.ssrf.enabled` | `true` |
+| Allow tools to access LAN | `security.ssrf.allow_tool_private_network` | `false` |
+| Allow webhooks to access LAN | `security.ssrf.allow_webhook_private_network` | `false` |
+| Max redirects | `security.ssrf.max_redirects` | `5` |
+| Trusted host allowlist | `security.ssrf.allowed_hosts` | `[]` |
+| Blocked host denylist | `security.ssrf.blocked_hosts` | `[]` |
+
+**Config file** (`~/.aleph/config.toml`):
+
+```toml
+[security.ssrf]
+enabled = true
+allow_tool_private_network = false
+allow_webhook_private_network = false
+max_redirects = 5
+allowed_hosts = ["*.corp.internal"]
+blocked_hosts = ["*.malware.com"]
+```
+
+**RPC**: `security_config.get` / `security_config.update` — read/write via Gateway JSON-RPC.
+
+### Security Guarantees
+
+1. **Fail-closed** — malformed URLs, unresolvable hosts, and unknown IP formats are rejected
+2. **DNS pinning** — eliminates TOCTOU race conditions between validation and connection
+3. **Every hop validated** — redirect targets are validated with the same rigor as the initial URL
+4. **Header isolation** — Authorization/Cookie headers stripped on cross-origin redirects
+5. **Policy-aware** — `allow_private_network=true` still blocks loopback and cloud metadata
+6. **Unified engine** — single implementation prevents coverage gaps between callers
+
+### For Developers
+
+1. **Always use `safe_fetch()`** for outbound HTTP requests — never use `reqwest::Client` directly
+2. **Use `validate_url()`** for URL-only validation without fetching (e.g., browser navigation)
+3. **Construct caller-specific policies** — tools and webhooks may have different `allow_private_network` settings based on user configuration
+4. **Add new callers** — any new outbound HTTP code must go through `safe_fetch()` or `validate_url()`
+5. **Test coverage** — add tests for new IP ranges or bypass vectors in `ip.rs` and `hostname.rs`
+
+---
+
+## Cross-Cutting Security Module Index
+
+| Module | Location | Purpose |
+|--------|----------|---------|
+| SSRF Engine | `core/src/security/ssrf/` | Outbound request validation |
+| HTTP Headers | `core/src/security/headers.rs` | Security response headers |
+| Content Sanitizer | `core/src/security/content_sanitizer.rs` | Prompt injection defense |
+| Audit Logger | `core/src/security/audit.rs` | Security event logging |
+| Browser Guard | `core/src/browser/network_policy.rs` | Browser navigation SSRF |
+| Identity/Auth | `core/src/gateway/security/` | Session, pairing, permissions |
+| Exec Kernel | `core/src/exec/` | Shell command safety |
+| Policy Engine | `core/src/gateway/security/policy_engine.rs` | Role-based access control |
+
+---
+
 ## See Also
 
 - [Architecture](ARCHITECTURE.md) - System overview

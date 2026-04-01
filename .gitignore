@@ -63,7 +63,6 @@ platforms/macos/Aleph/Frameworks/*.dylib.*
 docs/*
 !docs/reference/
 !docs/images/
-openspec/
 _bmad/
 
 # Test / scratch / local files
