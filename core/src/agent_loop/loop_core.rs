@@ -3137,4 +3137,47 @@ mod tests {
         let result = agent.run("hello", &mut cb).await;
         assert!(result.is_err());
     }
+
+    #[tokio::test]
+    async fn test_tier2_all_callbacks_fire() {
+        #[derive(Default)]
+        struct Tier2Callback {
+            fallback_fired: bool,
+            stop_hook_block_fired: bool,
+            stop_hook_error_fired: bool,
+            summary_fired: bool,
+        }
+
+        impl LoopCallback for Tier2Callback {
+            fn on_model_fallback(&mut self, reason: &str, model: &str) {
+                assert!(!reason.is_empty());
+                assert!(!model.is_empty());
+                self.fallback_fired = true;
+            }
+            fn on_stop_hook_block(&mut self, reason: &str) {
+                assert!(!reason.is_empty());
+                self.stop_hook_block_fired = true;
+            }
+            fn on_stop_hook_error(&mut self, name: &str, error: &str) {
+                assert!(!name.is_empty());
+                assert!(!error.is_empty());
+                self.stop_hook_error_fired = true;
+            }
+            fn on_tool_summary(&mut self, summary: &str) {
+                assert!(!summary.is_empty());
+                self.summary_fired = true;
+            }
+        }
+
+        let mut cb = Tier2Callback::default();
+        cb.on_model_fallback("test reason", "test-model");
+        cb.on_stop_hook_block("test block");
+        cb.on_stop_hook_error("test-hook", "test error");
+        cb.on_tool_summary("Searched for bugs");
+
+        assert!(cb.fallback_fired);
+        assert!(cb.stop_hook_block_fired);
+        assert!(cb.stop_hook_error_fired);
+        assert!(cb.summary_fired);
+    }
 }
