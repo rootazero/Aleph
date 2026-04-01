@@ -33,8 +33,8 @@ pub struct AgentDef {
     pub id: String,
     /// Agent mode
     pub mode: AgentMode,
-    /// System prompt for the agent
-    pub system_prompt: String,
+    /// Prompt sections this agent needs (assembled by Section Registry)
+    pub prompt_sections: Vec<String>,
     /// Tools this agent is allowed to use ("*" for all)
     pub allowed_tools: Vec<String>,
     /// Tools this agent is denied from using
@@ -51,11 +51,11 @@ pub struct AgentDef {
 
 impl AgentDef {
     /// Create a new agent definition
-    pub fn new(id: impl Into<String>, mode: AgentMode, system_prompt: impl Into<String>) -> Self {
+    pub fn new(id: impl Into<String>, mode: AgentMode) -> Self {
         Self {
             id: id.into(),
             mode,
-            system_prompt: system_prompt.into(),
+            prompt_sections: vec![],
             allowed_tools: vec!["*".into()],
             denied_tools: vec![],
             max_iterations: None,
@@ -101,6 +101,12 @@ impl AgentDef {
         self
     }
 
+    /// Set prompt sections this agent needs
+    pub fn with_prompt_sections(mut self, sections: Vec<String>) -> Self {
+        self.prompt_sections = sections;
+        self
+    }
+
     /// Check if a tool is allowed for this agent
     pub fn is_tool_allowed(&self, tool_name: &str) -> bool {
         // Check denied list first
@@ -123,25 +129,45 @@ mod tests {
 
     #[test]
     fn test_agent_def_new() {
-        let agent = AgentDef::new("test", AgentMode::SubAgent, "Test prompt");
+        let agent = AgentDef::new("test", AgentMode::SubAgent);
         assert_eq!(agent.id, "test");
         assert_eq!(agent.mode, AgentMode::SubAgent);
-        assert_eq!(agent.system_prompt, "Test prompt");
+        assert!(agent.prompt_sections.is_empty());
         assert_eq!(agent.allowed_tools, vec!["*"]);
         assert!(agent.denied_tools.is_empty());
         assert!(agent.max_iterations.is_none());
     }
 
     #[test]
+    fn test_prompt_sections_default_empty() {
+        let agent = AgentDef::new("test", AgentMode::Primary);
+        assert!(agent.prompt_sections.is_empty());
+    }
+
+    #[test]
+    fn test_with_prompt_sections() {
+        let agent = AgentDef::new("test", AgentMode::SubAgent)
+            .with_prompt_sections(vec![
+                "core_identity".into(),
+                "tool_usage".into(),
+                "safety".into(),
+            ]);
+        assert_eq!(agent.prompt_sections.len(), 3);
+        assert_eq!(agent.prompt_sections[0], "core_identity");
+        assert_eq!(agent.prompt_sections[1], "tool_usage");
+        assert_eq!(agent.prompt_sections[2], "safety");
+    }
+
+    #[test]
     fn test_is_tool_allowed_wildcard() {
-        let agent = AgentDef::new("test", AgentMode::Primary, "");
+        let agent = AgentDef::new("test", AgentMode::Primary);
         assert!(agent.is_tool_allowed("any_tool"));
         assert!(agent.is_tool_allowed("another_tool"));
     }
 
     #[test]
     fn test_is_tool_allowed_specific() {
-        let agent = AgentDef::new("test", AgentMode::SubAgent, "")
+        let agent = AgentDef::new("test", AgentMode::SubAgent)
             .with_allowed_tools(vec!["read_file".into(), "glob".into()]);
 
         assert!(agent.is_tool_allowed("read_file"));
@@ -151,7 +177,7 @@ mod tests {
 
     #[test]
     fn test_is_tool_denied() {
-        let agent = AgentDef::new("test", AgentMode::SubAgent, "")
+        let agent = AgentDef::new("test", AgentMode::SubAgent)
             .with_denied_tools(vec!["bash".into(), "write_file".into()]);
 
         assert!(!agent.is_tool_allowed("bash"));
@@ -161,7 +187,7 @@ mod tests {
 
     #[test]
     fn test_denied_overrides_allowed() {
-        let agent = AgentDef::new("test", AgentMode::SubAgent, "")
+        let agent = AgentDef::new("test", AgentMode::SubAgent)
             .with_allowed_tools(vec!["bash".into()])
             .with_denied_tools(vec!["bash".into()]);
 
@@ -171,14 +197,14 @@ mod tests {
 
     #[test]
     fn test_with_max_iterations() {
-        let agent = AgentDef::new("test", AgentMode::SubAgent, "").with_max_iterations(20);
+        let agent = AgentDef::new("test", AgentMode::SubAgent).with_max_iterations(20);
 
         assert_eq!(agent.max_iterations, Some(20));
     }
 
     #[test]
     fn test_context_mode_default() {
-        let agent = AgentDef::new("test", AgentMode::SubAgent, "prompt");
+        let agent = AgentDef::new("test", AgentMode::SubAgent);
         assert_eq!(agent.context_mode, ContextMode::Fresh);
         assert!(agent.token_budget.is_none());
         assert!(agent.model_hint.is_none());
@@ -186,21 +212,21 @@ mod tests {
 
     #[test]
     fn test_with_context_mode() {
-        let agent = AgentDef::new("test", AgentMode::SubAgent, "prompt")
+        let agent = AgentDef::new("test", AgentMode::SubAgent)
             .with_context_mode(ContextMode::Summary);
         assert_eq!(agent.context_mode, ContextMode::Summary);
     }
 
     #[test]
     fn test_with_token_budget() {
-        let agent = AgentDef::new("test", AgentMode::SubAgent, "prompt")
+        let agent = AgentDef::new("test", AgentMode::SubAgent)
             .with_token_budget(50_000);
         assert_eq!(agent.token_budget, Some(50_000));
     }
 
     #[test]
     fn test_with_model_hint() {
-        let agent = AgentDef::new("test", AgentMode::SubAgent, "prompt")
+        let agent = AgentDef::new("test", AgentMode::SubAgent)
             .with_model_hint("fast");
         assert_eq!(agent.model_hint.as_deref(), Some("fast"));
     }
