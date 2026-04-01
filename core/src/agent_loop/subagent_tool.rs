@@ -41,6 +41,7 @@ pub struct SubagentTool {
     provider: Arc<dyn AiProvider>,
     tool_registry_factory: ToolRegistryFactory,
     safety_guard_factory: SafetyGuardFactory,
+    chain: super::chain_context::ChainContext,
 }
 
 impl SubagentTool {
@@ -49,15 +50,18 @@ impl SubagentTool {
     /// - `provider`: the AI provider for the sub-agent's LLM calls
     /// - `tool_registry_factory`: builds a fresh tool registry (without "subagent")
     /// - `safety_guard_factory`: builds a fresh SafetyGuard per invocation
+    /// - `chain`: the parent's chain context for depth tracking
     pub fn new(
         provider: Arc<dyn AiProvider>,
         tool_registry_factory: ToolRegistryFactory,
         safety_guard_factory: SafetyGuardFactory,
+        chain: super::chain_context::ChainContext,
     ) -> Self {
         Self {
             provider,
             tool_registry_factory,
             safety_guard_factory,
+            chain,
         }
     }
 }
@@ -126,7 +130,21 @@ impl LoopTool for SubagentTool {
 
         tracing::info!(task = %task, timeout_secs = timeout_secs, "subagent: starting sub-task");
 
-        // 2. Build sub-agent components
+        // 2. Check nesting depth
+        let child_chain = match self.chain.child() {
+            Some(c) => c,
+            None => {
+                return ToolResult::Error {
+                    error: format!(
+                        "Maximum subagent nesting depth ({}) exceeded",
+                        self.chain.max_depth
+                    ),
+                    retryable: false,
+                };
+            }
+        };
+
+        // 3. Build sub-agent components
         let bridge = AiProviderBridge::new(self.provider.clone());
         let registry = (self.tool_registry_factory)();
         let prompt_builder = PromptBuilder::new().with_soul_identity(SUBAGENT_SYSTEM_PROMPT);
@@ -135,7 +153,7 @@ impl LoopTool for SubagentTool {
             token_budget: 100_000,
         };
 
-        // 3. Create and run the agent loop
+        // 4. Create and run the agent loop
         let agent_loop = AgentLoop::new(
             bridge,
             registry,
@@ -143,7 +161,8 @@ impl LoopTool for SubagentTool {
             (self.safety_guard_factory)(),
             config,
             CancellationToken::new(),
-        );
+        )
+        .with_chain(child_chain);
 
         let mut callback = NoopCallback;
         let timeout_duration = std::time::Duration::from_secs(timeout_secs);
@@ -225,7 +244,8 @@ mod tests {
         let provider: Arc<dyn AiProvider> = Arc::new(MockAiProvider);
         let factory: ToolRegistryFactory = Arc::new(|| LoopToolRegistry::new());
         let safety_factory: SafetyGuardFactory = Arc::new(|| SafetyGuard::default_guard());
-        SubagentTool::new(provider, factory, safety_factory)
+        let chain = super::super::chain_context::ChainContext::new();
+        SubagentTool::new(provider, factory, safety_factory, chain)
     }
 
     #[test]

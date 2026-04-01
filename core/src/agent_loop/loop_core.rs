@@ -95,7 +95,7 @@ fn emergency_truncate(
     use super::context_budget::pressure::estimate_tokens_smart;
 
     let groups = group_by_round(messages);
-    if groups.len() <= fresh_tail_count + 1 {
+    if groups.len() <= fresh_tail_count {
         return; // Not enough groups to drop
     }
 
@@ -283,6 +283,10 @@ pub struct LoopRunResult {
     pub total_tokens: usize,
     pub hit_limit: bool,
     pub cancelled: bool,
+    /// Chain ID shared across all depths in a subagent call chain.
+    pub chain_id: String,
+    /// Nesting depth (0 = root agent).
+    pub depth: u32,
 }
 
 // =============================================================================
@@ -380,6 +384,8 @@ pub struct AgentLoop<P: LoopProvider> {
     stop_hooks: Vec<StopHook>,
     /// Optional lightweight provider for async tool use summaries.
     summary_provider: Option<Arc<dyn AiProvider>>,
+    /// Chain context tracking subagent call chain nesting.
+    chain: super::chain_context::ChainContext,
 }
 
 impl<P: LoopProvider> AgentLoop<P> {
@@ -428,6 +434,7 @@ impl<P: LoopProvider> AgentLoop<P> {
             cancel_token,
             stop_hooks: Vec::new(),
             summary_provider: None,
+            chain: super::chain_context::ChainContext::new(),
         }
     }
 
@@ -482,6 +489,12 @@ impl<P: LoopProvider> AgentLoop<P> {
         self
     }
 
+    /// Attach a [`ChainContext`](super::chain_context::ChainContext) for subagent call chain tracking.
+    pub fn with_chain(mut self, chain: super::chain_context::ChainContext) -> Self {
+        self.chain = chain;
+        self
+    }
+
     /// Get tool definitions from the registry (for inspection/testing).
     pub fn tool_definitions(&self) -> Vec<ToolDefinition> {
         self.tool_registry.tool_definitions()
@@ -519,6 +532,12 @@ impl<P: LoopProvider> AgentLoop<P> {
         messages: Vec<UnifiedMessage>,
         callback: &mut dyn LoopCallback,
     ) -> anyhow::Result<LoopRunResult> {
+        tracing::info!(
+            chain_id = %self.chain.chain_id,
+            depth = self.chain.depth,
+            "agent_loop: starting"
+        );
+
         // Build system prompt with tool info
         let tool_infos: Vec<ToolInfo> = self
             .tool_registry
@@ -564,10 +583,13 @@ impl<P: LoopProvider> AgentLoop<P> {
         while iterations < self.config.max_iterations {
             iterations += 1;
 
-            // Resolve pending tool summary from previous iteration
-            if let Some(handle) = pending_summary.take() {
-                if let Ok(Some(summary)) = handle.await {
-                    callback.on_tool_summary(&summary);
+            // Resolve pending tool summary if ready (non-blocking — summary is optional)
+            if let Some(handle) = pending_summary.as_ref() {
+                if handle.is_finished() {
+                    let handle = pending_summary.take().unwrap();
+                    if let Ok(Some(summary)) = handle.await {
+                        callback.on_tool_summary(&summary);
+                    }
                 }
             }
 
@@ -812,6 +834,8 @@ impl<P: LoopProvider> AgentLoop<P> {
                             total_tokens,
                             hit_limit: false,
                             cancelled: true,
+                            chain_id: self.chain.chain_id.clone(),
+                            depth: self.chain.depth,
                         });
                     }
                 }
@@ -1229,6 +1253,8 @@ impl<P: LoopProvider> AgentLoop<P> {
             total_tokens,
             hit_limit,
             cancelled: false,
+            chain_id: self.chain.chain_id.clone(),
+            depth: self.chain.depth,
         })
     }
 }

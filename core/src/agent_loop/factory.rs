@@ -66,6 +66,7 @@ impl LoopFactory {
             config,
             CancellationToken::new(),
         )
+        .with_chain(super::chain_context::ChainContext::new())
         .with_context_compactor(compactor)
     }
 

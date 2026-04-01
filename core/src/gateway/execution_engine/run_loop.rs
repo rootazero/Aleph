@@ -280,11 +280,13 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             // Register subagent tool
             {
                 use crate::agent_loop::subagent_tool::SubagentTool;
+                use crate::agent_loop::chain_context::ChainContext;
                 let sub_provider = self.provider_registry.default_provider();
                 tool_registry.register(Box::new(SubagentTool::new(
                     sub_provider,
                     sub_tool_factory.clone(),
                     sub_safety_factory.clone(),
+                    ChainContext::new(),
                 )));
             }
 
