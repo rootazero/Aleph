@@ -640,4 +640,99 @@ mod tests {
         assert!(prompt.contains("macos"));
         assert!(prompt.contains("main"));
     }
+
+    #[test]
+    fn test_cache_boundary_present() {
+        let tools = vec![ToolInfo {
+            name: "web_search".into(),
+            description: "Search the web".into(),
+            parameters_schema: None,
+        }];
+        let prompt = PromptBuilder::new().build(&tools, None, None);
+        assert!(
+            prompt.contains("<!-- CACHE_BOUNDARY -->"),
+            "Cache boundary marker should be present when dynamic sections exist"
+        );
+    }
+
+    #[test]
+    fn test_static_before_dynamic() {
+        let tools = vec![ToolInfo {
+            name: "web_search".into(),
+            description: "Search the web".into(),
+            parameters_schema: None,
+        }];
+        let prompt = PromptBuilder::new()
+            .with_capability_rules("Always confirm.")
+            .build(&tools, None, None);
+
+        let boundary_pos = prompt.find("<!-- CACHE_BOUNDARY -->").unwrap();
+        let task_pos = prompt.find("# Task Execution").unwrap();
+        let tools_pos = prompt.find("# Available Tools").unwrap();
+
+        assert!(
+            task_pos < boundary_pos,
+            "Task Execution (static) should be before cache boundary"
+        );
+        assert!(
+            tools_pos > boundary_pos,
+            "Available Tools (dynamic) should be after cache boundary"
+        );
+    }
+
+    #[test]
+    fn test_session_guidance_only_with_matching_tools() {
+        let no_browser = vec![ToolInfo {
+            name: "memory_store".into(),
+            description: "Store memory".into(),
+            parameters_schema: None,
+        }];
+        let prompt_no = PromptBuilder::new().build(&no_browser, None, None);
+        assert!(
+            !prompt_no.contains("# Session Guidance"),
+            "Should not have Session Guidance without matching tools"
+        );
+
+        let with_browser = vec![ToolInfo {
+            name: "browser_open".into(),
+            description: "Open browser".into(),
+            parameters_schema: None,
+        }];
+        let prompt_yes = PromptBuilder::new().build(&with_browser, None, None);
+        assert!(
+            prompt_yes.contains("# Session Guidance"),
+            "Should have Session Guidance with browser tool"
+        );
+        assert!(
+            prompt_yes.contains("headless"),
+            "Browser guidance should mention headless mode"
+        );
+    }
+
+    #[test]
+    fn test_build_backward_compat_none_session() {
+        let prompt = PromptBuilder::new().build(&[], None, None);
+        assert!(prompt.contains("# Identity"));
+        assert!(prompt.contains("# Task Execution"));
+        assert!(prompt.contains("# Risk Awareness"));
+        assert!(prompt.contains("# Tool Usage"));
+        assert!(prompt.contains("# Output"));
+        assert!(prompt.contains("# Persistence"));
+        assert!(
+            !prompt.contains("# Environment"),
+            "No Environment section when session is None"
+        );
+    }
+
+    #[test]
+    fn test_no_cache_boundary_when_no_dynamic_sections() {
+        // With no tools, no memory, no session, no capability rules, no skills,
+        // and no discovered skills — there should be no dynamic sections
+        // and therefore no cache boundary
+        let prompt = PromptBuilder::new().build(&[], None, None);
+        assert!(
+            !prompt.contains("<!-- CACHE_BOUNDARY -->"),
+            "No cache boundary when there are no dynamic sections"
+        );
+    }
 }
