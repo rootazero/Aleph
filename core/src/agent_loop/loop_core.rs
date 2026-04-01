@@ -47,6 +47,86 @@ const TRUNCATION_NOTICE: &str =
     "[SYSTEM] Earlier conversation history and memory context were truncated \
      to fit the model's context window. Continue based on the remaining context.";
 
+// =============================================================================
+// 413 Prompt-Too-Long (PTL) recovery constants
+// =============================================================================
+
+/// Maximum number of retry attempts after receiving a 413 error.
+const MAX_PTL_RETRIES: usize = 3;
+/// Safety margin multiplier applied to the token gap when calculating how many
+/// groups to drop (e.g. 1.2 = drop 20% more than strictly needed).
+const PTL_SAFETY_MARGIN: f64 = 1.2;
+/// When the token gap is unknown, drop this fraction of droppable groups.
+const PTL_FALLBACK_DROP_RATIO: f64 = 0.20;
+/// Marker inserted at the beginning of the conversation after truncation.
+const PTL_TRUNCATION_MARKER: &str = "[earlier conversation truncated for recovery]";
+
+// =============================================================================
+// 413 emergency truncation helpers
+// =============================================================================
+
+/// Group messages by API round: each group is (user → assistant [→ tool_results]*).
+/// Returns Vec of (start_index, end_index_exclusive) pairs.
+fn group_by_round(messages: &[UnifiedMessage]) -> Vec<(usize, usize)> {
+    let mut groups = Vec::new();
+    let mut start = 0;
+    for (i, msg) in messages.iter().enumerate() {
+        if i > 0 && msg.is_user() && !msg.is_tool_result() {
+            groups.push((start, i));
+            start = i;
+        }
+    }
+    if start < messages.len() {
+        groups.push((start, messages.len()));
+    }
+    groups
+}
+
+/// Emergency truncation for 413 recovery.
+/// Drops oldest message groups to free tokens. Protects the last
+/// `fresh_tail_count` groups.
+fn emergency_truncate(
+    messages: &mut Vec<UnifiedMessage>,
+    token_gap: Option<usize>,
+    fresh_tail_count: usize,
+) {
+    use super::context_budget::pressure::estimate_tokens_smart;
+
+    let groups = group_by_round(messages);
+    if groups.len() <= fresh_tail_count + 1 {
+        return; // Not enough groups to drop
+    }
+
+    let droppable_count = groups.len().saturating_sub(fresh_tail_count);
+    if droppable_count == 0 {
+        return;
+    }
+
+    let groups_to_drop = if let Some(gap) = token_gap {
+        let target = (gap as f64 * PTL_SAFETY_MARGIN) as usize;
+        let mut freed = 0usize;
+        let mut count = 0usize;
+        for &(start, end) in &groups[..droppable_count] {
+            if freed >= target {
+                break;
+            }
+            for msg in &messages[start..end] {
+                freed += estimate_tokens_smart(&msg.text_content());
+            }
+            count += 1;
+        }
+        count.max(1)
+    } else {
+        ((droppable_count as f64 * PTL_FALLBACK_DROP_RATIO).ceil() as usize).max(1)
+    };
+
+    let groups_to_drop = groups_to_drop.min(droppable_count);
+    let drop_end = groups[groups_to_drop - 1].1;
+
+    messages.drain(..drop_end);
+    messages.insert(0, UnifiedMessage::user(PTL_TRUNCATION_MARKER));
+}
+
 /// Find a safe cut point that doesn't split ToolCall/ToolResult pairs.
 fn find_safe_cut_point(messages: &[UnifiedMessage], initial_cut: usize) -> usize {
     let mut cut = initial_cut;
@@ -2621,5 +2701,82 @@ mod tests {
         let text = "  Hello   World";
         let result = strip_repeated_intermediate(text, &intermediates);
         assert_eq!(result, "World");
+    }
+
+    // =========================================================================
+    // 413 emergency truncation tests
+    // =========================================================================
+
+    #[test]
+    fn test_group_by_round_basic() {
+        let messages = vec![
+            UnifiedMessage::user("q1"),
+            UnifiedMessage::assistant("a1"),
+            UnifiedMessage::user("q2"),
+            UnifiedMessage::assistant("a2"),
+        ];
+        let groups = group_by_round(&messages);
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0], (0, 2));
+        assert_eq!(groups[1], (2, 4));
+    }
+
+    #[test]
+    fn test_group_by_round_single() {
+        let messages = vec![UnifiedMessage::user("q1")];
+        let groups = group_by_round(&messages);
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0], (0, 1));
+    }
+
+    #[test]
+    fn test_emergency_truncate_drops_oldest_groups() {
+        let mut messages = vec![
+            UnifiedMessage::user("round 1 question"),
+            UnifiedMessage::assistant("round 1 answer"),
+            UnifiedMessage::user("round 2 question"),
+            UnifiedMessage::assistant("round 2 answer"),
+            UnifiedMessage::user("round 3 question"),
+            UnifiedMessage::assistant("round 3 answer"),
+            UnifiedMessage::user("current question"),
+        ];
+        let original_len = messages.len();
+        emergency_truncate(&mut messages, None, 2);
+        assert!(messages.len() < original_len);
+        // First message should be truncation marker
+        assert!(messages[0].text_content().contains("truncated"));
+        // Last message should be preserved
+        assert_eq!(
+            messages.last().unwrap().text_content(),
+            "current question"
+        );
+    }
+
+    #[test]
+    fn test_emergency_truncate_with_known_gap() {
+        let mut messages = vec![];
+        for i in 0..10 {
+            messages.push(UnifiedMessage::user(&format!("question {i} {}", "x".repeat(80))));
+            messages.push(UnifiedMessage::assistant(&format!(
+                "answer {i} {}",
+                "y".repeat(80)
+            )));
+        }
+        messages.push(UnifiedMessage::user("final"));
+        let original_len = messages.len();
+        emergency_truncate(&mut messages, Some(500), 3);
+        assert!(messages.len() < original_len);
+        assert_eq!(messages.last().unwrap().text_content(), "final");
+    }
+
+    #[test]
+    fn test_emergency_truncate_too_few_messages_is_noop() {
+        let mut messages = vec![
+            UnifiedMessage::user("only question"),
+            UnifiedMessage::assistant("only answer"),
+        ];
+        let original_len = messages.len();
+        emergency_truncate(&mut messages, None, 2);
+        assert_eq!(messages.len(), original_len);
     }
 }
