@@ -64,7 +64,22 @@ const BASE_BEHAVIOR: &str = "\
   - Reuse sessions for continuity: When follow-up prompts need prior context, reuse the session so the tool retains conversation history.\n\
   - Switch tools strategically: Different tools have different strengths. You may use one for planning and another for implementation.\n\
   - Handle failures: If a tool fails (e.g., permission denied, timeout), fall back to bash/code_exec to complete the task yourself, try a different tool, or ask the user.\n\
-  - CLI tools run in non-interactive mode: they cannot ask for user confirmation. If a tool reports permission issues, use bash to do the work directly rather than retrying the same tool.";
+  - CLI tools run in non-interactive mode: they cannot ask for user confirmation. If a tool reports permission issues, use bash to do the work directly rather than retrying the same tool.\n\n\
+## Memory Protocol\n\n\
+### When to Save Memory\n\
+- User corrections and preferences → highest priority, prevents repeating mistakes.\n\
+- Environment facts (OS, tools, project conventions) → reduces future context gathering.\n\
+- Do NOT save: task progress, session outcomes, completed-work logs, or temporary TODO state.\n\n\
+### When to Search Sessions\n\
+- User references something from a past conversation.\n\
+- You suspect relevant cross-session context exists.\n\
+- Before asking user to repeat information they may have already told you.\n\
+- Use the session_search tool — sessions have verbatim transcripts.\n\n\
+### When to Extract Skills\n\
+- After completing a complex task (5+ tool calls).\n\
+- After fixing a tricky error with a non-obvious solution.\n\
+- After discovering a reusable workflow or pattern.\n\
+- Save via memory as a Lesson-type fact with clear, reusable steps.";
 
 /// Builds the system prompt by assembling sections.
 pub struct PromptBuilder {
@@ -551,6 +566,14 @@ mod tests {
     fn test_build_omits_model_behavior_when_not_set() {
         let prompt = PromptBuilder::new().build(&[], None);
         assert!(!prompt.contains("# Model Behavior"));
+    }
+
+    #[test]
+    fn base_behavior_contains_memory_protocol() {
+        assert!(BASE_BEHAVIOR.contains("## Memory Protocol"));
+        assert!(BASE_BEHAVIOR.contains("When to Save Memory"));
+        assert!(BASE_BEHAVIOR.contains("When to Search Sessions"));
+        assert!(BASE_BEHAVIOR.contains("When to Extract Skills"));
     }
 
     #[test]
