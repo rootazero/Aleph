@@ -331,6 +331,7 @@ pub trait LoopCallback: Send {
     fn on_tool_start(&mut self, _name: &str, _input: &Value) {}
     fn on_tool_done(&mut self, _name: &str, _result: &ToolResult) {}
     fn on_safety_block(&mut self, _error: &SafetyError) {}
+    fn on_model_fallback(&mut self, _reason: &str, _fallback_model: &str) {}
 }
 
 /// No-op callback for when you don't need events.
@@ -344,6 +345,8 @@ impl LoopCallback for NoopCallback {}
 /// The core agent loop: think → act, repeated until done.
 pub struct AgentLoop<P: LoopProvider> {
     provider: P,
+    fallback_provider: Option<Box<dyn LoopProvider>>,
+    fallback_label: Option<String>,
     tool_registry: Arc<LoopToolRegistry>,
     prompt_builder: PromptBuilder,
     safety_guard: Arc<SafetyGuard>,
@@ -398,6 +401,8 @@ impl<P: LoopProvider> AgentLoop<P> {
         let provider_max = provider.max_output_tokens();
         Self {
             provider,
+            fallback_provider: None,
+            fallback_label: None,
             tool_registry: Arc::new(tool_registry),
             prompt_builder,
             safety_guard: Arc::new(safety_guard),
@@ -437,6 +442,20 @@ impl<P: LoopProvider> AgentLoop<P> {
     /// to WebSocket clients or other reactive consumers.
     pub fn with_delta_sink(mut self, sink: Box<dyn DeltaSink>) -> Self {
         self.delta_sink = sink;
+        self
+    }
+
+    /// Attach a fallback provider for automatic model switching.
+    ///
+    /// When the primary model is unavailable (overloaded, auth failure,
+    /// not found), the loop automatically switches to this fallback.
+    pub fn with_fallback(
+        mut self,
+        provider: Box<dyn LoopProvider>,
+        label: impl Into<String>,
+    ) -> Self {
+        self.fallback_provider = Some(provider);
+        self.fallback_label = Some(label.into());
         self
     }
 
@@ -1186,6 +1205,7 @@ mod tests {
         tool_starts: Vec<String>,
         tool_dones: Vec<String>,
         safety_blocks: Vec<String>,
+        fallback_events: Vec<(String, String)>,
     }
 
     impl LoopCallback for TrackingCallback {
@@ -1203,6 +1223,10 @@ mod tests {
         }
         fn on_safety_block(&mut self, error: &SafetyError) {
             self.safety_blocks.push(error.to_string());
+        }
+        fn on_model_fallback(&mut self, reason: &str, fallback_model: &str) {
+            self.fallback_events
+                .push((reason.to_string(), fallback_model.to_string()));
         }
     }
 
