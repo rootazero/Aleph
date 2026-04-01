@@ -23,6 +23,7 @@ use super::context_budget::pipeline::{
 use super::context_budget::pressure::PressureSensor;
 use super::prompt_builder::{PromptBuilder, ToolInfo};
 use super::safety::{SafetyError, SafetyGuard};
+use super::stop_hooks::{self, StopHook, StopHookContext};
 use super::tool::{LoopToolRegistry, ToolDefinition, ToolResult};
 use crate::providers::adapter::StopReason;
 use crate::providers::delta::{DeltaCollector, DeltaSink, NoopSink, ProviderDelta};
@@ -332,6 +333,8 @@ pub trait LoopCallback: Send {
     fn on_tool_done(&mut self, _name: &str, _result: &ToolResult) {}
     fn on_safety_block(&mut self, _error: &SafetyError) {}
     fn on_model_fallback(&mut self, _reason: &str, _fallback_model: &str) {}
+    fn on_stop_hook_block(&mut self, _reason: &str) {}
+    fn on_stop_hook_error(&mut self, _hook_name: &str, _error: &str) {}
 }
 
 /// No-op callback for when you don't need events.
@@ -371,6 +374,8 @@ pub struct AgentLoop<P: LoopProvider> {
     delta_sink: Box<dyn DeltaSink>,
     /// Token for cooperative cancellation of streaming and tool execution.
     cancel_token: CancellationToken,
+    /// Stop hooks to run before the loop exits at task-completion break points.
+    stop_hooks: Vec<StopHook>,
 }
 
 impl<P: LoopProvider> AgentLoop<P> {
@@ -417,6 +422,7 @@ impl<P: LoopProvider> AgentLoop<P> {
             ),
             delta_sink: Box::new(NoopSink),
             cancel_token,
+            stop_hooks: Vec::new(),
         }
     }
 
@@ -456,6 +462,12 @@ impl<P: LoopProvider> AgentLoop<P> {
     ) -> Self {
         self.fallback_provider = Some(provider);
         self.fallback_label = Some(label.into());
+        self
+    }
+
+    /// Register stop hooks to run before the loop exits.
+    pub fn with_stop_hooks(mut self, hooks: Vec<StopHook>) -> Self {
+        self.stop_hooks = hooks;
         self
     }
 
@@ -526,6 +538,8 @@ impl<P: LoopProvider> AgentLoop<P> {
         let mut current_max_tokens: Option<u32> = None;
         const MAX_CONSECUTIVE_ERRORS: usize = 10;
         const MAX_COMPLETION_NUDGES: usize = 3;
+        const MAX_STOP_HOOK_BLOCKS: usize = 3;
+        let mut stop_hook_blocks: usize = 0;
 
         #[derive(Clone, Copy)]
         enum ActiveProvider {
@@ -857,6 +871,31 @@ impl<P: LoopProvider> AgentLoop<P> {
                     .is_some_and(|t| t.contains("<task-complete/>"));
 
                 if has_completion_tag {
+                    if !self.stop_hooks.is_empty() && stop_hook_blocks < MAX_STOP_HOOK_BLOCKS {
+                        let ctx = StopHookContext {
+                            final_text: final_text.clone(),
+                            iterations,
+                            tool_calls_made,
+                            stop_reason: "end_turn".to_string(),
+                        };
+                        let hook_result = stop_hooks::execute_stop_hooks(
+                            &self.stop_hooks,
+                            &ctx,
+                            &self.cancel_token,
+                        )
+                        .await;
+                        for (name, msg) in hook_result.errors() {
+                            callback.on_stop_hook_error(name, msg);
+                        }
+                        if let Some(reason) = hook_result.blocking_reason() {
+                            stop_hook_blocks += 1;
+                            callback.on_stop_hook_block(reason);
+                            messages.push(UnifiedMessage::user(&format!(
+                                "[SYSTEM] Stop hook blocked exit: {reason}. Address the issue and try again."
+                            )));
+                            continue;
+                        }
+                    }
                     break;
                 }
 
@@ -886,7 +925,35 @@ impl<P: LoopProvider> AgentLoop<P> {
                     continue;
                 }
 
-                break; // Exhausted all nudges
+                // Exhausted all nudges
+                {
+                    if !self.stop_hooks.is_empty() && stop_hook_blocks < MAX_STOP_HOOK_BLOCKS {
+                        let ctx = StopHookContext {
+                            final_text: final_text.clone(),
+                            iterations,
+                            tool_calls_made,
+                            stop_reason: "nudge_exhausted".to_string(),
+                        };
+                        let hook_result = stop_hooks::execute_stop_hooks(
+                            &self.stop_hooks,
+                            &ctx,
+                            &self.cancel_token,
+                        )
+                        .await;
+                        for (name, msg) in hook_result.errors() {
+                            callback.on_stop_hook_error(name, msg);
+                        }
+                        if let Some(reason) = hook_result.blocking_reason() {
+                            stop_hook_blocks += 1;
+                            callback.on_stop_hook_block(reason);
+                            messages.push(UnifiedMessage::user(&format!(
+                                "[SYSTEM] Stop hook blocked exit: {reason}. Address the issue and try again."
+                            )));
+                            continue;
+                        }
+                    }
+                    break;
+                }
             }
 
             // If no tool calls and MaxTokens → use TruncationRecovery state machine
