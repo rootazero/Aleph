@@ -21,6 +21,8 @@ pub enum RetryVerdict {
     Fatal,
     /// The request is too large — compact messages and retry.
     CompactAndRetry { token_gap: Option<usize> },
+    /// Primary model unavailable — switch to fallback if available.
+    Fallback { reason: String },
 }
 
 /// Extract token gap from "prompt is too long: X tokens > Y maximum" error messages.
@@ -49,6 +51,56 @@ pub fn parse_token_gap(err: &anyhow::Error) -> Option<usize> {
     let limit: usize = limit_str.parse().ok()?;
 
     Some(actual.saturating_sub(limit))
+}
+
+/// Classify an error AFTER all retries are exhausted.
+///
+/// Called by the main loop when `retry_async` returns its final error.
+/// Reclassifies transient errors as `Fallback` since retries didn't help.
+/// 413 errors pass through as `CompactAndRetry` (handled separately).
+/// 400 errors remain `Fatal` (request itself is broken).
+pub fn classify_exhausted_error(err: &anyhow::Error) -> RetryVerdict {
+    let base = classify_error(err);
+
+    // 413 → still CompactAndRetry (main loop handles compression)
+    if matches!(base, RetryVerdict::CompactAndRetry { .. }) {
+        return base;
+    }
+
+    let msg = err.to_string().to_lowercase();
+
+    // 400 → Fatal (request is malformed, fallback won't help)
+    if msg.contains("400") && (msg.contains("bad request") || msg.contains("invalid")) {
+        return RetryVerdict::Fatal;
+    }
+
+    // 404 model not found → Fallback
+    if msg.contains("404") || msg.contains("not found") {
+        return RetryVerdict::Fallback {
+            reason: "model not found".into(),
+        };
+    }
+
+    // 401/403 auth errors → Fallback (but caller should notify user)
+    if msg.contains("401")
+        || msg.contains("403")
+        || msg.contains("unauthorized")
+        || msg.contains("forbidden")
+    {
+        return RetryVerdict::Fallback {
+            reason: "authentication failed — check your API key".into(),
+        };
+    }
+
+    // Transient errors (overloaded, network) that exhausted retries → Fallback
+    if matches!(base, RetryVerdict::Retry { .. }) {
+        return RetryVerdict::Fallback {
+            reason: format!("primary model unavailable: {}", err),
+        };
+    }
+
+    // Everything else stays Fatal
+    RetryVerdict::Fatal
 }
 
 /// Inspect an `anyhow::Error` display string and decide whether to retry.
@@ -121,7 +173,9 @@ where
                 let retries_left = max_retries as u32 - attempt;
 
                 match verdict {
-                    RetryVerdict::Fatal | RetryVerdict::CompactAndRetry { .. } => {
+                    RetryVerdict::Fatal
+                    | RetryVerdict::CompactAndRetry { .. }
+                    | RetryVerdict::Fallback { .. } => {
                         return Err(err);
                     }
                     RetryVerdict::Retry { .. } if retries_left == 0 => {
@@ -355,6 +409,59 @@ mod tests {
             err_msg.contains("Cancelled during retry backoff"),
             "Expected cancellation error, got: {err_msg}"
         );
+    }
+
+    // --- classify_exhausted_error tests ---
+
+    #[test]
+    fn test_classify_exhausted_overloaded() {
+        let err = anyhow::anyhow!("HTTP 529 overloaded");
+        assert!(matches!(
+            classify_exhausted_error(&err),
+            RetryVerdict::Fallback { .. }
+        ));
+    }
+
+    #[test]
+    fn test_classify_exhausted_network() {
+        let err = anyhow::anyhow!("connection reset by peer");
+        assert!(matches!(
+            classify_exhausted_error(&err),
+            RetryVerdict::Fallback { .. }
+        ));
+    }
+
+    #[test]
+    fn test_classify_exhausted_404() {
+        let err = anyhow::anyhow!("HTTP 404 model not found");
+        assert!(matches!(
+            classify_exhausted_error(&err),
+            RetryVerdict::Fallback { .. }
+        ));
+    }
+
+    #[test]
+    fn test_classify_exhausted_401() {
+        let err = anyhow::anyhow!("HTTP 401 Unauthorized");
+        assert!(matches!(
+            classify_exhausted_error(&err),
+            RetryVerdict::Fallback { .. }
+        ));
+    }
+
+    #[test]
+    fn test_classify_exhausted_400_stays_fatal() {
+        let err = anyhow::anyhow!("HTTP 400 Bad Request: invalid parameter");
+        assert_eq!(classify_exhausted_error(&err), RetryVerdict::Fatal);
+    }
+
+    #[test]
+    fn test_classify_exhausted_413_stays_compact() {
+        let err = anyhow::anyhow!("HTTP 413 prompt is too long: 137500 tokens > 135000 maximum");
+        assert!(matches!(
+            classify_exhausted_error(&err),
+            RetryVerdict::CompactAndRetry { .. }
+        ));
     }
 
     #[tokio::test]
