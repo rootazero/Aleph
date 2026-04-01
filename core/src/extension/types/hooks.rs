@@ -49,6 +49,9 @@ pub enum HookEvent {
     /// After a tool call completes
     #[serde(alias = "PostToolUse", alias = "AfterToolCall")]
     AfterToolCall,
+    /// After a tool call fails
+    #[serde(alias = "PostToolUseFailure", alias = "AfterToolCallFailure")]
+    AfterToolCallFailure,
     /// When tool result is being persisted
     #[serde(alias = "ToolResultPersist")]
     ToolResultPersist,

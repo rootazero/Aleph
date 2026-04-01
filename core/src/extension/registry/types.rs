@@ -451,6 +451,7 @@ mod tests {
             HookEvent::AgentEnd,
             HookEvent::BeforeToolCall,
             HookEvent::AfterToolCall,
+            HookEvent::AfterToolCallFailure,
             HookEvent::ToolResultPersist,
             HookEvent::MessageReceived,
             HookEvent::MessageSending,
@@ -470,6 +471,20 @@ mod tests {
             let roundtrip: HookEvent = serde_json::from_str(&json).unwrap();
             assert_eq!(roundtrip, event);
         }
+    }
+
+    #[test]
+    fn test_after_tool_call_failure_event() {
+        use crate::extension::types::HookEvent;
+
+        let event = HookEvent::AfterToolCallFailure;
+        let json = serde_json::to_string(&event).unwrap();
+        let roundtrip: HookEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(roundtrip, event);
+
+        // Test alias
+        let aliased: HookEvent = serde_json::from_str("\"PostToolUseFailure\"").unwrap();
+        assert_eq!(aliased, HookEvent::AfterToolCallFailure);
     }
 
     #[test]
