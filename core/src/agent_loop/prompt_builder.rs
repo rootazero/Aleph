@@ -1,9 +1,8 @@
-//! PromptBuilder — assembles system prompt from sections.
-
-use super::sections::{self, SessionContext};
-use crate::domain::skill::{PromptScope, SkillManifest};
-use crate::skill::prompt::build_skills_prompt_xml;
-use crate::thinker::soul::SoulManifest;
+//! PromptBuilder — assembles system prompt from a registry of prioritized sections.
+//!
+//! Sections are classified as **Stable** (cacheable across turns) or **Dynamic**
+//! (varies per request). The builder renders them in priority order, inserting a
+//! cache boundary marker between the two zones.
 
 // =============================================================================
 // ToolInfo
@@ -20,298 +19,277 @@ pub struct ToolInfo {
 }
 
 // =============================================================================
-// PromptBuilder
+// Stability
+// =============================================================================
+
+/// Whether a section's content is stable across turns (cacheable) or dynamic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Stability {
+    /// Content rarely changes — placed before the cache boundary.
+    Stable,
+    /// Content varies per request — placed after the cache boundary.
+    Dynamic,
+}
+
+// =============================================================================
+// PromptSection
+// =============================================================================
+
+/// A named, prioritized block of prompt content.
+#[derive(Debug, Clone)]
+pub struct PromptSection {
+    /// Unique name used for overwrite/removal.
+    pub name: String,
+    /// Cache stability classification.
+    pub stability: Stability,
+    /// Sort priority — lower numbers render first.
+    pub priority: u16,
+    /// If `true`, this section survives budget enforcement even when over budget.
+    pub protected: bool,
+    /// The rendered text content of this section.
+    pub content: String,
+}
+
+// =============================================================================
+// PromptBudget
+// =============================================================================
+
+/// Character budget for the assembled prompt.
+#[derive(Debug, Clone, Copy)]
+pub struct PromptBudget {
+    /// Maximum total characters in the assembled prompt.
+    pub max_chars: usize,
+}
+
+impl Default for PromptBudget {
+    fn default() -> Self {
+        Self { max_chars: 80_000 }
+    }
+}
+
+// =============================================================================
+// PromptResult
+// =============================================================================
+
+/// The output of `PromptBuilder::build()`.
+#[derive(Debug, Clone)]
+pub struct PromptResult {
+    /// The fully assembled prompt string.
+    pub prompt: String,
+    /// Byte offset where the cache boundary sits (end of Stable zone).
+    /// `None` if there are no Stable sections or no Dynamic sections.
+    pub cache_boundary_offset: Option<usize>,
+    /// Names of sections that were removed to satisfy the budget.
+    pub truncated_sections: Vec<String>,
+}
+
+// =============================================================================
+// Constants
 // =============================================================================
 
 const SECTION_SEPARATOR: &str = "\n\n---\n\n";
-const CACHE_BOUNDARY: &str = "\n\n<!-- CACHE_BOUNDARY -->\n\n";
+const ZONE_SEPARATOR: &str = "\n\n---\n\n";
 
-/// Builds the system prompt by assembling sections.
+// =============================================================================
+// PromptBuilder
+// =============================================================================
+
+/// Assembles system prompts from a registry of prioritized, typed sections.
+///
+/// Sections are registered by name (later registrations overwrite earlier ones
+/// with the same name). At build time they are sorted by priority, split into
+/// Stable / Dynamic zones, and concatenated with a cache boundary between them.
 pub struct PromptBuilder {
-    persona_prefix: Option<String>,
-    soul_identity: Option<String>,
-    soul_tone: Option<String>,
-    soul_directives: Vec<String>,
-    capability_rules: Option<String>,
-    custom_instructions: Option<String>,
-    eligible_skills: Option<Vec<SkillManifest>>,
-    model_behavior: Option<String>,
-    /// Dynamically discovered skill info section (updated via interior mutability).
-    skill_info_section: std::sync::Mutex<Option<String>>,
+    sections: Vec<PromptSection>,
+    budget: PromptBudget,
 }
 
 impl PromptBuilder {
-    /// Build a prompt builder pre-configured from a SoulManifest.
-    pub fn from_soul(soul: &SoulManifest) -> Self {
-        let mut builder = Self::new();
-
-        // Identity
-        if !soul.identity.is_empty() {
-            builder = builder.with_soul_identity(&soul.identity);
-        }
-
-        // Voice tone
-        if !soul.voice.tone.is_empty() {
-            builder = builder.with_soul_tone(&soul.voice.tone);
-        }
-
-        // Directives (both positive directives and anti-patterns)
-        for directive in &soul.directives {
-            builder = builder.with_soul_directive(directive);
-        }
-        for anti in &soul.anti_patterns {
-            builder = builder.with_soul_directive(&format!("NEVER: {anti}"));
-        }
-
-        // Expertise as directives
-        if !soul.expertise.is_empty() {
-            let expertise_str = format!("Your areas of expertise: {}", soul.expertise.join(", "));
-            builder = builder.with_soul_directive(&expertise_str);
-        }
-
-        // Addendum as custom instructions
-        if let Some(addendum) = &soul.addendum {
-            builder = builder.with_custom_instructions(addendum);
-        }
-
-        builder
-    }
-
-    /// Create an empty builder.
+    /// Create an empty builder with the default budget.
     pub fn new() -> Self {
         Self {
-            persona_prefix: None,
-            soul_identity: None,
-            soul_tone: None,
-            soul_directives: Vec::new(),
-            capability_rules: None,
-            custom_instructions: None,
-            eligible_skills: None,
-            model_behavior: None,
-            skill_info_section: std::sync::Mutex::new(None),
+            sections: Vec::new(),
+            budget: PromptBudget::default(),
         }
     }
 
-    /// Set a persona prefix (prepended before all other content).
-    /// Used by team sub-agents for distinct identity.
-    pub fn with_persona_prefix(mut self, persona: &str) -> Self {
-        self.persona_prefix = Some(persona.to_string());
+    /// Register a section. Overwrites any existing section with the same name.
+    /// Sections with empty content are silently skipped.
+    pub fn register(&mut self, section: PromptSection) -> &mut Self {
+        if section.content.is_empty() {
+            return self;
+        }
+        // Remove any existing section with the same name.
+        self.sections.retain(|s| s.name != section.name);
+        self.sections.push(section);
         self
     }
 
-    /// Set the soul identity (who the assistant is).
-    pub fn with_soul_identity(mut self, identity: &str) -> Self {
-        self.soul_identity = Some(identity.to_string());
+    /// Register multiple sections at once.
+    pub fn register_all(&mut self, sections: Vec<PromptSection>) -> &mut Self {
+        for section in sections {
+            self.register(section);
+        }
         self
     }
 
-    /// Set the communication tone/style.
-    pub fn with_soul_tone(mut self, tone: &str) -> Self {
-        self.soul_tone = Some(tone.to_string());
+    /// Remove a section by name.
+    pub fn remove(&mut self, name: &str) -> &mut Self {
+        self.sections.retain(|s| s.name != name);
         self
     }
 
-    /// Add a directive (accumulated as a bullet list).
-    pub fn with_soul_directive(mut self, directive: &str) -> Self {
-        self.soul_directives.push(directive.to_string());
+    /// Override the character budget.
+    pub fn with_budget(mut self, budget: PromptBudget) -> Self {
+        self.budget = budget;
         self
     }
 
-    /// Set capability/tool-usage rules.
-    pub fn with_capability_rules(mut self, rules: &str) -> Self {
-        self.capability_rules = Some(rules.to_string());
-        self
-    }
-
-    /// Set custom instructions from the user.
-    pub fn with_custom_instructions(mut self, instructions: &str) -> Self {
-        self.custom_instructions = Some(instructions.to_string());
-        self
-    }
-
-    /// Set eligible skills for scope-aware filtering.
-    pub fn with_eligible_skills(mut self, skills: Vec<SkillManifest>) -> Self {
-        self.eligible_skills = Some(skills);
-        self
-    }
-
-    /// Set model behavior content (loaded from model_behaviors/).
-    pub fn with_model_behavior(mut self, content: &str) -> Self {
-        self.model_behavior = Some(content.to_string());
-        self
-    }
-
-    /// Update the discovered skill info section (takes `&self` via interior mutability).
-    pub fn update_skill_info(&self, skills: &[super::skill_prefetch::SkillInfo]) {
-        let section = if skills.is_empty() {
-            None
-        } else {
-            let lines: Vec<String> = skills
-                .iter()
-                .map(|s| format!("- **{}**: {}", s.name, s.description))
-                .collect();
-            Some(format!("## Discovered Skills\n{}", lines.join("\n")))
-        };
-        *self
-            .skill_info_section
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()) = section;
-    }
-
-    /// Assemble the full system prompt from all configured sections.
+    /// Assemble the prompt from all registered sections.
     ///
-    /// The prompt is split into **static** sections (cacheable across turns)
-    /// and **dynamic** sections (vary per request), separated by a cache
-    /// boundary marker.
-    pub fn build(
-        &self,
-        tools: &[ToolInfo],
-        memory_context: Option<&str>,
-        session: Option<&SessionContext>,
-    ) -> String {
-        // =================================================================
-        // Static sections (stable across turns — cacheable)
-        // =================================================================
-        let mut static_sections: Vec<String> = Vec::new();
+    /// 1. Filter out empty-content sections.
+    /// 2. Sort by priority ascending (lower number = higher importance = rendered first).
+    /// 3. Separate into Stable and Dynamic zones.
+    /// 4. Enforce budget: if total chars exceed `max_chars`, drop non-protected
+    ///    sections starting from the highest priority *number* (least important) first.
+    /// 5. Render Stable sections joined by separators, record the byte offset, then
+    ///    render Dynamic sections.
+    pub fn build(&self) -> PromptResult {
+        // 1. Filter empties and clone for sorting.
+        let mut live: Vec<&PromptSection> = self
+            .sections
+            .iter()
+            .filter(|s| !s.content.is_empty())
+            .collect();
 
-        // 0. Persona prefix
-        if let Some(persona) = &self.persona_prefix {
-            static_sections.push(format!("# Persona\n\n{}", persona));
-        }
+        // 2. Sort by priority ascending.
+        live.sort_by_key(|s| s.priority);
 
-        // 1. Identity
-        let identity = self
-            .soul_identity
-            .as_deref()
-            .unwrap_or(sections::DEFAULT_IDENTITY);
-        static_sections.push(format!("# Identity\n\n{}", identity));
+        // 3. Split into zones.
+        let stable: Vec<&PromptSection> = live.iter().filter(|s| s.stability == Stability::Stable).copied().collect();
+        let dynamic: Vec<&PromptSection> = live.iter().filter(|s| s.stability == Stability::Dynamic).copied().collect();
 
-        // 2. Communication Style
-        if let Some(tone) = &self.soul_tone {
-            static_sections.push(format!("# Communication Style\n\n{}", tone));
-        }
+        // 4. Enforce budget.
+        let total_content: usize = live.iter().map(|s| s.content.len()).sum();
+        let separator_overhead = if !live.is_empty() {
+            (live.len() - 1) * SECTION_SEPARATOR.len()
+                + if !stable.is_empty() && !dynamic.is_empty() {
+                    ZONE_SEPARATOR.len()
+                } else {
+                    0
+                }
+        } else {
+            0
+        };
+        let total_chars = total_content + separator_overhead;
 
-        // 3. Directives
-        if !self.soul_directives.is_empty() {
-            let bullets: String = self
-                .soul_directives
+        let mut truncated_sections: Vec<String> = Vec::new();
+
+        let (final_stable, final_dynamic) = if total_chars > self.budget.max_chars {
+            // Collect all sections with their zone tag, sorted by priority ascending.
+            // We'll remove from the *end* (highest priority number = least important).
+            let mut candidates: Vec<(Stability, &PromptSection)> = live
                 .iter()
-                .map(|d| format!("- {}", d))
-                .collect::<Vec<_>>()
-                .join("\n");
-            static_sections.push(format!("# Directives\n\n{}", bullets));
-        }
-
-        // 4. Task Philosophy
-        static_sections.push(format!("# Task Execution\n\n{}", sections::TASK_PHILOSOPHY));
-
-        // 5. Risk Actions
-        static_sections.push(format!("# Risk Awareness\n\n{}", sections::RISK_ACTIONS));
-
-        // 6. Tool Grammar
-        static_sections.push(format!("# Tool Usage\n\n{}", sections::TOOL_GRAMMAR));
-
-        // 7. Output Style
-        static_sections.push(format!("# Output\n\n{}", sections::OUTPUT_STYLE));
-
-        // 8. Persistence
-        static_sections.push(format!("# Persistence\n\n{}", sections::PERSISTENCE));
-
-        // 9. Model Behavior
-        if let Some(behavior) = &self.model_behavior {
-            static_sections.push(format!("# Model Behavior\n\n{}", behavior));
-        }
-
-        let static_part = static_sections.join(SECTION_SEPARATOR);
-
-        // =================================================================
-        // Dynamic sections (vary per request)
-        // =================================================================
-        let mut dynamic_sections: Vec<String> = Vec::new();
-
-        // 10. Tool Usage Rules
-        if let Some(rules) = &self.capability_rules {
-            dynamic_sections.push(format!("# Tool Usage Rules\n\n{}", rules));
-        }
-
-        // 11. Available Tools
-        if !tools.is_empty() {
-            let tool_list: String = tools
-                .iter()
-                .map(|t| format!("- **{}**: {}", t.name, t.description))
-                .collect::<Vec<_>>()
-                .join("\n");
-            dynamic_sections.push(format!("# Available Tools\n\n{}", tool_list));
-        }
-
-        // 12. Available Skills (scope-filtered from SkillSystem v2)
-        if let Some(ref skills) = self.eligible_skills {
-            let active_tool_names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
-            let filtered: Vec<&SkillManifest> = skills
-                .iter()
-                .filter(|s| match *s.scope() {
-                    PromptScope::System => true,
-                    PromptScope::Tool => s
-                        .bound_tool()
-                        .is_some_and(|bound| active_tool_names.contains(&bound)),
-                    PromptScope::Standalone | PromptScope::Disabled => false,
-                })
+                .map(|s| (s.stability, *s))
                 .collect();
 
-            if !filtered.is_empty() {
-                let xml = build_skills_prompt_xml(&filtered);
-                dynamic_sections.push(format!(
-                    "# Available Skills\n\nYou can invoke skills using the `skill` tool. \
-                     Skills provide specialized instructions for specific tasks.\n\
-                     {}\n\n{}",
-                    crate::skill::prompt::DEFERRED_LOADING_GUIDANCE,
-                    xml
-                ));
+            // Remove non-protected sections from highest priority number first.
+            let mut current_size = total_chars;
+            // Iterate from the back (highest priority number).
+            let mut i = candidates.len();
+            while i > 0 && current_size > self.budget.max_chars {
+                i -= 1;
+                if !candidates[i].1.protected {
+                    let removed = candidates.remove(i);
+                    truncated_sections.push(removed.1.name.clone());
+                    // Recalculate size.
+                    current_size = Self::estimate_size(&candidates);
+                }
             }
-        }
 
-        // 13. Session Guidance (conditional on active tools)
-        if let Some(guidance) = sections::render_session_guidance(tools) {
-            dynamic_sections.push(format!("# Session Guidance\n\n{}", guidance));
-        }
+            let final_stable: Vec<&PromptSection> = candidates
+                .iter()
+                .filter(|(stab, _)| *stab == Stability::Stable)
+                .map(|(_, s)| *s)
+                .collect();
+            let final_dynamic: Vec<&PromptSection> = candidates
+                .iter()
+                .filter(|(stab, _)| *stab == Stability::Dynamic)
+                .map(|(_, s)| *s)
+                .collect();
 
-        // 14. Environment
-        if let Some(ctx) = session {
-            dynamic_sections.push(format!(
-                "# Environment\n\n{}",
-                sections::render_environment(ctx)
-            ));
-        }
-
-        // 15. Context from Memory
-        if let Some(ctx) = memory_context {
-            dynamic_sections.push(format!("# Context from Memory\n\n{}", ctx));
-        }
-
-        // 16. Additional Instructions
-        if let Some(instructions) = &self.custom_instructions {
-            dynamic_sections.push(format!("# Additional Instructions\n\n{}", instructions));
-        }
-
-        // 17. Discovered Skills (from async prefetch)
-        let skill_section = self
-            .skill_info_section
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone();
-        if let Some(ref section) = skill_section {
-            dynamic_sections.push(section.clone());
-        }
-
-        // =================================================================
-        // Assemble
-        // =================================================================
-        if dynamic_sections.is_empty() {
-            static_part
+            (final_stable, final_dynamic)
         } else {
-            let dynamic_part = dynamic_sections.join(SECTION_SEPARATOR);
-            format!("{}{}{}", static_part, CACHE_BOUNDARY, dynamic_part)
+            (stable, dynamic)
+        };
+
+        // 5 & 6. Render.
+        let stable_text = Self::join_sections(&final_stable);
+        let dynamic_text = Self::join_sections(&final_dynamic);
+
+        // 7. Combine.
+        let (prompt, cache_boundary_offset) = match (stable_text.is_empty(), dynamic_text.is_empty())
+        {
+            (true, true) => (String::new(), None),
+            (true, false) => (dynamic_text, None),
+            (false, true) => (stable_text, None),
+            (false, false) => {
+                let boundary = stable_text.len() + ZONE_SEPARATOR.len();
+                let combined = format!("{}{}{}", stable_text, ZONE_SEPARATOR, dynamic_text);
+                (combined, Some(boundary))
+            }
+        };
+
+        PromptResult {
+            prompt,
+            cache_boundary_offset,
+            truncated_sections,
         }
+    }
+
+    /// Build only the Stable sections (useful for cache-key computation).
+    pub fn build_stable_only(&self) -> String {
+        let mut stable: Vec<&PromptSection> = self
+            .sections
+            .iter()
+            .filter(|s| !s.content.is_empty() && s.stability == Stability::Stable)
+            .collect();
+        stable.sort_by_key(|s| s.priority);
+        Self::join_sections(&stable)
+    }
+
+    // -- helpers --
+
+    fn join_sections(sections: &[&PromptSection]) -> String {
+        sections
+            .iter()
+            .map(|s| s.content.as_str())
+            .collect::<Vec<_>>()
+            .join(SECTION_SEPARATOR)
+    }
+
+    fn estimate_size(candidates: &[(Stability, &PromptSection)]) -> usize {
+        if candidates.is_empty() {
+            return 0;
+        }
+        let content: usize = candidates.iter().map(|(_, s)| s.content.len()).sum();
+        let has_stable = candidates.iter().any(|(stab, _)| *stab == Stability::Stable);
+        let has_dynamic = candidates.iter().any(|(stab, _)| *stab == Stability::Dynamic);
+        let sep_count = if candidates.len() > 1 {
+            candidates.len() - 1
+        } else {
+            0
+        };
+        // Each pair of adjacent sections gets a separator; the zone boundary
+        // replaces one of them if both zones are present.
+        let zone_extra = if has_stable && has_dynamic {
+            // The zone separator is the same length as section separator in our impl,
+            // but we count sections within each zone and one between zones.
+            0
+        } else {
+            0
+        };
+        content + sep_count * SECTION_SEPARATOR.len() + zone_extra
     }
 }
 
@@ -328,411 +306,175 @@ impl Default for PromptBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::thinker::soul::{SoulManifest, SoulVoice};
 
-    #[test]
-    fn test_build_includes_soul() {
-        let prompt = PromptBuilder::new()
-            .with_soul_identity("I am Aleph, your personal AI.")
-            .with_soul_tone("Speak concisely and warmly.")
-            .build(&[], None, None);
+    fn section(name: &str, stability: Stability, priority: u16, content: &str) -> PromptSection {
+        PromptSection {
+            name: name.to_string(),
+            stability,
+            priority,
+            protected: false,
+            content: content.to_string(),
+        }
+    }
 
-        assert!(prompt.contains("I am Aleph, your personal AI."));
-        assert!(prompt.contains("Speak concisely and warmly."));
-        assert!(prompt.contains("# Identity"));
-        assert!(prompt.contains("# Communication Style"));
+    fn protected_section(
+        name: &str,
+        stability: Stability,
+        priority: u16,
+        content: &str,
+    ) -> PromptSection {
+        PromptSection {
+            name: name.to_string(),
+            stability,
+            priority,
+            protected: true,
+            content: content.to_string(),
+        }
     }
 
     #[test]
-    fn test_build_includes_tool_rules() {
-        let prompt = PromptBuilder::new()
-            .with_capability_rules("Always confirm before destructive actions.")
-            .build(&[], None, None);
-
-        assert!(prompt.contains("# Tool Usage Rules"));
-        assert!(prompt.contains("Always confirm before destructive actions."));
+    fn register_and_build_single_section() {
+        let mut builder = PromptBuilder::new();
+        builder.register(section("identity", Stability::Stable, 10, "I am Aleph."));
+        let result = builder.build();
+        assert!(result.prompt.contains("I am Aleph."));
+        assert!(result.truncated_sections.is_empty());
     }
 
     #[test]
-    fn test_build_includes_memory_context() {
-        let prompt =
-            PromptBuilder::new().build(&[], Some("User prefers dark mode and short replies."), None);
-
-        assert!(prompt.contains("# Context from Memory"));
-        assert!(prompt.contains("User prefers dark mode and short replies."));
+    fn sections_ordered_by_priority() {
+        let mut builder = PromptBuilder::new();
+        builder.register(section("c", Stability::Stable, 30, "THIRD"));
+        builder.register(section("a", Stability::Stable, 10, "FIRST"));
+        builder.register(section("b", Stability::Stable, 20, "SECOND"));
+        let result = builder.build();
+        let first_pos = result.prompt.find("FIRST").unwrap();
+        let second_pos = result.prompt.find("SECOND").unwrap();
+        let third_pos = result.prompt.find("THIRD").unwrap();
+        assert!(first_pos < second_pos);
+        assert!(second_pos < third_pos);
     }
 
     #[test]
-    fn test_build_includes_tool_descriptions() {
-        let tools = vec![
-            ToolInfo {
-                name: "web_search".to_string(),
-                description: "Search the web for information.".to_string(),
-                parameters_schema: None,
-            },
-            ToolInfo {
-                name: "file_read".to_string(),
-                description: "Read a file from disk.".to_string(),
-                parameters_schema: None,
-            },
-        ];
+    fn cache_boundary_separates_stable_and_dynamic() {
+        let mut builder = PromptBuilder::new();
+        builder.register(section("s", Stability::Stable, 10, "STABLE_CONTENT"));
+        builder.register(section("d", Stability::Dynamic, 20, "DYNAMIC_CONTENT"));
+        let result = builder.build();
 
-        let prompt = PromptBuilder::new().build(&tools, None, None);
+        let boundary = result.cache_boundary_offset.expect("should have boundary");
+        let stable_part = &result.prompt[..boundary];
+        let dynamic_part = &result.prompt[boundary..];
 
-        assert!(prompt.contains("# Available Tools"));
-        assert!(prompt.contains("- **web_search**: Search the web for information."));
-        assert!(prompt.contains("- **file_read**: Read a file from disk."));
+        assert!(stable_part.contains("STABLE_CONTENT"));
+        assert!(!stable_part.contains("DYNAMIC_CONTENT"));
+        assert!(dynamic_part.contains("DYNAMIC_CONTENT"));
+        assert!(!dynamic_part.contains("STABLE_CONTENT"));
     }
 
     #[test]
-    fn test_build_empty_is_valid() {
-        let prompt = PromptBuilder::new().build(&[], None, None);
-
-        assert!(!prompt.is_empty());
-        assert!(prompt.contains("helpful personal AI assistant"));
-        assert!(prompt.contains("# Identity"));
-        assert!(prompt.contains("# Task Execution"));
+    fn register_overwrites_by_name() {
+        let mut builder = PromptBuilder::new();
+        builder.register(section("identity", Stability::Stable, 10, "OLD_CONTENT"));
+        builder.register(section("identity", Stability::Stable, 10, "NEW_CONTENT"));
+        let result = builder.build();
+        assert!(!result.prompt.contains("OLD_CONTENT"));
+        assert!(result.prompt.contains("NEW_CONTENT"));
     }
 
     #[test]
-    fn test_from_soul_identity() {
-        let soul = SoulManifest {
-            identity: "I am Aleph, a personal AI companion.".to_string(),
-            voice: SoulVoice {
-                tone: "warm and concise".to_string(),
-                ..Default::default()
-            },
-            ..Default::default()
+    fn remove_section() {
+        let mut builder = PromptBuilder::new();
+        builder.register(section("keep", Stability::Stable, 10, "KEEPER"));
+        builder.register(section("drop", Stability::Stable, 20, "DROPPER"));
+        builder.remove("drop");
+        let result = builder.build();
+        assert!(result.prompt.contains("KEEPER"));
+        assert!(!result.prompt.contains("DROPPER"));
+    }
+
+    #[test]
+    fn empty_content_sections_skipped() {
+        let mut builder = PromptBuilder::new();
+        builder.register(section("a", Stability::Stable, 10, "AAA"));
+        builder.register(section("empty", Stability::Stable, 15, ""));
+        builder.register(section("b", Stability::Stable, 20, "BBB"));
+        let result = builder.build();
+        assert!(result.prompt.contains("AAA"));
+        assert!(result.prompt.contains("BBB"));
+        // No double separator from the empty section.
+        assert!(!result.prompt.contains("---\n\n\n\n---"));
+    }
+
+    #[test]
+    fn budget_enforcement_truncates_lowest_priority_first() {
+        // Create sections whose total content exceeds a tiny budget.
+        let mut builder = PromptBuilder::new();
+        builder.register(section("important", Stability::Stable, 10, "IMPORTANT"));
+        builder.register(section("less", Stability::Stable, 50, "LESS_IMPORTANT"));
+        builder.register(section("least", Stability::Stable, 90, "LEAST_IMPORTANT"));
+
+        // Set a budget that fits ~2 sections but not 3.
+        let total_two = "IMPORTANT".len() + "LESS_IMPORTANT".len() + SECTION_SEPARATOR.len();
+        let budget = PromptBudget {
+            max_chars: total_two + 1,
         };
+        let builder = builder.with_budget(budget);
+        let result = builder.build();
 
-        let prompt = PromptBuilder::from_soul(&soul).build(&[], None, None);
-
-        assert!(prompt.contains("I am Aleph, a personal AI companion."));
-        assert!(prompt.contains("warm and concise"));
+        assert!(result.prompt.contains("IMPORTANT"));
+        // "LEAST_IMPORTANT" (priority 90) should be removed first.
+        assert!(result.truncated_sections.contains(&"least".to_string()));
+        assert!(!result.prompt.contains("LEAST_IMPORTANT"));
     }
 
     #[test]
-    fn test_from_soul_directives() {
-        let soul = SoulManifest {
-            directives: vec![
-                "Always explain reasoning".to_string(),
-                "Be precise".to_string(),
-            ],
-            anti_patterns: vec!["Making things up".to_string()],
-            ..Default::default()
+    fn budget_enforcement_never_removes_protected() {
+        let mut builder = PromptBuilder::new();
+        builder.register(protected_section(
+            "protected",
+            Stability::Stable,
+            90,
+            "PROTECTED_CONTENT",
+        ));
+        builder.register(section("expendable", Stability::Stable, 10, "EXPENDABLE"));
+
+        // Budget so small only one section fits.
+        let budget = PromptBudget {
+            max_chars: "PROTECTED_CONTENT".len() + 1,
         };
-
-        let prompt = PromptBuilder::from_soul(&soul).build(&[], None, None);
-
-        assert!(prompt.contains("Always explain reasoning"));
-        assert!(prompt.contains("Be precise"));
-        assert!(prompt.contains("NEVER: Making things up"));
-    }
-
-    #[test]
-    fn test_from_soul_addendum() {
-        let soul = SoulManifest {
-            addendum: Some("Remember the user prefers dark mode.".to_string()),
-            ..Default::default()
-        };
-
-        let prompt = PromptBuilder::from_soul(&soul).build(&[], None, None);
-
-        assert!(prompt.contains("# Additional Instructions"));
-        assert!(prompt.contains("Remember the user prefers dark mode."));
-    }
-
-    #[test]
-    fn test_from_soul_empty() {
-        let soul = SoulManifest::default();
-        let prompt = PromptBuilder::from_soul(&soul).build(&[], None, None);
-
-        // Should still produce a valid prompt with defaults
-        assert!(!prompt.is_empty());
-        assert!(prompt.contains("# Identity"));
-        assert!(prompt.contains("# Task Execution"));
-    }
-
-    #[test]
-    fn test_custom_instructions() {
-        let prompt = PromptBuilder::new()
-            .with_custom_instructions("Reply only in haiku format.")
-            .build(&[], None, None);
-
-        assert!(prompt.contains("# Additional Instructions"));
-        assert!(prompt.contains("Reply only in haiku format."));
-    }
-
-    #[test]
-    fn test_build_with_skill_instructions() {
-        use crate::domain::skill::{PromptScope, SkillContent, SkillManifest, SkillSource};
-
-        let mut system_skill = SkillManifest::new(
-            "git-commit",
-            "Git Commit",
-            "Helps write commit messages",
-            SkillContent::new("content"),
-            SkillSource::Bundled,
-        );
-        system_skill.set_scope(PromptScope::System);
-
-        let mut tool_skill = SkillManifest::new(
-            "docker-build",
-            "Docker Build",
-            "Builds Docker images",
-            SkillContent::new("content"),
-            SkillSource::Bundled,
-        );
-        tool_skill.set_scope(PromptScope::Tool);
-        tool_skill.set_bound_tool("docker_cli".to_string());
-
-        let mut standalone_skill = SkillManifest::new(
-            "hidden",
-            "Hidden",
-            "Hidden skill",
-            SkillContent::new("content"),
-            SkillSource::Bundled,
-        );
-        standalone_skill.set_scope(PromptScope::Standalone);
-
-        let builder = PromptBuilder::new().with_eligible_skills(vec![
-            system_skill,
-            tool_skill,
-            standalone_skill,
-        ]);
-
-        let tools = vec![ToolInfo {
-            name: "docker_cli".to_string(),
-            description: "Docker CLI".to_string(),
-            parameters_schema: None,
-        }];
-
-        let prompt = builder.build(&tools, None, None);
-
-        assert!(prompt.contains("# Available Skills"));
-        assert!(prompt.contains("Git Commit"));
-        assert!(prompt.contains("Docker Build"));
-        assert!(!prompt.contains("Hidden"));
-    }
-
-    #[test]
-    fn test_build_no_skills_no_section() {
-        let prompt = PromptBuilder::new().build(&[], None, None);
-        assert!(!prompt.contains("# Available Skills"));
-    }
-
-    #[test]
-    fn test_build_with_deferred_loading_guidance() {
-        use crate::domain::skill::{PromptScope, SkillContent, SkillManifest, SkillSource};
-        use crate::skill::prompt::DEFERRED_LOADING_GUIDANCE;
-
-        let mut skill = SkillManifest::new(
-            "test-skill",
-            "Test Skill",
-            "A test skill",
-            SkillContent::new("content"),
-            SkillSource::Bundled,
-        );
-        skill.set_scope(PromptScope::System);
-
-        let builder = PromptBuilder::new().with_eligible_skills(vec![skill]);
-
-        let prompt = builder.build(&[], None, None);
-
-        assert!(prompt.contains(DEFERRED_LOADING_GUIDANCE));
-    }
-
-    #[test]
-    fn test_build_includes_model_behavior() {
-        let prompt = PromptBuilder::new()
-            .with_model_behavior("You MUST call tools proactively.")
-            .build(&[], None, None);
-
-        assert!(prompt.contains("# Model Behavior"));
-        assert!(prompt.contains("You MUST call tools proactively."));
-    }
-
-    #[test]
-    fn test_build_omits_model_behavior_when_not_set() {
-        let prompt = PromptBuilder::new().build(&[], None, None);
-        assert!(!prompt.contains("# Model Behavior"));
-    }
-
-    #[test]
-    fn sections_contain_memory_protocol() {
-        assert!(sections::PERSISTENCE.contains("Memory Protocol"));
-        assert!(sections::PERSISTENCE.contains("When to Save Memory"));
-        assert!(sections::PERSISTENCE.contains("When to Search Sessions"));
-        assert!(sections::PERSISTENCE.contains("When to Extract Skills"));
-    }
-
-    #[test]
-    fn test_update_skill_info_rebuilds_prompt_with_new_skills() {
-        use crate::agent_loop::skill_prefetch::SkillInfo;
-
-        let builder = PromptBuilder::new();
-
-        // Before update: no discovered skills section
-        let prompt_before = builder.build(&[], None, None);
-        assert!(
-            !prompt_before.contains("Discovered Skills"),
-            "No skills section before update"
-        );
-
-        // Update with discovered skills
-        builder.update_skill_info(&[
-            SkillInfo {
-                name: "web-search".to_string(),
-                description: "Search the web".to_string(),
-                schema: None,
-            },
-            SkillInfo {
-                name: "translate".to_string(),
-                description: "Translate text".to_string(),
-                schema: None,
-            },
-        ]);
-
-        // After update: prompt includes discovered skills
-        let prompt_after = builder.build(&[], None, None);
-        assert!(
-            prompt_after.contains("Discovered Skills"),
-            "Should contain Discovered Skills section"
-        );
-        assert!(
-            prompt_after.contains("web-search"),
-            "Should contain web-search skill"
-        );
-        assert!(
-            prompt_after.contains("translate"),
-            "Should contain translate skill"
-        );
-    }
-
-    #[test]
-    fn test_model_behavior_appears_before_tool_rules() {
-        let prompt = PromptBuilder::new()
-            .with_model_behavior("Be proactive.")
-            .with_capability_rules("Always confirm.")
-            .build(&[], None, None);
-
-        let behavior_pos = prompt.find("# Model Behavior").unwrap();
-        let rules_pos = prompt.find("# Tool Usage Rules").unwrap();
-        assert!(
-            behavior_pos < rules_pos,
-            "Model Behavior should appear before Tool Usage Rules"
-        );
-    }
-
-    #[test]
-    fn test_build_with_session_context() {
-        let ctx = SessionContext {
-            os: "macos".into(),
-            shell: "/bin/zsh".into(),
-            cwd: "/home/user/project".into(),
-            git_branch: Some("main".into()),
-            language: "zh-CN".into(),
-        };
-
-        let prompt = PromptBuilder::new().build(&[], None, Some(&ctx));
-
-        assert!(prompt.contains("# Environment"));
-        assert!(prompt.contains("macos"));
-        assert!(prompt.contains("main"));
-    }
-
-    #[test]
-    fn test_cache_boundary_present() {
-        let tools = vec![ToolInfo {
-            name: "web_search".into(),
-            description: "Search the web".into(),
-            parameters_schema: None,
-        }];
-        let prompt = PromptBuilder::new().build(&tools, None, None);
-        assert!(
-            prompt.contains("<!-- CACHE_BOUNDARY -->"),
-            "Cache boundary marker should be present when dynamic sections exist"
-        );
-    }
-
-    #[test]
-    fn test_static_before_dynamic() {
-        let tools = vec![ToolInfo {
-            name: "web_search".into(),
-            description: "Search the web".into(),
-            parameters_schema: None,
-        }];
-        let prompt = PromptBuilder::new()
-            .with_capability_rules("Always confirm.")
-            .build(&tools, None, None);
-
-        let boundary_pos = prompt.find("<!-- CACHE_BOUNDARY -->").unwrap();
-        let task_pos = prompt.find("# Task Execution").unwrap();
-        let tools_pos = prompt.find("# Available Tools").unwrap();
+        let builder = builder.with_budget(budget);
+        let result = builder.build();
 
         assert!(
-            task_pos < boundary_pos,
-            "Task Execution (static) should be before cache boundary"
+            result.prompt.contains("PROTECTED_CONTENT"),
+            "Protected section must survive"
         );
         assert!(
-            tools_pos > boundary_pos,
-            "Available Tools (dynamic) should be after cache boundary"
+            result.truncated_sections.contains(&"expendable".to_string()),
+            "Non-protected section should be truncated"
         );
     }
 
     #[test]
-    fn test_session_guidance_only_with_matching_tools() {
-        let no_browser = vec![ToolInfo {
-            name: "memory_store".into(),
-            description: "Store memory".into(),
-            parameters_schema: None,
-        }];
-        let prompt_no = PromptBuilder::new().build(&no_browser, None, None);
-        assert!(
-            !prompt_no.contains("# Session Guidance"),
-            "Should not have Session Guidance without matching tools"
-        );
-
-        let with_browser = vec![ToolInfo {
-            name: "browser_open".into(),
-            description: "Open browser".into(),
-            parameters_schema: None,
-        }];
-        let prompt_yes = PromptBuilder::new().build(&with_browser, None, None);
-        assert!(
-            prompt_yes.contains("# Session Guidance"),
-            "Should have Session Guidance with browser tool"
-        );
-        assert!(
-            prompt_yes.contains("headless"),
-            "Browser guidance should mention headless mode"
-        );
+    fn build_stable_only() {
+        let mut builder = PromptBuilder::new();
+        builder.register(section("s1", Stability::Stable, 10, "STABLE_ONE"));
+        builder.register(section("s2", Stability::Stable, 20, "STABLE_TWO"));
+        builder.register(section("d1", Stability::Dynamic, 15, "DYNAMIC_ONE"));
+        let stable = builder.build_stable_only();
+        assert!(stable.contains("STABLE_ONE"));
+        assert!(stable.contains("STABLE_TWO"));
+        assert!(!stable.contains("DYNAMIC_ONE"));
     }
 
     #[test]
-    fn test_build_backward_compat_none_session() {
-        let prompt = PromptBuilder::new().build(&[], None, None);
-        assert!(prompt.contains("# Identity"));
-        assert!(prompt.contains("# Task Execution"));
-        assert!(prompt.contains("# Risk Awareness"));
-        assert!(prompt.contains("# Tool Usage"));
-        assert!(prompt.contains("# Output"));
-        assert!(prompt.contains("# Persistence"));
-        assert!(
-            !prompt.contains("# Environment"),
-            "No Environment section when session is None"
-        );
-    }
-
-    #[test]
-    fn test_no_cache_boundary_when_no_dynamic_sections() {
-        // With no tools, no memory, no session, no capability rules, no skills,
-        // and no discovered skills — there should be no dynamic sections
-        // and therefore no cache boundary
-        let prompt = PromptBuilder::new().build(&[], None, None);
-        assert!(
-            !prompt.contains("<!-- CACHE_BOUNDARY -->"),
-            "No cache boundary when there are no dynamic sections"
-        );
+    fn build_is_non_consuming() {
+        let mut builder = PromptBuilder::new();
+        builder.register(section("x", Stability::Stable, 10, "CONTENT_X"));
+        let r1 = builder.build();
+        let r2 = builder.build();
+        assert_eq!(r1.prompt, r2.prompt);
+        assert_eq!(r1.cache_boundary_offset, r2.cache_boundary_offset);
     }
 }

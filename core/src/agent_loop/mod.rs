@@ -10,6 +10,7 @@ pub mod factory;
 mod loop_core;
 pub mod model_behaviors;
 mod prompt_builder;
+pub mod prompt_sections;
 pub mod provider_bridge;
 pub mod retry;
 mod safety;
@@ -44,7 +45,7 @@ pub use retry::{
 pub use truncation_recovery::{RecoveryAction, RecoveryPhase, TruncationRecovery};
 pub(crate) use loop_core::NoopCallback;
 pub use loop_core::{AgentLoop, LoopCallback, LoopConfig, LoopProvider, LoopRunResult};
-pub use prompt_builder::{PromptBuilder, ToolInfo};
+pub use prompt_builder::{PromptBuilder, PromptBudget, PromptResult, PromptSection, Stability, ToolInfo};
 pub use sections::SessionContext;
 pub use provider_bridge::AiProviderBridge;
 pub use safety::{SafetyError, SafetyGuard, ToolCall as SafetyToolCall};
