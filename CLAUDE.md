@@ -93,7 +93,7 @@
 ### P4. 依赖倒置 (Dependency Inversion)
 
 - **高层模块不依赖低层模块，两者都依赖抽象** — Core 定义 trait，具体实现在 crate 边界之外
-- **实践**: `DesktopCapability` trait 在 core 中定义，native 实现在 `crates/desktop/`；`MemoryStore` trait 在 core 中定义，LanceDB 实现在同层但可替换
+- **实践**: `DesktopCapability` trait 在 core 中定义，native 实现在 `desktop/shared/`；`MemoryStore` trait 在 core 中定义，LanceDB 实现在同层但可替换
 - **构造时注入** — 通过 `AppContext` / Builder 模式在启动时组装依赖，运行时不 `new` 具体类型
 
 ### P5. 最小知识原则 (Least Knowledge / Law of Demeter)
