@@ -17,6 +17,7 @@ mod tool;
 pub mod context_compactor;
 pub mod truncation_recovery;
 pub mod tool_orchestrator;
+pub mod stop_hooks;
 pub mod streaming_bridge;
 
 #[cfg(test)]
