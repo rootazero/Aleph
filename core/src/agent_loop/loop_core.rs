@@ -25,7 +25,8 @@ use super::prompt_builder::{PromptBuilder, ToolInfo};
 use super::safety::{SafetyError, SafetyGuard};
 use super::stop_hooks::{self, StopHookContext, StopHookHandler};
 use super::tool_pipeline::ToolPipeline;
-use crate::extension::hooks::HookExecutor;
+use crate::extension::hooks::{HookContext, HookExecutor};
+use crate::extension::HookEvent;
 use super::tool::{LoopToolRegistry, ToolDefinition, ToolResult};
 use crate::providers::AiProvider;
 use crate::providers::adapter::StopReason;
@@ -575,6 +576,15 @@ impl<P: LoopProvider> AgentLoop<P> {
             depth = self.chain.depth,
             "agent_loop: starting"
         );
+
+        // Session-level hook: SessionStart (observers only)
+        if self.tool_pipeline.has_hooks() {
+            let ctx = HookContext::new(&self.chain.chain_id);
+            self.tool_pipeline
+                .hooks()
+                .execute_observers(HookEvent::SessionStart, &ctx)
+                .await;
+        }
 
         // Build system prompt with tool info
         let tool_infos: Vec<ToolInfo> = self
@@ -1230,6 +1240,20 @@ impl<P: LoopProvider> AgentLoop<P> {
                         }
                         stop_requested = true;
                     }
+
+                    // Consume hook-injected additional contexts and messages.
+                    // TODO: inject additional_contexts into next LLM turn as system-reminder content
+                    // when a dedicated prompt injection mechanism is available.
+                    if !outcome.additional_contexts.is_empty() {
+                        tracing::debug!(
+                            tool = %o.tool_name,
+                            contexts = ?outcome.additional_contexts,
+                            "hook additional_contexts (pending prompt injection)"
+                        );
+                    }
+                    if outcome.prevent_continuation {
+                        stop_requested = true;
+                    }
                 }
 
                 tool_calls_made += outcomes.len();
@@ -1359,6 +1383,15 @@ impl<P: LoopProvider> AgentLoop<P> {
         // Check if we hit max iterations
         if iterations >= self.config.max_iterations {
             hit_limit = true;
+        }
+
+        // Session-level hook: SessionEnd (observers only)
+        if self.tool_pipeline.has_hooks() {
+            let ctx = HookContext::new(&self.chain.chain_id);
+            self.tool_pipeline
+                .hooks()
+                .execute_observers(HookEvent::SessionEnd, &ctx)
+                .await;
         }
 
         Ok(LoopRunResult {
