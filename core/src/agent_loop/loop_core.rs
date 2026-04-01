@@ -25,6 +25,7 @@ use super::prompt_builder::{PromptBuilder, ToolInfo};
 use super::safety::{SafetyError, SafetyGuard};
 use super::stop_hooks::{self, StopHook, StopHookContext};
 use super::tool::{LoopToolRegistry, ToolDefinition, ToolResult};
+use crate::providers::AiProvider;
 use crate::providers::adapter::StopReason;
 use crate::providers::delta::{DeltaCollector, DeltaSink, NoopSink, ProviderDelta};
 use crate::providers::message::UnifiedMessage;
@@ -335,6 +336,7 @@ pub trait LoopCallback: Send {
     fn on_model_fallback(&mut self, _reason: &str, _fallback_model: &str) {}
     fn on_stop_hook_block(&mut self, _reason: &str) {}
     fn on_stop_hook_error(&mut self, _hook_name: &str, _error: &str) {}
+    fn on_tool_summary(&mut self, _summary: &str) {}
 }
 
 /// No-op callback for when you don't need events.
@@ -376,6 +378,8 @@ pub struct AgentLoop<P: LoopProvider> {
     cancel_token: CancellationToken,
     /// Stop hooks to run before the loop exits at task-completion break points.
     stop_hooks: Vec<StopHook>,
+    /// Optional lightweight provider for async tool use summaries.
+    summary_provider: Option<Arc<dyn AiProvider>>,
 }
 
 impl<P: LoopProvider> AgentLoop<P> {
@@ -423,6 +427,7 @@ impl<P: LoopProvider> AgentLoop<P> {
             delta_sink: Box::new(NoopSink),
             cancel_token,
             stop_hooks: Vec::new(),
+            summary_provider: None,
         }
     }
 
@@ -468,6 +473,12 @@ impl<P: LoopProvider> AgentLoop<P> {
     /// Register stop hooks to run before the loop exits.
     pub fn with_stop_hooks(mut self, hooks: Vec<StopHook>) -> Self {
         self.stop_hooks = hooks;
+        self
+    }
+
+    /// Attach a lightweight provider for async tool use summaries.
+    pub fn with_summary_provider(mut self, provider: Arc<dyn AiProvider>) -> Self {
+        self.summary_provider = Some(provider);
         self
     }
 
@@ -540,6 +551,7 @@ impl<P: LoopProvider> AgentLoop<P> {
         const MAX_COMPLETION_NUDGES: usize = 3;
         const MAX_STOP_HOOK_BLOCKS: usize = 3;
         let mut stop_hook_blocks: usize = 0;
+        let mut pending_summary: Option<tokio::task::JoinHandle<Option<String>>> = None;
 
         #[derive(Clone, Copy)]
         enum ActiveProvider {
@@ -551,6 +563,13 @@ impl<P: LoopProvider> AgentLoop<P> {
         // === THE LOOP ===
         while iterations < self.config.max_iterations {
             iterations += 1;
+
+            // Resolve pending tool summary from previous iteration
+            if let Some(handle) = pending_summary.take() {
+                if let Ok(Some(summary)) = handle.await {
+                    callback.on_tool_summary(&summary);
+                }
+            }
 
             // --- Context budget evaluation (single lock scope) ---
             let mut budget_directive = super::context_budget::LoopDirective::Continue;
@@ -1116,6 +1135,34 @@ impl<P: LoopProvider> AgentLoop<P> {
                 }
 
                 tool_calls_made += outcomes.len();
+
+                // Fire-and-forget: generate tool summary in background
+                if let Some(ref sp) = self.summary_provider {
+                    let inputs: Vec<super::tool_summary::ToolSummaryInput> = outcomes
+                        .iter()
+                        .map(|o| {
+                            let tool_input = tool_args_by_id
+                                .get(o.tool_id.as_str())
+                                .map(|v| serde_json::to_string(v).unwrap_or_default())
+                                .unwrap_or_default();
+                            super::tool_summary::ToolSummaryInput {
+                                tool_name: o.tool_name.clone(),
+                                tool_input,
+                                tool_output: o.output_text.clone(),
+                            }
+                        })
+                        .collect();
+                    let sp = sp.clone();
+                    let last_text = intermediate_texts.last().cloned();
+                    pending_summary = Some(tokio::spawn(async move {
+                        super::tool_summary::generate_tool_summary(
+                            &*sp,
+                            &inputs,
+                            last_text.as_deref(),
+                        )
+                        .await
+                    }));
+                }
             } else {
                 // No tool calls — abort the idle executor.
                 executor_handle.abort();

@@ -42,3 +42,4 @@ pub use streaming_bridge::{StreamingToolBridge, StreamingToolExecutor};
 pub use tool::{LoopTool, LoopToolRegistry, ToolDefinition, ToolResult};
 pub use retry::{classify_exhausted_error, parse_token_gap, RetryVerdict};
 pub use stop_hooks::{StopHook, StopHookAggregateResult, StopHookContext, StopHookVerdict};
+pub use tool_summary::{generate_tool_summary, ToolSummaryInput};
